@@ -46,6 +46,21 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 	}
 }
 
+/** New Agent with the preselected CLI, accepted as soon as its picker shows: the card it creates. */
+async function newCard(): Promise<PanelState['cards'][number]> {
+	const before = (await state()).cardCount;
+	void vscode.commands.executeCommand('facade.newAgent');
+	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
+	return until('a new card', async () => {
+		const now = await state();
+		if (now.cardCount > before) {
+			return now.cards[0];
+		}
+		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+		return undefined;
+	});
+}
+
 function alive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
@@ -62,17 +77,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 	});
 
 	test('New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder', async () => {
-		const before = (await state()).cardCount;
-		void vscode.commands.executeCommand('facade.newAgent');
-		// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
-		const card = await until('a new card', async () => {
-			const now = await state();
-			if (now.cardCount > before) {
-				return now.cards[0];
-			}
-			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-			return undefined;
-		});
+		const card = await newCard();
 		assert.ok(vscode.window.terminals.some(terminal => terminal.name.startsWith(card.name)), 'its editor terminal exists');
 		const alias = card.tooltip.join(' ').match(/#a\d+/)?.[0];
 		assert.ok(alias, 'the card shows its short ID');
@@ -109,5 +114,26 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Close Agent removes the card at once');
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
+	});
+
+	test('PANEL-1.2, 2.3: a card\'s location filter keeps the count; with no card left the page says none is in its location, and its Clear Filter shows every agent again', async function () {
+		// Once, with the first built-in: the filter is the panel's, whatever the CLI
+		if (CLI !== 'claude') {
+			this.skip();
+		}
+		const card = await newCard();
+		await vscode.commands.executeCommand('facade.filterByLocation', { run_id: card.runId });
+		const filtered = await until('the filter', async () => { const now = await state(); return now.filter ? now : undefined; });
+		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
+		const said = await until('the page to say so', async () => {
+			const text = await vscode.commands.executeCommand<string[]>('facade.probe', { op: 'read', selector: '#empty p' });
+			return text?.length ? text : undefined;
+		});
+		assert.strictEqual(await vscode.commands.executeCommand('facade.probe', { op: 'click', selector: '#empty button', index: 0 }), true);
+		const cleared = await until('Clear Filter', async () => { const now = await state(); return now.filter === undefined ? now : undefined; });
+		assert.deepStrictEqual([filtered.filter?.kind, filtered.cards.map(each => each.runId), filtered.cardCount, left.cardCount, said, cleared.empty], [
+			'location', [card.runId], 1, 0, [`No agents found in "${filtered.filter?.label}".`], 'noAgents'
+		]);
 	});
 });

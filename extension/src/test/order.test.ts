@@ -15,22 +15,32 @@ suite('The panel\'s manual stack (PANEL-2.1, U05)', () => {
 		assert.deepStrictEqual(arranged(['b', 'gone', 'a'], ['new2', 'new1', 'a', 'b']), ['new2', 'new1', 'b', 'a']);
 	});
 
-	test('Move Up/Down trades places with the next card; nothing moves past an end', () => {
+	test('Move Up/Down trades places with the next card; with a filter, the next shown one, hidden cards keeping their slots; nothing moves past an end', () => {
 		const order = ['a', 'b', 'c'];
+		const filtered = ['a', 'h1', 'b', 'h2', 'c'];
+		const shown = (run: string) => !run.startsWith('h');
 		assert.deepStrictEqual([
 			moved(order, 'b', -1),
 			moved(order, 'b', 1),
 			moved(order, 'a', -1),
 			moved(order, 'c', 1),
 			moved(order, 'missing', 1),
-			moved(['a', 'b'], 'a', 1)
+			moved(['a', 'b'], 'a', 1),
+			moved(filtered, 'b', -1, shown),
+			moved(filtered, 'b', 1, shown),
+			moved(filtered, 'a', -1, shown),
+			moved(filtered, 'h1', 1, shown)
 		], [
 			['b', 'a', 'c'],
 			['a', 'c', 'b'],
 			undefined,
 			undefined,
 			undefined,
-			['b', 'a']
+			['b', 'a'],
+			['b', 'h1', 'a', 'h2', 'c'],
+			['a', 'h1', 'c', 'h2', 'b'],
+			undefined,
+			undefined
 		]);
 	});
 

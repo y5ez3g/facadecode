@@ -32,7 +32,7 @@ suite('The agent panel in Chromium', function () {
 	let tested: string;
 	let css: string;
 	/** The page's words: each its own key, the templates as the extension gives them. */
-	const words = { started: 'Started {0}' };
+	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}' };
 	/** Loads a new page of the panel, as the view does each time it shows. */
 	const load = async (bundle = shipped, saved?: unknown) => {
 		await call('Page.navigate', { url: 'about:blank' });
@@ -47,7 +47,7 @@ suite('The agent panel in Chromium', function () {
 	const CARDS = `
 		window.newCard = (i, more = {}) => ({ runId: 'run-' + i, selected: false, name: 'Agent ' + i, avatar: { file: 'avatar-claude.png' },
 			location: { label: 'project', full: 'project · /project' }, dot: 'working', stateText: 'Working', line: 'Step one', tooltip: ['Agent ' + i + ' · #a' + i + ' · Claude Code', 'Working'],
-			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false }, ...more });
+			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false, filterLocation: false, filterFolder: false, clearFilter: false }, ...more });
 		window.stateOf = (cards, more = {}) => ({ revision: 1, loading: false, cards, cardCount: cards.length, capabilities: { remote: false }, ...more });
 		window.agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1));
 		window.redraw = (more = {}) => panel.render(stateOf(agents, more));
@@ -163,18 +163,23 @@ suite('The agent panel in Chromium', function () {
 		assert.strictEqual(await evaluate(`getComputedStyle(document.querySelector('.dot')).backgroundColor`), 'rgb(137, 209, 133)');
 	});
 
-	test('UX-2.2: a new card opens in 180 ms, but not on the first draw or with reduced motion; a card that goes is removed at once, never animated out', async () => {
+	test('UX-2.2: a new card opens in 180 ms, but not on the first draw, a change of filter or with reduced motion; a card that goes is removed at once, never animated out', async () => {
 		const seen = await evaluate(`(() => {
 			const first = document.querySelectorAll('.agent.opening').length;
 			agents = [newCard(31), ...agents]; redraw({ revision: 2 });
 			const opened = document.querySelector('.agent').classList.contains('opening') ? getComputedStyle(document.querySelector('.agent')).animationDuration : 'none';
 			agents = agents.slice(2); redraw({ revision: 3 });
 			const gone = [document.querySelectorAll('.agent').length, document.querySelectorAll('.closing').length, [...document.querySelectorAll('.agent .name')].some(name => name.textContent === 'Agent 1')];
+			agents = [newCard(32), ...agents]; redraw({ revision: 4, filter: { kind: 'location', id: 'loc-1', label: 'project' } });
+			const filtered = document.querySelector('.agent').classList.contains('opening');
+			// The same filter again: a new card opens as ever
+			agents = [newCard(34), ...agents]; redraw({ revision: 5, filter: { kind: 'location', id: 'loc-1', label: 'project' } });
+			const sameFilter = document.querySelector('.agent').classList.contains('opening');
 			document.body.classList.add('vscode-reduce-motion');
-			agents = [newCard(33), ...agents]; redraw({ revision: 4 });
-			return [first, opened, gone, document.querySelector('.agent').classList.contains('opening')];
+			agents = [newCard(33), ...agents]; redraw({ revision: 6, filter: { kind: 'location', id: 'loc-1', label: 'project' } });
+			return [first, opened, gone, filtered, sameFilter, document.querySelector('.agent').classList.contains('opening')];
 		})()`);
-		assert.deepStrictEqual(seen, [0, '0.18s', [29, 0, false], false]);
+		assert.deepStrictEqual(seen, [0, '0.18s', [29, 0, false], false, true, false]);
 	});
 
 	test('a state change is said politely, once, in a live region; a repeated state says nothing new (PANEL-1.5)', async () => {
@@ -244,9 +249,9 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves, Rename, Copy and Close always', async () => {
-		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 2).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
-			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
+	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves, its filters where they change what is shown, Clear Filter while filtered; Rename, Copy and Close always', async () => {
+		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true, filterLocation: true, filterFolder: false, clearFilter: true } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 2).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
+			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, webviewFilterLocation: true, webviewFiltered: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-2', preventDefaultContextMenuItems: true }
 		]);
 	});
@@ -298,14 +303,20 @@ suite('The agent panel in Chromium', function () {
 		}
 	});
 
-	test('PANEL-1.2, J13: the empty panel says why - no agents, no folder - each with its own native, keyboard-reachable button; nothing while loading', async () => {
-		const empty = (state: object) => evaluate(`(() => { panel.render(stateOf([], ${JSON.stringify(state)})); const empty = document.getElementById('empty'); return [empty.hidden, [...empty.children].map(each => { const button = each.querySelector('button'); return button ? 'button:' + button.textContent : each.textContent; })]; })()`);
+	test('PANEL-1.2, J13: the empty panel says why - no agents, none in the filter\'s location, no folder - each with its own native, keyboard-reachable buttons; nothing while loading', async () => {
+		const empty = (state: object) => evaluate(`(() => { panel.render(stateOf([], ${JSON.stringify(state)})); const empty = document.getElementById('empty'); return [empty.hidden, [...empty.children].map(each => { const button = each.querySelector('button'); return button ? (button.classList.contains('secondary') ? 'secondary:' : 'button:') + button.textContent : each.textContent; })]; })()`);
 		// No agent: New Agent, no ellipsis (D60), and nothing else
 		assert.deepStrictEqual(await empty({ empty: 'noAgents' }), [false, ['noAgents', 'button:newAgent']]);
+		// A filter shows none: how many it hides, Clear Filter first and New Agent secondary
+		assert.deepStrictEqual(await empty({ empty: 'noMatch', cardCount: 3, filter: { kind: 'location', id: 'loc-1', label: 'shop · login-fix' } }), [false, ['No agents found in "shop · login-fix".', '3 other agents are in this workspace.', 'button:clearFilter', 'secondary:newAgent']]);
+		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 1, filter: { kind: 'location', id: 'loc-1', label: 'main' } }))[1][1], '1 other agent is in this workspace.');
+		// A location's name is said as it is, `$&` and all
+		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 0, filter: { kind: 'folder', id: 'file:///price', label: 'price$&$\'' } }))[1][0], 'No agents found in "price$&$\'".');
+		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 0, filter: { kind: 'location', id: 'loc-1', label: 'main' } }))[1].length, 3);
 		assert.deepStrictEqual(await empty({ empty: 'noFolder' }), [false, ['noFolder', 'button:openFolder']]);
 		assert.deepStrictEqual((await empty({ loading: true }))[0], true);
-		const acted = await evaluate(`(() => { window.posted = []; const render = () => panel.render(stateOf([], { revision: 8, empty: 'noAgents' })); render(); const buttons = [...document.querySelectorAll('#empty button')]; buttons[0].focus(); render(); const kept = document.activeElement === buttons[0]; buttons.forEach(button => button.click()); return [buttons.every(button => button.type === 'button' && button.tabIndex === 0), kept, window.posted.map(({ type, what, revision, target }) => ({ type, what, revision, target }))]; })()`);
-		assert.deepStrictEqual(acted, [true, true, [{ type: 'act', what: 'new' }]]);
+		const acted = await evaluate(`(() => { window.posted = []; const render = () => panel.render(stateOf([], { revision: 8, empty: 'noMatch', filter: { kind: 'folder', id: 'file:///shop', label: 'shop' } })); render(); const buttons = [...document.querySelectorAll('#empty button')]; buttons[0].focus(); render(); const kept = document.activeElement === buttons[0]; buttons.forEach(button => button.click()); return [buttons.every(button => button.type === 'button' && button.tabIndex === 0), kept, window.posted.map(({ type, what, revision, target }) => ({ type, what, revision, target }))]; })()`);
+		assert.deepStrictEqual(acted, [true, true, [{ type: 'act', what: 'clearFilter' }, { type: 'act', what: 'new' }]]);
 	});
 
 	test('E03, UX-3.2: the shipped page has none of the probe\'s code and answers no probe; the integration build\'s page does', async () => {

@@ -6,11 +6,11 @@ of its sequence of owner-tested additive steps, carried from the Facade Dots spe
 ## Reproducible checks
 
 Run `python3 -I -B docs/extension/audit/check_spec.py` from the repository root.
-The [saved result](review-2026-10-29.json) records the latest outcome and local-link count.
+The [saved result](review-2026-10-30.json) records the latest outcome and local-link count.
 
 | Check | Scope |
 | --- | --- |
-| Structure | Ten normative documents, 125 rules, bold decisions, Checks and change logs |
+| Structure | Ten normative documents, 126 rules, bold decisions, Checks and change logs |
 | References | Local Markdown links/anchors and numbered cross-references |
 | Source coverage and migration | Run only when `audit/source-inventory.json`, `audit/migration.json` and `MIGRATION.md` are present; they join in the last step |
 
@@ -26,6 +26,7 @@ revision.
 
 ## Change log
 
+- 2026-10-30: 126 rules, with PANEL-2.3.
 - 2026-10-29: 125 rules, with the owner-approved ARCHITECTURE-4.2.
 - 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots audit report: structure and reference
   checks, with the migration checks deferred until the ledger files are added.

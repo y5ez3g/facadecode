@@ -14,10 +14,16 @@ export const COMMANDS = {
 	renameAgent: 'facade.renameAgent',
 	copyAgentReference: 'facade.copyAgentReference',
 	closeAgent: 'facade.closeAgent',
+	filter: 'facade.filter',
+	clearFilter: 'facade.clearFilter',
 	configureAgents: 'facade.configureAgents',
 	newWorktree: 'facade.newWorktree',
 	moveUp: 'facade.moveUp',
 	moveDown: 'facade.moveDown',
+	filterByLocation: 'facade.filterByLocation',
+	filterByFolder: 'facade.filterByFolder',
+	/** Filter by Working Location as its title button shows it while a filter is on: filled (UX-3.2). */
+	filterOn: 'facade.filterOn',
 	revealAgent: 'facade.revealAgent'
 } as const;
 
@@ -32,7 +38,8 @@ export const TEST_COMMANDS = {
 export const CONTEXT = {
 	hasAgents: 'facade.hasAgents',
 	agentSelected: 'facade.agentSelected',
-	agentSelectedEnded: 'facade.agentSelectedEnded'
+	agentSelectedEnded: 'facade.agentSelectedEnded',
+	filtered: 'facade.filtered'
 } as const;
 
 /** Where Configure Agents goes: the Settings editor showing this extension's settings alone, in the execution environment (CLIS-1.1). */

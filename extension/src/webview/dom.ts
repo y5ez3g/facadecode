@@ -90,8 +90,8 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ''
 }
 
 /** A button of words, as VS Code's views have them where they have nothing to show. */
-export function button(text: string, run: () => void): HTMLButtonElement {
-	const element = el('button', 'button primary', text);
+export function button(text: string, run: () => void, secondary = false): HTMLButtonElement {
+	const element = el('button', secondary ? 'button secondary' : 'button primary', text);
 	element.type = 'button';
 	element.addEventListener('click', event => {
 		event.stopPropagation();

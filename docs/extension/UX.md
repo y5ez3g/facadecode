@@ -76,7 +76,7 @@ diacritics/descenders. Paragraphs wrap, card lines ellipsize with full accessibl
 **Motion is brief, does not delay input, and disappears when reduced motion is requested.**
 
 Card insertion 180 ms and removal after a normal process exit 160 ms, `cubic-bezier(0.22,1,0.36,1)`; text fade 160 ms.
-No motion on first draw. Explicit close and confirmed location removal remove the card and terminal immediately, without
+No motion on first draw/filter change. Explicit close and confirmed location removal remove the card and terminal immediately, without
 animation. Dot and scrolling durations belong to PANEL. Long-running animation changes only opacity/transform. Follow
 both `workbench.reduceMotion` and system preference. Test 180, 260, 420 and 720 px view widths plus editor minimum; no
 overlap, horizontal overflow or hidden essential controls. Test zoom -1, 0, 2. Themes: Dark Modern, Light Modern, both
@@ -127,6 +127,8 @@ run and are validated against current state, without falling back to the selecti
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `copyAgentReference` | Copy Agent Reference | Known owned record; card/Go to Agent | LIFECYCLE-2.1 |
 | `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
+| `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
+| `clearFilter` | Clear Filter | Active filter; card/empty state | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 
@@ -138,15 +140,16 @@ History, Show Agent Launch and Show Agents Log have no contributed entry or hidd
 
 **Context-only actions carry their actual target and never substitute the foreground agent.**
 
-Hidden from palette: `newWorktree` (view-menu creation), `moveUp`, `moveDown` and `revealAgent` (notification navigation).
-The worktree command follows WORKTREES-4.3. Tab Rename/Copy entries are contributed only on
+Hidden from palette: `newWorktree` (view-menu creation), `moveUp`, `moveDown`, `filterByLocation`, `filterByFolder`,
+`filterOn` (filled-icon alias) and `revealAgent` (notification navigation). `filterOn` invokes exactly the same
+behavior as `filter`. The worktree command follows WORKTREES-4.3. Tab Rename/Copy entries are contributed only on
 editors/versions where public context can be resolved exactly; otherwise the card/palette remain available. No internal
 `$mid` terminal-context trick. There is no scripted-start command. Retired `facade.nextAgent`, `facade.stopAgent` and
 `facade.startAgent` commands are not registered as hidden aliases.
 
 Test commands `state`, `selectRow` (selects a card by run ID) and `probe` are registered only in test mode and excluded
 from production manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected`
-identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded` reflects current state.
+identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded` and `filtered` reflect current state.
 
 ## 4 Settings
 
@@ -225,6 +228,9 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-10-30: 3.1 adds Filter by Working Location... and Clear Filter (PANEL-2.3); 3.2 keeps the card's filters and
+  the filled-icon alias out of the palette and adds the `filtered` context key; 2.2 keeps a filter change still.
 
 - 2026-10-30: 4.1 adds the `.path` settings of Antigravity, Muse Code, OpenCode and Pi, each in its own section in
   CLIS-1.1 order (D77).

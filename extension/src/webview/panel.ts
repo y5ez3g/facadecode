@@ -32,9 +32,9 @@ let state: PanelState = { revision: 0, loading: true, cards: [], cardCount: 0, c
 let restoring = savedBrowsing();
 
 const DOTS: readonly unknown[] = ['working', 'idle', 'error'];
-const EMPTY: readonly unknown[] = ['noFolder', 'noAgents'];
+const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
 
-const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean });
+const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean, filterLocation: isBoolean, filterFolder: isBoolean, clearFilter: isBoolean });
 const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) });
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString,
@@ -45,6 +45,7 @@ const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
 }, {
+	filter: value => isShaped(value, { kind: value => value === 'location' || value === 'folder', id: isString, label: isString }),
 	empty: value => EMPTY.includes(value),
 	exited: isStrings
 });
@@ -163,14 +164,14 @@ function rememberBrowsing(): void {
 }
 window.addEventListener('scroll', rememberBrowsing, { passive: true });
 
-/** One part of the empty panel: words, or a button - its main action's. */
+/** One part of the empty panel: words, or a button - the main action's primary, another's secondary. */
 type EmptyPart =
 	| { readonly kind: 'text'; readonly text: string }
-	| { readonly kind: 'button'; readonly text: string; readonly run: () => void };
+	| { readonly kind: 'button'; readonly text: string; readonly run: () => void; readonly secondary?: true };
 
 /**
- * No card to show, said as VS Code's own views say it, for why (PANEL-1.2): no folder open - Open Folder; no agent - New Agent. None
- * while there are cards or while loading.
+ * No card to show, said as VS Code's own views say it, for why (PANEL-1.2): no folder open - Open Folder; no agent - New Agent;
+ * none in the filter's location - how many it hides, Clear Filter, and New Agent there. None while there are cards or while loading.
  */
 function emptyParts(): readonly EmptyPart[] {
 	switch (state.empty) {
@@ -178,6 +179,15 @@ function emptyParts(): readonly EmptyPart[] {
 			return [{ kind: 'text', text: strings.noFolder }, { kind: 'button', text: strings.openFolder, run: () => act('openFolder') }];
 		case 'noAgents':
 			return [{ kind: 'text', text: strings.noAgents }, { kind: 'button', text: strings.newAgent, run: () => act('new') }];
+		case 'noMatch':
+			return [
+				// A function, not the label itself: a folder or branch name may hold `$&` or `$'`, which a replacement string would expand
+				{ kind: 'text', text: strings.noAgentsIn.replace('{0}', () => state.filter?.label ?? '') },
+				// Hidden by the filter, not ended: how many, where there are any (PANEL-1.2)
+				...state.cardCount ? [{ kind: 'text', text: state.cardCount === 1 ? strings.otherAgent : strings.otherAgents.replace('{0}', String(state.cardCount)) } as const] : [],
+				{ kind: 'button', text: strings.clearFilter, run: () => act('clearFilter') },
+				{ kind: 'button', text: strings.newAgent, run: () => act('new'), secondary: true }
+			];
 		default:
 			return [];
 	}
@@ -187,7 +197,7 @@ function emptyParts(): readonly EmptyPart[] {
 function renderEmpty(): void {
 	const parts = emptyParts();
 	empty.hidden = !parts.length;
-	const drawnText = JSON.stringify(parts.map(part => [part.kind, part.text]));
+	const drawnText = JSON.stringify(parts.map(part => [part.kind, part.text, 'secondary' in part]));
 	if (empty.dataset.drawn === drawnText) {
 		return;
 	}
@@ -198,7 +208,7 @@ function renderEmpty(): void {
 				return el('p', '', part.text);
 			case 'button': {
 				const container = el('div', 'button-container');
-				container.append(button(part.text, part.run));
+				container.append(button(part.text, part.run, part.secondary));
 				return container;
 			}
 		}
@@ -220,14 +230,18 @@ interface Drawn {
 
 /** The cards on the list by run ID, as drawn last; none before the first draw. */
 let drawn: Map<string, Drawn> | undefined;
+/** The filter the cards were drawn for last: another shows its cards at once, without motion (UX-2.2). */
+let drawnFilter: string | undefined;
 
 /**
  * Draws `cards` in their order. A card keeps its element, face and dot through every change of what it says (PANEL-3.2); a new card
- * opens in 180 ms, except on the first draw or with reduced motion (UX-2.2); a card whose process ended normally fades out in
- * 160 ms, and any other card gone - an explicit close, a removed location - goes at once.
+ * opens in 180 ms, except on the first draw, a change of filter or with reduced motion (UX-2.2); a card whose process ended
+ * normally fades out in 160 ms, and any other card gone - an explicit close, a removed location - goes at once.
  */
 function draw(cards: readonly Card[]): void {
-	const moving = drawn !== undefined && !reducedMotion();
+	const filter = state.filter ? `${state.filter.kind}:${state.filter.id}` : '';
+	const moving = drawn !== undefined && drawnFilter === filter && !reducedMotion();
+	drawnFilter = filter;
 	const next = new Map<string, Drawn>();
 	const said: string[] = [];
 	for (const card of cards) {
@@ -383,6 +397,9 @@ function contextOf(card: Card): string {
 		run_id: card.runId,
 		...(menu.moveUp ? { webviewMoveUp: true } : {}),
 		...(menu.moveDown ? { webviewMoveDown: true } : {}),
+		...(menu.filterLocation ? { webviewFilterLocation: true } : {}),
+		...(menu.filterFolder ? { webviewFilterFolder: true } : {}),
+		...(menu.clearFilter ? { webviewFiltered: true } : {}),
 		preventDefaultContextMenuItems: true
 	});
 }

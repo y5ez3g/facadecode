@@ -1,12 +1,12 @@
 # Panel
 
 Layer 3. The panel displays this window's agents. [Rules](../RULES.md) owns meanings; [UX](../UX.md) owns common
-interaction and tokens. This document owns the card, list and webview contract. Runtime evidence is pending.
+interaction and tokens. This document owns the card, list, filter and webview contract. Runtime evidence is pending.
 
 | Group | Decides | Implementation evidence |
 | --- | --- | --- |
 | 1 View and card | Loading, empty state, badge, content and geometry | Pending |
-| 2 List and actions | Order, selection and menu | Pending |
+| 2 List and actions | Order, selection, menu and filtering | Pending |
 | 3 Technical design | State transport, rendering, resources and scrolling | Pending |
 
 ## 1 View and card
@@ -18,23 +18,28 @@ interaction and tokens. This document owns the card, list and webview contract. 
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
-card loading. Title actions in order: New Agent (`new-session`). The view's native `Views and More Actions...` (`…`) menu holds
+card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), New Agent
+(`new-session`), so New Agent is rightmost. The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
 Configure Agents... in a separate group. Go to Agent... is a Command Palette entry, not a view-menu item. Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
-records. Tooltip `1 agent` / `{n} agents`; omit zero.
+records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
 
-### 1.2 Empty states
+### 1.2 Empty and filtered states
 
 **The empty state explains the current condition and offers the next relevant action.**
 
 No folder: `Open a folder to launch agents.` with Open Folder. No agents:
-`Launch an agent in this workspace.` with New Agent (primary). Empty-state buttons have no ellipsis, as VS Code's
+`Launch an agent in this workspace.` with New Agent (primary). No matching cards with a filter:
+`No agents found in "{location}".`, then `{n} other agents are in this workspace.` (`1 other agent is in this
+workspace.`; omitted when no other card exists), Clear Filter (primary) and New Agent (secondary), which starts at the
+filtered location (LIFECYCLE-1.2). Empty-state buttons have no ellipsis, as VS Code's
 welcome buttons do. Open Folder from this button or New Agent invokes the editor's `vscode.openFolder` command,
 matching the built-in Git view's entry. The editor owns folder selection, window opening and the resulting view;
 Facade does not record a return marker or automatically switch the sidebar back after activation. The person can
-return through Facade Code's activity-bar icon. Do not display worktree tutorials when Git is absent. Paragraphs wrap;
-buttons are native-themed and keyboard accessible. There is no composer field.
+return through Facade Code's activity-bar icon. Do not display worktree tutorials when Git is absent or make an empty
+filter look like all agents ended. Paragraphs wrap; buttons are native-themed and keyboard accessible. There is no
+composer field.
 
 Invoking New Agent with no folder opens a native Quick Pick titled `New Agent`, with placeholder
 `Open a folder to continue` and one item: `Open Folder...`, detail
@@ -104,11 +109,30 @@ failed launch remains selected. Keyboard focus and selection are independent.
 
 **A card uses a flat native context menu with only actions meaningful to its current record.**
 
-Groups: Rename / Copy Agent Reference; Move Up/Down; Close Agent for starting, live and retained-ended
-records. Enable actions by actual availability; name editing need not wait for CLI readiness. There is no worktree
-deletion or bulk selection action. LIFECYCLE-3.1 owns the shared close action. No menu outside a card, not even the
-webview's default Cut/Copy/Paste. Context targets its stable run ID, revalidated against current host state under 3.1,
-never the selected row by fallback. Palette targeting follows UX-3.1.
+Groups: Rename / Copy Agent Reference; Move Up/Down; Filter by This Location / Filter by This Folder / Clear Filter;
+Close Agent for starting, live and retained-ended records. Enable actions by actual availability; name editing need
+not wait for CLI readiness. There is no worktree deletion or bulk selection action. LIFECYCLE-3.1 owns the shared close
+action. No menu outside a card, not even the webview's default Cut/Copy/Paste. Context targets its stable run ID,
+revalidated against current host state under 3.1, never the selected row by fallback. Palette targeting follows UX-3.1.
+
+### 2.3 Filters
+
+**A filter affects this window's card visibility only, not access or launch defaults.**
+
+Filter by Working Location opens native Quick Pick steps by folder (D82). In each step one separator follows the first
+item, then come the folders or locations that have cards (including starting and retained failures) or hold the
+current filter, each with its count. In a window of several folders the first step lists All Locations, then the
+folders. A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
+(WORKTREES-1.2) - where two or more of its locations are listed, or where the filtered location is one of several it
+has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its
+first item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog no longer
+lists stays choosable, last in the first step. The current filter, or in the first step its folder, is initially
+highlighted. Back returns to the first step; Escape leaves the filter unchanged. The view description names the
+filter; the icon fills.
+Persist environment-qualified location/folder association in workspace state. Clear on Clear Filter, the first
+step's first item or confirmed location removal, never on a failed Git read. A launch does not change the filter;
+every new agent enters the normal list data and is displayed only when it matches. Per-card filters appear only when
+they would change the visible set. Ordinary folders use “location,” not an implication that Git/worktrees are required.
 
 ## 3 Technical design
 
@@ -116,8 +140,8 @@ never the selected row by fallback. Palette targeting follows UX-3.1.
 
 **The model sends one coherent state per microtask and applies it only to the current page generation.**
 
-State contains revision, loading, agents in order, card count, location metadata and capabilities. Agent run IDs remain
-stable through launch. Badge and context keys come from the same state. Reported text/activity updates are coalesced to
+State contains revision, loading, agents in order, filter, card count, location metadata and capabilities. Agent run
+IDs remain stable through launch. Badge, description and context keys come from the same state. Reported text/activity updates are coalesced to
 at most once per 300 ms; real lifecycle/errors are sent without waiting for that coalescer. `ready` triggers a full
 state and scroll settings. Webview-to-host actions carry the page generation and, for a targeted action, the stable run
 ID. Ignore actions from a replaced page generation; the host validates current-page actions against current state and
@@ -126,7 +150,7 @@ implementation detail when needed to match a reply; no expected revision is requ
 never ship.
 
 Update `src/ui/model.ts`, `src/ui/panel.ts`, `src/webview/panel.ts` together. Webview sends `ready`,
-validated `act` (`open`, `new`, `openFolder`, `rename`), and diagnostic `error`; host sends `state`, `scrolling`, and
+validated `act` (`open`, `new`, `clearFilter`, `openFolder`, `rename`), and diagnostic `error`; host sends `state`, `scrolling`, and
 matching action outcomes. These acts serve the empty-state buttons in 1.2 and F2 under UX-2.3; `rename` asks the host to
 open the native Input Box, and the host validates the target. Context menu commands run in the host through validated
 targets. Page-held state is navigation/typeahead/scroll, not business rules. Use the webview's saved page state to
@@ -144,7 +168,7 @@ CSP:
 Nonce is 16 random bytes per page. Escape `<` in embedded localization JSON, use textContent for CLI/user strings,
 validate incoming actions and reject unknown keys/types. Local resource roots are only bundled media/webview output. No
 external image fetches, remote scripts, injected HTML or secrets in state. Cards, focus, open context framing and avatar
-nodes survive ordinary text changes; initial draw does not animate.
+nodes survive ordinary text changes; initial draw/filter changes do not animate.
 
 ### 3.3 Scrolling
 
@@ -166,13 +190,21 @@ removes fades/glides. Keyboard Page Up/Down moves fully visible row count minus 
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Approved title/menu entries, both empty states and the no-folder New Agent prerequisite, slow/no Git, three dot meanings, known blocker before generic unavailable text without losing that explanation, all widths/themes/accessibility |
-| 2.1–2.2 | Stack insertion and manual order, retained failure, exact context target |
+| 1.1–1.5 | Approved title/menu entries, the empty and filtered states and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, three dot meanings, known blocker before generic unavailable text without losing that explanation, all widths/themes/accessibility |
+| 2.1–2.3 | Stack insertion and manual order, retained failure, exact context target, filter removal/read failure |
 | 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
 
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
+
+- 2026-10-31: 2.3's Filter by Working Location steps by folder; All Locations and All Worktrees replace All
+  Agents (D82).
+
+- 2026-10-30: Display filters, carried from the Facade Dots specification: 1.1 adds Filter by Working Location before
+  New Agent and counts every card whatever is shown; 1.2 adds the filtered empty state; 2.2 the card's filters; 2.3
+  Filters; 3.1 carries the filter in the state and the `clearFilter` act; 3.2 keeps a filter change still. New Agent
+  Here stays retired.
 
 - 2026-10-30: 1.3 adds the Antigravity, Muse Code, OpenCode and Pi avatars (D77); 1.4's startup stage lasts until the
   CLI first shows its activity (D81).

@@ -103,7 +103,10 @@ export class AgentActions {
 	}
 }
 
-/** The commands about one agent (UX-3.1, 3.2): Go to Agent, Rename, Copy Agent Reference, Close Agent, and the card's menu. */
+/**
+ * The commands about one agent (UX-3.1, 3.2): Go to Agent, Rename, Copy Agent Reference, Close Agent, and the card's menu - its
+ * filters and Clear Filter among them (PANEL-2.2, 2.3).
+ */
 export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActions, flows: { readonly goToAgent: () => Promise<void> }): vscode.Disposable[] {
 	const { model, agents } = deps;
 	/** A command about one run: `palette` where the Command Palette offers it for the selected run. */
@@ -111,6 +114,12 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 		const run = targetOf(arg, model, agents, palette);
 		return run === undefined ? undefined : does(run);
 	});
+	const filterTo = (run: RunId, kind: 'location' | 'folder') => {
+		const filter = model.filterFor(run, kind);
+		if (filter) {
+			model.setFilter(filter);
+		}
+	};
 	return [
 		vscode.commands.registerCommand(COMMANDS.showActiveAgents, () => flows.goToAgent()),
 		on(COMMANDS.renameAgent, true, run => actions.rename(run)),
@@ -125,6 +134,10 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 			return run === undefined ? false : actions.reveal(run);
 		}),
 		on(COMMANDS.moveUp, false, run => model.move(run, -1)),
-		on(COMMANDS.moveDown, false, run => model.move(run, 1))
+		on(COMMANDS.moveDown, false, run => model.move(run, 1)),
+		on(COMMANDS.filterByLocation, false, run => filterTo(run, 'location')),
+		on(COMMANDS.filterByFolder, false, run => filterTo(run, 'folder')),
+		// From a card's menu, the empty panel or the Command Palette: whichever card it was opened on, the filter goes (PANEL-2.3)
+		vscode.commands.registerCommand(COMMANDS.clearFilter, () => model.setFilter(undefined))
 	];
 }
