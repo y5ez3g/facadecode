@@ -102,6 +102,14 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			case 'openFolder':
 				await vscode.commands.executeCommand('vscode.openFolder');
 				return undefined;
+			case 'rename':
+				if (target === undefined || !deps.agents.get(target)) {
+					return 'gone';
+				}
+				await agent.rename(target);
+				// Back on the card F2 was pressed on, as a VS Code list has it: the editor gives a closed input box's focus to the editor
+				void vscode.commands.executeCommand(`${PANEL_VIEW}.focus`);
+				return undefined;
 		}
 	};
 	const view = new PanelView(deps.extensionUri, model, act, deps.log);

@@ -112,7 +112,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		const refused = [
 			{ type: 'navigate', page: page(1), url: 'command:workbench.action.reloadWindow' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'open' },
-			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'rename', target: '1' },
+			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'rename' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'new', target: '1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'resume' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'clearFilter' },
@@ -136,12 +136,12 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	test('what the person did on the page goes to the panel\'s actions with its card\'s run, and its outcome back to that page under its action ID (PANEL-1.2, 3.1)', async () => {
 		await say({ type: 'ready', page: page(1) });
 		answer = async () => acts.length === 1 ? 'gone' : undefined;
-		for (const [what, target] of [['open', 'run-2'], ['new'], ['openFolder']]) {
+		for (const [what, target] of [['open', 'run-2'], ['new'], ['openFolder'], ['rename', 'run-3']]) {
 			await say({ type: 'act', page: page(1), action: `${page(1)}-${what}`, what, ...target ? { target } : {} });
 		}
-		assert.deepStrictEqual(acts, [['open', 'run-2'], ['new', undefined], ['openFolder', undefined]]);
+		assert.deepStrictEqual(acts, [['open', 'run-2'], ['new', undefined], ['openFolder', undefined], ['rename', 'run-3']]);
 		assert.deepStrictEqual(posted.filter(message => message.type === 'outcome').map(({ action, ok, reason }) => [action, ok, reason]), [
-			[`${page(1)}-open`, false, 'gone'], [`${page(1)}-new`, true, undefined], [`${page(1)}-openFolder`, true, undefined]
+			[`${page(1)}-open`, false, 'gone'], [`${page(1)}-new`, true, undefined], [`${page(1)}-openFolder`, true, undefined], [`${page(1)}-rename`, true, undefined]
 		]);
 	});
 

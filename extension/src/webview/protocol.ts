@@ -55,7 +55,7 @@ export interface PanelState {
 }
 
 /** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons). */
-export type Act = 'open' | 'new' | 'openFolder';
+export type Act = 'open' | 'new' | 'openFolder' | 'rename';
 
 /** The host's answer to one action of the page that asked: `gone` (its card's run is gone) or `failed`. */
 export interface Outcome {

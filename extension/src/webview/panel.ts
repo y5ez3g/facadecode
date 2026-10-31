@@ -4,8 +4,9 @@
 
 // The panel's webview: this window's agents as a chat app lists its contacts - the CLI's avatar with a dot saying only what is known,
 // the name and location, and the most useful known fact (PANEL-1.3, 1.4). The extension sends every card already decided; the page
-// keeps only its scroll position, and reports what the person did (PANEL-3.1). It has no keys of its own: the pointer opens a card
-// and its menu, and the keyboard reaches agents through the Command Palette (UX-2.3); the page scrolls as any page does (PANEL-3.3).
+// keeps only its scroll position and the card the keyboard is on, and reports what the person did (PANEL-3.1). The list is one Tab
+// stop that the arrows, Home, End and the page keys move, typing goes to a card by its name, Enter or Space opens it and F2 renames
+// it, as VS Code's lists have it (UX-2.3); the page scrolls as any page does (PANEL-3.3).
 
 import { act, Browsing, Check, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
 import { Card, PanelState } from './protocol';
@@ -55,6 +56,16 @@ const INCOMING: { readonly [type: string]: readonly [required: Readonly<Record<s
 	outcome: [{ action: isString, ok: isBoolean }, { reason: value => value === 'gone' || value === 'failed' }],
 	...(typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? { probe: [{ id: isNumber, op: isString, selector: isString }, { index: isNumber }] as const } : {})
 };
+
+/** The run of the card the keyboard is on: the list's one Tab stop, the selected card's or the first until the person moves it (UX-2.3). */
+let keyed: string | undefined;
+/** Whether the person put the keyboard on {@link keyed} - its keys, a click, a screen reader - rather than it following the selection. */
+let keyedByPerson = false;
+/** What was typed to go to a card by its name, and when its last character came: characters within 750 ms combine (UX-2.3). */
+let typed = { text: '', at: -Infinity };
+const TYPEAHEAD_MS = 750;
+/** The keys the list acts on beside typed characters, and the menu's key (UX-2.3). */
+const LIST_KEYS: ReadonlySet<string> = new Set(['ArrowDown', 'ArrowUp', 'Home', 'End', 'PageDown', 'PageUp', 'Enter', ' ', 'F2', 'ContextMenu']);
 
 /** The open actions this page sent, by action ID: a card whose open failed loses the highlight the click gave it at once. */
 const opening = new Set<string>();
@@ -147,6 +158,12 @@ function renderList(): void {
 function restoreBrowsing(saved: Browsing): void {
 	const root = document.scrollingElement ?? document.documentElement;
 	root.scrollTop = Math.min(saved.scrollTop, Math.max(0, root.scrollHeight - window.innerHeight));
+	// The keyboard's card again where it still is, as the Tab stop alone: the input focus is not taken
+	if (saved.target !== undefined && drawn?.has(saved.target)) {
+		keyed = saved.target;
+		keyedByPerson = true;
+		rove();
+	}
 }
 
 let browsingSaved = 0;
@@ -158,7 +175,7 @@ function rememberBrowsing(): void {
 	browsingSaved = requestAnimationFrame(() => {
 		browsingSaved = 0;
 		const root = document.scrollingElement ?? document.documentElement;
-		saveBrowsing({ scrollTop: root.scrollTop });
+		saveBrowsing({ scrollTop: root.scrollTop, ...(keyed !== undefined ? { target: keyed } : {}) });
 	});
 }
 window.addEventListener('scroll', rememberBrowsing, { passive: true });
@@ -244,6 +261,9 @@ function draw(cards: readonly Card[]): void {
 		next.set(card.runId, entry);
 	}
 	const exited = new Set(state.exited ?? []);
+	// The keyboard's card gone, with the focus on it: the focus goes to the card in its place, as in VS Code's lists
+	const focused = (document.activeElement as HTMLElement | null)?.closest<HTMLElement>('.item.agent')?.dataset.run;
+	const order = [...drawn?.keys() ?? []];
 	for (const [runId, entry] of drawn ?? []) {
 		if (!next.has(runId)) {
 			if (moving && exited.has(runId)) {
@@ -271,6 +291,15 @@ function draw(cards: readonly Card[]): void {
 		}
 	}
 	drawn = next;
+	if (keyed !== undefined && !next.has(keyed)) {
+		const gone = order.indexOf(keyed);
+		const after = order.slice(gone + 1).find(run => next.has(run)) ?? order.slice(0, Math.max(gone, 0)).reverse().find(run => next.has(run));
+		keyed = after;
+		if (focused !== undefined && focused === order[gone] && after !== undefined) {
+			next.get(after)!.element.focus({ preventScroll: true });
+		}
+	}
+	rove();
 	// Said once for the whole state, and only where it changed: no repeated announcement of the same state (PANEL-1.5)
 	const announcement = said.join('. ');
 	if (announcement && status.textContent !== announcement) {
@@ -282,8 +311,9 @@ function draw(cards: readonly Card[]): void {
 function make(card: Card): Drawn {
 	const element = el('div', 'item agent');
 	element.dataset.run = card.runId;
-	// An option of the list for a screen reader, which can click it; never a Tab stop, as it has no key of its own (UX-2.3)
+	// An option of the list, focusable by the pointer and the keys; the list's one Tab stop is the keyboard's card alone (UX-2.3)
 	element.setAttribute('role', 'option');
+	element.tabIndex = -1;
 	const avatar = el('span', 'avatar');
 	const dot = el('span', 'dot');
 	avatar.append(face(card.avatar), dot);
@@ -301,10 +331,7 @@ function make(card: Card): Drawn {
 	element.addEventListener('mouseenter', () => {
 		element.title = hoverOf(entry.card);
 	});
-	element.addEventListener('click', () => {
-		highlight(entry.card.runId);
-		opening.add(act('open', entry.card.runId));
-	});
+	element.addEventListener('click', () => open(entry.card.runId));
 	return entry;
 }
 
@@ -398,6 +425,143 @@ function animate(element: HTMLElement, name: string): void {
 	const end = () => element.classList.remove(name);
 	element.addEventListener('animationend', event => event.target === element && end(), { once: true });
 	setTimeout(end, 400);
+}
+
+/**
+ * Makes the keyboard's card the list's one Tab stop: the card the person moved to while it is there, else the selected card, else the
+ * first. Focus and selection stay apart (PANEL-2.1).
+ */
+function rove(): void {
+	if (!drawn?.size) {
+		return;
+	}
+	const selected = state.cards.find(card => card.selected && drawn!.has(card.runId))?.runId;
+	if (keyed === undefined || !drawn.has(keyed) || (!keyedByPerson && selected !== undefined)) {
+		keyedByPerson = keyedByPerson && keyed !== undefined && drawn.has(keyed);
+		keyed = keyedByPerson ? keyed : selected ?? (keyed !== undefined && drawn.has(keyed) ? keyed : drawn.keys().next().value);
+	}
+	for (const [runId, entry] of drawn) {
+		const stop = runId === keyed ? 0 : -1;
+		if (entry.element.tabIndex !== stop) {
+			entry.element.tabIndex = stop;
+		}
+	}
+}
+
+/** The cards the keys move among, in their order: none going. */
+function shownCards(): HTMLElement[] {
+	return [...list.querySelectorAll<HTMLElement>('.item.agent:not(.closing)')];
+}
+
+/** Puts the keyboard on `card`: focused, scrolled into view as little as it takes (UX-2.3). */
+function goTo(card: HTMLElement | undefined): void {
+	if (!card) {
+		return;
+	}
+	keyed = card.dataset.run;
+	keyedByPerson = true;
+	rove();
+	card.focus({ preventScroll: true });
+	card.scrollIntoView({ block: 'nearest' });
+	rememberBrowsing();
+}
+
+/** How far Page Up and Page Down move: the cards fully in view, less one, and at least one (PANEL-3.3). */
+function pageOf(cards: readonly HTMLElement[]): number {
+	const visible = cards.filter(card => {
+		const box = card.getBoundingClientRect();
+		return box.top >= 0 && box.bottom <= window.innerHeight;
+	}).length;
+	return Math.max(1, visible - 1);
+}
+
+/** Goes to the next card whose name starts with what was typed in the last 750 ms, wrapping; a longer text may stay on its card. */
+function typeahead(char: string, cards: readonly HTMLElement[], at: number): void {
+	const now = performance.now();
+	typed = { text: now - typed.at <= TYPEAHEAD_MS ? typed.text + char : char, at: now };
+	const text = typed.text.toLocaleLowerCase();
+	const start = typed.text.length > 1 ? Math.max(at, 0) : at + 1;
+	for (let i = 0; i < cards.length; i++) {
+		const card = cards[(start + i) % cards.length];
+		if ((drawn?.get(card.dataset.run ?? '')?.card.name ?? '').toLocaleLowerCase().startsWith(text)) {
+			goTo(card);
+			return;
+		}
+	}
+}
+
+// The keys of VS Code's lists on the keyboard's card (UX-2.3); a key held with Ctrl, Alt or Cmd is the editor's. The view focused on
+// no card - its rename box closed, which gives the focus back to the view alone - the key is the keyboard's card's, which has the
+// focus again, as a VS Code list's focused row does
+document.addEventListener('keydown', event => {
+	const target = event.target as HTMLElement;
+	const own = target.closest<HTMLElement>('.item.agent');
+	// Only a key the list has, its menu's among them: Tab from the page goes to the Tab stop as it would
+	const listKey = LIST_KEYS.has(event.key) || event.key.length === 1 || (event.key === 'F10' && event.shiftKey);
+	const card = own ?? (target === document.body && keyed !== undefined && listKey ? drawn?.get(keyed)?.element : undefined);
+	if (!card || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) {
+		return;
+	}
+	if (card !== target) {
+		card.focus({ preventScroll: true });
+	}
+	const cards = shownCards();
+	const at = cards.indexOf(card);
+	const run = card.dataset.run!;
+	const typing = typed.text !== '' && performance.now() - typed.at <= TYPEAHEAD_MS;
+	switch (event.key) {
+		case 'ArrowDown': goTo(cards[Math.min(at + 1, cards.length - 1)]); break;
+		case 'ArrowUp': goTo(cards[Math.max(at - 1, 0)]); break;
+		case 'Home': goTo(cards[0]); break;
+		case 'End': goTo(cards[cards.length - 1]); break;
+		case 'PageDown': goTo(cards[Math.min(at + pageOf(cards), cards.length - 1)]); break;
+		case 'PageUp': goTo(cards[Math.max(at - pageOf(cards), 0)]); break;
+		case 'Enter':
+			open(run);
+			break;
+		case ' ':
+			// A space within a name being typed is part of it
+			if (typing) {
+				typeahead(' ', cards, at);
+			} else {
+				open(run);
+			}
+			break;
+		case 'F2':
+			act('rename', run);
+			break;
+		default:
+			if (event.key.length !== 1) {
+				return;
+			}
+			typeahead(event.key, cards, at);
+	}
+	event.preventDefault();
+});
+
+// The view focused again - its rename box closed, the person back from the editor - with the focus on no card: the keyboard's card
+// has it again, as a VS Code list's focused row does
+window.addEventListener('focus', () => {
+	if (document.activeElement === document.body && keyed !== undefined) {
+		drawn?.get(keyed)?.element.focus({ preventScroll: true });
+	}
+});
+
+// The card the pointer or a screen reader focused is the keyboard's card from then on
+list.addEventListener('focusin', event => {
+	const run = (event.target as HTMLElement).closest<HTMLElement>('.item.agent')?.dataset.run;
+	if (run !== undefined && drawn?.has(run) && (run !== keyed || !keyedByPerson)) {
+		keyed = run;
+		keyedByPerson = true;
+		rove();
+		rememberBrowsing();
+	}
+});
+
+/** Opens the card of run `run` - its terminal forward - highlighted at once, as a click does. */
+function open(run: string): void {
+	highlight(run);
+	opening.add(act('open', run));
 }
 
 /** Highlights the card of run `runId` at once, as its terminal comes forward: the extension's state says so too, a moment later. */

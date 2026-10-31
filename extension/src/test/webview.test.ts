@@ -265,19 +265,20 @@ suite('The agent panel in Chromium', function () {
 		], [0]]);
 	});
 
-	test('PANEL-3.1: a page made as the view shows again restores the still-valid scroll position from its saved state, without taking focus', async () => {
-		await evaluate(`(document.scrollingElement ?? document.documentElement).scrollTop = 400`);
+	test('PANEL-3.1: a page made as the view shows again restores the still-valid scroll position and keyboard card from its saved state, without taking focus', async () => {
+		await call('Emulation.setFocusEmulationEnabled', { enabled: true });
+		await evaluate(`document.querySelector('[data-run="run-12"]').focus(); (document.scrollingElement ?? document.documentElement).scrollTop = 400; document.activeElement.blur()`);
 		await wait(80);
 		const saved = await evaluate('window.saved');
 		await load(shipped, saved);
 		await wait(30);
-		const back = await evaluate(`[(document.scrollingElement ?? document.documentElement).scrollTop, document.activeElement === document.body]`);
-		// A scroll beyond the list is kept within it; the keyboard's card an earlier build saved beside it is no longer anything
-		await load(shipped, { scrollTop: 1e6, focused: 'run-12' });
+		const back = await evaluate(`[(document.scrollingElement ?? document.documentElement).scrollTop, document.activeElement === document.body, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)]`);
+		// A scroll beyond the list is kept within it; a card no longer there, or what an earlier build saved beside it, is nothing
+		await load(shipped, { scrollTop: 1e6, target: 'run-99', focused: 'run-12' });
 		await wait(80);
-		const kept = await evaluate(`(() => { const root = document.scrollingElement ?? document.documentElement, end = root.scrollHeight - window.innerHeight; return [root.scrollTop === end, document.activeElement === document.body, document.querySelectorAll('.agent.focused, .agent[tabindex]').length, JSON.stringify(window.saved) === JSON.stringify({ scrollTop: end })]; })()`);
+		const kept = await evaluate(`(() => { const root = document.scrollingElement ?? document.documentElement, end = root.scrollHeight - window.innerHeight; return [root.scrollTop === end, document.activeElement === document.body, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run), JSON.stringify(window.saved) === JSON.stringify({ scrollTop: end, target: 'run-1' })]; })()`);
 		await load();
-		assert.deepStrictEqual([saved, back, kept], [{ scrollTop: 400 }, [400, true], [true, true, 0, true]]);
+		assert.deepStrictEqual([saved, back, kept], [{ scrollTop: 400, target: 'run-12' }, [400, true, ['run-12']], [true, true, ['run-1'], true]]);
 	});
 
 	test('U02: a state meant for an earlier page does nothing on the page made since in its place (PANEL-3.1)', async () => {
@@ -318,24 +319,91 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual([inShipped, await evaluate(`window.posted.filter(each => each.type === 'probed').map(({ id, value }) => ({ id, value }))`)], [[[0, 1], false], [{ id: 5, value: ['Agent 1', 'Agent 2'] }]]);
 	});
 
-	test('UX-2.3: the panel has no keys of its own - no card is a Tab stop or takes focus, and no key on a card does anything or is cancelled', async () => {
-		const seen = await evaluate(`(() => {
-			window.posted = [];
-			const cards = [...document.querySelectorAll('.agent')];
-			cards[3].focus();
-			const focusable = cards.some(card => card.hasAttribute('tabindex') || document.activeElement === card);
-			const cancelled = ['Enter', ' ', 'F2', 'ArrowDown', 'ArrowUp', 'Home', 'End', 'PageDown', 'PageUp', 'z'].filter(key => !cards[3].dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true })));
-			return [focusable, cancelled, window.posted, document.querySelectorAll('.agent.selected, .agent.focused').length];
-		})()`);
-		// Real Tab presses, as the person would: none comes to a card
-		const landed: boolean[] = [];
-		for (let i = 0; i < 3; i++) {
-			for (const type of ['keyDown', 'keyUp']) {
-				await call('Input.dispatchKeyEvent', { type, key: 'Tab', code: 'Tab', windowsVirtualKeyCode: 9 });
+	test('UX-2.3: the list is one Tab stop the keys move - arrows, Home, End and the page keys, scrolled into view as little as it takes - Enter or Space opens, F2 renames; a key with Ctrl is the editor\'s', async () => {
+		/** Presses `key` as the person does, its virtual key code `vk`. */
+		const press = async (key: string, vk: number, code = key) => {
+			for (const type of ['rawKeyDown', 'keyUp']) {
+				await call('Input.dispatchKeyEvent', { type, key, code, windowsVirtualKeyCode: vk });
 			}
-			landed.push(await evaluate(`!!document.activeElement?.closest('.agent')`));
+		};
+		const on = () => evaluate(`document.activeElement?.closest('.agent')?.dataset.run ?? null`);
+		const stops = await evaluate(`[...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)`);
+		await press('Tab', 9);
+		const tabbed = await on();
+		await press('ArrowDown', 40);
+		const down = [await on(), await evaluate(`document.activeElement.matches(':focus-visible')`)];
+		await press('ArrowUp', 38);
+		const up = await on();
+		await press('End', 35);
+		const end = [await on(), await evaluate(`(() => { const box = document.activeElement.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; })()`)];
+		await press('Home', 36);
+		const home = [await on(), await evaluate('(document.scrollingElement ?? document.documentElement).scrollTop')];
+		const visible = await evaluate(`[...document.querySelectorAll('.agent')].filter(card => { const box = card.getBoundingClientRect(); return box.top >= 0 && box.bottom <= innerHeight; }).length`);
+		await press('PageDown', 34, 'PageDown');
+		const paged = await on();
+		await press('PageUp', 33, 'PageUp');
+		const back = await on();
+		await press('ArrowDown', 40);
+		await evaluate('window.posted = []');
+		await press('Enter', 13);
+		await press(' ', 32, 'Space');
+		await press('F2', 113);
+		const posted = await evaluate(`window.posted.filter(message => message.type === 'act').map(message => [message.what, message.target])`);
+		const stopsNow = await evaluate(`[...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)`);
+		const editors = await evaluate(`['ArrowDown', 'End', 'a'].map(key => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true })))`);
+		// Tab leaves the list: the next stop is outside it
+		await press('Tab', 9);
+		const left = await on();
+		assert.deepStrictEqual({ stops, tabbed, down, up, end, home, paged, back, posted, stopsNow, editors, left }, {
+			stops: ['run-1'], tabbed: 'run-1', down: ['run-2', true], up: 'run-1', end: ['run-30', true], home: ['run-1', 0],
+			paged: `run-${Math.max(1, visible - 1) + 1}`, back: 'run-1',
+			posted: [['open', 'run-2'], ['open', 'run-2'], ['rename', 'run-2']], stopsNow: ['run-2'], editors: [true, true, true], left: null
+		});
+	});
+
+	test('UX-2.3: typing goes to the next card whose name starts with what was typed within 750 ms, wrapping; a click focuses a card without the keyboard\'s outline', async () => {
+		await call('Emulation.setFocusEmulationEnabled', { enabled: true });
+		await evaluate(`agents[19].name = 'Zed'; agents[24].name = 'Zelda Two'; redraw()`);
+		const type = async (text: string) => {
+			for (const char of text) {
+				await call('Input.dispatchKeyEvent', { type: 'keyDown', key: char, text: char, code: char === ' ' ? 'Space' : `Key${char.toUpperCase()}` });
+				await call('Input.dispatchKeyEvent', { type: 'keyUp', key: char, code: char === ' ' ? 'Space' : `Key${char.toUpperCase()}` });
+			}
+		};
+		const on = () => evaluate(`document.activeElement?.closest('.agent')?.dataset.run ?? null`);
+		await evaluate(`document.querySelector('.agent').focus()`);
+		await type('z');
+		const first = await on();
+		await type('el');
+		const longer = await on();
+		await evaluate('window.posted = []');
+		await type('da t');
+		const spaced = [await on(), await evaluate(`window.posted.filter(message => message.type === 'act').length`)];
+		await wait(800);
+		await type('z');
+		const wrapped = await on();
+		const box = await evaluate(`(() => { document.querySelector('[data-run="run-3"]').scrollIntoView({ block: 'nearest' }); const box = document.querySelector('[data-run="run-3"]').getBoundingClientRect(); return { x: box.left + 40, y: box.top + 10 }; })()`);
+		for (const type of ['mousePressed', 'mouseReleased']) {
+			await call('Input.dispatchMouseEvent', { type, x: box.x, y: box.y, button: 'left', clickCount: 1 });
 		}
-		assert.deepStrictEqual([seen, landed], [[false, [], [], 0], [false, false, false]]);
+		const clicked = [await on(), await evaluate(`document.activeElement.matches(':focus-visible')`), await evaluate(`[...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)`)];
+		assert.deepStrictEqual({ first, longer, spaced, wrapped, clicked }, {
+			first: 'run-20', longer: 'run-25', spaced: ['run-25', 0], wrapped: 'run-20', clicked: ['run-3', false, ['run-3']]
+		});
+	});
+
+	test('UX-2.3: the keyboard\'s card closed with the focus on it gives the focus to the card in its place; the Tab stop is the selected card until the keys move it (PANEL-2.1)', async () => {
+		await call('Emulation.setFocusEmulationEnabled', { enabled: true });
+		await evaluate(`agents[4].selected = true; redraw()`);
+		const stop = await evaluate(`[...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)`);
+		await evaluate(`document.querySelector('[data-run="run-5"]').focus()`);
+		await evaluate(`agents.splice(4, 1); redraw()`);
+		const after = await evaluate(`[document.activeElement?.dataset.run ?? null, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)]`);
+		await evaluate(`agents.splice(agents.length - 1, 1); redraw()`);
+		await evaluate(`document.querySelector('[data-run="run-29"]').focus()`);
+		await evaluate(`agents.splice(agents.length - 1, 1); redraw()`);
+		const last = await evaluate(`document.activeElement?.dataset.run ?? null`);
+		assert.deepStrictEqual({ stop, after, last }, { stop: ['run-5'], after: ['run-6', ['run-6']], last: 'run-28' });
 	});
 
 	test('PANEL-3.3: the page scrolls natively - a real wheel turn scrolls it and is not cancelled - its scrollbar VS Code\'s: 10px in the slider colours over no track, whatever VS Code\'s own webview default', async () => {
