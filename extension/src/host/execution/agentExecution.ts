@@ -242,9 +242,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 					throw new Error('The accepted CLI start is no longer held by ptyd.');
 				}
 				this.listen(pair, client);
+				pair.terminal.pty.expectScreen();
 				const attached = await client.request('attach', { run: pair.run });
 				return { client, attached };
 			} catch (err) {
+				pair.terminal.pty.abandonScreen();
 				pair.events?.dispose();
 				pair.events = undefined;
 				if (!pair.starting || this.session.closed || this.pairs.get(pair.run) !== pair) {
@@ -270,9 +272,22 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				throw new Error('The agent was closed while reattaching.');
 			}
 			this.listen(pair, client);
-			// Claimed now, so that this window hears the run from here on; its screen is drawn as the terminal opens
+			// Claimed now, so that this window hears the run from here on; its screen is drawn as the terminal opens, and what it
+			// writes before the answer comes after the screen
+			pair.terminal.pty.expectScreen();
 			attached = await client.request('attach', { run: live.run });
 		} catch (err) {
+			pair.terminal.pty.abandonScreen();
+			if ((err instanceof PtydLost || err instanceof PtydNotSent) && this.pairs.get(live.run) === pair && !this.session.closed) {
+				// The connection went as it reattached: the run is kept, told as lost, and claimed again with the others once the
+				// connection is back - never forgotten for a moment's loss (RULES-4.1, LIFECYCLE-3.5)
+				pair.process = { pid: live.pid, startedAt: live.startedAt };
+				pair.startupEnds = this.startupEndOf(live.startedAt);
+				pair.lost = true;
+				this.reports.fire({ run: live.run, activity: 'unknown', reporting: false, reason: vscode.l10n.t("The connection to the agent's process was lost; reconnecting"), disconnected: true });
+				this.options.log(`${live.run} could not be claimed again yet: ${messageOf(err)}`);
+				return this.openRestored(pair, live.run);
+			}
 			// Claimed by another window meanwhile, or gone: this window shows no pair of it
 			this.detachPair(live.run);
 			throw err;
@@ -295,16 +310,22 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			pair.terminal.pty.exited(this.endLine(info.exited));
 		}
 		this.tell(pair);
+		return this.openRestored(pair, live.run);
+	}
+
+	/**
+	 * Opens a reattached run's terminal. Opening another editor terminal before this one's xterm is ready can detach its container
+	 * and prevent VS Code from ever opening its pseudoterminal: the next run is restored only after this native terminal is ready.
+	 */
+	private async openRestored(pair: Pair, run: RunId): Promise<void> {
 		pair.terminal.open(false);
-		// Opening another editor terminal before this one's xterm is ready can detach its container and prevent VS Code
-		// from ever opening its pseudoterminal. Restore the next run only after this native terminal is ready.
 		const opened = await Promise.race([pair.terminal.pty.ready, timeout(OPEN_WAIT_MS).then(() => undefined)]);
-		if (opened === false || this.pairs.get(live.run) !== pair) {
+		if (opened === false || this.pairs.get(run) !== pair) {
 			throw new Error('The agent was closed while reattaching.');
 		}
 		if (opened === undefined) {
 			// Its card and process are kept; its terminal draws the run's screen once VS Code opens it
-			this.options.log(`The terminal of ${live.run} did not open within ${OPEN_WAIT_MS / 1000} seconds; the agents after it are restored meanwhile.`);
+			this.options.log(`The terminal of ${run} did not open within ${OPEN_WAIT_MS / 1000} seconds; the agents after it are restored meanwhile.`);
 		}
 	}
 
@@ -631,8 +652,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			}
 			this.listen(pair, client);
 			try {
+				// What it writes before the answer is drawn after the screen, not over or under it
+				pair.terminal.pty.expectScreen();
 				const { info, screen, seq } = await client.request('attach', { run: pair.run });
 				if (this.pairs.get(pair.run) !== pair || this.session.closed) {
+					pair.terminal.pty.abandonScreen();
 					continue;
 				}
 				pair.lost = false;
@@ -645,6 +669,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 					this.tell(pair);
 				}
 			} catch (err) {
+				pair.terminal.pty.abandonScreen();
 				pair.events?.dispose();
 				pair.events = undefined;
 				this.options.log(`${pair.run} could not be shown again: ${messageOf(err)}`);
@@ -681,16 +706,15 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			void this.cleanup(run);
 		}
 		this.terminals.observeNames();
-		const shown = [...this.pairs.values()].filter(pair => pair.process && !pair.exited);
-		if (!shown.length) {
+		// Lost, and not claimed again yet: tried again now - with no run shown too, as ptyd ends an owner's runs and its claim five
+		// minutes after its window is gone, and this window is not gone (RULES-4.1, D75)
+		if (this.session.needsRecovery) {
+			void this.reclaim();
 			return;
 		}
+		const shown = [...this.pairs.values()].filter(pair => pair.process && !pair.exited);
 		const connection = this.session.current;
-		if (!connection || this.session.needsRecovery) {
-			// Lost, and not claimed again yet: tried again now
-			if (this.session.needsRecovery && !this.session.closed) {
-				void this.reclaim();
-			}
+		if (!shown.length || !connection) {
 			return;
 		}
 		try {

@@ -122,6 +122,19 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 	}
 
+	/**
+	 * A screen of the run is coming - a reattach was asked for, which ptyd answers with its screen after claiming the run: output
+	 * that comes before that answer is kept, to be drawn after the screen it follows (ARCHITECTURE-2.3).
+	 */
+	expectScreen(): void {
+		this.early ??= [];
+	}
+
+	/** The screen expected will not come: what was kept for it goes, and output is drawn as before. */
+	abandonScreen(): void {
+		this.early = undefined;
+	}
+
 	/** Output numbered `seq`: drawn once, after the screen it follows. */
 	output(seq: number, data: string): void {
 		if (this.early) {

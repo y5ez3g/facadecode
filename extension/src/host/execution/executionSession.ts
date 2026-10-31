@@ -114,8 +114,12 @@ export class ExecutionSession {
 		return this.reclaiming;
 	}
 
+	/**
+	 * Connects and claims again, whether or not runs are shown: ptyd ends an absent owner's runs, and its claim, five minutes after
+	 * the window went (D75), and this window is still here. A failed connection keeps the loss, tried again by the next check.
+	 */
 	private async restore(hasRuns: boolean, restore: (client: PtydClient) => Promise<boolean>): Promise<void> {
-		if (!hasRuns || this.closed) {
+		if (this.closed) {
 			this.lost = false;
 			return;
 		}
@@ -129,7 +133,7 @@ export class ExecutionSession {
 			return;
 		}
 		this.lost = false;
-		if (!await restore(client) && !this.closed) {
+		if (hasRuns && !await restore(client) && !this.closed) {
 			this.lost = true;
 		}
 	}
