@@ -139,6 +139,7 @@ run and are validated against current state, without falling back to the selecti
 | `messageHistory` | Message History... | Always; this window's records; panel `…` menu | COLLABORATION-3.2 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
+| `copyDiagnostics` | Copy Diagnostics | Always; Command Palette | ARCHITECTURE-3.3 |
 
 PANEL-1.1 places the editor's own Add Folder to Workspace... command in the view menu; it is not another `facade.` command.
 Refresh, New Agent Here, Pin/Unpin Agent, the former working-location rename/navigation/copy/terminal commands, Show
@@ -247,6 +248,7 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 
 ## Change log
 
+- 2026-10-31: 3.1 adds Copy Diagnostics (D110).
 - 2026-10-30: Step 2 of the Facade Code extension: 1.2 adds the notification for a message to the person; 1.3 adds the
   owner's plain-language rule (D90); 3.1 adds Message History...; 3.2 adds message navigation and the components' private
   commands; 4.1 adds `facade.collaboration.enabled` and `facade.collaboration.waitSeconds` to the Agents section (D89); 5.2 adds message

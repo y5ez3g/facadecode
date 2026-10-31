@@ -45,6 +45,21 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.agents.launched, []);
 		});
 
+		test('each call is logged by its tool, caller and outcome, never its arguments (ARCHITECTURE-3.3, D111)', async () => {
+			const { lead } = team(s);
+			await s.call(lead, 'list_agents', {});
+			await s.call(lead, 'send_message', { to: '#a77', text: 'the secret words' });
+			await s.call(lead, 'get_operation', { text: 'more secret words' });
+			await s.call(runId(99), 'list_agents', {});
+			const calls = s.log.filter(line => line.startsWith('Tool '));
+			assert.strictEqual(calls.length, 4, calls.join('\n'));
+			assert.match(calls[0], /^Tool list_agents by #a1: success in \d+ ms$/);
+			assert.match(calls[1], /^Tool send_message by #a1: failure NOT_FOUND \(\w+\) in \d+ ms$/);
+			assert.match(calls[2], /^Tool an unknown tool by #a1: failure INVALID \(unsupported\) in \d+ ms$/);
+			assert.match(calls[3], new RegExp(`^Tool list_agents by ${runId(99)}: failure NOT_FOUND \\(not_found\\) in \\d+ ms$`));
+			assert.ok(!s.log.some(line => line.includes('secret')), s.log.join('\n'));
+		});
+
 		test('the check of text against structure catches a field the text leaves out or misstates', () => {
 			const structured = { status: 'success', data: { agent_id: 'run-1', count: 2 }, effects: { outcome: 'confirmed' } };
 			assertSameFacts({ text: 'Done.\n\nstatus: success\ndata:\n  agent_id: run-1\n  count: 2\neffects:\n  outcome: confirmed', structured, isError: false });

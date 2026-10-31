@@ -13,6 +13,7 @@
 	"command.moveUp": "Przenieś w górę",
 	"command.moveDown": "Przenieś w dół",
 	"command.revealAgent": "Pokaż agenta",
+	"command.copyDiagnostics": "Kopiuj diagnostykę",
 	"config.title": "Agenci",
 	"config.yolo": "Uruchamiaj agentów bez monitów o zatwierdzenie. Wyłącz, aby korzystać ze standardowych zatwierdzeń i obsługiwanej piaskownicy każdego CLI. Dotyczy tylko nowych agentów.",
 	"config.claude.title": "Claude Code",

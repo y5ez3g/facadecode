@@ -13,6 +13,7 @@
 	"command.moveUp": "上移",
 	"command.moveDown": "下移",
 	"command.revealAgent": "前往 Agent",
+	"command.copyDiagnostics": "複製診斷資訊",
 	"config.title": "Agent",
 	"config.yolo": "執行 Agent 時不請求審批。關閉後使用各 CLI 的常規審批和其支援的沙箱。僅對新啟動的 Agent 生效。",
 	"config.claude.title": "Claude Code",

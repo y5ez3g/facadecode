@@ -13,6 +13,7 @@
 	"command.moveUp": "Déplacer vers le haut",
 	"command.moveDown": "Déplacer vers le bas",
 	"command.revealAgent": "Afficher l’agent",
+	"command.copyDiagnostics": "Copier les diagnostics",
 	"config.title": "Agents",
 	"config.yolo": "Exécuter les agents sans invite d'approbation. Désactivez cette option pour utiliser les approbations normales et le bac à sable de chaque CLI. S'applique uniquement aux nouveaux agents.",
 	"config.claude.title": "Claude Code",

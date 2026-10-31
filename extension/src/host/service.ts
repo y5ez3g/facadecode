@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as crypto from 'crypto';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
@@ -33,6 +34,7 @@ import { allocateNumbers } from '../record/windowRegistry';
 import { agentAliases, AliasPool, ClientNetwork, LOCAL_POOL, networkAddress, publishAgents, REMOTE_POOL, serveRoutes } from './client';
 import { HostClis } from './clis';
 import { WindowContact } from './contact';
+import { diagnosticsOf, DiagnosticsDeps, registerDiagnostics } from './diagnostics';
 import { WorkspaceLaunchHistory } from './history';
 import { WindowHuman } from './human';
 import { OrdinaryInput } from './input';
@@ -231,6 +233,17 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	} catch (err) {
 		log.event(`Could not remove expired result files: ${messageOf(err)}`);
 	}
+	const diagnostics: DiagnosticsDeps = {
+		agents,
+		locations,
+		clis,
+		readScreen: (run, lines) => execution.readScreen(run, lines),
+		inspect: run => input.inspect(run),
+		logFile: agentLog.file,
+		version: String(context.extension.packageJSON.version),
+		...identity.component ? { component: identity.component } : {},
+		home: os.homedir()
+	};
 	const disposables: vscode.Disposable[] = [
 		...registerUi({
 			agents,
@@ -249,8 +262,13 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
 		contact,
 		...registerMessageHistory({ messages }),
-		// The integration suite's own: what an agent's terminal shows, for a journey's diagnostics; compiled out of the shipped extension
-		...typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [vscode.commands.registerCommand('facade.screen', (run: string, lines = 40) => execution.readScreen(run, lines))] : [],
+		...registerDiagnostics(diagnostics),
+		// The integration suite's own: what an agent's terminal shows, for a journey's diagnostics, and what Copy Diagnostics would copy,
+		// without the system clipboard; compiled out of the shipped extension
+		...typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [
+			vscode.commands.registerCommand('facade.screen', (run: string, lines = 40) => execution.readScreen(run, lines)),
+			vscode.commands.registerCommand('facade.diagnostics', () => diagnosticsOf(diagnostics))
+		] : [],
 		serveRoutes(route => services.serve(route)),
 		publishAgents(agents, window.label, line => log.event(line), session)
 	];

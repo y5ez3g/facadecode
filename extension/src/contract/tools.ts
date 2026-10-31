@@ -205,6 +205,10 @@ class ToolService {
 		} catch (err) {
 			outcome = { result: err instanceof ArgumentError ? errorResult(err, { data: err.problems }) : errorResult(err, { readOnly: QUERY_TOOLS.has(call.tool) }) };
 		}
+		// Each call by its tool, caller and outcome, never its arguments: how agents use the tools shows in the log (ARCHITECTURE-3.3, D111)
+		const { status, error } = outcome.result;
+		const tool = TOOLS.some(each => each.name === call.tool) ? call.tool : 'an unknown tool';
+		this.deps.log?.(`Tool ${tool} by ${this.deps.agents.get(call.caller as RunId)?.alias ?? call.caller}: ${status}${error ? ` ${error.code} (${error.reason})` : ''} in ${Math.round(this.mono() - receivedAt)} ms`);
 		const { after } = outcome;
 		return {
 			answer: answerOf(outcome.result, outcome.headline),

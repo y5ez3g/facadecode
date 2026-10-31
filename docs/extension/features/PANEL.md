@@ -87,7 +87,9 @@ unavailable`; the accessible label preserves it. No unread dot, completed check,
 
 **Every fact cut from a card remains readable without relying on color.**
 
-Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason;
+Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason; for
+a working agent, how long ago its CLI reported that work, `Reported working 25 min. ago` - the CLI's last word, which a long
+silence leaves for the person to judge rather than turning it into idle or done, as Orca shows `No update in …` (D108);
 started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
 written `~` except on Windows; window. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,
@@ -179,6 +181,7 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
+- 2026-10-31: 1.5's hover says how long ago a working agent's CLI reported its work (D108).
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 adds Message History... to the view menu; 1.4 adds an
   unavailable-tools explanation and a creation prompt's first line; 1.5 names an agent's creator; 2.1 places agent-started
   cards like any other without tree grouping; 3.2 renders no command links from messages.

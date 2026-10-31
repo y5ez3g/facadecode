@@ -40,7 +40,7 @@ const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString,
 	location: value => isShaped(value, { label: isString, full: isString }, { folderPrefix: isString }),
 	dot: value => DOTS.includes(value), stateText: isString, line: isString, tooltip: isStrings, label: isString, menu: isMenu
-}, { avatar: isAvatar, startedAt: isNumber });
+}, { avatar: isAvatar, startedAt: isNumber, workingSince: isNumber });
 const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
@@ -368,11 +368,15 @@ function fitPlaces(): void {
 }
 new ResizeObserver(fitPlaces).observe(list);
 
-/** A card's hover (PANEL-1.5): the extension's lines, how long ago it started, and its qualified location and window. */
+/**
+ * A card's hover (PANEL-1.5): the extension's lines, how long ago its CLI reported the work it is doing, how long ago it started,
+ * and its qualified location and window.
+ */
 function hoverOf(card: Card): string {
-	const { startedAt } = card;
+	const { startedAt, workingSince } = card;
+	const working = workingSince === undefined ? [] : [strings.workingSince.replace('{0}', relativeTime(workingSince))];
 	const started = startedAt === undefined ? [] : [strings.started.replace('{0}', relativeTime(startedAt))];
-	return [...card.tooltip, ...started, card.location.full].join('\n');
+	return [...card.tooltip, ...working, ...started, card.location.full].join('\n');
 }
 
 /** What the menu of a card is given (PANEL-2.2): its run, and which of its actions apply now. */

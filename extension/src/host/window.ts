@@ -88,6 +88,6 @@ export function activate(context: vscode.ExtensionContext): void {
 		}
 		// The workspace extension host has its folders as file: URIs; the remote host's name is the local window's alone
 		const remote = vscode.env.remoteName === undefined ? undefined : vscode.workspace.workspaceFolders?.[0]?.uri.authority || vscode.workspace.workspaceFile?.authority;
-		return { version: 1, token, session: vscode.env.sessionId, ...(remote ? { remote } : {}) };
+		return { version: 1, token, session: vscode.env.sessionId, ...(remote ? { remote } : {}), component: String(context.extension.packageJSON.version) };
 	}));
 }

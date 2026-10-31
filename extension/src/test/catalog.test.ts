@@ -24,7 +24,8 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.copyAgentReference', 'Copy Agent Reference'],
 	['facade.closeAgent', 'Close Agent'],
 	['facade.messageHistory', 'Message History...'],
-	['facade.configureAgents', 'Configure Agents...']
+	['facade.configureAgents', 'Configure Agents...'],
+	['facade.copyDiagnostics', 'Copy Diagnostics']
 ];
 const HIDDEN: readonly [string, string, string?][] = [
 	['facade.newWorktree', 'New Worktree...'],
@@ -32,8 +33,11 @@ const HIDDEN: readonly [string, string, string?][] = [
 	['facade.moveDown', 'Move Down'],
 	['facade.revealAgent', 'Show Agent']
 ];
-/** Registered by the host itself rather than the panel: New Worktree, and Message History beside the message records (COLLABORATION-3.2). */
-const HOST_COMMANDS = ['facade.newWorktree', 'facade.messageHistory'];
+/**
+ * Registered by the host itself rather than the panel: New Worktree, Message History beside the message records (COLLABORATION-3.2)
+ * and Copy Diagnostics beside the agents log (ARCHITECTURE-3.3).
+ */
+const HOST_COMMANDS = ['facade.newWorktree', 'facade.messageHistory', 'facade.copyDiagnostics'];
 const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
@@ -169,7 +173,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree and Message History (UX-3.2, E03)', () => {
+		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Message History and Copy Diagnostics (UX-3.2, E03)', () => {
 			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id));
 			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
 		});

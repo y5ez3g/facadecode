@@ -166,6 +166,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		tooltip,
 		label,
 		startedAt: facts.startedAt ?? facts.createdAt,
+		...facts.activity === 'working' && facts.activitySince !== undefined ? { workingSince: facts.activitySince } : {},
 		menu: input.menu
 	};
 }

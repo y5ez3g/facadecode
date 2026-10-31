@@ -45,6 +45,12 @@ const menu = { moveUp: false, moveDown: true };
 
 suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () => {
 
+	test('a working card carries when its CLI reported that work, for its hover to say how long ago; any other card does not (RULES-3.2)', () => {
+		const working = cardOf(run({ activity: 'working', reporting: true, activitySince: 1_234 }), { place, selected: false, menu, words: WORDS });
+		const idle = cardOf(run({ activity: 'not_working', reporting: true, activitySince: 1_234 }), { place, selected: false, menu, words: WORDS });
+		assert.deepStrictEqual([working.workingSince, idle.workingSince], [1_234, undefined]);
+	});
+
 	test('a retained worktree failure renders its stored effects in the current language', () => {
 		const effects = { branch: 'fix', folder: '/app.worktrees/fix' };
 		const facts = run({ lifecycle: 'ended', error: { reason: 'spawn refused', source: 'launch', at: 3, worktree: effects } });

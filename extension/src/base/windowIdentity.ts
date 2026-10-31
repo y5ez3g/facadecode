@@ -40,6 +40,8 @@ export interface WindowIdentity {
 	readonly session: string;
 	/** The window's remote authority, `ssh-remote+host`, which only the local component sees; none in a local window. */
 	readonly remote?: string;
+	/** The component's own version, which a remote extension host cannot see, for Copy Diagnostics (ARCHITECTURE-3.3, D110). */
+	readonly component?: string;
 }
 
 export function isWindowToken(value: unknown): value is string {
@@ -49,5 +51,6 @@ export function isWindowToken(value: unknown): value is string {
 /** A late reply from an earlier editor session cannot identify the current window. */
 export function isWindowIdentity(value: unknown, session: string): value is WindowIdentity {
 	return isJsonObject(value) && value.version === 1 && value.session === session && isWindowToken(value.token)
-		&& (value.remote === undefined || (typeof value.remote === 'string' && !!value.remote));
+		&& (value.remote === undefined || (typeof value.remote === 'string' && !!value.remote))
+		&& (value.component === undefined || (typeof value.component === 'string' && !!value.component));
 }

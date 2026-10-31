@@ -13,6 +13,7 @@
 	"command.moveUp": "上へ移動",
 	"command.moveDown": "下へ移動",
 	"command.revealAgent": "エージェントを表示",
+	"command.copyDiagnostics": "診断情報をコピー",
 	"config.title": "Agent",
 	"config.yolo": "承認プロンプトなしでエージェントを実行します。無効にすると、各 CLI の通常の承認とサポート対象サンドボックスが使用されます。新しく起動するエージェントにのみ適用されます。",
 	"config.claude.title": "Claude Code",

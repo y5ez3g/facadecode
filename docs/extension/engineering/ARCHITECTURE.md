@@ -156,7 +156,8 @@ workspace. This lifecycle is a platform evidence requirement, not a guarantee in
 replacement of that directory cannot justify a folder-based search for another window's identity.
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
-component rejects a request from a different session. Each activation records its key and folders under that identity in
+component rejects a request from a different session. Its answer names the component's own version too, which a remote
+extension host cannot see otherwise, for Copy Diagnostics (3.3, D110). Each activation records its key and folders under that identity in
 the execution Facade directory. The same window that retains its original first folder takes that key and the current
 window's saved state - order, locations and choices - even if the destination workspace has stale state. Another window
 does not inherit it merely by opening the same folders or copying a workspace file. The execution environment keeps one atomic exact-workspace-URI ledger, including each owner's current URI. Resolution
@@ -302,7 +303,16 @@ prompts.
 Use a log with UTC time, safe name/reference, operation ID, phase, effects, route status and actual failure. Redact CLI
 credentials and sensitive environment values. Full message text belongs to deliberate message history, not routine
 transport logs. Correlation IDs connect UI/MCP/supervisor observations. Retain 30-day diagnostics subject to the
-capacity policy; no telemetry service is introduced by this refactor.
+capacity policy; no telemetry service is introduced by this refactor. Each tool call is logged with its tool, its caller's
+alias, its status and error code and how long it took, never its arguments (D111).
+
+Copy Diagnostics puts on the clipboard, in English as the log is, what a report of a problem needs, and sends nothing
+anywhere: the extension's, its window component's and the editor's versions, the platform and the remote kind; each
+built-in CLI for the window's first location - its version as its installation says it and its input reader, or why it
+cannot start; this window's agents - CLI and version, lifecycle, activity and since when, tools, and what their input
+reader reads now - with each live one's last twelve screen rows; and the agents log's last two hundred lines. The home
+folder is written `~`. Its notification says that screens can show code and keys, and to look the text over before
+sharing it (D110).
 
 ## 4 Repository and delivery
 
@@ -458,7 +468,7 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
-- 2026-10-31: Persist request metadata before startup and keep removed runs deduplicated without restoring their pairs.
+- 2026-10-31: Copy Diagnostics includes component versions and terminal facts; tool logs omit arguments.
 - 2026-10-31: 4.1's real run takes any built-in, its configuration given to its terminals.
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 makes the window component the client component, using local
   sockets and a client registry without a broker process (D87); 1.3 adds the `schema`, `contract`, `transport` and
