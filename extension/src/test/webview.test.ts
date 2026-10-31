@@ -365,13 +365,14 @@ suite('The agent panel in Chromium', function () {
 		const posted = await evaluate(`window.posted.filter(message => message.type === 'act').map(message => [message.what, message.target])`);
 		const stopsNow = await evaluate(`[...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)`);
 		const editors = await evaluate(`['ArrowDown', 'End', 'a'].map(key => document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: true, bubbles: true, cancelable: true })))`);
-		// Tab leaves the list: the next stop is outside it
+		// Tab leaves the list for what follows it on the page, never another card
+		await evaluate(`document.body.append(Object.assign(document.createElement('button'), { id: 'after', textContent: 'After' }))`);
 		await press('Tab', 9);
-		const left = await on();
+		const left = await evaluate(`document.activeElement?.id || document.activeElement?.closest('.agent')?.dataset.run || null`);
 		assert.deepStrictEqual({ stops, tabbed, down, up, end, home, paged, back, posted, stopsNow, editors, left }, {
 			stops: ['run-1'], tabbed: 'run-1', down: ['run-2', true], up: 'run-1', end: ['run-30', true], home: ['run-1', 0],
 			paged: `run-${Math.max(1, visible - 1) + 1}`, back: 'run-1',
-			posted: [['open', 'run-2'], ['open', 'run-2'], ['rename', 'run-2']], stopsNow: ['run-2'], editors: [true, true, true], left: null
+			posted: [['open', 'run-2'], ['open', 'run-2'], ['rename', 'run-2']], stopsNow: ['run-2'], editors: [true, true, true], left: 'after'
 		});
 	});
 
