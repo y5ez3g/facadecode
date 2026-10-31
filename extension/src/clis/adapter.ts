@@ -99,12 +99,17 @@ export interface LaunchInput {
 
 /**
  * What a run's start types into its CLI before its first turn (COLLABORATION-2.2), where that turn could not use the Facade tools
- * otherwise: `text` entered into its empty input, its screen waited on until it shows `ready`, then `close` pressed.
+ * otherwise: `text` entered into its empty input, its screen waited on until it shows `ready`, then `close` pressed while what it
+ * opened still shows.
  */
 export interface WarmUp {
 	readonly text: string;
+	/** A row of its screen once `text` alone is in its input, as a regular expression's source: Enter goes only then. */
+	readonly typed: string;
 	/** What its screen shows once the tools are there, as a regular expression's source. */
 	readonly ready: string;
+	/** A row of what `text` opened, as a regular expression's source: `close` goes only while it shows. */
+	readonly opened: string;
 	/** The key that closes what `text` opened, as press_keys names keys. */
 	readonly close: string;
 }
@@ -137,9 +142,9 @@ export interface CliAdapter {
 	readonly warmUp?: WarmUp;
 	/**
 	 * The value its launch gives the variable `name` the tools set (CLIS-1.2), where the tools' value `ours` must keep the person's
-	 * own value `theirs` of it.
+	 * own value `theirs` of it; undefined where theirs cannot be read, which then stays as it is, the run without the tools.
 	 */
-	mergeVariable?(name: string, ours: string, theirs: string | undefined): string;
+	mergeVariable?(name: string, ours: string, theirs: string | undefined): string | undefined;
 	/** What its launch must change in the environment, for a quirk of the CLI's own (CLIS-1.2). */
 	adjustEnvironment?(env: { [name: string]: string }, platform: NodeJS.Platform): void;
 	/**

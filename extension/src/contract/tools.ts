@@ -673,7 +673,7 @@ class ToolService {
 			origin: 'agent',
 			creator: { run: caller.id, root: caller.root, label: [caller.name, caller.alias].filter(Boolean).join(' ') }
 		});
-		const start: Start = { run, args, caller, call, location, ...prompt ? { promptId: prompt.id } : {} };
+		const start: Start = { run, args, caller, call, location, ...prompt ? { promptId: prompt.id } : {}, answerBy: Date.now() + this.deps.timeout() * 1000 };
 		const settled = this.deps.agents.started(run);
 		let outcome: { readonly value: StartOutcome } | undefined;
 		try {
@@ -687,7 +687,7 @@ class ToolService {
 		}
 		// Still starting: accepted now, its outcome reported to the caller under this call's ID once it settles (MCP-1.3)
 		void settled.then(async late => {
-			const final = await this.finishStart(start, late);
+			const final = await this.finishStart({ ...start, answerBy: Infinity }, late);
 			const facts = this.deps.agents.get(run);
 			if (facts) {
 				this.reportTo(caller, { callId: call.callId, agent: facts, text: answerOf(final.result, final.headline).text });
@@ -805,8 +805,10 @@ class ToolService {
 		}
 		let sent: SendResult;
 		try {
-			// After what its start types before its first turn: that turn can use the tools then, and the prompt's budget starts there
-			await this.deps.agents.warmedUp(run);
+			// After what its start types before its first turn: that turn can use the tools then, and the prompt's budget starts there -
+			// but not past the call's own wait, which answers the caller in time; the prompt then waits behind that typing (MCP-1.3)
+			const warmed = this.deps.agents.warmedUp(run);
+			await (start.answerBy === Infinity ? warmed : within(warmed, Math.max(0, start.answerBy - Date.now())));
 			sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId });
 		} catch (err) {
 			const failed = errorResult(err, { effects: { outcome: 'unknown' } });
@@ -1189,6 +1191,8 @@ interface Start {
 	readonly location: Location;
 	/** The creation prompt's message ID, taken before the launch. */
 	readonly promptId?: string;
+	/** When the call's own wait ends (MCP-1.3), by `Date.now()`: infinite for a start reported later, once its caller was answered. */
+	readonly answerBy: number;
 }
 
 /** `promise`'s value, or undefined once `ms` passed first. */

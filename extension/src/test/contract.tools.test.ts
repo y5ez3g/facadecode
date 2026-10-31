@@ -285,6 +285,17 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([s.messages.sent.length, result.data.prompt.path, result.data.prompt.status], [1, 'post_start', 'success']);
 		});
 
+		test('the wait for that typing ends with the call\'s own wait: the prompt is sent then, the caller answered in time (MCP-1.3)', async () => {
+			const { lead } = team(s);
+			s.timeout = 0.05;
+			s.agents.warmUps.set(runId(100), new Promise<void>(() => undefined));
+			s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_unknown' });
+			const began = Date.now();
+			const result = resultOf(await s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.' }));
+			assert.ok(Date.now() - began < 2_000, 'answered within its wait, not after the typing');
+			assert.deepStrictEqual([s.messages.sent.length, result.data.prompt.path, result.data.prompt.status], [1, 'post_start', 'pending']);
+		});
+
 		test('a failed prompt leaves the started agent running and its start a success', async () => {
 			const { lead } = team(s);
 			s.agents.startWith = { state: 'running', prompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'No mapping.' } } };

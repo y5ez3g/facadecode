@@ -22,7 +22,8 @@ const TITLE_SWITCH = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
 
 /**
  * Claude Code's settings for one run, passed inline with `--settings`, which overrides the same keys of its settings files for
- * that session alone: no more than a run needs, so that the person's own settings stay in force (CLIS-1.3). Its title switch also
+ * that session alone: no more than a run needs, so that the person's own settings stay in force (CLIS-1.3). It never takes a
+ * project's `facade` server from `.mcp.json`, which would ask about it at its start. Its title switch also
  * turns off its OSC 7501 status reports, which a run needs to show its activity (CLIS-2.3), and it reapplies `env` from its
  * settings files after launch, so the run's settings clear the switch too. With YOLO off its sandbox is turned on where it has one;
  * with YOLO on its sandbox is its own setting's, as YOLO maps to the permission bypass alone.
@@ -30,6 +31,9 @@ const TITLE_SWITCH = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
 export function claudeRunSettings(yolo: boolean, platform: NodeJS.Platform): object {
 	return {
 		env: { [TITLE_SWITCH]: '' },
+		// A project's own `facade` server - Muse Code's shared entry, on Windows - is never this run's: it has its own, and no question
+		// about the project's stops it at its start
+		disabledMcpjsonServers: [SERVER_NAME],
 		...!yolo && hasSandbox(platform) ? { sandbox: { enabled: true } } : {}
 	};
 }

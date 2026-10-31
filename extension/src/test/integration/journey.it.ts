@@ -19,7 +19,7 @@ const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
  * which the tools' journey checks (CLIS-3.2); Codex's trust is checked apart.
  */
 const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
-	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'],
+	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"]}', '--dangerously-skip-permissions'],
 	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 	muse: ['--disable-approval', '--disable-sandbox', '--trust-workspace'],
 	opencode: ['--auto'],

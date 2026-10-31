@@ -15,7 +15,7 @@ import { museAdapter } from '../clis/muse';
 import { openCodeAdapter } from '../clis/opencode';
 import { piAdapter } from '../clis/pi';
 import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconcileRuns, releaseProject, releaseRun } from '../clis/injected';
-import { DestinationEnvironment, inputOf, PlanInput, planLaunch } from '../clis/plan';
+import { DestinationEnvironment, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
 import { INPUT_ADAPTERS } from '../ptyd/composer';
 import { McpServer, ProjectWrite, runDirOf, ToolsInput } from '../clis/tools';
 import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
@@ -144,7 +144,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual(JSON.parse(config.content), { mcpServers: { facade: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1' } } } });
 		assert.deepStrictEqual(planned.injection!.env, { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' });
 		assert.deepStrictEqual([planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.ELECTRON_RUN_AS_NODE], ['run-1', '/tmp/ptyd.sock', undefined]);
-		assert.deepStrictEqual(planned.warmUp, { text: '/mcp', ready: '✓\\s+facade_facade\\b', close: 'Escape' });
+		assert.deepStrictEqual(planned.warmUp, { text: '/mcp', typed: '^> /mcp\\s*$', ready: '✓\\s+facade_facade\\b', opened: '^MCP Servers\\s*$|\\besc Exit\\b', close: 'Escape' });
 		// Its first task waits for the tools: it goes as the first message once they are ready
 		const prompted = plan({ cli: 'agy', tools, prompt: 'Review the diff' });
 		assert.deepStrictEqual(prompted.prompt?.path, 'post_start');
@@ -157,16 +157,25 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([without.args.includes('--settings'), without.warmUp], [false, undefined]);
 	});
 
-	test('Muse Code: the server as the facade entry of the project\'s .mcp.json, its variables references to the CLI\'s environment that are empty where unset, and the skill in .agents/skills/facade; no argument carries JSON', () => {
+	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows, through cmd.exe, the project\'s .mcp.json entry instead, its references empty where unset', () => {
 		const planned = plan({ cli: 'muse', tools, prompt: 'Fix the build' });
-		assert.deepStrictEqual(planned.injection!.project, [
-			{ kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } } },
-			{ kind: 'file', path: path.join('.agents', 'skills', 'facade', 'SKILL.md'), content: FACADE_SKILL }
-		]);
-		assert.deepStrictEqual([planned.injection!.runFiles, planned.injection!.env], [[], { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' }]);
-		assert.strictEqual(planned.env.FACADE_AGENT, '#a1');
-		assert.deepStrictEqual(planned.args, ['--disable-approval', '--disable-sandbox', '--trust-workspace', '--', 'Fix the build']);
+		const references = { ELECTRON_RUN_AS_NODE: '${FACADE_ELECTRON_RUN_AS_NODE}', FACADE_RUN: '${FACADE_RUN}', FACADE_PTYD: '${FACADE_PTYD}', FACADE_AGENT: '${FACADE_AGENT}' };
+		assert.deepStrictEqual(planned.args, ['-c', `mcpServers.facade=${JSON.stringify({ command: SERVER.command, args: SERVER.args, env: references })}`, '--disable-approval', '--disable-sandbox', '--trust-workspace', '--', 'Fix the build']);
+		assert.deepStrictEqual(planned.injection!.project, [{ kind: 'file', path: path.join('.agents', 'skills', 'facade', 'SKILL.md'), content: FACADE_SKILL }]);
+		// Each reference names a variable the CLI's environment carries; the runtime's under a name no other program reads
+		assert.deepStrictEqual([planned.env.FACADE_ELECTRON_RUN_AS_NODE, planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.FACADE_AGENT, planned.env.ELECTRON_RUN_AS_NODE], ['1', 'run-1', '/tmp/ptyd.sock', '#a1', undefined]);
 		assert.deepStrictEqual(planned.prompt?.path, 'native');
+		// On Windows its launcher goes through cmd.exe, which cannot carry the entry: it is a shared project entry there
+		const windows = museAdapter.tools.inject({ ...tools, platform: 'win32' });
+		assert.deepStrictEqual([windows.args, windows.project[0]], [undefined, { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } } }]);
+		assert.deepStrictEqual(windows.env, { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' });
+	});
+
+	test('a choice cmd.exe cannot carry is not offered where the CLI runs through it: Muse Code\'s effort, a JSON string, before any effect (CLIS-1.4)', () => {
+		assert.deepStrictEqual(takesThrough(museAdapter, true, cwd, 'win32'), { model: true, effort: false });
+		assert.deepStrictEqual(takesThrough(museAdapter, false, cwd, 'win32'), { model: true, effort: true });
+		assert.deepStrictEqual(takesThrough(codexAdapter, true, cwd, 'win32'), { model: true, effort: false }, 'Codex\'s effort is a TOML string too');
+		assert.deepStrictEqual(takesThrough(claudeAdapter, true, cwd, 'win32'), { model: true, effort: true });
 	});
 
 	test('OpenCode: the server, its tools allowed and the skill as instructions in the run\'s own OPENCODE_CONFIG_CONTENT, on the person\'s own where they set one, with --standalone for a server process of its own', () => {
@@ -182,8 +191,14 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual(JSON.parse(plan({ cli: 'opencode', tools }, theirs).env.OPENCODE_CONFIG_CONTENT), {
 			permission: { '*': 'ask', 'facade_*': 'allow' }, mcp: { mine: { type: 'local', command: ['x'] }, facade }, instructions: ['a.md', skill], model: 'p/m'
 		});
-		const unreadable = { ...destination, host: { ...destination.host, OPENCODE_CONFIG_CONTENT: 'not json' } };
-		assert.deepStrictEqual(Object.keys(JSON.parse(plan({ cli: 'opencode', tools }, unreadable).env.OPENCODE_CONFIG_CONTENT)), ['mcp', 'permission', 'instructions']);
+		// Theirs is read as OpenCode reads it, comments and trailing commas allowed
+		const commented = { ...destination, host: { ...destination.host, OPENCODE_CONFIG_CONTENT: '{\n\t// theirs\n\t"permission": { "bash": "ask", },\n}' } };
+		assert.deepStrictEqual(JSON.parse(plan({ cli: 'opencode', tools }, commented).env.OPENCODE_CONFIG_CONTENT).permission, { bash: 'ask', 'facade_*': 'allow' });
+		// One it cannot read stays as it is: the agent starts without the tools rather than without the person's configuration
+		const unreadable = { ...destination, host: { ...destination.host, OPENCODE_CONFIG_CONTENT: '{ "model": {env:MODEL} }' } };
+		const kept = plan({ cli: 'opencode', tools }, unreadable);
+		assert.deepStrictEqual([kept.env.OPENCODE_CONFIG_CONTENT, kept.injection, kept.args.includes('--standalone')], ['{ "model": {env:MODEL} }', undefined, false]);
+		assert.deepStrictEqual([kept.tools.state, kept.tools.problem, kept.tools.file], ['unavailable', 'variable', 'OPENCODE_CONFIG_CONTENT']);
 		// A prompt it would read as an option goes after startup; without the tools, nothing of Facade's in its environment
 		assert.strictEqual(plan({ cli: 'opencode', tools, prompt: '-v' }).prompt?.path, 'post_start');
 		const without = plan({ cli: 'opencode' }, theirs);

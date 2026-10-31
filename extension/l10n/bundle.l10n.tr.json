@@ -51,6 +51,7 @@
 	"Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file": "Diğer aracılarla birlikte çalışılamıyor: Aracıları Yapılandır bölümünde yolu .cmd dosyası yerine CLI'nin kendi programına ayarlayın",
 	"Cannot work with other agents: move or rename {0} in this folder": "Diğer aracılarla birlikte çalışılamıyor: bu klasördeki {0} dosyasını taşıyın veya yeniden adlandırın",
 	"Cannot work with other agents: Facade could not create the files it needs": "Diğer aracılarla birlikte çalışılamıyor: Facade gereken dosyaları oluşturamadı",
+	"Cannot work with other agents: Facade could not read your {0} setting": "Diğer aracılarla birlikte çalışılamıyor: Facade {0} ayarınızı okuyamadı",
 	"Started by {0}": "{0} tarafından başlatıldı",
 	"New Worktree needs a working location in a Git repository with a commit.": "Yeni Çalışma Ağacı için en az bir işleme içeren bir Git deposunda bir çalışma konumu gerekir.",
 	"New Worktree": "Yeni Çalışma Ağacı",

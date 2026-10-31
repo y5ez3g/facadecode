@@ -123,12 +123,22 @@ export class OrdinaryInput implements InputPort {
 			this.log(run, `what goes before its first turn was not typed whole: ${typed.outcome}`);
 			return;
 		}
-		const shows = (text: string) => (screen: ScreenRead) => screen.text.some(line => line.includes(text));
-		await this.screenUntil(run, shows(warmUp.text), DRAFT_MS);
+		const shows = (source: string) => {
+			const pattern = new RegExp(source, 'u');
+			return (screen: ScreenRead) => screen.text.some(line => pattern.test(line.trimEnd()));
+		};
+		// Enter only once the input holds that text alone: text the person typed meanwhile is never submitted with it
+		if (!await this.screenUntil(run, shows(warmUp.typed), DRAFT_MS)) {
+			this.log(run, `what goes before its first turn did not show alone in its input within ${DRAFT_MS / 1000} seconds, so Enter was not pressed`);
+			return;
+		}
 		await this.deps.pressKeys(run, ['Enter']);
-		const ready = new RegExp(warmUp.ready, 'u');
-		const shown = await this.screenUntil(run, screen => screen.text.some(line => ready.test(line)), WARM_READY_MS);
-		await this.deps.pressKeys(run, [warmUp.close]);
+		const shown = await this.screenUntil(run, shows(warmUp.ready), WARM_READY_MS);
+		// Closed only while what it opened shows: once someone else closed it, the key could stop a turn of theirs
+		const opened = shows(warmUp.opened);
+		if (shown || await this.screenUntil(run, opened, 0)) {
+			await this.deps.pressKeys(run, [warmUp.close]);
+		}
 		const usable = await this.until(run, adapter, 'usable', TAKEN_MS, undefined);
 		this.log(run, `before its first turn its tools ${shown ? 'were shown ready' : `did not show ready within ${WARM_READY_MS / 1000} seconds`}, and its input ${usable ? 'reads empty again' : 'did not read empty again'}`);
 	}

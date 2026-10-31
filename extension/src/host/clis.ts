@@ -12,7 +12,8 @@ import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { catalogOf, SettingsReader } from '../clis/catalog';
 import { acquireProject, injectedRecordOf, markPlanned, reconcileRuns, releaseRun, removeRunFiles, writeRunFiles } from '../clis/injected';
-import { CliPlanError, DestinationEnvironment, discover, environmentOf, executableOf, inputOf, PlanInput, planLaunch, PlannedLaunch } from '../clis/plan';
+import { CliPlanError, DestinationEnvironment, discover, environmentOf, executableOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough } from '../clis/plan';
+import { launchTarget } from '../clis/executable';
 import { installedVersionOf } from '../clis/version';
 import { runDirOf, ToolsInput } from '../clis/tools';
 import { writeTrust } from '../clis/trust';
@@ -81,11 +82,14 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		return {
 			launches: discover(catalogOf(this.read), destination, location.path).map(({ entry, available }): CliFacts => {
 				const { adapter } = entry;
-				const found = available ? executableOf(entry, environmentOf(entry, destination), location.path, destination.platform) : undefined;
+				const env = environmentOf(entry, destination);
+				const found = available ? executableOf(entry, env, location.path, destination.platform) : undefined;
 				const version = found?.executable ? installedVersionOf(adapter.id, found.executable) : undefined;
+				// As a start here would go: a choice whose arguments cmd.exe cannot carry is not offered where the CLI runs through it
+				const target = found?.executable ? adapter.launchTarget?.(found.executable, destination.platform, env, location.path) ?? launchTarget(found.executable, destination.platform, env, location.path) : undefined;
 				return {
 					cli: adapter.id,
-					takes: adapter.takes,
+					takes: takesThrough(adapter, target?.throughCmd ?? false, location.path, destination.platform),
 					...adapter.initialPrompt ? { initialPrompt: { ...adapter.groups.prompt ? { mapping: adapter.groups.prompt } : {}, capability: adapter.initialPrompt } } : {},
 					// A CLI whose first task waits for what its start types: the prompt goes after it, as its first message (COLLABORATION-2.2)
 					...!adapter.initialPrompt && adapter.promptAfterStart ? { initialPrompt: { capability: { state: 'unavailable' as const, reason: adapter.promptAfterStart } } } : {},

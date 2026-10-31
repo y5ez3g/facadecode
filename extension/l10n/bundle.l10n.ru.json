@@ -51,6 +51,7 @@
 	"Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file": "Невозможно работать с другими агентами: в разделе «Настроить агентов» укажите путь к собственной программе CLI, а не к файлу .cmd",
 	"Cannot work with other agents: move or rename {0} in this folder": "Невозможно работать с другими агентами: переместите или переименуйте {0} в этой папке",
 	"Cannot work with other agents: Facade could not create the files it needs": "Невозможно работать с другими агентами: Facade не удалось создать необходимые файлы",
+	"Cannot work with other agents: Facade could not read your {0} setting": "Невозможно работать с другими агентами: Facade не удалось прочитать настройку {0}",
 	"Started by {0}": "Запущен агентом {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "Для команды «Новое рабочее дерево» нужно рабочее расположение в репозитории Git, где есть хотя бы одна фиксация.",
 	"New Worktree": "Новое рабочее дерево",

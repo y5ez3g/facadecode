@@ -279,10 +279,13 @@ async function serverOf(): Promise<Server | undefined> {
 	if (antigravity && fs.existsSync(plugin)) {
 		return JSON.parse(fs.readFileSync(plugin, 'utf8')).mcpServers.facade;
 	}
-	if (args.includes('--trust-workspace') && fs.existsSync('.mcp.json')) {
-		const entry = JSON.parse(fs.readFileSync('.mcp.json', 'utf8')).mcpServers?.facade as Server | undefined;
+	// Muse Code's entry: for the run alone by `-c`, or on Windows in the folder's `.mcp.json`; its references read from its environment
+	const museArg = args.find(arg => arg.startsWith('mcpServers.facade='));
+	const museFile = args.includes('--trust-workspace') && fs.existsSync('.mcp.json') ? JSON.parse(fs.readFileSync('.mcp.json', 'utf8')).mcpServers?.facade as Server | undefined : undefined;
+	const entry = museArg !== undefined ? JSON.parse(museArg.slice('mcpServers.facade='.length)) as Server : museFile;
+	if (entry) {
 		const expanded = (value: string) => value.replace(/\$\{(\w+)(?::-([^}]*))?\}/g, (_all, name: string, empty?: string) => process.env[name] ?? empty ?? '');
-		return entry && { ...entry, env: Object.fromEntries(Object.entries(entry.env ?? {}).map(([name, value]) => [name, expanded(value)])) };
+		return { ...entry, env: Object.fromEntries(Object.entries(entry.env ?? {}).map(([name, value]) => [name, expanded(value)])) };
 	}
 	return undefined;
 }

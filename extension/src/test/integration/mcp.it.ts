@@ -146,8 +146,11 @@ function assertTools(alias: string): void {
 			break;
 		}
 		case 'muse': {
-			const entry = JSON.parse(fs.readFileSync(path.join(cwd, '.mcp.json'), 'utf8')).mcpServers.facade;
-			assert.deepStrictEqual(entry.env.FACADE_RUN, '${FACADE_RUN:-}');
+			// For the run alone by -c; on Windows, where it goes through cmd.exe, in the folder's .mcp.json
+			const entry = process.platform === 'win32'
+				? JSON.parse(fs.readFileSync(path.join(cwd, '.mcp.json'), 'utf8')).mcpServers.facade
+				: JSON.parse(args.find(arg => arg.startsWith('mcpServers.facade='))!.slice('mcpServers.facade='.length));
+			assert.deepStrictEqual(entry.env.FACADE_RUN, process.platform === 'win32' ? '${FACADE_RUN:-}' : '${FACADE_RUN}');
 			assert.ok(args.includes('--trust-workspace') && routes(env), args.join(' '));
 			assert.ok(fs.existsSync(path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md')), 'the skill in its folder');
 			break;

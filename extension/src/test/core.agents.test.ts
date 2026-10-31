@@ -173,7 +173,7 @@ function setUp(options: {
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 suite('A start\'s typing before the first turn (COLLABORATION-2.2)', () => {
-	const WARM_UP = { text: '/mcp', ready: '✓\\s+facade_facade\\b', close: 'Escape' };
+	const WARM_UP = { text: '/mcp', typed: '^> /mcp\\s*$', ready: '✓\\s+facade_facade\\b', opened: '^MCP Servers\\s*$', close: 'Escape' };
 
 	test('a running start whose plan has it is handed to the window once its process started; warmedUp settles after it, at once for any other', async () => {
 		const asked: [RunId, unknown][] = [];

@@ -69,7 +69,10 @@ function cardWords(): CardWords {
 			: problem === 'conflict' && file
 				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
 				? vscode.l10n.t("Cannot work with other agents: move or rename {0} in this folder", file)
-				: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
+				: problem === 'variable' && file
+					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
+					? vscode.l10n.t("Cannot work with other agents: Facade could not read your {0} setting", file)
+					: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
 		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
 		startedBy: creator => vscode.l10n.t("Started by {0}", creator)
 	};

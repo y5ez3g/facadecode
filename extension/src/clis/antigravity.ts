@@ -118,7 +118,7 @@ export const antigravityAdapter: CliAdapter = {
 	tools: antigravityTools,
 	// It starts a folder's plugin servers with its first turn, which is planned before they connect, or with its MCP panel: opened
 	// and closed before the first turn, every turn has the tools (COLLABORATION-2.2)
-	warmUp: { text: '/mcp', ready: `✓\\s+${PLUGIN_SERVER}\\b`, close: 'Escape' },
+	warmUp: { text: '/mcp', typed: '^> /mcp\\s*$', ready: `✓\\s+${PLUGIN_SERVER}\\b`, opened: '^MCP Servers\\s*$|\\besc Exit\\b', close: 'Escape' },
 	promptAfterStart: 'Antigravity starts the Facade tools of a folder only with its first turn, so its first task goes in as its first message once they are ready',
 	trustTarget: (cwd, env, platform): TrustTarget => {
 		const folder = workingDirectoryOf(cwd, env, platform);

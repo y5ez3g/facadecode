@@ -31,6 +31,8 @@ export interface ToolsInput {
 	readonly skill: string;
 	/** Where the run's launch files go, in the execution environment's Facade directory. */
 	readonly runDir: string;
+	/** The platform the CLI runs on, where how it is given the tools depends on it. */
+	readonly platform?: NodeJS.Platform;
 }
 
 /**
@@ -45,6 +47,8 @@ export type ProjectWrite =
 export interface Injection {
 	/** The `${name}`s of the adapter's `connect` group. */
 	readonly values: { readonly [name: string]: string };
+	/** Arguments of the launch alone that go where its `connect` group goes, for an integration whose arguments vary by platform. */
+	readonly args?: readonly string[];
 	/** Files of the run alone, under its folder: absolute paths. */
 	readonly runFiles: readonly { readonly path: string; readonly content: string }[];
 	/** Content shared by the runs in the project folder. */

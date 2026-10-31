@@ -235,10 +235,10 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 });
 
 suite('A start\'s typing before the first turn: the CLI\'s tools ready before it takes a task (COLLABORATION-2.2)', () => {
-	const WARM_UP = { text: '/mcp', ready: '✓\\s+facade_facade\\b', close: 'Escape' };
+	const WARM_UP = { text: '/mcp', typed: '^> /mcp\\s*$', ready: '✓\\s+facade_facade\\b', opened: '^MCP Servers\\s*$|\\besc Exit\\b', close: 'Escape' };
 
 	/** The input of a run whose screen shows `/mcp` once typed and the tools' panel once entered, unless `shows` says otherwise. */
-	function warming(facts: Partial<RunFacts> = {}, shows: { readonly panel: boolean } = { panel: true }, starting = 0) {
+	function warming(facts: Partial<RunFacts> = {}, shows: { readonly panel: boolean; readonly typedFirst?: string; readonly closedBy?: 'person' } = { panel: true }, starting = 0) {
 		const world = setUp(facts);
 		let unrecognized = starting;
 		const inspectInput = world.terminal.inspectInput;
@@ -250,12 +250,14 @@ suite('A start\'s typing before the first turn: the CLI\'s tools ready before it
 			get: run => world.runs.get(run),
 			inspectInput: async (run, adapter) => unrecognized-- > 0 ? { state: 'unknown', evidence: 'still starting' } : inspectInput(run, adapter),
 			typeText: async (run, text, enter) => {
-				screen = [`> ${text}`];
+				// The person may have typed first, the paste going on after their text
+				screen = [`> ${shows.typedFirst ?? ''}${text}`];
 				return typeText(run, text, enter);
 			},
 			pressKeys: async (run, keys) => {
 				if (keys[0] === 'Enter' && screen[0] === '> /mcp') {
-					screen = ['MCP Servers', shows.panel ? '>  ✓ facade_facade  Tools: list_agents' : '>  ⋯ facade_facade'];
+					// A panel the person closes at once leaves the input behind
+					screen = shows.closedBy === 'person' ? ['>'] : ['MCP Servers', shows.panel ? '>  ✓ facade_facade  Tools: list_agents' : '>  ⋯ facade_facade'];
 				} else if (keys[0] === 'Escape') {
 					screen = ['>'];
 				}
@@ -291,6 +293,16 @@ suite('A start\'s typing before the first turn: the CLI\'s tools ready before it
 			assert.deepStrictEqual(world.terminal.calls.filter(call => !call.startsWith('read')), [], first);
 			assert.ok(world.log.some(line => line.includes(`nothing is typed before its first turn: its input first read ${first}`)), world.log.join('\n'));
 		}
+	});
+
+	test('nothing is submitted with text the person typed meanwhile, and nothing is closed once the person closed the panel', async () => {
+		const typedFirst = warming({}, { panel: true, typedFirst: 'fix ' });
+		await typedFirst.input.warmUp(RUN, WARM_UP);
+		assert.deepStrictEqual(typedFirst.terminal.calls.filter(call => !call.startsWith('read')), ['type "/mcp"'], 'no Enter: the input holds more than its text');
+		assert.ok(typedFirst.log.some(line => /did not show alone in its input/.test(line)), typedFirst.log.join('\n'));
+		const closed = warming({}, { panel: true, closedBy: 'person' });
+		await closed.input.warmUp(RUN, WARM_UP);
+		assert.deepStrictEqual(closed.terminal.calls.filter(call => !call.startsWith('read')), ['type "/mcp"', 'keys Enter'], 'no Escape once the panel is gone');
 	});
 
 	test('an input that never reads within the wait is given up; a panel that never shows ready is closed after its wait', async () => {

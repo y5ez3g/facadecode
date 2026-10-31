@@ -644,7 +644,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(typeof meta.version === 'string' ? { version: meta.version } : {}),
 		tools: meta.tools === 'connecting' || meta.tools === 'available' || meta.tools === 'unavailable' ? meta.tools : 'not_injected',
 		...(typeof meta.toolsReason === 'string' ? { toolsReason: meta.toolsReason } : {}),
-		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' ? { toolsProblem: meta.toolsProblem } : {}),
+		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' ? { toolsProblem: meta.toolsProblem } : {}),
 		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
 		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
 		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),

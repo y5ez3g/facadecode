@@ -130,7 +130,11 @@ export interface McpServerLaunch {
  * Why an agent runs without its Facade tools, as the card says it in plain words (PANEL-1.4): its CLI starts through cmd.exe, which
  * cannot take their arguments; the files they need could not be written; or its folder holds another `facade` skill or server.
  */
-export type ToolsProblem = 'cmd' | 'files' | 'conflict';
+/**
+ * Why a run has no Facade tools, for the person's words (CLIS-2.2): its CLI runs through cmd.exe, its files could not be written, a
+ * file of the person's is in the way, or a variable of theirs the tools' would go on could not be read.
+ */
+export type ToolsProblem = 'cmd' | 'files' | 'conflict' | 'variable';
 
 /** A capability as an adapter stands behind it (CLIS-2.1). */
 export interface CapabilityState {
@@ -164,10 +168,11 @@ export interface LaunchPlan {
 	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
 	readonly screenStatus?: string;
 	/**
-	 * What its start types before its first turn (COLLABORATION-2.2): `text` into its empty input, then `close` once its screen shows
-	 * `ready`, a regular expression's source - where its first turn could not use the Facade tools otherwise.
+	 * What its start types before its first turn (COLLABORATION-2.2): `text` into its empty input, Enter once its screen shows `typed`,
+	 * then `close` once it shows `ready`, while it shows `opened` - regular expressions' sources - where its first turn could not use
+	 * the Facade tools otherwise.
 	 */
-	readonly warmUp?: { readonly text: string; readonly ready: string; readonly close: string };
+	readonly warmUp?: { readonly text: string; readonly typed: string; readonly ready: string; readonly opened: string; readonly close: string };
 }
 
 /** A reason Facade itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */

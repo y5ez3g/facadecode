@@ -11,29 +11,34 @@ import { SERVER_NAME, serverEntry, sharedServer, ToolsIntegration } from './tool
 const MCP_FILE = '.mcp.json';
 const SKILL_PATH = path.join('.agents', 'skills', SERVER_NAME, 'SKILL.md');
 
+/** The variable a run's own entry names for the server's runtime variable: Muse Code takes only references in a run's entry. */
+const RUNTIME_REFERENCE = 'FACADE_ELECTRON_RUN_AS_NODE';
+
 /**
- * Muse Code is given the server as the `facade` entry of the project's `.mcp.json`, merged into the person's file, and the skill in
- * the project's `.agents/skills/facade`, both shared by the folder's runs; every launch trusts the folder, so it reads them (CLIS-2.2,
- * 3.3). Its arguments go through cmd.exe on Windows, which cannot carry a server's JSON, so the entry is a file everywhere. A shared
- * entry holds no run's identity: it names the run's variables as `${NAME:-}` references to the CLI's environment - empty in a session
- * the person starts there by hand, whose server then serves nothing, where an unset reference would turn off every server of theirs.
+ * Muse Code is given the server for the run alone by `-c mcpServers.facade=<entry>`, and the skill in the project's
+ * `.agents/skills/facade`, shared by the folder's runs; every launch trusts the folder, so it reads it (CLIS-2.2, 3.3). A run's
+ * entry may name variables only by references to the CLI's environment, which carries the run's own. On Windows its arguments go
+ * through cmd.exe, which cannot carry an entry's JSON: there the entry is the `facade` entry of the project's `.mcp.json`, merged
+ * into the person's file and shared by the folder's runs, its variables `${NAME:-}` references - empty in a session the person
+ * starts there by hand, whose server then serves nothing, where an unset reference would turn off every server of theirs.
  */
 const museTools: ToolsIntegration = {
-	capability: { state: 'unverified', reason: 'a facade entry merged into the project\'s .mcp.json and the skill in its .agents/skills/facade, shared by the folder\'s runs, the server given the run\'s variables by references to the CLI\'s environment' },
-	where: (_runDir, cwd) => `mcpServers.${SERVER_NAME} in ${path.join(cwd, MCP_FILE)} and the skill in ${path.join(cwd, SKILL_PATH)}, shared by the runs there, with the run's variables in its environment`,
-	inject: ({ server, skill }) => {
+	capability: { state: 'unverified', reason: 'the server by -c mcpServers.facade for the run alone - on Windows a facade entry merged into the project\'s .mcp.json, shared by the folder\'s runs - with references to the run\'s variables in the CLI\'s environment, and the skill in the project\'s .agents/skills/facade' },
+	where: (_runDir, cwd) => `-c mcpServers.${SERVER_NAME} of the launch alone, on Windows mcpServers.${SERVER_NAME} in ${path.join(cwd, MCP_FILE)}, and the skill in ${path.join(cwd, SKILL_PATH)}, shared by the runs there`,
+	inject: ({ server, skill, platform }) => {
 		const shared = sharedServer(server);
-		const references = Object.fromEntries([...Object.keys(shared.env), RUN_VARIABLE].map(name => [name, `\${${name}:-}`]));
-		const entry = serverEntry({ ...shared.server, env: { ...shared.server.env, ...references } });
-		return {
-			values: {},
-			runFiles: [],
-			project: [
-				{ kind: 'entry', path: MCP_FILE, keys: ['mcpServers', SERVER_NAME], value: entry },
-				{ kind: 'file', path: SKILL_PATH, content: skill }
-			],
-			env: shared.env
-		};
+		const skillFile = { kind: 'file', path: SKILL_PATH, content: skill } as const;
+		if (platform === 'win32') {
+			const references = Object.fromEntries([...Object.keys(shared.env), RUN_VARIABLE].map(name => [name, `\${${name}:-}`]));
+			const entry = serverEntry({ ...shared.server, env: { ...shared.server.env, ...references } });
+			return { values: {}, runFiles: [], project: [{ kind: 'entry', path: MCP_FILE, keys: ['mcpServers', SERVER_NAME], value: entry }, skillFile], env: shared.env };
+		}
+		// Every variable a reference to the CLI's environment, the runtime's under a name of its own, which no program but the server reads
+		const runtime = Object.fromEntries(Object.entries(shared.server.env).map(([name, value]) => [name === 'ELECTRON_RUN_AS_NODE' ? RUNTIME_REFERENCE : name, value]));
+		const env = { ...runtime, ...shared.env };
+		const references = Object.fromEntries([...Object.keys(server.env), RUN_VARIABLE].map(name => [name, `\${${name === 'ELECTRON_RUN_AS_NODE' ? RUNTIME_REFERENCE : name}}`]));
+		const entry = serverEntry({ command: server.command, args: server.args, env: references });
+		return { values: {}, args: ['-c', `mcpServers.${SERVER_NAME}=${JSON.stringify(entry)}`], runFiles: [], project: [skillFile], env };
 	}
 };
 

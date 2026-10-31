@@ -6,7 +6,7 @@
 // alone, before any file or process exists. Discovery and launch use the same environment, so the program found is the one
 // started; every prerequisite that can be checked is checked here, and a failure carries its actual reason.
 
-import { Capability, CliAdapter, invocation, WarmUp } from './adapter';
+import { Capability, CliAdapter, expanded, invocation, WarmUp } from './adapter';
 import { Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
 import { composeEnvironment, Environment, EnvironmentMap, runEnvironment, setVariable, variableOf } from './environment';
@@ -64,7 +64,7 @@ export interface PlannedLaunch {
 	readonly model?: string;
 	readonly effort?: string;
 	/** Whether the Facade tools are injected, and why not where they are not (CLIS-2.2). */
-	readonly tools: { readonly state: 'injected' | 'not_injected' | 'unavailable'; readonly reason?: string; readonly problem?: 'cmd' | 'files' | 'conflict'; readonly file?: string };
+	readonly tools: { readonly state: 'injected' | 'not_injected' | 'unavailable'; readonly reason?: string; readonly problem?: 'cmd' | 'files' | 'conflict' | 'variable'; readonly file?: string };
 	/** How a requested creation prompt goes in, and the state of the native path (COLLABORATION-2.2, MCP-2.3). */
 	readonly prompt?: { readonly path: 'native' | 'post_start'; readonly capability: Capability };
 	readonly input: { readonly adapter?: string; readonly capability: Capability };
@@ -98,6 +98,24 @@ function promptOf(adapter: CliAdapter, prompt: string, throughCmd: boolean): { r
 	return problem === undefined
 		? { path: 'native', capability: native }
 		: { path: 'post_start', capability: { state: 'unavailable', reason: `${problem}; it is sent as the first message after the process starts` } };
+}
+
+/**
+ * What `adapter` takes for a launch in `cwd` (CLIS-1.4): its own choices, less one whose arguments cmd.exe cannot be given where the
+ * launch goes through it - Muse Code's effort, a JSON string, through its `muse.cmd` on Windows.
+ */
+export function takesThrough(adapter: CliAdapter, throughCmd: boolean, cwd: string, platform: NodeJS.Platform): CliAdapter['takes'] {
+	if (!throughCmd) {
+		return adapter.takes;
+	}
+	const passes = (kind: 'model' | 'effort') => {
+		if (!adapter.takes[kind]) {
+			return false;
+		}
+		const group = adapter.groups[kind] ?? [];
+		return !expanded(group, adapter.values({ yolo: true, cwd, platform, [kind]: 'medium' })).some(unsafeForCmd);
+	};
+	return { model: passes('model'), effort: passes('effort') };
 }
 
 /**
@@ -173,23 +191,36 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	if (found.problem !== undefined) {
 		throw new CliPlanError(found.problem, 'not_found', found.said);
 	}
+	const target = adapter.launchTarget?.(found.executable, platform, env, input.cwd) ?? launchTarget(found.executable, platform, env, input.cwd);
+	const takes = takesThrough(adapter, target.throughCmd, input.cwd, platform);
 	for (const asked of ['model', 'effort'] as const) {
-		if (input[asked] !== undefined && !adapter.takes[asked]) {
-			throw new CliPlanError(`${adapter.displayName} has no supported way to set ${asked === 'model' ? 'a model' : 'an effort'}; omit ${asked} to use its own default`, 'unsupported');
+		if (input[asked] !== undefined && !takes[asked]) {
+			throw new CliPlanError(`${adapter.displayName} has no supported way to set ${asked === 'model' ? 'a model' : 'an effort'}${adapter.takes[asked] ? ' where it runs through cmd.exe' : ''}; omit ${asked} to use its own default`, 'unsupported');
 		}
 	}
-	const target = adapter.launchTarget?.(found.executable, platform, env, input.cwd) ?? launchTarget(found.executable, platform, env, input.cwd);
 	const prompt = input.prompt === undefined ? undefined : promptOf(adapter, input.prompt, target.throughCmd);
 	const native = prompt?.path === 'native';
-	const argsWith = (injection: Injection | undefined) => [...target.args, ...invocation(adapter.groups, {
+	const argsWith = (injection: Injection | undefined) => [...target.args, ...injection?.args ?? [], ...invocation(adapter.groups, {
 		yolo: input.yolo, connect: injection !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: native
 	}, {
 		...adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, model: input.model, effort: input.effort, env }),
 		...injection?.values,
 		...native ? { prompt: input.prompt! } : {}
 	})];
-	let injection = input.tools ? adapter.tools.inject(input.tools) : undefined;
+	let injection = input.tools ? adapter.tools.inject({ ...input.tools, platform }) : undefined;
 	let tools: PlannedLaunch['tools'] = injection ? { state: 'injected' } : { state: 'not_injected' };
+	// The tools' variables on the person's own, where a CLI's variable must keep theirs: one that cannot be read keeps theirs whole,
+	// and the CLI starts without the tools rather than without the person's configuration (CLIS-2.2)
+	const merged: { [name: string]: string } = {};
+	for (const [name, value] of Object.entries(injection?.env ?? {})) {
+		const kept = adapter.mergeVariable ? adapter.mergeVariable(name, value, variableOf(env, name, platform)) : value;
+		if (kept === undefined) {
+			injection = undefined;
+			tools = { state: 'unavailable', problem: 'variable', file: name, reason: `${name} in ${adapter.displayName}'s environment could not be read, so Facade leaves it as it is and does not give the agent its tools` };
+			break;
+		}
+		merged[name] = kept;
+	}
 	let args = argsWith(injection);
 	if (target.throughCmd && injection && args.some(unsafeForCmd) && !argsWith(undefined).some(unsafeForCmd)) {
 		// The tools alone cannot pass through cmd.exe: the CLI starts without them rather than not at all (MCP-6.1)
@@ -210,8 +241,10 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		}
 	}
 	const started = { ...env };
-	for (const [name, value] of Object.entries(injection?.env ?? {})) {
-		setVariable(started, name, adapter.mergeVariable ? adapter.mergeVariable(name, value, variableOf(started, name, platform)) : value, platform);
+	if (injection) {
+		for (const [name, value] of Object.entries(merged)) {
+			setVariable(started, name, value, platform);
+		}
 	}
 	const runEnv = runEnvironment(started, input.alias, platform);
 	const version = installedVersionOf(adapter.id, found.executable)?.version;

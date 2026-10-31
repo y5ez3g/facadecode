@@ -4,6 +4,7 @@
 
 import * as path from 'path';
 import { isJsonObject, JsonObject } from '../base/json';
+import { nodeValue, parseJsonc } from '../base/jsonc';
 import { CliAdapter, sigintExit } from './adapter';
 import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';
 
@@ -30,18 +31,22 @@ export function openCodeConfig(server: McpServer, skill: string): JsonObject {
 
 /**
  * The inline configuration a run starts with: `ours` on the person's own `theirs`, where they set one - their servers, rules and
- * instructions kept, Facade's rule after theirs - and ours alone where theirs is none or no JSON object.
+ * instructions kept, Facade's rule after theirs - and ours alone where they set none. Theirs is read as OpenCode reads it, comments
+ * and trailing commas allowed; one that cannot be read so, or is no object, is undefined: it stays as it is, the run without the tools.
  */
-export function mergedOpenCodeConfig(ours: string, theirs: string | undefined): string {
+export function mergedOpenCodeConfig(ours: string, theirs: string | undefined): string | undefined {
+	if (theirs === undefined || theirs.trim() === '') {
+		return ours;
+	}
 	let mine: unknown;
 	try {
-		mine = theirs === undefined ? undefined : JSON.parse(theirs);
+		mine = nodeValue(parseJsonc(theirs));
 	} catch {
-		mine = undefined;
+		return undefined;
 	}
 	const facade = JSON.parse(ours) as JsonObject;
 	if (!isJsonObject(mine)) {
-		return ours;
+		return undefined;
 	}
 	const permission = typeof mine.permission === 'string' ? { '*': mine.permission } : isJsonObject(mine.permission) ? mine.permission : {};
 	return JSON.stringify({

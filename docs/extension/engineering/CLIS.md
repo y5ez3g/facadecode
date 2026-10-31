@@ -95,8 +95,9 @@ choices to their CLI argument/configuration mechanism and report requested versu
 ignored override is not verified success. Do not track every in-CLI change to reconstruct session settings. Previously
 observed choices remain discovery/display facts, not restore inputs. Claude Code, Antigravity and Pi take `--model` and
 an effort option (Pi's `--thinking`); Codex its `model_reasoning_effort`; Muse Code `--model` and its `reasoning_effort`
-for the run, as its own effort option would save it in the person's settings. OpenCode's interface takes neither, so a
-start that asks it for one is refused with why.
+for the run, as its own effort option would save it in the person's settings - not offered where it runs through cmd.exe,
+on Windows, which cannot carry that JSON string. OpenCode's interface takes neither, so a start that asks it for one is
+refused with why.
 
 ## 2 Runtime adapters
 
@@ -139,18 +140,20 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | Claude Code | Per-run `--mcp-config` file | Per-run `--plugin-dir` plugin | `--allowedTools mcp__facade` |
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
 | Antigravity | Project plugin `.agents/plugins/facade`, shared | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
-| Muse Code | `facade` entry merged into the project's `.mcp.json`, shared | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
+| Muse Code | Per-run `-c mcpServers.facade`; on Windows a `facade` entry merged into the project's `.mcp.json`, shared | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
 | OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
 | Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
 
 These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
 RULES-4.3 chose (D84). An entry shared by a folder's runs holds no run's identity: the run's variables reach the server
-through the CLI's environment - for Muse Code as `${NAME:-}` references, empty in a session the person starts there by
-hand, whose server then offers no tools; an unset plain reference would turn off every server of theirs. Muse Code's
-arguments pass through cmd.exe on Windows, which cannot carry a server's JSON, so its entry is a project file on every
-platform. Antigravity's `--settings` replaces a settings key whole for its session, so the person's own permission rules
-are read and kept in it. OpenCode's background service, which the person's sessions share, would not read a run's own
-configuration, so a run with the tools has its own server process. Antigravity starts a folder's plugin servers only
+through the CLI's environment. Muse Code's own entry names its variables only by references to that environment; its
+arguments pass through cmd.exe on Windows, which cannot carry a server's JSON, so there its entry is a project file, its
+references `${NAME:-}`, empty in a session the person starts there by hand, whose server then offers no tools - an unset
+plain reference would turn off every server of theirs. Claude Code's run settings disable a project's `facade` entry,
+which would otherwise ask about it at its start. Antigravity's `--settings` replaces a settings key whole for its session,
+so the person's own permission rules are read and kept in it. OpenCode's background service, which the person's sessions
+share, would not read a run's own configuration, so a run with the tools has its own server process; the person's own
+inline configuration is read as OpenCode reads it, and one that cannot be read stays as it is, the run without the tools. Antigravity starts a folder's plugin servers only
 with its first turn, which is planned before they connect, or with its MCP panel: a run's start opens and closes that
 panel before the first turn (COLLABORATION-2.2), and the server marks its tools for Antigravity to give the model
 directly. The server is never declared required, so a CLI whose Facade server fails still starts and stays usable. The

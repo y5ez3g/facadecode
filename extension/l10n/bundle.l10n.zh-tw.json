@@ -51,6 +51,7 @@
 	"Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file": "無法與其他 Agent 協作：請在 [設定 Agent] 中將路徑設定為 CLI 自身的程式，而非 .cmd 檔案",
 	"Cannot work with other agents: move or rename {0} in this folder": "無法與其他 Agent 協作：請移動或重新命名此資料夾中的 {0}",
 	"Cannot work with other agents: Facade could not create the files it needs": "無法與其他 Agent 協作：Facade 無法建立所需的檔案",
+	"Cannot work with other agents: Facade could not read your {0} setting": "無法與其他 Agent 協作：Facade 無法讀取您的 {0} 設定",
 	"Started by {0}": "由 {0} 啟動",
 	"New Worktree needs a working location in a Git repository with a commit.": "新增工作樹需要位於至少有一次提交的 Git 存放庫中的工作位置。",
 	"New Worktree": "新增工作樹",

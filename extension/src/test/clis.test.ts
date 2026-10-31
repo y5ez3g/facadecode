@@ -300,15 +300,15 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 
 	test('Claude Code maps YOLO to its native bypass, and with YOLO off turns its sandbox on where it has one, approvals left as they are; its folder is trusted in its own file, YOLO on or off (CLIS-1.3, 3.3)', () => {
 		const args = (yolo: boolean) => plan({ cli: 'claude', yolo }).args;
-		assert.deepStrictEqual(args(true), ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions']);
-		assert.deepStrictEqual(args(false), ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"sandbox":{"enabled":true}}']);
+		assert.deepStrictEqual(args(true), ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"]}', '--dangerously-skip-permissions']);
+		assert.deepStrictEqual(args(false), ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"],"sandbox":{"enabled":true}}']);
 		// Every launch trusts its folder in Claude Code's own file, never by an argument (CLIS-3.3, D62)
 		for (const yolo of [true, false]) {
 			assert.strictEqual(plan({ cli: 'claude', yolo }).trust.kind, 'file', `${yolo}`);
 			assert.ok(!args(yolo).some(arg => /trust/i.test(arg)), `${yolo}`);
 		}
 		// Windows has no Claude Code sandbox
-		assert.deepStrictEqual(JSON.parse(claudeAdapter.values({ yolo: false, cwd, platform: 'win32' }).runSettings), { env: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' } });
+		assert.deepStrictEqual(JSON.parse(claudeAdapter.values({ yolo: false, cwd, platform: 'win32' }).runSettings), { env: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' }, disabledMcpjsonServers: ['facade'] });
 	});
 
 	test('Claude Code\'s run settings hold no more than a run needs: no sandbox setting with YOLO on, no prompt of its own switched off; its title switch is cleared wherever the environment sets it (CLIS-1.3, 2.3)', () => {
@@ -318,7 +318,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		// The host's copy, and one the folder's terminal settings give, are cleared alike: the switch would turn off its status reports
 		const where: DestinationEnvironment = { ...destination, terminal: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1' } };
 		const cleared = [plan({ cli: 'claude' }).env, plan({ cli: 'claude', yolo: false }, {}, where).env].map(env => 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE' in env);
-		assert.deepStrictEqual([cleared, settingsOf(plan({ cli: 'claude', yolo: false }, {}, where))], [[false, false], { env: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' }, sandbox: { enabled: true } }]);
+		assert.deepStrictEqual([cleared, settingsOf(plan({ cli: 'claude', yolo: false }, {}, where))], [[false, false], { env: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' }, disabledMcpjsonServers: ['facade'], sandbox: { enabled: true } }]);
 	});
 
 	test('the groups go in their order: the run\'s own settings, then the YOLO mapping', () => {
@@ -363,7 +363,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		const planned = plan({ cli: 'claude' }, left);
 		// Only Claude Code and Codex are installed here
 		assert.deepStrictEqual([discover(catalogOf(settings(left)), destination, cwd).map(each => each.available), planned.args, 'LEFT' in planned.env], [
-			[true, true, false, false, false, false], ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'], false
+			[true, true, false, false, false, false], ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"]}', '--dangerously-skip-permissions'], false
 		]);
 		const missing = { 'facade.claude.path': '/nowhere/claude' };
 		assert.deepStrictEqual(discover(catalogOf(settings(missing)), destination, cwd).map(each => [each.available, each.notInstalled]).slice(0, 2), [[false, undefined], [true, undefined]]);
