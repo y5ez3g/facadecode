@@ -841,6 +841,31 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
 		});
+
+		test('a name or CLI title that holds $(...) is shown word for word, not as the theme icon the editor would draw (PANEL-3.2)', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const { plainText } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+			const runs = [run(1, { name: '$(rocket) Ada', title: 'Fix $(build) and $(x' })];
+			const words = {
+				worktreeFailure: (reason: string) => reason,
+				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`
+			};
+			const done = goToAgent({
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
+				agents: { onDidChange: new TestEmitter<void>().event as never },
+				words,
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined,
+				copyReference: async () => undefined,
+				close: async () => undefined
+			});
+			const picker = ui.current!;
+			const shown = [picker.items[0].label, picker.items[0].description];
+			picker.hide();
+			await done;
+			assert.deepStrictEqual([shown, plainText('no icon here')], [['\\$(rocket) Ada', '#a1 · Claude Code · Working · main · Fix \\$(build) and \\$(x'], 'no icon here']);
+		});
 	});
 });
 

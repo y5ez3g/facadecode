@@ -8,7 +8,7 @@ import { FacadeError } from '../../core/errors';
 import { normalizeName, suggestName } from '../../core/names';
 import { PlanError, type Agents, type Catalog, type CliCatalogPort, type CliChoice, type HumanPort, type LaunchHistoryPort, type Location, type LocationId, type LocationPort, type LogPort, type RunId, type WorktreePort } from '../../core/ports';
 import { COMMANDS } from '../catalog';
-import { cliIcon, configureAgentsLabel, launchFailureText, reasonText } from '../presentation';
+import { cliIcon, configureAgentsLabel, launchFailureText, plainText, reasonText } from '../presentation';
 import { chooseLocation, Destination, environmentLabel, locationLabel, worktreeSourceLabel } from './location';
 import { BACK, Flow } from './stepping';
 
@@ -163,15 +163,15 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	const bottom: Item[] = [
 		// A labeled line: the editor draws one without a label as all but invisible. The location said as a label is its own line.
 		...!changeable
-			? [{ label: where, kind: vscode.QuickPickItemKind.Separator }]
+			? [{ label: plainText(where), kind: vscode.QuickPickItemKind.Separator }]
 			: [{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator }, {
 				label: vscode.l10n.t("Change Working Location..."),
-				description: where,
+				description: plainText(where),
 				iconPath: new vscode.ThemeIcon('folder'),
 				alwaysShow: true,
 				does: 'location' as const
 			}],
-		{ label: vscode.l10n.t("Change Name..."), description: at.name, iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
+		{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
 	];
 	const itemsOf = (choices: readonly CliChoice[] | Error): { readonly items: Item[]; readonly active?: Item } => {
 		if (choices instanceof Error) {

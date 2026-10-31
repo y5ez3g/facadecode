@@ -11,6 +11,7 @@ import { isDeletableWorktree } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
 import type { Agents, Catalog, HumanPort, Location, LocationId, LocationPort, LogPort, WorkspaceFolderInfo, WorktreePlan, WorktreePort } from '../../core/ports';
 import { folderPrefixOf } from '../cardView';
+import { plainText } from '../presentation';
 import { BACK, Flow, StepAction } from './stepping';
 
 /**
@@ -155,7 +156,7 @@ function folderIconOf(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.The
 function locationItems(locations: readonly Location[], folder: WorkspaceFolderInfo): LocationItem[] {
 	const rank = (location: Location) => location.isMain ? 0 : location.uri === folder.uri ? 1 : 2;
 	return [...locations].sort((a, b) => rank(a) - rank(b))
-		.map(location => ({ label: location.label, description: homeRelative(location.path), iconPath: iconOf(location), location }));
+		.map(location => ({ label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: iconOf(location), location }));
 }
 
 /**
@@ -207,7 +208,7 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
 		const items: FolderItem[] = [
 			// Its name, then the folder that holds it, as VS Code lists recent folders: the home folder as ~. Removing one is offered
 			// where another stays (D73)
-			...catalog.folders.map((each): FolderItem => ({ label: each.name, description: homeRelative(path.dirname(each.path)), iconPath: folderIconOf(catalog, each), folder: each, buttons: [remove] })),
+			...catalog.folders.map((each): FolderItem => ({ label: plainText(each.name), description: plainText(homeRelative(path.dirname(each.path))), iconPath: folderIconOf(catalog, each), folder: each, buttons: [remove] })),
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
 			{ label: vscode.l10n.t("Add Folder to Workspace..."), iconPath: new vscode.ThemeIcon('add'), add: true }
 		];
@@ -294,9 +295,9 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 		const worktreeItems = (): StepItem[] => !from || !availability ? [] : [
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
 			availability.available
-				? { label: vscode.l10n.t("New Worktree..."), description: vscode.l10n.t("from {0}", worktreeSourceLabel(from)), iconPath: new vscode.ThemeIcon('add'), newWorktree: 'available' }
+				? { label: vscode.l10n.t("New Worktree..."), description: vscode.l10n.t("from {0}", plainText(worktreeSourceLabel(from))), iconPath: new vscode.ThemeIcon('add'), newWorktree: 'available' }
 				// Git is there but a prerequisite is not: why, where it would be offered - nothing at all for a plain folder (PANEL-1.2)
-				: { label: vscode.l10n.t("New Worktree..."), detail: availability.reason, iconPath: new vscode.ThemeIcon('add'), newWorktree: 'unavailable' }
+				: { label: vscode.l10n.t("New Worktree..."), detail: plainText(availability.reason), iconPath: new vscode.ThemeIcon('add'), newWorktree: 'unavailable' }
 		];
 		// A linked worktree can be deleted here, one at a time (D73)
 		const remove: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Delete Worktree") };
