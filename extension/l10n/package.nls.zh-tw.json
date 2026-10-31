@@ -47,6 +47,12 @@
 	"config.pi.launch": "進階: Pi 的額外命令列引數和環境變數。**顯示 Agent 啟動方式** 會顯示每個 Agent 的啟動內容。",
 	"config.launch.arguments": "額外的命令列選項，依原樣、依此順序傳給 CLI。",
 	"config.launch.environment": "CLI 的環境變數: 字串會設定變數，`null` 會移除變數，而值中的 `${env:NAME}` 會讀取編輯器的環境。",
+	"config.custom.title": "自訂 Agent",
+	"config.custom": "您自己的 CLI，依 ID 設定，每個都在自己的終端機中啟動: `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`。ID 不能是內建的 ID: `claude`、`codex`、`agy`、`muse`、`opencode` 或 `pi`。",
+	"config.custom.path": "要執行的程式: PATH 上的命令，或檔案路徑。此為必要項目。",
+	"config.custom.launch": "CLI 的啟動方式: `start` 用於新對話，`resume` 用於已儲存的對話，`environment` 用於其環境變數。",
+	"config.custom.launch.start": "用於新互動式對話的引數，會完全依照所寫的內容傳遞。",
+	"config.custom.launch.resume": "必要: 用於接續某個確切已儲存對話的引數。`${sessionId}` 會由其工作階段 ID 取代，且必須出現。",
 	"windowDisplayName": "Facade Code 視窗元件",
 	"windowDescription": "Facade Code 的視窗身分與工作階段連續性協調元件。"
 }

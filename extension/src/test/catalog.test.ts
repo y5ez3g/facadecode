@@ -108,7 +108,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.configureAgents'].includes(each.command)));
 	});
 
-	test('settings: Agents, then each built-in CLI in its catalog order with whether it is offered, its path and its launch; machine scope (UX-4.1, D43, CLIS-1.1, 1.2, 3.1)', () => {
+	test('settings: Agents, then each built-in CLI in its catalog order with whether it is offered, its path and its launch, then Custom Agents; machine scope (UX-4.1, D43, CLIS-1.1, 1.2, 3.1, 3.4)', () => {
 		const sections = contributes.configuration.map((section: { id: string; title: string; order: number; properties: Record<string, unknown> }) => [section.id, english(section.title), section.order, Object.keys(section.properties)]);
 		const cli = (setting: string) => [`${setting}.enabled`, `${setting}.path`, `${setting}.launch`];
 		assert.deepStrictEqual(sections, [
@@ -118,10 +118,11 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			['facade.antigravity', 'Antigravity', 5, cli('facade.antigravity')],
 			['facade.muse', 'Muse Code', 6, cli('facade.muse')],
 			['facade.opencode', 'OpenCode', 7, cli('facade.opencode')],
-			['facade.pi', 'Pi', 8, cli('facade.pi')]
+			['facade.pi', 'Pi', 8, cli('facade.pi')],
+			['facade.custom', 'Custom Agents', 9, ['facade.custom']]
 		]);
 		// The sections are the catalog's, by its adapters' settings and display names
-		assert.deepStrictEqual(sections.slice(1).map((section: unknown[]) => [section[0], section[1]]), BUILT_IN_ADAPTERS.map(adapter => [adapter.setting, adapter.displayName]));
+		assert.deepStrictEqual(sections.slice(1, -1).map((section: unknown[]) => [section[0], section[1]]), BUILT_IN_ADAPTERS.map(adapter => [adapter.setting, adapter.displayName]));
 		const settings: Record<string, { type: string; default: unknown; scope: string; markdownDescription: string }> = Object.assign({}, ...contributes.configuration.map((section: { properties: object }) => section.properties));
 		assert.deepStrictEqual(Object.entries(settings).map(([key, value]) => [key, value.type, value.default, value.scope]), [
 			['facade.yolo', 'boolean', true, 'machine'],
@@ -129,7 +130,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				[`${adapter.setting}.enabled`, 'boolean', true, 'machine'],
 				[`${adapter.setting}.path`, 'string', '', 'machine'],
 				[`${adapter.setting}.launch`, 'object', {}, 'machine']
-			])
+			]),
+			['facade.custom', 'object', {}, 'machine']
 		]);
 		// Each description names its CLI - the path the command PATH is searched for, the launch Show Agent Launch
 		for (const adapter of BUILT_IN_ADAPTERS) {
@@ -142,6 +144,21 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		assert.deepStrictEqual([Object.keys(launch.properties), launch.additionalProperties, launch.properties.arguments, (launch.properties.environment as { additionalProperties: unknown }).additionalProperties], [
 			['arguments', 'environment'], false, { type: 'array', items: { type: 'string' }, default: [], markdownDescription: '%config.launch.arguments%' }, { type: ['string', 'null'] }
 		]);
+		// A custom CLI is a path and a launch of start, the required exact-session resume and environment, under an ID no built-in has (CLIS-3.4)
+		const custom = settings['facade.custom'] as unknown as {
+			propertyNames: { pattern: string; not: { enum: string[] } };
+			additionalProperties: { required: string[]; additionalProperties: boolean; properties: { path: unknown; launch: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } } };
+		};
+		const definition = custom.additionalProperties;
+		assert.deepStrictEqual([
+			custom.propertyNames.pattern, custom.propertyNames.not.enum, definition.required, definition.additionalProperties, definition.properties.path,
+			definition.properties.launch.required, definition.properties.launch.additionalProperties, Object.keys(definition.properties.launch.properties), definition.properties.launch.properties.resume
+		], [
+			'\\S', BUILT_IN_ADAPTERS.map(adapter => adapter.id), ['path', 'launch'], false, { type: 'string', pattern: '\\S', markdownDescription: '%config.custom.path%' },
+			['resume'], false, ['start', 'resume', 'environment'],
+			{ type: 'array', items: { type: 'string' }, minItems: 1, contains: { type: 'string', pattern: '\\$\\{sessionId\\}' }, markdownDescription: '%config.custom.launch.resume%' }
+		]);
+		assert.ok(english(settings['facade.custom'].markdownDescription).endsWith(`An ID cannot be a built-in one: ${BUILT_IN_ADAPTERS.map(adapter => `\`${adapter.id}\``).slice(0, -1).join(', ')} or \`pi\`.`));
 		// Every description resolves; no retired setting survives
 		const keys = [...JSON.stringify(contributes).matchAll(/"%([\w.]+)%"/g)].map(match => match[1]);
 		assert.deepStrictEqual(keys.filter(key => nls[key] === undefined), []);

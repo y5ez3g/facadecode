@@ -1030,7 +1030,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`, locale: 'en'
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },

@@ -47,6 +47,12 @@
 	"config.pi.launch": "Advanced: additional command-line arguments and environment variables for Pi. **Show Agent Launch** shows what each agent starts with.",
 	"config.launch.arguments": "Additional command-line options, passed to the CLI exactly as written and in this order.",
 	"config.launch.environment": "Environment variables for the CLI: a string sets one, `null` removes it, and `${env:NAME}` in a value reads the editor's environment.",
+	"config.custom.title": "Custom Agents",
+	"config.custom": "Your own CLIs, by ID, each started in a terminal of its own: `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`. An ID cannot be a built-in one: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi`.",
+	"config.custom.path": "The program to run: a command on the PATH, or a file path. Required.",
+	"config.custom.launch": "How the CLI starts: `start` for a new conversation, `resume` for a saved one, and `environment` for its environment variables.",
+	"config.custom.launch.start": "Arguments for a new interactive conversation, passed exactly as written.",
+	"config.custom.launch.resume": "Required: the arguments that resume an exact saved conversation. `${sessionId}` is replaced by its session ID and must appear.",
 	"windowDisplayName": "Facade Code Window Component",
 	"windowDescription": "Window identity and session continuity coordinator for Facade Code."
 }

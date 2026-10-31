@@ -47,6 +47,12 @@
 	"config.pi.launch": "Avancé : arguments de ligne de commande et variables d'environnement supplémentaires pour Pi. **Afficher la configuration de lancement de l'agent** montre avec quoi chaque agent démarre.",
 	"config.launch.arguments": "Options de ligne de commande supplémentaires, transmises à la CLI telles quelles et dans cet ordre.",
 	"config.launch.environment": "Variables d'environnement pour la CLI : une chaîne en définit une, `null` la supprime, et `${env:NAME}` dans une valeur lit l'environnement de l'éditeur.",
+	"config.custom.title": "Agents personnalisés",
+	"config.custom": "Vos propres CLI, par ID, chacune démarrée dans son propre terminal : `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`. Un ID ne peut pas être celui d’une CLI intégrée : `claude`, `codex`, `agy`, `muse`, `opencode` ou `pi`.",
+	"config.custom.path": "Programme à exécuter : une commande du PATH ou un chemin de fichier. Obligatoire.",
+	"config.custom.launch": "Comment la CLI démarre : `start` pour une nouvelle conversation, `resume` pour une conversation enregistrée et `environment` pour ses variables d'environnement.",
+	"config.custom.launch.start": "Arguments pour une nouvelle conversation interactive, transmis exactement tels qu’ils sont écrits.",
+	"config.custom.launch.resume": "Obligatoire : les arguments qui reprennent une conversation enregistrée précise. `${sessionId}` est remplacé par son ID de session et doit figurer.",
 	"windowDisplayName": "Composant de fenêtre Facade Code",
 	"windowDescription": "Coordinateur d'identité de fenêtre et de continuité de session pour Facade Code."
 }

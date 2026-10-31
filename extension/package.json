@@ -593,6 +593,88 @@
 						"markdownDescription": "%config.pi.launch%"
 					}
 				}
+			},
+			{
+				"id": "facade.custom",
+				"title": "%config.custom.title%",
+				"order": 9,
+				"properties": {
+					"facade.custom": {
+						"type": "object",
+						"default": {},
+						"propertyNames": {
+							"pattern": "\\S",
+							"not": {
+								"enum": [
+									"claude",
+									"codex",
+									"agy",
+									"muse",
+									"opencode",
+									"pi"
+								]
+							}
+						},
+						"additionalProperties": {
+							"type": "object",
+							"required": [
+								"path",
+								"launch"
+							],
+							"properties": {
+								"path": {
+									"type": "string",
+									"pattern": "\\S",
+									"markdownDescription": "%config.custom.path%"
+								},
+								"launch": {
+									"type": "object",
+									"required": [
+										"resume"
+									],
+									"properties": {
+										"start": {
+											"type": "array",
+											"items": {
+												"type": "string"
+											},
+											"default": [],
+											"markdownDescription": "%config.custom.launch.start%"
+										},
+										"resume": {
+											"type": "array",
+											"items": {
+												"type": "string"
+											},
+											"minItems": 1,
+											"contains": {
+												"type": "string",
+												"pattern": "\\$\\{sessionId\\}"
+											},
+											"markdownDescription": "%config.custom.launch.resume%"
+										},
+										"environment": {
+											"type": "object",
+											"additionalProperties": {
+												"type": [
+													"string",
+													"null"
+												]
+											},
+											"default": {},
+											"markdownDescription": "%config.launch.environment%"
+										}
+									},
+									"additionalProperties": false,
+									"markdownDescription": "%config.custom.launch%"
+								}
+							},
+							"additionalProperties": false
+						},
+						"scope": "machine",
+						"markdownDescription": "%config.custom%"
+					}
+				}
 			}
 		]
 	},

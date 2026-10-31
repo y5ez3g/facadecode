@@ -47,6 +47,12 @@
 	"config.pi.launch": "Avançado: argumentos de linha de comando e variáveis de ambiente adicionais para o Pi. **Mostrar Configuração de Inicialização do Agente** mostra com o que cada agente é iniciado.",
 	"config.launch.arguments": "Opções de linha de comando adicionais, passadas à CLI exatamente como escritas e nesta ordem.",
 	"config.launch.environment": "Variáveis de ambiente para a CLI: uma cadeia de caracteres define uma variável, `null` a remove, e `${env:NAME}` em um valor lê o ambiente do editor.",
+	"config.custom.title": "Agentes Personalizados",
+	"config.custom": "Suas próprias CLIs, por ID, cada uma iniciada em um terminal próprio: `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`. Uma ID não pode ser uma das internas: `claude`, `codex`, `agy`, `muse`, `opencode` ou `pi`.",
+	"config.custom.path": "O programa a ser executado: um comando no PATH ou um caminho de arquivo. Obrigatório.",
+	"config.custom.launch": "Como a CLI inicia: `start` para uma nova conversa, `resume` para uma salva e `environment` para as variáveis de ambiente dela.",
+	"config.custom.launch.start": "Argumentos para uma nova conversa interativa, passados exatamente como escritos.",
+	"config.custom.launch.resume": "Obrigatório: os argumentos que retomam uma conversa salva exata. `${sessionId}` é substituído pela ID da sessão dela e deve aparecer.",
 	"windowDisplayName": "Componente de Janela do Facade Code",
 	"windowDescription": "Coordenador de identidade de janela e continuidade de sessão para o Facade Code."
 }

@@ -31,7 +31,7 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 
 **Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your computer for local folders, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): agents also start with 1.x (`opencode-ai`), but their status dot stays red because 1.x does not report its activity. Git is required if you use worktrees.
 
-**Agents run without approval prompts by default.** With `facade.yolo` on, the default, agents can run commands and change files without asking first. Turn it off to use each CLI's normal approvals and supported sandbox; the change applies to agents you start afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. **Configure Agents...** in the panel's `...` menu opens the settings. Facade also trusts the folder an agent starts in, as you would by accepting the CLI's own trust question.
+**Agents run without approval prompts by default.** With `facade.yolo` on, the default, agents can run commands and change files without asking first. Turn it off to use each CLI's normal approvals and supported sandbox; the change applies to agents you start afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. **Configure Agents...** in the panel's `...` menu opens the settings. Facade also trusts the folder an agent starts in, as you would by accepting the CLI's own trust question. A custom CLI is the exception to both: `facade.yolo` does not change how it starts, and Facade gives it no folder trust.
 
 ## Quick Start
 
@@ -68,16 +68,17 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 - **Remote - SSH**: Agents run on the remote host, with the CLIs and accounts there. Facade names the environment as VS Code does, for example `SSH: my-server`.
 - **Exits**: An agent whose CLI exits normally leaves the panel; one that exits abnormally keeps a red card until you close it.
 
+### More CLIs
+
+- **Custom CLIs**: Add any interactive CLI in `facade.custom`: its program, the arguments for a new conversation, and the arguments that resume one by its session ID. The resume arguments are required, although Resume itself is still under development. **New Agent** offers it after the built-in CLIs, and its cards show the first letter of its ID in place of a logo. Facade passes its arguments exactly as written: `facade.yolo` does not change them, and Facade adds no sandbox or folder trust. See [`CLIS.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/engineering/CLIS.md).
+- **Qwen Code** *(Under development)*: Qwen Code as a built-in CLI.
+
 ### A team that works together *(Under development)*
 
 - **Agents launch agents**: An agent can start other agents, in any supported CLI, and give them tasks.
 - **Messaging**: Agents send each other messages, report results to whoever started them, and contact you when a decision needs you.
 - **Unsticking each other**: An agent can read another agent's terminal, answer prompts and send keystrokes to help a blocked worker continue without interrupting you.
 - **Standard MCP**: All of this goes through a standard MCP server.
-
-### More CLIs *(Under development)*
-
-- **Qwen Code and your own CLIs**: Qwen Code as a built-in CLI, and CLIs you add yourself.
 
 ### Languages
 
@@ -118,8 +119,17 @@ Facade runs the infrastructure, the CLIs do the work, and you decide the goals a
 | `facade.pi.path` | Empty | Path to Pi. Leave empty to use `pi` from the terminal environment's PATH. |
 | `facade.<cli>.enabled` | On | Controls whether the CLI is offered for new agents. Turning it off does not stop agents that are running. |
 | `facade.<cli>.launch` | `{}` | Advanced: additional command-line `arguments` and `environment` variables for the CLI. **Show Agent Launch** shows what each agent starts with. |
+| `facade.custom` | `{}` | Your own CLIs, by ID, each with a `path` and a `launch`: `start` for a new conversation, `resume` for a saved one (required; it must contain `${sessionId}`), and `environment`. An ID cannot be a built-in one: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi`. |
 
 `<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. These are machine settings: for a remote window, set them in the remote host's settings.
+
+For example, a CLI started as `my-cli --fast` and resumed as `my-cli resume <session ID>`:
+
+```json
+"facade.custom": {
+  "my-cli": { "path": "my-cli", "launch": { "start": ["--fast"], "resume": ["resume", "${sessionId}"] } }
+}
+```
 
 ## Status and Known Limitations
 
@@ -129,6 +139,7 @@ Facade runs the infrastructure, the CLIs do the work, and you decide the goals a
 - **First installation in a remote window**: VS Code installs Facade Code on the remote host first and its Window Component on your computer a moment later, so Facade Code may not start and VS Code may report that the Window Component is disabled. Reload the window once (**Developer: Reload Window**); Facade Code then starts normally. Installing **Facade Code Window Component** in a local window first avoids this.
 - **Remote - SSH reconnects**: If VS Code stops reconnecting to an SSH host and asks you to reload the window, reload it once the network is back. The agents keep running on the host, and the reloaded window shows them again.
 - **Closing a window**: Facade ends a window's agents five minutes after that window's extension host disconnects and nothing reconnects, for example after you close the window.
+- **Custom CLIs**: Facade knows a custom CLI's activity only if the CLI reports it in its terminal with OSC 7501 sequences, as the built-in CLIs do. Otherwise the agent still starts and works, but its dot turns red with *Activity unavailable* 20 seconds after it starts.
 
 ## Building from Source
 

@@ -84,7 +84,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		const pidFile = `${RECORD}.${alias}`;
 		const pid = await until('the fake CLI to start', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
 		assert.ok(alive(pid));
-		assert.strictEqual(card.avatar?.file, AVATAR);
+		assert.deepStrictEqual(card.avatar, { file: AVATAR });
 		const launch = JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] };
 		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);
 		if (CLI === 'codex') {

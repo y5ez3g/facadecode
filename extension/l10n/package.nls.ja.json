@@ -47,6 +47,12 @@
 	"config.pi.launch": "詳細設定: Pi の追加のコマンド ライン引数と環境変数。各エージェントの起動内容は **Agent の起動構成を表示** で確認できます。",
 	"config.launch.arguments": "追加のコマンド ライン オプション。記述どおり、この順序で CLI に渡されます。",
 	"config.launch.environment": "CLI の環境変数: 文字列を指定すると設定され、`null` を指定すると削除されます。値に含まれる `${env:NAME}` はエディターの環境から読み取られます。",
+	"config.custom.title": "カスタム Agent",
+	"config.custom": "ID ごとに指定する独自の CLI。それぞれ専用のターミナルで起動します: `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`。組み込みの ID (`claude`、`codex`、`agy`、`muse`、`opencode`、`pi`) は ID として使用できません。",
+	"config.custom.path": "実行するプログラム: PATH 上のコマンド、またはファイル パス。必須です。",
+	"config.custom.launch": "CLI の起動方法: 新しい会話には `start`、保存された会話には `resume`、環境変数には `environment` を使います。",
+	"config.custom.launch.start": "新しい対話型の会話の引数。記述したとおりに渡されます。",
+	"config.custom.launch.resume": "必須: 保存された特定の会話を正確に再開する引数。`${sessionId}` はそのセッション ID に置き換えられ、必ず含める必要があります。",
 	"windowDisplayName": "Facade Code ウィンドウ コンポーネント",
 	"windowDescription": "Facade Code のウィンドウ ID およびセッション継続性コーディネーター。"
 }

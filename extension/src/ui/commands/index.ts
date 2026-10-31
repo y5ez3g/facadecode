@@ -64,7 +64,8 @@ function cardWords(): CardWords {
 		// {0} is the signal that ended the agent's CLI, such as SIGKILL
 		endedBySignal: signal => vscode.l10n.t("Terminated by signal {0}", signal),
 		// {0} is the name of the editor window the agent is in
-		window: label => vscode.l10n.t("Window: {0}", label)
+		window: label => vscode.l10n.t("Window: {0}", label),
+		locale: vscode.env.language
 	};
 }
 

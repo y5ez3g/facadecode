@@ -47,6 +47,12 @@
 	"config.pi.launch": "Zaawansowane: dodatkowe argumenty wiersza polecenia i zmienne środowiskowe dla Pi. Polecenie **Pokaż konfigurację uruchamiania agenta** pokazuje, z czym uruchamia się każdy agent.",
 	"config.launch.arguments": "Dodatkowe opcje wiersza polecenia, przekazywane do CLI dokładnie tak, jak zapisano, i w tej kolejności.",
 	"config.launch.environment": "Zmienne środowiskowe dla CLI: ciąg ustawia zmienną, `null` ją usuwa, a `${env:NAME}` w wartości odczytuje środowisko edytora.",
+	"config.custom.title": "Agenci niestandardowi",
+	"config.custom": "Twoje własne CLI według identyfikatora, każdy uruchamiany we własnym terminalu: `{ \"my-cli\": { \"path\": \"my-cli\", \"launch\": { \"start\": [], \"resume\": [\"resume\", \"${sessionId}\"] } } }`. Identyfikator nie może być identyfikatorem wbudowanym: `claude`, `codex`, `agy`, `muse`, `opencode` ani `pi`.",
+	"config.custom.path": "Program do uruchomienia: polecenie dostępne w zmiennej PATH lub ścieżka pliku. Wymagane.",
+	"config.custom.launch": "Jak uruchamia się CLI: `start` dla nowej rozmowy, `resume` dla zapisanej i `environment` dla jego zmiennych środowiskowych.",
+	"config.custom.launch.start": "Argumenty dla nowej interaktywnej rozmowy, przekazywane dokładnie tak, jak zostały zapisane.",
+	"config.custom.launch.resume": "Wymagane: argumenty, które wznawiają dokładnie określoną zapisaną rozmowę. Symbol zastępczy `${sessionId}` jest zastępowany identyfikatorem jej sesji i musi występować.",
 	"windowDisplayName": "Składnik okna Facade Code",
 	"windowDescription": "Koordynator tożsamości okna i ciągłości sesji dla Facade Code."
 }

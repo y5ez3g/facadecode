@@ -15,13 +15,16 @@ export interface CardMenu {
 	readonly clearFilter: boolean;
 }
 
+/** The `charts` colours a custom CLI's avatar can take: none that a status dot uses (UX-2.1). */
+export type AvatarColor = 'blue' | 'orange' | 'purple';
+
 /** One card (PANEL-1.3-1.5), every text already in the person's language. */
 export interface Card {
 	readonly runId: string;
 	readonly selected: boolean;
 	readonly name: string;
-	/** A built-in CLI's maker avatar in `media/agents`; none for a CLI this build has no avatar of. */
-	readonly avatar?: { readonly file: string };
+	/** A built-in CLI's maker avatar in `media/agents`, or a custom CLI's initial on a theme colour; none for a name that shows nothing. */
+	readonly avatar?: { readonly file: string } | { readonly initial: string; readonly color: AvatarColor };
 	/**
 	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it
 	 * and names the window.

@@ -26,7 +26,8 @@ const WORDS: CardWords = {
 	hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Beendet mit Code ${code}`,
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
-	window: label => `Window: ${label}`
+	window: label => `Window: ${label}`,
+	locale: 'en'
 };
 
 function run(more: Partial<RunFacts> = {}): RunFacts {
@@ -163,14 +164,22 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([own.tooltip, own.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main · /app']);
 	});
 
-	test('avatars: each built-in\'s maker avatar, a file of media/agents; none for a CLI this build has no avatar of, which the card then leaves out (PANEL-1.3, UX-2.1)', () => {
+	test('avatars: each built-in\'s maker avatar, a file of media/agents; a custom CLI\'s initial on the colour its name picks (PANEL-1.3, UX-2.1)', () => {
 		const builtIns = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'];
-		assert.deepStrictEqual([...builtIns.map(avatarOf), avatarOf('other')], [
-			{ file: 'avatar-claude.png' }, { file: 'avatar-codex.png' }, { file: 'avatar-antigravity.png' }, { file: 'avatar-muse.png' }, { file: 'avatar-opencode.png' }, { file: 'avatar-pi.png' }, undefined
+		assert.deepStrictEqual(builtIns.map(cli => avatarOf(cli, 'Any', 'en')), [
+			{ file: 'avatar-claude.png' }, { file: 'avatar-codex.png' }, { file: 'avatar-antigravity.png' }, { file: 'avatar-muse.png' }, { file: 'avatar-opencode.png' }, { file: 'avatar-pi.png' }
 		]);
 		assert.deepStrictEqual(BUILT_IN_ADAPTERS.map(adapter => adapter.id), builtIns);
 		const media = path.join(__dirname, '..', '..', '..', 'media');
-		assert.deepStrictEqual(builtIns.filter(cli => !fs.existsSync(path.join(media, 'agents', avatarOf(cli)!.file))), []);
+		assert.deepStrictEqual(builtIns.filter(cli => !fs.existsSync(path.join(media, 'agents', (avatarOf(cli, cli, 'en') as { file: string }).file))), []);
+		// The first grapheme - a whole emoji or accented letter - uppercased in the person's language; the colour the same for the same
+		// name however it is cased or spaced, and one of the three
+		const custom = (name: string, locale = 'en') => avatarOf(name, name, locale) as { initial: string; color: string };
+		assert.deepStrictEqual([custom('my-cli').initial, custom('île').initial, custom('👩‍💻 bot').initial, custom('istanbul', 'tr').initial, custom('istanbul').initial], ['M', 'Î', '👩‍💻', 'İ', 'I']);
+		assert.deepStrictEqual([custom(' My-CLI ').color === custom('my-cli').color, ['blue', 'orange', 'purple'].includes(custom('my-cli').color)], [true, true]);
+		assert.deepStrictEqual(new Set(['a', 'b', 'c', 'd', 'e', 'f'].map(name => custom(name).color)).size, 3);
+		// A name with nothing to show has no avatar: the card leaves it out
+		assert.deepStrictEqual([avatarOf('', '', 'en'), avatarOf(' ', ' ', 'en')], [undefined, undefined]);
 		// And each one's logo for pickers and terminal tabs, in both themes
 		const vscode = {
 			ThemeIcon: class { constructor(readonly id: string) { } },
@@ -180,6 +189,8 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		const logos = builtIns.map(cli => cliIcon({ fsPath: media } as never, cli) as unknown as { readonly light: { readonly fsPath: string }; readonly dark: { readonly fsPath: string } });
 		assert.deepStrictEqual(logos.flatMap(logo => [logo.light?.fsPath, logo.dark?.fsPath]).filter(file => !file || !fs.existsSync(file)), []);
 		assert.deepStrictEqual((cliIcon({ fsPath: media } as never, 'other') as unknown as { readonly id: string }).id, 'terminal');
-		assert.deepStrictEqual([cardOf(run(), { place, selected: false, menu, words: WORDS }).avatar, 'avatar' in cardOf(run({ cli: 'other' }), { place, selected: false, menu, words: WORDS })], [{ file: 'avatar-claude.png' }, false]);
+		const cardFor = (more: Partial<RunFacts>) => cardOf(run(more), { place, selected: false, menu, words: WORDS });
+		assert.deepStrictEqual([cardFor({}).avatar, cardFor({ cli: 'my-cli', displayName: 'my-cli' }).avatar, 'avatar' in cardFor({ cli: 'my-cli', displayName: ' ' })],
+			[{ file: 'avatar-claude.png' }, avatarOf('my-cli', 'my-cli', 'en'), false]);
 	});
 });
