@@ -137,17 +137,19 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const { place, words } = input;
 	const status = statusOf(facts, words);
 	const tooltip = [
-		`${facts.name} · ${facts.alias} · ${facts.displayName}`,
+		// An empty name is left out, not said as an empty part (LIFECYCLE-2.1)
+		[facts.name, facts.alias, facts.displayName].filter(Boolean).join(' · '),
 		...facts.title ? [facts.title] : [],
 		status.stateText,
 		...status.reason && status.reason !== facts.title ? [status.reason] : []
 	];
-	const label = [facts.name, facts.alias, status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].join(', ');
+	const label = [facts.name, facts.alias, status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
 	const avatar = avatarOf(facts.cli);
 	return {
 		runId: facts.id,
 		selected: input.selected,
 		name: facts.name,
+		alias: facts.alias,
 		...(avatar ? { avatar } : {}),
 		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: input.window ? `${place.full} · ${words.window(input.window)}` : place.full },
 		dot: status.dot,

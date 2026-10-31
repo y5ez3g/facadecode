@@ -38,7 +38,7 @@ const EMPTY: readonly unknown[] = ['noFolder', 'noAgents'];
 const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean });
 const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) });
 const isCard: Check = value => isShaped(value, {
-	runId: isString, selected: isBoolean, name: isString,
+	runId: isString, selected: isBoolean, name: isString, alias: isString,
 	location: value => isShaped(value, { label: isString, full: isString }, { folderPrefix: isString }),
 	dot: value => DOTS.includes(value), stateText: isString, line: isString, tooltip: isStrings, label: isString, menu: isMenu
 }, { avatar: isAvatar, startedAt: isNumber });
@@ -255,7 +255,8 @@ function draw(cards: readonly Card[]): void {
 				animate(entry.element, 'opening');
 			}
 		} else if (entry.card.stateText !== card.stateText) {
-			said.push(`${card.name}: ${card.stateText}`);
+			// An agent with an empty name said by its #aN, as messages name it (LIFECYCLE-3.1)
+			said.push(`${card.name || card.alias}: ${card.stateText}`);
 		}
 		update(entry, card);
 		next.set(card.runId, entry);
@@ -278,6 +279,9 @@ function draw(cards: readonly Card[]): void {
 	// Each in its place; a card already there is not moved, so the pointer over it stays over it
 	let at = list.firstElementChild;
 	for (const entry of next.values()) {
+		while (at?.classList.contains('closing')) {
+			at = at.nextElementSibling;
+		}
 		if (at === entry.element) {
 			at = at.nextElementSibling;
 		} else {

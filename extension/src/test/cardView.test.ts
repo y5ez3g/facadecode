@@ -141,6 +141,9 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Ada · #a1 · Claude Code', 'Fix the login flow', 'Idle', 'Waiting for an answer'], 'Ada, #a1, Idle, shop · main, Claude Code, Waiting for an answer']);
 		// The second line saying no more than the state is not said twice
 		assert.deepStrictEqual([unknown.tooltip, unknown.label, unknown.dot], [['Ada · #a1 · Claude Code', 'Activity unavailable'], 'Ada, #a1, Activity unavailable, shop · main, Claude Code', 'error']);
+		// An empty name is left out of both, never said as an empty part; the card carries its #aN for what the page says of it
+		const unnamed = cardOf(run({ name: '' }), { place, selected: false, menu, words: WORDS });
+		assert.deepStrictEqual([unnamed.tooltip[0], unnamed.label, unnamed.alias], ['#a1 · Claude Code', '#a1, Working, shop · main, Claude Code', '#a1']);
 		// Nothing the page never draws is sent
 		assert.deepStrictEqual(Object.keys(working).filter(key => ['cliName', 'pinId'].includes(key)), []);
 		// A launch that never started says when it was accepted

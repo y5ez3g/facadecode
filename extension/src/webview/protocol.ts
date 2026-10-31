@@ -16,6 +16,8 @@ export interface Card {
 	readonly runId: string;
 	readonly selected: boolean;
 	readonly name: string;
+	/** Its `#aN`: how a message names an agent whose name is empty (LIFECYCLE-3.1). */
+	readonly alias: string;
 	/** A built-in CLI's maker avatar in `media/agents`; none for a CLI this build has no avatar of. */
 	readonly avatar?: { readonly file: string };
 	/**

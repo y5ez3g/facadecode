@@ -45,7 +45,7 @@ suite('The agent panel in Chromium', function () {
 	const deliver = (message: object) => evaluate(`window.dispatchEvent(new MessageEvent('message', {data: {page: panel.page, ...${JSON.stringify(message)}}}))`);
 	/** Thirty working cards, `window.agents`, drawn by `redraw()`; `newCard(i, more)` and `stateOf(cards, more)` make others as the host does. */
 	const CARDS = `
-		window.newCard = (i, more = {}) => ({ runId: 'run-' + i, selected: false, name: 'Agent ' + i, avatar: { file: 'avatar-claude.png' },
+		window.newCard = (i, more = {}) => ({ runId: 'run-' + i, selected: false, name: 'Agent ' + i, alias: '#a' + i, avatar: { file: 'avatar-claude.png' },
 			location: { label: 'project', full: 'project · /project' }, dot: 'working', stateText: 'Working', line: 'Step one', tooltip: ['Agent ' + i + ' · #a' + i + ' · Claude Code', 'Working'],
 			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false }, ...more });
 		window.stateOf = (cards, more = {}) => ({ revision: 1, loading: false, cards, cardCount: cards.length, capabilities: { remote: false }, ...more });
@@ -175,6 +175,20 @@ suite('The agent panel in Chromium', function () {
 			return [first, opened, gone, document.querySelector('.agent').classList.contains('opening')];
 		})()`);
 		assert.deepStrictEqual(seen, [0, '0.18s', [29, 0, false], false]);
+	});
+
+	test('PANEL-1.5, LIFECYCLE-3.1: an agent with an empty name is said by its #aN when its state changes', async () => {
+		await evaluate(`agents[0] = newCard(1, { name: '' }); redraw()`);
+		await evaluate(`agents[0] = newCard(1, { name: '', dot: 'idle', stateText: 'Idle' }); redraw()`);
+		assert.strictEqual(await evaluate(`document.querySelector('[role="status"]').textContent`), '#a1: Idle');
+	});
+
+	test('UX-2.2: a card whose process ended fades out where it was - the cards after it are not put before it - and then goes', async () => {
+		await evaluate(`agents.splice(4, 1); redraw({ exited: ['run-5'] })`);
+		const during = await evaluate(`(() => { const children = [...document.querySelector('#list').children]; const closing = document.querySelector('.agent.closing'); return [closing?.dataset.run, children.indexOf(closing), children.length]; })()`);
+		await wait(300);
+		const after = await evaluate(`[document.querySelectorAll('.agent.closing').length, document.querySelectorAll('.agent').length]`);
+		assert.deepStrictEqual([during, after], [['run-5', 4, 30], [0, 29]]);
 	});
 
 	test('a state change is said politely, once, in a live region; a repeated state says nothing new (PANEL-1.5)', async () => {
