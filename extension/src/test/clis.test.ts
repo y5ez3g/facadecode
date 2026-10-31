@@ -129,6 +129,43 @@ suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
 			temp.remove();
 		}
 	});
+
+	test('npm\'s Windows shim for a native program starts that program itself; another shape, a program missing, outside the shim\'s folder or no .exe goes through cmd.exe', () => {
+		const temp = tempDir('fd-native-shim-');
+		try {
+			const bin = path.join(temp.dir, 'bin');
+			const exe = path.join(bin, 'node_modules', '@opencode', 'cli', 'bin', 'opencode.exe');
+			fs.mkdirSync(path.dirname(exe), { recursive: true });
+			fs.writeFileSync(exe, '');
+			fs.mkdirSync(path.join(temp.dir, 'other'));
+			fs.writeFileSync(path.join(temp.dir, 'other', 'opencode.exe'), '');
+			fs.writeFileSync(path.join(bin, 'node_modules', '@opencode', 'cli', 'bin', 'run.cmd'), '');
+			// What npm 11 writes for a package whose bin is a native program, byte for byte
+			const npm = (program: string) => `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\${program}"   %*\r\n`;
+			const shim = path.join(bin, 'opencode.cmd');
+			const program = 'node_modules\\@opencode\\cli\\bin\\opencode.exe';
+			for (const text of [npm(program), npm(program).replace(/\r\n/g, '\n')]) {
+				fs.writeFileSync(shim, text);
+				assert.deepStrictEqual(launchTarget(shim, 'win32', {}), { executable: exe, args: [], throughCmd: false });
+			}
+			const through = { executable: shim, args: [], throughCmd: true };
+			for (const text of [
+				npm('node_modules\\@opencode\\cli\\bin\\missing.exe'),
+				npm('..\\other\\opencode.exe'),
+				npm('node_modules\\@opencode\\cli\\bin\\run.cmd'),
+				// A line of its own before the program: not npm's shim, so not known to start only the program
+				npm(program).replace('SETLOCAL\r\n', 'SETLOCAL\r\nSET OPENCODE_CONFIG=x\r\n'),
+				`${npm(program)}echo done\r\n`
+			]) {
+				fs.writeFileSync(shim, text);
+				assert.deepStrictEqual(launchTarget(shim, 'win32', {}), through, text);
+			}
+			fs.writeFileSync(shim, npm(program));
+			assert.deepStrictEqual(launchTarget(shim, 'darwin', {}), { executable: shim, args: [], throughCmd: false });
+		} finally {
+			temp.remove();
+		}
+	});
 });
 
 suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
