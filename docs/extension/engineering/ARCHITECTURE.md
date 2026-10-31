@@ -204,7 +204,7 @@ actual identity. New starts use current settings/protocol. Upgrade/reload behavi
 | Store | Contents |
 | --- | --- |
 | Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects and location metadata |
-| Editor workspace storage | Human CLI/location choices, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Editor workspace storage | Human CLI/location choices, filter, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
@@ -272,8 +272,8 @@ never rewritten by staging. This keeps repository setup instructions out of the 
 
 Earlier development settings and stored workspace state are not read into the current catalog, and earlier command
 IDs get no aliases; this includes the Facade Dots development builds' `facadeDots.*` and `facade.agents.*` settings
-and their `~/.facade-dots` directory. Records stored by earlier development builds, such as card order and known
-locations, are ignored with one line in the agents log. They are never translated or replayed. Discoverable worktrees
+and their `~/.facade-dots` directory. Records stored by earlier development builds, such as filters, card order and
+known locations, are ignored with one line in the agents log. They are never translated or replayed. Discoverable worktrees
 remain available because Git discovers them. Never delete vendor history, user work or an earlier Facade data
 directory. No migration-news popup is required.
 Retired launch-group/trust/settings-template fields report a configuration error under CLIS-3 instead of keeping a
@@ -366,6 +366,8 @@ what was tested and what remains. Task assignments, pauses and discussion author
 See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this design.
 
 ## Change log
+
+- 2026-10-30: Workspace storage keeps the panel's filter (PANEL-2.3); a filter stored by an earlier build is ignored.
 
 - 2026-10-30: 2.2 and 2.3 describe the owner's five-minute policy (D75) as ptyd applies it, and 2.2 bounds the wait
   for each restored terminal to open.

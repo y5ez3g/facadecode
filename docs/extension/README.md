@@ -15,7 +15,7 @@ rule bodies and [Decisions](DECISIONS.md); historical task records and review fi
 | 3 Common interaction | [UX](UX.md) | Native surfaces, fixed presentation, accessibility, commands/settings and languages |
 | 3 Features | [LIFECYCLE](features/LIFECYCLE.md) | Display names, editor terminals, local finding and immediate close |
 | 3 Features | [WORKTREES](features/WORKTREES.md) | Folder/worktree discovery, native creation and observing external removal |
-| 3 Features | [PANEL](features/PANEL.md) | Cards, count, stack order and webview |
+| 3 Features | [PANEL](features/PANEL.md) | Cards, count, stack order, local filters and webview |
 | 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, processes, data, packaging and working safeguards |
 | 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, capability evidence and trust |
 | 4 Verification | [VERIFICATION](engineering/VERIFICATION.md) | G2 and G5, required journeys/scale and actual evidence |
@@ -39,14 +39,15 @@ and do not reinstate a requirement explicitly superseded by the current body.
 deleted behavior must change its expectation; it is not evidence that the deleted feature should be restored.
 
 The Facade Code extension is committed in additive steps, and each commit carries only the specification its step needs.
-This is the subset for two of a sequence of owner-tested steps: step 1, Claude Code and Codex with the whole user
-interface that serves them, and the step that adds Antigravity, Muse Code, OpenCode and Pi at the same level (D77).
+This is the subset for three of a sequence of owner-tested steps: step 1, Claude Code and Codex with the whole user
+interface that serves them; the step that adds Antigravity, Muse Code, OpenCode and Pi at the same level (D77); and
+the step that adds the panel's display filters.
 Every rule keeps its final number, so the numbering has gaps that later steps fill; their rules, decisions
 and checks are not part of these steps.
 
 ## 3 Coverage and evidence limits
 
-The set contains **10 normative documents and 125 numbered rules**. The [audit report](audit/REPORT.md) records
+The set contains **10 normative documents and 126 numbered rules**. The [audit report](audit/REPORT.md) records
 structural and reference checks; the migration ledger joins in the last step. These do not constitute a runtime pass.
 
 Required product evidence includes native/compatible-editor installation, true close versus reload/disconnect, each
@@ -66,6 +67,8 @@ Resolve routine engineering details within scope; raise concrete rule/scenario/e
 the owner to repeatedly approve speculative edge cases. Verification states remain separate for spec, code and product.
 
 ## Change log
+
+- 2026-10-30: The step summary includes the panel's display filters; PANEL-2.3 makes 126 rules.
 
 - 2026-10-30: The step summary includes the step adding Antigravity, Muse Code, OpenCode and Pi (D77).
 

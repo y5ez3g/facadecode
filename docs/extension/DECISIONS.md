@@ -63,7 +63,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D27 | Retain quiet progress in existing UI and errors directed to their initiators | UX-1 |
 | D29 | Retain reproducible builds, separate isolated fixture stage, README staging markers and target-native notices | ARCHITECTURE-4 |
 | D31 | Retain repository layout/test safeguards; task-specific arrangements follow current user instructions | ARCHITECTURE-4, 5 |
-| D38 | Owner-authorized: webview `act` adds openFolder and rename for the empty-state buttons and F2; the host opens the Input Box and validates | PANEL-3.1 |
+| D38 | Owner-authorized: webview `act` adds clearFilter, openFolder and rename for the empty-state buttons and F2; the host opens the Input Box and validates | PANEL-3.1 |
 | D39 | Owner-revised in IA-03: the native picker title uses middle dots and keeps name/location visible while filtering, including the folder in multi-folder windows. A planned worktree uses `(new)` in the title and retains its source in the location row. Missing history silently falls back. The branch input has a placeholder and shorter source prompt. The latest confirmed screenshots use `Select a branch or worktree` without a folder suffix and no custom Change Name prompt, without restricting name labels | LIFECYCLE-1.1, 1.2, 1.3 |
 | D41 | Owner-authorized: the 160 ms removal animation follows only a normal exit; explicit close and confirmed location removal are immediate | UX-2.2 |
 | D42 | Owner-authorized: test-only `state`, `selectRow` (by run ID) and `probe` commands; the first draft's hidden scripted start was withdrawn because the owner-approved R9 removal stands | UX-3.2 |
@@ -77,7 +77,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D54 | Derived from independent-review item 5: palette availability keys follow the selected run (`agentSelected*`), not the active terminal, so a file in front keeps the actions | UX-3.2 |
 | D57 | Owner-calibrated: New Agent's suggested names are at least 100 short machine words (`Bolt`, `Pixel`, `Servo`), not invented personal names; a suggestion prefers one no agent in the window has, without requiring uniqueness | LIFECYCLE-2.1 |
 | D58 | Owner-clarified on 2026-10-29: the native view menu holds Add Folder to Workspace..., New Worktree... when a workspace folder is open, then Configure Agents... in a separate group. New Worktree retains its standalone creation flow but is hidden from the Command Palette. Go to Agent stays in the palette; Refresh is removed. New Agent retains its contextual worktree option | PANEL-1.1, UX-3.1, WORKTREES-2.1 |
-| D59 | Owner-calibrated: empty states use the reviewed copy (#m3056, final #m3060/#m3061 relayed by `#a525` at the owner's request): no-folder `Open a folder to launch coding agents.`; no-agents `Launch a coding agent in this workspace.` | PANEL-1.2 |
+| D59 | Owner-calibrated: empty states use the reviewed copy (#m3056, final #m3060/#m3061 relayed by `#a525` at the owner's request): no-folder `Open a folder to launch coding agents.`; no-agents `Launch a coding agent in this workspace.`; the filtered empty panel counts other agents neutrally and its New Agent starts at the filtered location | PANEL-1.2, LIFECYCLE-1.2 |
 | D60 | Owner-calibrated: empty-state buttons have no ellipsis, like VS Code's welcome buttons; the main action is primary | PANEL-1.2 |
 | D61 | Owner-revised on 2026-10-29: Open Folder matches the built-in Git view and calls `vscode.openFolder`; sidebar selection stays with the editor, with no automatic return to Facade. Supersedes the earlier return-after-reload behavior and its early-activation workaround because they produced an extra visible view switch | PANEL-1.1–1.2 |
 | D62 | Owner-calibrated: every launch trusts its folder as the person would by accepting the CLI's trust question - the CLI's own trust entry merged into its file, for Claude Code - as the Facade Code IDE did; login and permission prompts stay native | CLIS-3.3 |
@@ -97,6 +97,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D79 | Derived from the CLIs' own behavior: Pi has no approvals or sandbox, and OpenCode's default permissions allow every tool, so YOLO off leaves them as they natively are; the README says so, and Facade adds no approval mechanism of its own (RULES-4.3's sandbox applies where a CLI has one) | CLIS-1.3 |
 | D80 | Owner-decided 2026-10-30, after Muse Code was found to send no OSC 7501 on Windows, signed in or not, while it reports on Linux: there is no neutral or gray dot; Muse Code alone gets a fallback, its activity read from its own screen while it sends no reports, as the other built-ins all report themselves | CLIS-2.3 |
 | D81 | Owner-decided 2026-10-30, after seeing every card red for the seconds before its CLI's first report: a run is still starting - green, with its startup stage - until its CLI first shows its activity, by a report or, for Muse Code, its screen, for at most 20 s from its process start. The bound keeps a CLI that never reports, as OpenCode 1.x, from showing it starts forever: past it, the card is red with why | CLIS-2.3, RULES-3.2 |
+| D82 | Owner-decided 2026-10-31, after trying the filter: Filter by Working Location steps by folder. Its first step lists All Locations, then the folders; a folder whose cards are in two or more locations opens its own step, All Worktrees then its locations; a window of one folder shows its folder's step alone (All Locations first outside Git). One separator follows each step's first item. This replaces Facade Dots' one grouped list | PANEL-2.3 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -162,6 +163,10 @@ proven platform limitations instead of silently weakening a product promise. The
 full spec revision; it does not authorize publication or unrelated source changes.
 
 ## Change log
+
+- 2026-10-31: Recorded the owner's choice of Filter by Working Location in steps by folder (D82).
+
+- 2026-10-30: D59 adds the filtered empty panel and D38 its Clear Filter act, carried with the display filters.
 
 - 2026-10-30: Recorded the owner's addition of Antigravity, Muse Code, OpenCode and Pi (D77), the OpenCode line (D78)
   and YOLO off for CLIs that natively ask for nothing (D79), Muse Code's screen fallback without a gray dot (D80), and
