@@ -136,4 +136,26 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			'location', [card.runId], 1, 0, [`No agents found in "${filtered.filter?.label}".`], 'noAgents'
 		]);
 	});
+
+	test('CLIS-4.1, ARCHITECTURE-3.3: Show Agent Launch shows each CLI as a start in this folder would have it, starting none; Show Agents Log shows the log', async function () {
+		// Once, with the first built-in: the documents are the window's, whatever the CLI
+		if (CLI !== 'claude') {
+			this.skip();
+		}
+		const before = (await state()).cardCount;
+		// As the Command Palette runs it, with no argument; one working location: no picker, its document at once
+		await vscode.commands.executeCommand('facade.showAgentLaunch');
+		const launch = await until('the launch document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-launch'));
+		const text = launch.getText();
+		assert.match(text, /^Agent launch in /);
+		assert.match(text, /^YOLO: on, from facade\.yolo; it applies to agents started from now on$/m);
+		for (const name of ['Claude Code (claude, facade.claude)', 'Codex (codex, facade.codex)', 'Pi (pi, facade.pi)']) {
+			assert.ok(text.includes(`\n${name}\n  Status: available\n`), `${name} available in:\n${text}`);
+		}
+		assert.ok(text.includes('\n    --dangerously-skip-permissions\n'), text);
+		assert.strictEqual((await state()).cardCount, before, 'no agent was started');
+		await vscode.commands.executeCommand('facade.showAgentsLog');
+		const log = await until('the log document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-agents-log'));
+		assert.ok(log.getText().trim() && log.getText() !== 'No agent events yet\n', 'this run has logged its agents');
+	});
 });
