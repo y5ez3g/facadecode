@@ -4,8 +4,8 @@
 
 import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
-import type { CardMenu, PanelState } from '../webview/protocol';
-import { cardOf, CardPlace, CardWords, folderPrefixOf } from './cardView';
+import type { CardMenu, PanelFilter, PanelState } from '../webview/protocol';
+import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel } from './cardView';
 import { arranged, moved, PanelPrefs, withNew } from './order';
 
 /** Reported text and activity reach the page at most this often; lifecycle changes and errors go at once (PANEL-3.1, UX-5.2). */
@@ -24,9 +24,22 @@ const REAL_TIMERS: Timers = {
 	clearTimeout: handle => clearTimeout(handle as ReturnType<typeof setTimeout>)
 };
 
+/**
+ * Where New Agent from the filtered empty panel starts (PANEL-1.2, LIFECYCLE-1.2): the filtered location, or a filtered folder's
+ * own location, else its first; none without a filter or once it is gone.
+ */
+export function locationOfFilter(filter: PanelFilter | undefined, locations: readonly Location[]): LocationId | undefined {
+	if (!filter) {
+		return undefined;
+	}
+	const location = filter.kind === 'location' ? locations.find(each => each.id === filter.id)
+		: locations.find(each => each.uri === filter.id) ?? locations.find(each => each.folders[0]?.uri === filter.id);
+	return location?.id;
+}
+
 interface PanelModelDeps {
 	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange'>;
-	readonly locations: Pick<LocationPort, 'snapshot' | 'onDidChange' | 'onDidRemove'>;
+	readonly locations: Pick<LocationPort, 'snapshot' | 'onDidChange' | 'onDidRemove' | 'removalOf'>;
 	readonly prefs: PanelPrefs;
 	readonly words: CardWords;
 	readonly remote: boolean;
@@ -46,8 +59,8 @@ export interface SelectedAgent {
 }
 
 /**
- * The panel's one state (PANEL-3.1): this window's runs in the manual stack's order (PANEL-2.1), the selection, and every card
- * already decided (PANEL-1.3-1.5). Whatever changes in one moment goes out as one state at the end of the
+ * The panel's one state (PANEL-3.1): this window's runs in the manual stack's order (PANEL-2.1), the display filter (PANEL-2.3), the
+ * selection, and every card already decided (PANEL-1.3-1.5). Whatever changes in one moment goes out as one state at the end of the
  * microtask; a CLI's reported text and activity at most once per {@link REPORT_COALESCE_MS}.
  */
 export class PanelModel implements Disposable {
@@ -55,6 +68,7 @@ export class PanelModel implements Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	private readonly listeners = new Set<(state: PanelState) => void>();
 	private order: string[];
+	private filter: PanelFilter | undefined;
 	private selectedRun: RunId | undefined;
 	private loading = true;
 	/** Every location seen, kept while it is only unavailable, gone on confirmed removal alone (PANEL-1.3, RULES-2.4). */
@@ -78,6 +92,11 @@ export class PanelModel implements Disposable {
 	constructor(private readonly deps: PanelModelDeps) {
 		this.timers = deps.timers ?? REAL_TIMERS;
 		this.order = deps.prefs.order();
+		this.filter = deps.prefs.filter();
+		// A removal confirmed as the host restarted, before this panel listened, clears the filter it kept (PANEL-2.3, RULES-2.4)
+		if (this.filter && this.removedFor(this.filter)) {
+			this.setFilter(undefined);
+		}
 		for (const run of [...deps.agents.list()].sort((a, b) => a.createdAt - b.createdAt)) {
 			this.order = withNew(this.order, run.id);
 		}
@@ -87,7 +106,7 @@ export class PanelModel implements Disposable {
 		this.said = this.fingerprint(state, selection);
 		this.subscriptions.push(
 			deps.agents.onDidChange(change => this.changed(change)),
-			deps.locations.onDidChange(() => this.schedule()),
+			deps.locations.onDidChange(() => this.locationsChanged()),
 			deps.locations.onDidRemove(({ ids }) => this.removed(ids))
 		);
 		const settled = () => {
@@ -136,16 +155,48 @@ export class PanelModel implements Disposable {
 		this.schedule();
 	}
 
-	/** This window's runs, in the panel's order. */
+	/** This window's runs, every one whatever the filter shows, in the panel's order. */
 	ordered(): RunFacts[] {
 		const runs = this.deps.agents.list();
 		const byId = new Map(runs.map(run => [run.id, run]));
 		return this.arrangedIds(runs).map(id => byId.get(id)!);
 	}
 
-	/** Moves a card one place up or down (PANEL-2.1). Answers whether it moved. */
+	currentFilter(): PanelFilter | undefined {
+		return this.filter;
+	}
+
+	/** Shows the cards `filter` matches, or every card; kept in workspace storage (PANEL-2.3). */
+	setFilter(filter: PanelFilter | undefined): void {
+		this.filter = filter;
+		this.deps.prefs.setFilter(filter);
+		this.schedule();
+	}
+
+	/** The filter of a run's own location or of its location's workspace folder (PANEL-2.2), with the label the view says. */
+	filterFor(run: RunId, kind: PanelFilter['kind']): PanelFilter | undefined {
+		const facts = this.deps.agents.get(run);
+		if (!facts) {
+			return undefined;
+		}
+		if (kind === 'location') {
+			return { kind, id: facts.location, label: this.placeOf(facts).qualified };
+		}
+		const folder = this.known.get(facts.location)?.folders[0];
+		return folder ? { kind, id: folder.uri, label: folder.name } : undefined;
+	}
+
+	/** How many of this window's cards `filter` shows - every card without one - starting and failed cards included (PANEL-2.3). */
+	count(filter: PanelFilter | undefined): number {
+		this.learn(this.deps.locations.snapshot());
+		return this.deps.agents.list().filter(run => this.matches(run, filter)).length;
+	}
+
+	/** Moves a shown card one place up or down, hidden cards keeping theirs (PANEL-2.1). Answers whether it moved. */
 	move(run: RunId, by: -1 | 1): boolean {
-		const next = moved(this.arrangedIds(this.deps.agents.list()), run, by);
+		const runs = this.deps.agents.list();
+		const byId = new Map(runs.map(each => [each.id, each]));
+		const next = moved(this.arrangedIds(runs), run, by, id => this.matches(byId.get(id), this.filter));
 		if (!next) {
 			return false;
 		}
@@ -159,7 +210,7 @@ export class PanelModel implements Disposable {
 		const location = this.known.get(facts.location) ?? catalog.locations.find(each => each.id === facts.location);
 		const label = location?.label ?? baseName(facts.cwd);
 		const folderPrefix = location ? folderPrefixOf(location, catalog) : undefined;
-		const qualified = folderPrefix ? `${folderPrefix} · ${label}` : label;
+		const qualified = location ? locationLabel(location, catalog) : label;
 		const environment = facts.environment !== 'local' ? this.deps.environmentLabel?.(facts.environment) ?? facts.environment : undefined;
 		// A fact a line (PANEL-1.5, D74): where it works, then its folder - the home folder as ~, not on Windows - which the editor's
 		// tooltip then never breaks mid-line
@@ -186,12 +237,36 @@ export class PanelModel implements Disposable {
 		}
 	}
 
-	/** Confirmed location removal: its runs are closed by the lifecycle (RULES-2.4). */
+	/** Confirmed location removal: its runs are closed by the lifecycle, and a filter of it clears (PANEL-2.3, RULES-2.4). */
 	private removed(ids: readonly LocationId[]): void {
 		for (const id of ids) {
 			this.known.delete(id);
 		}
+		if (this.filter && (this.filter.kind === 'location' ? ids.includes(this.filter.id) : this.removedFor(this.filter))) {
+			this.setFilter(undefined);
+		}
 		this.schedule();
+	}
+
+	/**
+	 * The catalog changed. The editor's own folder list is the workspace's: a folder filter whose folder it no longer has clears,
+	 * though the folder's locations may stay listed under another folder and so report no removal (PANEL-2.3, RULES-2.4).
+	 */
+	private locationsChanged(): void {
+		if (this.filter?.kind === 'folder' && this.removedFor(this.filter)) {
+			this.setFilter(undefined);
+		}
+		this.schedule();
+	}
+
+	/**
+	 * Whether a filter's location or folder is confirmed removed: a location the location service reported removed, or a workspace
+	 * folder the editor's own folder list no longer has - neither a Git read nor a remote observation (RULES-2.4).
+	 */
+	private removedFor(filter: PanelFilter): boolean {
+		return filter.kind === 'location'
+			? this.deps.locations.removalOf(filter.id) !== undefined
+			: !this.deps.locations.snapshot().folders.some(folder => folder.uri === filter.id);
 	}
 
 	private setOrder(order: readonly string[]): void {
@@ -258,17 +333,38 @@ export class PanelModel implements Disposable {
 		const runs = this.deps.agents.list();
 		const byId = new Map(runs.map(run => [run.id, run]));
 		const ids = this.arrangedIds(runs);
-		const cards = ids.map(id => {
+		const filter = this.filter && this.labeled(this.filter, catalog);
+		const shown = ids.filter(id => this.matches(byId.get(id), filter));
+		const shownSet = new Set(shown);
+		// Whether a filter would show another set of cards than now: a card's own filters are offered only then (PANEL-2.3)
+		const changes = new Map<string, boolean>();
+		const wouldChange = (candidate: Omit<PanelFilter, 'label'>) => {
+			const key = `${candidate.kind}\n${candidate.id}`;
+			let answer = changes.get(key);
+			if (answer === undefined) {
+				const there = ids.filter(id => this.matches(byId.get(id), candidate));
+				answer = there.length !== shownSet.size || there.some(id => !shownSet.has(id));
+				changes.set(key, answer);
+			}
+			return answer;
+		};
+		const visible = (id: string) => shownSet.has(id);
+		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
+			const folder = this.known.get(facts.location)?.folders[0];
 			const menu: CardMenu = {
-				moveUp: moved(ids, id, -1) !== undefined,
-				moveDown: moved(ids, id, 1) !== undefined
+				moveUp: moved(ids, id, -1, visible) !== undefined,
+				moveDown: moved(ids, id, 1, visible) !== undefined,
+				filterLocation: wouldChange({ kind: 'location', id: facts.location }),
+				// A folder filter only where the window has several folders, as Filter by Working Location offers one
+				filterFolder: folder !== undefined && catalog.folders.length > 1 && wouldChange({ kind: 'folder', id: folder.uri }),
+				clearFilter: filter !== undefined
 			};
 			return cardOf(facts, { place: this.placeOf(facts, catalog), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.window ? { window: this.deps.window } : {} });
 		});
 		const exited = [...this.exited];
 		this.exited.clear();
-		const empty: PanelState['empty'] = this.loading || cards.length ? undefined : catalog.folders.length ? 'noAgents' : 'noFolder';
+		const empty: PanelState['empty'] = this.loading || cards.length ? undefined : filter ? 'noMatch' : catalog.folders.length ? 'noAgents' : 'noFolder';
 		const selected = this.selectedRun === undefined ? undefined : byId.get(this.selectedRun);
 		return {
 			state: {
@@ -276,6 +372,7 @@ export class PanelModel implements Disposable {
 				loading: this.loading,
 				cards,
 				cardCount: runs.length,
+				...(filter ? { filter } : {}),
 				...(empty ? { empty } : {}),
 				capabilities: { remote: this.deps.remote },
 				...(exited.length ? { exited } : {})
@@ -293,6 +390,38 @@ export class PanelModel implements Disposable {
 	/** The run IDs of `runs` as the panel lists them: by the stack, any it does not know yet first, newest first (PANEL-2.1). */
 	private arrangedIds(runs: readonly RunFacts[]): string[] {
 		return arranged(this.order, [...runs].sort((a, b) => b.createdAt - a.createdAt).map(run => run.id));
+	}
+
+	/** The filter as the view names it now: a location's current label, a folder's name; the label kept where neither is known. */
+	private labeled(filter: PanelFilter, catalog: Catalog): PanelFilter {
+		let label = filter.label;
+		if (filter.kind === 'folder') {
+			label = catalog.folders.find(folder => folder.uri === filter.id)?.name ?? label;
+		} else {
+			const location = this.known.get(filter.id);
+			if (location) {
+				label = locationLabel(location, catalog);
+			}
+		}
+		if (label !== filter.label) {
+			this.filter = { ...filter, label };
+			this.deps.prefs.setFilter(this.filter);
+		}
+		return this.filter!;
+	}
+
+	/** Whether `filter` shows the card of `facts`: its location's, or one of its location's workspace folders (PANEL-2.3). */
+	private matches(facts: RunFacts | undefined, filter: Omit<PanelFilter, 'label'> | undefined): boolean {
+		if (!facts) {
+			return false;
+		}
+		if (!filter) {
+			return true;
+		}
+		if (filter.kind === 'location') {
+			return facts.location === filter.id;
+		}
+		return this.known.get(facts.location)?.folders.some(folder => folder.uri === filter.id) ?? false;
 	}
 }
 

@@ -4,6 +4,7 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { isJsonObject } from '../../base/json';
 import { invalid } from '../../core/errors';
 import { worktreeCreationEffects } from '../../core/locations/problems';
 import { Agents, Catalog, HumanPort, Location, LocationPort, LogPort, WorkspaceFolderInfo, WorktreeError, WorktreePlan, WorktreePort } from '../../core/ports';
@@ -40,8 +41,8 @@ export interface NewWorktreeResult {
 export function registerWorktreeCommands(deps: WorktreeCommandDeps): vscode.Disposable[] {
 	return [
 		vscode.commands.registerCommand(NEW_WORKTREE_COMMAND, async (arg?: unknown): Promise<NewWorktreeResult | undefined> => {
-			// The view's own menu gives `null`: no request, the person chooses
-			if (arg !== undefined && arg !== null) {
+			// No request where the editor's own menu runs it: the person chooses
+			if (!fromEditorMenu(arg)) {
 				const request = requestOf(arg);
 				return createAs(deps, request.branch, () => deps.worktrees.plan(request.location_id, request.branch, request.base_ref));
 			}
@@ -49,6 +50,14 @@ export function registerWorktreeCommands(deps: WorktreeCommandDeps): vscode.Disp
 			return plan ? createAs(deps, plan.branch, async () => plan) : undefined;
 		})
 	];
+}
+
+/**
+ * Whether `arg` is all the editor gives a command its own menu runs (WORKTREES-4.3): nothing, `null`, or, for an item clicked
+ * with the mouse, `{ preserveFocus }` - VS Code's context for an item with none of its own.
+ */
+function fromEditorMenu(arg: unknown): boolean {
+	return arg === undefined || arg === null || (isJsonObject(arg) && Object.keys(arg).length === 1 && typeof arg.preserveFocus === 'boolean');
 }
 
 /** The command's arguments, exactly (WORKTREES-4.3): anything else fails without a guess. */

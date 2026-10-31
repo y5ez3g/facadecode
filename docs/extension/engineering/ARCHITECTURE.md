@@ -111,7 +111,7 @@ same for this native window across these transitions and differs for a separate 
 workspace. This lifecycle is a platform evidence requirement, not a guarantee inferred from the API's name. Removal or
 replacement of that directory cannot justify a folder-based search for another window's identity. A record gone is
 replaced by a new identity unnoticed; a damaged one is not replaced: Facade does not start in that window and says to close
-it and open its folder again, or restart the editor - not to reload, which reads the same record (D83).
+it and open its folder again, or restart the editor - not to reload, which reads the same record (D86).
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
 component rejects a request from a different session. Each activation records its key and folders under that identity in
@@ -197,7 +197,7 @@ that disables an otherwise usable session.
 Existing processes are not killed just because an extension/protocol is updated. Compatible reconnect preserves their
 actual identity. A build speaks every earlier protocol a released build used, and drops none: a window joins each such
 ptyd that holds runs of its workspace - never starting one - claims them there, and shows and operates them through it as
-its own: cards, terminals, input, resizing, closing and ends (RULES-4.1, D83). A run whose earlier-protocol ptyd is gone
+its own: cards, terminals, input, resizing, closing and ends (RULES-4.1, D86). A run whose earlier-protocol ptyd is gone
 ended with it, how is not known. A request a later protocol added goes to no earlier ptyd. Once none of the window's runs
 is left in such a ptyd the window lets it go, to exit once idle. New starts use current settings/protocol, in the window's
 own ptyd. Upgrade/reload behavior must be verified with in-flight work.
@@ -211,7 +211,7 @@ own ptyd. Upgrade/reload behavior must be verified with in-flight work.
 | Store | Contents |
 | --- | --- |
 | Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects and location metadata |
-| Editor workspace storage | Human CLI/location choices, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Editor workspace storage | Human CLI/location choices, filter, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
@@ -235,9 +235,10 @@ product or prompts.
 
 ### 3.3 Diagnostics
 
-**The agents log records operation and lifecycle facts without secrets or task-policy judgments.**
+**Show Agents Log presents operation and lifecycle facts without secrets or task-policy judgments.**
 
-Use a log with UTC time, safe name/reference, operation ID, phase, effects and actual failure. Redact CLI credentials
+Use a read-only editor log with UTC time, safe name/reference, operation ID, phase, effects and actual failure. An empty
+log opens with `No agent events yet`, with no information toast. Redact CLI credentials
 and sensitive environment values. Correlation IDs connect UI/supervisor observations. Retain 30-day diagnostics subject
 to the capacity policy; no telemetry service is introduced by this refactor.
 
@@ -275,12 +276,12 @@ never rewritten by staging. This keeps repository setup instructions out of the 
 
 ### 4.2 No compatibility migration
 
-**The Facade Code extension has never been released, so it does not migrate earlier development settings, command IDs or stored state.**
+**Earlier development settings, command IDs and stored state are not migrated; released runtime protocols remain supported under 2.4.**
 
 Earlier development settings and stored workspace state are not read into the current catalog, and earlier command
 IDs get no aliases; this includes the Facade Dots development builds' `facadeDots.*` and `facade.agents.*` settings
-and their `~/.facade-dots` directory. Records stored by earlier development builds, such as card order and known
-locations, are ignored with one line in the agents log. They are never translated or replayed. Discoverable worktrees
+and their `~/.facade-dots` directory. Records stored by earlier development builds, such as filters, card order and
+known locations, are ignored with one line in the agents log. They are never translated or replayed. Discoverable worktrees
 remain available because Git discovers them. Never delete vendor history, user work or an earlier Facade data
 directory. No migration-news popup is required.
 Retired launch-group/trust/settings-template fields report a configuration error under CLIS-3 instead of keeping a
@@ -374,11 +375,18 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-10-31: 4.2 distinguishes unreleased development data from released runtime protocols, removing the stale
+  claim that the extension has never been released.
+
 - 2026-10-31: 2.4: a build speaks every earlier released protocol and shows and operates the runs such a ptyd holds through
-  it (D83), where a window only held them unseen before.
+  it (D86), where a window only held them unseen before.
 - 2026-10-31: 2.2 says what a damaged window identity record does: Facade does not start there and says what helps.
 - 2026-10-31: 2.4 says how runs held by an earlier protocol's ptyd survive an update: the night verification found they
   ended five minutes after the reload, as no window claimed them there.
+- 2026-10-30: 3.3 opens the agents log as Show Agents Log, a read-only document.
+
+- 2026-10-30: Workspace storage keeps the panel's filter (PANEL-2.3); a filter stored by an earlier build is ignored.
+
 - 2026-10-30: 2.2 and 2.3 describe the owner's five-minute policy (D75) as ptyd applies it, and 2.2 bounds the wait
   for each restored terminal to open.
 

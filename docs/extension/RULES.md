@@ -112,7 +112,7 @@ platform proof obligation.
 
 Until a person closes it or it ends normally, every agent a window started stays shown: its card in the window's panel and
 its terminal in the editor, across a reload, an extension host restart, an update and a lost connection alike. Where Facade
-cannot reach its process or tell its state, the card is red and says why (3.2); Facade never leaves it out (D83). A window
+cannot reach its process or tell its state, the card is red and says why (3.2); Facade never leaves it out (D86). A window
 whose own identity record is gone or damaged cannot tell its agents from another window's (ARCHITECTURE-2.2) and is the
 exception.
 
@@ -126,7 +126,7 @@ Changing the setting does not change existing runs. Enable the CLI's own sandbox
 
 **Launch settings affect subsequent starts.**
 
-A disabled CLI cannot be newly started; existing processes remain (CLIS-1.1's `.enabled` joins in a later step). YOLO uses 4.3's single launch-time rule. There is no
+A disabled CLI cannot be newly started; existing processes remain (CLIS-1.1). YOLO uses 4.3's single launch-time rule. There is no
 worktree-management switch: detect Git and offer creation where supported; ordinary locations remain usable without Git.
 
 ## 5 Side effects
@@ -170,7 +170,8 @@ accumulated-operation counter may permanently disable an otherwise usable enviro
 
 ## Change log
 
-- 2026-10-31: 4.1 keeps every agent a window started shown, red where Facade cannot reach it or tell its state (D83).
+- 2026-10-31: 4.1 keeps every agent a window started shown, red where Facade cannot reach it or tell its state (D86).
+- 2026-10-30: 4.4 refers to CLIS-1.1's `.enabled`, now part of the extension.
 
 - 2026-10-30: 3.2's startup lasts until the CLI first shows its activity, within CLIS-2.3's bound (D81).
 

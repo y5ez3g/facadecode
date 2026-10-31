@@ -44,7 +44,12 @@ export function destinationEnvironment(scope: vscode.Uri | undefined): Destinati
 	return {
 		host: process.env,
 		...mapOf(terminal.get<unknown>(`env.${key}`)) ? { terminal: mapOf(terminal.get<unknown>(`env.${key}`)) } : {},
-		...profile ? { profile } : {},
+		...profile ? { profile, profileName: name as string } : {},
 		platform
 	};
+}
+
+/** The terminal environment setting of this platform, as Show Agent Launch names that layer (CLIS-1.2, 4.1). */
+export function terminalEnvSetting(): string {
+	return `terminal.integrated.env.${settingsPlatform(process.platform)}`;
 }

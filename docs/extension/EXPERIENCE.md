@@ -117,7 +117,8 @@ An unconfirmed remote cleanup is not silently described as proven process exit.
 **Plain folders, optional Git and multi-folder/remote use follow the same agent flows.**
 
 Git discovery never blocks ordinary agent use. Worktree creation is available where Git/repository prerequisites exist,
-with no enable/disable setting and no initialization wizard.
+with no enable/disable setting and no initialization wizard. Panel filters affect display only: every created agent
+enters the normal panel data, and a filtered-out creation does not clear the person's filter.
 
 ## Checks
 
@@ -131,6 +132,8 @@ with no enable/disable setting and no initialization wizard.
 Evidence is recorded in [Verification](engineering/VERIFICATION.md); these scenarios have not been run by this rewrite.
 
 ## Change log
+
+- 2026-10-30: 4.3 says a panel filter affects display only (PANEL-2.3).
 
 - 2026-10-30: 2.4 says when a closed window's agents end under the owner's five-minute policy (D75).
 

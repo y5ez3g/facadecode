@@ -15,7 +15,7 @@ dated observations; an old probe is not current-platform certification.
 
 ### 1.1 CLI catalog
 
-**Built-ins are discovered in the destination execution environment.**
+**Built-ins and configured custom CLIs are discovered in the destination execution environment.**
 
 | Display name | API ID | Executable | Setting segment |
 | --- | --- | --- | --- |
@@ -26,9 +26,10 @@ dated observations; an old probe is not current-platform certification.
 | OpenCode | `opencode` | `opencode` | `opencode` |
 | Pi | `pi` | `pi` | `pi` |
 
-Use this order. Step 1 offers every installed built-in; `.enabled` joins with its later step. Recompute on relevant
-settings/PATH changes, picker/discovery request, and immediately before launch. Discovery inspects files/configuration
-without invoking a model, logging in, installing/updating a CLI, or modifying settings.
+Use this order, then custom entries in configuration order. `.enabled:false` hides a built-in from new starts, never
+stops its runs. Recompute on relevant settings/PATH changes, picker/discovery request, and immediately before launch.
+Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or modifying
+settings.
 
 ### 1.2 Executable and environment
 
@@ -133,9 +134,6 @@ user punctuation. Never rewrite useful original CLI text. Terminal emoji width f
 
 **Expose executable paths, literal arguments and environment values; keep vendor integration inside adapters.**
 
-Step 1 has `.path` alone; the `.launch` schema below joins with its later step, and until then a launch uses its
-adapter's invocation and 1.2's environment.
-
 Built-in `.path` follows 1.2; `.launch` defaults to `{}` and accepts only:
 
 | Field | Shape / default |
@@ -145,8 +143,12 @@ Built-in `.path` follows 1.2; `.launch` defaults to `{}` and accepts only:
 
 Arrays are replaced as a whole, not merged by named groups. There is no public argument-group/template engine,
 deep-merged native settings object, generic trust-file merge, unattended overlay, taskDelay or enterDelay setting.
-Invalid or retired fields report their setting path; do not silently translate ambiguous old configuration. Preserve the
-user's values so they can correct them. Running processes keep their actual plan.
+Custom start/Resume argument templates are the limited exception defined in 3.4. Invalid or retired fields report their
+setting path; do not silently translate ambiguous old configuration. Preserve the user's values so they can correct
+them. An argument that repeats an option the adapter sets itself - its run settings or its YOLO mapping in either mode -
+is a configuration error naming its place in `arguments`: the CLI would take the person's value in place of Facade's
+(RULES-4.3). A problem names a received value by its JSON type, never the value, which may be a secret. Running
+processes keep their actual plan.
 
 ### 3.2 Adapter-owned invocation
 
@@ -176,7 +178,52 @@ Keep administrator settings and user deny policies effective according to verifi
 native settings are unknown, report that fact instead of claiming trust or sandbox evidence. Test isolation remains
 ARCHITECTURE-5's separate concern.
 
+### 3.4 Custom CLIs
+
+**A custom CLI definition requires an explicit exact-session Resume command before it can be used.**
+
+Under `facade.custom`, map a unique custom CLI key to `{path, launch}`. Do not shadow built-in IDs;
+CLI registry keys are distinct from agent display names. A key names its CLI wherever CLIs are listed, so it has a
+visible character and no control character; a key that cannot be an ID is a configuration error that defines no CLI.
+`path` is a required nonempty string resolved under 1.2. Custom `launch` accepts:
+
+| Field | Shape / meaning |
+| --- | --- |
+| start | `string[]`, default `[]`; arguments for a new interactive conversation |
+| resume | Required nonempty `string[]`; exact-session arguments containing `${sessionId}` |
+| environment | Map of string/null values, default `{}`; follows 1.2 |
+
+Both commands use `path` as the executable in the selected working location; Resume uses the conversation's original
+cwd and replaces the start arguments.
+Substitute the exact session ID once as literal argument data; `${sessionId}` is the only custom argument placeholder.
+Do not invoke a shell or expand integration/configuration variables. A wrapper executable can handle a CLI with a
+different command structure. For example, `{"path":"my-cli","launch":{"start":[],"resume":["resume","${sessionId}"]}}`.
+Missing/empty Resume or a command without the exact-session placeholder is a configuration error, not an accepted
+interactive-only definition. No YOLO mapping and no implicit model, effort, prompt or resume flags are invented:
+`facade.yolo` leaves a custom launch as configured, and Show Agent Launch says so, reporting its sandbox and approvals
+as unknown to Facade and that Facade gives it no trust (3.3).
+
+Capabilities such as activity reporting are what the shipped adapter proves under 2.1 and 2.3, not configured by the
+user. There is no `capabilities` field in a custom definition. An interactive CLI without runtime capability proofs
+can still start and accept direct terminal control after its definition passes validation; unproved capabilities
+remain unavailable. A Resume command is necessary but does not prove session discovery/identity or successful
+restoration; the definition requirement never becomes a claim that an untested integration works.
+
 ## 4 Inspection and design
+
+### 4.1 Show Agent Launch
+
+**Show Agent Launch displays the current effective configuration and actual known choices without running a CLI.**
+
+Show executable/environment source, cwd, literal argument order, resulting YOLO, native sandbox/approval facts, how
+the folder is trusted and configuration errors. Use one launch configuration and RULES-4.3's YOLO source. A chosen
+inspection location is not an API launch default. Redact account secrets and sensitive environment values; do not
+invent invalid-plan defaults. The document does not certify observed behavior of a process never started.
+
+Its location is the one a `{ location_id }` names, the window's only one, or the person's choice in native steps by
+folder that offer locations alone (D84): in a window of several folders, the folders, as Change Working Location lists
+them (LIFECYCLE-1.3) - one with a single location choosing it, one with more opening its own step of them; in a window
+of one folder, its locations. Locations come main checkout first (WORKTREES-1.2), and no separator divides them.
 
 ### 4.2 Adapter ownership and files
 
@@ -227,8 +274,8 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 | --- | --- |
 | 1.1–1.3 | Each built-in's destination discovery, unknown-version launch, matching profile/PATH/env/quoting, Windows launcher recognition, native permission mapping |
 | 2.1, 2.3 | Adapter evidence, startup until the first activity or its bound - a reload too - then red unknown, title sanitizing for each built-in's titles, Muse Code's screen reader on its fixtures and its reports' precedence |
-| 3.1–3.3 | Minimal argument/env schema, no generic file merge, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
-| 4.2 | Staged cwd validation; version invalidation |
+| 3.1–3.4 | Minimal argument/env schema, `.enabled` hiding new starts only, required custom Resume without user capability declarations, no generic file merge, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
+| 4.1–4.2 | Show Agent Launch matches the plan a start uses, redacts secrets and shows errors without an invented plan; staged cwd validation; version invalidation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes, no claims inferred from historical tables |
 
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
@@ -238,6 +285,16 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 - 2026-10-31: 1.2 refuses a launch through cmd.exe from a UNC folder, where cmd.exe ran the CLI in the Windows directory
   with the run's permissions - Muse Code's launcher always goes through it - and runs a Node entry point with Node on
   Windows, where the program the refusals advise failed to start. Both found by the night verification.
+- 2026-10-31: 4.1 chooses its location in native steps by folder, as Change Working Location does (D84).
+
+- 2026-10-31: 1.1 lists configured custom CLIs after the built-ins; 3.1 names 3.4's templates as its exception; 3.4
+  Custom CLIs, carried from the Facade Dots specification under `facade.custom`, with the capabilities of later steps
+  left out; a key needs a visible character and no control character.
+
+- 2026-10-30: 1.1 adds `.enabled`, 3.1 the `.launch` arguments and environment, and 4.1 Show Agent Launch, carried
+  from the Facade Dots specification without the parts of later steps (model and effort, MCP, sessions and input). 3.1
+  refuses an argument repeating an option the adapter sets, and names a received value by its type alone.
+
 - 2026-10-30: At the owner's request, Antigravity, Muse Code, OpenCode and Pi join the built-in catalog at the level of
   Claude Code and Codex (D77): 1.1's catalog, 1.2's Windows launchers - recognized only as their installers write them, and
   refused through cmd.exe where the launcher's own path holds what cmd.exe reads as its own - 1.3's permission mappings, 2.3's OpenCode line

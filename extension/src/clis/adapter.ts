@@ -10,13 +10,16 @@ import type { Environment } from './environment';
 import type { LaunchTarget } from './executable';
 import type { TrustTarget } from './trust';
 
-/** The argument groups of an invocation (CLIS-3.2): run settings, the YOLO mapping, then per-launch trust. */
-export const GROUP_ORDER = ['quiet', 'yoloOn', 'yoloOff', 'trust'] as const;
+/**
+ * The argument groups of an invocation (CLIS-3.2): run settings, the YOLO mapping, per-launch trust, then the configured
+ * `.launch.arguments` in the vendor's options position (CLIS-3.1).
+ */
+export const GROUP_ORDER = ['quiet', 'yoloOn', 'yoloOff', 'trust', 'extra'] as const;
 
 export type Group = (typeof GROUP_ORDER)[number];
 
-/** An adapter's groups, as literal arguments with `${name}`s the adapter fills itself. */
-export type Groups = { readonly [G in Group]?: readonly string[] };
+/** An adapter's groups, as literal arguments with `${name}`s the adapter fills itself; `extra` is the configured `arguments`. */
+export type Groups = { readonly [G in Exclude<Group, 'extra'>]?: readonly string[] };
 
 /** What one launch applies (CLIS-3.2). */
 export interface LaunchUses {
@@ -30,6 +33,7 @@ export function applies(group: Group, uses: LaunchUses): boolean {
 		case 'yoloOff': return !uses.yolo;
 		case 'quiet': return true;
 		case 'trust': return true;
+		case 'extra': return true;
 	}
 }
 
@@ -46,12 +50,15 @@ export function expanded(args: readonly string[], values: { readonly [name: stri
 	}));
 }
 
-/** The literal invocation of an adapter's groups for one launch (CLIS-3.2): the groups that apply, in {@link GROUP_ORDER}. */
-export function invocation(groups: Groups, uses: LaunchUses, values: { readonly [name: string]: string }): string[] {
+/**
+ * The literal invocation of an adapter's groups for one launch (CLIS-3.1, 3.2): the groups that apply, in {@link GROUP_ORDER}, the
+ * configured `extra` arguments among them as they are - a person's literal options, never expanded.
+ */
+export function invocation(groups: Groups, extra: readonly string[], uses: LaunchUses, values: { readonly [name: string]: string }): string[] {
 	const args: string[] = [];
 	for (const group of GROUP_ORDER) {
 		if (applies(group, uses)) {
-			args.push(...expanded(groups[group] ?? [], values));
+			args.push(...group === 'extra' ? extra : expanded(groups[group] ?? [], values));
 		}
 	}
 	return args;
@@ -64,14 +71,27 @@ export interface LaunchInput {
 	readonly platform: NodeJS.Platform;
 }
 
-/** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition. */
+/**
+ * A CLI's sandbox as a launch leaves it (CLIS-1.3, 4.1): turned on by arguments of the launch (`by`), else by Facade's run settings
+ * for it; turned off by arguments; left to the CLI's own configuration; none, where the CLI has no sandbox on this platform; or
+ * unknown, for a custom CLI whose configuration Facade does not read (CLIS-3.3, 3.4).
+ */
+export type SandboxFact = { readonly state: 'on'; readonly by?: readonly string[] } | { readonly state: 'off'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' | 'unknown' };
+
+/**
+ * A CLI's approvals as a launch leaves them (CLIS-1.3, 4.1): bypassed by arguments of the launch, its own, none it has, or unknown
+ * for a custom CLI (CLIS-3.4).
+ */
+export type ApprovalFact = { readonly state: 'bypassed'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' | 'unknown' };
+
+/** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition, or a custom CLI's validated configuration (CLIS-3.4). */
 export interface CliAdapter {
-	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` (CLIS-1.1). */
+	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, or a custom CLI's key (CLIS-1.1, 3.4). */
 	readonly id: string;
 	readonly displayName: string;
-	/** Its settings: `facade.<segment>`. */
+	/** Its settings: `facade.<segment>`, or `facade.custom.<key>`. */
 	readonly setting: string;
-	/** The command PATH is searched for where its `path` setting is empty. */
+	/** The command PATH is searched for where its `path` setting is empty; a custom CLI's configured path. */
 	readonly command: string;
 	readonly groups: Groups;
 	/** The values its groups' `${name}`s take for a launch. */
@@ -98,6 +118,10 @@ export interface CliAdapter {
 	 * give for a title before it has one.
 	 */
 	readonly title: { readonly decoration?: RegExp; readonly names: readonly string[]; readonly placeholder?: RegExp };
+	/** Its sandbox for a launch with this YOLO on this platform, as Show Agent Launch says it (CLIS-1.3, 4.1). */
+	sandbox(yolo: boolean, platform: NodeJS.Platform): SandboxFact;
+	/** Its approvals for a launch with this YOLO (CLIS-1.3, 4.1). */
+	approvals(yolo: boolean): ApprovalFact;
 	/**
 	 * Whether an exit was the CLI's own handling of an interrupt the person typed (RULES-3.3): `ctrlC` says a Ctrl+C went into its
 	 * terminal just before. Without the adapter's evidence, no exit is an interrupt.

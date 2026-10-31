@@ -37,7 +37,7 @@ function PI_CMD(setup: string): string {
 /** The installer's choice of Node where it installed a Node of its own. */
 const PI_OWN_NODE = 'SET "node=node"\r\nIF EXIST "%LOCALAPPDATA%\\pi-node\\current\\node.exe" SET "node=%LOCALAPPDATA%\\pi-node\\current\\node.exe"';
 
-suite('CLIs: the catalog and its settings (CLIS-1.1, 1.2)', () => {
+suite('CLIs: the catalog and its settings (CLIS-1.1, 1.2, 3.1)', () => {
 
 	test('the built-ins in their order, with their API IDs, executables and setting segments', () => {
 		assert.deepStrictEqual(BUILT_IN_ADAPTERS.map(adapter => [adapter.displayName, adapter.id, adapter.command, adapter.setting.replace(/^facade\./, '')]), [
@@ -53,27 +53,91 @@ suite('CLIs: the catalog and its settings (CLIS-1.1, 1.2)', () => {
 
 	test('each built-in\'s path is read from its own setting, and a problem with one names that setting alone', () => {
 		const entries = catalogOf(settings({ 'facade.antigravity.path': ' C:\\Tools\\agy.exe ', 'facade.muse.path': 7, 'facade.opencode.path': '', 'facade.pi.path': '~/bin/pi' })).entries;
-		assert.deepStrictEqual(entries.map(entry => [entry.adapter.id, entry.path, entry.problems]), [
+		assert.deepStrictEqual(entries.map(entry => [entry.adapter.id, entry.path, entry.problems.map(problem => problem.text)]), [
 			['claude', '', []],
 			['codex', '', []],
 			['agy', 'C:\\Tools\\agy.exe', []],
-			['muse', '', ['facade.muse.path must be a string; received 7']],
+			['muse', '', ['facade.muse.path must be a string; received number']],
 			['opencode', '', []],
 			['pi', '~/bin/pi', []]
 		]);
 	});
 
-	test('a built-in\'s path is read trimmed; none is its command on PATH', () => {
-		assert.deepStrictEqual(readCliSettings('facade.claude', () => ' /opt/claude '), { path: '/opt/claude', problems: [] });
-		assert.deepStrictEqual(readCliSettings('facade.claude', () => undefined), { path: '', problems: [] });
+	test('a built-in\'s path is read trimmed; none is its command on PATH; it is offered unless turned off, and its launch adds nothing unless set', () => {
+		assert.deepStrictEqual(readCliSettings('facade.claude', key => key === 'path' ? ' /opt/claude ' : undefined), { enabled: true, path: '/opt/claude', arguments: [], environment: {}, problems: [] });
+		assert.deepStrictEqual(readCliSettings('facade.claude', () => undefined), { enabled: true, path: '', arguments: [], environment: {}, problems: [] });
 	});
 
 	test('a path of the wrong kind, of whitespace alone or with a NUL in it is an error naming its setting, never PATH\'s command in its place', () => {
-		assert.deepStrictEqual([7, '   ', 'a\0b'].map(value => readCliSettings('facade.claude', () => value)), [
-			{ path: '', problems: ['facade.claude.path must be a string; received 7'], said: { kind: 'path_type', values: ['facade.claude', '7'] } },
-			{ path: '', problems: ['facade.claude.path contains only whitespace. Set the program\'s path, or leave it empty to find the CLI on PATH'], said: { kind: 'path_blank', values: ['facade.claude'] } },
-			{ path: 'a\0b', problems: ['facade.claude.path contains a NUL character, which no path can hold'], said: { kind: 'path_nul', values: ['facade.claude'] } }
+		assert.deepStrictEqual([7, '   ', 'a\0b'].map(value => readCliSettings('facade.claude', key => key === 'path' ? value : undefined).problems), [
+			[{ text: 'facade.claude.path must be a string; received number', said: { kind: 'path_type', values: ['facade.claude', 'number'] } }],
+			[{ text: 'facade.claude.path contains only whitespace. Set the program\'s path, or leave it empty to find the CLI on PATH', said: { kind: 'path_blank', values: ['facade.claude'] } }],
+			[{ text: 'facade.claude.path contains a NUL character, which no path can hold', said: { kind: 'path_nul', values: ['facade.claude'] } }]
 		]);
+	});
+
+	test('a launch accepts literal arguments and an environment map alone, in the order and shape given; .enabled turns a built-in off (CLIS-1.1, 3.1)', () => {
+		const read = readCliSettings('facade.codex', key => ({ enabled: false, path: ' /opt/codex ', launch: { arguments: ['--search', '-c', 'a=b'], environment: { A: '1', B: null } } })[key]);
+		assert.deepStrictEqual(read, { enabled: false, path: '/opt/codex', arguments: ['--search', '-c', 'a=b'], environment: { A: '1', B: null }, problems: [] });
+		assert.deepStrictEqual(catalogOf(settings({ 'facade.pi.enabled': false, 'facade.pi.launch': { arguments: ['--x'], environment: { Y: '2' } } })).entries.filter(entry => entry.adapter.id === 'pi').map(entry => [entry.enabled, entry.extra, entry.environment]),
+			[[false, ['--x'], { Y: '2' }]]);
+	});
+
+	test('an unknown field or a value of the wrong kind is an error naming its setting path, in the order read and by its kind for the person\'s language, never translated or used', () => {
+		const read = readCliSettings('facade.claude', key => ({
+			enabled: 'yes',
+			path: '   ',
+			launch: { arguments: { yoloOn: ['--x'] }, environment: { GOOD: 'x', BAD: 1, '': 'y', 'A=B': 'z' }, trust: null, quiet: [] }
+		})[key]);
+		assert.deepStrictEqual(read.problems.map(problem => [problem.text.split(' ')[0], problem.said.kind]), [
+			['facade.claude.enabled', 'enabled_type'],
+			['facade.claude.path', 'path_blank'],
+			['facade.claude.launch.trust', 'launch_field'],
+			['facade.claude.launch.quiet', 'launch_field'],
+			['facade.claude.launch.arguments', 'arguments_type'],
+			['facade.claude.launch.environment.BAD', 'environment_value'],
+			['facade.claude.launch.environment', 'environment_name'],
+			['facade.claude.launch.environment', 'environment_name']
+		]);
+		// Nothing of a wrong part is used, and nothing takes its place silently; a wrong .enabled leaves the default, said as wrong
+		assert.deepStrictEqual([read.enabled, read.arguments, read.environment], [true, [], {}]);
+		const items = readCliSettings('facade.muse', key => (key === 'launch' ? { arguments: ['ok', 2, 'nul\0'], environment: { NUL: 'a\0' } } : undefined));
+		assert.deepStrictEqual(items.problems.map(problem => problem.said), [
+			{ kind: 'argument_type', values: ['facade.muse.launch.arguments', '1', 'number'] },
+			{ kind: 'argument_nul', values: ['facade.muse.launch.arguments', '2'] },
+			{ kind: 'environment_nul', values: ['facade.muse.launch.environment', 'NUL'] }
+		]);
+		assert.deepStrictEqual(readCliSettings('facade.pi', key => (key === 'launch' ? [] : undefined)).problems.map(problem => problem.text),
+			['facade.pi.launch must be an object with arguments and environment; received array']);
+	});
+
+	test('a problem names a received value by its type and a variable\'s name up to its =, never a value that may be a secret (CLIS-3.1, 4.1)', () => {
+		const read = readCliSettings('facade.claude', key => ({
+			enabled: 'sk-enabled',
+			path: { token: 'sk-path' },
+			launch: { arguments: 'sk-arguments', environment: { 'ANTHROPIC_API_KEY=sk-name': 'x', DB_PASSWORD: 12345678 } }
+		})[key]);
+		const said = JSON.stringify(read.problems);
+		assert.ok(!/sk-|12345678/.test(said), said);
+		assert.deepStrictEqual(read.problems.map(problem => problem.said.values.slice(1)), [['string'], ['object'], ['string'], ['"ANTHROPIC_API_KEY=…"'], ['DB_PASSWORD', 'number']]);
+	});
+
+	test('a launch argument that repeats an option the adapter sets itself - its run settings or its YOLO mapping, either way - is refused, naming its place; others are the person\'s (CLIS-3.1)', () => {
+		const owned = (cli: string, args: readonly string[]) => catalogOf(settings({ [`facade.${cli}.launch`]: { arguments: args } })).entries.find(entry => entry.adapter.setting === `facade.${cli}`)!;
+		const claude = owned('claude', ['--verbose', '--settings', '{}', '--dangerously-skip-permissions']);
+		assert.deepStrictEqual([claude.extra, claude.problems.map(problem => problem.said)], [[], [
+			{ kind: 'launch_owned', values: ['facade.claude.launch.arguments', '1', '--settings'] },
+			{ kind: 'launch_owned', values: ['facade.claude.launch.arguments', '3', '--dangerously-skip-permissions'] }
+		]]);
+		assert.deepStrictEqual([
+			owned('codex', ['--sandbox=read-only']).problems.map(problem => problem.said.values[2]),
+			owned('antigravity', ['--mode', 'plan']).problems.map(problem => problem.said.values[2]),
+			owned('muse', ['--disable-sandbox']).problems.map(problem => problem.said.values[2]),
+			owned('opencode', ['--auto']).problems.map(problem => problem.said.values[2]),
+			// Codex's generic -c, which its trust uses too, and Pi's flags are the person's
+			owned('codex', ['-c', 'model_reasoning_effort=high']).extra,
+			owned('pi', ['--approve', '--model', 'x']).extra
+		], [['--sandbox'], ['--mode'], ['--disable-sandbox'], ['--auto'], ['-c', 'model_reasoning_effort=high'], ['--approve', '--model', 'x']]);
 	});
 });
 
@@ -285,7 +349,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 				...(yolo ? ['--dangerously-bypass-approvals-and-sandbox'] : ['--sandbox', 'workspace-write']),
 				'-c', `projects={ ${tomlString(fs.realpathSync(cwd))} = { trust_level = "trusted" } }`
 			]);
-			assert.deepStrictEqual(launch.trust, { kind: 'arguments' });
+			assert.deepStrictEqual(launch.trust, { kind: 'arguments', args: ['-c', `projects={ ${tomlString(fs.realpathSync(cwd))} = { trust_level = "trusted" } }`] });
 			assert.strictEqual(launch.env.FACADE_AGENT, '#a7');
 		}
 		assert.strictEqual(codexAdapter.values({ cwd, platform: 'win32', yolo: false }).folderToml,
@@ -321,23 +385,24 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		assert.deepStrictEqual([cleared, settingsOf(plan({ cli: 'claude', yolo: false }, {}, where))], [[false, false], { env: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' }, sandbox: { enabled: true } }]);
 	});
 
-	test('the groups go in their order: the run\'s own settings, then the YOLO mapping', () => {
-		assert.deepStrictEqual([...GROUP_ORDER], ['quiet', 'yoloOn', 'yoloOff', 'trust']);
-		const groups = { quiet: ['q', '${value}'], yoloOn: ['on'] };
-		assert.deepStrictEqual(invocation(groups, { yolo: false }, { value: 'v' }), ['q', 'v']);
-		assert.deepStrictEqual(invocation(groups, { yolo: true }, { value: 'v' }), ['q', 'v', 'on']);
+	test('the groups go in their order: the run\'s own settings, the YOLO mapping, the folder\'s trust, then the configured arguments as they are (CLIS-3.1, 3.2)', () => {
+		assert.deepStrictEqual([...GROUP_ORDER], ['quiet', 'yoloOn', 'yoloOff', 'trust', 'extra']);
+		const groups = { quiet: ['q', '${value}'], yoloOn: ['on'], trust: ['t'] };
+		assert.deepStrictEqual(invocation(groups, [], { yolo: false }, { value: 'v' }), ['q', 'v', 't']);
+		// A person's literal option is never expanded: `${value}` stays as written
+		assert.deepStrictEqual(invocation(groups, ['--extra', '${value}'], { yolo: true }, { value: 'v' }), ['q', 'v', 'on', 't', '--extra', '${value}']);
 	});
 
-	test('the environment: the host\'s, the folder\'s terminal settings, the default profile\'s, then the run\'s variables - null removing - with Claude Code\'s title switch removed (CLIS-1.2)', () => {
+	test('the environment: the host\'s, the folder\'s terminal settings, the default profile\'s, the CLI\'s launch environment, then the run\'s variables - null removing - with Claude Code\'s title switch removed (CLIS-1.2, 3.1)', () => {
 		const where: DestinationEnvironment = {
 			...destination,
 			host: { ...destination.host, SHELL_ONLY: 'kept', DROP_ME: 'x', HOST_VALUE: 'from host' },
 			terminal: { TERMINAL: '${env:HOST_VALUE} via terminal', DROP_ME: null, LAYERED: 'terminal' },
 			profile: { PROFILE: 'p', LAYERED: 'profile', MISSING: '${env:NOT_SET}' },
 		};
-		const env = plan({ cli: 'claude' }, {}, where).env;
+		const env = plan({ cli: 'claude' }, { 'facade.claude.launch': { environment: { LAUNCHED: '${env:HOST_VALUE} via launch', LAYERED: 'launch', PROFILE: null } } }, where).env;
 		assert.deepStrictEqual({ ...env, PATH: undefined, HOME: undefined }, {
-			PATH: undefined, HOME: undefined, SHELL_ONLY: 'kept', HOST_VALUE: 'from host', TERMINAL: 'from host via terminal', LAYERED: 'profile', PROFILE: 'p', MISSING: '',
+			PATH: undefined, HOME: undefined, SHELL_ONLY: 'kept', HOST_VALUE: 'from host', TERMINAL: 'from host via terminal', LAYERED: 'launch', MISSING: '', LAUNCHED: 'from host via launch',
 			TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor', FACADE_AGENT: '#a7'
 		});
 		assert.ok(!('CLAUDE_CODE_DISABLE_TERMINAL_TITLE' in env) && !('ELECTRON_RUN_AS_NODE' in env));
@@ -355,20 +420,61 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, {}, empty))[0], 'not_found');
 	});
 
-	test('Claude Code is always offered: a value left in facade.claude.enabled or facade.claude.launch, settings of later steps, changes nothing; one not installed, misconfigured or unknown fails with its actual reason (RULES-5.1)', () => {
-		const left = { 'facade.claude.enabled': false, 'facade.claude.launch': { arguments: ['--verbose'], environment: { LEFT: '1' } } };
-		const planned = plan({ cli: 'claude' }, left);
+	test('a built-in turned off is not offered and not started, said why (RULES-4.4); its launch arguments follow its own, and its launch environment is its runs\'; one not installed, misconfigured or unknown fails with its actual reason (RULES-5.1)', () => {
+		const off = { 'facade.claude.enabled': false };
+		let said: unknown;
+		try {
+			plan({ cli: 'claude' }, off);
+		} catch (err) {
+			said = err instanceof CliPlanError ? [err.reason, err.message, err.said] : err;
+		}
+		assert.deepStrictEqual([discover(catalogOf(settings(off)), destination, cwd).map(each => each.entry.adapter.id), said], [
+			['codex', 'agy', 'muse', 'opencode', 'pi'],
+			['unavailable', 'Claude Code is turned off by facade.claude.enabled', { kind: 'cli_disabled', values: ['Claude Code', 'facade.claude'] }]
+		]);
+		// A value of .enabled that is no boolean leaves the CLI offered, unavailable with its problem: never hidden in silence
+		assert.deepStrictEqual(discover(catalogOf(settings({ 'facade.claude.enabled': 'no' })), destination, cwd).map(each => [each.entry.adapter.id, each.available, each.said?.kind]).slice(0, 2),
+			[['claude', false, 'enabled_type'], ['codex', true, undefined]]);
+		const launch = { 'facade.claude.launch': { arguments: ['--verbose', '--model', 'opus'], environment: { LAUNCHED: '1' } } };
+		const planned = plan({ cli: 'claude' }, launch);
 		// Only Claude Code and Codex are installed here
-		assert.deepStrictEqual([discover(catalogOf(settings(left)), destination, cwd).map(each => each.available), planned.args, 'LEFT' in planned.env], [
-			[true, true, false, false, false, false], ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'], false
+		assert.deepStrictEqual([discover(catalogOf(settings(launch)), destination, cwd).map(each => each.available), planned.args, planned.env.LAUNCHED], [
+			[true, true, false, false, false, false], ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions', '--verbose', '--model', 'opus'], '1'
 		]);
 		const missing = { 'facade.claude.path': '/nowhere/claude' };
 		assert.deepStrictEqual(discover(catalogOf(settings(missing)), destination, cwd).map(each => [each.available, each.notInstalled]).slice(0, 2), [[false, undefined], [true, undefined]]);
 		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, missing))[0], 'not_found');
 		const invalid = { 'facade.claude.path': 7 };
-		assert.deepStrictEqual(discover(catalogOf(settings(invalid)), destination, cwd).map(each => [each.available, each.problem]).slice(0, 2), [[false, 'facade.claude.path must be a string; received 7'], [true, undefined]]);
+		assert.deepStrictEqual(discover(catalogOf(settings(invalid)), destination, cwd).map(each => [each.available, each.problem, each.said?.kind]).slice(0, 2), [[false, 'facade.claude.path must be a string; received number', 'path_type'], [true, undefined, undefined]]);
 		assert.deepStrictEqual(failure(() => plan({ cli: 'claude' }, invalid))[0], 'configuration_invalid');
-		assert.deepStrictEqual(failure(() => plan({ cli: 'gemini' })), ['not_found', 'No CLI "gemini" is configured; the built-ins are claude, codex, agy, muse, opencode and pi']);
+		assert.deepStrictEqual(failure(() => plan({ cli: 'gemini' })), ['not_found', 'No CLI "gemini" is configured; the built-ins are claude, codex, agy, muse, opencode and pi, and custom CLIs are configured in facade.custom']);
+	});
+
+	test('each built-in\'s sandbox and approvals, as Show Agent Launch says them, name only arguments its launch has (CLIS-1.3, 4.1)', () => {
+		const bin = path.join(temp.dir, 'bin');
+		for (const adapter of BUILT_IN_ADAPTERS) {
+			program(bin, adapter.command);
+		}
+		const named: string[] = [];
+		for (const adapter of BUILT_IN_ADAPTERS) {
+			for (const yolo of [true, false]) {
+				const args = plan({ cli: adapter.id, yolo }).args;
+				for (const fact of [adapter.sandbox(yolo, 'darwin'), adapter.approvals(yolo)]) {
+					const by = 'by' in fact ? fact.by ?? [] : [];
+					assert.ok(by.every(arg => args.includes(arg)), `${adapter.id} yolo ${yolo}: ${by.join(' ')} in ${args.join(' ')}`);
+					named.push(`${adapter.id}${yolo ? '+' : '-'}${fact.state}`);
+				}
+			}
+		}
+		assert.deepStrictEqual(named, [
+			'claude+native', 'claude+bypassed', 'claude-on', 'claude-native',
+			'codex+off', 'codex+bypassed', 'codex-on', 'codex-native',
+			'agy+none', 'agy+bypassed', 'agy-none', 'agy-native',
+			'muse+off', 'muse+bypassed', 'muse-native', 'muse-native',
+			'opencode+none', 'opencode+bypassed', 'opencode-none', 'opencode-native',
+			'pi+none', 'pi+none', 'pi-none', 'pi-none'
+		]);
+		assert.deepStrictEqual(claudeAdapter.sandbox(false, 'win32'), { state: 'none' });
 	});
 
 	test('Antigravity, Muse Code, OpenCode and Pi each map YOLO to their own switches and trust their folder as their own questions would, with no later-step integrations (CLIS-1.3, 3.3)', () => {
@@ -434,6 +540,20 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		fs.writeFileSync(script, '');
 		const planned = plan({ cli: 'claude', yolo: false }, {}, windows);
 		assert.deepStrictEqual([planned.executable, planned.args.slice(0, 2)], [path.join(bin, 'node.exe'), [script, '--settings']]);
+	});
+
+	test('a configured argument cmd.exe would read as its own is refused by its place in the setting and its character, never quoted: it may be a secret (CLIS-3.1, 4.1)', () => {
+		const bin = path.join(temp.dir, 'winbin');
+		fs.mkdirSync(bin);
+		fs.writeFileSync(path.join(bin, 'pi.cmd'), '@echo off\r\nsomething.exe %*\r\n');
+		const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.CMD', USERPROFILE: temp.dir }, platform: 'win32' };
+		let said: unknown;
+		try {
+			plan({ cli: 'pi' }, { 'facade.pi.launch': { arguments: ['--password', 'Hunter2!'] } }, windows);
+		} catch (err) {
+			said = err instanceof CliPlanError ? [err.reason, err.message.includes('Hunter2'), err.said] : err;
+		}
+		assert.deepStrictEqual(said, ['unsupported', false, { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'facade.pi.launch.arguments', '1', '"!"', 'facade.pi'] }]);
 	});
 
 	test('a launcher that goes through cmd.exe from a folder whose path cmd.exe reads as its own - a profile named R&D - is refused before anything starts, with the setting that fixes it', () => {

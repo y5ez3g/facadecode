@@ -24,7 +24,8 @@ the local window component sees the remote authority, so it reports it with the 
 not change. This summary remains visible while CLI choices
 are filtered or scrolled, including when 1.2 has fallen back to another location. Put the last successfully used CLI
 first and preselect it; never execute it without selection. The CLI step lists nothing until the CLIs are found, so an
-Enter while they load starts nothing (D71). The bottom items, under a separator labeled `Options`, are
+Enter while they load starts nothing (D71). Other installed/enabled CLIs follow CLIS-1.1 order, then configured
+custom CLIs. The bottom items, under a separator labeled `Options`, are
 `Change Working Location...` and `Change Name...`; where the location is only a label, that label is the line. The
 location item's description shows the full current working location, including `New worktree {branch} from {source}`
 for a proposed worktree, and its environment when that is not this machine (D67). The name item's description shows the
@@ -46,7 +47,9 @@ location. WORKTREES-1 keeps the folder as opened first in the catalog; its picke
 without changing this default. History is a qualified
 location ID, never just a branch name. Remember the last successful human CLI choice alongside it.
 Picker choices, cancellation, setup completion without CLI start and
-failure do not update human launch history. A missing historical location silently uses the default above; the picker
+failure do not update human launch history. A panel filter does not select a launch location, except that New Agent
+from the filtered empty panel (PANEL-1.2) starts at the filtered location, or a filtered folder's own location.
+A missing historical location silently uses the default above; the picker
 shows the resulting location without an unavailable-location note.
 
 ### 1.3 Changing location
@@ -89,7 +92,8 @@ that worktree, busy until it ends; a refusal is the person's error (RULES-1.8) (
 **The toolbar, empty state and Command Palette invoke the same New Agent flow.**
 
 There is no separate New Agent Here entry or public scripted-start command. Missing prerequisites are explained in
-the same flow. Human starts show the new terminal and create normal panel entries.
+the same flow. Human starts show the new terminal and create normal panel entries. The current filter stays unchanged
+even when it hides a person's newly created agent.
 
 ### 1.5 Accepted launch and failure
 
@@ -120,7 +124,8 @@ descriptive; stale display text must not redirect the run.
 **Each visible agent has one terminal in an editor group; no terminal-panel placement option is provided.**
 
 Human New shows the terminal. Card/Go to Agent reveals the same terminal without launching another. Tab title uses the
-agent name and, when present, the native tabs separator plus CLI title. Use the CLI's theme-appropriate logo. Do not put
+agent name and, when present, the native tabs separator plus CLI title. Use the CLI's theme-appropriate logo; custom CLIs
+use a terminal icon. Do not put
 status in the name. Native tab renames synchronize the display name when valid. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
 as an alternative.
@@ -188,7 +193,7 @@ integration evidence, not a fact established by this document.
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching, editable name, last CLI/location, immediate pair and initiator-owned errors |
+| 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching, editable name, last CLI/location, filter unchanged, immediate pair and initiator-owned errors |
 | 2.1–2.3 | Empty/duplicate/spaced names and `human`, editor-only terminals, ID/copied-reference search, distinguishable picker details |
 | 3.1, 3.5 | One human Close action, reload/disconnect reuse, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
@@ -196,6 +201,11 @@ integration evidence, not a fact established by this document.
 See [Verification](../engineering/VERIFICATION.md). Runtime results remain unverified.
 
 ## Change log
+
+- 2026-10-31: 1.1 offers configured custom CLIs after the built-ins; 2.2 gives their tabs a terminal icon.
+
+- 2026-10-30: 1.2 starts New Agent from the filtered empty panel at the filtered location; 1.4 leaves the filter as
+  it is when a new agent starts (PANEL-2.3).
 
 - 2026-10-30: 1.1's detail with no usable CLI names no CLI, as six built-ins are offered (D77); the settings Configure
   Agents opens list each of them.

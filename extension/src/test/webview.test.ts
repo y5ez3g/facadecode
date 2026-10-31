@@ -32,7 +32,7 @@ suite('The agent panel in Chromium', function () {
 	let tested: string;
 	let css: string;
 	/** The page's words: each its own key, the templates as the extension gives them. */
-	const words = { started: 'Started {0}' };
+	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}' };
 	/** Loads a new page of the panel, as the view does each time it shows. */
 	const load = async (bundle = shipped, saved?: unknown) => {
 		await call('Page.navigate', { url: 'about:blank' });
@@ -47,7 +47,7 @@ suite('The agent panel in Chromium', function () {
 	const CARDS = `
 		window.newCard = (i, more = {}) => ({ runId: 'run-' + i, selected: false, name: 'Agent ' + i, alias: '#a' + i, avatar: { file: 'avatar-claude.png' },
 			location: { label: 'project', full: 'project · /project' }, dot: 'working', stateText: 'Working', line: 'Step one', tooltip: ['Agent ' + i + ' · #a' + i + ' · Claude Code', 'Working'],
-			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false }, ...more });
+			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false, filterLocation: false, filterFolder: false, clearFilter: false }, ...more });
 		window.stateOf = (cards, more = {}) => ({ revision: 1, loading: false, cards, cardCount: cards.length, capabilities: { remote: false }, ...more });
 		window.agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1));
 		window.redraw = (more = {}) => panel.render(stateOf(agents, more));
@@ -163,18 +163,38 @@ suite('The agent panel in Chromium', function () {
 		assert.strictEqual(await evaluate(`getComputedStyle(document.querySelector('.dot')).backgroundColor`), 'rgb(137, 209, 133)');
 	});
 
-	test('UX-2.2: a new card opens in 180 ms, but not on the first draw or with reduced motion; a card that goes is removed at once, never animated out', async () => {
+	test('UX-2.2: a new card opens in 180 ms, but not on the first draw, a change of filter or with reduced motion; a card that goes is removed at once, never animated out', async () => {
 		const seen = await evaluate(`(() => {
 			const first = document.querySelectorAll('.agent.opening').length;
 			agents = [newCard(31), ...agents]; redraw({ revision: 2 });
 			const opened = document.querySelector('.agent').classList.contains('opening') ? getComputedStyle(document.querySelector('.agent')).animationDuration : 'none';
 			agents = agents.slice(2); redraw({ revision: 3 });
 			const gone = [document.querySelectorAll('.agent').length, document.querySelectorAll('.closing').length, [...document.querySelectorAll('.agent .name')].some(name => name.textContent === 'Agent 1')];
+			agents = [newCard(32), ...agents]; redraw({ revision: 4, filter: { kind: 'location', id: 'loc-1', label: 'project' } });
+			const filtered = document.querySelector('.agent').classList.contains('opening');
+			// The same filter again: a new card opens as ever
+			agents = [newCard(34), ...agents]; redraw({ revision: 5, filter: { kind: 'location', id: 'loc-1', label: 'project' } });
+			const sameFilter = document.querySelector('.agent').classList.contains('opening');
 			document.body.classList.add('vscode-reduce-motion');
-			agents = [newCard(33), ...agents]; redraw({ revision: 4 });
-			return [first, opened, gone, document.querySelector('.agent').classList.contains('opening')];
+			agents = [newCard(33), ...agents]; redraw({ revision: 6, filter: { kind: 'location', id: 'loc-1', label: 'project' } });
+			return [first, opened, gone, filtered, sameFilter, document.querySelector('.agent').classList.contains('opening')];
 		})()`);
-		assert.deepStrictEqual(seen, [0, '0.18s', [29, 0, false], false]);
+		assert.deepStrictEqual(seen, [0, '0.18s', [29, 0, false], false, true, false]);
+	});
+
+	test('filtering preserves keyboard navigation and F2 targets the visible custom agent', async () => {
+		const result = await evaluate(`(() => {
+			document.querySelector('[data-run="run-1"]').focus();
+			agents = [newCard(2, { avatar: { initial: 'C', color: 'blue' } }), newCard(3)];
+			redraw({ revision: 2, filter: { kind: 'location', id: 'filtered', label: 'main' } });
+			const stops = [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0);
+			stops[0].focus();
+			window.posted = [];
+			stops[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true, cancelable: true }));
+			return [stops.map(card => card.dataset.run), stops[0].querySelector('.initial').textContent,
+				window.posted.filter(message => message.type === 'act').map(({ what, target }) => [what, target])];
+		})()`);
+		assert.deepStrictEqual(result, [['run-2'], 'C', [['rename', 'run-2']]]);
 	});
 
 	test('PANEL-1.5, LIFECYCLE-3.1: an agent with an empty name is said by its #aN when its state changes', async () => {
@@ -258,9 +278,9 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves, Rename, Copy and Close always', async () => {
-		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 2).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
-			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
+	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves, its filters where they change what is shown, Clear Filter while filtered; Rename, Copy and Close always', async () => {
+		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true, filterLocation: true, filterFolder: false, clearFilter: true } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 2).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
+			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, webviewFilterLocation: true, webviewFiltered: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-2', preventDefaultContextMenuItems: true }
 		]);
 	});
@@ -313,14 +333,20 @@ suite('The agent panel in Chromium', function () {
 		}
 	});
 
-	test('PANEL-1.2, J13: the empty panel says why - no agents, no folder - each with its own native, keyboard-reachable button; nothing while loading', async () => {
-		const empty = (state: object) => evaluate(`(() => { panel.render(stateOf([], ${JSON.stringify(state)})); const empty = document.getElementById('empty'); return [empty.hidden, [...empty.children].map(each => { const button = each.querySelector('button'); return button ? 'button:' + button.textContent : each.textContent; })]; })()`);
+	test('PANEL-1.2, J13: the empty panel says why - no agents, none in the filter\'s location, no folder - each with its own native, keyboard-reachable buttons; nothing while loading', async () => {
+		const empty = (state: object) => evaluate(`(() => { panel.render(stateOf([], ${JSON.stringify(state)})); const empty = document.getElementById('empty'); return [empty.hidden, [...empty.children].map(each => { const button = each.querySelector('button'); return button ? (button.classList.contains('secondary') ? 'secondary:' : 'button:') + button.textContent : each.textContent; })]; })()`);
 		// No agent: New Agent, no ellipsis (D60), and nothing else
 		assert.deepStrictEqual(await empty({ empty: 'noAgents' }), [false, ['noAgents', 'button:newAgent']]);
+		// A filter shows none: how many it hides, Clear Filter first and New Agent secondary
+		assert.deepStrictEqual(await empty({ empty: 'noMatch', cardCount: 3, filter: { kind: 'location', id: 'loc-1', label: 'shop · login-fix' } }), [false, ['No agents found in "shop · login-fix".', '3 other agents are in this workspace.', 'button:clearFilter', 'secondary:newAgent']]);
+		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 1, filter: { kind: 'location', id: 'loc-1', label: 'main' } }))[1][1], '1 other agent is in this workspace.');
+		// A location's name is said as it is, `$&` and all
+		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 0, filter: { kind: 'folder', id: 'file:///price', label: 'price$&$\'' } }))[1][0], 'No agents found in "price$&$\'".');
+		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 0, filter: { kind: 'location', id: 'loc-1', label: 'main' } }))[1].length, 3);
 		assert.deepStrictEqual(await empty({ empty: 'noFolder' }), [false, ['noFolder', 'button:openFolder']]);
 		assert.deepStrictEqual((await empty({ loading: true }))[0], true);
-		const acted = await evaluate(`(() => { window.posted = []; const render = () => panel.render(stateOf([], { revision: 8, empty: 'noAgents' })); render(); const buttons = [...document.querySelectorAll('#empty button')]; buttons[0].focus(); render(); const kept = document.activeElement === buttons[0]; buttons.forEach(button => button.click()); return [buttons.every(button => button.type === 'button' && button.tabIndex === 0), kept, window.posted.map(({ type, what, revision, target }) => ({ type, what, revision, target }))]; })()`);
-		assert.deepStrictEqual(acted, [true, true, [{ type: 'act', what: 'new' }]]);
+		const acted = await evaluate(`(() => { window.posted = []; const render = () => panel.render(stateOf([], { revision: 8, empty: 'noMatch', filter: { kind: 'folder', id: 'file:///shop', label: 'shop' } })); render(); const buttons = [...document.querySelectorAll('#empty button')]; buttons[0].focus(); render(); const kept = document.activeElement === buttons[0]; buttons.forEach(button => button.click()); return [buttons.every(button => button.type === 'button' && button.tabIndex === 0), kept, window.posted.map(({ type, what, revision, target }) => ({ type, what, revision, target }))]; })()`);
+		assert.deepStrictEqual(acted, [true, true, [{ type: 'act', what: 'clearFilter' }, { type: 'act', what: 'new' }]]);
 	});
 
 	test('E03, UX-3.2: the shipped page has none of the probe\'s code and answers no probe; the integration build\'s page does', async () => {
@@ -500,7 +526,7 @@ suite('The agent panel in Chromium', function () {
 			{ glides: true, glided: 50, taken: [true, 400], still: 450, refused: [true] });
 	});
 
-	test('New Agent\'s own icon draws where codicons\' `new-session` does: at 300 px, ink from 38 to 281 px of a 300 px advance, as its outline is placed in VS Code\'s codicon.ttf (PANEL-1.1, D82)', async () => {
+	test('New Agent\'s own icon draws where codicons\' `new-session` does: at 300 px, ink from 38 to 281 px of a 300 px advance, as its outline is placed in VS Code\'s codicon.ttf (PANEL-1.1, D85)', async () => {
 		const root = path.resolve(__dirname, '../../..');
 		const font = fs.readFileSync(path.join(root, 'media', 'new-agent.woff')).toString('base64');
 		const drawn = await evaluate(`(async () => {
@@ -524,5 +550,46 @@ suite('The agent panel in Chromium', function () {
 			return [drawn, after[0] === faces[0], after[1] === faces[1], after[1].querySelector('img')?.getAttribute('src')];
 		})()`);
 		assert.deepStrictEqual(seen, [[['/avatar-claude.png', '', 'true'], ['', '', 'true']], true, false, '/avatar-claude.png']);
+	});
+
+	test('a custom CLI\'s face is its initial on its theme colour, kept while it stays, on a fainter tint or the side bar\'s own colour where its letter would not read (PANEL-1.3, UX-2.1)', async () => {
+		/** The theme's colours, as VS Code sets them on the page's root: null removes one. */
+		const theme = (colors: { readonly [name: string]: string | null }) => evaluate(`(() => {
+			for (const [name, value] of Object.entries(${JSON.stringify(colors)})) {
+				value === null ? document.documentElement.style.removeProperty(name) : document.documentElement.style.setProperty(name, value);
+			}
+		})()`);
+		const grounds = () => evaluate(`[...document.querySelectorAll('.agent .face')].map(face => [face.classList.contains('faint') ? 'faint' : face.classList.contains('unreadable') ? 'plain' : 'tint', getComputedStyle(face).backgroundColor])`);
+		// Dark Modern, whose orange is VS Code's own, see-through: taken opaque, so that every circle is measured as it is drawn
+		await theme({ '--vscode-foreground': '#cccccc', '--vscode-sideBar-background': '#181818', '--vscode-charts-blue': '#3794ff', '--vscode-charts-orange': '#d186167e', '--vscode-charts-purple': '#b180d7' });
+		const seen = await evaluate(`(() => {
+			agents = [newCard(1, { avatar: { initial: 'M', color: 'blue' } }), newCard(2, { avatar: { initial: 'Q', color: 'purple' } }), newCard(3, { avatar: { initial: 'Z', color: 'purple' } })]; redraw({ revision: 2 });
+			const faces = [...document.querySelectorAll('.agent .face')];
+			const drawn = faces.map(face => [face.classList.contains('initial'), face.className.match(/on-\\w+/)[0], face.textContent, face.querySelector('img') === null, face.getAttribute('aria-hidden')]);
+			agents = [newCard(1, { avatar: { initial: 'M', color: 'blue' }, line: 'Another line' }), newCard(2, { avatar: { initial: 'Q', color: 'orange' } }), agents[2]]; redraw({ revision: 3 });
+			const after = [...document.querySelectorAll('.agent .face')];
+			return [drawn, after[0] === faces[0], after[1] === faces[1], after[1].className.match(/on-\\w+/)[0]];
+		})()`);
+		assert.deepStrictEqual(seen, [[[true, 'on-blue', 'M', true, 'true'], [true, 'on-purple', 'Q', true, 'true'], [true, 'on-purple', 'Z', true, 'true']], true, false, 'on-orange']);
+		const dark = await grounds();
+		assert.deepStrictEqual(dark.map((each: string[]) => each[0]), ['tint', 'tint', 'tint']);
+		assert.ok(dark.every((each: string[]) => !/rgba\(|\/ 0?\.\d/.test(each[1])), JSON.stringify(dark));
+		// Light+: no letter reads on the tint, each does on the fainter one
+		await theme({ '--vscode-foreground': '#616161', '--vscode-sideBar-background': '#f3f3f3', '--vscode-charts-blue': '#1a85ff', '--vscode-charts-orange': '#d18616', '--vscode-charts-purple': '#652d90' });
+		await wait(30);
+		const light = (await grounds()).map((each: string[]) => each[0]);
+		// A theme whose text reads best on the side bar itself; and one without a colour, which leaves that circle clear and untested
+		await theme({ '--vscode-foreground': '#5a7fb0', '--vscode-sideBar-background': '#ffffff', '--vscode-charts-purple': null });
+		await wait(30);
+		const poor = (await grounds()).map((each: string[]) => each[0]);
+		await theme({ '--vscode-foreground': '#cccccc', '--vscode-sideBar-background': '#181818', '--vscode-charts-purple': '#b180d7' });
+		await wait(30);
+		assert.deepStrictEqual([light, poor, (await grounds()).map((each: string[]) => each[0])], [['faint', 'faint', 'faint'], ['plain', 'plain', 'tint'], ['tint', 'tint', 'tint']]);
+		// An initial must be a letter and its colour one of the three: anything else is refused, as any malformed state is
+		for (const avatar of [{ initial: '', color: 'blue' }, { initial: 'M', color: 'red' }, { initial: 'M' }]) {
+			await evaluate('window.errors = []');
+			await deliver({ type: 'state', state: { revision: 9, loading: false, cards: [{ ...(await evaluate('newCard(1)')), avatar }], cardCount: 1, capabilities: { remote: false } } });
+			assert.strictEqual((await evaluate('window.errors')).length, 1, JSON.stringify(avatar));
+		}
 	});
 });

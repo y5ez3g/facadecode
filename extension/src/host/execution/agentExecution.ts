@@ -149,7 +149,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidLoseOwnership = this.transfers.event;
 	/**
 	 * After the first restore, a ptyd lists runs of this window that it shows no pair of - one of an earlier protocol found late, or
-	 * one whose reattach failed: the composition root restores again, so that none is left out (RULES-4.1, D83).
+	 * one whose reattach failed: the composition root restores again, so that none is left out (RULES-4.1, D86).
 	 */
 	readonly onDidFindRuns = this.finds.event;
 	private readonly terminals: AgentTerminals;

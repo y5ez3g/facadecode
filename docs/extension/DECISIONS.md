@@ -63,11 +63,11 @@ rejected several of them. Their old implementation/tests must follow the current
 | D27 | Retain quiet progress in existing UI and errors directed to their initiators | UX-1 |
 | D29 | Retain reproducible builds, separate isolated fixture stage, README staging markers and target-native notices | ARCHITECTURE-4 |
 | D31 | Retain repository layout/test safeguards; task-specific arrangements follow current user instructions | ARCHITECTURE-4, 5 |
-| D38 | Owner-authorized: webview `act` adds openFolder and rename for the empty-state buttons and F2; the host opens the Input Box and validates | PANEL-3.1 |
+| D38 | Owner-authorized: webview `act` adds clearFilter, openFolder and rename for the empty-state buttons and F2; the host opens the Input Box and validates | PANEL-3.1 |
 | D39 | Owner-revised in IA-03: the native picker title uses middle dots and keeps name/location visible while filtering, including the folder in multi-folder windows. A planned worktree uses `(new)` in the title and retains its source in the location row. Missing history silently falls back. The branch input has a placeholder and shorter source prompt. The latest confirmed screenshots use `Select a branch or worktree` without a folder suffix and no custom Change Name prompt, without restricting name labels | LIFECYCLE-1.1, 1.2, 1.3 |
 | D41 | Owner-authorized: the 160 ms removal animation follows only a normal exit; explicit close and confirmed location removal are immediate | UX-2.2 |
 | D42 | Owner-authorized: test-only `state`, `selectRow` (by run ID) and `probe` commands; the first draft's hidden scripted start was withdrawn because the owner-approved R9 removal stands | UX-3.2 |
-| D43 | Owner-authorized: Settings sections are Agents, then each built-in CLI in CLIS-1.1 order | UX-4.1 |
+| D43 | Owner-authorized: Settings sections are Agents, then each built-in CLI in CLIS-1.1 order, then Custom Agents | UX-4.1 |
 | D46 | Owner-authorized: `FACADE_AGENT` carries the run's `#aN` alias | CLIS-1.2 |
 | D47 | Owner-authorized: confirmed deletion needs a successful Git read without the worktree (or marking it prunable) and a missing root; launch-location association; feature-detected Git extension creation API | WORKTREES-1.3, 3.3, 4.1 |
 | D48 | Owner-authorized: activity is verified per run by an OSC 7501 probe answer or valid reports, independent of version; quirks stay version-scoped | CLIS-2.1, 2.3 |
@@ -77,7 +77,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D54 | Derived from independent-review item 5: palette availability keys follow the selected run (`agentSelected*`), not the active terminal, so a file in front keeps the actions | UX-3.2 |
 | D57 | Owner-calibrated: New Agent's suggested names are at least 100 short machine words (`Bolt`, `Pixel`, `Servo`), not invented personal names; a suggestion prefers one no agent in the window has, without requiring uniqueness | LIFECYCLE-2.1 |
 | D58 | Owner-clarified on 2026-10-29: the native view menu holds Add Folder to Workspace..., New Worktree... when a workspace folder is open, then Configure Agents... in a separate group. New Worktree retains its standalone creation flow but is hidden from the Command Palette. Go to Agent stays in the palette; Refresh is removed. New Agent retains its contextual worktree option | PANEL-1.1, UX-3.1, WORKTREES-2.1 |
-| D59 | Owner-calibrated: empty states use the reviewed copy (#m3056, final #m3060/#m3061 relayed by `#a525` at the owner's request): no-folder `Open a folder to launch coding agents.`; no-agents `Launch a coding agent in this workspace.` | PANEL-1.2 |
+| D59 | Owner-calibrated: empty states use the reviewed copy (#m3056, final #m3060/#m3061 relayed by `#a525` at the owner's request): no-folder `Open a folder to launch coding agents.`; no-agents `Launch a coding agent in this workspace.`; the filtered empty panel counts other agents neutrally and its New Agent starts at the filtered location | PANEL-1.2, LIFECYCLE-1.2 |
 | D60 | Owner-calibrated: empty-state buttons have no ellipsis, like VS Code's welcome buttons; the main action is primary | PANEL-1.2 |
 | D61 | Owner-revised on 2026-10-29: Open Folder matches the built-in Git view and calls `vscode.openFolder`; sidebar selection stays with the editor, with no automatic return to Facade. Supersedes the earlier return-after-reload behavior and its early-activation workaround because they produced an extra visible view switch | PANEL-1.1–1.2 |
 | D62 | Owner-calibrated: every launch trusts its folder as the person would by accepting the CLI's trust question - the CLI's own trust entry merged into its file, for Claude Code - as the Facade Code IDE did; login and permission prompts stay native | CLIS-3.3 |
@@ -97,9 +97,12 @@ rejected several of them. Their old implementation/tests must follow the current
 | D79 | Derived from the CLIs' own behavior: Pi has no approvals or sandbox, and OpenCode's default permissions allow every tool, so YOLO off leaves them as they natively are; the README says so, and Facade adds no approval mechanism of its own (RULES-4.3's sandbox applies where a CLI has one) | CLIS-1.3 |
 | D80 | Owner-decided 2026-10-30, after Muse Code was found to send no OSC 7501 on Windows, signed in or not, while it reports on Linux: there is no neutral or gray dot; Muse Code alone gets a fallback, its activity read from its own screen while it sends no reports, as the other built-ins all report themselves | CLIS-2.3 |
 | D81 | Owner-decided 2026-10-30, after seeing every card red for the seconds before its CLI's first report: a run is still starting - green, with its startup stage - until its CLI first shows its activity, by a report or, for Muse Code, its screen, for at most 20 s from its process start. The bound keeps a CLI that never reports, as OpenCode 1.x, from showing it starts forever: past it, the card is red with why | CLIS-2.3, RULES-3.2 |
-| D82 | Owner-decided 2026-10-31, after VS Code 1.105 - the declared minimum - showed New Agent's title button with no icon, its codicons having no `new-session` before 1.111: New Agent shows Facade's own copy of that glyph, shipped with the extension, in every editor. Using the editor's own where it has one would take a second New Agent command, listed beside the first in Keyboard Shortcuts. Neither the minimum version nor the icon's look changes | PANEL-1.1 |
-| D83 | Owner-decided 2026-10-31, after the night verification found that agents still running in 0.0.1's ptyd (protocol 8) were only kept alive, unseen, by a window updated to protocol 9: every agent Facade started stays shown in its window's panel and editor, whatever the reason, red where it is in error. As Orca keeps every released daemon protocol attachable, a build speaks each earlier released protocol and operates each run through the ptyd that holds it. A lost or damaged window identity record (ARCHITECTURE-2.2) stays the exception: refusing is safer there than guessing whose agents they are | RULES-4.1, ARCHITECTURE-2.4 |
-| D84 | Owner-decided 2026-10-31, after the night verification found the panel scrolling natively - about twice a list's step a wheel turn on Windows, gliding, its list settings unread - though R7 had kept the full contract: the wheel is VS Code's own list code, ported, so that it scrolls exactly as a list does; the scrollbar stays the page's, in VS Code's colors. An overlay scrollbar that hides and fades as VS Code's does would have to be drawn by Facade, a change of its own | PANEL-3.3 |
+| D82 | Owner-decided 2026-10-31, after trying the filter: Filter by Working Location steps by folder. Its first step lists All Locations, then the folders; a folder whose cards are in two or more locations opens its own step, All Worktrees then its locations; a window of one folder shows its folder's step alone (All Locations first outside Git). One separator follows each step's first item. This replaces Facade Dots' one grouped list | PANEL-2.3 |
+| D83 | Owner-decided 2026-10-31, after trying them: Show Agent Launch and Show Agents Log are commands only, in the Command Palette; the view's `…` menu does not list them, as Facade Dots' did | PANEL-1.1, UX-3.1 |
+| D84 | Owner-decided 2026-10-31, after the filter's steps: Show Agent Launch chooses its location in steps by folder - the folders, one with two or more locations opening a step of them; a window of one folder lists its locations - offering locations alone, main checkout first and with no separator, rather than one list grouped by folder | CLIS-4.1 |
+| D85 | Owner-decided 2026-10-31, after VS Code 1.105 - the declared minimum - showed New Agent's title button with no icon, its codicons having no `new-session` before 1.111: New Agent shows Facade's own copy of that glyph, shipped with the extension, in every editor. Using the editor's own where it has one would take a second New Agent command, listed beside the first in Keyboard Shortcuts. Neither the minimum version nor the icon's look changes | PANEL-1.1 |
+| D86 | Owner-decided 2026-10-31, after the night verification found that agents still running in 0.0.1's ptyd (protocol 8) were only kept alive, unseen, by a window updated to protocol 9: every agent Facade started stays shown in its window's panel and editor, whatever the reason, red where it is in error. As Orca keeps every released daemon protocol attachable, a build speaks each earlier released protocol and operates each run through the ptyd that holds it. A lost or damaged window identity record (ARCHITECTURE-2.2) stays the exception: refusing is safer there than guessing whose agents they are | RULES-4.1, ARCHITECTURE-2.4 |
+| D87 | Owner-decided 2026-10-31, after the night verification found the panel scrolling natively - about twice a list's step a wheel turn on Windows, gliding, its list settings unread - though R7 had kept the full contract: the wheel is VS Code's own list code, ported, so that it scrolls exactly as a list does; the scrollbar stays the page's, in VS Code's colors. An overlay scrollbar that hides and fades as VS Code's does would have to be drawn by Facade, a change of its own | PANEL-3.3 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -116,6 +119,7 @@ asserted design defects.
 | Review item | Owner disposition and reason | Normative owner |
 | --- | --- | --- |
 | R1 | Accepted: a user must be able to change YOLO for the next start without preserving an old mode | RULES-4.3 |
+| R2 | Accepted: an incomplete custom definition without a Resume command is not a supported configuration | CLIS-3.4 |
 | R5 | Accepted: vendor internals and arbitrary file merging do not belong in a general launch configuration language | CLIS-3 |
 | R7 | Scrolling reduction rejected: the owner tried the earlier simpler scrolling and found it inadequate; retain the full existing requirements | PANEL-3.3 |
 | R8 | Accepted: existing notification navigation and Go to Agent cover the need without another attention queue | RULES-3.4, LIFECYCLE-2.3 |
@@ -148,7 +152,7 @@ owners and verification scenarios; they are not evidence that the implementation
 | Webview actions | Accepted: retain generation isolation, stable targets and current-state validation; do not mandate expected revisions or correlation IDs on every action | PANEL-3.1 |
 | Rule ownership and assignments | Accepted: replace repeated status/theme/update rules with references; keep engineering safeguards and make temporary reviewer/implementer assignments follow current user instructions | UX, PANEL, ARCHITECTURE-5.3, VERIFICATION-4.1 |
 
-The earlier R7 decision still protects the PANEL-3.3 scrolling contract, whose scrollbar D84 later left to the page. No
+The earlier R7 decision still protects the PANEL-3.3 scrolling contract, whose scrollbar D87 later left to the page. No
 new settings, capability-registration framework or general argument parser is introduced by this follow-up.
 
 ## Evidence and open engineering gates
@@ -166,9 +170,19 @@ full spec revision; it does not authorize publication or unrelated source change
 
 ## Change log
 
-- 2026-10-31: Recorded the owner's decision on the panel's wheel and scrollbar (D84).
-- 2026-10-31: Recorded the owner's rule that every started agent stays shown, every released ptyd protocol spoken (D83).
-- 2026-10-31: Recorded the owner's decision on New Agent's icon in an editor without `new-session` (D82).
+- 2026-10-31: Recorded the owner's decision on the panel's wheel and scrollbar (D87).
+- 2026-10-31: Recorded the owner's rule that every started agent stays shown, every released ptyd protocol spoken (D86).
+- 2026-10-31: Recorded the owner's decision on New Agent's icon in an editor without `new-session` (D85).
+- 2026-10-31: Recorded the owner's choice of Show Agent Launch's location in steps by folder (D84).
+
+- 2026-10-31: Recorded the owner's choice of Filter by Working Location in steps by folder (D82).
+
+- 2026-10-31: D43 adds the Custom Agents section and R2 the required custom Resume, carried with the custom CLIs.
+
+- 2026-10-31: Recorded the owner's choice of Show Agent Launch and Show Agents Log as commands only (D83).
+
+- 2026-10-30: D59 adds the filtered empty panel and D38 its Clear Filter act, carried with the display filters.
+
 - 2026-10-30: Recorded the owner's addition of Antigravity, Muse Code, OpenCode and Pi (D77), the OpenCode line (D78)
   and YOLO off for CLIs that natively ask for nothing (D79), Muse Code's screen fallback without a gray dot (D80), and
   a run's startup that lasts until its CLI first shows its activity, at most 20 s (D81).

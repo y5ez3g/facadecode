@@ -9,10 +9,13 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
-import { catalogOf, SettingsReader } from '../clis/catalog';
+import { CatalogEntry, catalogOf, SettingsReader } from '../clis/catalog';
+import type { CliProblem } from '../clis/config';
+import { CUSTOM_SETTING } from '../clis/custom';
+import { describeLaunches, LaunchDescription } from '../clis/describe';
 import { CliPlanError, DestinationEnvironment, discover, planLaunch, PlannedLaunch } from '../clis/plan';
 import { writeTrust } from '../clis/trust';
-import { CliCatalogPort, CliChoice, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
+import { CliCatalogPort, CliChoice, CliChoices, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
 import { readSetting } from './settings';
 import { destinationEnvironment } from './terminals';
 
@@ -49,9 +52,13 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		this.log = options.log ?? (() => undefined);
 	}
 
-	/** The built-ins new starts are offered in CLIS-1.1 order for `location`. */
-	async list(location: Location): Promise<readonly CliChoice[]> {
-		return discover(catalogOf(this.read), this.destination(location), location.path).map(({ entry, available, problem, said, notInstalled }) => ({
+	/**
+	 * The built-ins new starts are offered in CLIS-1.1 order - a turned-off one hidden - then the custom CLIs, for `location`; and the
+	 * errors of `facade.custom` no CLI stands for (CLIS-3.4).
+	 */
+	async list(location: Location): Promise<CliChoices> {
+		const catalog = catalogOf(this.read);
+		const clis = discover(catalog, this.destination(location), location.path).map(({ entry, available, problem, said, notInstalled }): CliChoice => ({
 			id: entry.adapter.id,
 			displayName: entry.adapter.displayName,
 			available,
@@ -59,6 +66,17 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 			...said ? { said } : {},
 			...notInstalled ? { notInstalled } : {}
 		}));
+		return { clis, problems: catalog.problems.map(each => ({ setting: CUSTOM_SETTING, problem: each.text, said: each.said })) };
+	}
+
+	/**
+	 * What Show Agent Launch shows (CLIS-4.1): each CLI as a start in `location` would have it now, with `yolo`, computed without
+	 * running any CLI or writing any file - none without a location - each CLI's settings as read, and what is wrong with
+	 * `facade.custom` as a whole (CLIS-3.4).
+	 */
+	describe(location: Location | undefined, yolo: boolean): { readonly launches: readonly LaunchDescription[]; readonly entries: readonly CatalogEntry[]; readonly problems: readonly CliProblem[] } {
+		const catalog = catalogOf(this.read);
+		return { launches: location ? describeLaunches(catalog, this.destination(location), location.path, yolo) : [], entries: catalog.entries, problems: catalog.problems };
 	}
 
 	/**

@@ -4,6 +4,7 @@
 
 import { messageOf } from '../base/errors';
 import type { LogPort } from '../core/ports';
+import type { PanelFilter } from '../webview/protocol';
 
 /** What the panel keeps in workspace storage (ARCHITECTURE-3.1): `vscode.Memento`'s shape. */
 export interface Storage {
@@ -12,12 +13,14 @@ export interface Storage {
 }
 
 const ORDER = 'facade.panel.order';
+const FILTER = 'facade.panel.filter';
 
 /** Run IDs as RULES-2.2 makes them. */
 const RUN_ID = /^run-[0-9a-f]{32}$/;
 
 /**
- * The panel's preferences in this workspace: the manual card order by run ID (PANEL-2.1). A value of another shape - an earlier
+ * The panel's preferences in this workspace: the manual card order by run ID (PANEL-2.1), and the display filter by its
+ * environment-qualified location ID or folder URI, with its last label (PANEL-2.3). A value of another shape - an earlier
  * development build's - is ignored, never translated, with one line in the agents log (ARCHITECTURE-4.2).
  */
 export class PanelPrefs {
@@ -39,10 +42,32 @@ export class PanelPrefs {
 	}
 
 	setOrder(order: readonly string[]): void {
-		const failed = (err: unknown) => this.log?.event(`Could not save the card order: ${messageOf(err)}`);
+		// The current panel order remains usable when workspace storage cannot persist it.
+		this.save(ORDER, [...order], 'card order');
+	}
+
+	filter(): PanelFilter | undefined {
+		const value = this.storage.get<unknown>(FILTER);
+		if (value === undefined) {
+			return undefined;
+		}
+		const { kind, id, label } = (value && typeof value === 'object' ? value : {}) as { kind?: unknown; id?: unknown; label?: unknown };
+		if ((kind === 'location' || kind === 'folder') && typeof id === 'string' && id && typeof label === 'string') {
+			return { kind, id, label };
+		}
+		this.ignore(FILTER, 'filter');
+		return undefined;
+	}
+
+	setFilter(filter: PanelFilter | undefined): void {
+		// The filter shown remains in effect when workspace storage cannot persist it.
+		this.save(FILTER, filter ? { kind: filter.kind, id: filter.id, label: filter.label } : undefined, 'filter');
+	}
+
+	private save(key: string, value: unknown, what: string): void {
+		const failed = (err: unknown) => this.log?.event(`Could not save the ${what}: ${messageOf(err)}`);
 		try {
-			// The current panel order remains usable when workspace storage cannot persist it.
-			void Promise.resolve(this.storage.update(ORDER, [...order])).catch(failed);
+			void Promise.resolve(this.storage.update(key, value)).catch(failed);
 		} catch (err) {
 			failed(err);
 		}
@@ -72,16 +97,21 @@ export function arranged(order: readonly string[], present: readonly string[]): 
 }
 
 /**
- * The stack with `run` moved one place (PANEL-2.1): it trades places with the next card up (`-1`) or down (`1`). None where it
- * cannot move: not in the stack, or already at that end.
+ * The stack with `run` moved one place among the cards `visible` says are shown - every card unless a filter hides some (PANEL-2.1,
+ * 2.3): it trades places with the next shown card up (`-1`) or down (`1`), and every hidden card keeps its slot. None where it
+ * cannot move: not shown, or already at that end.
  */
-export function moved(order: readonly string[], run: string, by: -1 | 1): string[] | undefined {
+export function moved(order: readonly string[], run: string, by: -1 | 1, visible: (run: string) => boolean = () => true): string[] | undefined {
 	const at = order.indexOf(run);
-	const other = at + by;
-	if (at < 0 || other < 0 || other >= order.length) {
+	if (at < 0 || !visible(run)) {
 		return undefined;
 	}
-	const next = [...order];
-	[next[at], next[other]] = [next[other], next[at]];
-	return next;
+	for (let other = at + by; other >= 0 && other < order.length; other += by) {
+		if (visible(order[other])) {
+			const next = [...order];
+			[next[at], next[other]] = [next[other], next[at]];
+			return next;
+		}
+	}
+	return undefined;
 }

@@ -187,3 +187,9 @@ export function isNodeScript(file: string, platform: NodeJS.Platform): boolean {
 export function unsafeForCmd(arg: string): boolean {
 	return CMD_SPECIAL.test(arg);
 }
+
+/** The first character of `arg` cmd.exe would read as its own, quoted as a problem names it; none where it has none. */
+export function unsafeCharacterForCmd(arg: string): string | undefined {
+	const found = CMD_SPECIAL.exec(arg);
+	return found ? JSON.stringify(found[0]) : undefined;
+}

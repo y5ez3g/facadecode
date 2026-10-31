@@ -9,6 +9,7 @@ import type { LogPort } from '../core/ports';
 import type { Act, Outcome, PanelState, Scrolling, Strings } from '../webview/protocol';
 import { CONTEXT, PANEL_VIEW } from './catalog';
 import { PanelModel } from './model';
+import { agentCountText } from './presentation';
 
 /**
  * What the page's wheel follows (PANEL-3.3): the list settings VS Code's own lists scroll by, its defaults where a value is not a
@@ -40,6 +41,7 @@ const isTarget: Check = value => typeof value === 'string' && value.length > 0 &
 const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
+	clearFilter: { target: false },
 	openFolder: { target: false },
 	// F2 on a card: the host opens the Input Box and validates the name (D38)
 	rename: { target: true }
@@ -222,8 +224,10 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 	private publish(state: PanelState): void {
 		this.sayContext(state);
 		if (this.view) {
-			// The badge counts every card, starting and failed ones too (PANEL-1.1)
-			this.view.badge = state.cardCount ? { value: state.cardCount, tooltip: state.cardCount === 1 ? vscode.l10n.t("1 agent") : vscode.l10n.t("{0} agents", state.cardCount) } : undefined;
+			// The badge counts every card, starting and failed ones too; a filter changes no count (PANEL-1.1)
+			this.view.badge = state.cardCount ? { value: state.cardCount, tooltip: agentCountText(state.cardCount) } : undefined;
+			// The view's description names the filter, as its filled button says one is on (PANEL-2.3)
+			this.view.description = state.filter?.label;
 		}
 		this.post(state);
 	}
@@ -247,7 +251,8 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const keys: readonly [string, boolean][] = [
 			[CONTEXT.hasAgents, state.cardCount > 0],
 			[CONTEXT.agentSelected, selected !== undefined],
-			[CONTEXT.agentSelectedEnded, selected?.ended === true]
+			[CONTEXT.agentSelectedEnded, selected?.ended === true],
+			[CONTEXT.filtered, state.filter !== undefined]
 		];
 		for (const [key, value] of keys) {
 			if (this.contextSaid.get(key) !== value) {
@@ -282,8 +287,14 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const strings: Strings = {
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
+			clearFilter: vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
 			noAgents: vscode.l10n.t("Launch an agent in this workspace."),
+			// {0} is the location or folder the filter shows
+			noAgentsIn: vscode.l10n.t("No agents found in \"{0}\"."),
+			// {0} is how many agents the filter hides, 2 or more
+			otherAgents: vscode.l10n.t("{0} other agents are in this workspace."),
+			otherAgent: vscode.l10n.t("1 other agent is in this workspace."),
 			noFolder: vscode.l10n.t("Open a folder to launch agents."),
 			openFolder: vscode.l10n.t("Open Folder"),
 			// {0} is how long ago, as the browser says it in the window's language: now, 5 min. ago, yesterday

@@ -10,7 +10,6 @@ import { isJsonObject } from '../../base/json';
 import { isDeletableWorktree } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
 import type { Agents, Catalog, HumanPort, Location, LocationId, LocationPort, LogPort, WorkspaceFolderInfo, WorktreePlan, WorktreePort } from '../../core/ports';
-import { folderPrefixOf } from '../cardView';
 import { plainText } from '../presentation';
 import { BACK, Flow, StepAction } from './stepping';
 
@@ -81,12 +80,6 @@ function deletionFailed(name: string, detail: string): string {
 	return vscode.l10n.t("Could not delete worktree \"{0}\": {1}", name, detail);
 }
 
-/** A location as the person reads it alone (PANEL-1.3): its label, after its workspace folder's name in a multi-folder window. */
-export function locationLabel(location: Location, catalog: Catalog): string {
-	const prefix = folderPrefixOf(location, catalog);
-	return prefix ? `${prefix} · ${location.label}` : location.label;
-}
-
 /** The checkout a new worktree starts from, even when the selected location is its subfolder (WORKTREES-2.1). */
 export function worktreeSourceLabel(location: Location): string {
 	return location.branch ?? (location.detached ? 'HEAD' : location.label);
@@ -134,7 +127,7 @@ function hostOf(encoded: string): string {
 }
 
 /** A location's icon: a plain folder, a repository's main checkout, or another worktree. */
-function iconOf(location: Location): vscode.ThemeIcon {
+export function locationIcon(location: Location): vscode.ThemeIcon {
 	return new vscode.ThemeIcon(location.kind === 'folder' ? 'folder' : location.isMain ? 'repo' : 'worktree');
 }
 
@@ -142,21 +135,27 @@ type LocationItem = vscode.QuickPickItem & { readonly location?: Location };
 type FolderItem = vscode.QuickPickItem & { readonly folder?: WorkspaceFolderInfo; readonly add?: true };
 
 /** The locations of a workspace folder, in the catalog's order (WORKTREES-1.2): every one associated with it. */
-function locationsIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location[] {
+export function locationsIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location[] {
 	return catalog.locations.filter(location => location.folders.some(each => each.uri === folder.uri));
 }
 
 /** A workspace folder's icon: that of the location it opened - a plain folder, a repository's main checkout or another worktree. */
-function folderIconOf(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.ThemeIcon {
-	const opened = locationsIn(catalog, folder).find(location => location.opened);
-	return opened ? iconOf(opened) : new vscode.ThemeIcon('folder');
+export function folderIconOf(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.ThemeIcon {
+	const opened = locationsIn(catalog, folder).find(location => location.opened && location.uri === folder.uri);
+	return opened ? locationIcon(opened) : new vscode.ThemeIcon('folder');
 }
 
-/** Main checkout first, then this folder's opened location; the catalog's order and launch defaults stay intact (WORKTREES-1.2). */
-function locationItems(locations: readonly Location[], folder: WorkspaceFolderInfo): LocationItem[] {
+/**
+ * `locations` of `folder` in the order its steps list them: the main checkout first, then the folder's opened location; the
+ * catalog's order and launch defaults stay intact (WORKTREES-1.2).
+ */
+export function inStepOrder(locations: readonly Location[], folder: WorkspaceFolderInfo): Location[] {
 	const rank = (location: Location) => location.isMain ? 0 : location.uri === folder.uri ? 1 : 2;
-	return [...locations].sort((a, b) => rank(a) - rank(b))
-		.map(location => ({ label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: iconOf(location), location }));
+	return [...locations].sort((a, b) => rank(a) - rank(b));
+}
+
+function locationItems(locations: readonly Location[], folder: WorkspaceFolderInfo): LocationItem[] {
+	return inStepOrder(locations, folder).map(location => ({ label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location }));
 }
 
 /**

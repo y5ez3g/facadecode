@@ -18,6 +18,7 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 	const none = { dispose: () => undefined };
 	const api = () => ({
 		env: { sessionId: session, remoteName: undefined, appName: 'Visual Studio Code' },
+		Uri: { from: (parts: object) => parts },
 		l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) },
 		commands: {
 			registerCommand: (id: string, handler: (...args: unknown[]) => unknown) => { commands.set(id, handler); return none; },

@@ -23,11 +23,13 @@ import { facadeHome } from '../record/paths';
 import { RetainedFile } from '../record/retained';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
+import { registerAgentsLog } from './agentsLog';
 import { HostClis } from './clis';
 import { WorkspaceLaunchHistory } from './history';
 import { WindowHuman } from './human';
 import { createLocationService, createWorktreeService } from './locations/index';
 import { yolo } from './settings';
+import { registerShowLaunch } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
 
@@ -171,7 +173,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	})();
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
 	// Then a ptyd listing runs of this window that it shows no pair of - one of an earlier protocol found late, or a failed reattach -
-	// restores again, one restore at a time: no started agent is left out (RULES-4.1, D83)
+	// restores again, one restore at a time: no started agent is left out (RULES-4.1, D86)
 	let restoring: Promise<unknown> = ready;
 	const found = execution.onDidFindRuns(() => {
 		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`));
@@ -191,7 +193,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			ready,
 			...(identity.remote ? { remote: identity.remote } : {})
 		}),
-		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log })
+		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
+		registerShowLaunch(clis, locations, log, identity.remote),
+		registerAgentsLog(agentLog.file)
 	];
 	context.subscriptions.push(...disposables);
 	return async () => {

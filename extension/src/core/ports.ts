@@ -97,9 +97,19 @@ export interface CliChoice {
 	readonly notInstalled?: boolean;
 }
 
+/**
+ * What New Agent offers for a location (CLIS-1.1, 3.4): its CLIs, and the configuration errors no CLI stands for - `facade.custom`
+ * wrong as a whole, or a key that cannot be a custom CLI's ID - said apart, with the way to the settings.
+ */
+export interface CliChoices {
+	readonly clis: readonly CliChoice[];
+	/** Each by the setting it is in, its English for agents and logs, and the same for the person's language (UX-2.4). */
+	readonly problems: readonly { readonly setting: string; readonly problem: string; readonly said?: FacadeReason }[];
+}
+
 export interface CliCatalogPort {
-	/** Built-ins in CLIS-1.1 order, for `location`'s environment. */
-	list(location: Location): Promise<readonly CliChoice[]>;
+	/** Built-ins in CLIS-1.1 order, then custom CLIs, for `location`'s environment; and what no CLI stands for. */
+	list(location: Location): Promise<CliChoices>;
 }
 
 /** What the core asks the planner to start. */

@@ -25,5 +25,7 @@ export const museAdapter: CliAdapter = {
 	values: () => ({}),
 	screenStatus: 'muse',
 	title: { names: ['Muse Code', 'Muse', 'muse'] },
+	sandbox: yolo => yolo ? { state: 'off', by: ['--disable-sandbox'] } : { state: 'native' },
+	approvals: yolo => yolo ? { state: 'bypassed', by: ['--disable-approval'] } : { state: 'native' },
 	interruptExit: sigintExit
 };

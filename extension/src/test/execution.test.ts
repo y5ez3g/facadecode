@@ -854,7 +854,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		return { server, socket };
 	};
 
-	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1, D83)', async function () {
+	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1, D86)', async function () {
 		this.timeout(20_000);
 		const protocol = EARLIER_PROTOCOLS[0];
 		const earlier = await earlierWith('run-old');
@@ -886,7 +886,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		}
 	});
 
-	test('the ptyd of an earlier protocol going takes the window\'s runs there with it: each is told ended, how not known, and its terminal says so - never left out (RULES-3.3, 4.1, D83)', async function () {
+	test('the ptyd of an earlier protocol going takes the window\'s runs there with it: each is told ended, how not known, and its terminal says so - never left out (RULES-3.3, 4.1, D86)', async function () {
 		this.timeout(20_000);
 		const earlier = await earlierWith('run-gone');
 		try {
@@ -909,7 +909,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		}
 	});
 
-	test('after its first restore, a run a ptyd lists that the window shows no pair of - its reattach failed, or its ptyd was found late - is told once a while, for the window to restore again (RULES-4.1, D83)', async function () {
+	test('after its first restore, a run a ptyd lists that the window shows no pair of - its reattach failed, or its ptyd was found late - is told once a while, for the window to restore again (RULES-4.1, D86)', async function () {
 		this.timeout(15_000);
 		const first = portOf();
 		first.openPair(facts('run-unshown'), { reveal: false });
@@ -930,7 +930,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(found, 1, 'once a while, not at every check');
 	});
 
-	test('a run of an earlier protocol\'s ptyd that could not be reached as the window reattached it is told as lost, and claimed again at a later check once it can be: never left reconnecting (RULES-3.1, 4.1, D83)', async function () {
+	test('a run of an earlier protocol\'s ptyd that could not be reached as the window reattached it is told as lost, and claimed again at a later check once it can be: never left reconnecting (RULES-3.1, 4.1, D86)', async function () {
 		this.timeout(20_000);
 		const earlier = await earlierWith('run-late');
 		try {

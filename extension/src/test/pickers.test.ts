@@ -3,7 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { Catalog, CliChoice, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
+import type { Catalog, CliChoice, CliChoices, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
+import type { PanelFilter } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
 
 const BACK_BUTTON = { id: 'back' };
@@ -130,7 +131,8 @@ function vscodeFor(ui: Ui) {
 const SHOP: WorkspaceFolderInfo = { index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' };
 const DOCS: WorkspaceFolderInfo = { index: 1, name: 'docs', uri: 'file:///docs', path: '/docs' };
 const place = (id: string, label: string, folder: WorkspaceFolderInfo, more: Partial<Location> = {}): Location => ({ id, path: `/${label}`, uri: `file:///${label}`, environment: 'local', label, folders: [folder], kind: 'checkout', opened: false, git: 'ok', ...more });
-const MAIN = place('loc-main', 'main', SHOP, { opened: true, isMain: true });
+// The location a folder opened has the folder's own URI, as the catalog gives it
+const MAIN = place('loc-main', 'main', SHOP, { opened: true, isMain: true, uri: SHOP.uri });
 const LOGIN = place('loc-login', 'login-fix', SHOP, { branch: 'login-fix' });
 const GUIDE = place('loc-guide', 'guide', DOCS, { kind: 'folder' });
 const cli = (id: string, displayName: string, more: Partial<CliChoice & { notInstalled: boolean }> = {}): CliChoice => ({ id, displayName, available: true, ...more });
@@ -149,7 +151,7 @@ const buttonsOf = (input: Input) => input.items.filter(item => item.buttons?.len
 	return `${iconPath.id}: ${tooltip}`;
 })]);
 
-suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LIFECYCLE-1, 2)', () => {
+suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to Agent (LIFECYCLE-1, 2, PANEL-2.3)', () => {
 	let ui: Ui;
 	let load: <T>(file: string) => T;
 
@@ -259,6 +261,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 		let removing: { id: string; closeAgents: () => Promise<boolean> }[];
 		let remove: WorktreePort['remove'];
 		let choices: CliChoice[] | Error;
+		/** What no CLI stands for: `facade.custom` wrong as a whole (CLIS-3.4). */
+		let problems: CliChoices['problems'] = [];
 		let last: { location?: string; cli?: string };
 		let launched: LaunchRequest[];
 		let selected: string[];
@@ -269,12 +273,12 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 		let planned: string[];
 		let created: number;
 
-		const start = () => {
+		const start = (startAt?: string) => {
 			const { newAgent } = load<typeof import('../ui/pickers/newAgent')>(require.resolve('../ui/pickers/newAgent'));
 			return newAgent({
 				agents: { launch: request => { launched.push(request); return 'run-new'; }, list: () => runs, close: async run => { closed.push(run); return 'terminated'; } },
 				locations: { snapshot: () => catalog, refresh: async () => undefined, onDidChange: changed.event },
-				clis: { list: async location => { listed.push(location.id); if (choices instanceof Error) { throw choices; } return choices; } },
+				clis: { list: async location => { listed.push(location.id); if (choices instanceof Error) { throw choices; } return { clis: choices, problems }; } },
 				worktrees,
 				history: { last: () => last, remember: () => undefined },
 				select: run => selected.push(run),
@@ -282,7 +286,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 				log: { event: () => undefined },
 				media: { path: '/extension/media' } as never,
 				suggest: () => 'Ada'
-			});
+			}, startAt);
 		};
 
 		setup(() => {
@@ -324,6 +328,24 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 			await done;
 			assert.deepStrictEqual(shown, { title: 'New Agent · Ada · main', placeholder: 'Select a CLI', labels: ['Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], active: ['Claude Code'], where: 'main', name: 'Ada', launched: 0 });
 			assert.deepStrictEqual([launched, selected, picker.shown, ui.current], [[{ name: 'Ada', location: MAIN.id, cli: 'claude' }], ['run-new'], false, undefined]);
+		});
+
+		test('from the filtered empty panel it starts at the filtered location, still changeable; one no longer offered gives way to the remembered location (LIFECYCLE-1.2)', async () => {
+			let done = start(LOGIN.id);
+			await settle();
+			const filtered = { title: ui.current!.title, where: ui.current!.item('Change Working Location...').description };
+			ui.current!.accept();
+			await done;
+			done = start('loc-gone');
+			await settle();
+			const gone = ui.current!.title;
+			ui.current!.accept();
+			await done;
+			assert.deepStrictEqual([filtered, gone, launched.map(request => request.location)], [
+				{ title: 'New Agent · Ada · login-fix', where: 'login-fix' },
+				'New Agent · Ada · main',
+				[LOGIN.id, MAIN.id]
+			]);
 		});
 
 		test('Change Name: uses the native hint only and accepts empty labels and human; Back keeps the name it had; Escape ends the launch with nothing done (UX-1.1)', async () => {
@@ -451,11 +473,20 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 			const nothing = ui.current!.labels();
 			ui.current!.hide();
 			await done;
-			assert.deepStrictEqual([noFolder, noCli, nothing, ui.commands, launched], [
+			// A wrong facade.custom defines no CLI, so it is said by its setting, with the way to the settings (CLIS-3.4)
+			problems = [{ setting: 'facade.custom', problem: 'facade.custom must be an object of custom CLIs by ID; received array', said: { kind: 'custom_type', values: ['facade.custom', 'array'] } }];
+			done = start();
+			await settle();
+			const broken = [ui.current!.labels(), ui.current!.item('facade.custom').detail];
+			ui.current!.accept('facade.custom');
+			await done;
+			problems = [];
+			assert.deepStrictEqual([noFolder, noCli, nothing, broken, ui.commands, launched], [
 				['Open Folder...'],
 				[['Configure Agents...', 'Unavailable', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Configure Agents...'], 'Install a supported CLI in this environment, or configure its path.', 'facade.claude.path is "/opt/claude", which is not a program that can be run', [['Claude Code', 'gear: Configure Agents']]],
 				['Configure Agents...', 'Options', 'Change Working Location...', 'Change Name...'],
-				[['vscode.openFolder'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents']],
+				[['Configure Agents...', 'Unavailable', 'facade.custom', 'Options', 'Change Working Location...', 'Change Name...'], 'facade.custom must be an object of custom CLIs by ID; received array'],
+				[['vscode.openFolder'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents']],
 				[]
 			]);
 		});
@@ -808,6 +839,338 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 		});
 	});
 
+	suite('Filter by Working Location', () => {
+		test('folder, location and temporarily missing filter labels preserve literal theme-icon syntax', () => {
+			const { filterItems, folderItems } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const folder = { ...SHOP, name: '$(rocket) shop' };
+			const main = { ...MAIN, label: '$(git-branch) main', folders: [folder] };
+			const catalog = { folders: [folder, DOCS], locations: [main, LOGIN, GUIDE], pending: false };
+			const model = { count: () => 1, currentFilter: () => undefined };
+			assert.ok(filterItems(model, catalog).some(item => item.label === '\\$(rocket) shop'));
+			assert.ok(folderItems(model, catalog, folder).some(item => item.label === '\\$(git-branch) main'));
+			const missing = { kind: 'location' as const, id: 'missing', label: '$(warning) missing' };
+			const item = filterItems({ ...model, currentFilter: () => missing }, catalog).at(-1)!;
+			assert.strictEqual(item.label, '\\$(warning) missing');
+			assert.deepStrictEqual(item.filter, missing, 'display escaping never changes the saved filter');
+		});
+
+		const counts: Record<string, number> = { all: 5, [MAIN.id]: 2, [LOGIN.id]: 1, [GUIDE.id]: 2, [SHOP.uri]: 3, [DOCS.uri]: 2 };
+		const modelWith = (current?: PanelFilter, more: Record<string, number> = {}) => {
+			const set: (PanelFilter | undefined)[] = [];
+			return { set, model: { count: (filter: PanelFilter | undefined) => ({ ...counts, ...more })[filter?.id ?? 'all'] ?? 0, currentFilter: () => current, setFilter: (filter: PanelFilter | undefined) => void set.push(filter) } };
+		};
+		const two: Catalog = { locations: [MAIN, LOGIN, GUIDE], folders: [SHOP, DOCS], pending: false };
+		const one: Catalog = { locations: [MAIN, LOGIN], folders: [SHOP], pending: false };
+		const locationsOf = (catalog: () => Catalog, changed = new TestEmitter<void>()) => ({ snapshot: catalog, refresh: async () => undefined, onDidChange: changed.event });
+		const log = { event: () => undefined };
+		const show = (items: readonly { readonly label: string; readonly description?: string; readonly kind?: number }[]) => items.map(item => item.description ? `${item.label} (${item.description})` : item.kind === -1 ? `--${item.label}--` : item.label);
+		const does = (items: readonly { readonly folder?: unknown; readonly filter?: 'all' | PanelFilter }[]) => items.map(item => item.folder ? 'step' : item.filter === 'all' ? 'all' : item.filter?.kind ?? '');
+		const active = () => ui.current!.activeItems.map(item => item.label);
+		/** The step the picker opens with, for `current`, and nothing chosen. */
+		const opened = async (catalog: Catalog, current?: PanelFilter, more?: Record<string, number>) => {
+			const { pickFilter } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const { set, model } = modelWith(current, more);
+			const picking = pickFilter(model as never, locationsOf(() => catalog), log);
+			await settle();
+			const shown = [ui.current!.labels(), active()];
+			ui.current!.hide();
+			await picking;
+			assert.deepStrictEqual(set, []);
+			return shown;
+		};
+
+		test('PANEL-2.3, D82: steps by folder - All Locations, then each folder with cards, one in two or more locations opening All Worktrees and its locations, main checkout first, any other filtering at once; a window of one folder shows that step alone, All Locations outside Git; one separator, below each step\'s first item', () => {
+			const { filterItems, folderItems } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const first = filterItems(modelWith().model, two);
+			assert.deepStrictEqual([
+				show(first),
+				does(first),
+				show(folderItems(modelWith().model, two, SHOP)),
+				show(folderItems(modelWith().model, { locations: [LOGIN, GUIDE, MAIN], folders: [SHOP, DOCS], pending: false }, SHOP)),
+				show(filterItems(modelWith().model, one)),
+				show(filterItems(modelWith().model, { locations: [GUIDE], folders: [DOCS], pending: false })),
+				show(filterItems(modelWith().model, { locations: [], folders: [], pending: false })),
+				show(filterItems(modelWith(undefined, { all: 3, [GUIDE.id]: 0, [DOCS.uri]: 0 }).model, two))
+			], [
+				['All Locations (5 agents)', '----', 'shop (3 agents)', 'docs (2 agents)'],
+				['all', '', 'step', 'folder'],
+				['All Worktrees (3 agents)', '----', 'main (2 agents)', 'login-fix (1 agent)'],
+				['All Worktrees (3 agents)', '----', 'main (2 agents)', 'login-fix (1 agent)'],
+				['All Worktrees (5 agents)', '----', 'main (2 agents)', 'login-fix (1 agent)'],
+				['All Locations (5 agents)', '----', 'guide (2 agents)'],
+				['All Locations (5 agents)'],
+				['All Locations (3 agents)', '----', 'shop (3 agents)']
+			]);
+		});
+
+		test('a filtered location alone with cards in its folder opens the folder\'s step, where it stays in sight and Enter keeps it; one in a plain folder filters by the folder at once (PANEL-2.3, D82)', () => {
+			const { filterItems, folderItems } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const login = modelWith({ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' }, { all: 1, [MAIN.id]: 0, [GUIDE.id]: 0, [SHOP.uri]: 1, [DOCS.uri]: 0 }).model;
+			const guide = modelWith({ kind: 'location', id: GUIDE.id, label: 'docs · guide' }, { all: 2, [MAIN.id]: 0, [LOGIN.id]: 0, [SHOP.uri]: 0 }).model;
+			assert.deepStrictEqual([
+				show(filterItems(login, two)),
+				does(filterItems(login, two)),
+				show(folderItems(login, two, SHOP)),
+				show(filterItems(guide, two)),
+				does(filterItems(guide, two))
+			], [
+				['All Locations (1 agent)', '----', 'shop (1 agent)'],
+				['all', '', 'step'],
+				['All Worktrees (1 agent)', '----', 'login-fix (1 agent)'],
+				['All Locations (2 agents)', '----', 'docs (2 agents)'],
+				['all', '', 'folder']
+			]);
+		});
+
+		test('the current filter is highlighted - a location through its folder, then itself in the folder\'s step, titled with the folder, listed with no card left; Back returns to the first step at the folder; Escape in either step changes nothing (PANEL-2.3, D82)', async () => {
+			const { pickFilter } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const { set, model } = modelWith({ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' }, { [LOGIN.id]: 0 });
+			let picking = pickFilter(model as never, locationsOf(() => two), log);
+			await settle();
+			const first = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), active(), ui.current!.buttons.length];
+			ui.current!.accept('shop');
+			await settle();
+			const inFolder = [ui.current!.title, ui.current!.placeholder, show(ui.current!.items), active(), ui.current!.buttons.length];
+			ui.current!.back();
+			await settle();
+			const back = [ui.current!.labels(), active()];
+			ui.current!.hide();
+			await picking;
+			picking = pickFilter(model as never, locationsOf(() => two), log);
+			await settle();
+			ui.current!.accept('shop');
+			await settle();
+			ui.current!.hide();
+			await picking;
+			assert.deepStrictEqual([first, inFolder, back, set], [
+				['Filter by Working Location', 'Select a working location to show its agents', ['All Locations', '', 'shop', 'docs'], ['shop'], 0],
+				['Filter by Working Location · shop', 'Select a worktree to show its agents', ['All Worktrees (3 agents)', '----', 'main (2 agents)', 'login-fix (0 agents)'], ['login-fix'], 1],
+				[['All Locations', '', 'shop', 'docs'], ['shop']],
+				[]
+			]);
+		});
+
+		test('a folder filter is highlighted at its folder, then at All Worktrees, and at the first item in a window of one folder; a filtered location the catalog does not list now stays last, highlighted, in either window (PANEL-2.3)', async () => {
+			const shop: PanelFilter = { kind: 'folder', id: SHOP.uri, label: 'shop' };
+			const gone: PanelFilter = { kind: 'location', id: 'loc-gone', label: 'shop · gone' };
+			const { pickFilter } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const { model } = modelWith(shop);
+			const picking = pickFilter(model as never, locationsOf(() => two), log);
+			await settle();
+			const folder = [active()];
+			ui.current!.accept('shop');
+			await settle();
+			folder.push(active());
+			ui.current!.hide();
+			await picking;
+			assert.deepStrictEqual([
+				folder,
+				await opened(one, shop),
+				await opened(two, gone, { 'loc-gone': 1 }),
+				await opened(one, gone, { 'loc-gone': 1 })
+			], [
+				[['shop'], ['All Worktrees']],
+				[['All Worktrees', '', 'main', 'login-fix'], ['All Worktrees']],
+				[['All Locations', '', 'shop', 'docs', 'shop · gone'], ['shop · gone']],
+				[['All Worktrees', '', 'main', 'login-fix', 'shop · gone'], ['shop · gone']]
+			]);
+		});
+
+		test('as the locations are read again while a step is up, its items, hint and busy state follow - All Worktrees once the folder is found in Git - the item under the cursor staying under it, else the step back at the current filter (PANEL-2.3)', async () => {
+			const { pickFilter } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const polish = place('loc-polish', 'ui-polish', SHOP, { branch: 'ui-polish' });
+			const changed = new TestEmitter<void>();
+			// Until Git is read, the folder's opened location is a plain folder with no card
+			let catalog: Catalog = { locations: [place('loc-shop', 'shop', SHOP, { kind: 'folder', opened: true })], folders: [SHOP], pending: true };
+			const { set, model } = modelWith(undefined, { [polish.id]: 1 });
+			let picking = pickFilter(model as never, locationsOf(() => catalog, changed), log);
+			await settle();
+			const picker = ui.current!;
+			const pending = [picker.labels(), picker.placeholder, picker.busy];
+			catalog = one;
+			changed.fire();
+			const read = [picker.labels(), picker.placeholder, picker.busy];
+			picker.activeItems = [picker.item('login-fix')];
+			catalog = { locations: [MAIN, LOGIN, polish], folders: [SHOP], pending: false };
+			changed.fire();
+			const kept = [picker.labels(), active(), picker.items.indexOf(picker.activeItems[0])];
+			picker.hide();
+			await picking;
+			// In a folder's step too; and with the item under the cursor gone, the step is back at the current filter
+			catalog = two;
+			picking = pickFilter(model as never, locationsOf(() => catalog, changed), log);
+			await settle();
+			ui.current!.activeItems = [ui.current!.item('docs')];
+			catalog = { locations: [MAIN, LOGIN, polish], folders: [SHOP, DOCS], pending: false };
+			changed.fire();
+			const fallen = [ui.current!.labels(), active(), ui.current!.items.indexOf(ui.current!.activeItems[0])];
+			ui.current!.accept('shop');
+			await settle();
+			ui.current!.activeItems = [ui.current!.item('login-fix')];
+			catalog = { locations: [polish, LOGIN, MAIN, GUIDE], folders: [SHOP, DOCS], pending: false };
+			changed.fire();
+			const inFolder = [ui.current!.labels(), active(), ui.current!.items.indexOf(ui.current!.activeItems[0])];
+			ui.current!.hide();
+			await picking;
+			assert.deepStrictEqual([pending, read, kept, fallen, inFolder, set], [
+				[['All Locations'], 'Select a working location to show its agents', true],
+				[['All Worktrees', '', 'main', 'login-fix'], 'Select a worktree to show its agents', false],
+				[['All Worktrees', '', 'main', 'login-fix', 'ui-polish'], ['login-fix'], 3],
+				[['All Locations', '', 'shop'], ['All Locations'], 0],
+				[['All Worktrees', '', 'main', 'ui-polish', 'login-fix'], ['login-fix'], 4],
+				[]
+			]);
+		});
+
+		test('choosing a location filters to it, a folder with one location by the folder at once, All Worktrees by the whole folder, and the first step\'s first item clears the filter (PANEL-2.3, D82)', async () => {
+			const { pickFilter } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const { set, model } = modelWith();
+			const choose = async (catalog: Catalog, ...labels: string[]) => {
+				const picking = pickFilter(model as never, locationsOf(() => catalog), log);
+				for (const label of labels) {
+					await settle();
+					ui.current!.accept(label);
+				}
+				await picking;
+			};
+			await choose(two, 'shop', 'login-fix');
+			await choose(two, 'docs');
+			await choose(two, 'shop', 'All Worktrees');
+			await choose(two, 'All Locations');
+			await choose(one, 'main');
+			await choose(one, 'All Worktrees');
+			assert.deepStrictEqual(set, [
+				{ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' },
+				{ kind: 'folder', id: DOCS.uri, label: 'docs' },
+				{ kind: 'folder', id: SHOP.uri, label: 'shop' },
+				undefined,
+				{ kind: 'location', id: MAIN.id, label: 'main' },
+				undefined
+			]);
+		});
+	});
+
+	suite('Show Agent Launch: its location', () => {
+		const log = { event: () => undefined };
+		const locationsOf = (catalog: () => Catalog, changed = new TestEmitter<void>()) => ({ snapshot: catalog, refresh: async () => undefined, onDidChange: changed.event });
+		// Its folder with two locations second, so that Back's highlight is not merely the first row's
+		const two: Catalog = { locations: [GUIDE, LOGIN, MAIN], folders: [DOCS, SHOP], pending: false };
+		const icons = () => ui.current!.items.map(item => (item.iconPath as { id: string }).id);
+
+		test('CLIS-4.1, D84: in a window of several folders, the folders with their own icons - one with a single location choosing it at once, one with more opening its own step titled with it, main checkout first; Back returns to the folders at it; no separator; Escape chooses none', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			let choosing = chooseLaunchLocation(locationsOf(() => two), log);
+			await settle();
+			const first = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.items.map(item => item.description), icons(), ui.current!.buttons.length];
+			ui.current!.accept('shop');
+			await settle();
+			const inFolder = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.buttons.length];
+			ui.current!.back();
+			await settle();
+			const back = [ui.current!.labels(), ui.current!.activeItems.map(item => item.label)];
+			ui.current!.accept('shop');
+			await settle();
+			ui.current!.accept('login-fix');
+			const login = await choosing;
+			choosing = chooseLaunchLocation(locationsOf(() => two), log);
+			await settle();
+			ui.current!.accept('docs');
+			const guide = await choosing;
+			choosing = chooseLaunchLocation(locationsOf(() => two), log);
+			await settle();
+			ui.current!.accept('shop');
+			await settle();
+			ui.current!.hide();
+			assert.deepStrictEqual([first, inFolder, back, login?.id, guide?.id, await choosing], [
+				['Show Agent Launch', 'Select a folder', ['docs', 'shop'], ['/', '/'], ['folder', 'repo'], 0],
+				['Show Agent Launch · shop', 'Select a working location', ['main', 'login-fix'], 1],
+				[['docs', 'shop'], ['shop']],
+				LOGIN.id,
+				GUIDE.id,
+				null
+			]);
+		});
+
+		test('in a window of one folder, its locations at once - main checkout first, each with its path - searched by path too; Escape chooses none (CLIS-4.1, D84)', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			const one: Catalog = { locations: [LOGIN, MAIN], folders: [SHOP], pending: false };
+			let choosing = chooseLaunchLocation(locationsOf(() => one), log);
+			await settle();
+			const shown = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.items.map(item => item.description), ui.current!.matchOnDescription];
+			ui.current!.accept('login-fix');
+			const login = await choosing;
+			choosing = chooseLaunchLocation(locationsOf(() => one), log);
+			await settle();
+			ui.current!.hide();
+			assert.deepStrictEqual([shown, login?.id, await choosing], [['Show Agent Launch', 'Select a working location', ['main', 'login-fix'], ['/main', '/login-fix'], true], LOGIN.id, null]);
+		});
+
+		test('Show Agent Launch preserves literal location labels and paths while returning the original location', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			const literal = { ...MAIN, label: '$(git-branch) main', path: '/$(folder)/main' };
+			const choosing = chooseLaunchLocation(locationsOf(() => ({ folders: [SHOP], locations: [literal], pending: false })), log);
+			await settle();
+			assert.deepStrictEqual([ui.current!.items[0].label, ui.current!.items[0].description], ['\\$(git-branch) main', '/\\$(folder)/main']);
+			ui.current!.accept('\\$(git-branch) main');
+			assert.strictEqual(await choosing, literal);
+		});
+
+		test('a location of two folders is listed under each; each folder has the icon of the location it opened, not another\'s listed under it (CLIS-4.1, WORKTREES-1.2)', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			const FEAT: WorkspaceFolderInfo = { index: 1, name: 'feat', uri: 'file:///feat', path: '/feat' };
+			const shared: Location = { ...MAIN, folders: [SHOP, FEAT] };
+			const feat = place('loc-feat', 'feat', FEAT, { opened: true, uri: FEAT.uri, branch: 'feat' });
+			const choosing = chooseLaunchLocation(locationsOf(() => ({ locations: [shared, feat], folders: [SHOP, FEAT], pending: false })), log);
+			await settle();
+			const first = [ui.current!.labels(), icons()];
+			ui.current!.accept('feat');
+			await settle();
+			const inFolder = [ui.current!.labels(), icons()];
+			ui.current!.accept('main');
+			assert.deepStrictEqual([first, inFolder, (await choosing)?.id], [[['shop', 'feat'], ['repo', 'worktree']], [['main', 'feat'], ['repo', 'worktree']], MAIN.id]);
+		});
+
+		test('as the locations are read again while a step is up, its items, hint and busy state follow, and the item under the cursor stays under it - a folder too, as it comes to have more locations (WORKTREES-1.3)', async () => {
+			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
+			const notes = place('loc-notes', 'notes', DOCS, { kind: 'folder' });
+			const polish = place('loc-polish', 'ui-polish', SHOP, { branch: 'ui-polish' });
+			const changed = new TestEmitter<void>();
+			let catalog: Catalog = { locations: [GUIDE, MAIN], folders: [DOCS, SHOP], pending: true };
+			let choosing = chooseLaunchLocation(locationsOf(() => catalog, changed), log);
+			await settle();
+			let picker = ui.current!;
+			const pending = [picker.labels(), picker.busy];
+			picker.activeItems = [picker.item('docs')];
+			catalog = { locations: [GUIDE, notes, MAIN, LOGIN], folders: [DOCS, SHOP], pending: false };
+			changed.fire();
+			const grown = [picker.labels(), picker.busy, picker.activeItems.map(item => item.label), picker.items.indexOf(picker.activeItems[0])];
+			catalog = { locations: [MAIN, LOGIN], folders: [SHOP], pending: false };
+			changed.fire();
+			const oneFolder = [picker.labels(), picker.placeholder];
+			picker.hide();
+			const none = await choosing;
+			catalog = two;
+			choosing = chooseLaunchLocation(locationsOf(() => catalog, changed), log);
+			await settle();
+			ui.current!.accept('shop');
+			await settle();
+			picker = ui.current!;
+			picker.activeItems = [picker.item('login-fix')];
+			catalog = { locations: [polish, GUIDE, LOGIN, MAIN], folders: [DOCS, SHOP], pending: false };
+			changed.fire();
+			const inFolder = [picker.labels(), picker.activeItems.map(item => item.label), picker.items.indexOf(picker.activeItems[0])];
+			picker.hide();
+			assert.deepStrictEqual([pending, grown, oneFolder, none, inFolder, await choosing], [
+				[['docs', 'shop'], true],
+				[['docs', 'shop'], false, ['docs'], 0],
+				[['main', 'login-fix'], 'Select a working location'],
+				null,
+				[['main', 'ui-polish', 'login-fix'], ['login-fix'], 2],
+				null
+			]);
+		});
+	});
+
 	suite('Go to Agent', () => {
 		const run = (n: number, more: Partial<RunFacts> = {}): RunFacts => ({
 			id: `run-${String(n).padStart(32, '0')}`, alias: `#a${n}`, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: MAIN.id,
@@ -823,7 +1186,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en'
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
@@ -869,7 +1232,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Go to Agent (LI
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en'
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Catalog, Location, RunFacts, WorktreeCreationEffects } from '../core/ports';
-import type { Card, CardMenu } from '../webview/protocol';
+import type { AvatarColor, Card, CardMenu } from '../webview/protocol';
 
 /** The words a card is said in, in the person's language. */
 export interface CardWords {
@@ -29,6 +29,8 @@ export interface CardWords {
 	readonly exitUnknown: string;
 	/** `Window: {0}`, {0} the window's name: where the hover says the agent is (PANEL-1.5). */
 	readonly window: (label: string) => string;
+	/** The person's language, as a custom CLI's initial is uppercased in it (UX-2.1). */
+	readonly locale: string;
 }
 
 /** Where a card's agent works, as the card says it (PANEL-1.3). */
@@ -50,6 +52,12 @@ export interface CardPlace {
 export function folderPrefixOf(location: Pick<Location, 'label' | 'folders'>, catalog: Pick<Catalog, 'folders'>): string | undefined {
 	const folder = location.folders[0];
 	return catalog.folders.length > 1 && folder && folder.name !== location.label ? folder.name : undefined;
+}
+
+/** A location as the person reads it alone (PANEL-1.3): its label, after its workspace folder's name in a multi-folder window. */
+export function locationLabel(location: Pick<Location, 'label' | 'folders'>, catalog: Pick<Catalog, 'folders'>): string {
+	const prefix = folderPrefixOf(location, catalog);
+	return prefix ? `${prefix} · ${location.label}` : location.label;
 }
 
 /** What a card's dot says and its second line (RULES-3.2, PANEL-1.4); `reason` is what the state's words leave unsaid. */
@@ -123,9 +131,40 @@ const AVATARS: { readonly [cli: string]: string } = {
 	pi: 'avatar-pi.png'
 };
 
-/** A card's avatar (PANEL-1.3, UX-2.1): its built-in CLI's maker avatar; none for a CLI this build has no avatar of. */
-export function avatarOf(cli: string): Card['avatar'] {
-	return Object.hasOwn(AVATARS, cli) ? { file: AVATARS[cli] } : undefined;
+/** How a name is cut into what a reader sees as characters: an accented letter or an emoji whole. */
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** The `charts` colours a custom CLI's avatar can take: none that a status dot uses (UX-2.1). */
+const AVATAR_COLORS: readonly AvatarColor[] = ['blue', 'orange', 'purple'];
+
+/**
+ * A card's avatar (PANEL-1.3, UX-2.1): a built-in's maker avatar; for another CLI - a custom one - the uppercased first grapheme of
+ * its name in the `charts` colour a stable hash of its normalized name picks, the same for every agent of that CLI; none for a name
+ * with nothing to show.
+ */
+export function avatarOf(cli: string, displayName: string, locale: string): Card['avatar'] {
+	if (Object.hasOwn(AVATARS, cli)) {
+		return { file: AVATARS[cli] };
+	}
+	const name = displayName.trim().normalize('NFC');
+	const [first] = GRAPHEMES.segment(name);
+	if (!first) {
+		return undefined;
+	}
+	let hash = 0;
+	for (const char of name.toLowerCase()) {
+		hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
+	}
+	return { initial: upper(first.segment, locale), color: AVATAR_COLORS[hash % AVATAR_COLORS.length] };
+}
+
+/** `text` uppercased in `locale`, where the runtime knows it; else as the runtime's default does. */
+function upper(text: string, locale: string): string {
+	try {
+		return text.toLocaleUpperCase(locale);
+	} catch {
+		return text.toUpperCase();
+	}
 }
 
 /**
@@ -144,7 +183,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		...status.reason && status.reason !== facts.title ? [status.reason] : []
 	];
 	const label = [facts.name, facts.alias, status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
-	const avatar = avatarOf(facts.cli);
+	const avatar = avatarOf(facts.cli, facts.displayName, words.locale);
 	return {
 		runId: facts.id,
 		selected: input.selected,

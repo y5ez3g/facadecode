@@ -67,7 +67,7 @@ the available environment, complete independent work and record the exact missin
 | Client | macOS, Windows, Linux; VS Code minimum/current; one declared compatible editor |
 | Execution | Local; Remote SSH Linux plus another supported host OS where available; WSL; Dev Container |
 | Workspace | Plain folder without Git executable; ordinary nonrepository with Git; main checkout; opened worktree; mixed multi-folder; nested/duplicate repo folders; no folder |
-| CLI | Each built-in; missing/disabled/invalid CLI |
+| CLI | Each built-in; valid custom definition with required Resume but unverified runtime capabilities; missing Resume rejected; missing/disabled/invalid CLI |
 | UI | Themes/widths/zoom/languages/reduced motion/keyboard/accessibility from UX |
 
 Use pairwise sampling for routine presentation combinations, but exercise every critical G2 boundary directly.
@@ -114,12 +114,14 @@ passes.
 | U01 | Narrow/high contrast/reduced motion/non-English/keyboard/screen reader | UX/PANEL checks, no invented completion/extra badges |
 | U02 | Old-page action/reply, unrelated state change before a current-page action, agent rename while menu open | PANEL-3.1 generation isolation and current-target validation; no wrong target or required per-action expected revision |
 | U03 | Human operation error | Error to initiator in the related window |
-| U05 | New card, manual movement | Card-count badge, stack insertion and stable state changes |
+| U04 | Empty filtered panel; a person's start outside the filter; missing Git | Filter remains unchanged; new card follows normal data/order and only matching entries display; no launch-default change |
+| U05 | New card, manual movement, filter | Card-count badge, stack insertion and stable state changes |
 | U06 | Go to Agent with duplicate names, exact/short IDs and stale-name copied references; terminal placement | ID selects the intended current-window run; picker detail/hover distinguish duplicates; editor-only terminals; no global default shortcut |
 | U07 | Command/menu catalog with starting, live and retained-ended records; view a notified source | One Close Agent action for all states; no attention queue/seen state, nextAgent, human stopAgent or startAgent registration; opening does not clear the error |
 | U08 | Activate agent B, switch to a file/unrelated terminal, invoke palette Rename/Copy/Close; repeat without a selected run | Available actions target B under UX-3.1; no target picker; unavailable without a valid target; explicit card/tab context still targets its own run |
 | U09 | Browse near the 80th card, switch to Explorer, then return; repeat after the navigation target is removed | Restore still-valid scroll position and navigation target without stealing input focus; removed target is discarded; existing PANEL-3.3 scrolling behavior is unchanged |
 | C02 | Executable found only through configured default-profile PATH; null/omitted variables at each env layer; remote and Windows cases | Discovery and launch use the same CLIS-1.2 environment; null removes, omission inherits; no shell-init execution/parser |
+| C04 | Custom definition missing/empty Resume, lacking exact-session placeholder, containing a capabilities field, a key that cannot be an ID, valid unverified Resume | Invalid definitions cannot start; only path/launch are configured; a valid command alone does not prove Resume/Pin under CLIS-3.4 |
 | C03 | New worktree with tracked relative executable; missing/nonexecutable file after creation | Static validation before creation; cwd-dependent checks use actual Git destination before spawn; failure retains pair and created worktree; no preparation barrier/rollback |
 | E01 | Output flood/slow UI, attach snapshot/output race, current/alternate screen | Bounded pressure, no duplicated input/output, readable final evidence |
 | E03 | Package contents/localization/native ABI/install in isolated profiles | No test probes/secrets, complete strings/notices, verified components |
@@ -162,9 +164,13 @@ for review, not acceptance evidence.
 
 ## Change log
 
-- 2026-10-31: J09 includes an update from the last released build with its agents running (D83).
+- 2026-10-31: J09 includes an update from the last released build with its agents running (D86).
 - 2026-10-31: G5 records the night verification's Remote-SSH runs from a Windows x64 client, and the integration suite on
   VS Code 1.105.0, the declared minimum, and on Linux.
+- 2026-10-31: The CLI coverage and C04 cover custom CLIs (CLIS-3.4).
+
+- 2026-10-30: U04 and U05 cover the panel's display filter (PANEL-2.3).
+
 - 2026-10-30: G5 records the Windows x64 and macOS arm64 client and Linux x64 build evidence of the step adding four
   CLIs (D77); J05 covers startup until the CLI's first report (D81).
 

@@ -279,7 +279,7 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		destination.host.CODEX_HOME = home;
 		const log: string[] = [];
 		const planner = clis(log);
-		assert.deepStrictEqual((await planner.list(location)).map(cli => [cli.id, cli.available]), [['claude', true], ['codex', true], ['agy', false], ['muse', false], ['opencode', false], ['pi', false]]);
+		assert.deepStrictEqual((await planner.list(location)).clis.map(cli => [cli.id, cli.available]), [['claude', true], ['codex', true], ['agy', false], ['muse', false], ['opencode', false], ['pi', false]]);
 		const planned = await planner.plan(request('codex', 'codex-1'));
 		assert.strictEqual(planned.cli, 'codex');
 		assert.strictEqual(planned.env.CODEX_HOME, home);

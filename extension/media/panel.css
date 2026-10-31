@@ -125,6 +125,16 @@ body.vscode-context-menu-visible #list .item.menu-target {
 	background: var(--vscode-button-hoverBackground);
 }
 
+/* Another action beside the main one, as VS Code's welcome views set one off (PANEL-1.2) */
+.button.secondary {
+	color: var(--vscode-button-secondaryForeground);
+	background: var(--vscode-button-secondaryBackground);
+}
+
+.button.secondary:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
 
 /* ---- The agents ---- */
 
@@ -175,7 +185,8 @@ body.vscode-context-menu-visible #list .item.menu-target {
 	--facade-row-background: var(--vscode-list-activeSelectionBackground);
 }
 
-/* The avatar: its maker's app icon, 28px round, edged in the theme's border so that a dark one reads on a dark theme (PANEL-1.3). */
+/* The avatar: its maker's app icon - or a custom CLI's initial - 28px round, edged in the theme's border so that a dark one reads on a
+   dark theme (PANEL-1.3). */
 .avatar {
 	position: relative;
 	flex: 0 0 auto;
@@ -208,6 +219,32 @@ body.vscode-context-menu-visible #list .item.menu-target {
 	height: 100%;
 	object-fit: cover;
 }
+
+/*
+ * A custom CLI's: the first grapheme of its name in the editor's text colour, on the side bar's tinted with the `charts` colour its
+ * name picks - none of the dot's - the theme's own colours throughout (UX-2.1). The colour is taken opaque - a theme may give it
+ * transparent, as VS Code's own orange is - so that the circle is the colour the page measures, whatever row it is on. Where the
+ * letter does not read on that tint, a fainter one is under it, and where it reads on neither, the side bar's own colour; the ring is
+ * the theme's border, its contrast border in a high contrast theme. A colour the theme does not have leaves the circle clear.
+ */
+.face.initial {
+	font-size: var(--facade-label);
+	font-weight: var(--facade-semibold);
+	color: var(--vscode-foreground);
+	background: color-mix(in srgb, var(--facade-avatar-color) 30%, var(--facade-base-background));
+}
+
+.face.initial.faint {
+	background: color-mix(in srgb, var(--facade-avatar-color) 12%, var(--facade-base-background));
+}
+
+.face.initial.unreadable {
+	background: var(--facade-base-background);
+}
+
+.face.on-blue { --facade-avatar-color: rgb(from var(--vscode-charts-blue) r g b / 1); }
+.face.on-orange { --facade-avatar-color: rgb(from var(--vscode-charts-orange) r g b / 1); }
+.face.on-purple { --facade-avatar-color: rgb(from var(--vscode-charts-purple) r g b / 1); }
 
 /*
  * What is known of the agent, on its avatar's corner as a chat app's presence, cut out of the row so that it reads on any background
@@ -465,6 +502,11 @@ body.vscode-reduce-motion .item.closing {
 #empty .button {
 	width: 100%;
 	padding: 4px 8px;
+}
+
+/* Buttons one under another, close together as VS Code's welcome views stack them */
+#empty > .button-container + .button-container {
+	margin-top: 8px;
 }
 
 

@@ -23,7 +23,7 @@ beneath the input while typing; asynchronous checks show busy and disable accept
 selection history or filesystem state. Accepted agent launches close the picker and show card/terminal immediately.
 
 Use native view progress for initial loading and human Git operations, and existing card/terminal text for launch/setup.
-No progress, success or copy notifications. Long operation diagnostics are in the agents log. A button/key receives
+No progress, success or copy notifications. Long operation diagnostics are in Show Agents Log. A button/key receives
 immediate visual feedback without waiting for process/Git work. Routine errors keep relevant failure surfaces.
 
 ### 1.2 Notifications and errors
@@ -66,17 +66,20 @@ language.
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
 | Corners/inset | 4 px rows/buttons, 2 px fields, 4 px list side inset |
 
-No contributed color palette. Status colors are not reused as avatar meanings. High contrast selection uses a dotted
-`contrastActiveBorder` outline, hover dashed, never over keyboard focus. Do not fade high-contrast text. Other secondary
-selection text can use 80% opacity only if contrast remains adequate. Whole-pixel layout at supported zoom; preserve
-diacritics/descenders. Paragraphs wrap, card lines ellipsize with full accessible text.
+No contributed color palette. Custom avatars use a stable hash of the normalized CLI name to choose one of the editor's
+`charts` colors, paired with contrast-tested foreground/background; in high contrast use `foreground` on
+`sideBar.background` with `contrastBorder` if the chosen pair fails. Status colors are not reused as avatar meanings.
+High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never over keyboard focus. Do not
+fade high-contrast text. Other secondary selection text can use 80% opacity only if contrast remains adequate.
+Whole-pixel layout at supported zoom; preserve diacritics/descenders. Paragraphs wrap, card lines ellipsize with full
+accessible text.
 
 ### 2.2 Motion and responsive layout
 
 **Motion is brief, does not delay input, and disappears when reduced motion is requested.**
 
 Card insertion 180 ms and removal after a normal process exit 160 ms, `cubic-bezier(0.22,1,0.36,1)`; text fade 160 ms.
-No motion on first draw. Explicit close and confirmed location removal remove the card and terminal immediately, without
+No motion on first draw/filter change. Explicit close and confirmed location removal remove the card and terminal immediately, without
 animation. Dot and scrolling durations belong to PANEL. Long-running animation changes only opacity/transform. Follow
 both `workbench.reduceMotion` and system preference. Test 180, 260, 420 and 720 px view widths plus editor minimum; no
 overlap, horizontal overflow or hidden essential controls. Test zoom -1, 0, 2. Themes: Dark Modern, Light Modern, both
@@ -127,26 +130,32 @@ run and are validated against current state, without falling back to the selecti
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `copyAgentReference` | Copy Agent Reference | Known owned record; card/Go to Agent | LIFECYCLE-2.1 |
 | `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
+| `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
+| `clearFilter` | Clear Filter | Active filter; card/empty state | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
+| `showAgentLaunch` | Show Agent Launch | Always; Command Palette | CLIS-4.1 |
+| `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 
 PANEL-1.1 places the editor's own Add Folder to Workspace... command in the view menu; it is not another `facade.` command.
-Refresh, New Agent Here, Pin/Unpin Agent, the former working-location rename/navigation/copy/terminal commands, Message
-History, Show Agent Launch and Show Agents Log have no contributed entry or hidden compatibility alias.
+Refresh, New Agent Here, Pin/Unpin Agent, the former working-location rename/navigation/copy/terminal commands and Message
+History have no contributed entry or hidden compatibility alias. Facade Dots' `facade.agents.showLaunch` and
+`facade.agents.showLog` are not aliases of Show Agent Launch and Show Agents Log.
 
 ### 3.2 Context and internal commands
 
 **Context-only actions carry their actual target and never substitute the foreground agent.**
 
-Hidden from palette: `newWorktree` (view-menu creation), `moveUp`, `moveDown` and `revealAgent` (notification navigation).
-The worktree command follows WORKTREES-4.3. Tab Rename/Copy entries are contributed only on
+Hidden from palette: `newWorktree` (view-menu creation), `moveUp`, `moveDown`, `filterByLocation`, `filterByFolder`,
+`filterOn` (filled-icon alias) and `revealAgent` (notification navigation). `filterOn` invokes exactly the same
+behavior as `filter`. The worktree command follows WORKTREES-4.3. Tab Rename/Copy entries are contributed only on
 editors/versions where public context can be resolved exactly; otherwise the card/palette remain available. No internal
 `$mid` terminal-context trick. There is no scripted-start command. Retired `facade.nextAgent`, `facade.stopAgent` and
 `facade.startAgent` commands are not registered as hidden aliases.
 
 Test commands `state`, `selectRow` (selects a card by run ID) and `probe` are registered only in test mode and excluded
 from production manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected`
-identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded` reflects current state.
+identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded` and `filtered` reflect current state.
 
 ## 4 Settings
 
@@ -157,11 +166,14 @@ identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSel
 | Setting | Type / default | Scope | Behavioral owner |
 | --- | --- | --- | --- |
 | `facade.yolo` | boolean; true | machine in execution environment | RULES-4.3 |
+| `facade.<cli>.enabled` | boolean; true | machine in execution environment | CLIS-1.1 |
 | `facade.<cli>.path` | string; empty | machine in execution environment | CLIS-1.2 |
+| `facade.<cli>.launch` | object; `{}` | machine in execution environment | CLIS-3 |
+| `facade.custom` | object; `{}` | machine in execution environment | CLIS-3.4 |
 
-`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`; `facade.<cli>.enabled` (CLIS-1.1) and `facade.<cli>.launch` (CLIS-3) join in a later step. Settings sections in order: `Agents` (`facade.yolo`), then one section per built-in CLI in CLIS-1.1
-order. Read on use and apply live where RULES-4.4 allows. Do not add an “agent default CLI/model/worktree” setting.
-Local and remote values are clearly scoped in the editor.
+`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. Settings sections in order: `Agents` (`facade.yolo`), then one section per built-in CLI in CLIS-1.1
+order, then `Custom Agents` (`facade.custom`). Read on use and apply live where RULES-4.4 allows. Do not add an “agent
+default CLI/model/worktree” setting. Local and remote values are clearly scoped in the editor.
 
 ### 4.2 Follow existing editor settings
 
@@ -225,6 +237,15 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-10-31: 2.1 gives custom CLIs their avatars' colors; 4.1 adds `facade.custom` in its own section, Custom Agents.
+
+- 2026-10-30: 3.1 adds Show Agent Launch (CLIS-4.1) and Show Agents Log (ARCHITECTURE-3.3), Command Palette
+  commands (D83); 4.1 adds each built-in's `.enabled` and `.launch`; 1.1 points long operation diagnostics to Show
+  Agents Log.
+
+- 2026-10-30: 3.1 adds Filter by Working Location... and Clear Filter (PANEL-2.3); 3.2 keeps the card's filters and
+  the filled-icon alias out of the palette and adds the `filtered` context key; 2.2 keeps a filter change still.
 
 - 2026-10-30: 4.1 adds the `.path` settings of Antigravity, Muse Code, OpenCode and Pi, each in its own section in
   CLIS-1.1 order (D77).

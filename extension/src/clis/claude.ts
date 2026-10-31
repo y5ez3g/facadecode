@@ -139,5 +139,8 @@ export const claudeAdapter: CliAdapter = {
 	adjustEnvironment: (env, platform) => setVariable(env, TITLE_SWITCH, null, platform),
 	// ✳ while it waits, a Braille spinner frame while it works
 	title: { decoration: /^[✳⠀-⣿]+\s*/u, names: ['Claude Code', 'claude'] },
+	// YOLO off turns its sandbox on through the run's settings, where it has one; YOLO on leaves it to its own settings
+	sandbox: (yolo, platform) => !hasSandbox(platform) ? { state: 'none' } : yolo ? { state: 'native' } : { state: 'on' },
+	approvals: yolo => yolo ? { state: 'bypassed', by: ['--dangerously-skip-permissions'] } : { state: 'native' },
 	interruptExit: sigintExit
 };

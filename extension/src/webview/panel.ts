@@ -9,7 +9,7 @@
 // it, as VS Code's lists have it (UX-2.3); a wheel scrolls it as one of those lists, by the person's list settings, and its
 // scrollbar is the page's own (PANEL-3.3).
 
-import { act, Browsing, Check, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
+import { act, Browsing, Check, contrastOf, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
 import { Card, PanelState, Scrolling } from './protocol';
 import { cancelSmoothScroll, setScrolling, takeWheel } from './wheel';
 
@@ -35,10 +35,12 @@ let state: PanelState = { revision: 0, loading: true, cards: [], cardCount: 0, c
 let restoring = savedBrowsing();
 
 const DOTS: readonly unknown[] = ['working', 'idle', 'error'];
-const EMPTY: readonly unknown[] = ['noFolder', 'noAgents'];
+const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
+const AVATAR_COLORS: readonly unknown[] = ['blue', 'orange', 'purple'];
 
-const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean });
-const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) });
+const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean, filterLocation: isBoolean, filterFolder: isBoolean, clearFilter: isBoolean });
+const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) })
+	|| isShaped(value, { initial: value => isString(value) && value !== '', color: value => AVATAR_COLORS.includes(value) });
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString, alias: isString,
 	location: value => isShaped(value, { label: isString, full: isString }, { folderPrefix: isString }),
@@ -48,6 +50,7 @@ const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
 }, {
+	filter: value => isShaped(value, { kind: value => value === 'location' || value === 'folder', id: isString, label: isString }),
 	empty: value => EMPTY.includes(value),
 	exited: isStrings
 });
@@ -154,12 +157,75 @@ function renderList(): void {
 	}
 	renderEmpty();
 	draw(state.cards);
+	// Only the letters just drawn: a redraw that keeps its faces measures nothing
+	checkInitials(untested.splice(0));
 	if (restoring) {
 		restoreBrowsing(restoring);
 		restoring = undefined;
 	}
 	rememberBrowsing();
 }
+
+/** How far apart a custom CLI's letter and its circle are to be: as far as WCAG asks of text (UX-2.1). */
+const READABLE = 4.5;
+
+/** The circles a custom CLI's letter can be on, strongest first: its tint, a fainter one, the side bar's own colour (UX-2.1). */
+const GROUNDS = ['', 'faint', 'unreadable'] as const;
+
+/** Faces with a letter drawn since the letters were last tested. */
+const untested: HTMLElement[] = [];
+
+/**
+ * Tests each custom CLI's letter of `faces` on its circle as the theme draws them now (UX-2.1): it goes on the strongest circle on
+ * which it reads as far as WCAG asks of text, else on the one it reads best on - the side bar's own colour only where that is better,
+ * as a theme may have its own text closer still. A colour the page cannot measure leaves the tint as it is.
+ */
+function checkInitials(faces: readonly HTMLElement[]): void {
+	if (!faces.length) {
+		return;
+	}
+	// All measured at once on each circle: three looks at the page's styles, not three for each face
+	const contrasts = GROUNDS.map(ground => {
+		faces.forEach(face => face.classList.remove('faint', 'unreadable'));
+		if (ground) {
+			faces.forEach(face => face.classList.add(ground));
+		}
+		return faces.map(face => {
+			const style = getComputedStyle(face);
+			return contrastOf(style.color, style.backgroundColor);
+		});
+	});
+	faces.forEach((face, i) => {
+		face.classList.remove('faint', 'unreadable');
+		const seen = contrasts.map(each => each[i]);
+		if (seen.some(each => each === undefined)) {
+			return;
+		}
+		const readable = seen.findIndex(each => each! >= READABLE);
+		const best = readable >= 0 ? readable : seen.indexOf(Math.max(...seen as number[]));
+		if (GROUNDS[best]) {
+			face.classList.add(GROUNDS[best]);
+		}
+	});
+}
+
+/** A card's face, a custom CLI's letter among those to test once it is on the page (UX-2.1). */
+function newFace(avatar: Card['avatar']): HTMLElement {
+	const element = face(avatar);
+	if (element.classList.contains('initial')) {
+		untested.push(element);
+	}
+	return element;
+}
+
+/** Tests every custom CLI's letter again: the theme changed. */
+function checkAllInitials(): void {
+	checkInitials([...list.querySelectorAll<HTMLElement>('.face.initial')]);
+}
+
+// The theme changed - VS Code sets its colours on the page's root and its kind on the body: the letters are tested again
+new MutationObserver(checkAllInitials).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+new MutationObserver(checkAllInitials).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
 /** The saved scroll position on the cards drawn from the host's state, kept within the list. */
 function restoreBrowsing(saved: Browsing): void {
@@ -188,14 +254,14 @@ function rememberBrowsing(): void {
 window.addEventListener('scroll', rememberBrowsing, { passive: true });
 takeWheel(reducedMotion);
 
-/** One part of the empty panel: words, or a button - its main action's. */
+/** One part of the empty panel: words, or a button - the main action's primary, another's secondary. */
 type EmptyPart =
 	| { readonly kind: 'text'; readonly text: string }
-	| { readonly kind: 'button'; readonly text: string; readonly run: () => void };
+	| { readonly kind: 'button'; readonly text: string; readonly run: () => void; readonly secondary?: true };
 
 /**
- * No card to show, said as VS Code's own views say it, for why (PANEL-1.2): no folder open - Open Folder; no agent - New Agent. None
- * while there are cards or while loading.
+ * No card to show, said as VS Code's own views say it, for why (PANEL-1.2): no folder open - Open Folder; no agent - New Agent;
+ * none in the filter's location - how many it hides, Clear Filter, and New Agent there. None while there are cards or while loading.
  */
 function emptyParts(): readonly EmptyPart[] {
 	switch (state.empty) {
@@ -203,6 +269,15 @@ function emptyParts(): readonly EmptyPart[] {
 			return [{ kind: 'text', text: strings.noFolder }, { kind: 'button', text: strings.openFolder, run: () => act('openFolder') }];
 		case 'noAgents':
 			return [{ kind: 'text', text: strings.noAgents }, { kind: 'button', text: strings.newAgent, run: () => act('new') }];
+		case 'noMatch':
+			return [
+				// A function, not the label itself: a folder or branch name may hold `$&` or `$'`, which a replacement string would expand
+				{ kind: 'text', text: strings.noAgentsIn.replace('{0}', () => state.filter?.label ?? '') },
+				// Hidden by the filter, not ended: how many, where there are any (PANEL-1.2)
+				...state.cardCount ? [{ kind: 'text', text: state.cardCount === 1 ? strings.otherAgent : strings.otherAgents.replace('{0}', String(state.cardCount)) } as const] : [],
+				{ kind: 'button', text: strings.clearFilter, run: () => act('clearFilter') },
+				{ kind: 'button', text: strings.newAgent, run: () => act('new'), secondary: true }
+			];
 		default:
 			return [];
 	}
@@ -212,7 +287,7 @@ function emptyParts(): readonly EmptyPart[] {
 function renderEmpty(): void {
 	const parts = emptyParts();
 	empty.hidden = !parts.length;
-	const drawnText = JSON.stringify(parts.map(part => [part.kind, part.text]));
+	const drawnText = JSON.stringify(parts.map(part => [part.kind, part.text, 'secondary' in part]));
 	if (empty.dataset.drawn === drawnText) {
 		return;
 	}
@@ -223,7 +298,7 @@ function renderEmpty(): void {
 				return el('p', '', part.text);
 			case 'button': {
 				const container = el('div', 'button-container');
-				container.append(button(part.text, part.run));
+				container.append(button(part.text, part.run, part.secondary));
 				return container;
 			}
 		}
@@ -245,14 +320,18 @@ interface Drawn {
 
 /** The cards on the list by run ID, as drawn last; none before the first draw. */
 let drawn: Map<string, Drawn> | undefined;
+/** The filter the cards were drawn for last: another shows its cards at once, without motion (UX-2.2). */
+let drawnFilter: string | undefined;
 
 /**
  * Draws `cards` in their order. A card keeps its element, face and dot through every change of what it says (PANEL-3.2); a new card
- * opens in 180 ms, except on the first draw or with reduced motion (UX-2.2); a card whose process ended normally fades out in
- * 160 ms, and any other card gone - an explicit close, a removed location - goes at once.
+ * opens in 180 ms, except on the first draw, a change of filter or with reduced motion (UX-2.2); a card whose process ended
+ * normally fades out in 160 ms, and any other card gone - an explicit close, a removed location - goes at once.
  */
 function draw(cards: readonly Card[]): void {
-	const moving = drawn !== undefined && !reducedMotion();
+	const filter = state.filter ? `${state.filter.kind}:${state.filter.id}` : '';
+	const moving = drawn !== undefined && drawnFilter === filter && !reducedMotion();
+	drawnFilter = filter;
 	const next = new Map<string, Drawn>();
 	const said: string[] = [];
 	for (const card of cards) {
@@ -328,7 +407,7 @@ function make(card: Card): Drawn {
 	element.tabIndex = -1;
 	const avatar = el('span', 'avatar');
 	const dot = el('span', 'dot');
-	avatar.append(face(card.avatar), dot);
+	avatar.append(newFace(card.avatar), dot);
 	const body = el('span', 'body');
 	const top = el('span', 'line top');
 	const name = el('span', 'name');
@@ -354,7 +433,7 @@ function update(entry: Drawn, card: Card): void {
 	const look = lookOf(card.avatar);
 	if (look !== entry.look) {
 		entry.look = look;
-		entry.avatar.firstElementChild?.replaceWith(face(card.avatar));
+		entry.avatar.firstElementChild?.replaceWith(newFace(card.avatar));
 	}
 	const kind = card.dot === 'idle' ? 'not-working' : card.dot;
 	if (!entry.dot.classList.contains(kind) || entry.dot.title !== card.stateText) {
@@ -422,6 +501,9 @@ function contextOf(card: Card): string {
 		run_id: card.runId,
 		...(menu.moveUp ? { webviewMoveUp: true } : {}),
 		...(menu.moveDown ? { webviewMoveDown: true } : {}),
+		...(menu.filterLocation ? { webviewFilterLocation: true } : {}),
+		...(menu.filterFolder ? { webviewFilterFolder: true } : {}),
+		...(menu.clearFilter ? { webviewFiltered: true } : {}),
 		preventDefaultContextMenuItems: true
 	});
 }
