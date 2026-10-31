@@ -226,6 +226,26 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual(world.remembered, [], 'a failed launch is not remembered (LIFECYCLE-1.2)');
 	});
 
+	test('a failed launch whose record cannot be written - a full disk - still tells the person who started it and keeps its red pair here (RULES-1.8, LIFECYCLE-1.5)', async () => {
+		const world = setUp({ planError: new PlanError('claude is not installed in this environment.', 'not_found') });
+		world.retained.set = () => { throw new Error('ENOSPC: no space left on device'); };
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		await settle();
+		assert.deepStrictEqual([world.agents.get(id)?.end?.kind, world.errors, world.log.filter(line => /Could not keep|ENOSPC/.test(line))], [
+			'failed',
+			[{ text: 'Could not start Ada: claude is not installed in this environment.', show: id }],
+			['Could not keep the failed start of #a1 for a reload: ENOSPC: no space left on device']
+		]);
+	});
+
+	test('a failed card of a location removed while no window showed it is not brought back after the restart (RULES-2.4)', async () => {
+		const world = setUp({ removedWhileAway: ['loc-gone'] });
+		const id = 'run-' + '8'.repeat(32);
+		world.retained.set(id, { id, alias: '#a8', name: 'Gone', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-gone', cwd: '/work/gone', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
+		await world.agents.restore();
+		assert.deepStrictEqual([world.agents.list().map(run => run.id), world.execution.pairs.has(id), world.retained.has(id)], [[], false, false]);
+	});
+
 	test('explicit close removes card and terminal at once and cleans up in the background (J07, LIFECYCLE-3.1)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
@@ -266,6 +286,49 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual([facts.lifecycle, facts.end?.kind, facts.end?.code, facts.error?.reason], ['ended', 'abnormal', 3, 'Exited with code 3']);
 		assert.deepStrictEqual(world.errors, [], 'an unknown cause is not guessed in a popup');
 		assert.ok(world.execution.pairs.has(crashed));
+	});
+
+	test('an exit heard before its start is answered leaves the run ended: its tab then closes without the question for a live agent (RULES-3.1, 3.3, LIFECYCLE-3.1)', async () => {
+		const asked: RunId[] = [];
+		const world = setUp({ confirm: async agent => { asked.push(agent.run); return false; } });
+		let release!: () => void;
+		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		await settle();
+		world.execution.exits.fire({ run: id, code: 1, interruptVerified: false });
+		release();
+		await settle();
+		const facts = world.agents.get(id)!;
+		world.execution.tabCloses.fire(id);
+		await settle();
+		assert.deepStrictEqual([facts.lifecycle, facts.end?.kind, facts.pid, asked, world.agents.get(id)], ['ended', 'abnormal', 4242, [], undefined]);
+	});
+
+	test('a rename while the CLI starts is kept with its process, as a later one is: a reloaded window shows it (LIFECYCLE-2.1, 3.5)', async () => {
+		const world = setUp();
+		let release!: () => void;
+		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		await settle();
+		world.agents.rename(id, 'Grace');
+		release();
+		await settle();
+		assert.strictEqual(world.execution.metas.get(id)?.name, 'Grace');
+	});
+
+	test('a CLI a signal ended is abnormal though its code is 0 - as node-pty reports a process killed on Linux and macOS - and keeps its red pair; the person\'s own close is not (RULES-3.3)', async () => {
+		const world = setUp();
+		const killed = world.agents.launch({ name: 'K', location: 'loc-1', cli: 'claude' });
+		const closed = world.agents.launch({ name: 'C', location: 'loc-1', cli: 'claude' });
+		await settle();
+		world.execution.exits.fire({ run: killed, code: 0, signal: 'SIGKILL', interruptVerified: false });
+		const closing = world.agents.close(closed);
+		world.execution.exits.fire({ run: closed, code: 0, signal: 'SIGHUP', interruptVerified: false });
+		await closing;
+		const facts = world.agents.get(killed)!;
+		assert.deepStrictEqual([facts.lifecycle, facts.end?.kind, facts.end?.signal, facts.error?.reason], ['ended', 'abnormal', 'SIGKILL', 'Ended by signal SIGKILL']);
+		assert.ok(world.execution.pairs.has(killed));
+		assert.strictEqual(world.agents.get(closed), undefined);
 	});
 
 	test('activity reports set the facts; a reported error clears only when the CLI recovers (RULES-3.2)', async () => {
