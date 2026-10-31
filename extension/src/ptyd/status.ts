@@ -248,13 +248,14 @@ export class ProgramStatus {
 
 	/**
 	 * Its record taken away - `clear`, or a full reset of the terminal: it stands on no report, pending the next. What its screen
-	 * showed is no record of its own to take away: the screen goes on deciding.
+	 * showed is no record of its own to take away: the screen goes on deciding. Nor is a probe answered and no report since: its
+	 * first report is still waited for (CLIS-2.3, D81).
 	 */
 	clear(): void {
 		if (this.fromScreen) {
 			return;
 		}
-		if (this.current && (this.current.state !== 'pending' || this.current.negotiating)) {
+		if (this.current && this.current.state !== 'pending') {
 			this.set({ state: 'pending', at: Date.now() });
 		}
 	}

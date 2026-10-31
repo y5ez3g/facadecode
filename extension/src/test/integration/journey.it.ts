@@ -94,9 +94,17 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
 		}
 		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
-		// its screen showed its empty input: the dot says not working (CLIS-2.3, D80)
-		const reported = await until('its idle report', async () => (await state()).cards.find(each => each.runId === card.runId && each.dot === 'idle'));
+		// its screen showed its empty input: the dot says not working (CLIS-2.3, D80). Until then it was starting, never red (D81)
+		const dots = new Set([card.dot]);
+		const reported = await until('its idle report', async () => {
+			const now = (await state()).cards.find(each => each.runId === card.runId);
+			if (now) {
+				dots.add(now.dot);
+			}
+			return now?.dot === 'idle' ? now : undefined;
+		});
 		assert.strictEqual(reported.dot, 'idle');
+		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Close Agent removes the card at once');

@@ -87,6 +87,21 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
+	test('a run whose CLI has shown no activity yet is still starting, green with its stage, over its title; an error still comes first (CLIS-2.3, D81)', () => {
+		const connection = { reason: 'The connection to the agent\'s process was lost; reconnecting', source: 'connection', at: 3 };
+		assert.deepStrictEqual([
+			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, title: 'Fix login' }), WORDS),
+			statusOf(run({ activity: 'unknown', reporting: true, awaitingActivity: true }), WORDS),
+			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, error: connection }), WORDS).dot,
+			statusOf(run({ activity: 'unknown', reporting: false, activityReason: 'The CLI has not reported its activity' }), WORDS).dot
+		], [
+			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
+			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
+			'error',
+			'error'
+		]);
+	});
+
 	test('a known native blocker leads the second line over unavailable activity, which keeps the dot red and its explanation (PANEL-1.4, RULES-3.2)', () => {
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, blocker: { kind: 'auth' } }), WORDS),

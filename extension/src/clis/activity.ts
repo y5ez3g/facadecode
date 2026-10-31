@@ -4,8 +4,9 @@
 
 // What a run's CLI reports, as activity and title (CLIS-2.3, RULES-3.2). Only the root process's OSC 7501 reports count; a run
 // counts as reporting once its CLI takes part in the protocol - it asked whether the terminal takes reports, or sent a valid
-// one - whatever its version (CLIS-2.3). Without that its activity is unknown, which the card shows red with the reason: a quiet
-// screen proves nothing. Titles are the CLI's own words, sanitized and capped, the report's preferred over OSC 0/2.
+// one - whatever its version (CLIS-2.3). Without that its activity is unknown, which the card shows red with the reason once its
+// run's startup is over (D81): a quiet screen proves nothing. Titles are the CLI's own words, sanitized and capped, the report's
+// preferred over OSC 0/2.
 
 import * as path from 'path';
 import { displayLine } from '../base/text';
