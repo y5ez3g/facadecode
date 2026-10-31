@@ -120,7 +120,7 @@ Changing the setting does not change existing runs. Enable the CLI's own sandbox
 
 **Launch settings affect subsequent starts.**
 
-A disabled CLI cannot be newly started; existing processes remain (CLIS-1.1's `.enabled` joins in a later step). YOLO uses 4.3's single launch-time rule. There is no
+A disabled CLI cannot be newly started; existing processes remain (CLIS-1.1). YOLO uses 4.3's single launch-time rule. There is no
 worktree-management switch: detect Git and offer creation where supported; ordinary locations remain usable without Git.
 
 ## 5 Side effects
@@ -163,6 +163,8 @@ accumulated-operation counter may permanently disable an otherwise usable enviro
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
 ## Change log
+
+- 2026-10-30: 4.4 refers to CLIS-1.1's `.enabled`, now part of the extension.
 
 - 2026-10-30: 3.2's startup lasts until the CLI first shows its activity, within CLIS-2.3's bound (D81).
 

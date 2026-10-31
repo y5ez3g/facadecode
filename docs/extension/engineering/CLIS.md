@@ -26,7 +26,7 @@ dated observations; an old probe is not current-platform certification.
 | OpenCode | `opencode` | `opencode` | `opencode` |
 | Pi | `pi` | `pi` | `pi` |
 
-Use this order. Step 1 offers every installed built-in; `.enabled` joins with its later step. Recompute on relevant
+Use this order. `.enabled:false` hides a built-in from new starts, never stops its runs. Recompute on relevant
 settings/PATH changes, picker/discovery request, and immediately before launch. Discovery inspects files/configuration
 without invoking a model, logging in, installing/updating a CLI, or modifying settings.
 
@@ -130,9 +130,6 @@ user punctuation. Never rewrite useful original CLI text. Terminal emoji width f
 
 **Expose executable paths, literal arguments and environment values; keep vendor integration inside adapters.**
 
-Step 1 has `.path` alone; the `.launch` schema below joins with its later step, and until then a launch uses its
-adapter's invocation and 1.2's environment.
-
 Built-in `.path` follows 1.2; `.launch` defaults to `{}` and accepts only:
 
 | Field | Shape / default |
@@ -143,7 +140,10 @@ Built-in `.path` follows 1.2; `.launch` defaults to `{}` and accepts only:
 Arrays are replaced as a whole, not merged by named groups. There is no public argument-group/template engine,
 deep-merged native settings object, generic trust-file merge, unattended overlay, taskDelay or enterDelay setting.
 Invalid or retired fields report their setting path; do not silently translate ambiguous old configuration. Preserve the
-user's values so they can correct them. Running processes keep their actual plan.
+user's values so they can correct them. An argument that repeats an option the adapter sets itself - its run settings or
+its YOLO mapping in either mode - is a configuration error naming its place in `arguments`: the CLI would take the
+person's value in place of Facade's (RULES-4.3). A problem names a received value by its JSON type, never the value,
+which may be a secret. Running processes keep their actual plan.
 
 ### 3.2 Adapter-owned invocation
 
@@ -174,6 +174,15 @@ native settings are unknown, report that fact instead of claiming trust or sandb
 ARCHITECTURE-5's separate concern.
 
 ## 4 Inspection and design
+
+### 4.1 Show Agent Launch
+
+**Show Agent Launch displays the current effective configuration and actual known choices without running a CLI.**
+
+Show executable/environment source, cwd, literal argument order, resulting YOLO, native sandbox/approval facts, how
+the folder is trusted and configuration errors. Use one launch configuration and RULES-4.3's YOLO source. A chosen
+inspection location is not an API launch default. Redact account secrets and sensitive environment values; do not
+invent invalid-plan defaults. The document does not certify observed behavior of a process never started.
 
 ### 4.2 Adapter ownership and files
 
@@ -224,13 +233,17 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 | --- | --- |
 | 1.1–1.3 | Each built-in's destination discovery, unknown-version launch, matching profile/PATH/env/quoting, Windows launcher recognition, native permission mapping |
 | 2.1, 2.3 | Adapter evidence, startup until the first activity or its bound - a reload too - then red unknown, title sanitizing for each built-in's titles, Muse Code's screen reader on its fixtures and its reports' precedence |
-| 3.1–3.3 | Minimal argument/env schema, no generic file merge, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
-| 4.2 | Staged cwd validation; version invalidation |
+| 3.1–3.3 | Minimal argument/env schema, `.enabled` hiding new starts only, no generic file merge, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
+| 4.1–4.2 | Show Agent Launch matches the plan a start uses, redacts secrets and shows errors without an invented plan; staged cwd validation; version invalidation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes, no claims inferred from historical tables |
 
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
+
+- 2026-10-30: 1.1 adds `.enabled`, 3.1 the `.launch` arguments and environment, and 4.1 Show Agent Launch, carried
+  from the Facade Dots specification without the parts of later steps (model and effort, MCP, sessions and input). 3.1
+  refuses an argument repeating an option the adapter sets, and names a received value by its type alone.
 
 - 2026-10-30: At the owner's request, Antigravity, Muse Code, OpenCode and Pi join the built-in catalog at the level of
   Claude Code and Codex (D77): 1.1's catalog, 1.2's Windows launchers - recognized only as their installers write them, and

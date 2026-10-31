@@ -98,6 +98,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D80 | Owner-decided 2026-10-30, after Muse Code was found to send no OSC 7501 on Windows, signed in or not, while it reports on Linux: there is no neutral or gray dot; Muse Code alone gets a fallback, its activity read from its own screen while it sends no reports, as the other built-ins all report themselves | CLIS-2.3 |
 | D81 | Owner-decided 2026-10-30, after seeing every card red for the seconds before its CLI's first report: a run is still starting - green, with its startup stage - until its CLI first shows its activity, by a report or, for Muse Code, its screen, for at most 20 s from its process start. The bound keeps a CLI that never reports, as OpenCode 1.x, from showing it starts forever: past it, the card is red with why | CLIS-2.3, RULES-3.2 |
 | D82 | Owner-decided 2026-10-31, after trying the filter: Filter by Working Location steps by folder. Its first step lists All Locations, then the folders; a folder whose cards are in two or more locations opens its own step, All Worktrees then its locations; a window of one folder shows its folder's step alone (All Locations first outside Git). One separator follows each step's first item. This replaces Facade Dots' one grouped list | PANEL-2.3 |
+| D83 | Owner-decided 2026-10-31, after trying them: Show Agent Launch and Show Agents Log are commands only, in the Command Palette; the view's `…` menu does not list them, as Facade Dots' did | PANEL-1.1, UX-3.1 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -165,6 +166,8 @@ full spec revision; it does not authorize publication or unrelated source change
 ## Change log
 
 - 2026-10-31: Recorded the owner's choice of Filter by Working Location in steps by folder (D82).
+
+- 2026-10-31: Recorded the owner's choice of Show Agent Launch and Show Agents Log as commands only (D83).
 
 - 2026-10-30: D59 adds the filtered empty panel and D38 its Clear Filter act, carried with the display filters.
 
