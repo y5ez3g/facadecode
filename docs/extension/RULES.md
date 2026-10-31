@@ -153,7 +153,14 @@ that error, drop the undeliverable report. There is no chain of receipts about r
 
 A retained red card is not permission to duplicate an agent's operation error as a human popup. Do not automatically
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
-to contact a person. Each window shows only its own relevant notifications; no fallback to another window.
+to contact a person. One fact does go to an agent: an agent another agent of the same window started, whose CLI has waited
+twenty seconds on its own permission, question or sign-in, is reported to that creator once each time it starts waiting, as
+a Facade result naming who can answer - the person's permission and sign-in are theirs (D103). Orca tells its coordinator of
+a worker stopped at a prompt; without it, a child waiting on a question no one sees stalls its creator's work. A person is
+never told by it. The notice reports the blocker without asking its creator to contact the person, forward the notice or
+escalate it. Whether an agent contacts the person follows the person's task instructions, not this automatic notice.
+Permission and sign-in remain the person's to authorize or perform; reporting the blocker grants no authority to answer it.
+Each window shows only its own relevant notifications; no fallback to another window.
 
 ### 1.9 Window closure and pending messages
 
@@ -369,7 +376,16 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
-- 2026-10-31: Request IDs, owned drafts, bounded delivery and read-delivery follow D98-D104, D109, D112 and D113.
+- 2026-10-31: The owner's clarification of 1.8: automatic blocker notices never direct an agent to contact the person.
+- 2026-10-31: The MCP correctness review keeps read delivery immediate while an already pasted owned draft finishes;
+  5.1 follows D104's request IDs, including concurrent retries and completed runs (D113).
+- 2026-10-31: 1.5 gives a long paste its time and a joining result its whole budget; 1.6 never retypes a paste that did not
+  show and presses Enter only over the placeholder it showed as; 1.10 never pastes with another delivery's text (D112).
+- 2026-10-31: 1.7 types the Facade results waiting for one terminal in one paste (D109).
+- 2026-10-31: 1.1 lets a caller give a send its own request ID (D104).
+- 2026-10-31: 1.8 reports a started agent's wait on its CLI's own question to its creator, an agent (D103).
+- 2026-10-31: 1.6 types a message at most once and presses Enter only over its own draft (D98); 1.4 and 1.5 wait up to
+  ten minutes for an input another draft or a native question holds (D100); 1.3 confirms a submission at a later attempt.
 - 2026-10-30: Step 2 of the Facade Code extension: added the Facade Dots message rules 1.1–1.7 and 1.9–1.10, the client
   network (2.1), references (2.3), tool and input facts (3.1), client-wide reach (4.3), the MCP switch (4.4) and message
   retention (5.3), with the owner's decisions of that day: one delivery state, in which read_messages delivers (1.3, 1.7,

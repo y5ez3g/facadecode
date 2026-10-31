@@ -10,6 +10,7 @@ import { disposeAll } from '../base/lifecycle';
 import { WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { createToolServices } from '../contract/tools';
 import { AgentService } from '../core/agents';
+import { AttentionNotices } from '../core/attention';
 import type { MessageRecord } from '../core/messagePorts';
 import { MessageService } from '../core/messages';
 import { PlanError, type LogPort, type RetainedRun, type RunId } from '../core/ports';
@@ -189,6 +190,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		workspace: record.key,
 		log
 	});
+	// An agent another agent started, waiting on its CLI's own question, is reported to that creator (RULES-1.8, D103)
+	const attention = new AttentionNotices({ agents, messages, log: text => log.event(text) });
 	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1)
 	const restored = agents.restore();
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
@@ -255,6 +258,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	return async () => {
 		void earlier.then(each => each?.dispose());
 		tools.dispose();
+		attention.dispose();
 		messages.dispose();
 		agents.dispose();
 		// One that throws does not keep the rest open (ARCHITECTURE-2.4)
