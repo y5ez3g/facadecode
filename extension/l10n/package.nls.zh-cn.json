@@ -20,5 +20,8 @@
 	"config.codex.title": "Codex",
 	"config.codex.path": "Codex 的程序路径。留空则使用终端环境 PATH 中的 \"codex\"。",
 	"windowDisplayName": "Facade Code 窗口组件",
-	"windowDescription": "Facade Code 的窗口身份与会话连续性协调组件。"
+	"windowDescription": "Facade Code 的窗口身份与会话连续性协调组件。",
+	"command.messageHistory": "消息历史记录...",
+	"config.collaboration.enabled": "允许 Agent 相互启动和停止，相互发送消息并向你发送消息，以及读取彼此的终端并在其中输入。仅对新启动的 Agent 生效。",
+	"config.collaboration.waitSeconds": "Agent 等待另一个 Agent 启动或停止的秒数。超过此时间后，该 Agent 稍后会通过消息收到结果。"
 }

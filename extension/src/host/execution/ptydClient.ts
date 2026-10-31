@@ -6,11 +6,12 @@ import { spawn } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
+import { performance } from 'perf_hooks';
 import * as os from 'os';
 import * as path from 'path';
 import { timeout } from '../../base/async';
 import { messageOf } from '../../base/errors';
-import { isPtydEvent, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent, RunInfo } from '../../ptyd/protocol';
+import { CallEvent, isPtydEvent, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent, RunInfo } from '../../ptyd/protocol';
 import { ensurePtydSocket } from '../../ptyd/socket';
 
 /** How long a window waits for a ptyd it started to listen. */
@@ -43,7 +44,8 @@ export function ptydSocketPath(home: string, protocol = PTYD_PROTOCOL): string {
 
 /**
  * A window's connection to ptyd: starts it where nothing listens yet - detached, run by this extension host's own binary as Node,
- * so that it outlives the window - and asks it things, each answered once, while hearing what the runs it claims do.
+ * so that it outlives the window - and asks it things, each answered once, while hearing what the runs it claims do and the tool
+ * calls of their shims.
  */
 export class PtydClient {
 
@@ -53,6 +55,7 @@ export class PtydClient {
 	private readonly runListeners = new Map<string, Set<(event: RunEvent) => void>>();
 	private readonly closeListeners = new Set<() => void>();
 	private readonly ownerListeners = new Set<(owner: string) => void>();
+	private readonly callListeners = new Set<(event: CallEvent, receivedAt: number) => void>();
 	private closed = false;
 	private closeError: PtydLost | undefined;
 
@@ -60,7 +63,9 @@ export class PtydClient {
 		this.socket = socket;
 		socket.setEncoding('utf8');
 		socket.on('data', lineReader(line => {
-			let message: Response | RunEvent | OwnerEvent;
+			// When this window had the line, on its monotonic clock: a call's time here counts from then (RULES-1.2)
+			const receivedAt = performance.now();
+			let message: Response | RunEvent | OwnerEvent | CallEvent;
 			try {
 				message = JSON.parse(line);
 				if (!message || typeof message !== 'object' || Array.isArray(message)) {
@@ -76,6 +81,12 @@ export class PtydClient {
 				if (message.event === 'ownerLost') {
 					for (const listener of [...this.ownerListeners]) {
 						listener(message.owner);
+					}
+					return;
+				}
+				if (message.event === 'call') {
+					for (const listener of [...this.callListeners]) {
+						listener(message, receivedAt);
 					}
 					return;
 				}
@@ -115,8 +126,12 @@ export class PtydClient {
 	 * Connects to ptyd at `socketPath`, starting it from `script` first where nothing listens, `logFile` taking what it says. Rejects
 	 * where it does not come up, or speaks another protocol - which is said, and ends nothing it holds (ARCHITECTURE-2.4).
 	 */
-	static async connect(socketPath: string, script: string, logFile: string): Promise<PtydClient> {
+	static async connect(socketPath: string, script: string, logFile: string, options: { readonly protocol?: number; readonly start?: boolean } = {}): Promise<PtydClient> {
+		const protocol = options.protocol ?? PTYD_PROTOCOL;
 		let socket = await connectTo(socketPath);
+		if (!socket && options.start === false) {
+			throw new Error(`Nothing listens on ${socketPath}.`);
+		}
 		if (!socket) {
 			fs.mkdirSync(path.dirname(logFile), { recursive: true });
 			const child = spawn(process.execPath, [script, socketPath, logFile], {
@@ -139,13 +154,13 @@ export class PtydClient {
 		let helloTimer: ReturnType<typeof setTimeout> | undefined;
 		try {
 			const hello = await Promise.race([
-				client.request('hello', { protocol: PTYD_PROTOCOL }),
+				client.request('hello', { protocol }),
 				new Promise<never>((_, reject) => {
 					helloTimer = setTimeout(() => reject(new Error(`ptyd did not answer hello within ${START_WAIT_MS} ms.`)), START_WAIT_MS);
 				})
 			]);
-			if (hello.protocol !== PTYD_PROTOCOL) {
-				throw new Error(`The ptyd at ${socketPath} speaks protocol ${hello.protocol}, and this window protocol ${PTYD_PROTOCOL}: its runs keep running, and this window cannot show them.`);
+			if (hello.protocol !== protocol) {
+				throw new Error(`The ptyd at ${socketPath} speaks protocol ${hello.protocol}, and this window protocol ${protocol}: its runs keep running, and this window cannot show them.`);
 			}
 		} catch (err) {
 			client.dispose();
@@ -201,6 +216,15 @@ export class PtydClient {
 	onDidLoseOwner(listener: (owner: string) => void): { dispose(): void } {
 		this.ownerListeners.add(listener);
 		return { dispose: () => this.ownerListeners.delete(listener) };
+	}
+
+	/**
+	 * Hears the tool calls of the shims of the runs this connection claims, each to be answered with `answer` (MCP-6.1), with when its
+	 * line was read on this process's monotonic clock.
+	 */
+	onCall(listener: (event: CallEvent, receivedAt: number) => void): { dispose(): void } {
+		this.callListeners.add(listener);
+		return { dispose: () => this.callListeners.delete(listener) };
 	}
 
 	dispose(): void {

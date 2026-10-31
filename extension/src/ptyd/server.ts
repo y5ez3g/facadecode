@@ -7,8 +7,10 @@ import { createHash } from 'crypto';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { performance } from 'perf_hooks';
 import { messageOf } from '../base/errors';
-import { lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo } from './protocol';
+import { isAgentKey } from './keys';
+import { CallEvent, CallRefusal, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
 import { OwnerClaims, type OwnerClock } from './ownership';
 import { MOST_RUN_BUFFER, Run, RunListener } from './run';
 import { ensurePtydSocket } from './socket';
@@ -25,6 +27,28 @@ export const MOST_WINDOW_BUFFER = 32 * 1024 * 1024;
 /** Effect receipts retain at most one MiB; screen/list replies are never retained in the duplicate-request cache. */
 const MOST_RECEIPT_BYTES = 1024 * 1024;
 
+/** How long a shim's call waits for a window to claim its run - one reloading, say - counted from the shim's ingress (RULES-1.2). */
+export const CLAIM_WAIT_MS = 2_000;
+
+/** The most tool calls of one run under way at once, waiting for a window or for its answer: none grows without bound. */
+export const MOST_RUN_CALLS = 256;
+
+/** The requests a run's shim may make: it never claims, starts or types into a run. */
+const SHIM_METHODS: ReadonlySet<Method> = new Set<Method>(['hello', 'call']);
+
+/** Requests whose answer is the run's current state: never kept in the duplicate-request cache, where a repeat would read it stale. */
+const UNCACHED: ReadonlySet<Method> = new Set<Method>(['attach', 'list', 'hello', 'read', 'inspect', 'call']);
+
+/** What a request's handling answers where it wrote its response itself: a shim's call, or an attach the calls waiting follow. */
+const RESPONDED = Symbol('responded');
+
+/** A call ptyd answers without a window's answer: why, and whether it may have acted. */
+class CallRefused extends Error {
+	constructor(readonly reason: CallRefusal, readonly effects: 'none' | 'unknown', message: string, readonly close = false) {
+		super(message);
+	}
+}
+
 /**
  * One window's connection: what it is sent, and the output of each run it claims that waits to be flushed to it. A run with more
  * than {@link MOST_RUN_BUFFER} waiting, or a window with more than {@link MOST_WINDOW_BUFFER}, is paused until the window catches
@@ -32,6 +56,10 @@ const MOST_RECEIPT_BYTES = 1024 * 1024;
  */
 class Connection {
 
+	/** A window's, unless it said hello as a run's shim. */
+	role: 'window' | 'shim' = 'window';
+	/** The run a shim said hello for. */
+	shimRun: string | undefined;
 	private waiting = 0;
 	private readonly waitingByRun = new Map<Run, number>();
 	private readonly requests = new Map<number, { readonly body: string; readonly result: Promise<unknown>; bytes: number }>();
@@ -44,10 +72,21 @@ class Connection {
 		return this.socket.destroyed;
 	}
 
-	send(message: Response | RunEvent | OwnerEvent): void {
+	send(message: Response | RunEvent | OwnerEvent | CallEvent): void {
 		if (this.socket.writable) {
 			this.socket.write(JSON.stringify(message) + '\n');
 		}
+	}
+
+	/** Sends `message`, settling once it was written to the socket: rejected where it could not be, its reader gone. */
+	deliver(message: Response): Promise<void> {
+		return new Promise((resolve, reject) => {
+			if (!this.socket.writable) {
+				reject(new Error('its connection closed'));
+				return;
+			}
+			this.socket.write(JSON.stringify(message) + '\n', err => err ? reject(err) : resolve());
+		});
 	}
 
 	/** A repeated transport request never repeats its effects; old IDs beyond the response cache are refused. */
@@ -62,7 +101,7 @@ class Connection {
 		}
 		this.lastRequest = request.id;
 		const result = handle();
-		if (request.method === 'attach' || request.method === 'list' || request.method === 'hello') {
+		if (UNCACHED.has(request.method)) {
 			return result;
 		}
 		const receipt = { body, result, bytes: 0 };
@@ -136,11 +175,32 @@ class Connection {
 	}
 }
 
+/** A shim's call under way: waiting for a window to claim its run, or given to one and waiting for its answer. */
+interface PendingCall {
+	/** ptyd's number for it, by which the window answers. */
+	readonly id: number;
+	readonly run: string;
+	readonly shim: Connection;
+	/** The shim's number for its request, by which ptyd answers it. */
+	readonly request: number;
+	readonly call: ShimCall;
+	/** When ptyd read it, on its own monotonic clock: never compared with another process's (ARCHITECTURE-2.3). */
+	readonly receivedAt: number;
+	/** The window it was given to; none while it waits for one. */
+	window?: Connection;
+	/** Until a window claims its run. */
+	timer?: ReturnType<typeof setTimeout>;
+	/** Until a query's route deadline. */
+	routeTimer?: ReturnType<typeof setTimeout>;
+}
+
 /**
  * ptyd: holds the agents' processes for every window of the person's in this execution environment, on one socket per protocol
  * (ARCHITECTURE-2.3). A window starts runs and claims them; a run goes on as its window reloads or disconnects, and another
  * newer activation of its workspace can take ownership immediately. Effects are fenced to that owner; its disconnection starts
- * the explicit five-minute cleanup policy. Neither a former owner's disconnection nor an upgrade ends a successor's runs.
+ * the explicit five-minute cleanup policy. Neither a former owner's disconnection nor an upgrade ends a successor's runs. A run's
+ * MCP shim connects as well: each of its tool calls goes to the window that claims the run, and that window's answer back to it
+ * (MCP-6.1).
  */
 export class PtydServer {
 
@@ -153,6 +213,12 @@ export class PtydServer {
 	private idleTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly owners: OwnerClaims<Connection>;
 	private closing = false;
+	/** Each run's connected shims: a window that comes to claim the run is told its tools are there. */
+	private readonly shims = new Map<string, Set<Connection>>();
+	private readonly calls = new Map<number, PendingCall>();
+	/** Runs claimed by an attach not answered yet: their calls wait, for the window to know the run is its first (RULES-4.1). */
+	private readonly attaching = new Set<Run>();
+	private nextCall = 1;
 
 	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock) {
 		this.owners = new OwnerClaims((owner, previous) => {
@@ -203,6 +269,11 @@ export class PtydServer {
 		clearTimeout(this.idleTimer);
 		this.owners.dispose();
 		releaseLock(this.lockPath);
+		for (const pending of this.calls.values()) {
+			clearTimeout(pending.timer);
+			clearTimeout(pending.routeTimer);
+		}
+		this.calls.clear();
 		for (const run of this.runs.values()) {
 			run.dispose();
 		}
@@ -219,6 +290,8 @@ export class PtydServer {
 		clearTimeout(this.idleTimer);
 		socket.setEncoding('utf8');
 		socket.on('data', lineReader(line => {
+			// When ptyd read it: a shim's call adds the time it spends here to how long it has been under way (RULES-1.2)
+			const receivedAt = performance.now();
 			let request: Request;
 			try {
 				request = JSON.parse(line);
@@ -229,9 +302,19 @@ export class PtydServer {
 			} catch {
 				return;
 			}
-			connection.request(request, () => this.handle(request, connection)).then(
-				result => connection.send({ id: request.id, result }),
-				err => connection.send({ id: request.id, error: messageOf(err) })
+			connection.request(request, () => this.handle(request, connection, receivedAt)).then(
+				result => {
+					if (result !== RESPONDED) {
+						connection.send({ id: request.id, result });
+					}
+				},
+				err => {
+					const refused = err instanceof CallRefused ? err : undefined;
+					connection.send({ id: request.id, error: messageOf(err), ...refused ? { reason: refused.reason, effects: refused.effects } : {} });
+					if (refused?.close) {
+						connection.socket.end();
+					}
+				}
 			);
 		}, err => socket.destroy(err)));
 		socket.on('close', () => {
@@ -243,6 +326,7 @@ export class PtydServer {
 				run.listen(undefined);
 			}
 			connection.releaseAll(this.runs.values());
+			this.callsClosed(connection);
 			if (!this.closing) {
 				this.owners.disconnect(connection);
 				this.scheduleIdleExit();
@@ -266,7 +350,10 @@ export class PtydServer {
 		return run.info(this.claimedElsewhere(run, connection));
 	}
 
-	/** `connection` claims `run`: it alone is told what the run does from now on. */
+	/**
+	 * `connection` claims `run`: it alone is told what the run does from now on - that its shim is connected, where it is. The calls
+	 * that waited for a window go to it once it was answered the claim (`forwardWaiting`).
+	 */
 	private claim(run: Run, connection: Connection): void {
 		const previous = this.claims.get(run);
 		if (previous && previous !== connection) {
@@ -280,9 +367,21 @@ export class PtydServer {
 			exit: exit => connection.send({ event: 'exit', run: run.id, ...exit })
 		};
 		run.listen(listener);
+		if (previous !== connection && this.shims.get(run.id)?.size) {
+			connection.send({ event: 'tools', run: run.id });
+		}
 	}
 
-	private async handle(request: Request, connection: Connection): Promise<unknown> {
+	/** Gives the calls of `run` that wait for a window to `connection`, which claims it. */
+	private forwardWaiting(run: Run, connection: Connection): void {
+		for (const pending of [...this.calls.values()]) {
+			if (pending.run === run.id && !pending.window && this.claims.get(run) === connection && !connection.closed) {
+				this.forward(pending, connection);
+			}
+		}
+	}
+
+	private async handle(request: Request, connection: Connection, receivedAt: number): Promise<unknown> {
 		const params = request.params as Requests[Method]['params'];
 		const runOf = (id: string) => {
 			const run = this.runs.get(id);
@@ -292,9 +391,38 @@ export class PtydServer {
 			this.owners.assert(run.params.owner, connection);
 			return run;
 		};
+		if (connection.role === 'shim' && !SHIM_METHODS.has(request.method)) {
+			throw new Error(`A run's MCP shim does not ${String(request.method)}.`);
+		}
 		switch (request.method) {
-			case 'hello':
+			case 'hello': {
+				const { protocol, role, run } = params as Requests['hello']['params'];
+				if (role === 'shim') {
+					if (protocol !== PTYD_PROTOCOL) {
+						throw new CallRefused('protocol_incompatible', 'none', `This agent's Facade MCP server speaks protocol ${protocol}, and its agent runtime (ptyd) protocol ${PTYD_PROTOCOL}: no tool call can be carried.`, true);
+					}
+					this.shimConnected(connection, typeof run === 'string' ? run : '');
+				}
 				return { protocol: PTYD_PROTOCOL, pid: process.pid };
+			}
+			case 'call':
+				this.call(params as Requests['call']['params'], connection, receivedAt, request.id);
+				return RESPONDED;
+			case 'answer': {
+				const { id, answer } = params as Requests['answer']['params'];
+				const pending = this.calls.get(id);
+				if (!pending || pending.window !== connection) {
+					throw new Error(`No call ${id} waits for this window's answer.`);
+				}
+				this.settle(pending);
+				// Answered once the shim has it: the window then knows its answer was handed back (MCP-4.2)
+				try {
+					await pending.shim.deliver({ id: pending.request, result: answer });
+				} catch (err) {
+					throw new Error(`The MCP shim of ${pending.run} went before call ${id}'s answer was handed back: ${messageOf(err)}.`);
+				}
+				return undefined;
+			}
 			case 'claim':
 				this.owners.claim(params as Requests['claim']['params'], connection);
 				return undefined;
@@ -306,9 +434,9 @@ export class PtydServer {
 				}
 				this.seen.add(spawn.run);
 				const run = new Run(spawn);
+				// Claimed before its program starts: its window hears everything it writes from the first byte on
 				this.runs.set(run.id, run);
 				this.claim(run, connection);
-				this.log(`Started run ${run.id} (${spawn.file}) in ${spawn.cwd}, pid ${run.info(false).pid}.`);
 				run.onExit(exit => {
 					this.log(`Run ${run.id} ended: code ${exit.exitCode}${exit.signal ? `, signal ${exit.signal}` : ''}.`);
 					if (run.removed) {
@@ -316,11 +444,21 @@ export class PtydServer {
 					}
 					this.scheduleIdleExit();
 				});
+				try {
+					await run.started();
+				} catch (err) {
+					// A program that never started is no run: the spawn fails, as it did when node-pty threw at once
+					this.runs.delete(run.id);
+					run.dispose();
+					throw err;
+				}
+				this.log(`Started run ${run.id} (${spawn.file}) in ${spawn.cwd}, pid ${run.info(false).pid}.`);
 				return this.info(run, connection);
 			}
 			case 'list': {
 				const { owner } = params as Requests['list']['params'];
-				return [...this.runs.values()].filter(run => run.params.owner === owner && !run.removed).map(run => this.info(run, connection));
+				const runs = [...this.runs.values()];
+				return (typeof owner === 'string' ? runs.filter(run => run.params.owner === owner && !run.removed) : runs).map(run => this.info(run, connection));
 			}
 			case 'attach': {
 				const run = runOf((params as Requests['attach']['params']).run);
@@ -331,10 +469,18 @@ export class PtydServer {
 					throw new Error(`Run ${run.id} is claimed by another connected window.`);
 				}
 				this.claim(run, connection);
-				const { screen, seq } = await run.snapshot();
-				// Another activation can take over while xterm drains its writes. Do not bind its predecessor after that await.
-				this.owners.assert(run.params.owner, connection);
-				return { info: this.info(run, connection), screen, seq };
+				// Its calls wait until the window was answered that the run is its: it knows the caller when they come (RULES-1.9, 4.1)
+				this.attaching.add(run);
+				try {
+					const { screen, seq } = await run.snapshot();
+					// Another activation can take over while xterm drains its writes. Do not bind its predecessor after that await.
+					this.owners.assert(run.params.owner, connection);
+					connection.send({ id: request.id, result: { info: this.info(run, connection), screen, seq } });
+				} finally {
+					this.attaching.delete(run);
+				}
+				this.forwardWaiting(run, connection);
+				return RESPONDED;
 			}
 			case 'input': {
 				const { run, data } = params as Requests['input']['params'];
@@ -345,6 +491,35 @@ export class PtydServer {
 				const { run, cols, rows } = params as Requests['resize']['params'];
 				runOf(run).resize(cols, rows);
 				return undefined;
+			}
+			case 'read': {
+				const { run, lines } = params as Requests['read']['params'];
+				if (!Number.isSafeInteger(lines) || lines < 1) {
+					throw new Error('A read asks for a whole number of lines.');
+				}
+				return runOf(run).read(lines);
+			}
+			case 'type': {
+				const { run, text, enter } = params as Requests['type']['params'];
+				if (typeof text !== 'string') {
+					throw new Error('Text to type must be a string.');
+				}
+				return runOf(run).type(text, !!enter);
+			}
+			case 'keys': {
+				const { run, keys } = params as Requests['keys']['params'];
+				const refused = Array.isArray(keys) ? keys.find(key => !isAgentKey(key)) : '';
+				if (refused !== undefined) {
+					throw new Error(`Not a key: ${JSON.stringify(refused)}.`);
+				}
+				return runOf(run).keys(keys);
+			}
+			case 'inspect': {
+				const { run, adapter } = params as Requests['inspect']['params'];
+				if (typeof adapter !== 'string') {
+					throw new Error('An input reader is named by a string.');
+				}
+				return runOf(run).inspect(adapter);
 			}
 			case 'setMeta': {
 				const { run, meta } = params as Requests['setMeta']['params'];
@@ -358,6 +533,7 @@ export class PtydServer {
 					this.owners.assert(run.params.owner, connection);
 					// An accepted close precedes any later takeover. Its successor must not reattach a process already closing.
 					run.removed = true;
+					this.refuseWaiting(run.id);
 				}
 				// One ptyd no longer has ended and was forgotten: there is nothing left of it to end
 				return run ? run.terminate(Math.max(0, graceMs)) : 'already_exited';
@@ -367,6 +543,8 @@ export class PtydServer {
 				if (run) {
 					this.owners.assert(run.params.owner, connection);
 					run.removed = true;
+					// No window will claim it again: what its shim waits for is refused now, not after the claim wait (MCP-1.2)
+					this.refuseWaiting(run.id);
 					if (run.hasExited) {
 						this.drop(run);
 					}
@@ -397,7 +575,7 @@ export class PtydServer {
 		return ending.length;
 	}
 
-	/** Lets go of a run no window shows again: ended, and removed. */
+	/** Lets go of a run no window shows again: ended, and removed. Its calls waiting for a window are refused. */
 	private drop(run: Run): void {
 		if (this.runs.get(run.id) !== run) {
 			return;
@@ -406,8 +584,131 @@ export class PtydServer {
 		this.claims.delete(run);
 		this.runs.delete(run.id);
 		run.dispose();
+		this.refuseWaiting(run.id);
 		this.scheduleIdleExit();
 	}
+	/** `connection` is the shim of `run`: the window that claims the run is told its tools are there (MCP-6.1). */
+	private shimConnected(connection: Connection, run: string): void {
+		connection.role = 'shim';
+		if (connection.shimRun === run) {
+			return;
+		}
+		this.shimGone(connection);
+		if (!run) {
+			return;
+		}
+		connection.shimRun = run;
+		let shims = this.shims.get(run);
+		if (!shims) {
+			this.shims.set(run, shims = new Set());
+		}
+		shims.add(connection);
+		const claimed = this.runs.get(run);
+		const claimant = claimed && this.claims.get(claimed);
+		if (claimant && !claimant.closed) {
+			claimant.send({ event: 'tools', run });
+		}
+	}
+
+	private shimGone(connection: Connection): void {
+		const run = connection.shimRun;
+		const shims = run !== undefined ? this.shims.get(run) : undefined;
+		if (run !== undefined && shims?.delete(connection) && !shims.size) {
+			this.shims.delete(run);
+		}
+		connection.shimRun = undefined;
+	}
+
+	/**
+	 * A shim's call `request`, for the window that claims its caller: given to it at once, or - no window claiming the run, as while
+	 * one reloads - once one does, within the call's two seconds from the shim's ingress (RULES-1.2). The shim is answered that
+	 * window's answer as it comes, or why none came; a query once its route deadline passed without one (MCP-1.3).
+	 */
+	private call(call: ShimCall, shim: Connection, receivedAt: number, request: number): void {
+		if (shim.role !== 'shim') {
+			throw new Error('Tool calls come from a run\'s MCP shim, which says hello as one first.');
+		}
+		if (!call || typeof call !== 'object' || typeof call.caller !== 'string' || typeof call.elapsedMs !== 'number' || !Number.isFinite(call.elapsedMs)) {
+			throw new Error('A tool call names its calling run and how long it has been under way.');
+		}
+		const run = this.runs.get(call.caller);
+		if (!run || run.removed) {
+			throw new CallRefused('not_found', 'none', `Facade Code holds no agent run ${call.caller}: the call had no effect.`);
+		}
+		if ([...this.calls.values()].filter(pending => pending.run === run.id).length >= MOST_RUN_CALLS) {
+			throw new CallRefused('capacity_exceeded', 'none', `${MOST_RUN_CALLS} tool calls of ${run.id} are under way already: this one had no effect.`);
+		}
+		const pending: PendingCall = { id: this.nextCall++, run: run.id, shim, request, call, receivedAt };
+		this.calls.set(pending.id, pending);
+		const spent = () => Math.max(0, call.elapsedMs) + performance.now() - receivedAt;
+		if (typeof call.routeDeadlineMs === 'number' && Number.isFinite(call.routeDeadlineMs)) {
+			const seconds = Math.round(call.routeDeadlineMs / 100) / 10;
+			const tool = typeof call.tool === 'string' ? call.tool : 'The query';
+			pending.routeTimer = setTimeout(() => this.refuse(pending, new CallRefused('window_unavailable', 'none',
+				`No Facade Code window answered ${tool} of ${run.id} within ${seconds} seconds: a query, it had no effect.`)), Math.max(0, call.routeDeadlineMs - spent()));
+		}
+		const claimant = this.claims.get(run);
+		if (claimant && !claimant.closed && !this.attaching.has(run)) {
+			this.forward(pending, claimant);
+			return;
+		}
+		pending.timer = setTimeout(() => {
+			if (!pending.window) {
+				this.refuse(pending, new CallRefused('window_unavailable', 'none', `No Facade Code window holds ${run.id} now: the call had no effect.`));
+			}
+		}, Math.max(0, CLAIM_WAIT_MS - spent()));
+	}
+
+	/** Gives `pending` to `window`, with the time it spent in ptyd added to how long it has been under way. */
+	private forward(pending: PendingCall, window: Connection): void {
+		clearTimeout(pending.timer);
+		pending.timer = undefined;
+		pending.window = window;
+		const elapsedMs = pending.call.elapsedMs + Math.ceil(performance.now() - pending.receivedAt);
+		window.send({ event: 'call', id: pending.id, call: { ...pending.call, elapsedMs } });
+	}
+
+	/** `pending` is answered or refused: ptyd keeps it no longer. */
+	private settle(pending: PendingCall): void {
+		clearTimeout(pending.timer);
+		clearTimeout(pending.routeTimer);
+		this.calls.delete(pending.id);
+	}
+
+	/** Answers `pending`'s shim why no window's answer comes; a window's answer after it finds no call to answer. */
+	private refuse(pending: PendingCall, refusal: CallRefused): void {
+		if (this.calls.get(pending.id) !== pending) {
+			return;
+		}
+		this.settle(pending);
+		pending.shim.send({ id: pending.request, error: refusal.message, reason: refusal.reason, effects: refusal.effects });
+	}
+
+	/** The calls of `run` still waiting for a window are refused: the run is gone or forgotten. */
+	private refuseWaiting(run: string): void {
+		for (const pending of [...this.calls.values()]) {
+			if (pending.run === run && !pending.window) {
+				this.refuse(pending, new CallRefused('not_found', 'none', `Facade Code holds no agent run ${run}: the call had no effect.`));
+			}
+		}
+	}
+
+	/**
+	 * `connection` went. Each call given to it as a window may have acted, and is told so; each it asked as a shim that waits for a
+	 * window is let go, its answer having nowhere to go - but a call given to a window already goes on (MCP-1.2).
+	 */
+	private callsClosed(connection: Connection): void {
+		this.shimGone(connection);
+		for (const pending of [...this.calls.values()]) {
+			if (pending.window === connection) {
+				this.refuse(pending, new CallRefused('window_unavailable', 'unknown', `The Facade Code window holding ${pending.run} went before it answered: the call may have taken effect.`));
+			} else if (pending.shim === connection && !pending.window) {
+				this.settle(pending);
+			}
+		}
+	}
+
+
 
 	/** Goes once nothing is left for it to do: no live run, and no window connected, for a while. */
 	private scheduleIdleExit(): void {

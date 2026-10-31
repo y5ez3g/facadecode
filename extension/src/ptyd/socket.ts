@@ -12,7 +12,7 @@ import { codeOf } from '../base/errors';
  * owned by this user, and an existing socket must be theirs too. Checked before both connecting and listening; never repair
  * someone else's directory or follow a symlink. The private parent prevents a different user replacing the checked socket.
  */
-export function ensurePtydSocket(socket: string): void {
+export function ensurePtydSocket(socket: string, what = 'ptyd socket'): void {
 	if (process.platform === 'win32') {
 		return;
 	}
@@ -21,7 +21,7 @@ export function ensurePtydSocket(socket: string): void {
 	const uid = os.userInfo().uid;
 	const parent = fs.lstatSync(dir);
 	if (!parent.isDirectory() || parent.uid !== uid || (parent.mode & 0o077) !== 0) {
-		throw new Error(`Cannot use ptyd socket: ${dir} must be a private directory owned by this user.`);
+		throw new Error(`Cannot use the ${what}: ${dir} must be a private directory owned by this user.`);
 	}
 	let stat: fs.Stats;
 	try {
@@ -33,6 +33,6 @@ export function ensurePtydSocket(socket: string): void {
 		throw error;
 	}
 	if (!stat.isSocket() || stat.uid !== uid) {
-		throw new Error(`Cannot use ptyd socket: ${socket} must be a socket owned by this user.`);
+		throw new Error(`Cannot use the ${what}: ${socket} must be a socket owned by this user.`);
 	}
 }

@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import type { Catalog, Location, RunFacts, WorktreeCreationEffects } from '../core/ports';
+import type { Catalog, Location, RunFacts, ToolsProblem, WorktreeCreationEffects } from '../core/ports';
 import type { Card, CardMenu } from '../webview/protocol';
 
 /** The words a card is said in, in the person's language. */
@@ -27,6 +27,10 @@ export interface CardWords {
 	readonly endedBySignal: (signal: string) => string;
 	/** `Window: {0}`, {0} the window's name: where the hover says the agent is (PANEL-1.5). */
 	readonly window: (label: string) => string;
+	/** Why an agent cannot work with other agents - its Facade tools are not there - in plain words; it runs on without them (PANEL-1.4). */
+	readonly toolsUnavailable: (problem: ToolsProblem | undefined, file: string | undefined) => string;
+	/** `Started by {0}`, {0} the reference of the agent that started it (PANEL-1.5). */
+	readonly startedBy: (creator: string) => string;
 }
 
 /** Where a card's agent works, as the card says it (PANEL-1.3). */
@@ -78,14 +82,18 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 		const unknown = facts.activityReason?.trim() || words.activityUnavailable;
 		return { dot: 'error', stateText: words.activityUnavailable, line: `${said} · ${unknown}`, reason: said };
 	}
+	// Facade tools that could not be given come before the startup stage and the title: the agent works on without them (PANEL-1.4)
+	const tools = facts.tools === 'unavailable' ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile) : undefined;
 	if (facts.lifecycle === 'starting') {
-		return { dot: 'working', stateText: words.starting, line: facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName) };
+		return { dot: 'working', stateText: words.starting, line: tools ?? (facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName)) };
 	}
+	// An agent another agent started is described by its first task until its CLI gives a title (PANEL-1.4)
+	const described = facts.title || facts.promptLine;
 	if (facts.reporting && facts.activity === 'working') {
-		return { dot: 'working', stateText: words.working, line: facts.title || words.working };
+		return { dot: 'working', stateText: words.working, line: tools ?? (described || words.working) };
 	}
 	if (facts.reporting && facts.activity === 'not_working') {
-		return { dot: 'idle', stateText: words.notWorking, line: facts.title || words.readyForInput };
+		return { dot: 'idle', stateText: words.notWorking, line: tools ?? (described || words.readyForInput) };
 	}
 	const reason = facts.activityReason?.trim() || words.activityUnavailable;
 	return { dot: 'error', stateText: words.activityUnavailable, line: reason, ...(reason !== words.activityUnavailable ? { reason } : {}) };
@@ -129,11 +137,16 @@ export function avatarOf(cli: string): Card['avatar'] {
 export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly window?: string }): Card {
 	const { place, words } = input;
 	const status = statusOf(facts, words);
+	const described = facts.title || facts.promptLine;
+	const tools = facts.tools === 'unavailable' ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile) : undefined;
 	const tooltip = [
 		`${facts.name} · ${facts.alias} · ${facts.displayName}`,
-		...facts.title ? [facts.title] : [],
+		...described ? [described] : [],
 		status.stateText,
-		...status.reason && status.reason !== facts.title ? [status.reason] : []
+		...status.reason && status.reason !== described ? [status.reason] : [],
+		// The card's row may cut this line short: the hover says it whole (PANEL-1.5)
+		...tools ? [tools] : [],
+		...facts.origin === 'agent' && (facts.creatorLabel ?? facts.creator) ? [words.startedBy((facts.creatorLabel ?? facts.creator)!)] : []
 	];
 	const label = [facts.name, facts.alias, status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].join(', ');
 	const avatar = avatarOf(facts.cli);

@@ -14,7 +14,8 @@ const WORDS: CardWords = {
 	worktreeFailure: reason => reason,
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', working: 'Working', notWorking: 'Idle', error: reason => `Error: ${reason}`,
 	activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
-	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, window: label => `Window: ${label}`
+	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, window: label => `Window: ${label}`,
+	toolsUnavailable: problem => `Can't work with other agents: ${problem}`, startedBy: creator => `Started by ${creator}`
 };
 
 const SHOP: WorkspaceFolderInfo = { index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' };
@@ -33,7 +34,8 @@ const id = (n: number) => `run-${n.toString(16).padStart(32, '0')}`;
 function run(n: number, more: Partial<RunFacts> = {}): RunFacts {
 	return {
 		id: id(n), alias: `#a${n}`, name: `Agent ${n}`, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: MAIN.id, cwd: MAIN.path,
-		environment: 'local', yolo: true, createdAt: n, lifecycle: 'running', phase: 'running', activity: 'working', reporting: true, ...more
+		environment: 'local', yolo: true, createdAt: n, lifecycle: 'running', phase: 'running', activity: 'working', reporting: true,
+		root: id(n), origin: 'human', tools: 'not_injected', ...more
 	};
 }
 

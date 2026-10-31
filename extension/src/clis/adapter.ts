@@ -7,19 +7,31 @@
 // unverified with the reason, never more than the evidence holds.
 
 import type { Environment } from './environment';
+import type { Capability, ToolsIntegration } from './tools';
 import type { TrustTarget } from './trust';
 
-/** The argument groups of an invocation (CLIS-3.2): run settings, the YOLO mapping, then per-launch trust. */
-export const GROUP_ORDER = ['quiet', 'yoloOn', 'yoloOff', 'trust'] as const;
+/**
+ * The argument groups of an invocation, in the order an adapter gives them (CLIS-3.2): the MCP connection, the CLI's own run
+ * settings, the YOLO mapping, model, effort, the trust in the folder for this launch alone (CLIS-3.3, D62), and last a positional
+ * initial prompt, after the end of the options.
+ */
+export const GROUP_ORDER = ['connect', 'quiet', 'yoloOn', 'yoloOff', 'model', 'effort', 'trust', 'prompt'] as const;
 
 export type Group = (typeof GROUP_ORDER)[number];
 
 /** An adapter's groups, as literal arguments with `${name}`s the adapter fills itself. */
 export type Groups = { readonly [G in Group]?: readonly string[] };
 
-/** What one launch applies (CLIS-3.2). */
+/**
+ * What one launch applies (CLIS-3.2). Its MCP connection (`connect`), model, effort and a native initial prompt (`prompt`) are
+ * separate facts of the request; a launch that has none of them never expands those groups.
+ */
 export interface LaunchUses {
 	readonly yolo: boolean;
+	readonly connect: boolean;
+	readonly model: boolean;
+	readonly effort: boolean;
+	readonly prompt: boolean;
 }
 
 /** Whether `group` applies to a launch `uses` describes. */
@@ -27,9 +39,26 @@ export function applies(group: Group, uses: LaunchUses): boolean {
 	switch (group) {
 		case 'yoloOn': return uses.yolo;
 		case 'yoloOff': return !uses.yolo;
+		case 'connect': return uses.connect;
+		case 'model': return uses.model;
+		case 'effort': return uses.effort;
+		case 'prompt': return uses.prompt;
 		case 'quiet': return true;
 		case 'trust': return true;
 	}
+}
+
+export type { Capability } from './tools';
+
+/**
+ * How a CLI's ordinary-message input is read (CLIS-2.1, 2.3): the ptyd input reader that recognizes its input box on the screen by
+ * its layout, whatever the CLI's version. A screen it does not recognize is unknown, and nothing is typed into it.
+ */
+export interface InputReader {
+	/** The reader by its ID in ptyd (`ptyd/composer.ts`). */
+	readonly adapter: string;
+	/** The layouts it was recorded on, as diagnostics name them. */
+	readonly evidence: string;
 }
 
 /**
@@ -61,6 +90,8 @@ export interface LaunchInput {
 	readonly yolo: boolean;
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
+	readonly model?: string;
+	readonly effort?: string;
 }
 
 /** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition. */
@@ -73,8 +104,18 @@ export interface CliAdapter {
 	/** The command PATH is searched for where its `path` setting is empty. */
 	readonly command: string;
 	readonly groups: Groups;
+	/** Whether an explicit model and effort can be passed (CLIS-1.4); a CLI that cannot take one is refused it, never ignoring it. */
+	readonly takes: { readonly model: boolean; readonly effort: boolean };
 	/** The values its groups' `${name}`s take for a launch. */
 	values(input: LaunchInput): { readonly [name: string]: string };
+	/** How it is given the Facade tools (CLIS-2.2). */
+	readonly tools: ToolsIntegration;
+	/** The reader of its ordinary-message input (CLIS-2.1); none, and no message is typed into it. */
+	readonly input?: InputReader;
+	/** How far its native initial prompt argument is verified (COLLABORATION-2.2, D49), where its `prompt` group maps one. */
+	readonly initialPrompt?: Capability;
+	/** Why `prompt` cannot be its native initial prompt argument, where it cannot - it then goes in after startup. */
+	promptProblem?(prompt: string): string | undefined;
 	/** What its launch must change in the environment, for a quirk of the CLI's own (CLIS-1.2). */
 	adjustEnvironment?(env: { [name: string]: string }, platform: NodeJS.Platform): void;
 	/**

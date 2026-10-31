@@ -66,8 +66,16 @@ npm run test:integration
 ```
 
 `npm run test:package` checks the VSIX `npm run package` made. The integration suite runs the official VS Code with its own
-profile, a temporary Facade root and fake CLIs only; `FACADE_IT_ONLY=journeys` or `conversion` runs one part of it, and
-`FACADE_IT_KEEP=1` keeps what a run left.
+profile, a temporary Facade root and fake CLIs only; `FACADE_IT_ONLY=journeys`, `cross` or `conversion` runs one part of
+it, and `FACADE_IT_KEEP=1` keeps what a run left. Linux runs it under `xvfb-run -a`; Windows runs it in the desktop session.
+
+`npm run test:remote` runs the journeys over Remote-SSH to a host: `FACADE_IT_SSH_CONFIG` and `FACADE_IT_SSH_HOST` name
+it, and `FACADE_IT_REMOTE_EXTENSION` the extension's folder there, built with `npm run compile`, `npm run bundle` and
+`node scripts/build-it.mjs`. `FACADE_IT_ONLY=ssh`, `ssh-ssh`, `local-ssh` or `ssh-local` runs one scenario.
+
+`FACADE_IT_ONLY=real npm run test:integration` runs real Claude Code agents with YOLO off, never by default: it signs in and
+uses an account's usage. `FACADE_IT_CLAUDE` names its executable and `FACADE_IT_CLAUDE_CONFIG` a configuration folder
+signed in for testing; Codex has no such run.
 
 ## 6 Other files
 

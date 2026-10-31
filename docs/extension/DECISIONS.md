@@ -15,25 +15,37 @@ IDs remain stable for provenance; the decision column states the current owner-c
 
 | ID | Current decision | Normative owner |
 | --- | --- | --- |
+| O01 | Super Engineer and Super Team equally important; no mode/team wizard | PRODUCT-2.1 |
+| O02 | Panel, editor terminals and basic runtime MCP; prompts/skills own workflow, no task concept | PRODUCT-3.1 |
 | O03 | Capability before familiarity before simplicity; agreed scope, no speculative feature expansion | PRODUCT-4 |
 | O04 | All VS Code users; free MIT desktop extension, own CLI/accounts, compatible editors, no hosted model service or multi-user product | PRODUCT-1.2, 5.2 |
-| O05 | Local, SSH, WSL and containers execute where their workspace lives | PRODUCT-5.3 |
+| O05 | Local, SSH, WSL and containers execute where their workspace lives; interoperability is first-release scope | PRODUCT-5.3, 5.6 |
 | O06 | Plain and multi-folder use works without Git; worktree creation/use is optional | PRODUCT-5.4, 5.5 |
-| O07 | Every human UX manages its current window only | LIFECYCLE-2.3 |
+| O07 | Agents connect across client windows; every human UX manages its current window only | PRODUCT-5.6, LIFECYCLE-2.3 |
 | O08 | Human last successful location/CLI, editable name label, folder/worktree choices in the picker | LIFECYCLE-1 |
-| O09 | Accepted start immediately creates pair; actual launch error retains it | LIFECYCLE-1.5 |
+| O09 | Accepted start immediately creates pair; actual launch error retains it; usable CLI survives tool failure | LIFECYCLE-1.5 |
 | O10 | Green work, yellow not working, red error or unknown reliable status; reason in second line | RULES-3.2 |
 | O11 | Normal exit closes; abnormal retains red; unknown cause no guessed popup | RULES-3.3 |
-| O12 | All launch origins share the current-setting YOLO rule | RULES-4.3 |
-| O18 | Reload preserves original runs; explicit close removes UI immediately | RULES-4.1 |
-| O21 | Preserve native sandbox mapping; use the single launch-time setting policy | RULES-4.3, CLIS-1.3 |
-| O22 | Owner-revised on 2026-10-29: names are trimmed label strings; empty strings, spaces, duplicates and `human` are allowed. Empty is still `name: ""`, with its existing UI slot, not an absent field or an automatic replacement. The person has ID `#human`; an agent named `human` is identified by its own agent ID. Message routing belongs to the later messaging step | LIFECYCLE-2.1 |
+| O12 | Explicit agent startup choices remain; all launch origins share the current-setting YOLO rule | MCP-2, RULES-4.3 |
+| O13 | Success means the recipient has the complete message: CLI acceptance by the selected submission path, or a read_messages handback under D77 | RULES-1.3 |
+| O14 | Two-second initial response; five fixed attempts per fifteen-second stage; results to the agent sender for both outcomes, never human fallback | RULES-1.2, 1.5, 1.7, 1.8 |
+| O15 | Ordinary messages protect drafts; no typing-idle timer or post-check human-typing race machinery | RULES-1.4 |
+| O16 | Duplicate delivery is accepted; the injected skill tells the model to deduplicate by message ID | RULES-1.6, MCP-6.2 |
+| O17 | Any window close ends its own agents; no reopening replay; sender-only close needs no guaranteed delivery handover | RULES-1.9 |
+| O18 | Reload preserves original runs; creator closure does not close children; explicit close removes UI immediately | RULES-4.1 |
+| O21 | Preserve tree-limited non-YOLO reach and native sandbox mapping; use the single launch-time setting policy | RULES-4.3, CLIS-1.3 |
+| O22 | Owner-revised on 2026-10-29: names are trimmed label strings; empty strings, spaces, duplicates and `human` are allowed. Empty is still `name: ""`, with its existing UI slot, not an absent field or an automatic replacement. The person has ID `#human`; an agent named `human` is identified by its own agent ID. In messages `#human` addresses the person (D80) | LIFECYCLE-2.1, RULES-2.3 |
+| O23 | Direct text/keys have no input-policy choice/draft guard or arbitrary text single-line/length cap | COLLABORATION-1.2, MCP-5.2 |
 | O24 | No Git initialization/initial commit; worktree deletion only as D73; native Git creation and no post-create setup gate | WORKTREES-2, 3 |
 | O27 | Agent terminals only in editor | LIFECYCLE-2.2 |
+| O28 | Nine MCP tools; no request_id/get_operation/recall/bulk/rename/deletion extensions; inbox reads only one's incoming messages | MCP-1, 3, 4 |
+| O29 | MCP switch affects future injection only; no authentication/tokens/delegation; IDs are addresses, normal tree policy remains | RULES-4.4, ARCHITECTURE-2.1 |
+| O30 | Initial prompt uses native interactive arguments if supported, otherwise automatic post-start message; no unattended overlay | COLLABORATION-2.2, CLIS-3.2 |
+| O31 | Message History is window-local and view-only, automatically cleaned after 30 days; no vendor-history deletion | COLLABORATION-3 |
 | O32 | Badge counts cards; manual order | PANEL-1.1, 2 |
 | O33 | No default global shortcut; empty-panel explanation instead of onboarding; locales and fixed visual values retained | UX-2, PANEL-1.2 |
-| O34 | Real known human errors may notify | RULES-1.8, 3.4 |
-| O35 | G2, G5, first use, 100 agents/window and human walkthrough are first-release acceptance; 100 is not a cap | VERIFICATION-2, 3 |
+| O34 | Real known human errors may notify; agent errors return to their initiator, and an agent message chain never automatically notifies people | RULES-1.8, 3.4 |
+| O35 | G1–G3, G5, local plus two remotes, first use, 100 agents/window and human walkthrough are first-release acceptance; 100 is not a cap | VERIFICATION-2, 3 |
 
 ## Disposition of earlier Codex deductions
 
@@ -49,32 +61,51 @@ rejected several of them. Their old implementation/tests must follow the current
 | D05 | Retain error precedence and clearing only the recovered condition | RULES-3.2 |
 | D06 | Reversed: explicit close removes card/terminal immediately; cleanup can remain unconfirmed in background | LIFECYCLE-3.1 |
 | D07 | Retire separate unseen/seen attention bookkeeping | RULES-3.4 |
+| D09 | Reversed: client connectivity does not imply unrestricted reach; tree policy remains, historical YOLO inheritance is superseded | RULES-4.3 |
+| D10 | Retain complete ordinary messages and no batching/reminder-as-delivery; the separate fetch state is superseded by D77's single delivery state | COLLABORATION-2, 3 |
+| D11 | Remove caller request keys and get_operation; startup discovery remains as list_start_options | MCP-1–3 |
 | D12 | Retain ordinary-folder-first catalog and stale Git observations without inventing deletion | WORKTREES-1 |
 | D13 | Retain selected source/base, remove all Git initialization and initial-commit flows | WORKTREES-2 |
 | D14 | Retire Facade deletion, including external-tree eligibility and preview. Superseded by D73 for a confirmed clean linked worktree; the rest stays retired | WORKTREES-3.2 |
 | D15 | Retire deletion consent/fingerprints/peer queries/leftover cleanup with the deleted feature. Superseded by D73 for a confirmed clean linked worktree; the rest stays retired | WORKTREES-3.2 |
 | D16 | Reversed: native post-create preparation does not block CLI startup or become a Facade job | WORKTREES-2.4 |
+| D17 | Retain original remote URI and caller-readable generated long results, without authenticated transfer | COLLABORATION-4.2 |
+| D18 | Remove workflow warmups/latest-session fallback; restore native prompt arguments where supported | CLIS-3.2 |
 | D19 | Owned PTY accepted; still one product/install and actual packaging proof required | ARCHITECTURE-1, 4.3 |
 | D20 | Retain public APIs and exact context targeting; no guessed foreground terminal | UX-3.2 |
 | D21 | Retain actual window-lifetime evidence gates, without claiming timers prove them | VERIFICATION-2.1 |
 | D22 | Remove security leases; retain true process ownership and honest unreachable cleanup | ARCHITECTURE-2 |
 | D23 | Simple bounded buffers/retention; no permanent accumulated-operation quota | RULES-5.3, ARCHITECTURE-2.4 |
 | D24 | Retain specified theme/visual values and ordinary-location wording | UX-2.1 |
+| D25 | Superseded: direct terminal input has no draft guard | COLLABORATION-1.2 |
+| D26 | Remove manual history hide/delete; automatic Facade message expiry remains | COLLABORATION-3.3 |
 | D27 | Retain quiet progress in existing UI and errors directed to their initiators | UX-1 |
+| D28 | Remove required protect_draft/direct policy; direct input is direct, ordinary messages always guard drafts | MCP-5.2 |
 | D29 | Retain reproducible builds, separate isolated fixture stage, README staging markers and target-native notices | ARCHITECTURE-4 |
+| D30 | Retire the entire automatic human fallback/notification claim/recovery mechanism | RULES-1.7, 1.8 |
 | D31 | Retain repository layout/test safeguards; task-specific arrangements follow current user instructions | ARCHITECTURE-4, 5 |
+| D32 | Retain discoverable empty windows and ordinary/external-created locations; child inherits own tree, catalog is not global agent authorization | MCP-2 |
+| D33 | Retain two-second first-ingress timing; internal hops do not restart it | RULES-1.2 |
+| D34 | Remove token hashes, authenticated binding/delegation/cleanup authority; retain unique non-reused run addresses and correct routing | ARCHITECTURE-2.1 |
+| D36 | Owner-delegated choice: natural sender-close lifecycle; drop unreachable system receipts, report B's actual reply failure to B only | RULES-1.7, 1.9 |
+| D37 | Owner-authorized: no compatibility migration or aliases from development builds; their records are ignored with one log line, old MCP calls fail explicitly, no user data deleted | ARCHITECTURE-4.2, UX-3.2 |
 | D38 | Owner-authorized: webview `act` adds openFolder and rename for the empty-state buttons and F2; the host opens the Input Box and validates | PANEL-3.1 |
 | D39 | Owner-revised in IA-03: the native picker title uses middle dots and keeps name/location visible while filtering, including the folder in multi-folder windows. A planned worktree uses `(new)` in the title and retains its source in the location row. Missing history silently falls back. The branch input has a placeholder and shorter source prompt. The latest confirmed screenshots use `Select a branch or worktree` without a folder suffix and no custom Change Name prompt, without restricting name labels | LIFECYCLE-1.1, 1.2, 1.3 |
 | D41 | Owner-authorized: the 160 ms removal animation follows only a normal exit; explicit close and confirmed location removal are immediate | UX-2.2 |
 | D42 | Owner-authorized: test-only `state`, `selectRow` (by run ID) and `probe` commands; the first draft's hidden scripted start was withdrawn because the owner-approved R9 removal stands | UX-3.2 |
 | D43 | Owner-authorized: Settings sections are Agents, then each built-in CLI in CLIS-1.1 order | UX-4.1 |
+| D44 | Owner-authorized: type_text takes printable Unicode plus tab/LF/CR and refuses other controls toward press_keys; no press_keys count limit; protocol_incompatible. Its immediate capability_unverified is superseded by D78's `unsupported` | MCP-5.2, MCP-1.2 |
+| D45 | Owner-authorized: a window ID is a routing address that can change on reload; the same run IDs reattach | ARCHITECTURE-2.2, RULES-2.2 |
 | D46 | Owner-authorized: `FACADE_AGENT` carries the run's `#aN` alias | CLIS-1.2 |
 | D47 | Owner-authorized: confirmed deletion needs a successful Git read without the worktree (or marking it prunable) and a missing root; launch-location association; feature-detected Git extension creation API | WORKTREES-1.3, 3.3, 4.1 |
 | D48 | Owner-authorized: activity is verified per run by an OSC 7501 probe answer or valid reports, independent of version; quirks stay version-scoped | CLIS-2.1, 2.3 |
+| D49 | Owner-authorized: a declared maintained native prompt mapping is used while unverified and reports its capability state; otherwise post-start delivery | COLLABORATION-2.2, CLIS-3.2 |
+| D50 | Owner-authorized: `.agents/` is untracked because the product injects its `facade` skill there; repository skills avoid that name | ARCHITECTURE-4.1 |
 | D51 | Owner-authorized: `npm run package` and `npm run test:package` join the documented and required checks | ARCHITECTURE-4.1, 5.1 |
 | D52 | Owner-authorized: isolated editors are official VS Code builds with sanitized environments and short roots; no editor CLI against a default profile | ARCHITECTURE-5.2 |
 | D53 | Owner-calibrated: the store is `<FACADE_HOME or ~/.facade>/extension`, overridable for tests; `FACADE_HOME` (default `~/.facade`) is a root shared with the Facade Code IDE, and the extension uses only its `extension/` subfolder | ARCHITECTURE-3.1 |
 | D54 | Derived from independent-review item 5: palette availability keys follow the selected run (`agentSelected*`), not the active terminal, so a file in front keeps the actions | UX-3.2 |
+| D56 | Owner-authorized G3 probes of the owner's installed, signed-in Claude Code 2.1.312 and Codex 0.165.0 on macOS; their recorded screens are the input readers' fixtures. Superseded by D78: a version list no longer gates input | VERIFICATION-2.1, CLIS-2.1, 5.1 |
 | D57 | Owner-calibrated: New Agent's suggested names are at least 100 short machine words (`Bolt`, `Pixel`, `Servo`), not invented personal names; a suggestion prefers one no agent in the window has, without requiring uniqueness | LIFECYCLE-2.1 |
 | D58 | Owner-clarified on 2026-10-29: the native view menu holds Add Folder to Workspace..., New Worktree... when a workspace folder is open, then Configure Agents... in a separate group. New Worktree retains its standalone creation flow but is hidden from the Command Palette. Go to Agent stays in the palette; Refresh is removed. New Agent retains its contextual worktree option | PANEL-1.1, UX-3.1, WORKTREES-2.1 |
 | D59 | Owner-calibrated: empty states use the reviewed copy (#m3056, final #m3060/#m3061 relayed by `#a525` at the owner's request): no-folder `Open a folder to launch coding agents.`; no-agents `Launch a coding agent in this workspace.` | PANEL-1.2 |
@@ -92,6 +123,18 @@ rejected several of them. Their old implementation/tests must follow the current
 | D74 | Owner-calibrated: the card's hover gives each fact its own line and writes the home folder as ~ (except on Windows), so the editor's tooltip never breaks a long path mid-line; compared on real tooltips before choosing | PANEL-1.5 |
 | D75 | Owner-decided 2026-10-29: without a public close signal, a window's runs end five minutes after its extension host disconnects from ptyd, unless a reloaded or reopened window of the workspace claims them; reload, remote extension-host restart and network loss with the remote host connected keep them. The timer is cleanup policy, not close detection | RULES-4.1 |
 | D76 | Owner-decided 2026-10-30 after a native reproduction that Close All, Close Others and Close Saved closed every agent terminal without a question: closing a terminal tab still closes its agent, but a live agent is asked about first, once for tabs closed together; Cancel keeps it and opens its terminal again; `terminal.integrated.confirmOnKill` is followed | LIFECYCLE-3.1 |
+| D77 | Owner-calibrated 2026-10-30: messages are one full paste plus Enter, with no doorbell or reminder line. A message has one delivery state: delivered once its terminal submission is confirmed or once read_messages hands it to its recipient; there is no separate fetch state. read_messages without IDs returns the records not yet delivered and delivers them; a record read while being pasted is not pasted again, and its sender's result says read_messages. Claude decided, under the owner's delegation of such details, that a record read after its failure result becomes delivered without a second result. Revises D10's separate fetch state | RULES-1.3, 1.7, COLLABORATION-3.1, MCP-4.2 |
+| D78 | Owner-calibrated 2026-10-30: no CLI-version gate on message input. Every version is attempted; input readers recognize the input box by its layout; an unrecognized layout is never typed into and fails at the deadline as `input_unknown`, naming the CLI and version; a CLI without a reader fails at once as `unsupported`. Replaces D56's version list, which the owner's installed Claude Code 2.1.314 and Codex 0.166.0 had already left | CLIS-2.1, RULES-1.4, MCP-1.2, VERIFICATION-2.1 |
+| D79 | Owner-calibrated 2026-10-30: with YOLO off as with it on, Facade's own tools never ask for approval (Claude Code `--allowedTools mcp__facade`, Codex `default_tools_approval_mode="approve"`), while the CLI's own commands and edits keep their approvals. Derived with it: the server is never required, so its failure leaves a usable CLI | CLIS-2.2, MCP-6.1, RULES-4.3 |
+| D80 | Derived from O22: `#human` addresses the person; `@human` does too unless an agent in the caller's reach is named `human`, when it is ambiguous like any repeated name | RULES-2.3, MCP-4.1 |
+| D81 | Owner-calibrated 2026-10-30: after an accepted send the sender receives a Facade result whether the message was delivered or not, for completeness; budgets stay at two seconds and five attempts within fifteen seconds | RULES-1.5, 1.7 |
+| D82 | Owner-requested 2026-10-30: agents reach every Facade window on this client computer, local and Remote-SSH. Claude chose, under the owner's delegation, a network without a central process: each window component listens on its own local socket and registers in a client registry; the caller's window handles calls, the recipient's window delivers, and aliases are allocated client-wide | ARCHITECTURE-1.1, 2.1, RULES-2.1, COLLABORATION-1.1, 4.1 |
+| D83 | Derived from the 0.0.1 remote first-install failure, where VS Code activated the remote extension before installing its local dependency and offered no reload: the window component installs through `extensionPack`, activation waits up to 60 seconds for it, and its absence is explained in plain words | ARCHITECTURE-4.3 |
+| D84 | Claude chose under the owner's 2026-10-30 delegation: `facade.collaboration.enabled` and `facade.collaboration.waitSeconds` join `facade.yolo` in the Agents section, keeping D43's section order. The editor names a setting after its key, so both copy reviewers rejected the earlier `facade.orchestration.enabled` (shown as "Orchestration: Enabled") and `facade.timeout` under D85; both settings are new in this step | UX-4.1, RULES-4.4, MCP-1.3 |
+| D85 | Owner-requested 2026-10-30: everything a person sees is plain language; internal terms such as run, ptyd, shim, MCP server, capability, adapter, route, protocol or broker never appear in it | UX-1.3, PRODUCT-4.2 |
+| D86 | Owner-requested 2026-10-30: this release covers all nine tools, control and messages across windows for Claude Code and Codex, releasable rather than a prototype; Claude included start_agent's optional model/effort and prompt under the owner's delegation | MCP-2.2, CLIS-1.4, PRODUCT-5.1 |
+| D87 | Claude chose under the owner's 2026-10-30 delegation: after the first update, agents that 0.0.1's supervisor still runs are claimed by the new window and shown each in an editor terminal of its own, not as cards, until they end; closing that terminal asks as LIFECYCLE-3.1 does, and one plain notification explains it. Cards for them would need the execution adapter to serve two supervisor protocols at once, a risk to the reload and remote handling it was verified for | ARCHITECTURE-2.4, VERIFICATION E05 |
+| D88 | Claude chose under the owner's 2026-10-30 delegation: the native backend is node-pty 1.2.0-beta.15, pinned exactly, the backend VS Code 1.143 itself requires. node-pty 1.1.0's Windows exit watchers change its shared console list without a lock (fixed by node-pty #922), which the Windows runs of 2026-10-30 caught as heap corruption and access violations when several consoles ended together - in ptyd, the end of every agent of every window. On Windows a console is also ended once: a second kill reaches a console already freed | ARCHITECTURE-2.4, 4.3, VERIFICATION G5 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -157,6 +200,11 @@ proven platform limitations instead of silently weakening a product promise. The
 full spec revision; it does not authorize publication or unrelated source changes.
 
 ## Change log
+
+- 2026-10-30: Step 2 of the Facade Code extension: carried the Facade Dots rows that bear on agent collaboration (O01,
+  O02, O13–O17, O23, O28–O31; D09–D11, D17, D18, D25, D26, D28, D30, D32–D34, D36, D37, D44, D45, D49, D50, D56),
+  updated O05, O07, O09, O12, O18, O21, O22, O34 and O35 for this step, and recorded the owner's decisions of that day
+  as D77–D86.
 
 - 2026-10-30: Recorded the owner's five-minute cleanup policy (D75) and tab-close confirmation (D76).
 

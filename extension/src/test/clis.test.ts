@@ -202,10 +202,13 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 	});
 
 	test('the groups go in their order: the run\'s own settings, then the YOLO mapping', () => {
-		assert.deepStrictEqual([...GROUP_ORDER], ['quiet', 'yoloOn', 'yoloOff', 'trust']);
-		const groups = { quiet: ['q', '${value}'], yoloOn: ['on'] };
-		assert.deepStrictEqual(invocation(groups, { yolo: false }, { value: 'v' }), ['q', 'v']);
-		assert.deepStrictEqual(invocation(groups, { yolo: true }, { value: 'v' }), ['q', 'v', 'on']);
+		assert.deepStrictEqual([...GROUP_ORDER], ['connect', 'quiet', 'yoloOn', 'yoloOff', 'model', 'effort', 'trust', 'prompt']);
+		const groups = { quiet: ['q', '${value}'], yoloOn: ['on'], connect: ['--mcp'], prompt: ['--', '${prompt}'] };
+		const none = { connect: false, model: false, effort: false, prompt: false };
+		assert.deepStrictEqual(invocation(groups, { yolo: false, ...none }, { value: 'v' }), ['q', 'v']);
+		assert.deepStrictEqual(invocation(groups, { yolo: true, ...none }, { value: 'v' }), ['q', 'v', 'on']);
+		assert.deepStrictEqual(invocation(groups, { yolo: true, ...none, connect: true, prompt: true }, { value: 'v', prompt: '-p' }), ['--mcp', 'q', 'v', 'on', '--', '-p'],
+			'the connection comes first, and a prompt last after the end of the options');
 	});
 
 	test('the environment: the host\'s, the folder\'s terminal settings, the default profile\'s, then the run\'s variables - null removing - with Claude Code\'s title switch removed (CLIS-1.2)', () => {

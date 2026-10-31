@@ -20,5 +20,8 @@
 	"config.codex.title": "Codex",
 	"config.codex.path": "Codex yolu. Terminal ortamının PATH değerindeki \"codex\" komutunu kullanmak için boş bırakın.",
 	"windowDisplayName": "Facade Code Pencere Bileşeni",
-	"windowDescription": "Facade Code için pencere kimliği ve oturum sürekliliği koordinatörü."
+	"windowDescription": "Facade Code için pencere kimliği ve oturum sürekliliği koordinatörü.",
+	"command.messageHistory": "Mesaj Geçmişi...",
+	"config.collaboration.enabled": "Aracıların birbirini başlatıp durdurmasına, birbirlerine ve size mesaj göndermesine, birbirlerinin terminallerini okuyup bu terminallere yazmasına izin verin. Yalnızca yeni başlatılan aracılar için geçerlidir.",
+	"config.collaboration.waitSeconds": "Bir aracının başka bir aracının başlamasını veya durmasını kaç saniye bekleyeceği. Bu süre geçtikten sonra aracı sonucu daha sonra bir mesajla alır."
 }

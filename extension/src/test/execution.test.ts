@@ -12,6 +12,7 @@ import type { AgentExecution } from '../host/execution/agentExecution';
 import { PtydClient, PtydLost, PtydNotSent, earlierRuns, ptydSocketPath } from '../host/execution/ptydClient';
 import type { Method, Requests } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
+import { programEnv } from './ptydPlace';
 import { TestEmitter, withModules } from './withModules';
 
 /** A terminal as the stand-in editor makes it: what it was created with, and what was done to it. */
@@ -37,9 +38,6 @@ interface FakeTerminal {
 const EXIT_REASON = { Unknown: 0, Shutdown: 1, Process: 2, User: 3, Extension: 4 };
 
 suite('The execution port: an agent\'s terminal and its process held by ptyd (ARCHITECTURE-2.3, LIFECYCLE-1.5, 2.2, 3.1)', function () {
-	if (process.platform === 'win32') {
-		return;
-	}
 	this.timeout(20_000);
 	let home: string;
 	let server: PtydServer;
@@ -151,6 +149,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				onRunEvent: (...args: Parameters<PtydClient['onRunEvent']>) => real.onRunEvent(...args),
 				onDidClose: (...args: Parameters<PtydClient['onDidClose']>) => real.onDidClose(...args),
 				onDidLoseOwner: (...args: Parameters<PtydClient['onDidLoseOwner']>) => real.onDidLoseOwner(...args),
+				onCall: (...args: Parameters<PtydClient['onCall']>) => real.onCall(...args),
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
@@ -176,7 +175,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 	const plan = (script: string): LaunchPlan => ({
 		cli: 'claude', displayName: 'Claude Code', command: 'claude', executable: process.execPath, args: ['-e', script],
-		env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cwd: os.tmpdir()
+		env: programEnv(), cwd: os.tmpdir(),
+		tools: { state: 'not_injected' }, input: { capability: { state: 'unavailable', reason: 'no input reader in this test' } }
 	});
 	const until = async <T>(what: string, check: () => T | undefined | false | Promise<T | undefined | false>, ms = 8_000): Promise<T> => {
 		const deadline = Date.now() + ms;

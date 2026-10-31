@@ -1,0 +1,235 @@
+/*---------------------------------------------------------------------------------------------
+ *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import * as assert from 'assert';
+import type { InputEffects } from '../core/messagePorts';
+import type { CapabilityState, RunFacts, RunId } from '../core/ports';
+import { PtydLost, PtydNotSent } from '../host/execution/ptydClient';
+import { OrdinaryInput } from '../host/input';
+import type { InputEffect, InputReading, InputState } from '../ptyd/protocol';
+
+const RUN = 'run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+const OTHER = 'run-cccccccccccccccccccccccccccccccc';
+const SUPPORTED: CapabilityState = { state: 'supported', reason: 'claude-frame reads Claude Code\'s input by its layout.' };
+const CONFIRMED: InputEffects = { outcome: 'confirmed', text_written: 'full', enter_written: true };
+const NOTHING: InputEffects = { outcome: 'none', text_written: 'none', enter_written: false };
+
+/**
+ * A CLI's terminal as a test scripts it: what its input reads, and how that changes as a paste and Enter go in - shown as a draft, or
+ * emptied again, from the `after`th read on; never, where undefined.
+ */
+class FakeTerminal {
+	reading: InputState = 'usable';
+	readonly calls: string[] = [];
+	showsPasteAfter: number | undefined = 1;
+	takesEnterAfter: number | undefined = 1;
+	paste: InputEffect | Error = { outcome: 'applied', pasted: true, entered: false };
+	enter: InputEffect | Error = { outcome: 'applied', keysSent: 1 };
+	/** What a read waits for before it answers, where it should wait. */
+	gate: Promise<void> | undefined;
+	onPaste: () => void = () => undefined;
+	private change: { to: InputState; reads: number } | undefined;
+
+	readonly inspectInput = async (run: RunId, adapter: string): Promise<InputReading | undefined> => {
+		this.calls.push(`read ${run === RUN ? '' : `${run} `}by ${adapter}`);
+		await this.gate;
+		if (this.change && --this.change.reads <= 0) {
+			this.reading = this.change.to;
+			this.change = undefined;
+		}
+		return { state: this.reading, evidence: `scripted ${this.reading}` };
+	};
+
+	readonly typeText = async (run: RunId, text: string, enter: boolean): Promise<InputEffect> => {
+		this.calls.push(`type ${run === RUN ? '' : `${run} `}${JSON.stringify(text)}${enter ? ' and Enter' : ''}`);
+		if (this.paste instanceof Error) {
+			throw this.paste;
+		}
+		if (this.showsPasteAfter !== undefined && run === RUN) {
+			this.change = { to: 'draft', reads: this.showsPasteAfter };
+		}
+		this.onPaste();
+		return this.paste;
+	};
+
+	readonly pressKeys = async (_run: RunId, keys: readonly string[]): Promise<InputEffect> => {
+		this.calls.push(`keys ${keys.join(' ')}`);
+		if (this.enter instanceof Error) {
+			throw this.enter;
+		}
+		if (this.takesEnterAfter !== undefined) {
+			this.change = { to: 'usable', reads: this.takesEnterAfter };
+		}
+		return this.enter;
+	};
+}
+
+function setUp(facts: Partial<RunFacts> = {}) {
+	const terminal = new FakeTerminal();
+	const runs = new Map<RunId, RunFacts>([RUN, OTHER].map((id, i) => [id, {
+		id, alias: `#a${i + 2}`, displayName: 'Claude Code', lifecycle: 'running', inputAdapter: 'claude-frame', inputCapability: SUPPORTED, ...facts
+	} as RunFacts]));
+	const log: string[] = [];
+	const waits: number[] = [];
+	let now = 0;
+	const input = new OrdinaryInput({
+		get: run => runs.get(run),
+		inspectInput: terminal.inspectInput,
+		typeText: terminal.typeText,
+		pressKeys: terminal.pressKeys,
+		log: text => log.push(text),
+		monotonic: () => now,
+		// Time moves only as the input waits: each wait is its own read apart
+		wait: async (ms, signal) => {
+			if (signal?.aborted) {
+				throw new Error('Cancelled');
+			}
+			waits.push(ms);
+			now += ms;
+		}
+	});
+	return { input, terminal, runs, log, waits, waited: () => waits.reduce((sum, ms) => sum + ms, 0) };
+}
+
+suite('Ordinary message input: a whole paste, Enter once it shows, confirmed once the input empties (CLIS-2.1, RULES-1.3, 1.4, 1.10)', () => {
+
+	test('its capability is what the run\'s launch found - supported whenever its CLI has an input reader, whatever the version (D78); the launch\'s own reason otherwise', () => {
+		const unreadable: CapabilityState = { state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI, so messages to it fail; direct terminal input still works' };
+		assert.deepStrictEqual(setUp().input.capability(RUN), SUPPORTED);
+		assert.deepStrictEqual(setUp({ version: '2.1.999' }).input.capability(RUN), SUPPORTED, 'a version never recorded is read by its layout all the same');
+		assert.deepStrictEqual(setUp({ inputAdapter: undefined, inputCapability: unreadable }).input.capability(RUN), unreadable);
+		assert.strictEqual(setUp({ inputAdapter: undefined }).input.capability(RUN).state, 'unverified', 'supported with no reader to read it is not');
+		const unplanned = setUp({ inputAdapter: undefined, inputCapability: undefined }).input.capability(RUN);
+		assert.deepStrictEqual([unplanned.state, /not known before its launch is planned/.test(unplanned.reason)], ['unverified', true]);
+		assert.strictEqual(setUp().input.capability('run-unknown').state, 'unverified');
+	});
+
+	test('inspect reads the input with the run\'s own adapter, logging what a reading that holds delivery back rested on; unsupported input is unknown, never read', async () => {
+		const { input, terminal, log } = setUp();
+		assert.strictEqual(await input.inspect(RUN), 'usable');
+		terminal.reading = 'draft';
+		assert.strictEqual(await input.inspect(RUN), 'draft');
+		assert.deepStrictEqual(terminal.calls, ['read by claude-frame', 'read by claude-frame']);
+		assert.deepStrictEqual(log, ['Message input of #a2: input reads draft by claude-frame: scripted draft']);
+		const unverified = setUp({ inputAdapter: undefined, inputCapability: { state: 'unavailable', reason: 'no reader' } });
+		assert.strictEqual(await unverified.input.inspect(RUN), 'unknown');
+		assert.deepStrictEqual(unverified.terminal.calls, []);
+	});
+
+	test('a screen its reader does not recognize - a changed layout - is unknown, and nothing is pasted into it (D78, RULES-1.4)', async () => {
+		const { input, terminal } = setUp();
+		terminal.reading = 'unknown';
+		assert.strictEqual(await input.inspect(RUN), 'unknown');
+		assert.deepStrictEqual(await input.submit(RUN, 'Hello'), NOTHING);
+		assert.deepStrictEqual(terminal.calls, ['read by claude-frame', 'read by claude-frame']);
+	});
+
+	test('a run ptyd does not hold, or a reading that fails, is unknown', async () => {
+		const gone = setUp();
+		const missing = new OrdinaryInput({ get: () => gone.runs.get(RUN), inspectInput: async () => undefined, typeText: gone.terminal.typeText, pressKeys: gone.terminal.pressKeys });
+		assert.strictEqual(await missing.inspect(RUN), 'unknown');
+		const failing = new OrdinaryInput({ get: () => gone.runs.get(RUN), inspectInput: async () => { throw new PtydLost('lost'); }, typeText: gone.terminal.typeText, pressKeys: gone.terminal.pressKeys });
+		assert.strictEqual(await failing.inspect(RUN), 'unknown');
+	});
+
+	test('the message goes in as one paste without Enter, Enter once the CLI shows it as a draft, and is confirmed once its input is empty again', async () => {
+		const { input, terminal, waits } = setUp();
+		const text = '[Facade message #m1 | from @lead #a1 | window Design]\nReview the API.\n[/Facade message #m1]';
+		assert.deepStrictEqual(await input.submit(RUN, text), CONFIRMED);
+		assert.deepStrictEqual(terminal.calls, ['read by claude-frame', `type ${JSON.stringify(text)}`, 'read by claude-frame', 'keys Enter', 'read by claude-frame']);
+		assert.deepStrictEqual(waits, []);
+	});
+
+	test('it waits for the draft and for the empty input, reading every 100 ms: busy or idle, an emptied input is the CLI\'s acceptance', async () => {
+		const { input, terminal, waits } = setUp();
+		terminal.showsPasteAfter = 4;
+		terminal.takesEnterAfter = 6;
+		assert.deepStrictEqual(await input.submit(RUN, 'Hello'), CONFIRMED);
+		assert.deepStrictEqual(terminal.calls.filter(call => !call.startsWith('read')), ['type "Hello"', 'keys Enter']);
+		assert.deepStrictEqual(waits, [100, 100, 100, 100, 100, 100, 100, 100]);
+	});
+
+	test('Enter after which the input stays full is unconfirmed: its effects unknown, the text and Enter written', async () => {
+		const { input, terminal, log, waited } = setUp();
+		terminal.takesEnterAfter = undefined;
+		assert.deepStrictEqual(await input.submit(RUN, 'Hello'), { outcome: 'unknown', text_written: 'full', enter_written: true });
+		assert.strictEqual(waited(), 3_000);
+		assert.deepStrictEqual(log, ['Message input of #a2: its input did not empty within 3 seconds of Enter, so the message\'s submission is not confirmed']);
+	});
+
+	test('a paste that never shows as a draft gets no Enter: the text was written, what the CLI holds is not known', async () => {
+		const { input, terminal, log, waited } = setUp();
+		terminal.showsPasteAfter = undefined;
+		assert.deepStrictEqual(await input.submit(RUN, 'Hello'), { outcome: 'unknown', text_written: 'full', enter_written: false });
+		assert.ok(!terminal.calls.includes('keys Enter'));
+		assert.strictEqual(waited(), 2_000);
+		assert.match(log[0], /did not show in its input within 2 seconds, so Enter was not pressed/);
+	});
+
+	test('an input no longer usable in the submission\'s turn - direct input came after delivery looked - is not pasted into', async () => {
+		const { input, terminal } = setUp();
+		terminal.reading = 'draft';
+		assert.deepStrictEqual(await input.submit(RUN, 'Hello'), NOTHING);
+		assert.deepStrictEqual(terminal.calls, ['read by claude-frame']);
+		const unverified = setUp({ inputAdapter: undefined, inputCapability: { state: 'unavailable', reason: 'no reader' } });
+		assert.deepStrictEqual(await unverified.input.submit(RUN, 'Hello'), NOTHING);
+		assert.deepStrictEqual(unverified.terminal.calls, []);
+	});
+
+	test('input ptyd was never given went nowhere; an answer lost on the way is not known; an Enter that did not go in leaves the text alone', async () => {
+		const notSent = setUp();
+		notSent.terminal.paste = new PtydNotSent('not reached');
+		assert.deepStrictEqual(await notSent.input.submit(RUN, 'Hello'), NOTHING);
+		const lost = setUp();
+		lost.terminal.paste = new PtydLost('lost');
+		await assert.rejects(lost.input.submit(RUN, 'Hello'), PtydLost);
+		const ended = setUp();
+		ended.terminal.paste = { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false };
+		assert.deepStrictEqual(await ended.input.submit(RUN, 'Hello'), NOTHING);
+		const unentered = setUp();
+		unentered.terminal.enter = { outcome: 'not_applied', reason: 'ended', keysSent: 0 };
+		assert.deepStrictEqual(await unentered.input.submit(RUN, 'Hello'), { outcome: 'partial', text_written: 'full', enter_written: false });
+		const enterNotSent = setUp();
+		enterNotSent.terminal.enter = new PtydNotSent('not reached');
+		assert.deepStrictEqual(await enterNotSent.input.submit(RUN, 'Hello'), { outcome: 'partial', text_written: 'full', enter_written: false });
+		const enterLost = setUp();
+		enterLost.terminal.enter = new PtydLost('lost');
+		assert.deepStrictEqual(await enterLost.input.submit(RUN, 'Hello'), { outcome: 'unknown', text_written: 'full', enter_written: null });
+	});
+
+	test('a submission cut off - its deadline passed or its run ended - sends nothing more: no paste before it, no Enter after the paste', async () => {
+		const before = setUp();
+		const stopped = new AbortController();
+		stopped.abort();
+		assert.deepStrictEqual(await before.input.submit(RUN, 'Hello', stopped.signal), NOTHING);
+		assert.deepStrictEqual(before.terminal.calls, []);
+		const during = setUp();
+		const cutoff = new AbortController();
+		during.terminal.showsPasteAfter = 5;
+		during.terminal.onPaste = () => cutoff.abort();
+		assert.deepStrictEqual(await during.input.submit(RUN, 'Hello', cutoff.signal), { outcome: 'unknown', text_written: 'full', enter_written: false });
+		assert.ok(!during.terminal.calls.includes('keys Enter'));
+	});
+
+	test('direct text and keys for the same terminal wait for a submission under way, never landing between its paste and its Enter; another terminal\'s do not wait', async () => {
+		const { input, terminal } = setUp();
+		let open!: () => void;
+		// The reading after the paste is held back: the submission stays between its paste and its Enter
+		terminal.onPaste = () => {
+			terminal.onPaste = () => undefined;
+			terminal.gate = new Promise(resolve => open = resolve);
+		};
+		const submitted = input.submit(RUN, 'Hello');
+		await new Promise(resolve => setImmediate(resolve));
+		const direct = input.inTurn(RUN, () => terminal.typeText(RUN, 'typed', false));
+		const elsewhere = input.inTurn(OTHER, () => terminal.typeText(OTHER, 'there', false));
+		await elsewhere;
+		assert.deepStrictEqual(terminal.calls.filter(call => !call.startsWith('read')), ['type "Hello"', `type ${OTHER} "there"`]);
+		terminal.gate = undefined;
+		open();
+		assert.deepStrictEqual(await submitted, CONFIRMED);
+		await direct;
+		assert.deepStrictEqual(terminal.calls.filter(call => !call.startsWith('read')), ['type "Hello"', `type ${OTHER} "there"`, 'keys Enter', 'type "typed"']);
+	});
+});

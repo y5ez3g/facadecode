@@ -13,11 +13,8 @@ import { PTYD_PROTOCOL } from '../ptyd/protocol';
 import { ensurePtydSocket } from '../ptyd/socket';
 import { replaceFsFunction, tempDir } from './util';
 
-suite('ptyd socket ownership', function () {
-	if (process.platform === 'win32') {
-		return;
-	}
-
+// Unix sockets alone: Windows listens on named pipes, which have no folder or file mode to own
+(process.platform === 'win32' ? suite.skip : suite)('ptyd socket ownership', function () {
 	test('the fallback is always short and private, independent of a shared tmpdir, and a pre-existing nonprivate folder is refused', () => {
 		const socket = ptydSocketPath('/unused/isolated-review-home');
 		const dir = path.dirname(socket);

@@ -10,3 +10,11 @@ export type JsonObject = { readonly [key: string]: unknown };
 export function isJsonObject(value: unknown): value is JsonObject {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
+
+/**
+ * `value` written as JSON with each object's keys in order and each array as it is: the same content however its writer ordered
+ * the fields, while another order of a list is another value (CLIS-2.2).
+ */
+export function canonicalJson(value: unknown): string {
+	return JSON.stringify(value, (_key, each: unknown) => isJsonObject(each) ? Object.fromEntries(Object.keys(each).sort().map(key => [key, each[key]])) : each);
+}

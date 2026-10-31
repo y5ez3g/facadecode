@@ -61,3 +61,17 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 export function configureAgentsLabel(): string {
 	return vscode.l10n.t("Configure Agents");
 }
+
+/** How long ago `time` was, in the window's language, as briefly as it says it: now, 5 min. ago, yesterday (UX-2.4). */
+export function ago(time: number, now: number, language: string): string {
+	const format = new Intl.RelativeTimeFormat(language, { numeric: 'auto', style: 'short' });
+	const minutes = Math.floor(Math.max(0, now - time) / 60_000);
+	if (minutes < 1) {
+		return format.format(0, 'second');
+	}
+	if (minutes < 60) {
+		return format.format(-minutes, 'minute');
+	}
+	const hours = Math.floor(minutes / 60);
+	return hours < 24 ? format.format(-hours, 'hour') : format.format(-Math.floor(hours / 24), 'day');
+}

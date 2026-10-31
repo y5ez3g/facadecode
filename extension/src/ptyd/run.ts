@@ -3,7 +3,11 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { IPty } from 'node-pty';
-import type { RunExit, RunInfo, RunStatus, SpawnParams, Termination } from './protocol';
+import { InputReading, inputScreenOf, readInput } from './composer';
+import { InputEffect, InputQueue } from './input';
+import { KeyModes, keySequence, pasteSequence } from './keys';
+import type { RunExit, RunInfo, RunStatus, ScreenFrame, ScreenRead, SpawnParams, Termination } from './protocol';
+import { MOST_SCREEN_LINES, readScreen } from './screen';
 import { parseStatus, ProgramStatus, STATUS_REPLY } from './status';
 
 /** The backend packaged beside ptyd, loaded lazily so tests can substitute the process adapter (ARCHITECTURE-1.2). */
@@ -62,6 +66,22 @@ export const MOST_RUN_BUFFER = 8 * 1024 * 1024;
 const PROGRAM_STATUS_OSC = 7501;
 const PROMPT_MARK_OSC = 133;
 
+/**
+ * The pause after a lone Escape that another key of the call follows: in the legacy encoding Escape is the ESC that also starts
+ * every escape sequence, and a program that reads the next key with it takes the two for Alt with that key. No other key needs
+ * one: each other sequence ends itself, and the kitty and win32 encodings write Escape as a sequence of its own (MCP-5.2).
+ */
+const ESCAPE_GAP_MS = 50;
+
+/** Leaving the alternate screen: DECRST 47, 1047 or 1049. */
+const ALTERNATE_SCREEN_MODES = [47, 1047, 1049];
+
+/** Win32 input mode: `CSI ? 9001 h`. */
+const WIN32_INPUT_MODE = 9001;
+
+/** How many sets of kitty keyboard flags a screen's stack holds, as the protocol has it. */
+const KITTY_STACK_MOST = 16;
+
 /** How soon after a Ctrl+C an exit counts as following it: the evidence an adapter may verify as an interrupt (RULES-3.3). */
 const INTERRUPT_EVIDENCE_MS = 2_000;
 
@@ -71,7 +91,13 @@ const KILL_CONFIRM_MS = 2_000;
 /** How long a Windows console's output pipe may still bring what its program wrote last once it ended: node-pty's own flush time. */
 const CONSOLE_FLUSH_MS = 1_000;
 
-/** What node-pty 1.1 keeps of a Windows console: the pipes to it, and the worker thread that reads its output. */
+/**
+ * How long a Windows console may take to start its program. node-pty 1.2 starts it once the console's output is connected, and
+ * itself gives that up after five seconds, reporting an exit.
+ */
+const START_WAIT_MS = 10_000;
+
+/** What node-pty 1.2 keeps of a Windows console: the pipes to it, and the worker thread that reads its output. */
 interface WindowsConsole {
 	readonly _agent?: {
 		readonly _conoutSocketWorker?: { dispose?(): void };
@@ -81,7 +107,7 @@ interface WindowsConsole {
 }
 
 /**
- * Lets go of node-pty's connection to a Windows console whose program ended. With the ConPTY DLL, node-pty 1.1 never closes the
+ * Lets go of node-pty's connection to a Windows console whose program ended. With the ConPTY DLL, node-pty 1.2 never closes the
  * output pipe or ends the worker thread reading it - a thread and some 17 MB held in ptyd for every run that ended, measured on
  * Windows 11 - so they are closed here, where the backend has them; anything else has none of them, and nothing is done.
  */
@@ -123,16 +149,37 @@ export class Run {
 	/** Whoever cannot take more of what the run writes yet: while anyone is, its pty is not read, and the CLI waits. */
 	private readonly holders = new Set<object>();
 	private readonly programStatus = new ProgramStatus();
+	private readonly queue = new InputQueue();
 	/** The number of the last output chunk: each is numbered as it is drawn, so that a reattach never shows one twice. */
 	private seq = 0;
 	/** What was written to the headless terminal and is not drawn yet, in UTF-8 bytes. */
 	private undrawn = 0;
 	private title = '';
+	private lastOutput: number | undefined;
 	private exited: RunExit | undefined;
 	/** Set as node-pty reports the exit, before what it wrote last is drawn: from then on its PID is never signalled. */
 	private reaped = false;
-	/** When a Ctrl+C last went into its terminal. */
+	/** The exit code node-pty reported: on Windows, where a program never started, the system's error. */
+	private reapedCode: number | undefined;
+	/**
+	 * Whether its console was ended, on Windows: node-pty's kill there ends every process of the console and closes it, and a second
+	 * kill - a later one, once that close is done - reaches a console already freed and corrupts the whole process's heap. It is
+	 * ended once; nothing stronger follows, nor any resize of what is gone.
+	 */
+	private consoleEnded = false;
+
+	/** Whether its terminal still takes what is written to it and its size: not once it ended, nor once its console was ended. */
+	private get writable(): boolean {
+		return !this.exited && !this.consoleEnded;
+	}
+	/** When a Ctrl+C last went into its terminal, from the person or from automated keys. */
 	private ctrlCAt: number | undefined;
+	private readonly kittyStacks = { normal: [] as number[], alternate: [] as number[] };
+	private win32Input = false;
+	/** The last frame its program drew on the alternate screen, kept as it left it or ended there (MCP-5.1). */
+	private frame: ScreenFrame | undefined;
+	/** Set once ptyd let go of it: its headless terminal is gone. */
+	private disposed = false;
 	/** Set once a window removed it: no window lists it again, and it is dropped as it ends. */
 	removed = false;
 	readonly startedAt = Date.now();
@@ -155,6 +202,7 @@ export class Run {
 			this.listener?.title(title);
 		});
 		this.followStatus();
+		this.followModes();
 		this.programStatus.onDidChange(status => this.listener?.status(status));
 		try {
 			this.pty = spawnPty(params);
@@ -165,20 +213,27 @@ export class Run {
 		// With no window showing it, ptyd answers what the program asks its terminal - where its cursor is - so that a CLI waiting
 		// for the answer goes on; a window that shows it answers itself
 		terminal.onData(reply => {
-			if (!this.listener && !this.exited) {
+			if (!this.listener && this.writable) {
 				this.pty.write(reply);
 			}
 		});
 		this.pty.onData(data => {
+			this.lastOutput = Date.now();
 			const seq = ++this.seq;
 			this.draw(data);
 			this.listener?.output(seq, data);
 		});
 		this.pty.onExit(({ exitCode, signal }) => {
 			this.reaped = true;
+			this.reapedCode = exitCode;
 			const ctrlC = this.ctrlCAt !== undefined && Date.now() - this.ctrlCAt <= INTERRUPT_EVIDENCE_MS;
+			this.queue.end();
 			// Told once what it wrote last is drawn
 			this.terminal.write('', () => {
+				if (!this.disposed && this.terminal.buffer.active.type === 'alternate') {
+					// It ended on the alternate screen: that is its last frame, and the normal buffer its final output
+					this.keepFrame();
+				}
 				this.exited = { exitCode, ...(signal ? { signal } : {}), ...(ctrlC ? { ctrlC: true as const } : {}) };
 				this.holders.clear();
 				this.listener?.exit(this.exited);
@@ -199,6 +254,30 @@ export class Run {
 
 	get hasExited(): boolean {
 		return !!this.exited;
+	}
+
+	/**
+	 * Resolves once its program has started, with its PID: at once where node-pty starts it as it spawns, and on Windows - where
+	 * node-pty 1.2 starts it only once the console's output is connected - as soon as it has one. Rejects where it ended first, as
+	 * a program that could not start does, or none came within {@link START_WAIT_MS}.
+	 */
+	started(): Promise<void> {
+		return new Promise((resolve, reject) => {
+			const end = Date.now() + START_WAIT_MS;
+			const check = () => {
+				if (this.pty.pid > 0) {
+					resolve();
+				} else if (this.reaped) {
+					// node-pty's own words for a program Windows could not start, as it threw them before it started programs later
+					reject(new Error(`Cannot create process (error code: ${this.reapedCode})`));
+				} else if (Date.now() > end) {
+					reject(new Error(`${this.params.file} did not start within ${START_WAIT_MS / 1_000} seconds.`));
+				} else {
+					setTimeout(check, 20);
+				}
+			};
+			check();
+		});
 	}
 
 	/** The run as `claimedElsewhere` has it for the connection asking. */
@@ -265,7 +344,7 @@ export class Run {
 
 	/** What the person typed in the window that shows the run: straight to its process (EXPERIENCE-2.1). */
 	write(data: string): void {
-		if (this.exited) {
+		if (!this.writable) {
 			return;
 		}
 		if (hasCtrlC(data)) {
@@ -275,7 +354,7 @@ export class Run {
 	}
 
 	resize(cols: number, rows: number): void {
-		if (this.exited || cols < 1 || rows < 1 || (cols === this.terminal.cols && rows === this.terminal.rows)) {
+		if (!this.writable || cols < 1 || rows < 1 || (cols === this.terminal.cols && rows === this.terminal.rows)) {
 			return;
 		}
 		this.pty.resize(cols, rows);
@@ -283,12 +362,61 @@ export class Run {
 		this.terminal.options.scrollback = scrollbackRows(cols);
 	}
 
+	/** Pastes `text` as one input - bracketed where the program turned that mode on - and Enter after it if asked, in turn. */
+	type(text: string, enter: boolean): Promise<InputEffect> {
+		return this.queue.add(async alive => {
+			await this.parsed();
+			if (!alive()) {
+				return { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false };
+			}
+			if (text) {
+				this.pty.write(pasteSequence(this.terminal.modes.bracketedPasteMode, text));
+			}
+			if (!enter) {
+				return { outcome: 'applied', pasted: !!text, entered: false };
+			}
+			await this.parsed();
+			if (!alive()) {
+				return { outcome: text ? 'partial' : 'not_applied', reason: 'ended', pasted: !!text, entered: false };
+			}
+			this.pty.write(keySequence(this.keyModes(), 'Enter'));
+			return { outcome: 'applied', pasted: !!text, entered: true };
+		}, { outcome: 'not_applied', pasted: false, entered: false });
+	}
+
 	/**
-	 * Ends its process (LIFECYCLE-4.2): its process group hung up, as a closed terminal would, then killed where it has not ended
-	 * within `graceMs`. A process already reaped is never signalled: its PID may be another's now. Windows ends the console's
-	 * processes as node-pty does. Answers what its exit showed.
+	 * Presses `keys` in order, each in the modes the program has as it is pressed, in turn: one after another, but for the pause a
+	 * lone Escape needs before the key after it ({@link ESCAPE_GAP_MS}).
+	 */
+	keys(keys: readonly string[]): Promise<InputEffect> {
+		return this.queue.add(async alive => {
+			let lone = false;
+			for (let sent = 0; sent < keys.length; sent++) {
+				if (lone) {
+					await new Promise(resolve => setTimeout(resolve, ESCAPE_GAP_MS));
+				}
+				await this.parsed();
+				if (!alive()) {
+					return { outcome: sent ? 'partial' : 'not_applied', reason: 'ended', keysSent: sent };
+				}
+				if (keys[sent] === 'Ctrl+C') {
+					this.ctrlCAt = Date.now();
+				}
+				const sequence = keySequence(this.keyModes(), keys[sent]);
+				lone = sequence === '\x1b';
+				this.pty.write(sequence);
+			}
+			return { outcome: 'applied', keysSent: keys.length };
+		}, { outcome: 'not_applied', keysSent: 0 });
+	}
+
+	/**
+	 * Ends its process (LIFECYCLE-4.2): no more automated input; its process group hung up, as a closed terminal would, then
+	 * killed where it has not ended within `graceMs`. A process already reaped is never signalled: its PID may be another's now.
+	 * Windows ends the console's processes as node-pty does, once: nothing stronger follows its grace. Answers what its exit showed.
 	 */
 	async terminate(graceMs: number): Promise<Termination> {
+		this.queue.end();
 		if (this.exited) {
 			return 'already_exited';
 		}
@@ -304,8 +432,46 @@ export class Run {
 		return await this.exitWithin(KILL_CONFIRM_MS) ? 'terminated' : 'unconfirmed';
 	}
 
+	/**
+	 * The bottom `lines` lines of its screen, once what was written is drawn (MCP-5.1). Read from the normal buffer - its output, and
+	 * its final output once it ended, also where it ended on the alternate screen - it comes with the last frame drawn there.
+	 */
+	async read(lines: number): Promise<ScreenRead> {
+		await this.parsed();
+		const count = Math.max(1, Math.min(MOST_SCREEN_LINES, Math.floor(lines)));
+		const screen = readScreen(this.terminal as never, count, this.exited ? 'normal' : 'active');
+		const frame = screen.buffer === 'normal' ? this.frame : undefined;
+		return {
+			...screen,
+			capturedAt: Date.now(),
+			...(this.lastOutput !== undefined ? { lastOutput: this.lastOutput } : {}),
+			exited: !!this.exited,
+			...(frame ? { frame: { lines: frame.lines.slice(-count), text: frame.text.slice(-count), capturedAt: frame.capturedAt } } : {})
+		};
+	}
+
+	/**
+	 * Its ordinary-message input as `adapter` reads it from the screen, once what was written is drawn (CLIS-2.1, RULES-1.4): read,
+	 * never probed with a key. An ended run's is unknown.
+	 */
+	async inspect(adapter: string): Promise<InputReading> {
+		await this.parsed();
+		if (this.exited || this.disposed) {
+			return { state: 'unknown', evidence: 'its process ended' };
+		}
+		return readInput(inputScreenOf(this.terminal), adapter);
+	}
+
+	/** Keeps the alternate screen as it stands as the last frame its program drew there. */
+	private keepFrame(): void {
+		const { lines, text } = readScreen(this.terminal as never, MOST_SCREEN_LINES, 'alternate');
+		this.frame = { lines, text, capturedAt: Date.now() };
+	}
+
 	/** Ends what is left of it: ptyd itself is going, or a window forgot it. */
 	dispose(): void {
+		this.disposed = true;
+		this.queue.end();
 		this.signal(process.platform === 'win32' ? undefined : 'SIGHUP');
 		this.listener = undefined;
 		this.exitListeners.clear();
@@ -314,13 +480,25 @@ export class Run {
 
 	/**
 	 * Sends `signal` to its process group - the leader and what it started in its session - while the leader is not reaped; on
-	 * Windows node-pty's kill. False where nothing could be signalled.
+	 * Windows node-pty's kill, once (`consoleEnded`). False where nothing could be signalled.
 	 */
 	private signal(signal: NodeJS.Signals | undefined): boolean {
 		if (this.reaped) {
 			return false;
 		}
-		if (process.platform === 'win32' || signal === undefined) {
+		if (process.platform === 'win32') {
+			if (this.consoleEnded) {
+				return true;
+			}
+			try {
+				this.pty.kill();
+				this.consoleEnded = true;
+				return true;
+			} catch {
+				return false;
+			}
+		}
+		if (signal === undefined) {
 			try {
 				this.pty.kill();
 				return true;
@@ -379,6 +557,61 @@ export class Run {
 		});
 	}
 
+	/** Settles once all that was written to the headless terminal is drawn. */
+	private parsed(): Promise<void> {
+		return new Promise(resolve => this.terminal.write('', resolve));
+	}
+
+	private keyModes(): KeyModes {
+		const stack = this.kittyStacks[this.terminal.buffer.active.type];
+		return { applicationCursorKeys: this.terminal.modes.applicationCursorKeysMode, kittyFlags: stack[stack.length - 1] ?? 0, win32Input: this.win32Input };
+	}
+
+	/**
+	 * Follows what the program sets that the headless terminal does not keep: the kitty keyboard protocol's flags - pushed, popped
+	 * and set, a stack for each screen - and win32 input mode. The terminal's own handling of each sequence still runs.
+	 */
+	private followModes(): void {
+		const parser = this.terminal.parser;
+		const stack = () => this.kittyStacks[this.terminal.buffer.active.type];
+		const numbers = (params: (number | number[])[]) => params.map(param => Array.isArray(param) ? param[0] : param);
+		parser.registerCsiHandler({ prefix: '>', final: 'u' }, params => {
+			const flags = stack();
+			flags.push(numbers(params)[0] ?? 0);
+			flags.splice(0, Math.max(0, flags.length - KITTY_STACK_MOST));
+			return true;
+		});
+		parser.registerCsiHandler({ prefix: '<', final: 'u' }, params => {
+			const flags = stack();
+			flags.splice(Math.max(0, flags.length - Math.max(1, numbers(params)[0] || 1)));
+			return true;
+		});
+		parser.registerCsiHandler({ prefix: '=', final: 'u' }, params => {
+			const [value = 0, mode = 1] = numbers(params);
+			const flags = stack();
+			const current = flags.pop() ?? 0;
+			flags.push(mode === 2 ? current | value : mode === 3 ? current & ~value : value);
+			return true;
+		});
+		parser.registerCsiHandler({ prefix: '?', final: 'h' }, params => {
+			if (numbers(params).includes(WIN32_INPUT_MODE)) {
+				this.win32Input = true;
+			}
+			return false;
+		});
+		parser.registerCsiHandler({ prefix: '?', final: 'l' }, params => {
+			const modes = numbers(params);
+			if (modes.includes(WIN32_INPUT_MODE)) {
+				this.win32Input = false;
+			}
+			// Before the terminal leaves the alternate screen, which it clears as it does: its last frame is kept (MCP-5.1)
+			if (this.terminal.buffer.active.type === 'alternate' && modes.some(mode => ALTERNATE_SCREEN_MODES.includes(mode))) {
+				this.keepFrame();
+			}
+			return false;
+		});
+	}
+
 	/**
 	 * Follows what its program reports of itself (OSC 7501): its question whether ptyd takes reports is answered at once, whichever
 	 * window shows the run or none - ptyd implements the protocol, a window's terminal does not - and each report is taken. A new
@@ -389,7 +622,7 @@ export class Run {
 		parser.registerOscHandler(PROGRAM_STATUS_OSC, data => {
 			const message = parseStatus(data);
 			if (message === 'query') {
-				if (!this.exited) {
+				if (this.writable) {
 					this.pty.write(STATUS_REPLY);
 				}
 				this.programStatus.asked();

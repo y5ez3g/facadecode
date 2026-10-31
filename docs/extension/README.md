@@ -9,16 +9,18 @@ rule bodies and [Decisions](DECISIONS.md); historical task records and review fi
 
 | Layer | Document | Owns |
 | --- | --- | --- |
-| 1 Product | [PRODUCT](PRODUCT.md) | Users, access to every agent, responsibilities, priorities and first-release scope |
+| 1 Product | [PRODUCT](PRODUCT.md) | Users, ways of working, access to every agent, responsibilities, priorities and first-release scope |
 | 2 Experience | [EXPERIENCE](EXPERIENCE.md) | Complete human journeys |
-| 2 Shared rules | [RULES](RULES.md) | Identity, locations, state, error ownership, lifetime, YOLO and retention |
+| 2 Shared rules | [RULES](RULES.md) | Messages, identity, client network, locations, state, error ownership, lifetime, reach, YOLO and retention |
 | 3 Common interaction | [UX](UX.md) | Native surfaces, fixed presentation, accessibility, commands/settings and languages |
 | 3 Features | [LIFECYCLE](features/LIFECYCLE.md) | Display names, editor terminals, local finding and immediate close |
 | 3 Features | [WORKTREES](features/WORKTREES.md) | Folder/worktree discovery, native creation and observing external removal |
 | 3 Features | [PANEL](features/PANEL.md) | Cards, count, stack order and webview |
-| 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, processes, data, packaging and working safeguards |
-| 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, capability evidence and trust |
-| 4 Verification | [VERIFICATION](engineering/VERIFICATION.md) | G2 and G5, required journeys/scale and actual evidence |
+| 3 Features | [COLLABORATION](features/COLLABORATION.md) | Cross-window agent operations, messages, human contact and Message History |
+| 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, window components, processes, data, packaging and working safeguards |
+| 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, input readers, Facade tool files, capability evidence and trust |
+| 4 Engineering | [MCP](engineering/MCP.md) | The nine agent tools, results, waits, injection and protocol |
+| 4 Verification | [VERIFICATION](engineering/VERIFICATION.md) | G1, G2, G3 and G5, required journeys/scale and actual evidence |
 
 Read Product, then Experience for the whole product in plain terms. Shared Rules defines cross-feature behavior. Lower
 layers supply implementation details without adding work management, security services, rare features or extra approval
@@ -39,18 +41,22 @@ and do not reinstate a requirement explicitly superseded by the current body.
 deleted behavior must change its expectation; it is not evidence that the deleted feature should be restored.
 
 The Facade Code extension is committed in additive steps, and each commit carries only the specification its step needs.
-This is the subset for step 1, one of a sequence of owner-tested steps: Claude Code and Codex with the whole user interface
-that serves them. Every rule keeps its final number, so the numbering has gaps that later steps fill; their rules, decisions
-and checks are not part of this step.
+This is the subset for step 2, one of a sequence of owner-tested steps. Step 1 shipped Claude Code and Codex with the whole
+user interface that serves them, as the 0.0.1 preview. Step 2 adds agents that work together: the nine MCP tools,
+messages and their results, contact with the person, Message History, and control of agents in every Facade window on
+this computer, local and remote alike. Every rule keeps its final number, so the numbering has gaps that later steps fill
+(Resume, Pin, filters, more CLIs, custom CLIs and launch settings); their rules, decisions and checks are not part of
+this step.
 
 ## 3 Coverage and evidence limits
 
-The set contains **10 normative documents and 125 numbered rules**. The [audit report](audit/REPORT.md) records
+The set contains **12 normative documents and 175 numbered rules**. The [audit report](audit/REPORT.md) records
 structural and reference checks; the migration ledger joins in the last step. These do not constitute a runtime pass.
 
-Required product evidence includes native/compatible-editor installation, true close versus reload/disconnect, each
-supported CLI's activity capabilities, 100-agent window usability and a real user's walkthrough. Unknown CLI versions
-can start interactively; only verified capabilities/version/platform combinations are advertised as supported.
+Required product evidence includes native/compatible-editor installation, routing between local and remote windows,
+true close versus reload/disconnect, each supported CLI's activity and message-input capabilities, 100-agent window
+usability and a real user's walkthrough. Unknown CLI versions can start interactively and are attempted for messages;
+only verified capabilities/version/platform combinations are advertised as supported.
 Browser-only editors are outside this release. The current review does not manufacture evidence for an unavailable
 environment or close a platform gate by declaration.
 
@@ -65,6 +71,8 @@ Resolve routine engineering details within scope; raise concrete rule/scenario/e
 the owner to repeatedly approve speculative edge cases. Verification states remain separate for spec, code and product.
 
 ## Change log
+
+- 2026-10-30: Step 2 of the Facade Code extension: added COLLABORATION and MCP; 12 documents and 175 rules.
 
 - 2026-10-30: Corrected the stale step summary to include the owner's already-authorized Codex addition to step 1.
 

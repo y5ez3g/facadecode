@@ -20,5 +20,8 @@
 	"config.codex.title": "Codex",
 	"config.codex.path": "Chemin d'accès à Codex. Laissez vide pour utiliser « codex » à partir du PATH de l'environnement de terminal.",
 	"windowDisplayName": "Composant de fenêtre Facade Code",
-	"windowDescription": "Coordinateur d'identité de fenêtre et de continuité de session pour Facade Code."
+	"windowDescription": "Coordinateur d'identité de fenêtre et de continuité de session pour Facade Code.",
+	"command.messageHistory": "Historique des messages...",
+	"config.collaboration.enabled": "Permettre aux agents de se démarrer et de s'arrêter mutuellement, de s'envoyer des messages et de vous en envoyer, et de lire les terminaux des uns et des autres et d'y saisir du texte. S'applique uniquement aux nouveaux agents.",
+	"config.collaboration.waitSeconds": "Nombre de secondes pendant lesquelles un agent attend qu'un autre agent démarre ou s'arrête. Passé ce délai, l'agent reçoit le résultat plus tard dans un message."
 }

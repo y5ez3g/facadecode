@@ -20,5 +20,8 @@
 	"config.codex.title": "Codex",
 	"config.codex.path": "Codex 경로입니다. 터미널 환경의 PATH에서 \"codex\"를 사용하려면 비워 두세요。",
 	"windowDisplayName": "Facade Code 창 구성 요소",
-	"windowDescription": "Facade Code용 창 ID 및 세션 연속성 조정자입니다."
+	"windowDescription": "Facade Code용 창 ID 및 세션 연속성 조정자입니다.",
+	"command.messageHistory": "메시지 기록...",
+	"config.collaboration.enabled": "에이전트가 서로를 시작 및 중지하고, 서로에게 그리고 사용자에게 메시지를 보내고, 서로의 터미널을 읽고 입력할 수 있도록 합니다. 새로 시작되는 에이전트에만 적용됩니다.",
+	"config.collaboration.waitSeconds": "에이전트가 다른 에이전트의 시작 또는 중지를 기다리는 시간(초)입니다. 이 시간이 지나면 에이전트는 나중에 메시지로 결과를 받습니다."
 }

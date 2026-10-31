@@ -6,7 +6,7 @@ import * as path from 'path';
 import { messageOf } from '../../base/errors';
 import type { OwnerClaim } from '../../base/ownership';
 import { nextOwnerClaim } from '../../record/ownership';
-import { earlierRuns, PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
+import { PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
 
 /** Cadence for checking live processes and retrying recovery (UX-5.2). */
 export const RECONCILE_MS = 2_000;
@@ -21,6 +21,8 @@ interface SessionOptions {
 	readonly transferred: () => void;
 	readonly reconnect: () => Promise<void>;
 	readonly reconcile: () => Promise<void>;
+	/** Each connection once it holds this activation's claim: the window hears its runs' tool calls on it (MCP-6.1). */
+	readonly connected?: (client: PtydClient) => void;
 }
 
 /** Owns one activation's claim, connection and recovery schedule; it never owns terminal or per-run state. */
@@ -59,6 +61,7 @@ export class ExecutionSession {
 					if (this.closed) {
 						throw new Error('This workspace activation no longer owns its agents.');
 					}
+					this.options.connected?.(client);
 					return client;
 				} catch (err) {
 					client.dispose();
@@ -82,11 +85,6 @@ export class ExecutionSession {
 						}
 					}
 				});
-				void earlierRuns(this.options.home, this.options.owner).then(found => {
-					for (const { protocol, runs } of found) {
-						this.options.log(`${runs} agent processes started by an earlier Facade Code still run in a ptyd of protocol ${protocol}; this window cannot show them, and they were not ended.`);
-					}
-				}, () => undefined);
 			}, err => {
 				if (this.connection === connection) {
 					this.connection = undefined;

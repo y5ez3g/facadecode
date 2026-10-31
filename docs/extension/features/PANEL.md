@@ -20,7 +20,8 @@ Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facad
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
 card loading. Title actions in order: New Agent (`new-session`). The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Configure Agents... in a separate group. Go to Agent... is a Command Palette entry, not a view-menu item. Facade commands
+Message History... and Configure Agents... in a separate group. Go to Agent... is a Command Palette entry, not a
+view-menu item. Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero.
 
@@ -67,9 +68,12 @@ all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibili
 **The second line adds the most useful known fact without claiming task completion.**
 
 Priority: retained failure or specific connection/status error; known native blocker; generic activity-unavailable
-explanation; active startup stage; CLI title; fallback. When a known native blocker coexists with unavailable activity,
-lead with the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
-Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
+explanation; unavailable Facade tools; active startup stage; CLI title; creation prompt first line; fallback. When a
+known native blocker coexists with unavailable activity, lead with the blocker and retain the status explanation, for
+example `Sign-in required · Activity unavailable`.
+A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file} in this folder`,
+and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
+title. Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
 `Ready for your first message`. Never `Done, waiting for you` from a turn end. Native blockers use CLI words or
 `Needs permission`, `Sign-in required`, `Waiting for an answer`; no popup solely for them.
 
@@ -82,8 +86,9 @@ unavailable`; the accessible label preserves it. No unread dot, completed check,
 
 **Every fact cut from a card remains readable without relying on color.**
 
-Card tooltip lines, one fact per line: name, short run ID and CLI; full title; state and reason; started relative time;
-qualified location; its path, the home folder written `~` except on Windows; window. Accessible label: name, short run
+Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason;
+started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
+written `~` except on Windows; window. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,
 options with `aria-selected`, decorative icons hidden, one roving Tab stop. Update labels in place. State-change
 announcements are polite, coalesced, and do not repeatedly announce spinner/progress ticks.
@@ -94,8 +99,8 @@ announcements are polite, coalesced, and do not repeatedly announce spinner/prog
 
 **The list is a manually reorderable stack; state changes do not move cards.**
 
-A new card goes first. Move Up/Down works within the list. Explicit close removes a card immediately; no stopping card
-remains. There are no batch actions. Click selects immediately and reveals its terminal. Selection follows the last
+A new card goes first, whether a person or an agent started it. Move Up/Down works within the list. Explicit close
+removes a card immediately; no stopping card remains. There are no batch actions or automatic creation-tree grouping. Click selects immediately and reveals its terminal. Selection follows the last
 active owned agent terminal, survives focus on a file/unrelated terminal, and disappears when that record is removed. A
 failed launch remains selected. Keyboard focus and selection are independent.
 
@@ -142,7 +147,7 @@ CSP:
 `default-src 'none'; style-src <cspSource>; font-src <cspSource>; img-src <cspSource>; script-src 'nonce-<nonce>';`.
 Nonce is 16 random bytes per page. Escape `<` in embedded localization JSON, use textContent for CLI/user strings,
 validate incoming actions and reject unknown keys/types. Local resource roots are only bundled media/webview output. No
-external image fetches, remote scripts, injected HTML or secrets in state. Cards, focus, open context framing and avatar
+external image fetches, remote scripts, injected HTML, command links from messages or secrets in state. Cards, focus, open context framing and avatar
 nodes survive ordinary text changes; initial draw does not animate.
 
 ### 3.3 Scrolling
@@ -172,6 +177,10 @@ removes fades/glides. Keyboard Page Up/Down moves fully visible row count minus 
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
+
+- 2026-10-30: Step 2 of the Facade Code extension: 1.1 adds Message History... to the view menu; 1.4 adds an
+  unavailable-tools explanation and a creation prompt's first line; 1.5 names an agent's creator; 2.1 places agent-started
+  cards like any other without tree grouping; 3.2 renders no command links from messages.
 
 - 2026-10-30: 1.3 adds the Codex avatar; 3.1 names the current source paths.
 

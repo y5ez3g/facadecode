@@ -11,9 +11,8 @@ import { PtydClient } from '../host/execution/ptydClient';
 import { lineReader, PTYD_PROTOCOL, RunEvent, SpawnParams } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import * as runModule from '../ptyd/run';
+import { eachLine, finish, IDLE, program, programEnv, ptydPlace } from './ptydPlace';
 import { withModules } from './withModules';
-
-const SHELL = '/bin/sh';
 
 /** Whether a process `pid` still exists. */
 function alive(pid: number): boolean {
@@ -26,11 +25,10 @@ function alive(pid: number): boolean {
 }
 
 suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function () {
-	if (process.platform === 'win32') {
-		return;
-	}
+	this.timeout(20_000);
 	let socketPath: string;
 	let socketDir: string;
+	let pipe: (name: string) => string;
 	let server: PtydServer;
 	const clients: PtydClient[] = [];
 	const extra: net.Socket[] = [];
@@ -40,9 +38,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	setup(async () => {
 		generation = 0;
 		snapshotGate = undefined;
-		socketDir = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-ptyd-'));
-		fs.chmodSync(socketDir, 0o700);
-		socketPath = path.join(socketDir, 'ptyd.sock');
+		({ dir: socketDir, socket: socketPath, pipe } = ptydPlace('fd-ptyd-'));
 		class DelayedSnapshotRun extends runModule.Run {
 			override async snapshot() {
 				const snapshot = await super.snapshot();
@@ -73,8 +69,9 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 		return client;
 	};
-	const spawn = (client: PtydClient, run: string, script: string, more: Partial<SpawnParams> = {}) => client.request('spawn', {
-		run, owner: 'w1', file: SHELL, args: ['-c', script], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin', TERM: 'xterm-256color' }, cols: 80, rows: 24, meta: { name: run }, ...more
+	/** Starts `source` as the run `run`, in Node: the same program on every platform. */
+	const spawn = (client: PtydClient, run: string, source: string, more: Partial<SpawnParams> = {}) => client.request('spawn', {
+		run, owner: 'w1', ...program(source), cwd: os.tmpdir(), cols: 80, rows: 24, meta: { name: run }, ...more
 	});
 	const until = async <T>(what: string, check: () => T | undefined | false | Promise<T | undefined | false>, ms = 5_000): Promise<T> => {
 		const deadline = Date.now() + ms;
@@ -101,7 +98,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		assert.deepStrictEqual(await client.request('hello', { protocol: PTYD_PROTOCOL }), { protocol: PTYD_PROTOCOL, pid: process.pid });
 		assert.strictEqual(await new PtydServer(socketPath).listen(), false);
 		// A ptyd of an earlier protocol, which answers hello with its own number
-		const older = path.join(socketDir, 'older.sock');
+		const older = pipe('older');
 		const fake = net.createServer(socket => socket.on('data', chunk => {
 			const { id } = JSON.parse(chunk.toString().split('\n')[0]);
 			socket.write(`${JSON.stringify({ id, result: { protocol: PTYD_PROTOCOL - 1, pid: 1 } })}\n`);
@@ -117,7 +114,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	test('a run started is claimed by its window: its numbered output, what it is typed and its end reach that window', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'r1');
-		const info = await spawn(client, 'r1', 'echo started; read line; echo "got $line"; exit 3');
+		const info = await spawn(client, 'r1', `process.stdout.write('started\\n'); ${eachLine(finish(`'got ' + line + '\\n'`, 3))}`);
 		assert.ok(info.pid > 1);
 		assert.deepStrictEqual([info.claimedElsewhere, info.seq], [false, 0]);
 		await until('its first line', () => outputOf(events).includes('started'));
@@ -131,18 +128,18 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 
 	test('a run ID is never started twice, even once its run was forgotten (RULES-2.2)', async () => {
 		const client = await connect();
-		await spawn(client, 'once', 'exit 0');
+		await spawn(client, 'once', 'process.exit(0)');
 		await until('its end', async () => (await client.request('list', { owner: 'w1' })).find(run => run.run === 'once')?.exited);
 		await client.request('forget', { run: 'once' });
 		assert.deepStrictEqual(await client.request('list', { owner: 'w1' }), []);
-		await assert.rejects(spawn(client, 'once', 'exit 0'), /was started before: ptyd never starts a run ID twice/);
+		await assert.rejects(spawn(client, 'once', 'process.exit(0)'), /was started before: ptyd never starts a run ID twice/);
 		await assert.rejects(client.request('input', { run: 'nope', data: 'x' }), /No run nope/);
 	});
 
 	test('a window that goes leaves its runs running, unclaimed; a window of the same workspace claims and draws one again, every output after its screen once', async () => {
 		const first = await connect();
 		const early = eventsOf(first, 'r2');
-		await spawn(first, 'r2', 'printf "\\033]0;Working\\007"; echo before; read line; echo "after $line"; sleep 30');
+		await spawn(first, 'r2', `process.stdout.write('\\x1b]0;Working\\x07before\\n'); ${eachLine(`process.stdout.write('after ' + line + '\\n');`)} ${IDLE}`);
 		await until('its line', () => outputOf(early).includes('before'));
 		first.dispose();
 		await new Promise(resolve => setTimeout(resolve, 300));
@@ -161,7 +158,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 
 	test('a newer activation takes the same process immediately and fences every stale effect and later reconnect', async () => {
 		const first = await connect();
-		const before = await spawn(first, 'r3', 'sleep 30');
+		const before = await spawn(first, 'r3', IDLE);
 		const lost: string[] = [];
 		first.onDidLoseOwner(owner => lost.push(owner));
 		const second = await connect();
@@ -176,7 +173,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			() => first.request('terminate', { run: 'r3', graceMs: 0 }),
 			() => first.request('forget', { run: 'r3' }),
 			() => first.request('endWindow', { owner: 'w1', graceMs: 0 }),
-			() => spawn(first, 'stale-run', 'sleep 30'),
+			() => spawn(first, 'stale-run', IDLE),
 			() => first.request('claim', { owner: 'w1', generation: 1, token: 'activation-1' })
 		]) {
 			await assert.rejects(operation(), /ownership was transferred or expired/);
@@ -191,17 +188,21 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	test('terminate hangs up the process group and answers its actual end; one that ignores the hang-up is killed after the grace, its children with it; an ended or unknown run already exited (LIFECYCLE-4.2)', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'stubborn');
-		await spawn(client, 'polite', 'sleep 30');
+		await spawn(client, 'polite', IDLE);
 		assert.strictEqual(await client.request('terminate', { run: 'polite', graceMs: 3_000 }), 'terminated');
-		// It and the child it started both ignore the hang-up: only the group kill ends the child
-		await spawn(client, 'stubborn', 'trap "" HUP; sleep 1000 & echo "child $!"; wait');
+		// It and the child it started both ignore the hang-up: only the group kill ends the child. Windows has no hang-up: the processes
+		// of its console are ended at once, the child with them.
+		const ignoring = `process.on('SIGHUP', () => {});`;
+		await spawn(client, 'stubborn', `${ignoring} const child = require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(`${ignoring} ${IDLE}`)}], { stdio: 'inherit' }); process.stdout.write('child ' + child.pid + '\\n'); ${IDLE}`);
 		const child = Number((await until('its child', () => /child (\d+)/.exec(outputOf(events)) ?? undefined))[1]);
 		assert.ok(alive(child));
 		const began = Date.now();
 		assert.strictEqual(await client.request('terminate', { run: 'stubborn', graceMs: 300 }), 'terminated');
-		assert.ok(Date.now() - began >= 300);
 		const exit = await until('its end', () => events.find(event => event.event === 'exit'));
-		assert.strictEqual(exit.event === 'exit' && exit.signal, 9);
+		if (process.platform !== 'win32') {
+			assert.ok(Date.now() - began >= 300);
+			assert.strictEqual(exit.event === 'exit' && exit.signal, 9);
+		}
 		await until('its child to be gone', () => !alive(child));
 		assert.strictEqual(await client.request('terminate', { run: 'stubborn', graceMs: 300 }), 'already_exited');
 		assert.strictEqual(await client.request('terminate', { run: 'never', graceMs: 300 }), 'already_exited');
@@ -209,7 +210,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 
 	test('a snapshot that finishes after takeover cannot bind the old connection', async () => {
 		const old = await connect();
-		const original = await spawn(old, 'snapshot-race', 'sleep 30');
+		const original = await spawn(old, 'snapshot-race', IDLE);
 		let release!: () => void;
 		let entered!: () => void;
 		const began = new Promise<void>(resolve => entered = resolve);
@@ -227,7 +228,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	test('a close accepted before takeover cannot be restored while its forced cleanup is pending', async () => {
 		const old = await connect();
 		const events = eventsOf(old, 'closing-race');
-		const original = await spawn(old, 'closing-race', 'trap "" HUP; echo ready; sleep 30');
+		const original = await spawn(old, 'closing-race', `process.on('SIGHUP', () => {}); process.stdout.write('ready\\n'); ${IDLE}`);
 		await until('the hangup handler', () => outputOf(events).includes('ready'));
 		const closing = old.request('terminate', { run: 'closing-race', graceMs: 150 });
 		await until('close accepted', async () => (await old.request('list', { owner: 'w1' })).length === 0);
@@ -240,7 +241,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	test('a forgotten run is dropped as it ends; an owner disconnect retains live processes inside the grace period', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'r4');
-		await spawn(client, 'r4', 'read line; exit 0');
+		await spawn(client, 'r4', eachLine('process.exit(0);'));
 		await client.request('forget', { run: 'r4' });
 		assert.deepStrictEqual(await client.request('list', { owner: 'w1' }), []);
 		await client.request('input', { run: 'r4', data: '\r' });
@@ -254,7 +255,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			}
 		});
 		const kept = await connect();
-		const lone = await spawn(kept, 'r5', 'sleep 30');
+		const lone = await spawn(kept, 'r5', IDLE);
 		kept.dispose();
 		await new Promise(resolve => setTimeout(resolve, 500));
 		const other = await connect();
@@ -264,10 +265,10 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 
 	test('endWindow requires current ownership and ends only that workspace', async () => {
 		const mine = await connect();
-		await spawn(mine, 'm1', 'sleep 30');
+		await spawn(mine, 'm1', IDLE);
 		const theirs = await connect(false);
 		await theirs.request('claim', { owner: 'w2', generation: 1, token: 'other-workspace' });
-		await spawn(theirs, 't1', 'sleep 30', { owner: 'w2' });
+		await spawn(theirs, 't1', IDLE, { owner: 'w2' });
 		await assert.rejects(mine.request('endWindow', { owner: 'w2', graceMs: 0 }), /ownership was transferred or expired/);
 		assert.strictEqual(await mine.request('endWindow', { owner: 'w1', graceMs: 1_000 }), 1);
 		assert.deepStrictEqual((await theirs.request('list', { owner: 'w2' })).map(run => run.run), ['t1']);
@@ -276,7 +277,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	test('a resize reaches the process', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'r6');
-		await spawn(client, 'r6', 'echo one; read line; stty size; sleep 30');
+		await spawn(client, 'r6', `process.stdout.write('one\\n'); ${eachLine(`const [columns, rows] = process.stdout.getWindowSize(); process.stdout.write(rows + ' ' + columns + '\\n');`)} ${IDLE}`);
 		await until('its line', () => outputOf(events).includes('one'));
 		await client.request('resize', { run: 'r6', cols: 100, rows: 30 });
 		await client.request('input', { run: 'r6', data: '\r' });
@@ -295,7 +296,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('claim', () => replies.find(reply => reply.id === 1));
 		const output = path.join(socketDir, 'typed.txt');
 		const program = `const fs = require('fs'); process.stdin.setRawMode(true); fs.appendFileSync(${JSON.stringify(output)}, 'START\\n'); process.stdin.on('data', d => fs.appendFileSync(${JSON.stringify(output)}, d)); setInterval(() => {}, 1000);`;
-		const params = { run: 'once', owner: 'w1', file: process.execPath, args: ['-e', program], cwd: socketDir, env: { PATH: process.env.PATH ?? '' }, cols: 80, rows: 24, meta: {} };
+		const params = { run: 'once', owner: 'w1', file: process.execPath, args: ['-e', program], cwd: socketDir, env: programEnv(), cols: 80, rows: 24, meta: {} };
 		send(2, 'spawn', params);
 		send(2, 'spawn', params);
 		await until('duplicate spawn response', () => replies.filter(reply => reply.id === 2).length === 2);
@@ -323,7 +324,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const events = eventsOf(client, 'r8');
 		const title = Buffer.from('Fixing tests').toString('base64');
 		const program = `const out = s => process.stdout.write(s); process.stdin.setRawMode(true); out('\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => { if (d.toString().includes('\\x1b]7501;?:states=')) { out('\\x1b]7501;state=working:title=${title}\\x1b\\\\'); setTimeout(() => out('\\x1b]7501;id=worker:state=error\\x1b\\\\\\x1b]7501;state=blocked:kind=permission\\x1b\\\\'), 100); } }); setInterval(() => {}, 1000);`;
-		await client.request('spawn', { run: 'r8', owner: 'w1', file: process.execPath, args: ['-e', program], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: {} });
+		await client.request('spawn', { run: 'r8', owner: 'w1', file: process.execPath, args: ['-e', program], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {} });
 		const statuses = await until('its reports', () => {
 			const told = events.flatMap(event => event.event === 'status' && event.status ? [event.status] : []);
 			return told.some(status => status.state === 'blocked') && told;
@@ -344,7 +345,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await new Promise(resolve => stalled.once('connect', resolve));
 		stalled.pause();
 		stalled.write(`${JSON.stringify({ id: 1, method: 'claim', params: { owner: 'w1', generation: 1, token: 'stalled' } })}\n`);
-		stalled.write(`${JSON.stringify({ id: 2, method: 'spawn', params: { run: 'flood', owner: 'w1', file: process.execPath, args: ['-e', `const line = 'x'.repeat(4095) + '\\n'; const go = () => { while (process.stdout.write(line)) { } process.stdout.once('drain', go); }; go();`], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '' }, cols: 80, rows: 24, meta: {} } })}\n`);
+		stalled.write(`${JSON.stringify({ id: 2, method: 'spawn', params: { run: 'flood', owner: 'w1', file: process.execPath, args: ['-e', `const line = 'x'.repeat(4095) + '\\n'; const go = () => { while (process.stdout.write(line)) { } process.stdout.once('drain', go); }; go();`], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {} } })}\n`);
 		const seqOf = async () => (await observer.request('list', { owner: 'w1' })).find(run => run.run === 'flood')?.seq ?? 0;
 		// Its output stops once more than 8 MiB waits for the stalled window
 		let last = -1;

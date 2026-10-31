@@ -63,7 +63,15 @@ function cardWords(): CardWords {
 		// {0} is the signal that ended the agent's CLI, such as SIGKILL
 		endedBySignal: signal => vscode.l10n.t("Terminated by signal {0}", signal),
 		// {0} is the name of the editor window the agent is in
-		window: label => vscode.l10n.t("Window: {0}", label)
+		window: label => vscode.l10n.t("Window: {0}", label),
+		toolsUnavailable: (problem, file) => problem === 'cmd'
+			? vscode.l10n.t("Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file")
+			: problem === 'conflict' && file
+				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
+				? vscode.l10n.t("Cannot work with other agents: move or rename {0} in this folder", file)
+				: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
+		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
+		startedBy: creator => vscode.l10n.t("Started by {0}", creator)
 	};
 }
 

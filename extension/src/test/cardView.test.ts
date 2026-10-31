@@ -21,14 +21,17 @@ const WORDS: CardWords = {
 	hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Beendet mit Code ${code}`,
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
-	window: label => `Window: ${label}`
+	window: label => `Window: ${label}`,
+	toolsUnavailable: problem => `Can't work with other agents: ${problem}`,
+	startedBy: creator => `Started by ${creator}`
 };
 
 function run(more: Partial<RunFacts> = {}): RunFacts {
 	return {
 		id: 'run-00000000000000000000000000000001', alias: '#a1', name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude',
 		location: 'loc-1', cwd: '/app', environment: 'local', yolo: true, createdAt: 1000,
-		lifecycle: 'running', phase: 'running', pid: 42, startedAt: 2000, activity: 'working', reporting: true, ...more
+		lifecycle: 'running', phase: 'running', pid: 42, startedAt: 2000, activity: 'working', reporting: true,
+		root: 'run-00000000000000000000000000000001', origin: 'human', tools: 'not_injected', ...more
 	};
 }
 

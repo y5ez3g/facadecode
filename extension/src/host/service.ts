@@ -7,25 +7,39 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
-import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { createToolServices } from '../contract/tools';
 import { AgentService } from '../core/agents';
-import { PlanError, type LogPort, type RunFacts } from '../core/ports';
+import type { MessageRecord } from '../core/messagePorts';
+import { MessageService } from '../core/messages';
+import { PlanError, type LogPort, type RunFacts, type RunId } from '../core/ports';
 import { worktreeProblemText } from '../ui/pickers/location';
 import { reasonText } from '../ui/presentation';
 import { registerUi } from '../ui/commands/index';
 import { registerWorktreeCommands } from '../ui/commands/worktree';
 import { AgentExecution } from './execution/agentExecution';
+import { EarlierAgents } from './execution/earlierAgents';
 import { AliasCounter } from '../record/aliases';
+import { ChoiceStore } from '../record/choices';
 import { AgentLog } from '../record/log';
+import { MessageCounter, MessageFile } from '../record/messages';
 import { facadeHome } from '../record/paths';
+import { pruneResults, writeResult } from '../record/results';
 import { RetainedFile } from '../record/retained';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
+import { allocateNumbers } from '../record/windowRegistry';
+import { agentAliases, AliasPool, ClientNetwork, LOCAL_POOL, networkAddress, publishAgents, REMOTE_POOL, serveRoutes } from './client';
 import { HostClis } from './clis';
+import { WindowContact } from './contact';
 import { WorkspaceLaunchHistory } from './history';
 import { WindowHuman } from './human';
+import { OrdinaryInput } from './input';
 import { createLocationService, createWorktreeService } from './locations/index';
-import { yolo } from './settings';
+import { editorEnvironment } from './editorEnvironment';
+import { registerMessageHistory } from './messageHistory';
+import { readSetting, waitSeconds, yolo } from './settings';
+import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
 
@@ -44,14 +58,11 @@ function workspaceUri(): string {
 export async function activateFacade(context: vscode.ExtensionContext): Promise<() => Promise<void>> {
 	const home = facadeHome();
 	const session = vscode.env.sessionId;
-	let identity: unknown;
-	try {
-		identity = await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session);
-	} catch (error) {
-		console.error('Could not request the local window handover identity.', error);
-	}
-	if (!isWindowIdentity(identity, session)) {
-		throw new Error(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
+	// The window component comes with Facade Code's extension pack, maybe after it: waited for a bounded time (ARCHITECTURE-4.3, D83)
+	const identity = await waitForWindowIdentity(session);
+	if (!identity) {
+		const missing = showComponentMissing(context, session);
+		return async () => missing.dispose();
 	}
 	// Remote workspace transitions replace the session ID and workspace state. The local component carries the native window's
 	// identity; a different window cannot acquire that identity merely by opening the same folders or a copied workspace file.
@@ -93,10 +104,27 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		home,
 		media: vscode.Uri.joinPath(context.extensionUri, 'media'),
 		log: line => agentLog.event(line),
-		terminalOwner: { ...terminalOwner, remote: vscode.env.remoteName !== undefined }
+		terminalOwner: { ...terminalOwner, remote: vscode.env.remoteName !== undefined },
+		shimScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'shim.js').fsPath
 	});
 	const worktrees = createWorktreeService(locations, log);
-	const clis = new HostClis({ log: line => log.event(line) });
+	const clis = new HostClis({ log: line => log.event(line), home });
+	// This window on the client network, through its local component: without it, the tools reach this window alone (COLLABORATION-1.1)
+	const address = await networkAddress(session);
+	const network = address !== undefined ? new ClientNetwork(address, session) : undefined;
+	const localAliases = new AliasCounter(home);
+	const localMessages = new MessageCounter(home);
+	// A local window shares this computer's Facade directory with its component: its fallback is the computer's own counter
+	const local = vscode.env.remoteName === undefined;
+	const fallback = (kind: 'agent' | 'message', environment: () => number) => local ? () => allocateNumbers(home, kind, 1).first : environment;
+	const agentNumbers = new AliasPool('agent', fallback('agent', () => Number(localAliases.next().slice(2))), line => log.event(line), session, local ? LOCAL_POOL : REMOTE_POOL);
+	const messageNumbers = new AliasPool('message', fallback('message', () => localMessages.next()), line => log.event(line), session, local ? LOCAL_POOL : REMOTE_POOL);
+	if (network && !(await agentNumbers.prime() && await messageNumbers.prime())) {
+		log.event('This computer\'s alias counters could not be read; aliases come from this environment\'s counters, and may repeat in other windows.');
+	}
+	if (!network) {
+		log.event('The Facade Code Window Component cannot carry requests between windows: agents here reach this window\'s agents alone.');
+	}
 	const history = new WorkspaceLaunchHistory(workspaceState, log);
 	const human = new WindowHuman(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
 	const agents = new AgentService({
@@ -107,18 +135,94 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		history,
 		human,
 		retained: new RetainedFile<RunFacts>(record.dir, writeIfOwned),
-		aliases: new AliasCounter(home),
+		aliases: network ? agentAliases(agentNumbers) : localAliases,
 		clock: { now: Date.now },
 		log,
 		lifetime: new WindowLifetime(),
 		yolo,
 		// Facade's own reasons in the person's language: a worktree's problem, a CLI's configuration (UX-2.4)
 		describe: (err, english) => worktreeProblemText(err, err instanceof PlanError ? reasonText(err.said, english) : english),
+		// The run's own shim, where orchestration is on for this start (RULES-4.4, MCP-6.1)
+		tools: run => clis.collaborationEnabled() ? execution.shimLaunch(run) : undefined,
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`
+	});
+	// This window's address for the tools: it may change on reload, while its runs keep their IDs (ARCHITECTURE-2.2)
+	// The name of a window that has no folder or workspace open, as agents and message headers name it
+	const window = { id: address ?? `win-${crypto.randomBytes(8).toString('hex')}`, label: vscode.workspace.name ?? vscode.l10n.t('Window') };
+	const environment = editorEnvironment();
+	const contact = new WindowContact(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
+	const input = new OrdinaryInput({
+		get: run => agents.get(run),
+		inspectInput: (run, adapter) => execution.inspectInput(run, adapter),
+		typeText: (run, text, enter) => execution.typeText(run, text, enter),
+		pressKeys: (run, keys) => execution.pressKeys(run, keys),
+		log: text => log.event(text)
+	});
+	// Direct text and keys wait for a message's paste and Enter under way to the same terminal (RULES-1.10)
+	const terminal = {
+		readScreen: (run: RunId, lines: number) => execution.readScreen(run, lines),
+		typeText: (run: RunId, text: string, enter: boolean) => input.inTurn(run, () => execution.typeText(run, text, enter)),
+		pressKeys: (run: RunId, keys: readonly string[]) => input.inTurn(run, () => execution.pressKeys(run, keys))
+	};
+	const messages = new MessageService({
+		agents,
+		input,
+		human: contact,
+		store: new MessageFile<MessageRecord>(home),
+		ids: network ? { next: () => messageNumbers.next() } : localMessages,
+		sent: new MessageFile<MessageRecord>(home, Date.now, path.join('messages', 'sent')),
+		results: {
+			report: async (other, result) => {
+				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.callId !== undefined ? { callId: result.callId } : {} }, 15_000)
+					?? Promise.resolve({ ok: false as const, reason: 'window_unavailable' as const, message: 'No network', effects: 'none' as const }));
+				return response.ok;
+			}
+		},
+		clock: { now: Date.now },
+		window,
+		environment,
+		workspace: record.key,
+		log
 	});
 	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1)
 	const restored = agents.restore();
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
+	// The nine tools, for every run of this window whose shim calls in (MCP-1.1, 6.1)
+	const services = createToolServices({
+		window: { ...window, environment },
+		agents,
+		locations,
+		clis,
+		messages,
+		terminal,
+		home,
+		writeResult,
+		choices: new ChoiceStore(home),
+		timeout: () => waitSeconds(readSetting, text => log.event(text)),
+		yolo,
+		input,
+		clock: { now: Date.now },
+		log: text => log.event(text),
+		// A call from a run this window is still reattaching waits for it (RULES-4.1)
+		ready,
+		...network ? { network } : {}
+	});
+	const tools = execution.serveTools((call, receivedAt) => services.answer(call, receivedAt));
+	// Agents an earlier Facade Code started go on in their own terminals until they end (ARCHITECTURE-2.4)
+	const earlier = ready.then(() => EarlierAgents.open({
+		home, owner: record.key, claim, ptydScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'ptyd.js').fsPath,
+		log: line => log.event(line), confirmClose: agent => human.confirmClose(agent)
+	})).catch(err => {
+		log.event(`Could not look for agents an earlier Facade Code started: ${messageOf(err)}`);
+		return undefined;
+	});
+	// Project files injected for runs that are gone everywhere in this environment are released (CLIS-2.2); old results expire
+	void ready.then(() => execution.allRunIds()).then(alive => clis.reconcile(alive)).catch(err => log.event(`Could not release injected files of ended agents: ${messageOf(err)}`));
+	try {
+		pruneResults(home, Date.now());
+	} catch (err) {
+		log.event(`Could not remove expired result files: ${messageOf(err)}`);
+	}
 	const disposables: vscode.Disposable[] = [
 		...registerUi({
 			agents,
@@ -134,10 +238,17 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			ready,
 			...(identity.remote ? { remote: identity.remote } : {})
 		}),
-		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log })
+		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
+		contact,
+		...registerMessageHistory({ messages }),
+		serveRoutes(route => services.serve(route)),
+		publishAgents(agents, window.label, line => log.event(line), session)
 	];
 	context.subscriptions.push(...disposables);
 	return async () => {
+		void earlier.then(each => each?.dispose());
+		tools.dispose();
+		messages.dispose();
 		agents.dispose();
 		// One that throws does not keep the rest open (ARCHITECTURE-2.4)
 		disposeAll(disposables, err => log.event(`Could not dispose part of the window: ${messageOf(err)}`));

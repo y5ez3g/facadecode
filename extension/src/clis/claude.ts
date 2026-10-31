@@ -9,6 +9,7 @@ import { canonicalFolder, isEqualPath, realFolderOf } from '../base/files';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, setVariable, variableOf } from './environment';
 import { homeOf } from './executable';
+import { MCP_CONFIG, mcpConfigText, pluginManifest, SERVER_NAME, SKILL_FILE, ToolsIntegration } from './tools';
 import type { TrustTarget } from './trust';
 
 /** Claude Code has a sandbox on macOS and Linux, not on Windows. */
@@ -111,6 +112,29 @@ export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string
 	return platform === 'win32' ? key.split('\\').join('/').replace(/^[a-z]:/, drive => drive.toUpperCase()) : key;
 }
 
+/** The run's plugin of the skill, as `--plugin-dir` loads one: its manifest and its skill. */
+const PLUGIN_DIR = 'plugin';
+
+/**
+ * Claude Code is given the server in a per-run `--mcp-config` file, which adds it to the person's own servers, and the skill in a
+ * per-run `--plugin-dir` plugin: nothing in the project or the person's settings (CLIS-2.2). `--allowedTools mcp__facade` lets
+ * Facade's own tools run without asking, with YOLO off too; the CLI's own commands and edits keep their approvals (CLIS-1.3).
+ */
+const claudeTools: ToolsIntegration = {
+	capability: { state: 'unverified', reason: 'the server in a per-run --mcp-config file, its tools allowed by --allowedTools, and the skill in a per-run --plugin-dir plugin' },
+	where: runDir => `--mcp-config ${path.join(runDir, MCP_CONFIG)} and --plugin-dir ${path.join(runDir, PLUGIN_DIR)}, files of the run alone`,
+	inject: ({ server, skill, runDir }) => ({
+		values: { mcpConfig: path.join(runDir, MCP_CONFIG), pluginDir: path.join(runDir, PLUGIN_DIR), allowedTools: `mcp__${SERVER_NAME}` },
+		runFiles: [
+			{ path: path.join(runDir, MCP_CONFIG), content: mcpConfigText(server) },
+			{ path: path.join(runDir, PLUGIN_DIR, '.claude-plugin', 'plugin.json'), content: `${JSON.stringify(pluginManifest(), undefined, 2)}\n` },
+			{ path: path.join(runDir, PLUGIN_DIR, SKILL_FILE), content: skill }
+		],
+		project: [],
+		env: {}
+	})
+};
+
 /**
  * Claude Code in its own UI (CLIS-1.3). YOLO on: its permissions bypassed, its sandbox as its own settings have it. YOLO off: its
  * sandbox on where it has one, its permission mode and rules its own. Every launch trusts its repository - or, outside any, its
@@ -123,12 +147,24 @@ export const claudeAdapter: CliAdapter = {
 	setting: 'facade.claude',
 	command: 'claude',
 	groups: {
+		connect: ['--mcp-config', '${mcpConfig}', '--plugin-dir', '${pluginDir}', '--allowedTools', '${allowedTools}'],
 		quiet: ['--settings', '${runSettings}'],
-		yoloOn: ['--dangerously-skip-permissions']
+		yoloOn: ['--dangerously-skip-permissions'],
+		model: ['--model', '${model}'],
+		effort: ['--effort', '${effort}'],
+		// After the end of its options: some of them, --mcp-config and --allowedTools among them, take every value up to the next option
+		prompt: ['--', '${prompt}']
 	},
+	takes: { model: true, effort: true },
 	values: input => ({
-		runSettings: JSON.stringify(claudeRunSettings(input.yolo, input.platform))
+		runSettings: JSON.stringify(claudeRunSettings(input.yolo, input.platform)),
+		...input.model !== undefined ? { model: input.model } : {},
+		...input.effort !== undefined ? { effort: input.effort } : {}
 	}),
+	tools: claudeTools,
+	// Its input frame, recorded signed in on macOS with 2.1.312 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
+	input: { adapter: 'claude-frame', evidence: 'its input frame between two rules: empty, a typed, pasted, multi-line, history or slash-command draft, and gone behind a permission or trust question' },
+	initialPrompt: { state: 'unverified', reason: 'the prompt as its positional argument after --, which starts the interactive session with it' },
 	trustTarget: (cwd, env, platform): TrustTarget => {
 		const folder = claudeProjectKey(cwd, platform);
 		return { file: claudeConfigFile(env, platform), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder };

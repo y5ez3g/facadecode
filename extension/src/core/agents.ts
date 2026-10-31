@@ -4,13 +4,14 @@
 
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
+import { displayLine } from '../base/text';
 import { FacadeError, invalid } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
 import { labelOf, normalizeName } from './names';
 import {
 	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
-	LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, PairFacts, PlanError, RetainedStore, RunChange,
-	RunFacts, RunId, RunMeta, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
+	LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError,
+	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
 
 export interface AgentServiceDeps {
@@ -27,6 +28,8 @@ export interface AgentServiceDeps {
 	readonly lifetime: WindowLifetimePort;
 	/** The destination's current `facade.yolo`, read when each launch is accepted (RULES-4.3). */
 	readonly yolo: () => boolean;
+	/** The run's MCP shim where `facade.collaboration.enabled` is on when its launch is planned; none injects nothing (RULES-4.4). */
+	readonly tools?: (run: RunId) => McpServerLaunch | undefined;
 	/** A failure in the person's language (UX-2.4): Facade's own reasons translated, any other its `english` as it is. */
 	readonly describe?: (err: unknown, english: string) => string;
 	readonly newRunId: () => RunId;
@@ -38,6 +41,10 @@ interface Run {
 	worktree?: WorktreeCreationEffects;
 	/** Whether an explicit close of this run was requested: its exit is then normal (RULES-3.3). */
 	closing: boolean;
+	/** Settles once its process started, its launch failed or it was closed first (MCP-2.3). */
+	settled: Promise<void>;
+	/** How its creation prompt goes in, once planned. */
+	prompt?: LaunchPlan['prompt'];
 }
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
@@ -71,6 +78,9 @@ export class AgentService implements Agents, Disposable {
 		}
 		if (execution.onDidRenameTab) {
 			this.subscriptions.push(execution.onDidRenameTab(({ run, name }) => this.tabRenamed(run, name)));
+		}
+		if (execution.onDidConnectTools) {
+			this.subscriptions.push(execution.onDidConnectTools(run => this.toolsConnected(run)));
 		}
 		if (execution.onDidLoseOwnership) {
 			this.subscriptions.push(execution.onDidLoseOwnership(() => {
@@ -118,17 +128,18 @@ export class AgentService implements Agents, Disposable {
 			return 0;
 		}
 		const liveIds = new Set(live.map(run => run.run));
-		for (const facts of this.deps.retained.list()) {
-			if (!isRetainedRun(facts)) {
+		for (const kept of this.deps.retained.list()) {
+			if (!isRetainedRun(kept)) {
 				this.deps.log.event('Ignored an invalid retained agent record.');
 				continue;
 			}
+			const facts = retainedFacts(kept);
 			if (liveIds.has(facts.id)) {
 				this.deps.retained.remove(facts.id);
 				continue;
 			}
 			if (!this.runs.has(facts.id)) {
-				this.runs.set(facts.id, { facts, closing: false });
+				this.runs.set(facts.id, { facts, closing: false, settled: Promise.resolve() });
 				this.deps.execution.openPair(pairOf(facts), { reveal: false });
 				if (facts.error) {
 					this.deps.execution.note(facts.id, facts.error.reason);
@@ -155,7 +166,7 @@ export class AgentService implements Agents, Disposable {
 				pid: each.pid,
 				startedAt: each.startedAt
 			};
-			const run: Run = { facts, closing: false };
+			const run: Run = { facts, closing: false, settled: Promise.resolve() };
 			this.runs.set(each.run, run);
 			try {
 				await this.deps.execution.attach(each, pairOf(facts));
@@ -184,11 +195,34 @@ export class AgentService implements Agents, Disposable {
 		return this.accept(request, this.validated(request));
 	}
 
-	/** Reports every problem of a request together before any effect (RULES-5.1). */
+	async started(id: RunId): Promise<StartOutcome> {
+		const run = this.runs.get(id);
+		if (!run) {
+			return { state: 'closed' };
+		}
+		await run.settled;
+		const facts = this.runs.get(id) === run && !run.closing ? run.facts : undefined;
+		const prompt = run.prompt ? { prompt: run.prompt } : {};
+		if (!facts) {
+			return { state: 'closed', ...prompt };
+		}
+		return facts.lifecycle === 'running' ? { state: 'running', ...prompt } : { state: 'failed', ...(facts.error ? { error: facts.error.reason } : {}), ...prompt };
+	}
+
+	/** Reports every problem of a request together before any effect (RULES-5.1, MCP-1.1). */
 	private validated(request: LaunchRequest): Location {
 		const problems: string[] = [];
 		if (typeof request.name !== 'string') {
 			problems.push('The name must be a string.');
+		}
+		if (request.origin === 'agent' && !request.creator) {
+			problems.push('An agent start needs its calling agent.');
+		}
+		for (const field of ['model', 'effort'] as const) {
+			const value = request[field];
+			if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
+				problems.push(`The ${field} must be a nonempty string where given.`);
+			}
 		}
 		const location = request.location ? this.deps.locations.resolve(request.location) : undefined;
 		if (!request.location) {
@@ -211,6 +245,8 @@ export class AgentService implements Agents, Disposable {
 	private accept(request: LaunchRequest, location: Location): RunId {
 		const id = this.deps.newRunId();
 		const now = this.deps.clock.now();
+		const byAgent = request.origin === 'agent' && request.creator ? request.creator : undefined;
+		const promptLine = request.promptLine ?? firstLine(request.prompt);
 		const facts: RunFacts = {
 			id,
 			alias: this.deps.aliases.next(),
@@ -221,20 +257,30 @@ export class AgentService implements Agents, Disposable {
 			location: location.id,
 			cwd: location.path,
 			environment: location.environment,
+			// Every launch reads the setting; a child keeps its creator's tree, not its creator's YOLO (RULES-4.3)
 			yolo: this.deps.yolo(),
 			createdAt: now,
 			lifecycle: 'starting',
 			phase: request.worktree ? 'creating_worktree' : 'launching_cli',
 			activity: 'unknown',
-			reporting: false
+			reporting: false,
+			root: byAgent?.root ?? id,
+			...(byAgent ? { creator: byAgent.run } : {}),
+			...(byAgent?.label ? { creatorLabel: byAgent.label } : {}),
+			origin: byAgent ? 'agent' : 'human',
+			...(request.model !== undefined ? { model: request.model.trim() } : {}),
+			...(request.effort !== undefined ? { effort: request.effort.trim() } : {}),
+			tools: 'not_injected',
+			...(promptLine ? { promptLine } : {})
 		};
-		const run: Run = { facts, closing: false };
+		let settle!: () => void;
+		const run: Run = { facts, closing: false, settled: new Promise(resolve => settle = resolve) };
 		this.runs.set(id, run);
-		// The person's own launch shows its terminal (LIFECYCLE-2.2)
-		this.deps.execution.openPair(pairOf(facts), { reveal: true });
+		// The person's own launch shows its terminal; an agent's opens in the background, the person's focus kept (LIFECYCLE-2.2)
+		this.deps.execution.openPair(pairOf(facts), { reveal: !byAgent });
 		this.emit({ run: id, kind: 'added' });
-		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]`);
-		void this.start(run, request, location);
+		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]${byAgent ? ` for agent ${byAgent.run}` : ''}`);
+		void this.start(run, request, location).finally(settle);
 		return id;
 	}
 
@@ -259,27 +305,68 @@ export class AgentService implements Agents, Disposable {
 		if (!location) {
 			return this.fail(run, `The working location ${run.facts.cwd} is no longer available.`, 'location');
 		}
-		let plan;
+		let plan: LaunchPlan;
 		try {
-			plan = await this.deps.planner.plan({ run: run.facts.id, alias: run.facts.alias, name: run.facts.name, cli: request.cli, location, yolo: run.facts.yolo });
+			const tools = this.deps.tools?.(run.facts.id);
+			plan = await this.deps.planner.plan({
+				run: run.facts.id, alias: run.facts.alias, name: run.facts.name, cli: request.cli, location, yolo: run.facts.yolo,
+				...(run.facts.model !== undefined ? { model: run.facts.model } : {}),
+				...(run.facts.effort !== undefined ? { effort: run.facts.effort } : {}),
+				...(request.prompt !== undefined ? { prompt: request.prompt } : {}),
+				...(tools ? { tools } : {})
+			});
 		} catch (err) {
-			return this.fail(run, err instanceof PlanError || err instanceof FacadeError ? err.message : messageOf(err), 'launch', err);
+			this.fail(run, err instanceof PlanError || err instanceof FacadeError ? err.message : messageOf(err), 'launch', err);
+			return this.release(run.facts.id);
 		}
 		if (!this.live(run)) {
-			return;
+			// Closed while it planned: what the plan injected goes again, after the close's own release (CLIS-2.2)
+			return this.release(run.facts.id);
 		}
-		this.update(run, { displayName: plan.displayName, command: plan.command, cwd: plan.cwd }, 'lifecycle');
+		if (plan.prompt) {
+			run.prompt = plan.prompt;
+		}
+		this.update(run, {
+			displayName: plan.displayName, command: plan.command, cwd: plan.cwd,
+			...(plan.version !== undefined ? { version: plan.version } : {}),
+			tools: plan.tools.state === 'injected' ? 'connecting' : plan.tools.state === 'unavailable' ? 'unavailable' : 'not_injected',
+			...(plan.tools.state === 'unavailable' && plan.tools.reason ? { toolsReason: plan.tools.reason } : {}),
+			...(plan.tools.state === 'unavailable' && plan.tools.problem ? { toolsProblem: plan.tools.problem } : {}),
+			...(plan.tools.state === 'unavailable' && plan.tools.file ? { toolsFile: plan.tools.file } : {}),
+			...(plan.input.adapter !== undefined ? { inputAdapter: plan.input.adapter } : {}),
+			inputCapability: plan.input.capability
+		}, 'lifecycle');
 		try {
 			const started = await this.deps.execution.spawn(run.facts.id, plan, metaOf(run.facts));
 			if (!this.live(run)) {
 				return;
 			}
 			this.update(run, { lifecycle: 'running', phase: 'running', pid: started.pid, startedAt: started.startedAt }, 'lifecycle');
-			this.deps.history.remember(run.facts.location, run.facts.cli);
-			// The arguments may hold a credential: never logged (ARCHITECTURE-3.3, CLIS-4.2)
+			if (run.facts.origin === 'human') {
+				// The person's last successful launch alone is remembered (LIFECYCLE-1.2)
+				this.deps.history.remember(run.facts.location, run.facts.cli);
+			}
+			// The arguments may hold a prompt or a credential: never logged (ARCHITECTURE-3.3, CLIS-4.2)
 			this.deps.log.event(`Started ${run.facts.alias} (${plan.cli}) pid ${started.pid}: ${plan.executable} with ${plan.args.length} argument${plan.args.length === 1 ? '' : 's'}`);
 		} catch (err) {
 			this.fail(run, messageOf(err), 'launch', err);
+			this.release(run.facts.id);
+		}
+	}
+
+	/** The run's injected files and project references go once it ends or is closed (CLIS-2.2). */
+	private release(id: RunId): void {
+		void this.deps.planner.release(id).catch(err => this.deps.log.event(`Could not release ${id}'s injected files: ${messageOf(err)}`));
+	}
+
+	/** Its MCP shim said hello: its tools are there (CLIS-2.2), kept across a reload in what ptyd keeps of it. */
+	private toolsConnected(id: RunId): void {
+		const run = this.runs.get(id);
+		if (run && run.facts.lifecycle !== 'ended' && run.facts.tools !== 'available') {
+			this.update(run, { tools: 'available' }, 'reported');
+			if (run.facts.pid !== undefined) {
+				this.deps.execution.setMeta(id, metaOf(run.facts));
+			}
 		}
 	}
 
@@ -300,7 +387,10 @@ export class AgentService implements Agents, Disposable {
 		this.deps.retained.put(run.facts);
 		this.deps.execution.note(run.facts.id, reason);
 		this.deps.log.event(`Could not start ${run.facts.alias}: ${english}`);
-		this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' });
+		if (run.facts.origin === 'human') {
+			// An agent's start reports its failure to that agent, never as the person's popup (RULES-1.8)
+			this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' });
+		}
 	}
 
 	async close(id: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'> {
@@ -313,6 +403,7 @@ export class AgentService implements Agents, Disposable {
 		this.deps.retained.remove(id);
 		this.deps.execution.removePair(id);
 		this.emit({ run: id, kind: 'removed', cause: 'close' });
+		this.release(id);
 		if (run.facts.lifecycle === 'ended') {
 			this.deps.log.event(`Closed ${run.facts.alias}`);
 			return 'already_ended';
@@ -421,6 +512,7 @@ export class AgentService implements Agents, Disposable {
 			return;
 		}
 		const normal = exit.code === 0 || run.closing || exit.interruptVerified;
+		this.release(exit.run);
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
 			this.runs.delete(exit.run);
@@ -493,6 +585,17 @@ function isRetainedRun(value: unknown): value is RunFacts {
 			(value.error.worktree.branch !== undefined || value.error.worktree.folder !== undefined)));
 }
 
+/** A retained record as this build keeps runs: one an earlier build wrote is a root of its own, without tools (ARCHITECTURE-4.2). */
+function retainedFacts(kept: RunFacts): RunFacts {
+	const record = kept as RunFacts & { readonly [key: string]: unknown };
+	return {
+		...kept,
+		root: typeof record.root === 'string' && record.root ? record.root : kept.id,
+		origin: record.origin === 'agent' ? 'agent' : 'human',
+		tools: record.tools === 'connecting' || record.tools === 'available' || record.tools === 'unavailable' ? record.tools : 'not_injected'
+	};
+}
+
 function factsOf(id: RunId, meta: RunMeta): RunFacts {
 	return {
 		id,
@@ -509,7 +612,22 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		lifecycle: 'running',
 		phase: 'running',
 		activity: 'unknown',
-		reporting: false
+		reporting: false,
+		// A run an earlier build started is a root of its own, its tools unknown to this one (ARCHITECTURE-4.2)
+		root: typeof meta.root === 'string' && meta.root ? meta.root : id,
+		...(typeof meta.creator === 'string' && meta.creator ? { creator: meta.creator } : {}),
+		...(typeof meta.creatorLabel === 'string' && meta.creatorLabel ? { creatorLabel: meta.creatorLabel } : {}),
+		origin: meta.origin === 'agent' ? 'agent' : 'human',
+		...(typeof meta.model === 'string' ? { model: meta.model } : {}),
+		...(typeof meta.effort === 'string' ? { effort: meta.effort } : {}),
+		...(typeof meta.version === 'string' ? { version: meta.version } : {}),
+		tools: meta.tools === 'connecting' || meta.tools === 'available' || meta.tools === 'unavailable' ? meta.tools : 'not_injected',
+		...(typeof meta.toolsReason === 'string' ? { toolsReason: meta.toolsReason } : {}),
+		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' ? { toolsProblem: meta.toolsProblem } : {}),
+		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
+		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
+		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),
+		...(isCapability(meta.inputCapability) ? { inputCapability: meta.inputCapability } : {})
 	};
 }
 
@@ -524,8 +642,32 @@ export function metaOf(facts: RunFacts): RunMeta {
 		cwd: facts.cwd,
 		environment: facts.environment,
 		yolo: facts.yolo,
-		createdAt: facts.createdAt
+		createdAt: facts.createdAt,
+		root: facts.root,
+		...(facts.creator !== undefined ? { creator: facts.creator } : {}),
+		...(facts.creatorLabel !== undefined ? { creatorLabel: facts.creatorLabel } : {}),
+		origin: facts.origin,
+		...(facts.model !== undefined ? { model: facts.model } : {}),
+		...(facts.effort !== undefined ? { effort: facts.effort } : {}),
+		...(facts.version !== undefined ? { version: facts.version } : {}),
+		tools: facts.tools,
+		...(facts.toolsReason !== undefined ? { toolsReason: facts.toolsReason } : {}),
+		...(facts.toolsProblem !== undefined ? { toolsProblem: facts.toolsProblem } : {}),
+		...(facts.toolsFile !== undefined ? { toolsFile: facts.toolsFile } : {}),
+		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
+		...(facts.inputAdapter !== undefined ? { inputAdapter: facts.inputAdapter } : {}),
+		...(facts.inputCapability !== undefined ? { inputCapability: facts.inputCapability } : {})
 	};
+}
+
+function isCapability(value: unknown): value is NonNullable<RunMeta['inputCapability']> {
+	return isJsonObject(value) && typeof value.reason === 'string' && (value.state === 'supported' || value.state === 'unavailable' || value.state === 'unverified');
+}
+
+/** The first line of a creation prompt as a card's hover shows it: one trimmed line, or none. */
+function firstLine(prompt: string | undefined): string | undefined {
+	const line = prompt?.split(/\r?\n/).map(each => each.trim()).find(each => !!each);
+	return line ? displayLine(line, 300) : undefined;
 }
 
 export function pairOf(facts: RunFacts): PairFacts {

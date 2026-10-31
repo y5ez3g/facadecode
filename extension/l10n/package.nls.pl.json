@@ -20,5 +20,8 @@
 	"config.codex.title": "Codex",
 	"config.codex.path": "Ścieżka do Codex. Pozostaw puste, aby użyć „codex” ze zmiennej PATH środowiska terminala.",
 	"windowDisplayName": "Składnik okna Facade Code",
-	"windowDescription": "Koordynator tożsamości okna i ciągłości sesji dla Facade Code."
+	"windowDescription": "Koordynator tożsamości okna i ciągłości sesji dla Facade Code.",
+	"command.messageHistory": "Historia wiadomości...",
+	"config.collaboration.enabled": "Zezwalaj agentom na wzajemne uruchamianie i zatrzymywanie, wysyłanie wiadomości do siebie nawzajem i do Ciebie oraz odczytywanie terminali innych agentów i wpisywanie w nich tekstu. Dotyczy tylko nowych agentów.",
+	"config.collaboration.waitSeconds": "Ile sekund agent czeka na uruchomienie lub zatrzymanie innego agenta. Po upływie tego czasu agent otrzyma wynik później w wiadomości."
 }

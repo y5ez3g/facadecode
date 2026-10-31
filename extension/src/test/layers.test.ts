@@ -9,13 +9,16 @@ import * as path from 'path';
 /** What each layer may import of the others (ARCHITECTURE-1.3): business rules depend on ports, never on the editor or a socket. */
 const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 	'extension.ts': ['host'],
-	host: ['ui', 'core', 'record', 'clis', 'ptyd', 'base'],
+	host: ['ui', 'contract', 'core', 'record', 'clis', 'transport', 'schema', 'ptyd', 'base'],
 	ui: ['core', 'webview', 'base'],
 	webview: [],
+	contract: ['core', 'record', 'schema', 'base'],
 	core: ['base'],
 	record: ['base'],
 	clis: ['base'],
 	ptyd: ['base'],
+	transport: ['schema', 'base'],
+	schema: ['base'],
 	base: []
 };
 

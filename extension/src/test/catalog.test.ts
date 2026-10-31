@@ -22,6 +22,7 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.renameAgent', 'Rename Agent...'],
 	['facade.copyAgentReference', 'Copy Agent Reference'],
 	['facade.closeAgent', 'Close Agent'],
+	['facade.messageHistory', 'Message History...'],
 	['facade.configureAgents', 'Configure Agents...']
 ];
 const HIDDEN: readonly [string, string, string?][] = [
@@ -30,7 +31,8 @@ const HIDDEN: readonly [string, string, string?][] = [
 	['facade.moveDown', 'Move Down'],
 	['facade.revealAgent', 'Show Agent']
 ];
-const HOST_COMMANDS = ['facade.newWorktree'];
+/** Registered by the host itself rather than the panel: New Worktree, and Message History beside the message records (COLLABORATION-3.2). */
+const HOST_COMMANDS = ['facade.newWorktree', 'facade.messageHistory'];
 const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
@@ -62,7 +64,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				// The More Actions menu (PANEL-1.1, D58): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
 				{ command: 'facade.newWorktree', when: 'view == facade.agents && workspaceFolderCount != 0', group: '1_locations@2' },
-				{ command: 'facade.configureAgents', when: 'view == facade.agents', group: '9_configure@1' }
+				{ command: 'facade.messageHistory', when: 'view == facade.agents', group: '9_configure@1' },
+				{ command: 'facade.configureAgents', when: 'view == facade.agents', group: '9_configure@2' }
 			],
 			'webview/context': [
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
@@ -80,37 +83,42 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		});
 	});
 
-	test('PANEL-1.1, D58: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Configure Agents... - in that order, as the editor sorts groups and their order', () => {
+	test('PANEL-1.1, D58: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Message History..., Configure Agents... - in that order, as the editor sorts groups and their order', () => {
 		type Entry = { command: string; group: string };
 		const more = (contributes.menus['view/title'] as Entry[]).filter(each => !each.group.startsWith('navigation'));
 		const placed = more.map(each => ({ command: each.command, group: each.group.split('@')[0], order: Number(each.group.split('@')[1]) }))
 			.sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order);
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
-		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.configureAgents']);
+		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.messageHistory', 'facade.configureAgents']);
 		// Go to Agent stays in the Command Palette alone; Configure Agents is in it too
 		assert.ok(!more.some(each => each.command === 'facade.showActiveAgents'));
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => each.command === 'facade.showActiveAgents' || each.command === 'facade.configureAgents'));
 	});
 
-	test('settings: Agents, then Claude Code and Codex; machine scope; each CLI has its path alone - turning it off and its launch come in later steps (UX-4.1, D43, CLIS-1.2)', () => {
+	test('settings: Agents - YOLO, the agents\' tools switch and the start/stop timeout - then Claude Code and Codex; machine scope; each CLI has its path alone - turning it off and its launch come in later steps (UX-4.1, D43, D84, CLIS-1.2)', () => {
 		const sections = contributes.configuration.map((section: { id: string; title: string; order: number; properties: Record<string, unknown> }) => [section.id, english(section.title), section.order, Object.keys(section.properties)]);
 		assert.deepStrictEqual(sections, [
-			['facade.agents', 'Agents', 2, ['facade.yolo']],
+			['facade.agents', 'Agents', 2, ['facade.yolo', 'facade.collaboration.enabled', 'facade.collaboration.waitSeconds']],
 			['facade.claude', 'Claude Code', 3, ['facade.claude.path']],
 			['facade.codex', 'Codex', 4, ['facade.codex.path']]
 		]);
 		const settings: Record<string, { type: string; default: unknown; scope: string; markdownDescription: string }> = Object.assign({}, ...contributes.configuration.map((section: { properties: object }) => section.properties));
 		assert.deepStrictEqual(Object.entries(settings).map(([key, value]) => [key, value.type, value.default, value.scope]), [
 			['facade.yolo', 'boolean', true, 'machine'],
+			['facade.collaboration.enabled', 'boolean', true, 'machine'],
+			['facade.collaboration.waitSeconds', 'integer', 120, 'machine'],
 			['facade.claude.path', 'string', '', 'machine'],
 			['facade.codex.path', 'string', '', 'machine']
 		]);
 		// Every description resolves; no retired setting survives
 		const keys = [...JSON.stringify(contributes).matchAll(/"%([\w.]+)%"/g)].map(match => match[1]);
 		assert.deepStrictEqual(keys.filter(key => nls[key] === undefined), []);
-		for (const retired of ['agentLocation', 'worktrees"', 'taskDelay', 'unattended', 'enterDelay', 'trust', 'facade.claude.enabled', 'facade.claude.launch']) {
+		for (const retired of ['agentLocation', 'worktrees"', 'taskDelay', 'unattended', 'enterDelay', 'trust', 'facade.claude.enabled', 'facade.claude.launch', 'facade.agents.timeout', 'facade.agents.yolo']) {
 			assert.ok(!JSON.stringify(contributes.configuration).includes(retired), retired);
 		}
+		// The timeout's bounds are MCP-1.3's: whole seconds from 1 to 3600
+		const timeout = settings['facade.collaboration.waitSeconds'] as unknown as { minimum: number; maximum: number };
+		assert.deepStrictEqual([timeout.minimum, timeout.maximum], [1, 3600]);
 	});
 
 	suite('what the panel registers', () => {
@@ -132,7 +140,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				const { registerUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 				const emitter = new TestEmitter<never>();
 				const disposables = registerUi({
-					agents: { list: () => [], get: () => undefined, onDidChange: emitter.event, launch: () => '', close: async () => 'already_ended', rename: () => undefined },
+					agents: { list: () => [], get: () => undefined, onDidChange: emitter.event, launch: () => '', started: async () => ({ state: 'closed' }), close: async () => 'already_ended', rename: () => undefined },
 					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
 					clis: { list: async () => [] },
@@ -151,7 +159,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree (UX-3.2, E03)', () => {
+		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree and Message History (UX-3.2, E03)', () => {
 			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id));
 			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
 		});

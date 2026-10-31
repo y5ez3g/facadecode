@@ -20,5 +20,8 @@
 	"config.codex.title": "Codex",
 	"config.codex.path": "Codex 的程式路徑。留空則使用終端環境 PATH 中的 \"codex\"。",
 	"windowDisplayName": "Facade Code 視窗元件",
-	"windowDescription": "Facade Code 的視窗身分與工作階段連續性協調元件。"
+	"windowDescription": "Facade Code 的視窗身分與工作階段連續性協調元件。",
+	"command.messageHistory": "訊息歷程記錄...",
+	"config.collaboration.enabled": "允許 Agent 互相啟動和停止，互相傳送訊息並傳送訊息給您，以及讀取彼此的終端機並在其中輸入。僅對新啟動的 Agent 生效。",
+	"config.collaboration.waitSeconds": "Agent 等待另一個 Agent 啟動或停止的秒數。超過此時間後，該 Agent 稍後會透過訊息收到結果。"
 }

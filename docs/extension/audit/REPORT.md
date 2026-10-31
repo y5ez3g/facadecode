@@ -1,16 +1,16 @@
 # Specification audit report
 
-The maintained documentation of the Facade Code extension is `docs/extension/`. This revision is the subset for step 1
+The maintained documentation of the Facade Code extension is `docs/extension/`. This revision is the subset for step 2
 of its sequence of owner-tested additive steps, carried from the Facade Dots specification with each rule's final number.
 
 ## Reproducible checks
 
 Run `python3 -I -B docs/extension/audit/check_spec.py` from the repository root.
-The [saved result](review-2026-10-29.json) records the latest outcome and local-link count.
+The [saved result](review-2026-10-30.json) records the latest outcome and local-link count.
 
 | Check | Scope |
 | --- | --- |
-| Structure | Ten normative documents, 125 rules, bold decisions, Checks and change logs |
+| Structure | Twelve normative documents, 175 rules, bold decisions, Checks and change logs |
 | References | Local Markdown links/anchors and numbered cross-references |
 | Source coverage and migration | Run only when `audit/source-inventory.json`, `audit/migration.json` and `MIGRATION.md` are present; they join in the last step |
 
@@ -25,6 +25,8 @@ new implementation claims need evidence from the actual build. No code, editor, 
 revision.
 
 ## Change log
+
+- 2026-10-30: Step 2: COLLABORATION and MCP join the checked documents; 12 documents and 175 rules.
 
 - 2026-10-29: 125 rules, with the owner-approved ARCHITECTURE-4.2.
 - 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots audit report: structure and reference

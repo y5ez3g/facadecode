@@ -20,5 +20,8 @@
 	"config.codex.title": "Codex",
 	"config.codex.path": "Codex へのパス。ターミナル環境の PATH にある \"codex\" を使用する場合は空のままにします。",
 	"windowDisplayName": "Facade Code ウィンドウ コンポーネント",
-	"windowDescription": "Facade Code のウィンドウ ID およびセッション継続性コーディネーター。"
+	"windowDescription": "Facade Code のウィンドウ ID およびセッション継続性コーディネーター。",
+	"command.messageHistory": "メッセージ履歴...",
+	"config.collaboration.enabled": "エージェントが互いに起動と停止を行い、互いおよびユーザーにメッセージを送信し、互いのターミナルを読み取って入力できるようにします。新しく起動するエージェントにのみ適用されます。",
+	"config.collaboration.waitSeconds": "エージェントが別のエージェントの起動または停止を待機する秒数。この時間を過ぎると、エージェントは後でメッセージで結果を受け取ります。"
 }

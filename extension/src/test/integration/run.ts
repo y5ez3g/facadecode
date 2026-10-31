@@ -8,61 +8,55 @@
 // profile or agents.
 
 import { runTests } from '@vscode/test-electron';
-import { execFileSync, spawn, spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { EDITOR_FLAGS, endMatching, fakeCli, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
 
-/** The official VS Code only: a derived editor can load its own agent extension and share a data folder with a person's live state. */
-function officialVsCode(executable: string): void {
-	const candidates = [
-		path.join(path.dirname(executable), '..', 'Resources', 'app', 'product.json'),
-		path.join(path.dirname(executable), 'resources', 'app', 'product.json'),
-		path.join(path.dirname(executable), '..', 'resources', 'app', 'product.json')
-	];
-	const file = candidates.find(each => fs.existsSync(each));
-	if (!file) {
-		throw new Error(`Cannot find product.json beside ${executable}; refusing to run the suite in an unknown editor.`);
+/**
+ * Takes back the trust each launch gave its folder in Claude Code's configuration `file` (CLIS-3.3, D62): the entries of the run's own
+ * folders under `root`, nothing else; the file is replaced whole, as Claude Code writes it.
+ */
+function untrust(file: string, root: string): void {
+	let text: string;
+	try {
+		text = fs.readFileSync(file, 'utf8');
+	} catch {
+		return;
 	}
-	const product = JSON.parse(fs.readFileSync(file, 'utf8')) as { nameShort?: string; dataFolderName?: string; applicationName?: string };
-	if (product.dataFolderName !== '.vscode' || product.applicationName !== 'code') {
-		throw new Error(`${executable} is ${product.nameShort ?? 'not VS Code'} (data folder ${product.dataFolderName}); the suite runs only in official VS Code.`);
+	const config = JSON.parse(text) as { projects?: { [folder: string]: unknown } };
+	const folders = Object.keys(config.projects ?? {}).filter(folder => folder === root || folder.startsWith(`${root}${path.sep}`));
+	if (!folders.length) {
+		return;
 	}
-}
-
-/** Variables an editor, Git or a CLI session could pass on: none of them may reach the test editor. */
-function sanitizedEnvironment(): void {
-	for (const name of Object.keys(process.env)) {
-		if (/^(VSCODE_|CLAUDE_|CODEX_|GEMINI_|ANTHROPIC_|OPENAI_|FACADE_|ELECTRON_RUN_AS_NODE$|GIT_ASKPASS$|SSH_ASKPASS$)/.test(name) && name !== 'VSCODE_EXECUTABLE') {
-			delete process.env[name];
-		}
+	for (const folder of folders) {
+		delete config.projects![folder];
 	}
+	const temporary = `${file}.facade-it-${process.pid}`;
+	fs.writeFileSync(temporary, `${JSON.stringify(config, undefined, 2)}\n`, { mode: fs.statSync(file).mode & 0o777 });
+	fs.renameSync(temporary, file);
+	console.log(`Took back the trust of ${folders.join(', ')} in ${file}.`);
 }
 
 async function main(): Promise<void> {
-	const standard = '/Applications/Visual Studio Code.app/Contents/MacOS/Code';
-	const executable = process.env.VSCODE_EXECUTABLE || (process.platform === 'darwin' && fs.existsSync(standard) ? standard : undefined);
-	if (!executable) {
-		throw new Error('Set VSCODE_EXECUTABLE to an official VS Code executable, for example "/Applications/Visual Studio Code.app/Contents/MacOS/Code".');
-	}
-	officialVsCode(executable);
+	const executable = officialEditor();
 	const grep = process.env.FACADE_IT_GREP;
 	// For a look at what a run left: its folder kept, and one of its editors alone (`journeys` or `conversion`)
 	const keep = !!process.env.FACADE_IT_KEEP;
 	const only = process.env.FACADE_IT_ONLY;
+	// Real Claude Code, for `real` alone: its executable, and its configuration folder - else the person's own, signed in
+	const realClaude = process.env.FACADE_IT_CLAUDE;
+	const realConfig = process.env.FACADE_IT_CLAUDE_CONFIG;
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
 	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
 	const repo = path.join(root, 'app');
-	fs.mkdirSync(repo);
-	const git = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { stdio: 'pipe' });
-	git('init', '-q', '-b', 'main');
-	git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'first');
+	newRepository(repo);
 
 	// A Claude Code that records where it runs and what it was given, run as Node by this run's own
-	const fake = path.join(root, 'fake-claude');
+	const fake = fakeCli(root, path.join(__dirname, 'fakeClaude.js'));
 	const record = path.join(root, 'fake-claude.log');
-	fs.writeFileSync(fake, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(__dirname, 'fakeClaude.js'))} "$@"\n`, { mode: 0o755 });
 	// Claude Code's configuration, where each launch trusts its folder (CLIS-3.3, D62): the suite's own, never a person's
 	const claudeConfig = path.join(root, 'claude');
 	fs.mkdirSync(claudeConfig);
@@ -83,7 +77,7 @@ async function main(): Promise<void> {
 	 * One editor of the suite on `folder`, with user data, extensions and a Facade directory of its own - and shared data: without it
 	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2).
 	 */
-	const run = async (name: string, folder: string, env: { readonly [name: string]: string } = {}, more: { readonly [setting: string]: unknown } = {}) => {
+	const run = async (name: string, folder: string, env: { readonly [name: string]: string } = {}, more: { readonly [setting: string]: unknown } = {}, claude: string | null = claudeConfig) => {
 		const user = path.join(root, `u-${name}`);
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
@@ -91,9 +85,9 @@ async function main(): Promise<void> {
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
-		// FACADE_HOME, the root whose `extension` folder is the extension's data (ARCHITECTURE-3.1)
+		// FACADE_HOME, the root whose `extension` folder is the extension's data (ARCHITECTURE-3.1); a cross-window run shares it
 		const facade = path.join(home, name);
-		fs.mkdirSync(facade);
+		fs.mkdirSync(facade, { recursive: true });
 		try {
 			await runTests({
 				vscodeExecutablePath: executable,
@@ -103,14 +97,15 @@ async function main(): Promise<void> {
 				extensionTestsEnv: {
 					FACADE_HOME: facade,
 					FACADE_IT_RECORD: record,
-					CLAUDE_CONFIG_DIR: claudeConfig,
+					// None: Claude Code's own default, the person's signed-in configuration
+					...(claude !== null ? { CLAUDE_CONFIG_DIR: claude } : {}),
 					...(grep ? { FACADE_IT_GREP: grep } : {}),
 					...env
 				}
 			});
 		} finally {
 			// The window's ptyd outlives it, as it is made to: it goes with the run, and the agents it holds with it
-			spawnSync('pkill', ['-TERM', '-f', path.join(facade, 'extension', 'ptyd')]);
+			endMatching(path.join(facade, 'extension', 'ptyd'));
 		}
 	};
 	/**
@@ -135,7 +130,7 @@ async function main(): Promise<void> {
 			fs.rmSync(path.join(root, file));
 		}
 		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-conversion'), '--shared-data-dir', path.join(root, 's-conversion'),
-			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'], {
+			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
 			stdio: 'ignore',
 			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_SECOND: second, CLAUDE_CONFIG_DIR: claudeConfig }
 		});
@@ -156,17 +151,68 @@ async function main(): Promise<void> {
 			console.log('    ✔ the agent started in the folder window is the same run, card, live process and one terminal in the workspace');
 		} finally {
 			editor.kill('SIGTERM');
-			spawnSync('pkill', ['-TERM', '-f', user]);
-			spawnSync('pkill', ['-TERM', '-f', path.join(facade, 'extension', 'ptyd')]);
+			endMatching(user);
+			endMatching(path.join(facade, 'extension', 'ptyd'));
+		}
+	};
+	/**
+	 * Two windows of one computer (COLLABORATION-1.1, VERIFICATION J15): a second editor - user data and extensions of its own, the same
+	 * Facade root, so that both window components meet in this computer's registry - holds another folder while the suite's editor
+	 * runs its cross-window journey there. It runs no tests itself; it is closed with its agents afterwards.
+	 */
+	const crossWindow = async () => {
+		const peer = path.join(root, 'peer');
+		newRepository(peer);
+		const user = path.join(root, 'u-peer');
+		const facade = path.join(home, 'cross');
+		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
+		fs.mkdirSync(facade, { recursive: true });
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
+		const editor = spawn(executable, [peer, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-peer'), '--shared-data-dir', path.join(root, 's-peer'),
+			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, ...EDITOR_FLAGS], {
+			stdio: 'ignore',
+			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, CLAUDE_CONFIG_DIR: claudeConfig }
+		});
+		try {
+			// The other window is there once its component registered it on this computer
+			if (await registeredWindow(facade, label => label === 'peer') === undefined) {
+				throw new Error('The second editor window did not join this computer\'s Facade windows.');
+			}
+			await run('cross', repo, { FACADE_IT_CLI: 'claude', FACADE_IT_PEER: 'peer', FACADE_IT_PEER_DIR: fs.realpathSync(peer) });
+		} finally {
+			editor.kill('SIGTERM');
+			endMatching(user);
+			endMatching(path.join(facade, 'extension', 'ptyd'));
+		}
+	};
+	/**
+	 * Real Claude Code agents working together (VERIFICATION G3): YOLO off, the suite's real journey alone. Each launch trusts its folder
+	 * in that Claude Code's configuration (D62), the person's own where no folder of its own is given: the run takes that back.
+	 */
+	const real = async () => {
+		if (!realClaude) {
+			throw new Error('FACADE_IT_ONLY=real starts real Claude Code: set FACADE_IT_CLAUDE to its executable, and FACADE_IT_CLAUDE_CONFIG to a configuration folder signed in for testing - unset, it is your own.');
+		}
+		try {
+			await run('real', repo, { FACADE_IT_REAL: 'claude', FACADE_IT_GREP: 'real Claude Code' }, { 'facade.claude.path': realClaude, 'facade.yolo': false }, realConfig ?? null);
+		} finally {
+			untrust(realConfig ? path.join(realConfig, '.claude.json') : path.join(os.homedir(), '.claude.json'), root);
 		}
 	};
 	try {
-		if (only !== 'conversion') {
+		if (!only || only === 'journeys') {
 			await run('journeys', repo, { FACADE_IT_CLI: 'claude' });
 			await run('codex', repo, { FACADE_IT_CLI: 'codex' }, { 'facade.claude.path': path.join(root, 'unavailable-claude') });
 		}
-		if (only !== 'journeys') {
+		if (!only || only === 'cross') {
+			await crossWindow();
+		}
+		if (!only || only === 'conversion') {
 			await conversion();
+		}
+		// Never unasked: it signs in and uses an account's usage
+		if (only === 'real') {
+			await real();
 		}
 	} finally {
 		if (keep) {
