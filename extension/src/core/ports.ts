@@ -303,8 +303,8 @@ export interface ExecutionPort {
 	/** The run whose terminal is the active one, as the editor reports it; undefined when another editor/terminal is active. */
 	readonly onDidActivate: Event<RunId | undefined>;
 	/**
-	 * The person renamed a run's terminal tab natively (LIFECYCLE-2.2), told by the run's own terminal: `name` as they gave it, without
-	 * the separator and CLI title they kept. Whatever becomes of it, the tab then shows the agent's name.
+	 * The person renamed a run's terminal tab natively (LIFECYCLE-2.2), told by the run's own terminal: the complete `name` as they
+	 * gave it. Whatever becomes of it, the tab then shows the agent's name.
 	 */
 	readonly onDidRenameTab?: Event<{ readonly run: RunId; readonly name: string }>;
 	/** The person closed a run's terminal tab natively: a close they confirm for a live agent (LIFECYCLE-3.1). */

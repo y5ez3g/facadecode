@@ -203,7 +203,6 @@ window components' network has no settings; it shares the same OS-user desktop b
 
 | Editor setting | Owner/use |
 | --- | --- |
-| `terminal.integrated.tabs.separator` | LIFECYCLE tab title |
 | `terminal.integrated.confirmOnKill` | LIFECYCLE-3.1 close confirmation: `editor`/`always` ask, `never`/`panel` do not |
 | `terminal.integrated.env.osx/linux/windows`, configured default-profile env | CLIS-1.2 owns the shared discovery/launch environment; shell startup scripts are not evaluated |
 | Default terminal profile and shell | Ordinary Open Terminal Here terminals |
@@ -261,6 +260,7 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 
 ## Change log
 
+- 2026-11-01: Removed the tab-separator dependency after LIFECYCLE-2.2 changed editor tabs to icon plus name (D130).
 - 2026-11-01: 2.1 gives reliable idle its own neutral theme colour and reserves yellow for native blockers (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 

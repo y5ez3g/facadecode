@@ -221,7 +221,7 @@ passes.
 | U03 | Human operation error, agent operation error, failed message return, explicit `#human` | Error to initiator; no agent message fallback to human; explicit contact shown in related window even when terminal visible |
 | U04 | Empty filtered panel; a person's start outside the filter; missing Git | Filter remains unchanged; new card follows normal data/order and only matching entries display; no launch-default change |
 | U05 | New card, manual movement, filter | Card-count badge, stack insertion and stable state changes |
-| U06 | Go to Agent with duplicate names, exact/short IDs and stale-name copied references; terminal placement | ID selects the intended current-window run; picker detail/hover distinguish duplicates; editor-only terminals; no global default shortcut |
+| U06 | Go to Agent with duplicate names, exact/short IDs and stale-name copied references; terminal placement; native rename, CLI title changes and restored background tabs | ID selects the intended current-window run; picker detail/hover distinguish duplicates; editor-only terminals show the CLI icon and agent name without appended CLI titles; native renames keep literal title-like suffixes; no global default shortcut; LIFECYCLE-2.2 |
 | U07 | Command/menu catalog with starting, live and retained-ended records; view a notified source | One Close Agent action for all states; no attention queue/seen state, nextAgent, human stopAgent or startAgent registration; opening does not clear the error |
 | U08 | Activate agent B, switch to a file/unrelated terminal, invoke palette Rename/Copy/Close; repeat without a selected run | Available actions target B under UX-3.1; no target picker; unavailable without a valid target; explicit card/tab context still targets its own run |
 | U09 | Browse near the 80th card, switch to Explorer, then return; repeat after the navigation target is removed | Restore still-valid scroll position and navigation target without stealing input focus; removed target is discarded; existing PANEL-3.3 scrolling behavior is unchanged |
@@ -353,6 +353,7 @@ for review, not acceptance evidence.
 
 ## Change log
 
+- 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
 - 2026-11-01: U13 covers the panel status, stable-name and responsive-location decisions D127/D128.
 
 - 2026-10-31: U12 covers native overlay appearance and interaction, fractional-scale host clipping, full-range scrolling and card corners without decorative list padding; check balanced card sides when the right padding absorbs the device-pixel guard.

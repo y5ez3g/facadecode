@@ -130,9 +130,10 @@ explicitly renames it (D127). Rename uses a native Input Box and changes no run/
 **Each visible agent has one terminal in an editor group; no terminal-panel placement option is provided.**
 
 Human New shows the terminal; agent creation preserves focus. Card/Go to Agent reveals the same terminal without
-launching another. Tab title uses the
-agent name and, when present, the native tabs separator plus CLI title. Use the CLI's theme-appropriate logo; custom CLIs use a terminal icon. Do not put
-status in the name. Native tab renames synchronize the display name when valid. Match terminals by actual identity,
+launching another. The tab shows only the agent name beside the CLI's theme-appropriate logo; custom CLIs use a terminal
+icon (D130). CLI titles and status remain in PANEL-1.4's second line, never appended to the tab name. Do not add a name
+length limit or change the editor's tab-width settings. Native tab renames synchronize the complete display name when
+valid, without removing text that resembles a CLI title. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
 as an alternative.
 
@@ -256,7 +257,7 @@ integration evidence, not a fact established by this document.
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
-| 2.1–2.3 | Empty/duplicate/spaced names and `human`, editor-only terminals, ID/copied-reference search, distinguishable picker details |
+| 2.1–2.3 | Empty/duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, literal native renames, editor-only terminals, ID/copied-reference search, distinguishable picker details |
 | 3.1–3.5 | One human Close action shared with `stop_agent`, children kept, reload/disconnect reuse, exact Resume, linked Pins, bounded restoration, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
 
@@ -264,6 +265,7 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 
 ## Change log
 
+- 2026-11-01: 2.2 uses only the CLI icon and agent name for editor tabs; CLI titles remain in the panel (D130).
 - 2026-11-01: 2.1 explicitly keeps names stable across CLI titles, activity and task progress (D127).
 - 2026-10-31: A native workspace set with no recorded cwd uses an observed Facade cwd or asks for a working location; no directory-order guess (D123).
 

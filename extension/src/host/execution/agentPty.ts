@@ -11,9 +11,6 @@ const MOST_UNOPENED = 8 * 1024 * 1024;
 /** The most names said for a tab that are still told from a person's as the tab shows them: far more than are ever on their way. */
 const MOST_SAID = 32;
 
-/** The most separators and CLI titles a person renaming a tab may have kept from what it showed, newest first. */
-const MOST_KEPT = 4;
-
 /** A tab title as the editor shows it, which drops line breaks and tabs from what it is given (LIFECYCLE-2.2). */
 function shownAs(title: string): string {
 	return title.replace(/[\n\r\t]/g, '');
@@ -44,8 +41,8 @@ function noteLine(text: string): string {
 /**
  * An agent's editor terminal (LIFECYCLE-1.5, 2.2): a Pseudoterminal that exists from the accepted launch on, before any process.
  * It shows Facade's dim progress and failure lines; once the run's process starts, the same terminal shows the run - its screen
- * as it stands, then each numbered output after it, never one twice. Its tab reads the agent's name and, where the CLI gives
- * one, the native tabs separator and the CLI's title; never a status.
+ * as it stands, then each numbered output after it, never one twice. Its tab reads only the agent's name; CLI titles and
+ * status belong to the panel.
  */
 export class AgentPty implements vscode.Pseudoterminal {
 
@@ -72,20 +69,17 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private stale = false;
 	/** Whether a screen of the run was drawn: drawing another starts from a reset terminal. */
 	private drawn = false;
-	private title: string | undefined;
 	private ended = false;
 	/** The name the terminal was created with, which the editor gives its tab once more after each open (LIFECYCLE-2.2). */
 	private created: string;
 	/** Whether the editor's naming of the tab by {@link created} is to come: from each open until it is seen or the agent renamed. */
 	private resetDue = false;
-	/** The names said for the tab, oldest first, each with its separator and CLI title: dropped once one said after it is seen. */
-	private said: { readonly name: string; readonly suffix: string }[] = [];
+	/** The names said for the tab, oldest first: dropped once one said after it is seen. */
+	private said: string[] = [];
 	/** What the tab was last seen showing. */
 	private seen: string;
-	/** The separators and CLI titles of its names seen shown, newest first: what a person renaming the tab may have kept of them. */
-	private kept: string[] = [];
 
-	constructor(private name: string, private separator: string, private readonly log: (message: string) => void) {
+	constructor(private name: string, private readonly log: (message: string) => void) {
 		this.created = name;
 		this.seen = name;
 	}
@@ -162,22 +156,6 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 	}
 
-	/** The CLI's own title, sanitized; none where it gives none. */
-	setTitle(title: string | undefined): void {
-		if (title !== this.title) {
-			this.title = title;
-			this.say();
-		}
-	}
-
-	/** `terminal.integrated.tabs.separator` changed. */
-	setSeparator(separator: string): void {
-		if (separator !== this.separator) {
-			this.separator = separator;
-			this.say();
-		}
-	}
-
 	/** Gives its tab the name it has again, once open: the editor or a person named the tab otherwise meanwhile (LIFECYCLE-2.2). */
 	sayName(): void {
 		if (this.opened) {
@@ -185,12 +163,12 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 	}
 
-	/** The tab's name (LIFECYCLE-2.2): the agent's, then the separator and the CLI's title where it gives one. */
+	/** The tab's name (LIFECYCLE-2.2): only the agent's display name. */
 	tabName(): string {
-		return `${this.name}${this.suffix()}`;
+		return this.name;
 	}
 
-	/** The native terminal's initial name, including an already-known CLI title before VS Code opens the pseudoterminal. */
+	/** The native terminal's initial name, set before VS Code opens the pseudoterminal. */
 	creationName(): string {
 		this.created = this.tabName();
 		this.seen = this.created;
@@ -200,7 +178,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 	/**
 	 * The tab shows `title` now (LIFECYCLE-2.2): undefined where that is no change, or a name this terminal said - the editor shows
 	 * them in the order they were said, each perhaps late; `reset` where the editor named the tab by the name the terminal was created
-	 * with, as it does after each open; else the name the person gave it, without the separator and CLI title they kept.
+	 * with, as it does after each open; else the complete name the person gave it.
 	 */
 	shown(title: string): TabShown | undefined {
 		if (title === this.seen) {
@@ -212,18 +190,13 @@ export class AgentPty implements vscode.Pseudoterminal {
 			this.resetDue = false;
 			return 'reset';
 		}
-		const at = this.said.findIndex(each => each.name === shown);
+		const at = this.said.indexOf(shown);
 		if (at >= 0) {
 			// The names said before it are shown already, or never will be
 			this.said.splice(0, at);
-			const { suffix } = this.said[0];
-			if (suffix) {
-				this.kept = [suffix, ...this.kept.filter(each => each !== suffix)].slice(0, MOST_KEPT);
-			}
 			return undefined;
 		}
-		const suffix = [shownAs(this.suffix()), ...this.kept].find(each => each && shown.endsWith(each));
-		return { renamed: suffix ? shown.slice(0, -suffix.length) : shown };
+		return { renamed: shown };
 	}
 
 	open(dimensions: vscode.TerminalDimensions | undefined): void {
@@ -273,16 +246,11 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.nameEmitter.dispose();
 	}
 
-	/** The separator and the CLI's title the tab's name ends with; none where the CLI gives no title. */
-	private suffix(): string {
-		return this.title ? `${this.separator}${this.title}` : '';
-	}
-
 	/** Names the tab by {@link tabName}, noting it as said: as the tab shows it, it is not a person's name for it. */
 	private say(): void {
 		const name = this.tabName();
-		const said = { name: shownAs(name), suffix: shownAs(this.suffix()) };
-		if (said.name === shownAs(this.seen)) {
+		const said = shownAs(name);
+		if (said === shownAs(this.seen)) {
 			// The tab shows it already - a person named it so - and no change will say so: the names said before it are over, and a
 			// person naming the tab one of them again renames the agent (LIFECYCLE-2.2)
 			this.said = [said];

@@ -133,7 +133,8 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 
 	test('New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder', async () => {
 		const card = await newCard();
-		assert.ok(vscode.window.terminals.some(terminal => terminal.name.startsWith(card.name)), 'its editor terminal exists');
+		const terminal = vscode.window.terminals.find(each => each.name === card.name);
+		assert.ok(terminal, 'its editor terminal shows only the agent name');
 		const alias = card.tooltip.join(' ').match(/#a\d+/)?.[0];
 		assert.ok(alias, 'the card shows its short ID');
 		const pidFile = `${RECORD}.${alias}`;
@@ -143,7 +144,6 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		if (CUSTOM) {
 			const avatar = card.avatar as { initial: string; color: string };
 			assert.deepStrictEqual([avatar.initial, ['blue', 'orange', 'purple'].includes(avatar.color)], ['M', true]);
-			const terminal = vscode.window.terminals.find(each => each.name.startsWith(card.name))!;
 			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, 'terminal');
 		} else {
 			assert.deepStrictEqual(card.avatar, { file: AVATAR });
@@ -188,6 +188,13 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		});
 		assert.strictEqual(reported.dot, 'idle');
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
+		for (const title of ['✳ Checking responsive layout', '● 检查标题更新 | workspace']) {
+			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title }));
+			await until('the CLI title in the panel', async () => (await state()).cards.find(each => each.runId === card.runId)?.line === title ? true : undefined);
+			assert.strictEqual(terminal.name, card.name, 'CLI titles never change the native terminal name');
+			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
+				.some(tab => tab.input instanceof vscode.TabInputTerminal && tab.label === card.name) ? true : undefined);
+		}
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Close Agent removes the card at once');

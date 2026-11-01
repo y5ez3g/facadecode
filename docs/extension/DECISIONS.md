@@ -175,6 +175,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D126 | Owner-revised 2026-11-01 during the panel review: defer all CLI title cleanup and restore the original visible content, including status symbols, CLI/folder/agent names and default session titles. A nonempty reported title still takes precedence over the terminal title; invisible-format sanitation and the existing display bound remain. This withdraws the generic-title, decoration and OpenCode placeholder filters without deciding the separate location-layout discussion | CLIS-2.3 |
 | D127 | Owner-approved in the panel review, implemented 2026-11-01: green startup/work, grey reliable idle, yellow native permission/answer/sign-in blockers, red errors or unavailable reliable activity. Normal second lines show the native title or creation prompt directly, with fallbacks only when absent; blockers/errors lead with explicit labels. Names stay stable through CLI title and activity updates until an explicit human rename. No unread or task-completion meaning is added | RULES-3.2; PANEL-1.4; LIFECYCLE-2.1; UX-2.1 |
 | D128 | Owner-approved 2026-11-01: name and location borrow unused space from each other; the earlier 40% location cap is removed, with about 60:40 only when both are long. Names ellipsize at the end. Location remains folder plus worktree/branch, each long component ellipsized in the middle by measured width, short components kept whole; worktree has about two thirds when both are long. After the owner identified excess space before the separator, width shares are clarified as fitting limits: reuse unfilled grapheme space and render a compact group at the measured widths of the resulting strings. Keep the separator, full hover/accessibility and the existing panel header; never hide a long folder wholesale. Supersedes D72 | PANEL-1.3; UX-2.2 |
+| D130 | Owner-approved 2026-11-01: editor tabs show the CLI icon and agent name only. Stop appending the changing CLI title or its separator; keep CLI content in the panel's second line under D126/D127. Native renames preserve the complete entered name. No new name-length limit or editor-wide tab-sizing change | LIFECYCLE-2.2; UX-4.2 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -248,6 +249,7 @@ full spec revision; it does not authorize publication or unrelated source change
 
 ## Change log
 
+- 2026-11-01: Recorded D130: editor tabs use the CLI icon and agent name only.
 - 2026-11-01: Clarified D128 after the owner identified the folder-to-separator gap: fitting budgets must not become reserved blank space; compact the measured result and retain group alignment.
 - 2026-11-01: Recorded D127 and D128: four dot meanings, direct normal titles, explicit blockers/errors, stable names and elastic name/location widths with component-wise middle ellipses.
 - 2026-11-01: Recorded D126: the owner deferred CLI title cleanup and requested that filtered content be restored.
