@@ -12,7 +12,7 @@ import { disposeAll } from '../base/lifecycle';
 import { VendorHistory } from '../clis/history';
 import { ConversationFile } from '../record/conversations';
 import { WorkspacePins } from './pins';
-import { isDamagedWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { isDamagedWindowIdentity, isUnreadableWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { createToolServices } from '../contract/tools';
 import { AgentService } from '../core/agents';
 import { AttentionNotices } from '../core/attention';
@@ -113,6 +113,10 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	if (isDamagedWindowIdentity(identity, session)) {
 		// No other identity is invented (ARCHITECTURE-2.2), and a reload reads the same record: another window has its own
 		throw new ActivationError(vscode.l10n.t("This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.", vscode.env.appName), false);
+	}
+	if (isUnreadableWindowIdentity(identity, session)) {
+		// Not read now - a lock, no file handles left - which a reload may not meet again: the component is there, and says so
+		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
 	}
 	if (!identity) {
 		const missing = showComponentMissing(context, session);

@@ -68,3 +68,19 @@ export interface DamagedWindowIdentity {
 export function isDamagedWindowIdentity(value: unknown, session: string): value is DamagedWindowIdentity {
 	return isJsonObject(value) && value.version === 1 && value.session === session && value.damaged === true;
 }
+
+/**
+ * The local component's reply where this window's identity record could not be read now - a lock, no file handles left - and is not
+ * known damaged: a reload reads it again. Without it the workspace component would wait for a component that is there, and say to
+ * install it.
+ */
+export interface UnreadableWindowIdentity {
+	readonly version: 1;
+	readonly session: string;
+	/** Why it could not be read, for the log. */
+	readonly unreadable: string;
+}
+
+export function isUnreadableWindowIdentity(value: unknown, session: string): value is UnreadableWindowIdentity {
+	return isJsonObject(value) && value.version === 1 && value.session === session && typeof value.unreadable === 'string';
+}
