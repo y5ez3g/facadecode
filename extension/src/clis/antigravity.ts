@@ -75,7 +75,8 @@ function workingDirectoryOf(cwd: string, env: Environment, platform: NodeJS.Plat
 	const pwd = variableOf(env, 'PWD', platform);
 	try {
 		if (pwd !== undefined && path.isAbsolute(pwd)) {
-			const [named, actual] = [fs.statSync(pwd), fs.statSync(folder)];
+			// Compared whole: a 64-bit inode number loses its last digits as a JavaScript number, and two folders could seem one
+			const [named, actual] = [fs.statSync(pwd, { bigint: true }), fs.statSync(folder, { bigint: true })];
 			if (named.ino === actual.ino && named.dev === actual.dev) {
 				return pwd;
 			}
