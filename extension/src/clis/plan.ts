@@ -7,7 +7,7 @@
 // started; every prerequisite that can be checked is checked here, and a failure carries its actual reason.
 
 import { newSessionId, SESSION_FILE_VARIABLE } from './identity';
-import { Capability, CliAdapter, expanded, invocation, WarmUp } from './adapter';
+import { Capability, CliAdapter, configOverrides, expanded, invocation, WarmUp } from './adapter';
 import { BUILT_IN_ADAPTERS, Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
 import { composeEnvironment, Environment, EnvironmentMap, runEnvironment, setVariable, variableOf } from './environment';
@@ -204,36 +204,26 @@ function trustOf(entry: CatalogEntry, cwd: string, env: Environment, platform: N
 	return adapter.trustTarget ? { kind: 'file', target: adapter.trustTarget(cwd, env, platform) } : { kind: 'arguments', args: expanded(adapter.groups.trust ?? [], values) };
 }
 
-/** Remove configured defaults replaced by explicit model/effort choices, keeping original indices for configuration errors. */
-function configuredArguments(args: readonly string[], overrides: readonly string[]): { readonly index: number; readonly value: string }[] {
-	const options = new Set<string>();
-	const settings = new Set<string>();
-	for (let index = 0; index < overrides.length; index++) {
-		const option = overrides[index];
-		if (option === '-c') {
-			settings.add(overrides[++index].split('=', 1)[0].trim());
-		} else if (option.startsWith('-')) {
-			options.add(option.split('=', 1)[0]);
-		}
-	}
+/**
+ * Remove configured defaults replaced by explicit model/effort choices `overrides` (CLIS-1.4) - their options in every spelling the CLI
+ * takes, `aliases`, and the keys of their configuration overrides however given - keeping original indices for configuration errors.
+ */
+function configuredArguments(args: readonly string[], overrides: readonly string[], aliases: CliAdapter['aliases'] = {}): { readonly index: number; readonly value: string }[] {
+	const settings = new Set(configOverrides(overrides).map(each => each.key));
+	const options = new Set(overrides.filter(each => each.startsWith('-') && !/^(?:-c|--config)(?:=|$)/.test(each)).map(each => each.split('=', 1)[0]).flatMap(option => [option, ...aliases[option] ?? []]));
+	const replaced = new Set(configOverrides(args).filter(each => settings.has(each.key)).flatMap(({ index, span }) => span === 2 ? [index, index + 1] : [index]));
 	const kept: { index: number; value: string }[] = [];
 	for (let index = 0; index < args.length; index++) {
 		const value = args[index];
 		const option = value.split('=', 1)[0];
+		if (replaced.has(index)) {
+			continue;
+		}
 		if (options.has(option)) {
 			if (value === option && index + 1 < args.length) {
 				index++;
 			}
 			continue;
-		}
-		if (option === '-c') {
-			const setting = (value === '-c' ? args[index + 1] : value.slice(3))?.split('=', 1)[0].trim();
-			if (setting !== undefined && settings.has(setting)) {
-				if (value === '-c') {
-					index++;
-				}
-				continue;
-			}
 		}
 		kept.push({ index, value });
 	}
@@ -288,7 +278,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	const extra = configuredArguments(input.resume && entry.custom ? entry.custom.resume.map(arg => arg.replace(/\$\{sessionId\}/g, () => input.resume!.sessionId)) : entry.extra, [
 		...input.model !== undefined ? adapter.groups.model ?? [] : [],
 		...input.effort !== undefined ? adapter.groups.effort ?? [] : []
-	]);
+	], adapter.aliases);
 	let injection = input.tools ? adapter.tools?.inject({ ...input.tools, platform }) : undefined;
 	let tools: PlannedLaunch['tools'] = injection ? { state: 'injected' } : { state: 'not_injected' };
 	// The tools' variables on the person's own, where a CLI's variable must keep theirs: one that cannot be read keeps theirs whole,

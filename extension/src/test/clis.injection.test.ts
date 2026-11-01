@@ -85,6 +85,17 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.strictEqual(planned.tools.state, 'injected');
 	});
 
+	test('an explicit model and effort replace their configured options in every spelling the CLI takes: Codex\'s -m and its --config, given apart or with = (CLIS-1.4)', () => {
+		const configured = (cli: string, args: readonly string[]) => catalogOf(name => name === `facade.${cli}.launch` ? { arguments: args } : undefined);
+		const codex = planLaunch(configured('codex', ['--config', 'model_reasoning_effort="low"', '-m', 'gpt-4.1', '-c=model_reasoning_effort="medium"', '--config=unrelated=true']),
+			{ cli: 'codex', alias: '#a1', cwd, yolo: true, model: 'gpt-5', effort: 'high' }, destination);
+		assert.deepStrictEqual(codex.args.filter(arg => /model_reasoning_effort|^-m$|^--model$|gpt-/.test(arg)), ['--model', 'gpt-5', 'model_reasoning_effort="high"']);
+		assert.strictEqual(codex.args.at(-1), '--config=unrelated=true');
+		const muse = planLaunch(configured('muse', ['--config', 'reasoning_effort="low"', '--verbose']), { cli: 'muse', alias: '#a1', cwd, yolo: true, effort: 'high' }, destination);
+		assert.deepStrictEqual(muse.args.filter(arg => /reasoning_effort/.test(arg)), ['reasoning_effort="high"', 'model_reasoning_efforts={}']);
+		assert.ok(muse.args.includes('--verbose'));
+	});
+
 	test('a custom CLI keeps its configured start without invented MCP injection or message input support', () => {
 		const catalog = catalogOf(name => name === 'facade.custom' ? { custom: { path: path.join(temp.dir, 'bin', 'claude'), launch: { start: ['literal'], resume: ['resume', '${sessionId}'] } } } : undefined);
 		const planned = planLaunch(catalog, { cli: 'custom', alias: '#a1', cwd, yolo: true, tools }, destination);
