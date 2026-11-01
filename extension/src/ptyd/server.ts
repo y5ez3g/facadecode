@@ -524,6 +524,11 @@ export class PtydServer {
 				if (typeof text !== 'string') {
 					throw new Error('Text to type must be a string.');
 				}
+				// A paste's end and an Enter read together may lose the Enter, as Claude Code does: its Enter goes in a request of its own,
+				// once the CLI can have read the text (MCP-5.2, D113)
+				if (text && enter) {
+					throw new Error('Text and its Enter are typed in two requests: the Enter once the CLI can have read the text.');
+				}
 				// A lead is typed as it is: words alone, nothing a terminal would act on
 				// eslint-disable-next-line no-control-regex
 				if (lead !== undefined && (typeof lead !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(lead))) {

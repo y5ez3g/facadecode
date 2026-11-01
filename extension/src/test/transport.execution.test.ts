@@ -180,7 +180,8 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 		await until('run-5 to end', async () => (await other.request('list', {})).find(run => run.run === 'run-5')?.exited);
 		assert.deepStrictEqual([...await port.allRunIds()].sort(), ['run-4', 'run-6']);
 		await until('its first line', async () => (await port.readScreen('run-4', 5)).text.includes('ready'));
-		assert.deepStrictEqual(await port.typeText('run-4', 'hi', true), { outcome: 'applied', pasted: true, entered: true });
+		assert.deepStrictEqual(await port.typeText('run-4', 'hi', false), { outcome: 'applied', pasted: true, entered: false });
+		assert.deepStrictEqual(await port.typeText('run-4', '', true), { outcome: 'applied', pasted: false, entered: true });
 		assert.deepStrictEqual(await port.pressKeys('run-4', ['Escape', 'Up']), { outcome: 'applied', keysSent: 2 });
 		const screen = await until('what went in', async () => {
 			const read = await port.readScreen('run-4', 10);
