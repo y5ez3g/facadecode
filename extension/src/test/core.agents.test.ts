@@ -330,11 +330,21 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.requested(creator, 'old'), undefined, 'a request lookup is not failed by the same cleanup');
 	});
 
-	test('a damaged retained record is ignored without stopping restoration', async () => {
+	test('a damaged retained record is ignored without stopping restoration, said once however often the window restores (ARCHITECTURE-4.2)', async () => {
 		const world = setUp();
 		world.retained.set('bad', { id: 'bad', alias: '#a1', name: 'Incomplete' } as RunFacts);
 		await world.agents.restore();
+		await world.agents.restore();
 		assert.deepStrictEqual([world.agents.list(), [...world.execution.pairs], world.log], [[], [], ['Ignored an invalid retained agent record.']]);
+	});
+
+	test('a run that ends normally while it is reattached is never announced afterwards as added (RULES-3.3, LIFECYCLE-3.5)', async () => {
+		const world = setUp();
+		const run = 'run-' + '7'.repeat(32);
+		world.execution.liveRuns = [{ run, meta: { alias: '#a7', name: 'Done', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 5 }, pid: 77, startedAt: 6, claimedElsewhere: false }];
+		world.execution.attach = async live => { world.execution.exits.fire({ run: live.run, code: 0, interruptVerified: false }); };
+		await world.agents.restore();
+		assert.deepStrictEqual([world.agents.list(), world.changes.map(change => change.kind)], [[], ['removed']]);
 	});
 
 	test('an accepted launch creates its pair at once, before the process, and keeps the same run through startup (J01, LIFECYCLE-1.5)', async () => {

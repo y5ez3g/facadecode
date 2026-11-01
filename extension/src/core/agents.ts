@@ -116,6 +116,8 @@ export class AgentService implements Agents, Disposable {
 	private readonly released = new Set<RunId>();
 	/** Why the last listing of this window's runs failed, said once until it changes. */
 	private listingFailure: string | undefined;
+	/** Whether an invalid retained record was said in the log already. */
+	private ignoredRecord = false;
 
 	readonly onDidChange: Event<RunChange> = listener => {
 		this.listeners.add(listener);
@@ -250,7 +252,11 @@ export class AgentService implements Agents, Disposable {
 				continue;
 			}
 			if (!isRetainedRun(kept)) {
-				this.deps.log.event('Ignored an invalid retained agent record.');
+				// Said once a window, not at each restore (ARCHITECTURE-4.2)
+				if (!this.ignoredRecord) {
+					this.ignoredRecord = true;
+					this.deps.log.event('Ignored an invalid retained agent record.');
+				}
 				continue;
 			}
 			const facts = retainedFacts(kept);
@@ -299,6 +305,10 @@ export class AgentService implements Agents, Disposable {
 					this.runs.delete(each.run);
 				}
 				this.deps.log.event(`Could not reattach ${facts.alias}: ${messageOf(err)}`);
+				continue;
+			}
+			if (this.runs.get(each.run) !== run) {
+				// Ended normally or closed as it was reattached: already removed, never announced afterwards (RULES-3.3)
 				continue;
 			}
 			this.emit({ run: each.run, kind: 'added' });
