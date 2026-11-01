@@ -9,7 +9,7 @@ import type { PanelFilter } from '../../webview/protocol';
 import { locationLabel } from '../cardView';
 import { PanelModel } from '../model';
 import { agentCountText, plainText } from '../presentation';
-import { folderIconOf, inStepOrder, locationIcon, locationsIn } from './location';
+import { catalogStep, CatalogStepOptions, folderIconOf, inStepOrder, locationIcon, locationsIn } from './location';
 import { BACK, Flow } from './stepping';
 
 /** An item: the filter it sets - `all`, every card - or the folder whose own step it opens. */
@@ -125,43 +125,12 @@ function folderAt(model: Model, catalog: Catalog, folder: WorkspaceFolderInfo): 
 	return current?.kind === 'location' && listedIn(model, catalog, folder).some(each => each.filter.id === current.id) ? `location:${current.id}` : `folder:${folder.uri}`;
 }
 
-interface StepOptions {
-	readonly title: string;
-	readonly itemsOf: (catalog: Catalog) => Item[];
-	readonly placeholderOf: (catalog: Catalog) => string;
-	/** Where the step opens, by `keyOf`. */
-	readonly at: string;
-	/** Where it is at once the item under the cursor is gone. */
-	readonly atOf: (catalog: Catalog) => string;
-	readonly back: boolean;
-}
-
 /**
  * One step: busy while the locations are first read, its items and hint read again as they change - the item under the cursor
  * staying under it, else the step back where it would open (PANEL-2.3).
  */
-async function step(flow: Flow, locations: Locations, options: StepOptions): Promise<Item | typeof BACK | undefined> {
-	const catalog = locations.snapshot();
-	const items = options.itemsOf(catalog);
-	const picked = await flow.pick<Item>({
-		title: options.title,
-		placeholder: options.placeholderOf(catalog),
-		items,
-		active: items.find(item => keyOf(item) === options.at),
-		back: options.back,
-		busy: catalog.pending,
-		live: picker => locations.onDidChange(() => {
-			const active = picker.activeItems.at(0);
-			const now = locations.snapshot();
-			const next = options.itemsOf(now);
-			const at = active && next.some(item => keyOf(item) === keyOf(active)) ? keyOf(active) : options.atOf(now);
-			picker.items = next;
-			picker.placeholder = options.placeholderOf(now);
-			picker.busy = now.pending;
-			picker.activeItems = next.filter(item => keyOf(item) === at);
-		})
-	});
-	return picked === undefined || picked === BACK ? picked : picked.item;
+function step(flow: Flow, locations: Locations, options: Omit<CatalogStepOptions<Item>, 'keyOf'> & { readonly at: string; readonly atOf: (catalog: Catalog) => string }): Promise<Item | typeof BACK | undefined> {
+	return catalogStep(flow, locations, { ...options, keyOf });
 }
 
 /**

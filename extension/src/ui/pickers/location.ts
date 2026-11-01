@@ -158,8 +158,66 @@ export function inStepOrder(locations: readonly Location[], folder: WorkspaceFol
 	return [...locations].sort((a, b) => rank(a) - rank(b));
 }
 
+/** A location's row in a step: its label, its path from the home folder beside it - searched too - and its icon. */
+export function locationRow(location: Location): vscode.QuickPickItem & { readonly location: Location } {
+	return { label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location };
+}
+
+/** A workspace folder's row, as VS Code lists recent folders: its name, then the folder that holds it, the home folder as ~. */
+export function folderRow(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.QuickPickItem & { readonly folder: WorkspaceFolderInfo } {
+	return { label: plainText(folder.name), description: plainText(homeRelative(path.dirname(folder.path))), iconPath: folderIconOf(catalog, folder), folder };
+}
+
 function locationItems(locations: readonly Location[], folder: WorkspaceFolderInfo): LocationItem[] {
-	return inStepOrder(locations, folder).map(location => ({ label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location }));
+	return inStepOrder(locations, folder).map(locationRow);
+}
+
+/** What a step that follows the catalog shows and where it starts, by the key `keyOf` gives each item. */
+export interface CatalogStepOptions<T extends vscode.QuickPickItem> {
+	readonly title: string;
+	readonly placeholderOf: (catalog: Catalog) => string;
+	readonly itemsOf: (catalog: Catalog) => T[];
+	readonly keyOf: (item: T) => string | undefined;
+	/** Where the step opens. */
+	readonly at?: string;
+	/** Where it is once the item under the cursor is gone: none keeps the editor's own choice. */
+	readonly atOf?: (catalog: Catalog) => string;
+	readonly back: boolean;
+	readonly matchOnDescription?: boolean;
+}
+
+/**
+ * One step that follows the catalog (WORKTREES-1.3): busy while the locations are first read, its items and hint read again as they
+ * change - the item under the cursor staying under it where it still is, else at `atOf`'s.
+ */
+export async function catalogStep<T extends vscode.QuickPickItem>(flow: Flow, locations: Pick<LocationPort, 'snapshot' | 'onDidChange'>, options: CatalogStepOptions<T>): Promise<T | typeof BACK | undefined> {
+	const catalog = locations.snapshot();
+	const items = options.itemsOf(catalog);
+	const picked = await flow.pick<T>({
+		title: options.title,
+		placeholder: options.placeholderOf(catalog),
+		items,
+		active: items.find(item => options.at !== undefined && options.keyOf(item) === options.at),
+		back: options.back,
+		busy: catalog.pending,
+		matchOnDescription: options.matchOnDescription ?? false,
+		live: picker => locations.onDidChange(() => {
+			const active = picker.activeItems.at(0);
+			const now = locations.snapshot();
+			const next = options.itemsOf(now);
+			const still = active && next.find(item => options.keyOf(item) === options.keyOf(active));
+			picker.items = next;
+			picker.placeholder = options.placeholderOf(now);
+			picker.busy = now.pending;
+			if (options.atOf) {
+				const at = still ? options.keyOf(still) : options.atOf(now);
+				picker.activeItems = next.filter(item => options.keyOf(item) === at);
+			} else if (still) {
+				picker.activeItems = [still];
+			}
+		})
+	});
+	return picked === undefined || picked === BACK ? picked : picked.item;
 }
 
 /**
@@ -211,7 +269,7 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
 		const items: FolderItem[] = [
 			// Its name, then the folder that holds it, as VS Code lists recent folders: the home folder as ~. Removing one is offered
 			// where another stays (D73)
-			...catalog.folders.map((each): FolderItem => ({ label: plainText(each.name), description: plainText(homeRelative(path.dirname(each.path))), iconPath: folderIconOf(catalog, each), folder: each, buttons: [remove] })),
+			...catalog.folders.map((each): FolderItem => ({ ...folderRow(catalog, each), buttons: [remove] })),
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
 			{ label: vscode.l10n.t("Add Folder to Workspace..."), iconPath: new vscode.ThemeIcon('add'), add: true }
 		];
