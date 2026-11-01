@@ -38,6 +38,31 @@ suite('CLIs: the environment composer (CLIS-1.2)', () => {
 		const base = composeEnvironment({ host: { ELECTRON_RUN_AS_NODE: '1', TERM_PROGRAM: 'iTerm' }, terminal: { FACADE_AGENT: 'mine', COLORTERM: '256' } }, 'darwin');
 		assert.deepStrictEqual(runEnvironment(base, '#a12', 'darwin'), { TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor', FACADE_AGENT: '#a12' });
 	});
+
+	test('the host\'s environment is inherited as VS Code\'s integrated terminal inherits it: without the editor\'s own variables, nor an earlier session\'s - a configured layer still sets them (CLIS-1.2)', () => {
+		const host = {
+			PATH: '/bin', HOME: '/home/me', FACADE_HOME: '/tmp/facade', TMUX: '/tmp/tmux-1/default,1,0',
+			// The editor's own, as its extension host has them
+			VSCODE_CWD: '/Applications', VSCODE_NLS_CONFIG: '{}', VSCODE_IPC_HOOK: '/tmp/main.sock', VSCODE_ESM_ENTRYPOINT: 'vs/workbench/api/node/extensionHostProcess',
+			VSCODE_IPC_HOOK_CLI: '/tmp/cli.sock', VSCODE_PORTABLE: '/portable', VSCODE_SHELL_LOGIN: '1', VSCODE_ENV_APPEND: 'A=1',
+			ELECTRON_NO_ATTACH_CONSOLE: '1', SNAP: '/snap/code/1', SNAP_NAME: 'code', SNAPSHOT: 'kept', GDK_PIXBUF_MODULE_FILE: '/snap/x',
+			// An earlier run's and a Claude Code session's, as a window opened from inside one inherits them
+			FACADE_AGENT: '#a3', FACADE_CODE_SESSION_FILE: '/old/r.session.json', FACADE_CODE_TITLE_COMMAND: 'old', FACADE_RUN: 'run-old', FACADE_PTYD: '/old.sock', FACADE_ELECTRON_RUN_AS_NODE: '1',
+			CLAUDECODE: '1', CLAUDE_CODE_CHILD_SESSION: '1', CLAUDE_CODE_SESSION_ID: 'x', CLAUDE_CODE_BRIDGE_SESSION_ID: 'y', CLAUDE_CODE_EXECPATH: '/claude', CLAUDE_CODE_ENTRYPOINT: 'cli', CLAUDE_JOB_DIR: '/jobs/1',
+			CLAUDE_CONFIG_DIR: '/home/me/.claude-work'
+		};
+		const kept = { PATH: '/bin', HOME: '/home/me', FACADE_HOME: '/tmp/facade', TMUX: '/tmp/tmux-1/default,1,0', VSCODE_IPC_HOOK_CLI: '/tmp/cli.sock', VSCODE_PORTABLE: '/portable', VSCODE_SHELL_LOGIN: '1', VSCODE_ENV_APPEND: 'A=1', SNAPSHOT: 'kept', CLAUDE_CONFIG_DIR: '/home/me/.claude-work', TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor' };
+		assert.deepStrictEqual(composeEnvironment({ host }, 'linux'), kept);
+		// On Windows the names compare in any case
+		assert.deepStrictEqual(composeEnvironment({ host: { Path: 'C:\\bin', vscode_cwd: 'C:\\x', ClaudeCode: '1', Facade_Code_Session_File: 'C:\\r' } }, 'win32'), { Path: 'C:\\bin', TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor' });
+		// A person's explicit setting is theirs; the launch then sets the run's own variables over what is left
+		assert.deepStrictEqual(composeEnvironment({ host, launch: { CLAUDE_CODE_ENTRYPOINT: 'mine', VSCODE_EXTRA: 'mine' } }, 'linux'), { ...kept, CLAUDE_CODE_ENTRYPOINT: 'mine', VSCODE_EXTRA: 'mine' });
+		assert.strictEqual(runEnvironment(composeEnvironment({ host }, 'linux'), '#a9', 'linux').FACADE_AGENT, '#a9');
+		// macOS: the person's NODE_OPTIONS come back from where VS Code's launcher keeps them, as its terminal has them
+		assert.deepStrictEqual(composeEnvironment({ host: { VSCODE_NODE_OPTIONS: '--max-old-space-size=8192', VSCODE_NODE_REPL_EXTERNAL_MODULE: '/repl.js' } }, 'darwin'),
+			{ NODE_OPTIONS: '--max-old-space-size=8192', NODE_REPL_EXTERNAL_MODULE: '/repl.js', TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor' });
+		assert.deepStrictEqual(composeEnvironment({ host: { VSCODE_NODE_OPTIONS: '--x' } }, 'linux'), { TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor' });
+	});
 });
 
 suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
