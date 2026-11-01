@@ -930,6 +930,20 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.ok(!world.pins().some(pin => pin.id === 'pin-gone'), 'closing its card Unpins');
 	});
 
+	test('Pins of a location removed while no host ran - removing the first folder restarts the extensions - are unpinned, never restored red (RULES-2.4, 4.2)', async () => {
+		const world = setUp({ removedWhileAway: ['loc-gone'] });
+		const save = (pin: Pin) => (world.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save(pin);
+		const pin = (id: string): Pin => ({ id, conversation: { environment: 'local', cli: 'claude', sessionId: id }, location: 'loc-gone', cwd: '/work/gone', name: id });
+		save(pin('pin-unheld'));
+		save(pin('pin-held'));
+		// A failed restoration of that folder's Pin, kept red for a reload
+		const failed = 'run-' + '8'.repeat(32);
+		world.retained.set(failed, { id: failed, origin: 'human', root: failed, tools: 'not_injected', alias: '#a8', name: 'Held', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-gone', cwd: '/work/gone', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, resumable: true, sessionId: 'pin-held', pin: 'pin-held', end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
+		await world.agents.restore();
+		await world.agents.restorePins();
+		assert.deepStrictEqual([world.pins(), world.agents.list(), world.errors], [[], [], []]);
+	});
+
 	test('Resuming a crashed pinned conversation hands its Pin to the new card; closing the old card keeps the Pin (LIFECYCLE-3.4)', async () => {
 		const world = setUp();
 		const first = world.agents.resume(ENTRY, { reveal: false }) as RunId;

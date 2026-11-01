@@ -229,6 +229,7 @@ export class AgentService implements Agents, Disposable {
 		if (this.ownershipLost) {
 			return 0;
 		}
+		this.unpinRemoved();
 		const liveIds = new Set(live.map(run => run.run));
 		for (const kept of this.deps.retained.list()) {
 			if (isRequestRun(kept)) {
@@ -299,6 +300,23 @@ export class AgentService implements Agents, Disposable {
 		}
 		this.settlePins();
 		return elsewhere;
+	}
+
+	/**
+	 * Unpins the Pins whose location this session reported removed: a removal found as the extensions restart - removing the first
+	 * folder restarts them - is reported before this service hears it, and unpins as one heard does (RULES-2.4, 4.2).
+	 */
+	private unpinRemoved(): void {
+		for (const pin of this.pins()) {
+			if (this.deps.locations.removalOf(pin.location)) {
+				try {
+					this.pinStore.remove(pin.id);
+					this.deps.log.event(`Unpinned ${JSON.stringify(pin.name)}: its working location was removed`);
+				} catch (err) {
+					this.deps.log.event(`Could not unpin ${JSON.stringify(pin.name)}, whose working location was removed: ${messageOf(err)}`);
+				}
+			}
+		}
 	}
 
 	private settlePins(): void {
@@ -740,6 +758,7 @@ export class AgentService implements Agents, Disposable {
 		this.pinsRestored = true;
 		await this.refreshConversations().catch(err => this.deps.log.event(`Could not list running conversations before restoring Pins: ${messageOf(err)}`));
 		if (this.ownershipLost || this.disposed) { return; }
+		this.unpinRemoved();
 		// A Pin a card already holds - running, or retained red after an abnormal exit or a failed restore - is not started again
 		// on a reload: restoration happens once per opening, without a restart loop (RULES-4.2)
 		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
@@ -747,7 +766,8 @@ export class AgentService implements Agents, Disposable {
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
 		const failed: { readonly id: RunId; readonly name: string; readonly reason: string }[] = [];
 		const restoreOne = async (pin: Pin): Promise<void> => {
-			if (!this.pins().some(saved => saved.id === pin.id) || this.running(pin.conversation)) { return; }
+			// One whose location was removed is no failure to show: its removal unpins it, even where that write failed (RULES-2.4)
+			if (!this.pins().some(saved => saved.id === pin.id) || this.running(pin.conversation) || this.deps.locations.removalOf(pin.location)) { return; }
 			const location = this.locationFor(pin.location, pin.cwd);
 			if (!location || location.environment !== pin.conversation.environment) {
 				const reason = `Its working location ${pin.cwd} is not available in this window.`;
