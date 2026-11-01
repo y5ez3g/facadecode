@@ -8,14 +8,9 @@
 
 import * as net from 'net';
 import { lineReader, MAX_JSON_LINE_BYTES } from '../base/lines';
+import { PTYD_PROTOCOL, type CallRefusal, type Response } from '../ptyd/protocol';
 import { TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import type { FailureCode } from './failure';
-
-/**
- * The ptyd protocol the shim speaks: ptyd's own `PTYD_PROTOCOL`, which the layers keep this one from importing - a test holds the
- * two equal. A ptyd of another protocol refuses the shim's hello.
- */
-export const SHIM_PTYD_PROTOCOL = 10;
 
 /** How long ptyd has to answer the shim's hello: the two seconds of a call's first response (RULES-1.2). */
 const HELLO_WAIT_MS = 2_000;
@@ -27,14 +22,8 @@ export class CallFailed extends Error {
 	}
 }
 
-/** ptyd's answer to one request, as its protocol gives it. */
-interface Answer {
-	readonly id: number;
-	readonly result?: unknown;
-	readonly error?: string;
-	readonly reason?: string;
-	readonly effects?: 'none' | 'unknown';
-}
+/** ptyd's answer to one request, as its protocol gives it: each field read where it has it. */
+type Answer = Response & { readonly result?: unknown; readonly error?: string; readonly reason?: CallRefusal; readonly effects?: 'none' | 'unknown' };
 
 /** One connection to ptyd: requests numbered, each answered once by its number. */
 class Connection {
@@ -190,9 +179,9 @@ export class PtydLink {
 			socket.once('connect', () => {
 				connected = true;
 				const connection = new Connection(socket, this.maxLineBytes, onClose);
-				connection.request('hello', { protocol: SHIM_PTYD_PROTOCOL, role: 'shim', run: this.run }).then(hello => {
+				connection.request('hello', { protocol: PTYD_PROTOCOL, role: 'shim', run: this.run }).then(hello => {
 					const protocol = (hello as { protocol?: unknown } | undefined)?.protocol;
-					if (protocol !== SHIM_PTYD_PROTOCOL) {
+					if (protocol !== PTYD_PROTOCOL) {
 						fail(incompatible(`its agent runtime (ptyd) protocol ${String(protocol)}`));
 						return;
 					}
@@ -206,5 +195,5 @@ export class PtydLink {
 
 /** The shim and the ptyd it reached do not speak one protocol. */
 function incompatible(theirs: string): CallFailed {
-	return new CallFailed('UNAVAILABLE', 'protocol_incompatible', 'none', `This agent's Facade MCP server speaks protocol ${SHIM_PTYD_PROTOCOL}, and ${theirs}: no tool call can be carried, and this one had no effect.`);
+	return new CallFailed('UNAVAILABLE', 'protocol_incompatible', 'none', `This agent's Facade MCP server speaks protocol ${PTYD_PROTOCOL}, and ${theirs}: no tool call can be carried, and this one had no effect.`);
 }

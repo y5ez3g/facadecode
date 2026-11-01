@@ -17,7 +17,7 @@ const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 	record: ['base'],
 	clis: ['base'],
 	ptyd: ['base'],
-	transport: ['schema', 'base'],
+	transport: ['ptyd', 'schema', 'base'],
 	schema: ['base'],
 	base: []
 };

@@ -10,7 +10,6 @@ import * as path from 'path';
 import { PtydClient } from '../host/execution/ptydClient';
 import { lineReader } from '../base/lines';
 import { CallEvent, InputReading, PTYD_PROTOCOL, Response, RunEvent, ScreenRead } from '../ptyd/protocol';
-import { SHIM_PTYD_PROTOCOL } from '../transport/ptydLink';
 import { CLAIM_WAIT_MS, MOST_RUN_CALLS, PtydServer } from '../ptyd/server';
 import { IDLE, program, ptydPlace } from './ptydPlace';
 
@@ -25,10 +24,6 @@ interface FakeShim {
 const answerOf = (text: string) => ({ text, structured: { status: 'success', data: { text }, effects: { outcome: 'none' } }, isError: false });
 
 suite('ptyd: a run\'s tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2)', function () {
-	test('the shim speaks ptyd\'s own protocol: a test holds the two equal, as the layers keep the shim from importing it', () => {
-		assert.strictEqual(SHIM_PTYD_PROTOCOL, PTYD_PROTOCOL);
-	});
-
 	this.timeout(20_000);
 	let socketPath: string;
 	let socketDir: string;
