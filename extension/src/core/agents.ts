@@ -53,8 +53,6 @@ interface Run {
 	facts: RunFacts;
 	/** Known startup creation effects, retained if later CLI planning or spawning fails. */
 	worktree?: WorktreeCreationEffects;
-	/** Whether an explicit close of this run was requested: its exit is then normal (RULES-3.3). */
-	closing: boolean;
 	/** Settles once its process started, its launch failed or it was closed first (MCP-2.3). */
 	settled: Promise<void>;
 	/** Whether its process was asked for and the answer is not in yet: a close then cannot say none started (WORKTREES-3.2). */
@@ -268,7 +266,7 @@ export class AgentService implements Agents, Disposable {
 			if (!this.runs.has(facts.id) && !this.released.has(facts.id)) {
 				const pin = facts.pin && this.pins().find(pin => pin.id === facts.pin);
 				const { pin: _previousPin, ...rest } = facts;
-				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, closing: false, exactResume: facts.resumable, settled: Promise.resolve() });
+				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, exactResume: facts.resumable, settled: Promise.resolve() });
 				this.deps.execution.openPair(pairOf(facts), { reveal: false });
 				if (facts.error) {
 					this.deps.execution.note(facts.id, facts.error.reason);
@@ -296,7 +294,7 @@ export class AgentService implements Agents, Disposable {
 				pid: each.pid,
 				startedAt: each.startedAt
 			};
-			const run: Run = { facts, closing: false, exactResume: each.meta.exactResume, settled: Promise.resolve() };
+			const run: Run = { facts, exactResume: each.meta.exactResume, settled: Promise.resolve() };
 			this.runs.set(each.run, run);
 			try {
 				await this.deps.execution.attach(each, pairOf(facts));
@@ -387,7 +385,7 @@ export class AgentService implements Agents, Disposable {
 			return { state: 'closed' };
 		}
 		await run.settled;
-		const facts = this.runs.get(id) === run && !run.closing ? run.facts : undefined;
+		const facts = this.runs.get(id) === run ? run.facts : undefined;
 		const prompt = run.prompt ? { prompt: run.prompt } : {};
 		if (!facts) {
 			return { state: 'closed', ...prompt };
@@ -474,7 +472,7 @@ export class AgentService implements Agents, Disposable {
 			for (const other of this.runs.values()) { if (other.facts.pin === options.pin) { this.losePin(other); } }
 		}
 		let settle!: () => void;
-		const run: Run = { facts, closing: false, settled: new Promise(resolve => settle = resolve) };
+		const run: Run = { facts, settled: new Promise(resolve => settle = resolve) };
 		// Persist a request-bearing accepted run before creating its worktree or process, including starts interrupted by reload.
 		this.rememberRequest(facts, true);
 		if (options.restoring) { this.restoring.add(id); }
@@ -595,7 +593,7 @@ export class AgentService implements Agents, Disposable {
 
 	/** Whether the run is still wanted: closing it during startup prevents a later spawn (WORKTREES-2.5, RULES-5.2). */
 	private live(run: Run): boolean {
-		return !this.disposed && !this.ownershipLost && this.runs.get(run.facts.id) === run && !run.closing;
+		return !this.disposed && !this.ownershipLost && this.runs.get(run.facts.id) === run;
 	}
 
 	/** The launch failed: its pair kept red with why in the person's words, the English in the log (RULES-3.3, UX-2.4). */
@@ -637,7 +635,6 @@ export class AgentService implements Agents, Disposable {
 	/** Removes `run`'s pair at once and ends its process in the background (LIFECYCLE-3.1), its Pin already seen to. */
 	private async closeRun(run: Run): Promise<CleanupResult | 'already_ended' | 'not_started'> {
 		const id = run.facts.id;
-		run.closing = true;
 		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
 		this.released.add(id);
@@ -733,7 +730,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' } {
-		const running = this.running(entry.key);
+		const running = this.holding(entry.key);
 		if (running) {
 			return { running };
 		}
@@ -821,12 +818,12 @@ export class AgentService implements Agents, Disposable {
 		// A Pin a card already holds - running, or retained red after an abnormal exit or a failed restore - is not started again
 		// on a reload: restoration happens once per opening, without a restart loop (RULES-4.2)
 		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
-		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.running(pin.conversation));
+		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holding(pin.conversation));
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
 		const failed: { readonly id: RunId; readonly name: string; readonly reason: string }[] = [];
 		const restoreOne = async (pin: Pin): Promise<void> => {
 			// One whose location was removed is no failure to show: its removal unpins it, even where that write failed (RULES-2.4)
-			if (!this.pins().some(saved => saved.id === pin.id) || this.running(pin.conversation) || this.deps.locations.removalOf(pin.location)) { return; }
+			if (!this.pins().some(saved => saved.id === pin.id) || this.holding(pin.conversation) || this.deps.locations.removalOf(pin.location)) { return; }
 			const location = this.locationFor(pin.location, pin.cwd);
 			if (!location || location.environment !== pin.conversation.environment) {
 				const reason = `Its working location ${pin.cwd} is not available in this window.`;
@@ -871,7 +868,7 @@ export class AgentService implements Agents, Disposable {
 			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, resumable: true,
 			sessionId: pin.conversation.sessionId, pin: pin.id, end: { kind: 'failed', at }, error: { reason, source: 'location', at }
 		};
-		const run: Run = { facts, closing: false, exactResume: true, settled: Promise.resolve() };
+		const run: Run = { facts, exactResume: true, settled: Promise.resolve() };
 		this.runs.set(id, run);
 		this.deps.execution.openPair(pairOf(facts), { reveal: false });
 		this.deps.execution.note(id, reason);
@@ -881,12 +878,8 @@ export class AgentService implements Agents, Disposable {
 		return id;
 	}
 
-	/** The run holding this exact conversation: in this window, or `elsewhere` in another window of this workspace. */
+	/** The run holding this exact conversation: in this window, or `elsewhere` - a process another window's run holds it in. */
 	holding(key: ConversationKey): RunId | 'elsewhere' | undefined {
-		return this.running(key);
-	}
-
-	private running(key: ConversationKey): RunId | 'elsewhere' | undefined {
 		for (const run of this.runs.values()) {
 			if (run.facts.lifecycle !== 'ended' && run.facts.sessionId === key.sessionId && run.facts.cli === key.cli && run.facts.environment === key.environment) {
 				return run.facts.id;
@@ -1011,8 +1004,9 @@ export class AgentService implements Agents, Disposable {
 		if (!run) {
 			return;
 		}
-		// A signal's end is abnormal though its code be 0, as node-pty reports a process killed on Linux and macOS (RULES-3.3)
-		const normal = (exit.code === 0 && !exit.signal) || run.closing || exit.interruptVerified;
+		// A signal's end is abnormal though its code be 0, as node-pty reports a process killed on Linux and macOS (RULES-3.3). A run
+		// explicitly closed - a completed stop, normal - is no longer here, so its exit is never classified
+		const normal = (exit.code === 0 && !exit.signal) || exit.interruptVerified;
 		this.release(exit.run);
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
