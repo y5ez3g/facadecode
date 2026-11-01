@@ -6,8 +6,8 @@ import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND, type DamagedWindowIdentity, type WindowIdentity } from '../base/windowIdentity';
 import {
-	AGENTS_ROUTE_COMMAND, Allocation, Directory, isDirectoryAgent, isRouteRequest, RouteResponse, ServedRoute, WINDOW_ALLOCATE_COMMAND,
-	WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND
+	AGENTS_ROUTE_COMMAND, Allocation, Directory, isDirectoryAgent, isRouteRequest, PublishStatus, RouteResponse, ServedRoute, WINDOW_ALLOCATE_COMMAND,
+	WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND, WORKSPACE_REPUBLISH_COMMAND
 } from '../base/windowNetwork';
 import { facadeHome } from '../record/paths';
 import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
@@ -61,6 +61,9 @@ export function activate(context: vscode.ExtensionContext): void {
 		log: line => console.error(line)
 	});
 	const started = network.start().catch(err => console.error(`Could not join the Facade network: ${messageOf(err)}`));
+	// Its extension host may have restarted while the workspace extension went on: what the window holds is asked for again, so that
+	// other windows find its agents without waiting for one of them to change (ARCHITECTURE-2.1). Unanswered while none runs yet.
+	void started.then(() => vscode.commands.executeCommand(WORKSPACE_REPUBLISH_COMMAND, vscode.env.sessionId)).then(undefined, () => undefined);
 	const here = (session: unknown) => session === vscode.env.sessionId;
 	context.subscriptions.push({ dispose: () => network.dispose() },
 		vscode.commands.registerCommand(WINDOW_DIRECTORY_COMMAND, async (session: unknown): Promise<Directory | undefined> => {
@@ -77,10 +80,14 @@ export function activate(context: vscode.ExtensionContext): void {
 			await started;
 			return network.route(request);
 		}),
-		vscode.commands.registerCommand(WINDOW_PUBLISH_COMMAND, (session: unknown, agents: unknown, label: unknown) => {
-			if (here(session) && Array.isArray(agents) && agents.every(isDirectoryAgent)) {
-				void started.then(() => network.publish(agents, typeof label === 'string' && label ? label : undefined));
+		vscode.commands.registerCommand(WINDOW_PUBLISH_COMMAND, async (session: unknown, agents: unknown, label: unknown): Promise<PublishStatus | undefined> => {
+			if (!here(session) || !Array.isArray(agents) || !agents.every(isDirectoryAgent)) {
+				return undefined;
 			}
+			await started;
+			network.publish(agents, typeof label === 'string' && label ? label : undefined);
+			// Whether other windows can reach this one: where they cannot, the workspace extension's agents log says why
+			return network.status();
 		}),
 		vscode.commands.registerCommand(WINDOW_ALLOCATE_COMMAND, (session: unknown, kind: unknown, count: unknown, floor: unknown): Allocation | undefined => {
 			if (!here(session) || (kind !== 'agent' && kind !== 'message') || typeof count !== 'number') {

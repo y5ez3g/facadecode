@@ -18,6 +18,13 @@ export interface RegisteredWindow {
 	readonly socket: string;
 	/** Its local extension host's process: gone, the entry is stale. */
 	readonly pid: number;
+	/**
+	 * When that process started, as it says itself: with its id it tells it from a later process given the same id once its window
+	 * went without saying so (ARCHITECTURE-2.1). Absent from an entry an earlier build wrote.
+	 */
+	readonly started?: number;
+	/** This start of its window component, which alone removes the entry it wrote: never its successor's. */
+	readonly incarnation?: string;
 	readonly label: string;
 	readonly environment: string;
 	readonly agents: readonly DirectoryAgent[];
@@ -41,15 +48,57 @@ function entryFile(home: string, window: string): string {
 	return path.join(registryOf(home), `${window}.json`);
 }
 
-/** Writes this window's entry whole, so that a reader sees the old one or the new one. */
+/**
+ * Writes this window's entry whole, so that a reader sees the old one or the new one; under the entry's lock, which a stale entry's
+ * removal takes too, so that no removal takes a newer entry than the one it found stale.
+ */
 export function registerWindow(home: string, entry: RegisteredWindow): void {
 	fs.mkdirSync(registryOf(home), { recursive: true, mode: 0o700 });
-	replaceFile(entryFile(home, entry.window), `${JSON.stringify(entry)}\n`);
+	const file = entryFile(home, entry.window);
+	withFileLock(file, () => replaceFile(file, `${JSON.stringify(entry)}\n`));
 }
 
-/** Removes this window's entry: it closes, or its window component stops. */
-export function unregisterWindow(home: string, window: string): void {
-	fs.rmSync(entryFile(home, window), { force: true });
+/**
+ * Removes this window's entry as its window component stops: only the one `incarnation` wrote, never what a successor of it
+ * registered meanwhile - a late shutdown of the component's previous start (ARCHITECTURE-2.1).
+ */
+export function unregisterWindow(home: string, window: string, incarnation?: string): void {
+	const file = entryFile(home, window);
+	withFileLock(file, () => {
+		const entry = readEntry(file);
+		if (incarnation === undefined || entry === undefined || entry.incarnation === incarnation) {
+			fs.rmSync(file, { force: true });
+		}
+	});
+}
+
+/**
+ * Removes the entry `stale` of a window found gone - its process ended or is another program now, or its socket answers no more -
+ * where it is still the entry found so: one its window wrote since stays (ARCHITECTURE-2.1).
+ */
+export function removeStaleWindow(home: string, stale: RegisteredWindow): void {
+	const file = entryFile(home, stale.window);
+	withFileLock(file, () => {
+		const entry = readEntry(file);
+		if (entry && entry.incarnation === stale.incarnation && entry.pid === stale.pid && entry.updatedAt === stale.updatedAt && entry.socket === stale.socket) {
+			fs.rmSync(file, { force: true });
+		}
+	});
+}
+
+/** The entry `window` has now, where it has a valid one. */
+export function registeredWindow(home: string, window: string): RegisteredWindow | undefined {
+	return readEntry(entryFile(home, window));
+}
+
+function readEntry(file: string): RegisteredWindow | undefined {
+	let entry: unknown;
+	try {
+		entry = JSON.parse(fs.readFileSync(file, 'utf8'));
+	} catch {
+		return undefined;
+	}
+	return isRegisteredWindow(entry) && `${entry.window}.json` === path.basename(file) ? entry : undefined;
 }
 
 /**
@@ -68,18 +117,12 @@ export function registeredWindows(home: string, alive: (pid: number) => boolean 
 	}
 	const windows: RegisteredWindow[] = [];
 	for (const name of names) {
-		const file = path.join(registryOf(home), name);
-		let entry: unknown;
-		try {
-			entry = JSON.parse(fs.readFileSync(file, 'utf8'));
-		} catch {
-			continue;
-		}
-		if (!isRegisteredWindow(entry) || `${entry.window}.json` !== name) {
+		const entry = readEntry(path.join(registryOf(home), name));
+		if (!entry) {
 			continue;
 		}
 		if (!alive(entry.pid)) {
-			fs.rmSync(file, { force: true });
+			removeStaleWindow(home, entry);
 			continue;
 		}
 		windows.push(entry);
@@ -90,7 +133,8 @@ export function registeredWindows(home: string, alive: (pid: number) => boolean 
 function isRegisteredWindow(value: unknown): value is RegisteredWindow {
 	return isJsonObject(value) && Number.isSafeInteger(value.protocol) && typeof value.window === 'string' && typeof value.socket === 'string'
 		&& Number.isSafeInteger(value.pid) && typeof value.label === 'string' && typeof value.environment === 'string'
-		&& Array.isArray(value.agents) && value.agents.every(isDirectoryAgent) && typeof value.updatedAt === 'number';
+		&& Array.isArray(value.agents) && value.agents.every(isDirectoryAgent) && typeof value.updatedAt === 'number'
+		&& (value.started === undefined || Number.isFinite(value.started)) && (value.incarnation === undefined || (typeof value.incarnation === 'string' && !!value.incarnation));
 }
 
 /** Whether the process `pid` runs: one another user owns counts, as it may still be a window of this person's in another session. */
