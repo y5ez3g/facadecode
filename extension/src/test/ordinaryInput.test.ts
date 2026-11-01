@@ -338,7 +338,12 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 			[`[paste #1 ${chars + 1} chars]`, false],
 			[`[paste #1 +3 lines]`, true],
 			[`[paste #1 +4 lines]`, false],
-			[`[Pasted Content ${chars} chars]`, false]
+			[`[Pasted Content ${chars} chars]`, false],
+			// A person's later paste whose count ends in the message's: its number never runs into its count (RULES-1.6)
+			[`[paste #2 1${chars} chars]`, false],
+			[`[paste #3 5${chars} chars]`, false],
+			// Its placeholder wrapped onto two rows is the same placeholder
+			[`[paste #1\n${chars} chars]`, true]
 		] as const) {
 			assert.strictEqual(isOwnDraft(draft, wide, 'pi-frame'), own, draft);
 		}
