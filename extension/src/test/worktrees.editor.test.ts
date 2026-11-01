@@ -75,6 +75,8 @@ function fakeEditor(extension?: unknown) {
 	const shown: FakeInput[] = [];
 	/** Shown before the test asked for it: a step a command shows as it starts. */
 	const unseen: FakeInput[] = [];
+	/** The view's progress as it was asked for, with whether it still shows. */
+	const progress: { options: unknown; showing: boolean }[] = [];
 	const workspace: { folders: readonly WorkspaceFolderInfo[]; addFolder?: () => void } = { folders: [] };
 	const onShow = (input: FakeInput) => {
 		shown.push(input);
@@ -105,7 +107,11 @@ function fakeEditor(extension?: unknown) {
 			}
 		},
 		window: {
-			withProgress: (_options: unknown, task: () => Promise<unknown>) => task(),
+			withProgress: (options: unknown, task: () => Promise<unknown>) => {
+				const entry = { options, showing: true };
+				progress.push(entry);
+				return task().finally(() => { entry.showing = false; });
+			},
 			createInputBox: () => new FakeInput(onShow),
 			createQuickPick: () => new FakeInput(onShow)
 		},
@@ -117,7 +123,7 @@ function fakeEditor(extension?: unknown) {
 	};
 	const load = withModules({ vscode });
 	return {
-		handlers, executed, shown, workspace, clipboard,
+		handlers, executed, shown, workspace, clipboard, progress,
 		/** The next quick input shown: one shown already that the test has not had yet, else the next to show. */
 		next: () => unseen.length ? Promise.resolve(unseen.shift()!) : new Promise<FakeInput>(resolve => waiting.push(resolve)),
 		commands: load<typeof import('../ui/commands/worktree')>(require.resolve('../ui/commands/worktree')),
@@ -275,6 +281,22 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		confirm.accepted.fire();
 		assert.deepStrictEqual(await running, { location_id: MADE.id, destination: MADE.path, branch: 'me/feat' });
 		assert.deepStrictEqual(worktrees.calls.filter(call => call[0] === 'create'), [['create', 'me/feat', 'HEAD', '/w/repo.worktrees/feat']]);
+	});
+
+	test('UX-1.1: in a window of one folder, the view shows its progress at once while Git is asked whether a worktree can be made there, before any step is up', async () => {
+		const editor = fakeEditor();
+		let answer!: (state: { available: true }) => void;
+		const worktrees = fakeWorktrees({ availability: () => new Promise(resolve => { answer = resolve; }) });
+		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
+		const running = editor.handlers.get('facade.newWorktree')!();
+		await settled();
+		const asking = [editor.shown.length, editor.progress.map(each => [each.options, each.showing])];
+		answer({ available: true });
+		const branch = await editor.next();
+		const answered = editor.progress.map(each => each.showing);
+		branch.hide();
+		await running;
+		assert.deepStrictEqual([asking, answered], [[0, [[{ location: { viewId: 'facade.agents' } }, true]]], [false]]);
 	});
 
 	test('from the view\'s own `…` menu, which gives `null`, the person chooses as without arguments', async () => {
