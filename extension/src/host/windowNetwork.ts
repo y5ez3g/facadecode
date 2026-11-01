@@ -11,21 +11,32 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
+import { connectWithin } from '../base/connect';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { lineReader } from '../base/lines';
+import { isSameStart, processStartTime, processStartTimeOfAsync } from '../base/system';
 import {
-	Allocation, Directory, DirectoryAgent, DirectoryWindow, isDirectoryAgent, isRouteResponse, RouteRequest, RouteResponse, ServedRoute,
-	WINDOW_NETWORK_PROTOCOL
+	Allocation, Directory, DirectoryAgent, DirectoryWindow, isDirectoryAgent, isRouteResponse, PublishStatus, RouteRequest, RouteResponse,
+	ServedRoute, WINDOW_NETWORK_PROTOCOL
 } from '../base/windowNetwork';
 import { ensurePtydSocket } from '../ptyd/socket';
-import { allocateNumbers, registeredWindows, registerWindow, RegisteredWindow, speaksOurs, unregisterWindow } from '../record/windowRegistry';
+import {
+	allocateNumbers, isAlive, registeredWindow, registeredWindows, registerWindow, RegisteredWindow, removeStaleWindow, speaksOurs, unregisterWindow
+} from '../record/windowRegistry';
 
 /** How long a connection to another window's component may take before the route is unavailable. */
 const CONNECT_MS = 2_000;
 
 /** The most requests one connection carries at once, either way: none grows without bound. */
 const MOST_PENDING = 512;
+
+/** How long after a failed listen it is tried again, doubling each time up to {@link MOST_LISTEN_RETRY_MS}. */
+const LISTEN_RETRY_MS = 1_000;
+const MOST_LISTEN_RETRY_MS = 60_000;
+
+/** How long another window's process start, once checked, is taken as it is. */
+const START_CHECK_MS = 60_000;
 
 export interface WindowNetworkOptions {
 	/** This computer's Facade directory (ARCHITECTURE-3.1). */
@@ -38,6 +49,10 @@ export interface WindowNetworkOptions {
 	/** Serves a request another window routed to this one, through this window's workspace extension. */
 	readonly serve: (request: ServedRoute) => Promise<unknown>;
 	readonly log: (line: string) => void;
+	/** When the process `pid`, recorded as started at `recorded`, started: the system's, or a test's. */
+	readonly startOf?: (pid: number, recorded: number) => Promise<number | undefined>;
+	/** How long after a failed listen it is first tried again: {@link LISTEN_RETRY_MS}, or a test's. */
+	readonly retryMs?: number;
 }
 
 /**
@@ -55,16 +70,35 @@ export function windowAddress(token: string): string {
 	return `win-${crypto.createHash('sha256').update(`facade-window:${token}`).digest('hex').slice(0, 16)}`;
 }
 
-/** Where the component of `window` listens for this computer's user: a private socket, or a named pipe on Windows. */
-export function windowSocketPath(home: string, window: string): string {
-	const key = crypto.createHash('sha256').update(`${path.resolve(home)}\0${window}`).digest('hex').slice(0, 16);
+/**
+ * Where the component of `window` listens for this computer's user, in its start `incarnation`: a private socket, or a named pipe on
+ * Windows. Each start has its own, as the registry names it: a start never finds its pipe held, or its socket removed, by the
+ * previous start of its window shutting down late (ARCHITECTURE-2.1).
+ */
+export function windowSocketPath(home: string, window: string, incarnation = ''): string {
+	const key = crypto.createHash('sha256').update(`${path.resolve(home)}\0${window}${incarnation ? `\0${incarnation}` : ''}`).digest('hex').slice(0, 16);
 	return process.platform === 'win32' ? `\\\\.\\pipe\\facade-window-${WINDOW_NETWORK_PROTOCOL}-${key}`
-		: path.join('/tmp', `facade-window-${os.userInfo().uid}`, `${WINDOW_NETWORK_PROTOCOL}-${key}.sock`);
+		: path.join(socketFolder(), `${WINDOW_NETWORK_PROTOCOL}-${key}.sock`);
 }
+
+/** The private folder of the window components' sockets on POSIX. */
+function socketFolder(): string {
+	return path.join('/tmp', `facade-window-${os.userInfo().uid}`);
+}
+
+/** A window component's socket file in {@link socketFolder}, as {@link windowSocketPath} names it: one Facade may remove. */
+const SOCKET_FILE = /^\d+-[0-9a-f]{16}\.sock$/;
 
 interface Pending {
 	readonly resolve: (response: RouteResponse) => void;
 	readonly timer: ReturnType<typeof setTimeout>;
+}
+
+/** A window component that took no connection: `absent` where nothing is there to answer any more, its window gone. */
+class Unreached extends Error {
+	constructor(readonly absent: boolean, reason: string) {
+		super(reason);
+	}
 }
 
 /** One connection to another window's component, carrying this window's requests to it. */
@@ -73,7 +107,7 @@ class Peer {
 	private readonly pending = new Map<number, Pending>();
 	private closed = false;
 
-	private constructor(private readonly socket: net.Socket, readonly window: string) {
+	private constructor(private readonly socket: net.Socket, readonly window: string, readonly socketPath: string) {
 		socket.setEncoding('utf8');
 		socket.on('data', lineReader(line => this.answered(line), () => socket.destroy()));
 		socket.on('close', () => {
@@ -87,22 +121,12 @@ class Peer {
 		socket.on('error', () => socket.destroy());
 	}
 
-	static connect(socketPath: string, window: string): Promise<Peer> {
-		return new Promise((resolve, reject) => {
-			const socket = net.connect(socketPath);
-			const timer = setTimeout(() => {
-				socket.destroy();
-				reject(new Error(`no answer within ${CONNECT_MS / 1000} seconds`));
-			}, CONNECT_MS);
-			socket.once('connect', () => {
-				clearTimeout(timer);
-				resolve(new Peer(socket, window));
-			});
-			socket.once('error', err => {
-				clearTimeout(timer);
-				reject(err);
-			});
-		});
+	static async connect(socketPath: string, window: string): Promise<Peer> {
+		const reached = await connectWithin(socketPath, CONNECT_MS);
+		if (!reached.socket) {
+			throw new Unreached(reached.absent, reached.reason);
+		}
+		return new Peer(reached.socket, window, socketPath);
 	}
 
 	get isClosed(): boolean {
@@ -167,28 +191,56 @@ class Peer {
  */
 export class WindowNetwork {
 	readonly window: string;
-	private readonly socketPath: string;
+	/** This start of the window's component: its socket and its registry entry are its own (ARCHITECTURE-2.1). */
+	readonly incarnation = crypto.randomUUID();
+	readonly socketPath: string;
+	/** Set once it listens: an entry is registered only for a socket that takes connections. */
 	private server: net.Server | undefined;
-	private readonly peers = new Map<string, Promise<Peer>>();
+	/** Why it does not listen now, where it tried and could not: tried again meanwhile. */
+	private problem: string | undefined;
+	private retries = 0;
+	private retry: ReturnType<typeof setTimeout> | undefined;
+	/** The connection to each other window's component, with the socket it was made to. */
+	private readonly peers = new Map<string, { readonly socket: string; readonly peer: Promise<Peer> }>();
 	/** The connections other windows' components opened to this one: closed with it, so that they connect again to its successor. */
 	private readonly connections = new Set<net.Socket>();
 	private agents: readonly DirectoryAgent[] = [];
 	/** The window's name as its workspace extension published it. */
 	private publishedLabel: string | undefined;
+	/** When each other window's entry had its process start checked last. */
+	private readonly startsChecked = new Map<string, number>();
 	private disposed = false;
 
 	constructor(private readonly options: WindowNetworkOptions) {
 		this.window = windowAddress(options.token);
-		this.socketPath = windowSocketPath(options.home, this.window);
+		this.socketPath = windowSocketPath(options.home, this.window, this.incarnation);
 	}
 
-	/** Listens on this window's socket and registers it; resolves once other windows can reach it. */
+	/**
+	 * Listens on this window's socket and registers it; resolves once other windows can reach it. Rejects where it cannot listen now,
+	 * which is tried again, later and later, until it can or the component stops: the window is registered then.
+	 */
 	async start(): Promise<void> {
+		this.removePredecessor();
+		try {
+			await this.listen();
+		} catch (err) {
+			this.failed(err);
+			throw err;
+		}
+	}
+
+	/** Whether other windows can reach this one now, and why not where they cannot (ARCHITECTURE-2.1). */
+	status(): PublishStatus {
+		return this.server ? { listening: true } : { listening: false, ...this.problem !== undefined ? { problem: this.problem } : {} };
+	}
+
+	private async listen(): Promise<void> {
 		ensurePtydSocket(this.socketPath, 'window network socket');
 		if (process.platform !== 'win32') {
 			fs.rmSync(this.socketPath, { force: true });
 		}
-		const server = this.server = net.createServer(socket => this.accepted(socket));
+		const server = net.createServer(socket => this.accepted(socket));
 		await new Promise<void>((resolve, reject) => {
 			server.once('error', reject);
 			server.listen(this.socketPath, () => {
@@ -196,10 +248,52 @@ export class WindowNetwork {
 				resolve();
 			});
 		});
-		if (process.platform !== 'win32') {
-			fs.chmodSync(this.socketPath, 0o600);
+		try {
+			if (process.platform !== 'win32') {
+				fs.chmodSync(this.socketPath, 0o600);
+			}
+		} catch (err) {
+			server.close();
+			throw err;
 		}
+		if (this.disposed) {
+			server.close();
+			this.removeSocket();
+			return;
+		}
+		this.server = server;
+		this.problem = undefined;
 		this.register();
+	}
+
+	/** It could not listen: said once for each reason, and tried again later. */
+	private failed(err: unknown): void {
+		const problem = messageOf(err);
+		if (problem !== this.problem) {
+			this.options.log(`Other Facade windows cannot reach this window, which tries again: ${problem}`);
+		}
+		this.problem = problem;
+		if (this.disposed) {
+			return;
+		}
+		clearTimeout(this.retry);
+		this.retry = setTimeout(() => void this.listen().catch(again => this.failed(again)), Math.min(MOST_LISTEN_RETRY_MS, (this.options.retryMs ?? LISTEN_RETRY_MS) * 2 ** this.retries++));
+		this.retry.unref?.();
+	}
+
+	/**
+	 * The previous start of this window, ended without removing its entry - its extension host stopped at once - leaves it and, on
+	 * POSIX, its socket file: both go. A previous start still running ends itself, removing its own alone.
+	 */
+	private removePredecessor(): void {
+		try {
+			const previous = registeredWindow(this.options.home, this.window);
+			if (previous && previous.incarnation !== this.incarnation && !isAlive(previous.pid)) {
+				this.forget(previous);
+			}
+		} catch (err) {
+			this.options.log(`Could not remove what this window's previous Facade left: ${messageOf(err)}`);
+		}
 	}
 
 	/**
@@ -217,7 +311,7 @@ export class WindowNetwork {
 	directory(): Directory {
 		const windows: DirectoryWindow[] = [{ window: this.window, label: this.label(), environment: this.options.environment, agents: this.agents }];
 		const unavailable: { window: string; label: string; reason: string }[] = [];
-		for (const entry of registeredWindows(this.options.home)) {
+		for (const entry of this.registered()) {
 			if (entry.window === this.window) {
 				continue;
 			}
@@ -240,7 +334,7 @@ export class WindowNetwork {
 		if (this.disposed) {
 			return { ok: false, reason: 'window_unavailable', message: 'This Facade window is closing: the request had no effect.', effects: 'none' };
 		}
-		const entry = registeredWindows(this.options.home).find(each => each.window === request.to);
+		const entry = this.registered().find(each => each.window === request.to);
 		if (!entry) {
 			return { ok: false, reason: 'window_unavailable', message: `No open Facade window ${request.to} is on this computer: the request had no effect.`, effects: 'none' };
 		}
@@ -251,6 +345,10 @@ export class WindowNetwork {
 		try {
 			peer = await this.peer(entry);
 		} catch (err) {
+			// Nothing answers where its entry says it listens: that window went without saying so, and its entry goes (ARCHITECTURE-1.1)
+			if (err instanceof Unreached && err.absent) {
+				this.forget(entry);
+			}
 			return { ok: false, reason: 'window_unavailable', message: `The Facade window ${request.to} cannot be reached: ${messageOf(err)}. The request had no effect.`, effects: 'none' };
 		}
 		return peer.ask(this.window, request);
@@ -261,12 +359,14 @@ export class WindowNetwork {
 			return;
 		}
 		this.disposed = true;
+		clearTimeout(this.retry);
 		try {
-			unregisterWindow(this.options.home, this.window);
+			// Its own entry alone: a successor of this component may have registered the window already (ARCHITECTURE-2.1)
+			unregisterWindow(this.options.home, this.window, this.incarnation);
 		} catch (err) {
 			this.options.log(`Could not remove this window's network entry: ${messageOf(err)}`);
 		}
-		for (const peer of this.peers.values()) {
+		for (const { peer } of this.peers.values()) {
 			void peer.then(each => each.dispose(), () => undefined);
 		}
 		this.peers.clear();
@@ -275,6 +375,66 @@ export class WindowNetwork {
 		}
 		this.connections.clear();
 		this.server?.close();
+		this.removeSocket();
+	}
+
+	/**
+	 * The windows registered on this computer, those whose process ended left out and removed. The process start of each other one is
+	 * checked meanwhile, now and then: one whose process id another program has now went without saying so, and its entry goes
+	 * (ARCHITECTURE-1.1, 2.1).
+	 */
+	private registered(): RegisteredWindow[] {
+		const entries = registeredWindows(this.options.home);
+		const now = Date.now();
+		const seen = new Set<string>();
+		for (const entry of entries) {
+			const started = entry.started;
+			if (entry.window === this.window || started === undefined) {
+				continue;
+			}
+			const key = `${entry.window}\0${entry.incarnation ?? ''}\0${entry.pid}\0${started}`;
+			seen.add(key);
+			if (now - (this.startsChecked.get(key) ?? -Infinity) < START_CHECK_MS) {
+				continue;
+			}
+			this.startsChecked.set(key, now);
+			void (this.options.startOf ?? processStartTimeOfAsync)(entry.pid, started).then(async start => {
+				// A start the system reads otherwise than the window said its own - after a clock step, or read to the second - proves
+				// nothing alone: the entry goes only once its socket proves that no window listens there any more (ARCHITECTURE-1.1)
+				if (start !== undefined && !isSameStart(start, started) && !this.disposed && await this.unheard(entry)) {
+					this.forget(entry);
+				}
+			}, () => undefined);
+		}
+		for (const key of [...this.startsChecked.keys()]) {
+			if (!seen.has(key)) {
+				this.startsChecked.delete(key);
+			}
+		}
+		return entries;
+	}
+
+	/** Whether nothing listens at `entry`'s socket: no such socket, or on POSIX one refused. A busy one may still be a window's. */
+	private async unheard(entry: RegisteredWindow): Promise<boolean> {
+		const reached = await connectWithin(entry.socket, CONNECT_MS);
+		reached.socket?.destroy();
+		return !reached.socket && reached.absent;
+	}
+
+	/** Removes the entry of a window found gone, where it is unchanged, and on POSIX its socket file in this computer's socket folder. */
+	private forget(entry: RegisteredWindow): void {
+		try {
+			removeStaleWindow(this.options.home, entry);
+			if (process.platform !== 'win32' && path.dirname(entry.socket) === socketFolder() && SOCKET_FILE.test(path.basename(entry.socket))
+				&& registeredWindows(this.options.home).every(each => each.socket !== entry.socket) && fs.lstatSync(entry.socket, { throwIfNoEntry: false })?.isSocket()) {
+				fs.rmSync(entry.socket, { force: true });
+			}
+		} catch (err) {
+			this.options.log(`Could not remove the entry of the gone Facade window ${entry.window}: ${messageOf(err)}`);
+		}
+	}
+
+	private removeSocket(): void {
 		if (process.platform !== 'win32') {
 			fs.rmSync(this.socketPath, { force: true });
 		}
@@ -289,6 +449,8 @@ export class WindowNetwork {
 			window: this.window,
 			socket: this.socketPath,
 			pid: process.pid,
+			...processStartTime(process.pid) !== undefined ? { started: processStartTime(process.pid) } : {},
+			incarnation: this.incarnation,
 			label: this.label(),
 			environment: this.options.environment,
 			agents: this.agents,
@@ -306,27 +468,39 @@ export class WindowNetwork {
 		return this.publishedLabel ?? this.options.label();
 	}
 
-	/** The connection to `entry`'s component, made where there is none or the last one closed. */
+	/**
+	 * The connection to `entry`'s component, made where there is none, the last one closed, or the window's component started again -
+	 * a new start listens on a socket of its own.
+	 */
 	private peer(entry: RegisteredWindow): Promise<Peer> {
 		const existing = this.peers.get(entry.window);
-		if (existing) {
-			return existing.then(peer => peer.isClosed ? this.connect(entry) : peer, () => this.connect(entry));
+		if (!existing) {
+			return this.connect(entry);
 		}
-		return this.connect(entry);
+		if (existing.socket !== entry.socket) {
+			void existing.peer.then(peer => peer.dispose(), () => undefined);
+			return this.connect(entry);
+		}
+		const again = () => {
+			// Another request may have connected again meanwhile: its connection is shared
+			const current = this.peers.get(entry.window);
+			return current && current !== existing && current.socket === entry.socket ? current.peer : this.connect(entry);
+		};
+		return existing.peer.then(peer => peer.isClosed ? again() : peer, again);
 	}
 
 	private connect(entry: RegisteredWindow): Promise<Peer> {
 		if (process.platform !== 'win32') {
 			ensurePtydSocket(entry.socket, 'window network socket');
 		}
-		const connecting = Peer.connect(entry.socket, entry.window);
+		const connecting = { socket: entry.socket, peer: Peer.connect(entry.socket, entry.window) };
 		this.peers.set(entry.window, connecting);
-		connecting.catch(() => {
+		connecting.peer.catch(() => {
 			if (this.peers.get(entry.window) === connecting) {
 				this.peers.delete(entry.window);
 			}
 		});
-		return connecting;
+		return connecting.peer;
 	}
 
 	/** A connection from another window's component: each request it carries served here, its answer written back. */

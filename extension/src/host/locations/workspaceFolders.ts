@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { checkoutOf, gitExecutableOf, hasChanges, removeWorktree, worktreesOf } from './gitRead';
+import { checkoutOf, folderLinkIn, gitExecutableOf, gitVersionOf, hasChanges, removeWorktree, worktreesOf } from './gitRead';
 import { FolderSource } from './service';
 import { GitCreationSettings, WorktreeGit } from './worktrees';
 
@@ -27,7 +27,9 @@ export function editorGit(): WorktreeGit {
 		checkoutOf,
 		worktreesOf,
 		hasChanges,
-		removeWorktree
+		removeWorktree,
+		versionOf: gitVersionOf,
+		folderLinkIn
 	};
 }
 

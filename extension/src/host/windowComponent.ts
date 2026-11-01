@@ -8,7 +8,10 @@
 
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
-import { isDamagedWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, type DamagedWindowIdentity, type WindowIdentity } from '../base/windowIdentity';
+import {
+	isDamagedWindowIdentity, isUnreadableWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, type DamagedWindowIdentity, type UnreadableWindowIdentity,
+	type WindowIdentity
+} from '../base/windowIdentity';
 import { PANEL_VIEW } from '../ui/catalog';
 
 /** The window component's extension ID. */
@@ -21,10 +24,16 @@ export const COMPONENT_WAIT_MS = 60_000;
 const RETRY_MS = 500;
 
 /**
+ * How long after extensions change a missing component is asked for again: the editor tells of the change before it activates
+ * the component, whose command answers only then.
+ */
+const OFFER_WAIT_MS = 10_000;
+
+/**
  * This window's identity from its local component, as soon as it answers: at once, or once the editor installs or activates it,
  * within {@link COMPONENT_WAIT_MS}. None where it never answers, or answers for another window.
  */
-export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_WAIT_MS): Promise<WindowIdentity | DamagedWindowIdentity | undefined> {
+export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_WAIT_MS): Promise<WindowIdentity | DamagedWindowIdentity | UnreadableWindowIdentity | undefined> {
 	const deadline = Date.now() + waitMs;
 	for (;;) {
 		let identity: unknown;
@@ -36,7 +45,7 @@ export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_
 			// Not registered yet: the component is not installed, enabled or activated
 		}
 		if (answered) {
-			return isWindowIdentity(identity, session) || isDamagedWindowIdentity(identity, session) ? identity : undefined;
+			return isWindowIdentity(identity, session) || isDamagedWindowIdentity(identity, session) || isUnreadableWindowIdentity(identity, session) ? identity : undefined;
 		}
 		const left = deadline - Date.now();
 		if (left <= 0) {
@@ -92,17 +101,21 @@ export function showComponentMissing(context: vscode.ExtensionContext, session: 
 		}
 	});
 	let offered = false;
-	// Its command answering is what says it is there now, in whichever extension host the editor runs it
+	let asking = false;
+	// Its command answering is what says it is there now, in whichever extension host the editor runs it. The editor tells of the
+	// change before it activates the component: it is asked for a while, as activation waits for it (ARCHITECTURE-4.3)
 	const installed = vscode.extensions.onDidChange(async () => {
-		if (offered) {
+		if (offered || asking) {
 			return;
 		}
+		asking = true;
+		let identity: unknown;
 		try {
-			await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session);
-		} catch {
-			return;
+			identity = await waitForWindowIdentity(session, OFFER_WAIT_MS);
+		} finally {
+			asking = false;
 		}
-		if (offered) {
+		if (!identity || offered) {
 			return;
 		}
 		offered = true;

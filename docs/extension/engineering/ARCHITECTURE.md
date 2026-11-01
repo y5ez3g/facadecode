@@ -47,7 +47,13 @@ PTY data transport.
 The client network has no central process. Each window component listens on its own local socket - a Unix domain
 socket, or a named pipe on Windows - and records its window, with routing ID, label, environment, socket and protocol,
 in the client registry under the client Facade directory (3.1). It removes its entry when its window goes; an entry
-whose socket no longer answers is ignored and removed. A window component reaches another window by connecting to the
+whose socket no longer answers is ignored and removed. Each start of a window component listens on a socket of its own,
+registers only once it listens, retries a failed listen, and on shutdown removes only the entry it wrote, never a
+successor's. An entry records its process's start: one whose start the system reads otherwise - its process id another
+process's now - is removed, if unchanged, once its socket proves nothing listens there, as a clock step or a start read
+to the second proves nothing alone; one whose socket is absent when routed to is removed too (D133, D138). A starting component asks its workspace component to publish its
+agents again; the publish answer says whether other windows can reach the window, and the agents log says when they
+cannot (D133). A window component reaches another window by connecting to the
 socket the registry names; the receiving component hands the request to its own workspace component and returns the
 answer. The caller's window handles every tool call: its own agents directly, other windows' agents through these
 routes. The recipient's window performs message delivery and serializes terminal input, and results return to the
@@ -155,7 +161,9 @@ same for this native window across these transitions and differs for a separate 
 workspace. This lifecycle is a platform evidence requirement, not a guarantee inferred from the API's name. Removal or
 replacement of that directory cannot justify a folder-based search for another window's identity. A record gone is
 replaced by a new identity unnoticed; a damaged one is not replaced: Facade does not start in that window and says to close
-it and open its folder again, or restart the editor - not to reload, which reads the same record (D86).
+it and open its folder again, or restart the editor - not to reload, which reads the same record (D86). One that cannot be
+read now but is not damaged - a file the system holds - is answered as unreadable, and the workspace component says to
+reload rather than to install the component (D133).
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
 component rejects a request from a different session. Its answer names the component's own version too, which a remote
@@ -167,6 +175,7 @@ prefers a valid current-window handover, then the canonical URI binding, then an
 entry or still owns that exact URI, then an independent URI-derived key. Owner claims fence all ledger and window-record
 writes. Same-URI reload cannot use an obsolete window record to override a newer canonical binding; a changing URI can
 carry an owner only while that owner still owns the window record's previous URI. No same-folder search guesses identity.
+A window with no folder or workspace keeps no ledger entry: its key stays in its own storage for its reloads (D131).
 Save Workspace As A to B atomically moves that owner's binding to B and removes its A binding. Reopening A, including
 with its old saved key, selects an independent owner; copying B to another URI also does not acquire B's runs. An owner
 that has moved cannot be recovered through its old default URI hash. This makes a fresh profile opening the exact B URI
@@ -178,8 +187,9 @@ object's binding. The workspace runtime serializes terminal creation: begin a bo
 for that object's public open event, then finish. The local component accepts only one still-live object opened during
 that capture; every extra open makes it ambiguous even if that extra object closes before finish. Earlier objects' late
 close events do not contaminate the capture. Same-host completion additionally validates the actual Terminal reference.
-Only successful registration replaces and disposes the prior registered object for that run. Names, empty names and CLI
-titles may repeat freely. Cancellation, expiration, an old claim or ambiguous events do not guess an association.
+Only successful registration replaces and disposes the prior registered object for that run. A registration a restarted
+local component refuses, as it knows no owner yet, sends the activation's current claim again and retries once (D133).
+Names, empty names and CLI titles may repeat freely. Cancellation, expiration, an old claim or ambiguous events do not guess an association.
 An editor can replace its public Tab objects when rebuilding the tab-group model. Discard bindings to objects no longer
 present, then correlate the active terminal and tab through public activation/group events again; never recover them by
 title or index. Pending native Pin changes wait for that exact active association and do not reveal another editor.
@@ -233,12 +243,19 @@ forwards each call to the connection that currently owns that run's workspace an
 asked. While the owner reconnects, a call waits within RULES-1.2's two seconds, or a query within its ten-second route
 deadline (MCP-1.3); otherwise it is refused as window unavailable with no effects. A call that reached a window which
 then went away reports unknown effects. A window learns from the supervisor when its run's shim connects, which is the
-run's tool connection fact (RULES-3.1).
+run's tool connection fact (RULES-3.1), and when no shim of the run is connected any more, or none is as the window claims
+the run: its tools are then unavailable until one connects again. Each call has one deadline - a query's route deadline,
+two seconds for any other - whether it waits for the owner's reconnection or for its answer. A starting supervisor takes
+over its socket only from one proven gone - its socket refused or absent - as a timeout or another error proves nothing,
+and never removes a socket another supervisor made at its path (D136).
 
 Explicit close immediately removes card/terminal and invalidates further input. Process cleanup uses the owning handle
 or process group in the background and can terminate it when necessary. Do not wait five seconds in the UI.
 If remote cleanup is unreachable, record the pending outcome and reconcile the original run on reconnect; do not claim
-a proven remote exit or kill an unrelated process. Do not add expiring security leases or automatic process killing on
+a proven remote exit or kill an unrelated process. The pending close is recorded beside the window's runs, under its
+ownership claim, so that a reload ends that run rather than showing it again (D131). A window starts its ptyd only
+where none is there - no socket, or on POSIX one nothing listens on; a ptyd slow to take a connection, as a busy Windows
+pipe can be, is waited for and never replaced, as a second ptyd would leave every run of the first unclaimed (D133). Do not add expiring security leases or automatic process killing on
 temporary disconnection; RULES-4.1's five minutes after the owning extension host disconnects is the only timed cleanup. Native preparation jobs are not owned by this cleanup.
 
 ### 2.4 Journals, pressure and upgrades
@@ -276,15 +293,17 @@ own ptyd. Upgrade/reload behavior must be verified with in-flight work.
 
 | Store | Contents |
 | --- | --- |
-| Client Facade directory, `<FACADE_HOME or ~/.facade>/extension/client` on the client computer | Window registry - each open window's routing ID, label, environment, socket and protocol - and the client-wide alias counter |
-| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, per-run launch files, the injection record (CLIS-2.2), message records, previously successful model/effort choices location metadata and Facade conversation names/locations |
-| Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - each open window's routing ID, label, environment, socket, protocol and process start - and the client-wide alias counters `client-agent-numbers.json` and `client-message-numbers.json` |
+| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, per-run launch files, the injection record (CLIS-2.2), message records, previously successful model/effort choices location metadata, Facade conversation names/locations, and each window's closes ptyd has not confirmed (`workspaces/<key>/closing.json`, 2.3) |
+| Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70), its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged (D131) |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
 An environment variable can override the Facade directory, and tests always use temporary overrides. `FACADE_HOME`
 (default `~/.facade`) is a root shared with the Facade Code IDE, and the extension uses only its `extension/` subfolder.
+`FACADE_HOME` names an absolute folder; a relative one is refused, never taken for unset (D131). A counter of agent or
+message numbers that cannot be read is an error, never a count that starts again at `#a1` or `#m1` (D132).
 Directories are interpreted in their own environment, never an assumed shared remote home. Use normal application
 storage; no prescribed private-directory modes, ACL security protocol or randomized socket path scheme is required.
 Reconcile stale process records before cleanup and avoid deleting arbitrary files. Thirty-day message/log retention
@@ -309,7 +328,8 @@ prompts.
 Use a read-only editor log with UTC time, safe name/reference, operation ID, phase, effects, route status and actual failure. Redact CLI
 credentials and sensitive environment values. Full message text belongs to deliberate message history, not routine
 transport logs. Correlation IDs connect UI/MCP/supervisor observations. Retain 30-day diagnostics subject to the
-capacity policy; no telemetry service is introduced by this refactor. Each tool call is logged with its tool, its caller's
+capacity policy; ptyd's own log stays within 2 MiB, keeping its newest 512 KiB of whole lines (D136). No telemetry
+service is introduced by this refactor. Each tool call is logged with its tool, its caller's
 alias, its status and error code and how long it took, never its arguments (D117).
 
 An empty agents log opens with `No agent events yet`, with no information toast.
@@ -319,7 +339,8 @@ anywhere: the extension's, its window component's and the editor's versions, the
 built-in CLI for the window's first location - its version as its installation says it and its input reader, or why it
 cannot start; this window's agents - CLI and version, lifecycle, activity and since when, tools, and what their input
 reader reads now - with each live one's last twelve screen rows; and the agents log's last two hundred lines. The home
-folder is written `~`. Its notification says that screens can show code and keys, and to look the text over before
+folder is written `~`, whatever the case or separators a path spells it with, as VS Code lowercases a Windows drive
+letter (D135). Its notification says that screens can show code and keys, and to look the text over before
 sharing it (D116).
 
 ## 4 Repository and delivery
@@ -454,6 +475,9 @@ choices follow current user instructions; authorization to start one does not au
 credential/global-configuration changes.
 The real integration runner refuses a personal-home override and state directories outside temporary storage before
 opening an editor. Its default Claude and XDG state is isolated too; opting into a real CLI never opts into global state.
+Recorded screens are published with the repository: `scripts/capture-inputs.mjs` masks email addresses and the recording
+user's name character for character before a screen becomes a recorded case, and a unit test refuses a fixture showing
+an email address outside the domains reserved for examples (D137).
 
 ### 5.4 Working tree and commits
 
@@ -478,6 +502,13 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-11-01: From the owner-requested release review: 1.1 keeps each window component start's socket and entry its
+  own and drops entries of gone windows; 2.2 answers an unreadable window record, re-sends a refused terminal claim and
+  keeps no ledger entry for a window without folders; 2.3 records an unconfirmed close and starts a ptyd only where none
+  is there; 3.1 corrects the registry's location, adds pending closes and the D70 copy's write timing, requires an
+  absolute `FACADE_HOME` and strict counters; 3.3 writes the home folder `~` in any case; 5.3 masks identifying text
+  in recorded screens; 2.3 tells a window when a run's tools go away, gives each call one deadline and takes over a
+  supervisor's socket only from one proven gone; 3.3 bounds ptyd's own log (D131-D133, D135-D137).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 2.4 retains request-bearing metadata without restoring closed pairs; 5.3 enforces temporary CLI state in

@@ -69,7 +69,8 @@ folder-name suffix. A location picker without a checkout uses `Select a working 
 
 The branch Input Box uses the placeholder `Branch name` and the initial prompt `Starts from {source}`, with
 the checkout source label from WORKTREES-2.1. After a valid plan is read, WORKTREES-2.1's shared destination/base preview
-and Copy Path action replace that prompt.
+and Copy Path action replace that prompt. A field that holds only `git.branchPrefix` is where typing starts: nothing is
+said of it until it is edited, and the prefix alone asks `Enter a branch name.` (D135).
 The editor supplies the Enter/Escape instructions; Git branch validation remains in effect.
 
 The folder step, shown only in a multi-folder window, ends with `Add Folder to Workspace...`, which runs the editor's
@@ -82,7 +83,8 @@ returns to it unchanged. While two or more folders are open, each folder row has
 `Folder {0} will be deleted (detached HEAD).` for a detached one. The path is complete and untruncated in that detail,
 so a long absolute path remains inspectable without turning the decision question into a block of bold text.
 Both confirmations add `Its agent will be closed.` or `{0} associated agents will be closed.` to the detail where
-agents would close; the worktree detail separates this consequence with a blank line. Cancel changes nothing. A removed folder's agents close under
+agents would close, counting for a worktree the agents of every location inside it, such as a resumed conversation's
+subfolder (D135); the worktree detail separates this consequence with a blank line. Cancel changes nothing. A removed folder's agents close under
 WORKTREES-3.3, and the folder step shows again, or with one folder left that folder's location step; removing the first
 folder restarts the extensions and ends the picker. A confirmed deletion shows the location step again at once without
 that worktree, busy until it ends; a refusal is the person's error (RULES-1.8) (D73).
@@ -157,7 +159,9 @@ Terminal-tab context actions require accurate public context; do not substitute 
 Card menus, Go to Agent, Command Palette and terminal closure use the lifecycle effect in RULES-4.1: immediate pair
 removal and Unpin, with process cleanup in the background where a process exists. There is no separate human Stop Agent command.
 MCP keeps `stop_agent` under MCP-3.2 and uses the same close service. Return actual cleanup status to the initiator
-without recreating a closed card or claiming an unreachable process is dead. No worktree/files/history deletion is
+without recreating a closed card or claiming an unreachable process is dead; a close while the process is being started
+answers how that start's cleanup ended. A close ptyd has not confirmed is recorded, so that a reload ends that run rather
+than showing it again (D131). No worktree/files/history deletion is
 attached. Closing an agent does not close the agents it started. Unsolicited exits follow RULES-3.3.
 
 Closing a live agent's terminal tab, alone or together with other editors (Close All, Close Others, Close Saved), first
@@ -166,13 +170,14 @@ asks once in a modal warning for every tab closed together: `Close {0}?` or `Clo
 again with their current screens. `terminal.integrated.confirmOnKill` set to `never` or `panel` closes without asking, as
 the editor does for its own terminals. A starting or ended agent's tab closes it without asking. The editor cannot be
 stopped from closing the tab itself, so the question follows the close. Messages name an agent with an empty name by its
-`#aN`.
+`#aN`. A tab close whose Unpin cannot be saved keeps the agent, opens its terminal again and tells the person (D131).
 
 ### 3.2 Resume picker
 
 **Resume searches vendor histories for this window's folders, subfolders and all associated worktrees.**
 
-Open from panel, empty state or Command Palette. Read only list metadata, recent activity first, paginated in batches
+Open from panel, empty state or Command Palette; the picker shows at once, busy while the window's locations and
+running conversations are read (D135). Read only list metadata, recent activity first, paginated in batches
 of 100; search continues beyond the first page. Reuse already read metadata during the picker session rather than
 rescanning every log on each page or keystroke. Prefer vendor discovery; do not build a new conversation store.
 There is no 30-day age cutoff. A scan limit must not silently make older matching history permanently unreachable.
@@ -216,6 +221,8 @@ Keep the run's link to its saved Pin through a session switch even when saving t
 reattachment reconciles the linked Pin before restoration, so a stale saved key cannot start a second, old conversation.
 Pin and Unpin are acknowledged only after durable storage succeeds. If a normal exit cannot remove its Pin, retain an ended
 failure card with the reason and allow Unpin or Close to retry; do not silently restore that stale intent on reload.
+A conversation has one Pin: pinning a card whose conversation is already pinned takes that Pin, moved to the top, and a
+pinned card whose CLI switches to a pinned conversation replaces that conversation's other Pin (D131).
 Restore Pins once per true opening in saved order in the background, with at most two concurrent launches. A session
 already running in Facade is skipped by later windows. Failures retain their individual entries without auto-looping.
 Explicit agent close/normal exit removes Pin; whole-window close preserves it.
@@ -225,13 +232,16 @@ Explicit agent close/normal exit removes Pin; whole-window close preserves it.
 **Reload and temporary disconnection reuse existing runs; reopening restores saved Pins whose runs ended.**
 
 RULES-4.1 keeps runs for five minutes after disconnect. Reattach those runs before restoring Pins, never duplicating a
-conversation still held by Facade. A retained failed restoration is not retried on reload.
+conversation still held by Facade: Pins are restored only once the conversations every ptyd of the window holds are
+known, and one that does not answer yet delays them. A run that exits between the listing and its reattachment shows
+that exit. A failure to clean up a kept record never stops the window's agents from showing (D131). A retained failed
+restoration is not retried on reload.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
 silence or a remote disconnect; RULES-4.1's five minutes after the extension host disconnects is the only time-based
 cleanup. Reconcile actual process state; never restart an unknown original run as
 a replacement. Proven folder/worktree removal closes affected agents, whereas a temporary Git/read/remote failure does
-not.
+not; a removal found as the extensions restart closes and unpins as one heard while running does (D131).
 
 ## 4 Technical design
 
@@ -265,6 +275,9 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 
 ## Change log
 
+- 2026-11-01: From the owner-requested release review: 1.3 counts a worktree's subfolder agents and leaves a branch
+  prefix unjudged; 3.1 answers a close during a start, records an unconfirmed close and keeps a tab whose Unpin failed;
+  3.2 shows the picker at once; 3.4 keeps one Pin per conversation; 3.5 restores Pins once every ptyd answered (D131, D135).
 - 2026-11-01: 2.2 uses only the CLI icon and agent name for editor tabs; CLI titles remain in the panel (D130).
 - 2026-11-01: 2.1 explicitly keeps names stable across CLI titles, activity and task progress (D127).
 - 2026-10-31: A native workspace set with no recorded cwd uses an observed Facade cwd or asks for a working location; no directory-order guess (D123).

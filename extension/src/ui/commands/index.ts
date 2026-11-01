@@ -79,7 +79,10 @@ function cardWords(): CardWords {
 				: problem === 'variable' && file
 					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
 					? vscode.l10n.t("Cannot work with other agents: Facade could not read your {0} setting", file)
-					: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
+					: problem === 'disconnected'
+						// The agent's CLI stopped the Facade tools it had started with, or they ended on their own
+						? vscode.l10n.t("Cannot work with other agents: its Facade tools stopped")
+						: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
 		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
 		startedBy: creator => vscode.l10n.t("Started by {0}", creator),
 		locale: vscode.env.language
@@ -107,11 +110,16 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	const flows = {
 		resume: async () => {
 			if (!deps.conversations) { return; }
-			try {
+			// The picker shows at once, busy while this window's agents, its locations and the conversations other windows hold are read (UX-1.1)
+			const prepared = (async () => {
 				await deps.ready;
 				await deps.locations.refresh().catch(err => deps.log.event(`Resume uses the known working locations: ${messageOf(err)}`));
 				await deps.agents.refreshConversations();
-				await resumeAgent({ conversations: deps.conversations, locations: deps.locations, running: key => !!deps.agents.holding(key),
+			})();
+			// Said by the picker, which takes it: never a rejection no one hears where the picker could not be made
+			prepared.catch(() => undefined);
+			try {
+				await resumeAgent({ conversations: deps.conversations, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
 					resume: entry => deps.agents.resume(entry, { reveal: true }), reveal: run => agent.reveal(run), select: run => model.select(run),
 					notifyError: deps.notifyError, media, language: vscode.env.language });
 			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }

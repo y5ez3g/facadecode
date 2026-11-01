@@ -8,7 +8,7 @@ import { spawn, spawnSync } from 'child_process';
 import { getEventListeners, once } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
-import { sleepSync, timeout } from '../base/async';
+import { sleepSync, timeout, untilAnswered } from '../base/async';
 import { codeOf, messageOf } from '../base/errors';
 import { canonicalFolder, compactPath, FileChangedError, folderKeyOf, formatJson, homeRelative, isEqualPath, JsonFile, jsonLayoutOf, readJsonFile, realFolderOf, replaceFile, updateJsonFile, writeJsonFile } from '../base/files';
 import { isJsonObject } from '../base/json';
@@ -94,6 +94,22 @@ suite('Base: errors, JSON values, processes and promises', () => {
 			before: await outcomeOf(timeout(10, cancelled.signal)),
 			listeners: getEventListeners(ran.signal, 'abort').length
 		}, { long: 'CANCELLED: Cancelled', atOnce: true, before: 'CANCELLED: Cancelled', listeners: 0 });
+	});
+
+	test('what is tried until it answers is tried again after a call that fails as after one that does not answer, its waits doubling up to their most, and stops when told (RULES-4.1)', async () => {
+		const waits: number[] = [];
+		const failures: string[] = [];
+		const answers: (() => Promise<number | undefined>)[] = [
+			() => Promise.reject(new Error('EBUSY: resource busy or locked')),
+			() => Promise.resolve(undefined),
+			() => Promise.resolve(undefined),
+			() => Promise.resolve(7)
+		];
+		let calls = 0;
+		const answered = await untilAnswered(() => answers[calls++](), { first: 10, most: 25, stopped: () => false, failed: err => failures.push(messageOf(err)), wait: async ms => void waits.push(ms) });
+		let stopping = 0;
+		const given = await untilAnswered(() => Promise.resolve(undefined), { first: 10, most: 25, stopped: () => ++stopping > 2, failed: () => undefined, wait: async () => undefined });
+		assert.deepStrictEqual({ answered, calls, waits, failures, given, stopping }, { answered: 7, calls: 4, waits: [10, 20, 25], failures: ['EBUSY: resource busy or locked'], given: undefined, stopping: 3 });
 	});
 
 	test('a synchronous wait blocks for as long as it is asked', () => {

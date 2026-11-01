@@ -21,17 +21,20 @@ const squeezed = (text: string) => text.replace(/\s+/gu, '');
 /** Pi's count of a paste's characters (D118): its line breaks one each, its tabs four spaces, other control characters dropped. */
 const piCharsOf = (text: string) => [text.replace(/\r\n|\r/gu, '\n').replace(/\t/gu, '    ').replace(/[\x00-\x09\x0b-\x1f]/gu, '').length];
 
-/** A placeholder its CLI draws for a long paste: whether a draft, squeezed, is it for a paste of `text`. */
+/** A placeholder its CLI draws for a long paste: whether a draft, after `lead` where it begins with it, is it for a paste of `text`. */
 interface Placeholder {
-	readonly matches: (body: string, text: string) => boolean;
+	readonly matches: (draft: string, lead: string | undefined, text: string) => boolean;
 }
 
-/** A placeholder that shows one count of the paste in `pattern`'s first group, which `counts` gives the ways its CLI may count. */
-const counted = (pattern: RegExp, counts: (text: string) => readonly number[]): Placeholder => ({
-	matches: (body, text) => {
+/**
+ * A placeholder that shows one count of the paste in `pattern`'s first group, which `counts` gives the ways its CLI may count: matched
+ * squeezed, or `spaced` - its spaces and line breaks each one space - where squeezing would run a number into its count.
+ */
+const counted = (pattern: RegExp, counts: (text: string) => readonly number[], spaced = false): Placeholder => ({
+	matches: (draft, lead, text) => (spaced ? spacedBodiesOf : bodiesOf)(draft, lead).some(body => {
 		const count = pattern.exec(body)?.[1];
 		return count !== undefined && counts(text).includes(Number(count));
-	}
+	})
 });
 
 /** Each CLI's placeholders for a long paste, by its input reader, as squeezed (CLIS-2.1). */
@@ -45,13 +48,9 @@ export const PLACEHOLDERS: { readonly [adapter: string]: readonly Placeholder[] 
 	'pi-frame': [
 		// `[paste #1 +N lines]` for more than ten lines
 		counted(/^\[paste#\d+\+(\d+)lines?\]$/u, text => [linesOf(text)]),
-		// `[paste #1 N chars]` for ten lines or fewer of more than 1,000 characters: squeezed, its number runs into its count
-		{
-			matches: (body, text) => {
-				const digits = /^\[paste#(\d+)chars?\]$/u.exec(body)?.[1];
-				return digits !== undefined && piCharsOf(text).some(count => digits.length > String(count).length && digits.endsWith(String(count)));
-			}
-		}
+		// `[paste #1 N chars]` for ten lines or fewer of more than 1,000 characters, read with its spaces: squeezed, its number would
+		// run into its count, and a person's `[paste #2 11284 chars]` would be a message's 1,284 (RULES-1.6)
+		counted(/^\[paste #\d+ (\d+) chars?\]$/u, piCharsOf, true)
 	],
 	// `[Pasted ~N lines]`, from three lines on
 	'opencode-frame': [counted(/^\[Pasted~(\d+)lines?\]$/u, text => [linesOf(text)])]
@@ -61,6 +60,14 @@ export const PLACEHOLDERS: { readonly [adapter: string]: readonly Placeholder[] 
 function bodiesOf(draft: string, lead: string | undefined): string[] {
 	const drawn = squeezed(draft);
 	const after = lead !== undefined && squeezed(lead) && drawn.startsWith(squeezed(lead)) ? drawn.slice(squeezed(lead).length) : undefined;
+	return [drawn, ...after !== undefined ? [after] : []];
+}
+
+/** A draft with its spaces and line breaks each one space, and the same after `lead` where it begins with it. */
+function spacedBodiesOf(draft: string, lead: string | undefined): string[] {
+	const drawn = draft.replace(/\s+/gu, ' ').trim();
+	const leading = lead?.replace(/\s+/gu, ' ').trim();
+	const after = leading && drawn.startsWith(leading) ? drawn.slice(leading.length).trim() : undefined;
 	return [drawn, ...after !== undefined ? [after] : []];
 }
 
@@ -84,7 +91,7 @@ function isWritten(body: string, text: string, hidden: Hidden | undefined): bool
  */
 export function isOwnDraft(draft: string, text: string, adapter: string, lead?: string, hidden?: Hidden): boolean {
 	const placeholders = Object.hasOwn(PLACEHOLDERS, adapter) ? PLACEHOLDERS[adapter] : [];
-	return bodiesOf(draft, lead).some(body => isWritten(body, text, hidden) || placeholders.some(each => each.matches(body, text)));
+	return bodiesOf(draft, lead).some(body => isWritten(body, text, hidden)) || placeholders.some(each => each.matches(draft, lead, text));
 }
 
 /**

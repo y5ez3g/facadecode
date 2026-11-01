@@ -7,7 +7,7 @@ import * as path from 'path';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, variableOf } from './environment';
 import { LaunchTarget, nodeOnPath } from './executable';
-import type { SessionIntegrationInput } from './identity';
+import { sessionDirOf, type SessionIntegrationInput } from './identity';
 
 /** Pi emits this for startup, reload, new, resume and fork. No global extension or dependency is installed. */
 export const PI_SESSION_EXTENSION = `import fs from 'node:fs';
@@ -42,10 +42,10 @@ export default function (pi) {
 `;
 
 function piSession({ file }: SessionIntegrationInput) {
-	const extension = path.join(file.replace(/\.json$/, '.d'), 'pi.mjs');
+	const extension = path.join(sessionDirOf(file), 'pi.mjs');
 	return { args: ['--extension', extension], files: [{ file: extension, content: PI_SESSION_EXTENSION }] };
 }
-import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';
+import { McpServer, MOST_CALL_SECONDS, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** `line` as a regular expression that matches it alone. */
 const literal = (line: string) => line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -101,7 +101,7 @@ const EXTENSION = 'facade-pi.mjs';
 const SKILL_DIR = path.join('skills', SERVER_NAME);
 
 /** How long one call to the server may take: Pi's default minute is shorter than a start or a long screen wait may be. */
-const CALL_SECONDS = 3_600;
+const CALL_SECONDS = MOST_CALL_SECONDS;
 
 /**
  * The extension Pi loads with `-e`: it registers `server` for its session alone - nothing saved - its tools declared to the model

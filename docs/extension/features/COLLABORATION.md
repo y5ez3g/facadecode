@@ -150,7 +150,8 @@ one-hour reuse rule; no separate request ledger or deletion-consent workflow is 
 Keep message ID, sender/target run IDs, window/environment, original content, acceptance/deadline, current attempts
 and actual outcome. The recipient's window owns the authoritative record and its terminal input; the sender's window
 keeps its own copy of the messages its agents send, updated with the result it is given, so each window's Message
-History stays local. Internal bookkeeping can number operations; no public operation query or caller dedup key follows.
+History stays local. A copy whose result never came back - a lost route, a window gone - reads as unconfirmed once its
+deadline passed, never as still being delivered (D132). Internal bookkeeping can number operations; no public operation query or caller dedup key follows.
 The execution owner serializes input; the client routes messages and the direct result. No authentication, delegated
 proof or durable notification receipts are required. Sender closure follows the natural handover in RULES-1.9.
 There are no doorbells, indefinite reminders, idle gates, automatic child reports or human fallback paths.
@@ -180,6 +181,7 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 
 ## Change log
 
+- 2026-11-01: 4.1 shows a sender's copy whose result never came back as unconfirmed after its deadline (D132).
 - 2026-11-01: Describe competitive-analysis findings without naming individual products; message behavior is unchanged.
 - 2026-10-31: 3.1 follows RULES-1.5's completion of an already pasted owned draft after read delivery (D119).
 - 2026-10-31: 2.1 types `Act on this Facade message: ` before a message's paste for Claude Code (D108).

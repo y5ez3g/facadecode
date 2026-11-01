@@ -139,4 +139,23 @@ suite('Workspace ownership: one activation, fenced reconnect and five-minute cle
 			temp.remove();
 		}
 	});
+
+	test('an owned write says whether it wrote; a claim record that cannot be read fails it, never taken for another owner (LIFECYCLE-3.4)', () => {
+		const temp = tempDir('fc-owned-write-');
+		try {
+			const first = nextOwnerClaim('workspace', temp.dir);
+			let writes = 0;
+			assert.strictEqual(writeAsOwner(first, temp.dir, () => writes++), true);
+			nextOwnerClaim('workspace', temp.dir);
+			assert.strictEqual(writeAsOwner(first, temp.dir, () => writes++), false, 'a successor owns it: nothing written, and said so');
+			const other = nextOwnerClaim('other', temp.dir);
+			const record = fs.readdirSync(path.join(temp.dir, 'claims')).map(name => path.join(temp.dir, 'claims', name)).find(file => file.endsWith('.json') && fs.readFileSync(file, 'utf8').includes('"other"'))!;
+			fs.rmSync(record);
+			fs.mkdirSync(record);
+			assert.throws(() => writeAsOwner(other, temp.dir, () => writes++));
+			assert.strictEqual(writes, 1);
+		} finally {
+			temp.remove();
+		}
+	});
 });

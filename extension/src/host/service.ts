@@ -6,17 +6,18 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { untilAnswered } from '../base/async';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
 import { VendorHistory } from '../clis/history';
 import { ConversationFile } from '../record/conversations';
 import { WorkspacePins } from './pins';
-import { isDamagedWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { isDamagedWindowIdentity, isUnreadableWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { createToolServices } from '../contract/tools';
 import { AgentService } from '../core/agents';
 import { AttentionNotices } from '../core/attention';
 import type { MessageRecord } from '../core/messagePorts';
-import { MessageService } from '../core/messages';
+import { MessageService, STAGE_MS } from '../core/messages';
 import { PlanError, type LogPort, type RetainedRun, type RunId } from '../core/ports';
 import { PANEL_VIEW } from '../ui/catalog';
 import { worktreeProblemText } from '../ui/pickers/location';
@@ -112,6 +113,10 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	if (isDamagedWindowIdentity(identity, session)) {
 		// No other identity is invented (ARCHITECTURE-2.2), and a reload reads the same record: another window has its own
 		throw new ActivationError(vscode.l10n.t("This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.", vscode.env.appName), false);
+	}
+	if (isUnreadableWindowIdentity(identity, session)) {
+		// Not read now - a lock, no file handles left - which a reload may not meet again: the component is there, and says so
+		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
 	}
 	if (!identity) {
 		const missing = showComponentMissing(context, session);
@@ -222,7 +227,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const terminal = {
 		readScreen: (run: RunId, lines: number) => execution.readScreen(run, lines),
 		typeText: (run: RunId, text: string, enter: boolean) => input.inTurn(run, () => input.typeDirect(run, text, enter)),
-		pressKeys: (run: RunId, keys: readonly string[]) => input.inTurn(run, () => execution.pressKeys(run, keys))
+		pressKeys: (run: RunId, keys: readonly string[]) => input.inTurn(run, () => input.pressDirect(run, keys))
 	};
 	const messages = new MessageService({
 		agents,
@@ -233,7 +238,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		sent: new MessageFile<MessageRecord>(home, Date.now, path.join('messages', 'sent')),
 		results: {
 			report: async (other, result) => {
-				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.callId !== undefined ? { callId: result.callId } : {} }, 15_000)
+				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.callId !== undefined ? { callId: result.callId } : {} }, STAGE_MS)
 					?? Promise.resolve({ ok: false as const, reason: 'window_unavailable' as const, message: 'No network', effects: 'none' as const }));
 				return response.ok;
 			}
@@ -250,11 +255,18 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	// cannot list them yet - its ptyd not answering - keeps trying, as they end five minutes after no window claims them (RULES-4.1)
 	let restoreRetry: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
-	const restored = (async () => {
-		for (let wait = RECONCILE_MS; await agents.restore() === undefined && !disposed; wait = Math.min(wait * 2, MOST_RESTORE_WAIT_MS)) {
-			await new Promise<void>(resolve => { restoreRetry = setTimeout(resolve, wait); });
+	const retry = { first: RECONCILE_MS, most: MOST_RESTORE_WAIT_MS, stopped: () => disposed, wait: (ms: number) => new Promise<void>(resolve => { restoreRetry = setTimeout(resolve, ms); }) };
+	// A restore that fails outright is tried again as one whose listing failed: one failed write leaves no agent unseen (RULES-4.1, D86)
+	let restoreFailure: string | undefined;
+	const restored = untilAnswered(() => agents.restore(), {
+		...retry,
+		failed: err => {
+			if (messageOf(err) !== restoreFailure) {
+				restoreFailure = messageOf(err);
+				log.event(`Could not show this window's agents, trying again: ${restoreFailure}`);
+			}
 		}
-	})();
+	});
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
 	// Then a ptyd listing runs of this window that it shows no pair of - one of an earlier protocol found late, or a failed reattach -
 	// restores again, one restore at a time: no started agent is left out (RULES-4.1, D86)
@@ -264,7 +276,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	}).catch(err => log.event(`Could not restore pinned agents: ${messageOf(err)}`));
 	let restoring: Promise<unknown> = ready;
 	const found = execution.onDidFindRuns(() => {
-		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`));
+		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`))
+			// Deliveries to the agents shown now go on, within their own deadlines (RULES-1.9)
+			.then(() => disposed ? undefined : messages.resume()).catch(err => log.event(`Could not go on with this window's deliveries: ${messageOf(err)}`));
 	});
 	// The nine tools, for every run of this window whose shim calls in (MCP-1.1, 6.1)
 	const services = createToolServices({
@@ -287,6 +301,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		...network ? { network } : {}
 	});
 	const tools = execution.serveTools((call, receivedAt) => services.answer(call, receivedAt));
+	// Deliveries this window's earlier opening began go on within their deadlines once its agents are known again (RULES-1.9)
+	void ready.then(() => disposed ? undefined : messages.resume()).catch(err => log.event(`Could not go on with this window's deliveries: ${messageOf(err)}`));
 	// Project files injected for runs that are gone everywhere in this environment are released (CLIS-2.2); old results expire
 	void ready.then(() => execution.allRunIds()).then(alive => clis.reconcile(alive)).catch(err => log.event(`Could not release injected files of ended agents: ${messageOf(err)}`));
 	try {
@@ -344,6 +360,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	context.subscriptions.push(...disposables);
 	return async () => {
 		disposed = true;
+		// Its state's changes waiting to be written together are written now, while this activation may own them
+		workspaceState.flush();
 		clearTimeout(restoreRetry);
 		found.dispose();
 		tools.dispose();

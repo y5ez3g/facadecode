@@ -4,25 +4,25 @@
 
 import * as path from 'path';
 import { canonicalFolder } from '../base/files';
-import { CliAdapter, sigintExit } from './adapter';
+import { CliAdapter, configOverrides, sigintExit } from './adapter';
 import { createHash } from 'crypto';
 import { parse as parseToml } from 'smol-toml';
 import { isJsonObject } from '../base/json';
 import type { SessionIntegration, SessionIntegrationInput } from './identity';
 
-/** Codex 0.166's SessionFlags layer and normalized hook fingerprint. Trust only our own command, for this launch. */
+/**
+ * Codex 0.166's SessionFlags layer and normalized hook fingerprint. Trust only our own command, for this launch. Per-launch hooks it
+ * cannot read stay as configured, for Codex to say what is wrong with them, and the launch claims no identity tracking (CLIS-2.4).
+ */
 export function codexSession({ hook, platform, extra }: SessionIntegrationInput): SessionIntegration {
 	let configured: Record<string, unknown> = {};
-	for (let i = 0; i < extra.length; i++) {
-		const arg = extra[i] === '-c' || extra[i] === '--config' ? extra[++i] : extra[i].startsWith('--config=') ? extra[i].slice(9) : undefined;
-		const split = arg?.indexOf('=') ?? -1;
-		const key = arg?.slice(0, split).trim();
-		if (split < 0 || !key || (key !== 'hooks' && !key.startsWith('hooks.'))) { continue; }
+	for (const { key, value: text } of configOverrides(extra)) {
+		if (text === undefined || (key !== 'hooks' && !key.startsWith('hooks.'))) { continue; }
 		let value: unknown;
-		try { value = parseToml(`value=${arg!.slice(split + 1)}`).value; }
-		catch { throw new Error('Codex per-launch hooks must be valid TOML.'); }
+		try { value = parseToml(`value=${text}`).value; }
+		catch { return { unavailable: true }; }
 		if (key === 'hooks') {
-			if (!isJsonObject(value)) { throw new Error('Codex hooks configuration must be a table.'); }
+			if (!isJsonObject(value)) { return { unavailable: true }; }
 			configured = { ...value };
 		} else {
 			const keys = key.slice(6).split('.');
@@ -40,25 +40,32 @@ export function codexSession({ hook, platform, extra }: SessionIntegrationInput)
 	for (const [event, label] of [['SessionStart', 'session_start'], ['SessionEnd', 'session_end']]) {
 		const timeout = event === 'SessionEnd' ? 3 : 5;
 		const groups = configured[event] ?? [];
-		if (!Array.isArray(groups)) { throw new Error(`Codex ${event} hooks must be an array.`); }
+		if (!Array.isArray(groups)) { return { unavailable: true }; }
 		const fingerprint = JSON.stringify({ event_name: label, hooks: [{ async: false, command: hook, timeout, type: 'command' }] });
 		const hash = `sha256:${createHash('sha256').update(fingerprint).digest('hex')}`;
 		state[`${source}:${label}:${groups.length}:0`] = { enabled: true, trusted_hash: hash };
 		configured[event] = [...groups, { hooks: [{ type: 'command', command: hook, timeout }] }];
 	}
-	const hooks = { ...configured, state };
 	// CLI dotted-key parsing is literal: the state key contains dots and must be inside the TOML value.
-	return { args: ['-c', `hooks=${inlineToml(hooks)}`] };
+	let hooks: string | undefined;
+	try { hooks = inlineToml({ ...configured, state }); }
+	catch { hooks = undefined; }
+	return hooks === undefined ? { unavailable: true } : { args: ['-c', `hooks=${hooks}`] };
 }
 
-function inlineToml(value: unknown): string {
+/**
+ * `value` as an inline TOML value; none where it holds what this writer does not carry over as it is, such as a date. Throws for text
+ * TOML cannot hold.
+ */
+function inlineToml(value: unknown): string | undefined {
 	if (typeof value === 'string') { return tomlString(value); }
 	if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'bigint') { return String(value); }
-	if (Array.isArray(value)) { return `[${value.map(inlineToml).join(',')}]`; }
-	if (isJsonObject(value)) { return `{${Object.entries(value).map(([key, item]) => `${tomlString(key)}=${inlineToml(item)}`).join(',')}}`; }
-	throw new Error('Codex hooks contain an unsupported configuration value.');
+	const table = isJsonObject(value) && [Object.prototype, null].includes(Object.getPrototypeOf(value) as object | null);
+	const parts = Array.isArray(value) ? value.map(inlineToml) : table ? Object.entries(value).map(([key, item]) => { const inline = inlineToml(item); return inline === undefined ? undefined : `${tomlString(key)}=${inline}`; }) : undefined;
+	if (!parts || parts.some(part => part === undefined)) { return undefined; }
+	return Array.isArray(value) ? `[${parts.join(',')}]` : `{${parts.join(',')}}`;
 }
-import { SERVER_NAME, ToolsIntegration } from './tools';
+import { MOST_CALL_SECONDS, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** A TOML basic string for Codex's per-launch configuration (CLIS-3.2), including every control character. */
 export function tomlString(text: string): string {
@@ -111,6 +118,8 @@ export const codexAdapter: CliAdapter = {
 	displayName: 'Codex',
 	setting: 'facade.codex',
 	command: 'codex',
+	// Its short options and its `--yolo`, the same options as these: one configured so would undo the run's YOLO mapping (CLIS-3.1)
+	aliases: { '--model': ['-m'], '--sandbox': ['-s'], '--dangerously-bypass-approvals-and-sandbox': ['--yolo'] },
 	groups: {
 		resume: ['resume', '${sessionId}'],
 		connect: [
@@ -118,7 +127,7 @@ export const codexAdapter: CliAdapter = {
 			'-c', 'mcp_servers.facade.args=${mcpArgs}',
 			'-c', 'mcp_servers.facade.env=${mcpEnv}',
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
-			'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
+			'-c', `mcp_servers.facade.tool_timeout_sec=${MOST_CALL_SECONDS}`,
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
 			// Its first model request waits this long for the server, not its 1 s default, which leaves a slow start out (D101)
 			'-c', 'mcp_optional_startup_grace_ms=10000'

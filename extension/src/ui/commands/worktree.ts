@@ -13,9 +13,6 @@ import { plainText, worktreeFailureText } from '../presentation';
 import { askWorktreeRef, chooseFolder, copyPathAction, worktreeBaseLabel, worktreeProblemText } from '../pickers/location';
 import { BACK, Flow } from '../pickers/stepping';
 
-/** New Worktree... in the view menu only, hidden from the Command Palette (UX-3.1). */
-export const NEW_WORKTREE_COMMAND = COMMANDS.newWorktree;
-
 export interface WorktreeCommandDeps {
 	readonly locations: Pick<LocationPort, 'snapshot' | 'onDidChange'>;
 	readonly worktrees: WorktreePort;
@@ -40,7 +37,8 @@ export interface NewWorktreeResult {
  */
 export function registerWorktreeCommands(deps: WorktreeCommandDeps): vscode.Disposable[] {
 	return [
-		vscode.commands.registerCommand(NEW_WORKTREE_COMMAND, async (arg?: unknown): Promise<NewWorktreeResult | undefined> => {
+		// New Worktree... in the view menu only, hidden from the Command Palette (UX-3.1)
+		vscode.commands.registerCommand(COMMANDS.newWorktree, async (arg?: unknown): Promise<NewWorktreeResult | undefined> => {
 			// No request where the editor's own menu runs it: the person chooses
 			if (!fromEditorMenu(arg)) {
 				const request = requestOf(arg);
@@ -125,8 +123,10 @@ async function choosePlan(deps: WorktreeCommandDeps): Promise<WorktreePlan | und
 				return undefined;
 			}
 			const found = sourceIn(deps.locations.snapshot(), chosen);
-			// Git asked now, with the folder step busy meanwhile: the folder's prerequisite, as it stands (WORKTREES-2.3)
-			const state = await flow.checking(async () => found ? deps.worktrees.availability(found.id).catch((err: unknown) => ({ available: false as const, reason: messageOf(err) })) : undefined);
+			// Git asked now, with the folder step busy meanwhile and the view's own progress - the one sign there is where a window of one
+			// folder has no step up yet: the folder's prerequisite, as it stands (WORKTREES-2.3, UX-1.1)
+			const state = await flow.checking(async () => found ? vscode.window.withProgress({ location: { viewId: PANEL_VIEW } }, () => deps.worktrees.availability(found.id))
+				.then(answer => answer, (err: unknown) => ({ available: false as const, reason: messageOf(err) })) : undefined);
 			if (!found || state === undefined || !state.available) {
 				flow.close();
 				if (!found) {

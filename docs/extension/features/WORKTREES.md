@@ -161,13 +161,19 @@ A worktree Git lists as locked is refused the same way, before any agent closes:
 `Cannot delete worktree "{0}": worktree is locked. Unlock it with Git, then try again.` So is one another registered
 worktree is inside, which Git would remove with it, whatever that one holds:
 `Cannot delete worktree "{0}": worktree "{1}" is inside it. Delete or move that worktree first, then try again.`
-Otherwise it takes the worktree out of the catalog, so that no launch goes there meanwhile, closes the agents whose launch
-location is that worktree by the normal close (LIFECYCLE-3.1) and waits for their processes to end. Where one cannot be
+On Windows with a Git older than 2.54, which deletes through an NTFS junction or a link to a folder rather than the link
+alone, a worktree that contains such a link is refused the same way, before any agent closes and again after they end:
+`Cannot delete worktree "{0}": it contains a link to another folder ({1}), which this version of Git would delete through.
+Remove the link, or update Git to 2.54 or later, then try again.` (D135).
+Otherwise it takes the worktree and every location inside it out of the catalog, so that no launch or Resume goes there
+meanwhile, closes the agents whose launch location is that worktree or a location inside it, such as a resumed
+conversation's subfolder, by the normal close (LIFECYCLE-3.1) and waits for their processes to end. Where one cannot be
 confirmed ended it deletes nothing: `Cannot delete worktree "{0}": an agent's process in it could not be confirmed to have
 ended. Try again once it has.` It then checks for changes again - what the agents wrote as they ended - refusing as above,
 and runs `git worktree remove <path>` without `--force`, with 4.1's Git and execution environment; the branch is kept. Git's
-own refusal is reported as `Could not delete worktree "{0}": {1}` and nothing is retried. The catalog is then read
-again, which confirms the deletion under 1.3 (3.3). There is no deletion command, MCP tool or other agent API, no
+own refusal is reported as `Could not delete worktree "{0}": {1}` and nothing is retried. Where Git succeeds but leaves the
+folder - newer Git leaves a link inside it in place - Facade says `Deleted worktree "{0}", but Git left its folder {1}
+behind.` and deletes nothing itself (D135). The catalog is then read again, which confirms the deletion under 1.3 (3.3). There is no deletion command, MCP tool or other agent API, no
 stop-and-delete, branch deletion, `--force`, discard flow or recursive removal by Facade. Stopping an agent does not
 delete its directory or branch (D73).
 
@@ -203,7 +209,8 @@ Use executable/argument arrays for needed direct reads; avoid shell interpolatio
 from a failed repository read and retain the actual diagnostic. Keep simple serialization for concurrent creates
 using the same destination. Unknown results remain unknown; do not redo creation solely because a reply was lost.
 No destructive rollback, hard reset, force push or recursive deletion belongs to Facade worktree management; its one
-deletion is 3.2's. Background cleanup of an agent does not wait for native post-create preparation.
+deletion is 3.2's, run with no prompt program Git could ask through and, on Windows, with long paths enabled
+(`-c core.longpaths=true`), as a deep folder otherwise fails partway (D135). Background cleanup of an agent does not wait for native post-create preparation.
 
 ### 4.3 Creation entry boundary
 
@@ -236,6 +243,9 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Git tests use disposab
 
 ## Change log
 
+- 2026-11-01: From the owner-requested release review: 3.2 closes the agents of a worktree's subfolders, refuses a
+  worktree holding a folder link where Git would delete through it, and says when Git leaves the folder; 4.2 runs the
+  deletion without prompts and with Windows long paths (D135).
 - 2026-10-31: Resume and linked Pin/Unpin extend the current step; 134 rules.
 
 - 2026-10-30: Step 2 of the Facade Code extension: MCP discovery reads the same catalog (1.2), start_agent creates a

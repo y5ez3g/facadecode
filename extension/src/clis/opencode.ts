@@ -3,14 +3,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'path';
+import { readJsonFile } from '../base/files';
 import { isJsonObject, JsonObject } from '../base/json';
 import { nodeValue, parseJsonc } from '../base/jsonc';
 import { CliAdapter, sigintExit } from './adapter';
 import * as fs from 'fs';
-import { parse, ParseError } from 'jsonc-parser';
-import { homeOf } from './executable';
+import { xdgDirOf } from './executable';
 import { variableOf } from './environment';
-import type { SessionIntegrationInput } from './identity';
+import { sessionDirOf, type SessionIntegration, type SessionIntegrationInput } from './identity';
 
 /** Reads the selected TUI route, not shared server activity or subagent reports. No dependency on Solid internals. */
 export const OPENCODE_SESSION_PLUGIN = `import fs from 'node:fs';
@@ -41,29 +41,41 @@ export default { id: 'facade.session', setup(ctx) {
 } };
 `;
 
-/** CLI config's native merge replaces arrays. Carry its effective directives forward before adding this run's plugin. */
-export function openCodeSession({ file, env, platform }: SessionIntegrationInput) {
-	const read = (text: string, source: string) => {
-		const errors: ParseError[] = [];
-		const value: unknown = parse(text, errors, { allowTrailingComma: true });
-		if (errors.length || !isJsonObject(value)) { throw new Error(`OpenCode configuration in ${source} is not a valid object.`); }
-		return value;
-	};
-	const xdg = variableOf(env, 'XDG_CONFIG_HOME');
-	const configDir = path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(homeOf(env, platform), '.config'), 'opencode');
+/** OpenCode's JSONC text as an object, comments and trailing commas allowed; none where it is no object. */
+function objectOf(text: string): JsonObject | undefined {
+	try {
+		const value = nodeValue(parseJsonc(text));
+		return isJsonObject(value) ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * CLI config's native merge replaces arrays. Carry its effective directives forward before adding this run's plugin. Configuration it
+ * cannot read stays as it is, for OpenCode to say what is wrong with it, and the launch claims no identity tracking (CLIS-2.4).
+ */
+export function openCodeSession({ file, env, platform }: SessionIntegrationInput): SessionIntegration {
+	const configDir = path.join(xdgDirOf('config', env, platform), 'opencode');
 	const configFile = path.join(configDir, 'cli.json');
 	const legacyFile = path.join(configDir, 'tui.json');
-	const config = fs.existsSync(configFile) ? read(fs.readFileSync(configFile, 'utf8'), configFile) : {};
-	const legacy = !fs.existsSync(configFile) && fs.existsSync(legacyFile) ? read(fs.readFileSync(legacyFile, 'utf8'), legacyFile) : {};
-	const content = variableOf(env, 'OPENCODE_CLI_CONFIG_CONTENT');
-	const overlay = content ? read(content, 'OPENCODE_CLI_CONFIG_CONTENT') : {};
+	// A file not there holds nothing; one that cannot be read, no object
+	const settingsOf = (at: string): JsonObject | undefined => {
+		const found = readJsonFile(at);
+		return found.kind === 'missing' ? {} : found.kind === 'object' ? found.value : undefined;
+	};
+	const config = settingsOf(configFile);
+	const legacy = fs.existsSync(configFile) ? {} : settingsOf(legacyFile);
+	const content = variableOf(env, 'OPENCODE_CLI_CONFIG_CONTENT', platform);
+	const overlay = content ? objectOf(content) : {};
+	if (!config || !legacy || !overlay) { return { unavailable: true }; }
 	const legacyPlugins = Array.isArray(legacy.plugin) ? legacy.plugin.map(item => Array.isArray(item) ? { package: item[0], options: item[1] } : item) : [];
 	if (isJsonObject(legacy.plugin_enabled)) {
 		legacyPlugins.push(...Object.entries(legacy.plugin_enabled).map(([id, enabled]) => enabled ? id : `-${id}`));
 	}
 	const plugins = overlay.plugins ?? config.plugins ?? legacyPlugins;
-	if (!Array.isArray(plugins)) { throw new Error(`OpenCode plugins in ${configFile} must be an array.`); }
-	const directory = file.replace(/\.json$/, '.d');
+	if (!Array.isArray(plugins)) { return { unavailable: true }; }
+	const directory = sessionDirOf(file);
 	return {
 		env: { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugins: [...plugins, directory] }) },
 		files: [
@@ -72,7 +84,7 @@ export function openCodeSession({ file, env, platform }: SessionIntegrationInput
 		]
 	};
 }
-import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';
+import { McpServer, MOST_CALL_SECONDS, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** OpenCode's inline configuration: read after its configuration files, it goes on them for the run alone (CLIS-1.2). */
 export const OPENCODE_CONFIG = 'OPENCODE_CONFIG_CONTENT';
@@ -81,7 +93,7 @@ export const OPENCODE_CONFIG = 'OPENCODE_CONFIG_CONTENT';
 const SKILL_PATH = path.join('skills', SERVER_NAME, 'SKILL.md');
 
 /** How long one call to the server may take, in milliseconds: its default 30 seconds is shorter than a start may be. */
-const CALL_MS = 3_600_000;
+const CALL_MS = MOST_CALL_SECONDS * 1000;
 
 /**
  * The run's inline configuration: the server, its tools - named `facade_<tool>` - allowed whatever the person's own rules say, a rule
@@ -104,16 +116,11 @@ export function mergedOpenCodeConfig(ours: string, theirs: string | undefined): 
 	if (theirs === undefined || theirs.trim() === '') {
 		return ours;
 	}
-	let mine: unknown;
-	try {
-		mine = nodeValue(parseJsonc(theirs));
-	} catch {
+	const mine = objectOf(theirs);
+	if (!mine) {
 		return undefined;
 	}
 	const facade = JSON.parse(ours) as JsonObject;
-	if (!isJsonObject(mine)) {
-		return undefined;
-	}
 	const permission = typeof mine.permission === 'string' ? { '*': mine.permission } : isJsonObject(mine.permission) ? mine.permission : {};
 	return JSON.stringify({
 		...mine,
@@ -154,6 +161,8 @@ export const openCodeAdapter: CliAdapter = {
 	setting: 'facade.opencode',
 	command: 'opencode',
 	identityOptions: ['--session', '-s', '--continue', '-c', '--fork'],
+	// The same switch as its --auto: one configured so would answer every permission question with YOLO off (CLIS-3.1)
+	aliases: { '--auto': ['--yolo', '--dangerously-skip-permissions'] },
 	groups: {
 		resume: ['--session', '${sessionId}'],
 		connect: ['--standalone'],

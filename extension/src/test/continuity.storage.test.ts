@@ -15,17 +15,18 @@ import { ConversationFile } from '../record/conversations';
 import { cutNextWriteShort, fsError, replaceFsFunction, tempDir, waitFor } from './util';
 
 suite('Exact conversation identity and durable restoration intent (CLIS-2.4, RULES-4.2)', () => {
-	test('watch quota exhaustion falls back to bounded reads of owned session files', async () => {
+	test('owned session files are read on a bounded period, needing no file watcher a quota could refuse', async () => {
 		const temp = tempDir('fd-watch-quota-');
 		const observed: (string | null)[] = [], log: string[] = [];
 		const identity = new SessionIdentity(temp.dir, (_run, sessionId) => observed.push(sessionId), text => log.push(text));
 		const restore = replaceFsFunction('watch', () => (() => { throw fsError('EMFILE', 'watch'); }) as typeof fs.watch);
 		try {
 			assert.doesNotThrow(() => identity.track('run-a'));
+			fs.mkdirSync(path.dirname(sessionFileOf(temp.dir, 'run-a')), { recursive: true });
 			const session = '86da4482-2bae-4a45-b193-a5664c19826a';
 			fs.writeFileSync(sessionFileOf(temp.dir, 'run-a'), JSON.stringify({ session_id: session }));
 			await waitFor(() => observed.includes(session));
-			assert.strictEqual(log.length, 1);
+			assert.deepStrictEqual(log, []);
 		} finally { restore(); identity.dispose(); temp.remove(); }
 	});
 	test('a real isolated hook process updates only its run, observes /clear, and cleanup preserves other runs', async () => {

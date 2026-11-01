@@ -6,7 +6,9 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { tempDir } from './util';
-import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
+import { folderKeyOf } from '../base/files';
+import { locationIdOf } from '../core/locations/catalog';
+import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunChange, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
 
@@ -206,6 +208,71 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.strictEqual(ui.clipboard.length, 2);
 	});
 
+	test('LIFECYCLE-1.3: a branch input that starts with git.branchPrefix alone says nothing of it until the person types; the prefix alone names no branch', async () => {
+		const { Flow } = load<typeof import('../ui/pickers/stepping')>(require.resolve('../ui/pickers/stepping'));
+		const { askWorktreeRef } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+		ui.branchPrefix = 'feat/';
+		const planned: string[] = [];
+		const port: WorktreePort = {
+			availability: async () => ({ available: true }),
+			plan: async (source, branch) => { planned.push(branch); return { source, branch, baseRef: 'HEAD', baseCommit: 'abc', destination: `/repo.worktrees/${branch}` }; },
+			create: async () => { throw new Error('input must not create'); },
+			remove: async () => undefined
+		};
+		const result = askWorktreeRef(new Flow(), port, MAIN, { kind: 'branch', title: 'New Agent', back: true });
+		const input = ui.current!;
+		await new Promise(resolve => setTimeout(resolve, 200));
+		const opened = [input.value, input.prompt, input.validationMessage, [...planned]];
+		input.type('feat/x');
+		input.type('feat/');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		const prefixAgain = [input.validationMessage, [...planned]];
+		input.accept();
+		await settle();
+		const entered = [input.shown, input.validationMessage];
+		input.hide();
+		assert.strictEqual(await result, undefined);
+		assert.deepStrictEqual([opened, prefixAgain, entered], [['feat/', 'Starts from main', undefined, []], ['Enter a branch name.', []], [true, 'Enter a branch name.']]);
+	});
+
+	test('UX-1.1: an Enter while the check of the same text is under way waits for that check, never asking Git again', async () => {
+		const { Flow } = load<typeof import('../ui/pickers/stepping')>(require.resolve('../ui/pickers/stepping'));
+		const asked: string[] = [];
+		let answer!: () => void;
+		const result = new Flow().text({ title: 'New Worktree', value: '', check: value => {
+			asked.push(value);
+			return new Promise(resolve => { answer = () => resolve({ prompt: `/repo.worktrees/${value}` }); });
+		} });
+		const input = ui.current!;
+		input.type('feat/x');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		input.accept();
+		await settle();
+		answer();
+		assert.strictEqual(await result, 'feat/x');
+		assert.deepStrictEqual(asked, ['feat/x']);
+	});
+
+	test('UX-2.4: how long ago is said by one formatter for each language, however many rows a picker says it for', () => {
+		const original = Intl.RelativeTimeFormat;
+		let made = 0;
+		const counting = class extends original {
+			constructor(...args: ConstructorParameters<typeof original>) {
+				super(...args);
+				made++;
+			}
+		};
+		(Intl as { RelativeTimeFormat: unknown }).RelativeTimeFormat = counting;
+		try {
+			const { ago } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+			const now = Date.UTC(2026, 10, 1, 12);
+			const said = Array.from({ length: 100 }, (_, n) => ago(now - n * 60_000, now, 'en'));
+			assert.deepStrictEqual([said[0], said[5], made], ['now', '5 min. ago', 1]);
+		} finally {
+			(Intl as { RelativeTimeFormat: unknown }).RelativeTimeFormat = original;
+		}
+	});
+
 	test('a remote environment is named as VS Code\'s remote indicator names it, from the authority the local window sees (LIFECYCLE-1.1, D67)', () => {
 		const { environmentLabel } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
 		const hex = Buffer.from(JSON.stringify({ hostName: 'build.example.com', user: 'me' })).toString('hex');
@@ -332,6 +399,26 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual(shown, { title: 'New Agent · Ada · main', placeholder: 'Select a CLI', labels: ['Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], active: ['Claude Code'], where: 'main', name: 'Ada', launched: 0 });
 			assert.deepStrictEqual([launched, selected, picker.shown, ui.current], [[{ name: 'Ada', location: MAIN.id, cli: 'claude', origin: 'human' }], ['run-new'], false, undefined]);
+		});
+
+		test('LIFECYCLE-1.3, D63: a lone folder Git has not read yet is a label; Change Working Location comes once Git finds a repository there, the CLI in focus kept', async () => {
+			const SHOP_FOLDER = place('loc-shop', 'shop', SHOP, { kind: 'folder', git: 'pending', opened: true, uri: SHOP.uri, path: SHOP.path });
+			catalog = { locations: [SHOP_FOLDER], folders: [SHOP], pending: true };
+			last = { location: SHOP_FOLDER.id, cli: 'claude' };
+			const done = start();
+			await settle();
+			const picker = ui.current!;
+			const pending = [picker.labels(), picker.activeItems.map(item => item.label)];
+			catalog = { locations: [{ ...SHOP_FOLDER, kind: 'checkout', git: 'ok', isMain: true, branch: 'main' }], folders: [SHOP], pending: false };
+			changed.fire();
+			const read = [picker.labels(), picker.activeItems.map(item => item.label)];
+			picker.hide();
+			await done;
+			assert.deepStrictEqual([pending, read, launched], [
+				[['Claude Code', 'shop', 'Change Name...'], ['Claude Code']],
+				[['Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Claude Code']],
+				[]
+			]);
 		});
 
 		test('from the filtered empty panel it starts at the filtered location, still changeable; one no longer offered gives way to the remembered location (LIFECYCLE-1.2)', async () => {
@@ -811,6 +898,31 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
+		test('D73, WORKTREES-3.2: Delete Worktree names and closes the agents launched inside it too - a resumed conversation\'s subdirectory, listed or not yet - and no other', async () => {
+			const API = place('loc-login-api', 'api', SHOP, { kind: 'folder', path: `${LOGIN.path}/api`, uri: 'file:///login-fix/api' });
+			catalog = { locations: [MAIN, LOGIN, API], folders: [SHOP], pending: false };
+			const tools = `${LOGIN.path}/tools`;
+			runs = [runAt(1, API), { ...runAt(2, MAIN), location: locationIdOf('local', folderKeyOf(tools)), cwd: tools }, runAt(3, MAIN)];
+			ui.answer = 'Delete';
+			remove = async (_id, closeAgents) => { await closeAgents(); };
+			const done = start();
+			await settle();
+			ui.current!.accept('Change Working Location...');
+			await settle();
+			const offered = buttonsOf(ui.current!);
+			ui.current!.press(1, ui.current!.items[1].buttons![0]);
+			await settle();
+			await settle();
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual([offered, ui.dialogs[0].args, closed, errors], [
+				[['login-fix', 'close: Delete Worktree']],
+				['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\n2 associated agents will be closed.' }, 'Delete'],
+				['run-1', 'run-2'],
+				[]
+			]);
+		});
+
 		test('D73: a refused deletion is said - changes not committed, Git\'s own refusal - with the worktree back in the step and no agent closed by the picker; a detached worktree is asked about without a branch', async () => {
 			catalog = { locations: [MAIN, LOGIN, place('loc-loose', 'loose', SHOP, { detached: true })], folders: [SHOP], pending: false };
 			runs = [runAt(1, LOGIN)];
@@ -841,6 +953,17 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				{ kind: 'warning', args: ['Delete worktree "loose"?', { modal: true, detail: 'Folder /loose will be deleted (detached HEAD).' }, 'Delete'], over: undefined }
 			]);
 		});
+	});
+
+	test('WORKTREES-3.2: a link this Git would delete through, and a folder Git left behind, are said in the person\'s words', () => {
+		const { worktreeProblemText } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+		assert.deepStrictEqual([
+			worktreeProblemText({ problem: { kind: 'worktree_linked', name: 'feat', link: 'node_modules\\dep' } }, 'English'),
+			worktreeProblemText({ problem: { kind: 'worktree_left', name: 'feat', folder: 'C:\\repo.worktrees\\feat' } }, 'English')
+		], [
+			'Cannot delete worktree "feat": it contains a link to another folder (node_modules\\dep), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.',
+			'Deleted worktree "feat", but Git left its folder C:\\repo.worktrees\\feat behind.'
+		]);
 	});
 
 	suite('Resume Agent', () => {
@@ -1320,7 +1443,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		test('U06, LIFECYCLE-2.3: this window\'s agents, one line each - the name, then short ID, CLI, state, location and title, searched alike - duplicates told apart by short ID; an ID or copied reference finds its run; each copies or closes; choosing shows its terminal', async () => {
 			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
 			let runs = [run(1, { title: 'Fix login' }), run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }), run(3, { lifecycle: 'starting', phase: 'launching_cli' })];
-			const changed = new TestEmitter<void>();
+			const changed = new TestEmitter<RunChange>();
 			const did: string[] = [];
 			const words = {
 				worktreeFailure: (reason: string) => reason,
@@ -1336,7 +1459,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				media: { path: '/extension/media' } as never,
 				reveal: async run => void did.push(`reveal ${run}`),
 				copyReference: async run => void did.push(`copy ${run}`),
-				close: async run => { did.push(`close ${run}`); runs = runs.filter(each => each.id !== run); changed.fire(); }
+				close: async run => { did.push(`close ${run}`); runs = runs.filter(each => each.id !== run); changed.fire({ run, kind: 'removed', cause: 'close' }); }
 			});
 			const picker = ui.current!;
 			const listed = picker.items.map(item => [item.label, item.description, item.detail]);
@@ -1364,6 +1487,40 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				['#a1 · Claude Code · Working · main · Fix login', '#a3 · Claude Code · Starting · main'],
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
+		});
+
+		test('PANEL-3.1: what a CLI reports reaches the open picker at most once per 300 ms, as it does the panel; an agent added or gone at once', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const runs = [run(1)];
+			const changed = new TestEmitter<RunChange>();
+			let reads = 0;
+			const words = {
+				worktreeFailure: (reason: string) => reason,
+				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by ${creator}`
+			};
+			const done = goToAgent({
+				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
+				agents: { onDidChange: changed.event },
+				words,
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined,
+				copyReference: async () => undefined,
+				close: async () => undefined
+			});
+			const picker = ui.current!;
+			const before = reads;
+			for (let i = 0; i < 20; i++) {
+				changed.fire({ run: runs[0].id, kind: 'reported' });
+			}
+			const burst = reads - before;
+			await new Promise(resolve => setTimeout(resolve, 350));
+			const coalesced = reads - before;
+			changed.fire({ run: runs[0].id, kind: 'added' });
+			const added = reads - before;
+			picker.hide();
+			await done;
+			assert.deepStrictEqual([burst, coalesced, added], [0, 1, 2]);
 		});
 
 		test('a name or CLI title that holds $(...) is shown word for word, not as the theme icon the editor would draw (PANEL-3.2)', async () => {

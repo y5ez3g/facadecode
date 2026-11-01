@@ -98,6 +98,22 @@ suite('Copy Diagnostics: what it copies (ARCHITECTURE-3.3, D116)', () => {
 	test('a home folder of one character is not written ~ throughout', () => {
 		assert.match(diagnosticsText(diagnostics({ home: '/' })), /started in \/Users\/ada\/shop/);
 	});
+
+	test('D116: on Windows the home folder is written ~ whatever its drive letter\'s case and its separators - VS Code writes c:\\, Node C:\\ - and on macOS whatever its case; elsewhere a path differing in case is another', () => {
+		const windows = diagnosticsText(diagnostics({
+			home: 'C:\\Users\\Ada',
+			clis: { where: 'c:\\Users\\Ada\\shop', each: [] },
+			agents: [{ facts: run({ cwd: 'c:\\Users\\Ada\\shop' }) }],
+			log: ['Accepted #a1 in c:\\Users\\Ada\\shop', 'Read C:/Users/Ada/.claude.json', 'Kept C:\\Users\\Ada (o\'b) as is']
+		}), 'win32');
+		const text = (platform: NodeJS.Platform) => diagnosticsText(diagnostics({ home: '/Users/ada', log: ['in /users/ADA/shop', 'in /Users/ada/shop'] }), platform);
+
+		assert.deepStrictEqual([windows.toLowerCase().includes('users\\ada'), windows.toLowerCase().includes('users/ada')], [false, false]);
+		assert.match(windows, /^CLIs for ~\\shop$/m);
+		assert.match(windows, /in ~\\shop$/m);
+		assert.match(windows, /^Read ~\/\.claude\.json$/m);
+		assert.deepStrictEqual([text('darwin').split('\n').slice(-3, -1), text('linux').split('\n').slice(-3, -1)], [['in ~/shop', 'in ~/shop'], ['in /users/ADA/shop', 'in ~/shop']]);
+	});
 });
 
 suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {

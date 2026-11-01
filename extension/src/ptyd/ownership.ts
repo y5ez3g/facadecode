@@ -59,10 +59,6 @@ export class OwnerClaims<C> {
 		}
 	}
 
-	allows(owner: string, connection: C): boolean {
-		return this.owners.get(owner)?.connection === connection;
-	}
-
 	disconnect(connection: C): void {
 		for (const [key, owner] of this.owners) {
 			if (owner.connection !== connection) {

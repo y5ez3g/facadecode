@@ -36,7 +36,7 @@ const RECORDS: readonly MessageRecord[] = [
 ];
 
 /** The editor, as far as Message History and the person's notifications use it. */
-function fakeEditor() {
+function fakeEditor(overrides: { readonly openTextDocument?: () => Promise<unknown> } = {}) {
 	const none = { dispose: () => undefined };
 	const listeners = <T>() => {
 		const set = new Set<(value: T) => void>();
@@ -67,7 +67,7 @@ function fakeEditor() {
 		},
 		workspace: {
 			registerTextDocumentContentProvider: (scheme: string, provider: { provideTextDocumentContent(uri: unknown): string }) => { providers.set(scheme, provider); return none; },
-			openTextDocument: async (uri: { scheme: string; path: string; query: string }) => { const text = providers.get(uri.scheme)!.provideTextDocumentContent(uri); opened.push({ uri, text }); return { uri }; },
+			openTextDocument: overrides.openTextDocument ?? (async (uri: { scheme: string; path: string; query: string }) => { const text = providers.get(uri.scheme)!.provideTextDocumentContent(uri); opened.push({ uri, text }); return { uri }; }),
 			onDidCloseTextDocument: () => none
 		},
 		commands: { registerCommand: (id: string, run: (...args: unknown[]) => unknown) => { commands.set(id, run); return none; } }
@@ -134,6 +134,19 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		disposables.forEach(each => each.dispose());
 	});
 
+	test('an agent\'s name or words holding $(...) are shown as written, not as the theme icon the editor would draw (PANEL-3.2)', async () => {
+		const editor = fakeEditor();
+		const records = [record(1, { from: { ...ada, name: '$(rocket) Ada' }, to: bob, text: 'Run $(debug-start) now' }, T)];
+		const disposables = editor.host.registerMessageHistory({ messages: { history: () => records, onDidRecord: () => ({ dispose: () => undefined }) }, language: 'en' });
+		const done = editor.commands.get('facade.messageHistory')!() as Promise<void>;
+		const [item] = editor.picker.items;
+		const shown = [item.label, (item.detail ?? '').split(' · ').pop()];
+		editor.picker.accept(0);
+		await done;
+		disposables.forEach(each => each.dispose());
+		assert.deepStrictEqual(shown, ['\\$(rocket) Ada #a1 ↔ Bob #a2', 'Run \\$(debug-start) now']);
+	});
+
 	test('with no records the picker says so, and offers nothing to send or delete', async () => {
 		const editor = fakeEditor();
 		editor.host.registerMessageHistory({ messages: { history: () => [], onDidRecord: () => ({ dispose: () => undefined }) }, language: 'en' });
@@ -175,6 +188,30 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		await flush();
 		assert.deepStrictEqual([editor.revealed, editor.opened.length], [[ada.run], 0]);
 		port.dispose();
+	});
+
+	test('#human: a message or an agent that fails to open is no unhandled failure of the window', async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+		process.on('unhandledRejection', onUnhandled);
+		const errors = console.error;
+		console.error = () => undefined;
+		try {
+			for (const action of ['Open Message', 'Show Agent']) {
+				const editor = fakeEditor({ openTextDocument: () => Promise.reject(new Error('cannot open')) });
+				editor.choose(action);
+				const port = new editor.contact.WindowContact(() => Promise.reject(new Error('cannot show')), 'en');
+				const message = record(12, { from: ada, to: { run: '@human' }, text: 'Please review the plan.' }, T);
+				port.contact(message, () => message);
+				await flush();
+				await flush();
+				port.dispose();
+			}
+		} finally {
+			console.error = errors;
+			process.off('unhandledRejection', onUnhandled);
+		}
+		assert.deepStrictEqual(unhandled, []);
 	});
 
 	test('#human: Open Message looks the message up by its ID, however many came since; one no longer kept says so', async () => {

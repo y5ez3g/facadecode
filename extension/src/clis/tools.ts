@@ -18,6 +18,13 @@ export interface Capability {
 /** The server's name in every CLI's configuration, and the skill's (MCP-6.1, D50). */
 export const SERVER_NAME = 'facade';
 
+/**
+ * How long a CLI that times its MCP calls lets one of Facade's run, in seconds: the longest wait for a start or a stop MCP-1.3
+ * allows, `facade.collaboration.waitSeconds` at 3600, and a minute for the call's own route and answer, so that the CLI never
+ * gives up on a call Facade is still answering within its wait.
+ */
+export const MOST_CALL_SECONDS = 3_660;
+
 /** An MCP stdio server as a CLI's configuration names it: the window's McpServerLaunch, as plain data here. */
 export interface McpServer {
 	readonly command: string;

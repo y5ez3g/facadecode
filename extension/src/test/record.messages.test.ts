@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { AliasCounter } from '../record/aliases';
 import { MESSAGE_RETENTION_MS, MessageCounter, MessageFile } from '../record/messages';
 import { pruneResults, resultsFolder, writeResult } from '../record/results';
 import { tempDir } from './util';
@@ -90,12 +91,29 @@ suite('Message records in the Facade directory (RULES-1.1, 5.3, COLLABORATION-3.
 		const file = path.join(home, 'message-aliases.json');
 		for (const content of ['{"last":', '{"last":"7"}', '[]']) {
 			fs.writeFileSync(file, content);
-			assert.throws(() => counter.next(), /does not hold a message number/, content);
+			assert.throws(() => counter.next(), /does not hold a number; Facade gives no message number it may have given before/, content);
 		}
 		assert.strictEqual(fs.readFileSync(file, 'utf8'), '[]', 'nothing written over what could not be read');
 		fs.rmSync(file);
 		fs.mkdirSync(file);
 		assert.throws(() => counter.next(), /cannot be read/);
+	});
+
+	test('agent aliases: one counter for the environment; a counter that cannot be read stops them, never counting from #a1 again (RULES-2.2)', () => {
+		const first = new AliasCounter(home);
+		assert.deepStrictEqual([first.next(), new AliasCounter(home).next(), first.next()], ['#a1', '#a2', '#a3']);
+		const file = path.join(home, 'agent-aliases.json');
+		for (const content of ['{"last":', '{"last":"7"}', '{"last":-2}', '[]', 'null']) {
+			fs.writeFileSync(file, content);
+			assert.throws(() => first.next(), /does not hold a number; Facade gives no agent number it may have given before/, content);
+			assert.strictEqual(fs.readFileSync(file, 'utf8'), content, 'nothing written over what could not be read');
+		}
+		fs.rmSync(file);
+		fs.mkdirSync(file);
+		assert.throws(() => first.next(), /cannot be read/);
+		fs.rmSync(file, { recursive: true });
+		fs.writeFileSync(file, '{"last":41}');
+		assert.strictEqual(first.next(), '#a42');
 	});
 
 	test('a new record is never written over one of its ID', () => {

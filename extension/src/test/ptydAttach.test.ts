@@ -148,3 +148,39 @@ suite('ptyd: bounded scrollback and buffers (ARCHITECTURE-2.4)', () => {
 		}
 	});
 });
+
+suite('ptyd: what waits for the screen to be drawn waits on real writes alone', () => {
+
+	test('a terminal that drops an empty write and its callback - as a later xterm does - still draws reads, snapshots and the exit', async () => {
+		const params: SpawnParams = { run: 'r1', owner: 'w1', file: 'unused', args: [], cwd: '/', env: {}, cols: 80, rows: 24, meta: {} };
+		let output!: (data: string) => void;
+		let end!: (exit: { exitCode: number }) => void;
+		const pty = { pid: 1, onData: (listener: typeof output) => { output = listener; }, onExit: (listener: typeof end) => { end = listener; }, write() { }, resize() { }, kill() { }, pause() { }, resume() { } };
+		class Dropping extends Terminal {
+			override write(data: string | Uint8Array, callback?: () => void): void {
+				if (data.length) {
+					super.write(data, callback);
+				}
+			}
+		}
+		const { Run } = withModules({ 'node-pty': { spawn: () => pty }, '@xterm/headless': { Terminal: Dropping } })<typeof import('../ptyd/run')>(require.resolve('../ptyd/run'));
+		const run = new Run(params);
+		const within = <T>(what: string, promise: Promise<T>) => Promise.race([promise, new Promise<never>((_, reject) => setTimeout(() => reject(new Error(`${what} never came`)), 2_000))]);
+		try {
+			// Nothing written yet: at once
+			assert.deepStrictEqual((await within('the first read', run.read(5))).text, []);
+			output('hello\r\n');
+			output('world');
+			assert.deepStrictEqual((await within('a read after output', run.read(5))).text, ['hello', 'world']);
+			assert.strictEqual((await within('the snapshot', run.snapshot())).seq, 2);
+			assert.strictEqual((await within('an inspection', run.inspect('claude-frame'))).state, 'unknown');
+			const told = new Promise<number>(resolve => run.onExit(exit => resolve(exit.exitCode)));
+			output('bye');
+			end({ exitCode: 3 });
+			assert.strictEqual(await within('its exit', told), 3);
+			assert.deepStrictEqual((await within('its final screen', run.read(5))).text, ['hello', 'worldbye']);
+		} finally {
+			run.dispose();
+		}
+	});
+});

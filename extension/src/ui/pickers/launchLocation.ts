@@ -2,13 +2,10 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as path from 'path';
 import * as vscode from 'vscode';
-import { homeRelative } from '../../base/files';
 import { messageOf } from '../../base/errors';
 import type { Catalog, Location, LocationPort, LogPort, WorkspaceFolderInfo } from '../../core/ports';
-import { plainText } from '../presentation';
-import { folderIconOf, inStepOrder, locationIcon, locationsIn } from './location';
+import { catalogStep, folderRow, inStepOrder, locationRow, locationsIn } from './location';
 import { BACK, Flow } from './stepping';
 
 /** An item: the location it chooses - a folder's own row choosing its only one - else the folder whose own step it opens. */
@@ -20,14 +17,9 @@ function keyOf(item: Item): string | undefined {
 	return item.folder ? `folder:${item.folder.uri}` : item.location && `location:${item.location.id}`;
 }
 
-/** A location by its label, its path from the home folder beside it - searched too. */
-function locationItem(location: Location): Item {
-	return { label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location };
-}
-
 /** The locations of `folder`, main checkout first, then the folder's opened location (WORKTREES-1.2). */
 function folderItems(catalog: Catalog, folder: WorkspaceFolderInfo): Item[] {
-	return inStepOrder(locationsIn(catalog, folder), folder).map(locationItem);
+	return inStepOrder(locationsIn(catalog, folder), folder).map(locationRow);
 }
 
 /**
@@ -44,7 +36,7 @@ function firstItems(catalog: Catalog): Item[] {
 		if (!here.length) {
 			return [];
 		}
-		return [{ label: plainText(folder.name), description: plainText(homeRelative(path.dirname(folder.path))), iconPath: folderIconOf(catalog, folder), folder, ...here.length === 1 ? { location: here[0] } : {} }];
+		return [{ ...folderRow(catalog, folder), ...here.length === 1 ? { location: here[0] } : {} }];
 	});
 }
 
@@ -52,35 +44,9 @@ function firstPlaceholder(catalog: Catalog): string {
 	return catalog.folders.length > 1 ? vscode.l10n.t("Select a folder") : vscode.l10n.t("Select a working location");
 }
 
-/**
- * One step: busy while the locations are first read, its items and hint read again as they change - the item under the cursor
- * staying under it where it still is.
- */
-async function step(flow: Flow, locations: Locations, title: string, placeholderOf: (catalog: Catalog) => string, itemsOf: (catalog: Catalog) => Item[], at: string | undefined, back: boolean): Promise<Item | typeof BACK | undefined> {
-	const catalog = locations.snapshot();
-	const items = itemsOf(catalog);
-	const picked = await flow.pick<Item>({
-		title,
-		placeholder: placeholderOf(catalog),
-		items,
-		active: items.find(item => at !== undefined && keyOf(item) === at),
-		back,
-		busy: catalog.pending,
-		matchOnDescription: true,
-		live: picker => locations.onDidChange(() => {
-			const active = picker.activeItems.at(0);
-			const now = locations.snapshot();
-			const next = itemsOf(now);
-			const still = active && next.find(item => keyOf(item) === keyOf(active));
-			picker.items = next;
-			picker.placeholder = placeholderOf(now);
-			picker.busy = now.pending;
-			if (still) {
-				picker.activeItems = [still];
-			}
-		})
-	});
-	return picked === undefined || picked === BACK ? picked : picked.item;
+/** One step, as the catalog is now and changes (WORKTREES-1.3): the item under the cursor stays under it where it still is. */
+function step(flow: Flow, locations: Locations, title: string, placeholderOf: (catalog: Catalog) => string, itemsOf: (catalog: Catalog) => Item[], at: string | undefined, back: boolean): Promise<Item | typeof BACK | undefined> {
+	return catalogStep(flow, locations, { title, placeholderOf, itemsOf, keyOf, ...at !== undefined ? { at } : {}, back, matchOnDescription: true });
 }
 
 /**

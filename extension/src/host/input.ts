@@ -5,6 +5,7 @@
 import { timeout } from '../base/async';
 import { monotonic } from '../base/clock';
 import { messageOf } from '../base/errors';
+import { FacadeError } from '../core/errors';
 import type { InputEffects, InputPort, Submission } from '../core/messagePorts';
 import type { CapabilityState, LaunchPlan, RunFacts, RunId } from '../core/ports';
 import { PtydNotSent } from './execution/ptydClient';
@@ -24,6 +25,12 @@ const TAKEN_MS = 3_000;
 const PASTE_BYTES_PER_MS: { readonly win32: number; readonly other: number } = { win32: 64, other: 4096 };
 /** How long more a CLI's input needs for each line of a paste before Enter: Antigravity expands a long paste over seconds (D105). */
 const LINE_SETTLE_MS: { readonly [adapter: string]: number } = { 'agy-frame': 45 };
+/**
+ * How long more a CLI needs for each character of a paste where it reads its input one key at a time: Codex on Windows reads console
+ * input records, not a bracketed paste, which Orca measured at 21.1 s for 9,249 characters and gives 3 ms each. A character is a
+ * UTF-16 code unit there, one key event each (D105).
+ */
+const CHAR_SETTLE_MS: { readonly [adapter: string]: { readonly [platform: string]: number } } = { 'codex-prompt': { win32: 3 } };
 /** How long type_text's Enter waits after its text at least, so that its CLI reads them apart (MCP-5.2, D113). */
 const DIRECT_ENTER_MS = 100;
 
@@ -137,10 +144,13 @@ export class OrdinaryInput implements InputPort {
 		});
 	}
 
-	/** How much longer than usual a paste of `text` takes to show and be taken in `run`'s CLI: twice its size's time, and its lines (D105, D118). */
+	/**
+	 * How much longer than usual a paste of `text` takes to show and be taken in `run`'s CLI: twice its size's time, Antigravity's lines
+	 * and the characters of a CLI that reads them one at a time (D105, D118).
+	 */
 	pasteTime(run: RunId, text: string): number {
 		const adapter = this.adapterOf(run);
-		return 2 * this.pasteMs(text) + (adapter ? (LINE_SETTLE_MS[adapter] ?? 0) * text.split(/\r\n|\r|\n/u).length : 0);
+		return 2 * this.pasteMs(text) + this.linesMs(adapter, text) + this.charactersMs(adapter, text);
 	}
 
 	/**
@@ -276,8 +286,9 @@ export class OrdinaryInput implements InputPort {
 		if (pasted.outcome !== 'applied') {
 			return { effects: pasted.outcome === 'partial' ? { outcome: 'partial', text_written: 'partial', enter_written: false } : NOTHING, shown: false };
 		}
-		// The whole text is in the terminal: Enter goes only once the CLI shows it as the input's own draft, alone (RULES-1.6)
-		const showMs = DRAFT_MS + this.pasteMs(text);
+		// The whole text is in the terminal: Enter goes only once the CLI shows it as the input's own draft, alone (RULES-1.6) - one that
+		// reads it a key at a time drawing it as it reads (D105)
+		const showMs = DRAFT_MS + this.pasteMs(text) + this.charactersMs(adapter, text);
 		let seen: string | undefined;
 		const shows = (reading: InputReading) => {
 			if (!holds(reading, text, adapter, typed)) {
@@ -298,7 +309,7 @@ export class OrdinaryInput implements InputPort {
 	 * on to empty: a confirmed submission, else what went in.
 	 */
 	private async enterNow(run: RunId, adapter: string, text: string, signal: AbortSignal | undefined): Promise<InputEffects> {
-		const settle = (LINE_SETTLE_MS[adapter] ?? 0) * text.split(/\r\n|\r|\n/u).length;
+		const settle = this.linesMs(adapter, text);
 		if (settle > 0) {
 			try {
 				await this.wait(settle, signal);
@@ -335,14 +346,14 @@ export class OrdinaryInput implements InputPort {
 	 */
 	async typeDirect(run: RunId, text: string, enter: boolean): Promise<InputEffect> {
 		if (!enter || !text) {
-			return this.deps.typeText(run, text, enter);
+			return this.deps.typeText(run, text, enter).catch(refusedUnsent);
 		}
-		const typed = await this.deps.typeText(run, text, false);
+		const typed = await this.deps.typeText(run, text, false).catch(refusedUnsent);
 		if (typed.outcome !== 'applied') {
 			return typed;
 		}
 		const adapter = this.adapterOf(run);
-		await this.wait(DIRECT_ENTER_MS + this.pasteMs(text) + (adapter ? (LINE_SETTLE_MS[adapter] ?? 0) * text.split(/\r\n|\r|\n/u).length : 0), undefined);
+		await this.wait(DIRECT_ENTER_MS + this.pasteMs(text) + this.linesMs(adapter, text) + this.charactersMs(adapter, text), undefined);
 		let entered: InputEffect;
 		try {
 			entered = await this.deps.typeText(run, '', true);
@@ -355,10 +366,25 @@ export class OrdinaryInput implements InputPort {
 		return entered.outcome === 'applied' ? { outcome: 'applied', pasted: true, entered: true } : { outcome: 'partial', ...entered.reason ? { reason: entered.reason } : {}, pasted: true, entered: false };
 	}
 
+	/** press_keys' keys (MCP-5.2): refused with no effect where ptyd was never given them. */
+	pressDirect(run: RunId, keys: readonly string[]): Promise<InputEffect> {
+		return this.deps.pressKeys(run, keys).catch(refusedUnsent);
+	}
+
 	/** The time this platform's terminal takes to take in a paste of `text`, in whole tenths of a second (D105). */
 	private pasteMs(text: string): number {
 		const rate = this.platform === 'win32' ? PASTE_BYTES_PER_MS.win32 : PASTE_BYTES_PER_MS.other;
 		return Math.floor(Buffer.byteLength(text, 'utf8') / rate / 100) * 100;
+	}
+
+	/** The time the CLI of the reader `adapter` needs for the lines of a paste of `text` before its Enter: Antigravity's (D105). */
+	private linesMs(adapter: string | undefined, text: string): number {
+		return adapter ? (LINE_SETTLE_MS[adapter] ?? 0) * text.split(/\r\n|\r|\n/u).length : 0;
+	}
+
+	/** The time the CLI of the reader `adapter` needs on this platform to read a paste of `text` a key at a time: Codex on Windows (D105). */
+	private charactersMs(adapter: string | undefined, text: string): number {
+		return adapter ? (CHAR_SETTLE_MS[adapter]?.[this.platform] ?? 0) * text.length : 0;
 	}
 
 	/** Whether `run`'s input reads as `test` wants within `ms`, read every {@link POLL_MS}; false once `signal` aborts. */
@@ -401,4 +427,12 @@ export class OrdinaryInput implements InputPort {
 	private log(run: RunId, text: string): void {
 		this.deps.log?.(`Message input of ${this.deps.get(run)?.alias ?? run}: ${text}`);
 	}
+}
+
+/**
+ * Direct input that ptyd was never given - it cannot be reached, or the run's runtime takes no MCP input (D120) - went nowhere: a
+ * refusal with no effect, never input of unknown effect (MCP-1.2).
+ */
+function refusedUnsent(err: unknown): never {
+	throw err instanceof PtydNotSent ? new FacadeError('UNAVAILABLE', 'unavailable', messageOf(err)) : err;
 }

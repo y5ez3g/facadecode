@@ -243,7 +243,14 @@ export class AgentTerminals implements vscode.Disposable {
 		let finished = false;
 		let cancelOpen: (() => void) | undefined;
 		try {
-			const result = await request({ ...owner, kind: 'begin', run: pair.run });
+			let result = await request({ ...owner, kind: 'begin', run: pair.run });
+			if (result === false && current()) {
+				// A window component that started again - its extension host restarted while this one went on - knows no owner: told
+				// this activation's claim again, it registers this activation's terminals from now on (ARCHITECTURE-2.2)
+				if (await request({ ...owner, kind: 'activate' }) === true && current()) {
+					result = await request({ ...owner, kind: 'begin', run: pair.run });
+				}
+			}
 			if (typeof result === 'string') { ticket = result; }
 			if (!current()) { return; }
 			if (!ticket) {

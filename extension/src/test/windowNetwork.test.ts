@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as net from 'net';
 import * as path from 'path';
 import { WINDOW_NETWORK_PROTOCOL, type DirectoryAgent, type ServedRoute } from '../base/windowNetwork';
-import { NotServed, windowAddress, WindowNetwork, windowSocketPath } from '../host/windowNetwork';
+import { NotServed, windowAddress, WindowNetwork, type WindowNetworkOptions, windowSocketPath } from '../host/windowNetwork';
 import { registerWindow, registryOf } from '../record/windowRegistry';
 import { tempDir } from './util';
 
@@ -35,11 +35,90 @@ suite('Window network: window components register and carry requests between win
 	});
 
 	/** A window component of `token`, labeled `label`, serving with `serve`. */
-	function windowOf(token: string, label: string, serve: (request: ServedRoute) => Promise<unknown>, environment = 'local'): WindowNetwork {
-		const network = new WindowNetwork({ home: home.dir, token, label: () => label, environment, serve, log: line => logs.push(line) });
+	function windowOf(token: string, label: string, serve: (request: ServedRoute) => Promise<unknown>, environment = 'local', more: Partial<WindowNetworkOptions> = {}): WindowNetwork {
+		const network = new WindowNetwork({ home: home.dir, token, label: () => label, environment, serve, log: line => logs.push(line), ...more });
 		networks.push(network);
 		return network;
 	}
+
+	const entryOf = (window: string) => path.join(registryOf(home.dir), `${window}.json`);
+
+	test('a component starting while its window\'s previous start still listens has a socket of its own; the previous start, ending late, removes neither its successor\'s entry nor its socket (ARCHITECTURE-2.1)', async () => {
+		const caller = windowOf(TOKEN_A, 'Caller', async () => undefined);
+		await caller.start();
+		const previous = windowOf(TOKEN_B, 'Backend', async () => 'previous');
+		await previous.start();
+		const next = windowOf(TOKEN_B, 'Backend', async () => 'next');
+		await next.start();
+		assert.notStrictEqual(next.socketPath, previous.socketPath);
+		next.publish([AGENT], 'Backend');
+		previous.dispose();
+		assert.ok(fs.existsSync(entryOf(next.window)), 'the successor\'s entry stays');
+		assert.deepStrictEqual(await caller.route({ to: next.window, op: 'summary', args: {}, deadlineMs: 5_000 }), { ok: true, result: 'next' });
+		assert.deepStrictEqual(caller.directory().windows.find(each => each.window === next.window)?.agents, [AGENT]);
+		next.dispose();
+		assert.ok(!fs.existsSync(entryOf(next.window)), 'a start removes its own entry as it ends');
+	});
+
+	test('a component that cannot listen registers nothing, says why, and listens and registers once it can (ARCHITECTURE-2.1)', async function () {
+		this.timeout(10_000);
+		const caller = windowOf(TOKEN_A, 'Caller', async () => undefined);
+		await caller.start();
+		const blocked = windowOf(TOKEN_B, 'Backend', async () => 'reached', 'local', { retryMs: 100 });
+		// Something holds its socket's place now, as nothing should, and its listen fails: another listener of its Windows pipe; on
+		// POSIX, where a socket file left there is replaced, a folder in its place
+		let release: () => Promise<void>;
+		if (process.platform === 'win32') {
+			const squatter = net.createServer(socket => socket.destroy());
+			await new Promise<void>((resolve, reject) => { squatter.once('error', reject); squatter.listen(blocked.socketPath, resolve); });
+			release = () => new Promise<void>(resolve => squatter.close(() => resolve()));
+		} else {
+			fs.mkdirSync(blocked.socketPath, { recursive: true });
+			release = async () => fs.rmdirSync(blocked.socketPath);
+		}
+		await assert.rejects(blocked.start());
+		blocked.publish([AGENT], 'Backend');
+		assert.ok(!fs.existsSync(entryOf(blocked.window)), 'no entry names a socket it does not listen on');
+		assert.deepStrictEqual(blocked.status().listening, false);
+		assert.ok(blocked.status().problem);
+		assert.strictEqual(logs.filter(line => /cannot reach this window/.test(line)).length, 1);
+		await release();
+		const deadline = Date.now() + 5_000;
+		while (!blocked.status().listening) {
+			assert.ok(Date.now() < deadline, 'it listens again once it can');
+			await new Promise(resolve => setTimeout(resolve, 50));
+		}
+		assert.deepStrictEqual(await caller.route({ to: blocked.window, op: 'summary', args: {}, deadlineMs: 5_000 }), { ok: true, result: 'reached' });
+		assert.deepStrictEqual(caller.directory().windows.find(each => each.window === blocked.window)?.agents, [AGENT]);
+	});
+
+	test('an entry whose process id another program has now - its window gone without saying so - is removed as its start is checked (ARCHITECTURE-1.1)', async () => {
+		const reused = (_pid: number, recorded: number) => Promise.resolve(recorded + 60_000);
+		const a = windowOf(TOKEN_A, 'Design', async () => undefined, 'local', { startOf: reused });
+		await a.start();
+		const ghost = windowAddress(TOKEN_B);
+		registerWindow(home.dir, { protocol: WINDOW_NETWORK_PROTOCOL, window: ghost, socket: windowSocketPath(home.dir, ghost, 'gone'), pid: process.pid, started: 1, incarnation: 'gone', label: 'Ghost', environment: 'local', agents: [AGENT], updatedAt: 1 });
+		assert.ok(a.directory().windows.some(each => each.window === ghost), 'listed until its start is checked');
+		for (const deadline = Date.now() + 2_000; fs.existsSync(entryOf(ghost)) && Date.now() < deadline;) {
+			await new Promise(resolve => setTimeout(resolve, 20));
+		}
+		assert.deepStrictEqual(a.directory().windows.map(each => each.window), [a.window]);
+		assert.ok(!fs.existsSync(entryOf(ghost)));
+	});
+
+	test('a live window whose start the system reads otherwise - a clock step, a start read to the second - is kept, with its socket (ARCHITECTURE-1.1)', async () => {
+		const skewed = (_pid: number, recorded: number) => Promise.resolve(recorded + 60_000);
+		const a = windowOf(TOKEN_A, 'Design', async () => undefined, 'local', { startOf: skewed });
+		await a.start();
+		const b = windowOf(TOKEN_B, 'Backend', async () => 'reached');
+		await b.start();
+		assert.ok(a.directory().windows.some(each => each.window === b.window));
+		// Its start is checked, and found other than it said: its socket still answers, so it stays
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.ok(fs.existsSync(entryOf(b.window)), 'the entry of a window that still listens stays');
+		assert.ok(a.directory().windows.some(each => each.window === b.window));
+		assert.deepStrictEqual(await a.route({ to: b.window, op: 'summary', args: {}, deadlineMs: 5_000 }), { ok: true, result: 'reached' });
+	});
 
 	test('an address is the same for a token every time, another token\'s another, and tells nothing of the token', () => {
 		assert.strictEqual(windowAddress(TOKEN_A), windowAddress(TOKEN_A));
@@ -70,7 +149,7 @@ suite('Window network: window components register and carry requests between win
 		assert.deepStrictEqual(fromA.unavailable, []);
 		assert.deepStrictEqual(b.directory().windows.map(each => each.window), [b.window, a.window]);
 		if (process.platform !== 'win32') {
-			const socket = windowSocketPath(home.dir, a.window);
+			const socket = a.socketPath;
 			assert.strictEqual(fs.statSync(socket).mode & 0o777, 0o600, 'the socket is the person\'s alone');
 			assert.strictEqual(fs.statSync(path.dirname(socket)).mode & 0o077, 0, 'in a folder that is the person\'s alone');
 		}
@@ -136,13 +215,16 @@ suite('Window network: window components register and carry requests between win
 		assert.deepStrictEqual([response.ok, !response.ok && response.reason, !response.ok && response.effects], [false, 'window_unavailable', 'none']);
 	});
 
-	test('a registered window nobody answers for - its component gone without unregistering - cannot be reached; nothing was done there', async () => {
+	test('a registered window nobody answers for - its component gone without unregistering - cannot be reached; nothing was done there, and its entry goes (ARCHITECTURE-1.1)', async () => {
 		const a = windowOf(TOKEN_A, 'Design', async () => undefined);
 		await a.start();
 		const ghost = windowAddress(TOKEN_B);
-		registerWindow(home.dir, { protocol: WINDOW_NETWORK_PROTOCOL, window: ghost, socket: windowSocketPath(home.dir, ghost), pid: process.pid, label: 'Ghost', environment: 'local', agents: [], updatedAt: 1 });
+		// Its process id given to another process since: alive, but no window
+		registerWindow(home.dir, { protocol: WINDOW_NETWORK_PROTOCOL, window: ghost, socket: windowSocketPath(home.dir, ghost), pid: process.pid, label: 'Ghost', environment: 'local', agents: [AGENT], updatedAt: 1 });
 		const response = await a.route({ to: ghost, op: 'call', args: {}, deadlineMs: 5_000 });
 		assert.deepStrictEqual([response.ok, !response.ok && response.reason, !response.ok && response.effects], [false, 'window_unavailable', 'none']);
+		assert.ok(!fs.existsSync(entryOf(ghost)), 'the entry of a window nothing answers for is removed');
+		assert.deepStrictEqual(a.directory().windows.map(each => each.window), [a.window], 'its agents are not resolved any more');
 	});
 
 	test('a window of another network protocol is listed as unavailable, and a route to it is refused with no effect', async () => {
@@ -216,7 +298,7 @@ suite('Window network: window components register and carry requests between win
 		const served: ServedRoute[] = [];
 		const b = windowOf(TOKEN_B, 'Backend', async request => { served.push(request); return 'served'; });
 		await b.start();
-		const socket = net.connect(windowSocketPath(home.dir, b.window));
+		const socket = net.connect(b.socketPath);
 		await new Promise<void>((resolve, reject) => { socket.once('connect', () => resolve()); socket.once('error', reject); });
 		const answers: unknown[] = [];
 		let buffer = '';

@@ -8,9 +8,11 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { performance } from 'perf_hooks';
-import { messageOf } from '../base/errors';
+import { provesAbsent } from '../base/connect';
+import { codeOf, messageOf } from '../base/errors';
+import { lineReader } from '../base/lines';
 import { isAgentKey } from './keys';
-import { CallEvent, CallRefusal, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
+import { CallEvent, CallRefusal, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
 import { OwnerClaims, type OwnerClock } from './ownership';
 import { MOST_RUN_BUFFER, Run, RunListener } from './run';
 import { ensurePtydSocket } from './socket';
@@ -188,10 +190,10 @@ interface PendingCall {
 	readonly receivedAt: number;
 	/** The window it was given to; none while it waits for one. */
 	window?: Connection;
-	/** Until a window claims its run. */
+	/** Whether it is a query, which has its route deadline for a window's answer, waiting for a claim as well (MCP-1.3). */
+	readonly query: boolean;
+	/** Its one deadline: a call's two seconds for a window to claim its run, a query's route deadline for its answer. */
 	timer?: ReturnType<typeof setTimeout>;
-	/** Until a query's route deadline. */
-	routeTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -210,6 +212,8 @@ export class PtydServer {
 	private readonly claims = new Map<Run, Connection>();
 	private readonly connections = new Set<Connection>();
 	private server: net.Server | undefined;
+	/** The socket this ptyd made at its path, on Unix: the one it may remove as it closes, never one another ptyd made there later. */
+	private made: Identity | undefined;
 	private idleTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly owners: OwnerClaims<Connection>;
 	private closing = false;
@@ -234,13 +238,14 @@ export class PtydServer {
 	}
 
 	/**
-	 * Listens on the socket; resolves false where another ptyd answers there already - it serves the windows, and this one goes.
-	 * A socket file nobody answers on is a ptyd that died, and is taken over.
+	 * Listens on the socket; resolves false where another ptyd answers there already - it serves the windows, and this one goes - or
+	 * may: one too busy to answer at once still holds its runs, and only a socket proven gone, refused or absent, is taken over: a
+	 * ptyd that died.
 	 */
 	async listen(): Promise<boolean> {
 		ensurePtydSocket(this.socketPath);
 		// Two windows opening at once may each start a ptyd: the one that takes the lock listens, and the other goes
-		if (await answers(this.socketPath) || !takeLock(this.lockPath)) {
+		if (await probe(this.socketPath) !== 'gone' || !takeLock(this.lockPath)) {
 			return false;
 		}
 		if (process.platform !== 'win32') {
@@ -256,6 +261,7 @@ export class PtydServer {
 		});
 		if (process.platform !== 'win32') {
 			fs.chmodSync(this.socketPath, 0o600);
+			this.made = identityOf(this.socketPath);
 		}
 		this.scheduleIdleExit();
 		return true;
@@ -272,7 +278,6 @@ export class PtydServer {
 		releaseLock(this.lockPath);
 		for (const pending of this.calls.values()) {
 			clearTimeout(pending.timer);
-			clearTimeout(pending.routeTimer);
 		}
 		this.calls.clear();
 		for (const run of this.runs.values()) {
@@ -282,7 +287,13 @@ export class PtydServer {
 		for (const connection of this.connections) {
 			connection.socket.destroy();
 		}
-		this.server?.close();
+		// Closing a Unix socket's server removes whatever is at its path by then: a socket another ptyd made there, once this one's
+		// was taken for gone, is never removed - the server is let go of with the process instead
+		if (process.platform === 'win32' || (this.made && sameIdentity(identityOf(this.socketPath), this.made))) {
+			this.server?.close();
+		} else {
+			this.server?.unref();
+		}
 	}
 
 	private connected(socket: net.Socket): void {
@@ -458,9 +469,8 @@ export class PtydServer {
 				try {
 					await run.started();
 				} catch (err) {
-					// A program that never started is no run: the spawn fails, as it did when node-pty threw at once
-					this.runs.delete(run.id);
-					run.dispose();
+					// A program that never started is no run: the spawn fails, as it did when node-pty threw at once, and its claim goes too
+					this.drop(run);
 					throw err;
 				}
 				this.log(`Started run ${run.id} (${spawn.file}) in ${spawn.cwd}, pid ${run.info(false).pid}.`);
@@ -480,6 +490,10 @@ export class PtydServer {
 					throw new Error(`Run ${run.id} is claimed by another connected window.`);
 				}
 				this.claim(run, connection);
+				// A shim that went while no window claimed the run: what the window kept of its tools is told gone (RULES-3.1)
+				if (!this.shims.get(run.id)?.size) {
+					connection.send({ event: 'toolsGone', run: run.id });
+				}
 				// Its calls wait until the window was answered that the run is its: it knows the caller when they come (RULES-1.9, 4.1)
 				this.attaching.add(run);
 				try {
@@ -515,6 +529,11 @@ export class PtydServer {
 				if (typeof text !== 'string') {
 					throw new Error('Text to type must be a string.');
 				}
+				// A paste's end and an Enter read together may lose the Enter, as Claude Code does: its Enter goes in a request of its own,
+				// once the CLI can have read the text (MCP-5.2, D113)
+				if (text && enter) {
+					throw new Error('Text and its Enter are typed in two requests: the Enter once the CLI can have read the text.');
+				}
 				// A lead is typed as it is: words alone, nothing a terminal would act on
 				// eslint-disable-next-line no-control-regex
 				if (lead !== undefined && (typeof lead !== 'string' || /[\u0000-\u001f\u007f-\u009f]/.test(lead))) {
@@ -548,8 +567,7 @@ export class PtydServer {
 				if (run) {
 					this.owners.assert(run.params.owner, connection);
 					// An accepted close precedes any later takeover. Its successor must not reattach a process already closing.
-					run.removed = true;
-					this.refuseWaiting(run.id);
+					this.remove(run);
 				}
 				// One ptyd no longer has ended and was forgotten: there is nothing left of it to end
 				return run ? run.terminate(Math.max(0, graceMs)) : 'already_exited';
@@ -558,12 +576,7 @@ export class PtydServer {
 				const run = this.runs.get((params as Requests['forget']['params']).run);
 				if (run) {
 					this.owners.assert(run.params.owner, connection);
-					run.removed = true;
-					// No window will claim it again: what its shim waits for is refused now, not after the claim wait (MCP-1.2)
-					this.refuseWaiting(run.id);
-					if (run.hasExited) {
-						this.drop(run);
-					}
+					this.remove(run);
 				}
 				return undefined;
 			}
@@ -580,15 +593,25 @@ export class PtydServer {
 	private endOwner(owner: string, graceMs: number, reason: string): number {
 		const ending = [...this.runs.values()].filter(run => run.params.owner === owner);
 		for (const run of ending) {
-			run.removed = true;
 			this.log(`Ending run ${run.id}: ${reason}.`);
-			if (run.hasExited) {
-				this.drop(run);
-			} else {
+			this.remove(run);
+			if (!run.hasExited) {
 				void run.terminate(Math.max(0, graceMs));
 			}
 		}
 		return ending.length;
+	}
+
+	/**
+	 * No window shows `run` again: what its shim waits for is refused now, not after the claim wait (MCP-1.2), and it is let go of at
+	 * once where it ended, else as it ends - however it came to be removed.
+	 */
+	private remove(run: Run): void {
+		run.removed = true;
+		this.refuseWaiting(run.id);
+		if (run.hasExited) {
+			this.drop(run);
+		}
 	}
 
 	/** Lets go of a run no window shows again: ended, and removed. Its calls waiting for a window are refused. */
@@ -626,19 +649,26 @@ export class PtydServer {
 		}
 	}
 
+	/** `connection` is no shim of its run any more: where it was the run's last, the window that claims the run is told (RULES-3.1). */
 	private shimGone(connection: Connection): void {
 		const run = connection.shimRun;
 		const shims = run !== undefined ? this.shims.get(run) : undefined;
 		if (run !== undefined && shims?.delete(connection) && !shims.size) {
 			this.shims.delete(run);
+			const claimed = this.runs.get(run);
+			const claimant = claimed && this.claims.get(claimed);
+			if (claimant && !claimant.closed) {
+				claimant.send({ event: 'toolsGone', run });
+			}
 		}
 		connection.shimRun = undefined;
 	}
 
 	/**
 	 * A shim's call `request`, for the window that claims its caller: given to it at once, or - no window claiming the run, as while
-	 * one reloads - once one does, within the call's two seconds from the shim's ingress (RULES-1.2). The shim is answered that
-	 * window's answer as it comes, or why none came; a query once its route deadline passed without one (MCP-1.3).
+	 * one reloads - once one does, within the call's two seconds from the shim's ingress (RULES-1.2), or a query's route deadline
+	 * (ARCHITECTURE-2.3, MCP-1.3). The shim is answered that window's answer as it comes, or why none came; a query once its route
+	 * deadline passed without one.
 	 */
 	private call(call: ShimCall, shim: Connection, receivedAt: number, request: number): void {
 		if (shim.role !== 'shim') {
@@ -654,31 +684,30 @@ export class PtydServer {
 		if ([...this.calls.values()].filter(pending => pending.run === run.id).length >= MOST_RUN_CALLS) {
 			throw new CallRefused('capacity_exceeded', 'none', `${MOST_RUN_CALLS} tool calls of ${run.id} are under way already: this one had no effect.`);
 		}
-		const pending: PendingCall = { id: this.nextCall++, run: run.id, shim, request, call, receivedAt };
+		const routeDeadlineMs = typeof call.routeDeadlineMs === 'number' && Number.isFinite(call.routeDeadlineMs) ? call.routeDeadlineMs : undefined;
+		const pending: PendingCall = { id: this.nextCall++, run: run.id, shim, request, call, receivedAt, query: routeDeadlineMs !== undefined };
 		this.calls.set(pending.id, pending);
-		const spent = () => Math.max(0, call.elapsedMs) + performance.now() - receivedAt;
-		if (typeof call.routeDeadlineMs === 'number' && Number.isFinite(call.routeDeadlineMs)) {
-			const seconds = Math.round(call.routeDeadlineMs / 100) / 10;
-			const tool = typeof call.tool === 'string' ? call.tool : 'The query';
-			pending.routeTimer = setTimeout(() => this.refuse(pending, new CallRefused('window_unavailable', 'none',
-				`No Facade Code window answered ${tool} of ${run.id} within ${seconds} seconds: a query, it had no effect.`)), Math.max(0, call.routeDeadlineMs - spent()));
-		}
+		const spent = Math.max(0, call.elapsedMs) + performance.now() - receivedAt;
+		const tool = typeof call.tool === 'string' ? call.tool : 'The query';
+		const refusal = routeDeadlineMs !== undefined
+			? `No Facade Code window answered ${tool} of ${run.id} within ${Math.round(routeDeadlineMs / 100) / 10} seconds: a query, it had no effect.`
+			: `No Facade Code window holds ${run.id} now: the call had no effect.`;
+		pending.timer = setTimeout(() => this.refuse(pending, new CallRefused('window_unavailable', 'none', refusal)), Math.max(0, (routeDeadlineMs ?? CLAIM_WAIT_MS) - spent));
 		const claimant = this.claims.get(run);
 		if (claimant && !claimant.closed && !this.attaching.has(run)) {
 			this.forward(pending, claimant);
-			return;
 		}
-		pending.timer = setTimeout(() => {
-			if (!pending.window) {
-				this.refuse(pending, new CallRefused('window_unavailable', 'none', `No Facade Code window holds ${run.id} now: the call had no effect.`));
-			}
-		}, Math.max(0, CLAIM_WAIT_MS - spent()));
 	}
 
-	/** Gives `pending` to `window`, with the time it spent in ptyd added to how long it has been under way. */
+	/**
+	 * Gives `pending` to `window`, with the time it spent in ptyd added to how long it has been under way: a call no longer waits for
+	 * a deadline, a query still for its route's.
+	 */
 	private forward(pending: PendingCall, window: Connection): void {
-		clearTimeout(pending.timer);
-		pending.timer = undefined;
+		if (!pending.query) {
+			clearTimeout(pending.timer);
+			pending.timer = undefined;
+		}
 		pending.window = window;
 		const elapsedMs = pending.call.elapsedMs + Math.ceil(performance.now() - pending.receivedAt);
 		window.send({ event: 'call', id: pending.id, call: { ...pending.call, elapsedMs } });
@@ -687,7 +716,6 @@ export class PtydServer {
 	/** `pending` is answered or refused: ptyd keeps it no longer. */
 	private settle(pending: PendingCall): void {
 		clearTimeout(pending.timer);
-		clearTimeout(pending.routeTimer);
 		this.calls.delete(pending.id);
 	}
 
@@ -784,16 +812,42 @@ function isAlive(pid: number): boolean {
 	}
 }
 
-/** Whether something answers on the socket at `socketPath`. */
-function answers(socketPath: string): Promise<boolean> {
+/**
+ * What answers on the socket at `socketPath`: a connection proves a ptyd there, `alive`; what `provesAbsent` takes for nothing
+ * listening - no socket at all, or on POSIX a refusal - proves none, `gone`; a timeout or any other error proves nothing - a ptyd too
+ * busy to answer at once, say - and is `unknown`, never `gone`.
+ */
+export function probe(socketPath: string, ms = 1_000): Promise<'alive' | 'gone' | 'unknown'> {
 	return new Promise(resolve => {
 		const socket = net.connect(socketPath);
-		const done = (alive: boolean) => {
+		const done = (found: 'alive' | 'gone' | 'unknown') => {
+			clearTimeout(timer);
 			socket.destroy();
-			resolve(alive);
+			resolve(found);
 		};
-		socket.once('connect', () => done(true));
-		socket.once('error', () => done(false));
-		setTimeout(() => done(false), 1_000).unref();
+		socket.once('connect', () => done('alive'));
+		socket.once('error', err => done(provesAbsent(codeOf(err)) ? 'gone' : 'unknown'));
+		const timer = setTimeout(() => done('unknown'), ms);
+		timer.unref?.();
 	});
+}
+
+/** A file's identity: its device, inode and change time, which a socket made later at the same path does not share. */
+interface Identity {
+	readonly dev: number;
+	readonly ino: number;
+	readonly ctimeMs: number;
+}
+
+function identityOf(file: string): Identity | undefined {
+	try {
+		const { dev, ino, ctimeMs } = fs.statSync(file);
+		return { dev, ino, ctimeMs };
+	} catch {
+		return undefined;
+	}
+}
+
+function sameIdentity(found: Identity | undefined, made: Identity): boolean {
+	return !!found && found.dev === made.dev && found.ino === made.ino && found.ctimeMs === made.ctimeMs;
 }

@@ -8,6 +8,32 @@ import { TestEmitter, withModules } from './withModules';
 
 const LOCATION: Location = { id: 'loc-main', path: '/shop', uri: 'file:///shop', environment: 'local', label: 'main', folders: [{ index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' }], kind: 'checkout', opened: true, git: 'ok', branch: 'main' };
 const RUN = `run-${'3'.padStart(32, '0')}`;
+
+/** The editor's Quick Pick as Resume Agent drives it: what it shows, and whether it is up. */
+class FakePick {
+	title = '';
+	placeholder = '';
+	busy = false;
+	value = '';
+	matchOnDescription = false;
+	matchOnDetail = false;
+	items: readonly unknown[] = [];
+	activeItems: readonly unknown[] = [];
+	shown = false;
+	private readonly hidden = new TestEmitter<void>();
+	readonly onDidHide = this.hidden.event;
+	readonly onDidAccept = new TestEmitter<void>().event;
+	readonly onDidChangeValue = new TestEmitter<string>().event;
+	readonly onDidChangeActive = new TestEmitter<readonly unknown[]>().event;
+	show(): void { this.shown = true; }
+	hide(): void {
+		if (this.shown) {
+			this.shown = false;
+			this.hidden.fire();
+		}
+	}
+	dispose(): void { /* nothing held */ }
+}
 const FACTS: RunFacts = {
 	id: RUN, alias: '#a3', name: 'Ada Lovelace', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: LOCATION.id, cwd: '/shop', environment: 'local',
 	yolo: true, createdAt: 1, lifecycle: 'running', phase: 'running', pid: 7, startedAt: 2, activity: 'working', reporting: true,
@@ -24,11 +50,16 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let did: string[];
 	let activate: TestEmitter<string | undefined>;
 	let disposables: { dispose(): void }[];
+	/** What the locations' next read is; Quick Picks made; how many times the window's histories were opened. */
+	let refreshing: Promise<void>;
+	let pickers: FakePick[];
+	let opened: number;
 	const settle = () => new Promise(resolve => setImmediate(resolve));
 	const run = (id: string, arg?: unknown) => handlers.get(id)!(arg);
 
 	setup(async () => {
 		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; did = [];
+		refreshing = Promise.resolve(); pickers = []; opened = 0;
 		cleanup = 'terminated';
 		activate = new TestEmitter();
 		const none = { dispose: () => undefined };
@@ -40,7 +71,10 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 				registerCommand: (id: string, handler: (arg?: unknown) => unknown) => { handlers.set(id, handler); return none; },
 				executeCommand: async (...args: unknown[]) => void executed.push(args)
 			},
-			window: { registerWebviewViewProvider: () => none, withProgress: async (_: unknown, task: () => Promise<unknown>) => task() },
+			window: {
+				registerWebviewViewProvider: () => none, withProgress: async (_: unknown, task: () => Promise<unknown>) => task(),
+				createQuickPick: () => { const pick = new FakePick(); pickers.push(pick); return pick; }
+			},
 			workspace: { onDidChangeConfiguration: () => none, getConfiguration: () => ({ get: () => undefined }) },
 			ThemeIcon: class { constructor(readonly id: string) { } }
 		};
@@ -54,9 +88,10 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 				close: async id => { closed.push(id); runs.delete(id); return cleanup; }, rename: () => undefined
 			},
 			worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
+			conversations: { open: () => { opened++; return { next: async () => ({ entries: [], done: true }), dispose: () => undefined }; } },
 			locations: {
 				snapshot: () => ({ locations: [LOCATION], folders: LOCATION.folders, pending: false }), resolve: id => id === LOCATION.id ? LOCATION : undefined,
-				refresh: async () => undefined, onDidChange: changes.event, onDidRemove: changes.event, removalOf: () => undefined
+				refresh: () => refreshing, onDidChange: changes.event, onDidRemove: changes.event, removalOf: () => undefined
 			},
 			clis: { list: async () => ({ clis: [], problems: [] }) },
 			history: { last: () => ({}), remember: () => undefined },
@@ -104,6 +139,21 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 
 	test('notification navigation reveals the exact run and selects its card (UX-3.2)', async () => {
 		assert.deepStrictEqual([await run('facade.revealAgent', { run_id: RUN }), await run('facade.revealAgent', { run_id: `run-${'8'.padStart(32, '0')}` }), did], [true, false, [`reveal ${RUN}`]]);
+	});
+
+	test('UX-1.1, LIFECYCLE-3.2: Resume Agent shows its picker at once, busy, while the window\'s locations are read again; the histories open after, never before', async () => {
+		let finish!: () => void;
+		refreshing = new Promise<void>(resolve => { finish = resolve; });
+		const done = run('facade.history') as Promise<void>;
+		await settle();
+		const reading = [pickers.length, pickers[0]?.shown, pickers[0]?.busy, opened];
+		finish();
+		await settle();
+		await settle();
+		const read = [opened, pickers[0].busy, pickers[0].placeholder];
+		pickers[0].hide();
+		await done;
+		assert.deepStrictEqual([reading, read, errors], [[1, true, true, 0], [1, false, 'No saved conversations in this window\'s folders'], []]);
 	});
 
 	test('CLIS-1.1, UX-1.3: Configure Agents... opens the editor\'s Settings showing this extension\'s settings alone', async () => {

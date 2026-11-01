@@ -12,7 +12,7 @@ import { isDeletableWorktree, isWithin } from '../../core/locations/catalog';
 import { plannedDestination, whyNotFolderName } from '../../core/locations/destination';
 import { WorktreeProblem, WorktreeProblemError } from '../../core/locations/problems';
 import { Catalog, Location, LocationId, LogPort, WorkspaceFolderInfo, WorktreeError, WorktreePlan, WorktreePort } from '../../core/ports';
-import { Checkout, GitError, hasBranch, ListedWorktree, resolveCommit, whyNotBranchName } from './gitRead';
+import { Checkout, followsFolderLinks, GitError, hasBranch, ListedWorktree, resolveCommit, whyNotBranchName } from './gitRead';
 import { GitAccess } from './service';
 
 /** The editor's repository object for creating a worktree: the Git extension API's `Repository.createWorktree` (WORKTREES-4.1). */
@@ -37,12 +37,16 @@ export interface GitCreationSettings {
 	branchValidationRegex(folder: WorkspaceFolderInfo): string;
 }
 
-/** Git as worktrees are made and deleted with it: discovery's reads, and the two calls deletion makes (WORKTREES-3.2, 4.1). */
+/** Git as worktrees are made and deleted with it: discovery's reads, and the calls deletion makes (WORKTREES-3.2, 4.1). */
 export interface WorktreeGit extends GitAccess {
 	/** Whether `git status --porcelain` in the worktree at `folder` lists anything. */
 	hasChanges(git: string, folder: string): Promise<boolean>;
 	/** `git worktree remove` of `worktree`, without `--force`. */
 	removeWorktree(git: string, commonDir: string, worktree: string): Promise<void>;
+	/** What `git --version` answers: on Windows, whether Git would delete through a link to a folder. */
+	versionOf?(git: string): Promise<string>;
+	/** The first link to a folder within `folder`, as its path from it; undefined where there is none. */
+	folderLinkIn?(folder: string): Promise<string | undefined>;
 }
 
 /** The locations as worktree creation and deletion need them: the location service of this window. */
@@ -65,6 +69,8 @@ export interface WorktreeServiceDeps {
 	readonly log: LogPort;
 	/** How long a creation waits for another window creating in the same folder: 120 seconds where not given. */
 	readonly lockWaitMs?: number;
+	/** The platform Git runs on, this one's where not given: Git for Windows alone follows a junction as it deletes. */
+	readonly platform?: NodeJS.Platform;
 }
 
 /** What a creation is checked against, read from Git as it stands (WORKTREES-1.2: revalidated on use). */
@@ -174,15 +180,12 @@ export class WorktreeService implements WorktreePort {
 
 	/**
 	 * Deletes the linked worktree `id` (WORKTREES-3.2, D73), with the Git and in the environment its creation would use. Only a
-	 * registered worktree other than the main one, whose root it is and with no workspace folder in it, as Git and the window say now;
-	 * one with a change Git lists - not committed, or untracked - is refused before anything is touched. Then its agents close, their
-	 * processes ended, and `git worktree remove` runs without `--force`: Git's own refusal is reported as Git said it. The branch is
-	 * kept. The catalog is read again, which confirms the deletion (WORKTREES-1.3).
-	 */
-	/**
-	 * Deletes the linked worktree `id` (WORKTREES-3.2): refused with nothing touched where it is not deletable, locked, holds another
-	 * worktree or has changes; else out of the catalog while `closeAgents` closes its agents - true once every process is known to
-	 * have ended - then checked again, and removed by Git without `--force`.
+	 * registered worktree other than the main one, whose root it is and with no workspace folder in it, as Git and the window say now.
+	 * Refused with nothing touched where it is locked, holds another worktree, has a change Git lists - not committed, or untracked - or
+	 * holds a link to a folder this Git would delete through; else out of the catalog while `closeAgents` closes its agents - true once
+	 * every process is known to have ended - then checked again, and removed by `git worktree remove` without `--force`: Git's own
+	 * refusal is reported as Git said it, and so is a folder it left behind, which Facade never deletes itself. The branch is kept. The
+	 * catalog is read again, which confirms the deletion (WORKTREES-1.3).
 	 */
 	async remove(id: LocationId, closeAgents: () => Promise<boolean>): Promise<void> {
 		const location = this.deps.locations.resolve(id);
@@ -216,29 +219,57 @@ export class WorktreeService implements WorktreePort {
 		if (await this.gitRead({ location }, () => this.deps.git.hasChanges(git, location.path))) {
 			throw problemError({ kind: 'worktree_changed', name: location.label });
 		}
+		const followsLinks = await this.followsFolderLinks(git);
+		await this.refuseFolderLinks(followsLinks, location);
 		const release = this.deps.locations.markDeleting?.(id) ?? (() => undefined);
 		try {
 			if (!await closeAgents()) {
 				throw problemError({ kind: 'agents_not_ended', name: location.label });
 			}
-			// What its agents wrote as they ended is checked too: Git's own check may not see an untracked file
+			// What its agents wrote as they ended is checked too: Git's own check may not see an untracked file, nor a link at all
 			if (await this.gitRead({ location }, () => this.deps.git.hasChanges(git, location.path))) {
 				throw problemError({ kind: 'worktree_changed', name: location.label });
 			}
+			await this.refuseFolderLinks(followsLinks, location);
 			try {
 				await this.deps.git.removeWorktree(git, checkout.commonDir, worktree.path);
 			} catch (err) {
 				throw err instanceof GitError && err.missing ? problemError({ kind: 'git_missing' }) : problemError({ kind: 'deletion_failed', name: location.label, detail: messageOf(err) });
 			}
-			this.deps.log.event(`Deleted the worktree at ${worktree.path}${worktree.branch !== undefined ? `; its branch ${worktree.branch} is kept` : ''}`);
 			// Read again while it is still out of the catalog: it does not come back in between
 			try {
 				await this.deps.locations.refresh();
 			} catch (err) {
 				this.deps.log.event(`Could not read every working location after deleting ${worktree.path}: ${messageOf(err)}`);
 			}
+			// Git can succeed and leave the folder - a link it does not go through keeps it - which Facade does not delete itself
+			if (isOccupied(worktree.path)) {
+				this.deps.log.event(`Git removed the worktree at ${worktree.path} from its repository but left its folder behind`);
+				throw problemError({ kind: 'worktree_left', name: location.label, folder: worktree.path });
+			}
+			this.deps.log.event(`Deleted the worktree at ${worktree.path}${worktree.branch !== undefined ? `; its branch ${worktree.branch} is kept` : ''}`);
 		} finally {
 			release();
+		}
+	}
+
+	/**
+	 * Whether the Git deletion runs, `git`, deletes through a link to a folder: Git for Windows before 2.54 does; one whose version
+	 * cannot be read is taken to. Never elsewhere (WORKTREES-3.2).
+	 */
+	private async followsFolderLinks(git: string): Promise<boolean> {
+		const { versionOf, folderLinkIn } = this.deps.git;
+		if ((this.deps.platform ?? process.platform) !== 'win32' || !versionOf || !folderLinkIn) {
+			return false;
+		}
+		return followsFolderLinks(await versionOf(git).catch(() => undefined));
+	}
+
+	/** Refuses, with nothing touched, a worktree holding a link to a folder that this Git would delete through (WORKTREES-3.2). */
+	private async refuseFolderLinks(followsLinks: boolean, location: Location): Promise<void> {
+		const link = followsLinks ? await this.deps.git.folderLinkIn!(location.path) : undefined;
+		if (link !== undefined) {
+			throw problemError({ kind: 'worktree_linked', name: location.label, link });
 		}
 	}
 
@@ -365,6 +396,8 @@ function englishOf(problem: WorktreeProblem): [message: string, reason: string] 
 		case 'worktree_locked': return [`Worktree "${problem.name}" is locked, so it was not deleted. Unlock it with Git, then delete it again.`, 'worktree_locked'];
 		case 'worktree_nested': return [`Worktree "${problem.name}" holds worktree "${problem.nested}", so it was not deleted. Delete or move that worktree first, then delete it again.`, 'worktree_nested'];
 		case 'agents_not_ended': return [`Worktree "${problem.name}" was not deleted: an agent's process in it could not be confirmed to have ended. Delete it again once it has.`, 'agents_not_ended'];
+		case 'worktree_linked': return [`Worktree "${problem.name}" contains a link to another folder (${problem.link}), which this version of Git would delete through, so it was not deleted. Remove the link, or update Git to 2.54 or later, then delete it again.`, 'worktree_linked'];
+		case 'worktree_left': return [`Git removed worktree "${problem.name}" from its repository but left its folder ${problem.folder} behind.`, 'deletion_incomplete'];
 		case 'deletion_failed': return [`Could not delete worktree "${problem.name}": ${clauseOf(problem.detail)}.`, 'deletion_failed'];
 	}
 }

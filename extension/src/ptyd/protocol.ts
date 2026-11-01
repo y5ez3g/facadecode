@@ -180,11 +180,12 @@ export interface Requests {
 	resize: { params: { readonly run: string; readonly cols: number; readonly rows: number }; result: void };
 	/** The bottom `lines` lines of the run's screen, once what it wrote is drawn (MCP-5.1). */
 	read: { params: { readonly run: string; readonly lines: number }; result: ScreenRead };
-	/** Pastes text - bracketed where the program turned that mode on - then Enter if asked: in turn with other automated input. */
 	/**
-	 * Pastes `text`, then Enter where asked. `lead`, where given, is typed before the paste in the same write: words of the person's
-	 * own ahead of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1, D108). A
-	 * ptyd from before it takes no lead and pastes the text alone.
+	 * Pastes `text` - bracketed where the program turned that mode on - or presses Enter where asked, in turn with other automated
+	 * input: never both in one request, an Enter going in one of its own once the CLI can have read the text (MCP-5.2, D113); a ptyd
+	 * of protocol 9 still took both. `lead`, where given, is typed before the paste in the same write: words of the person's own ahead
+	 * of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1, D108). A ptyd from
+	 * before it takes no lead and pastes the text alone.
 	 */
 	type: { params: { readonly run: string; readonly text: string; readonly enter: boolean; readonly lead?: string }; result: InputEffect };
 	/** Presses keys by name, or printable characters, in order: in turn with other automated input. */
@@ -242,13 +243,18 @@ export interface OwnerEvent {
 	readonly owner: string;
 }
 
-/** What ptyd tells the connection that claims a run, as it happens: `tools` once the run's shim says hello (MCP-6.1). */
+/**
+ * What ptyd tells the connection that claims a run, as it happens: `tools` once the run's shim says hello (MCP-6.1), `toolsGone` once
+ * no shim of the run is connected any more, or none is as a window claims it again - its tool connection unavailable (RULES-3.1).
+ * A ptyd of protocol 9 tells no `toolsGone`.
+ */
 export type RunEvent =
 	| { readonly event: 'output'; readonly run: string; readonly seq: number; readonly data: string }
 	| { readonly event: 'title'; readonly run: string; readonly title: string }
 	| { readonly event: 'status'; readonly run: string; readonly status?: RunStatus }
 	| ({ readonly event: 'exit'; readonly run: string } & RunExit)
-	| { readonly event: 'tools'; readonly run: string };
+	| { readonly event: 'tools'; readonly run: string }
+	| { readonly event: 'toolsGone'; readonly run: string };
 
 /** A shim's call for the window that owns its run, numbered by ptyd: the window answers it with `answer`. */
 export interface CallEvent {
@@ -274,7 +280,7 @@ export function isPtydEvent(value: unknown): value is RunEvent | OwnerEvent | Ca
 	switch (value.event) {
 		case 'output': return typeof value.data === 'string' && Number.isSafeInteger(value.seq) && Number(value.seq) >= 0;
 		case 'title': return typeof value.title === 'string';
-		case 'tools': return true;
+		case 'tools': case 'toolsGone': return true;
 		case 'exit': return typeof value.exitCode === 'number' && Number.isFinite(value.exitCode) &&
 			(value.signal === undefined || typeof value.signal === 'number') && (value.ctrlC === undefined || value.ctrlC === true);
 		case 'status': {
@@ -285,65 +291,4 @@ export function isPtydEvent(value: unknown): value is RunEvent | OwnerEvent | Ca
 		}
 		default: return false;
 	}
-}
-
-/** Splits what came on the socket into its whole lines, keeping the unfinished rest for the next chunk. */
-export function splitJsonLines(buffer: string): { readonly lines: readonly string[]; readonly rest: string } {
-	const parts = buffer.split('\n');
-	const rest = parts.pop() ?? '';
-	return { lines: parts.filter(line => line.trim()), rest };
-}
-
-/** Allows an 8 MiB screen even with JSON's sixfold control-character escaping, plus its response envelope. */
-export const MAX_JSON_LINE_BYTES = 64 * 1024 * 1024;
-
-/**
- * Reads complete UTF-8 JSON lines, with bounded storage for a partial line. An oversized frame fails this reader permanently:
- * the caller closes its transport, and no partial input or later frame is delivered. The growing byte buffer also avoids keeping
- * an unbounded number of fragment objects when a peer sends a large frame in tiny pieces.
- */
-export function lineReader(onLine: (line: string) => void, onError: (err: Error) => void = err => { throw err; }, maxBytes = MAX_JSON_LINE_BYTES): (chunk: string | Buffer) => void {
-	if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) {
-		throw new Error('The ptyd frame limit must be a positive safe integer.');
-	}
-	let buffer: Buffer | undefined;
-	let length = 0;
-	let failed = false;
-	return chunk => {
-		if (failed) {
-			return;
-		}
-		const bytes = typeof chunk === 'string' ? Buffer.from(chunk, 'utf8') : chunk;
-		for (let start = 0; start < bytes.length;) {
-			const newline = bytes.indexOf(10, start);
-			const end = newline < 0 ? bytes.length : newline;
-			const next = length + end - start;
-			if (next > maxBytes) {
-				buffer = undefined;
-				length = 0;
-				failed = true;
-				onError(new Error(`The ptyd frame exceeds ${maxBytes} bytes.`));
-				return;
-			}
-			if (next) {
-				if (!buffer || next > buffer.length) {
-					const grown = Buffer.allocUnsafe(Math.min(maxBytes, Math.max(1024, next, (buffer?.length ?? 0) * 2)));
-					buffer?.copy(grown, 0, 0, length);
-					buffer = grown;
-				}
-				bytes.copy(buffer, length, start, end);
-				length = next;
-			}
-			if (newline < 0) {
-				return;
-			}
-			const line = buffer?.toString('utf8', 0, length) ?? '';
-			buffer = undefined;
-			length = 0;
-			if (line.trim()) {
-				onLine(line);
-			}
-			start = newline + 1;
-		}
-	};
 }

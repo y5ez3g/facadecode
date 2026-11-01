@@ -65,6 +65,7 @@ Human notification handoff is defined separately in COLLABORATION-2.3.
 | Another draft present | Leave it untouched; wait for it to go (1.5). |
 | Menu, login, permission interaction or unusable input box | Do not type a message into it; wait for it to close (1.5). |
 | Draft/input state unknown, including an input box the reader does not recognize | Treat as unavailable, without guessing an empty input. |
+| Run still starting, its input reader not yet known | Treat as an unknown input at each slot; once its launch shows its CLI has no reader, fail at once (D132). |
 | CLI without an input reader | Fail at once as a permanent obstacle; nothing is typed. |
 | Run ended or explicitly closed | Fail; do not restart it. |
 
@@ -99,8 +100,9 @@ unavailable target. A read through read_messages delivers the message immediatel
 begun. If text is already being written or remains as this message's own complete draft, the existing stage may finish
 its Enter within its original budget. It never types the text again, submits an edited draft or delays the read's result.
 Result handoff starts its own budget once the original result is known; a result joins others typed in one paste only
-while a whole stage's time is still before them (1.7, D118). Window-close handling is 1.9 and does not
-extend a deadline.
+while a whole stage's time is still before them, or when it comes within 50 ms of them - results of sends that ended
+together - the paste then keeping the newest one's whole stage; never a paste a read has already delivered (1.7, D118,
+D132). Window-close handling is 1.9 and does not extend a deadline.
 
 ### 1.6 A message is typed at most once
 
@@ -172,7 +174,11 @@ continue within its deadline; work still owned by the closing side can end with 
 recovery solely to guarantee this edge case, and do not cancel B's independent work just to enforce a global rule.
 
 Reload or temporary disconnect is not closure. Reuse an existing in-flight operation only while its original run and
-deadline still apply; an expired operation does not get a fresh budget. A newly started agent receives only messages
+deadline still apply; an expired operation does not get a fresh budget. A delivery under way when its window reloads
+goes on once the window shows its recipient again, within its original deadline: a text that may already be in the
+input is never pasted again, and only its own draft gets Enter (1.6). One whose recipient is not shown yet waits for a
+later restoration within that deadline; one whose recipient ended, or whose deadline passed, ends, and its sender is
+told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries (D132, D138). A newly started agent receives only messages
 addressed to its new run. Closing every window naturally ends the remaining volatile delivery work.
 No notification or message is scheduled for replay on the next opening.
 
@@ -400,6 +406,8 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
+- 2026-11-01: From the owner-requested release review: 1.4 tries a starting run's input as unknown; 1.5 joins results
+  that come together into one paste; 1.9 continues a reloaded window's deliveries within their deadlines (D132).
 - 2026-11-01: Describe competitive-analysis findings without naming individual products; behavior is unchanged.
 - 2026-11-01: 3.2 separates reliable idle from native blockers: grey idle, yellow permission/answer/sign-in, with green work and red error/unknown retained (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.

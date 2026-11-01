@@ -53,6 +53,15 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([working.workingSince, idle.workingSince], [1_234, undefined]);
 	});
 
+	test('tools that went as the process ended are no problem of the ended card; tools a live run lost, or an ended one never had, are said', () => {
+		const lost = { tools: 'unavailable', toolsProblem: 'disconnected' } as const;
+		const ended = cardOf(run({ ...lost, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
+		const live = cardOf(run({ ...lost, activity: 'not_working', reporting: true }), { place, selected: false, menu, words: WORDS });
+		const never = cardOf(run({ tools: 'unavailable', toolsProblem: 'conflict', lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
+		const said = (card: { readonly tooltip: readonly string[] }) => card.tooltip.some(line => line.startsWith('Can\'t work with other agents'));
+		assert.deepStrictEqual([said(ended), said(live), said(never)], [false, true, true]);
+	});
+
 	test('a retained worktree failure renders its stored effects in the current language', () => {
 		const effects = { branch: 'fix', folder: '/app.worktrees/fix' };
 		const facts = run({ lifecycle: 'ended', error: { reason: 'spawn refused', source: 'launch', at: 3, worktree: effects } });

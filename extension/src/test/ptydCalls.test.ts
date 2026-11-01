@@ -8,10 +8,11 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { PtydClient } from '../host/execution/ptydClient';
-import { CallEvent, InputReading, lineReader, PTYD_PROTOCOL, Response, RunEvent, ScreenRead } from '../ptyd/protocol';
-import { SHIM_PTYD_PROTOCOL } from '../transport/ptydLink';
+import { lineReader } from '../base/lines';
+import { CallEvent, InputReading, PTYD_PROTOCOL, Response, RunEvent, ScreenRead } from '../ptyd/protocol';
 import { CLAIM_WAIT_MS, MOST_RUN_CALLS, PtydServer } from '../ptyd/server';
 import { IDLE, program, ptydPlace } from './ptydPlace';
+import { withModules } from './withModules';
 
 /** A shim's side of ptyd's socket, as bare JSON lines: each request answered with the whole response, error facts and all. */
 interface FakeShim {
@@ -24,10 +25,6 @@ interface FakeShim {
 const answerOf = (text: string) => ({ text, structured: { status: 'success', data: { text }, effects: { outcome: 'none' } }, isError: false });
 
 suite('ptyd: a run\'s tool calls carried to the window that claims it, and its answers back (MCP-6.1, RULES-1.2)', function () {
-	test('the shim speaks ptyd\'s own protocol: a test holds the two equal, as the layers keep the shim from importing it', () => {
-		assert.strictEqual(SHIM_PTYD_PROTOCOL, PTYD_PROTOCOL);
-	});
-
 	this.timeout(20_000);
 	let socketPath: string;
 	let socketDir: string;
@@ -73,7 +70,7 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 			const response = JSON.parse(line) as Response;
 			waiting.get(response.id)?.(response);
 			waiting.delete(response.id);
-		}));
+		}, err => { throw err; }));
 		const ask: FakeShim['ask'] = (method, params) => new Promise(resolve => {
 			const id = next++;
 			waiting.set(id, resolve);
@@ -113,7 +110,8 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		await spawn(first, 'r1');
 		const shim = await shimOf('r1');
 		assert.deepStrictEqual(shim.hello, { id: 1, result: { protocol: PTYD_PROTOCOL, pid: process.pid } });
-		assert.deepStrictEqual(await until('the tools event', () => toolsOf(events).length && toolsOf(events)), [{ event: 'tools', run: 'r1' }]);
+		// A count of 0 is no answer: `until` waits until the event came
+		assert.deepStrictEqual(await until('the tools event', () => toolsOf(events).length > 0 && toolsOf(events)), [{ event: 'tools', run: 'r1' }]);
 		// The window reloads: the one that claims the run next is told, once however often it attaches
 		first.dispose();
 		await until('the claim to go', async () => !(await shim.ask('call', { caller: 'r1', elapsedMs: CLAIM_WAIT_MS })).result);
@@ -122,6 +120,30 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		await second.request('attach', { run: 'r1' });
 		await second.request('attach', { run: 'r1' });
 		assert.deepStrictEqual(toolsOf(later), [{ event: 'tools', run: 'r1' }]);
+	});
+
+	test('once its run\'s last shim goes, the window that claims the run is told its tools are gone, and a window that claims it with none connected (RULES-3.1)', async () => {
+		const first = await connect();
+		const events = eventsOf(first, 'r23');
+		await spawn(first, 'r23');
+		const shim = await shimOf('r23');
+		const second = await shimOf('r23', PTYD_PROTOCOL);
+		await until('the tools event', () => toolsOf(events).length > 0);
+		const gone = () => events.filter(event => event.event === 'toolsGone');
+		// One of two shims going leaves its tools there; the last going takes them
+		second.socket.destroy();
+		await new Promise(resolve => setTimeout(resolve, 100));
+		assert.deepStrictEqual(gone(), []);
+		shim.socket.destroy();
+		assert.deepStrictEqual(await until('the tools gone', () => gone().length > 0 && gone()), [{ event: 'toolsGone', run: 'r23' }]);
+		// Its window reloads meanwhile: the window that claims it next is told none is there, then told once one says hello again
+		first.dispose();
+		const reloaded = await connect();
+		const later = eventsOf(reloaded, 'r23');
+		await reloaded.request('attach', { run: 'r23' });
+		assert.deepStrictEqual(later.filter(event => event.event === 'toolsGone' || event.event === 'tools'), [{ event: 'toolsGone', run: 'r23' }]);
+		await shimOf('r23');
+		assert.deepStrictEqual(await until('the tools back', () => toolsOf(later).length > 0 && toolsOf(later)), [{ event: 'tools', run: 'r23' }]);
 	});
 
 	test('a call goes to the window that claims its caller, its time in ptyd added; that window\'s answer goes back, concurrent calls of the run matched by number', async () => {
@@ -180,6 +202,30 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		assert.deepStrictEqual((await waiting).result, answerOf('after the reload'));
 	});
 
+	test('with no window claiming the run, a query waits for one within its route deadline, past a call\'s two seconds (ARCHITECTURE-2.3, MCP-1.3)', async () => {
+		const reloading = await connect();
+		await spawn(reloading, 'r20');
+		reloading.dispose();
+		const shim = await shimOf('r20');
+		await new Promise(resolve => setTimeout(resolve, 100));
+		const waiting = shim.call({ tool: 'list_agents', routeDeadlineMs: CLAIM_WAIT_MS + 3_000 });
+		// The window reloads for longer than a call's two seconds, within the query's deadline
+		await new Promise(resolve => setTimeout(resolve, CLAIM_WAIT_MS + 500));
+		const reloaded = await connect();
+		const calls = callsOf(reloaded);
+		await reloaded.request('attach', { run: 'r20' });
+		await until('the waiting query', () => calls.length === 1);
+		await reloaded.request('answer', { id: calls[0].id, answer: answerOf('after a long reload') });
+		assert.deepStrictEqual((await waiting).result, answerOf('after a long reload'));
+		// With no window at all, it is refused at its deadline, not before
+		reloaded.dispose();
+		await new Promise(resolve => setTimeout(resolve, 100));
+		const began = Date.now();
+		const unanswered = await shim.call({ tool: 'read_messages', routeDeadlineMs: CLAIM_WAIT_MS + 1_000 });
+		assert.deepStrictEqual([unanswered.reason, unanswered.effects], ['window_unavailable', 'none']);
+		assert.ok(Date.now() - began >= CLAIM_WAIT_MS + 800, String(Date.now() - began));
+	});
+
 	test('a window that goes holding a call leaves its effects unknown; a shim that goes cancels nothing a window took', async () => {
 		const window = await connect();
 		const calls = callsOf(window);
@@ -216,7 +262,7 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		await new Promise(resolve => socket.once('connect', resolve));
 		const lines: { id?: number; event?: string; result?: unknown }[] = [];
 		socket.setEncoding('utf8');
-		socket.on('data', lineReader(line => lines.push(JSON.parse(line))));
+		socket.on('data', lineReader(line => lines.push(JSON.parse(line)), err => { throw err; }));
 		socket.write(`${JSON.stringify({ id: 1, method: 'hello', params: { protocol: PTYD_PROTOCOL, role: 'window' } })}\n`);
 		socket.write(`${JSON.stringify({ id: 2, method: 'claim', params: { owner: 'w1', generation: ++generation, token: 'bare' } })}\n`);
 		socket.write(`${JSON.stringify({ id: 4, method: 'attach', params: { run: 'r9' } })}\n`);
@@ -246,6 +292,42 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		await until('the second call', () => calls.length === 2);
 		await window.request('answer', { id: calls[1].id, answer: answerOf('in time') });
 		assert.deepStrictEqual((await answering).result, answerOf('in time'));
+	});
+
+	test('a window that ends refuses its runs\' calls waiting for a window at once, not_found, before their processes end (MCP-1.2, RULES-4.1)', async () => {
+		// A console whose program outlives its end's grace: its calls cannot wait for its exit to be refused
+		const pty = { pid: 1, onData() {}, onExit() {}, kill() {}, write() {}, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const place = ptydPlace('fc-ending-');
+		const ending = new Server(place.socket);
+		assert.strictEqual(await ending.listen(), true);
+		try {
+			const window = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+			clients.push(window);
+			await window.request('claim', { owner: 'w1', generation: 1, token: 'closing' });
+			await window.request('spawn', { run: 'r21', owner: 'w1', ...program(IDLE), cwd: os.tmpdir(), cols: 80, rows: 24, meta: {} });
+			window.dispose();
+			const shim = net.connect(place.socket);
+			sockets.push(shim);
+			await new Promise(resolve => shim.once('connect', resolve));
+			const answers: Response[] = [];
+			shim.on('data', lineReader(line => answers.push(JSON.parse(line)), err => { throw err; }));
+			shim.write(`${JSON.stringify({ id: 1, method: 'hello', params: { protocol: PTYD_PROTOCOL, role: 'shim', run: 'r21' } })}\n`);
+			shim.write(`${JSON.stringify({ id: 2, method: 'call', params: { caller: 'r21', tool: 'list_agents', arguments: {}, callId: '1', elapsedMs: 0 } })}\n`);
+			await new Promise(resolve => setTimeout(resolve, 100));
+			// The workspace's next activation finds the window truly closed: its runs end, and none will be claimed again
+			const reopened = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+			clients.push(reopened);
+			await reopened.request('claim', { owner: 'w1', generation: 2, token: 'reopened' });
+			const began = Date.now();
+			assert.strictEqual(await reopened.request('endWindow', { owner: 'w1', graceMs: 60_000 }), 1);
+			const refused = await until('the waiting call refused', () => answers.find(answer => answer.id === 2) as (Response & { readonly reason?: string; readonly effects?: string }) | undefined);
+			assert.deepStrictEqual([refused.reason, refused.effects], ['not_found', 'none']);
+			assert.ok(Date.now() - began < CLAIM_WAIT_MS / 2, String(Date.now() - began));
+		} finally {
+			ending.close();
+			fs.rmSync(place.dir, { recursive: true, force: true });
+		}
 	});
 
 	test('a call of a run ptyd does not hold, or one forgotten, is refused not_found with no effect', async () => {
@@ -385,8 +467,12 @@ suite('ptyd: a run\'s terminal read and written for its owner (MCP-5, CLIS-2.1, 
 	test('type pastes text and Enter in turn; read gives the rendered lines; keys press named keys; a reader that does not recognize the screen says unknown', async () => {
 		const owner = await window('w1', 1);
 		await cat(owner, 't1');
-		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'hello facade', enter: true }), { outcome: 'applied', pasted: true, entered: true });
+		// Text and its Enter are never one request: refused before anything goes in (MCP-5.2, D113)
+		await assert.rejects(owner.request('type', { run: 't1', text: 'both at once', enter: true }), /typed in two requests/);
+		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'hello facade', enter: false }), { outcome: 'applied', pasted: true, entered: false });
+		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: '', enter: true }), { outcome: 'applied', pasted: false, entered: true });
 		const read = await screenUntil(owner, 't1', each => each.text.filter(line => line.includes('hello facade')).length >= 2);
+		assert.ok(!read.text.some(line => line.includes('both at once')), JSON.stringify(read.text));
 		// The terminal's echo of the input, and cat's own copy of the line
 		assert.ok(read.text.filter(line => line.includes('hello facade')).length >= 2, JSON.stringify(read.text));
 		assert.deepStrictEqual([read.buffer, read.exited], ['normal', false]);
@@ -395,7 +481,8 @@ suite('ptyd: a run\'s terminal read and written for its owner (MCP-5, CLIS-2.1, 
 		assert.strictEqual(reading.state, 'unknown');
 		assert.strictEqual((await owner.request('inspect', { run: 't1', adapter: 'no-such-reader' })).state, 'unknown');
 		// A lead is typed ahead of the paste, in the same write; one with a control in it is refused before anything goes in (D108)
-		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'the message', enter: true, lead: 'Act on this: ' }), { outcome: 'applied', pasted: true, entered: true });
+		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'the message', enter: false, lead: 'Act on this: ' }), { outcome: 'applied', pasted: true, entered: false });
+		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: '', enter: true }), { outcome: 'applied', pasted: false, entered: true });
 		await screenUntil(owner, 't1', each => each.text.some(line => line.includes('Act on this: the message')));
 		await assert.rejects(owner.request('type', { run: 't1', text: 'x', enter: false, lead: 'go\r' }), /without control characters/);
 		await assert.rejects(owner.request('keys', { run: 't1', keys: ['Hyper+Q'] }), /Not a key: "Hyper\+Q"/);

@@ -5,9 +5,11 @@
 import * as assert from 'assert';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
+import { facadeHome } from '../record/paths';
 import { tempDir } from './util';
 
 suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3.1)', () => {
@@ -45,6 +47,14 @@ suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3
 		assert.deepStrictEqual([again.key, other.key === folder.key, became.key, became.dir, notKey.key], [folder.key, false, folder.key, folder.dir, other.key]);
 		assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(folder.dir, 'identity.json'), 'utf8')), { workspace: 'file:///work/shop' });
 		assert.match(folder.key, /^[0-9a-f]{16}$/);
+	});
+
+	test('a window without folders, which starts no agent, keeps no ledger entry for its URI - a new one each session - and keeps its key across its reloads (RULES-5.3, ARCHITECTURE-2.4)', () => {
+		const first = workspaceRecord('untitled:session-1', temp.dir, undefined, { token: 'empty-window', folders: [] });
+		keepWorkspaceUri('untitled:session-1', first, temp.dir);
+		const reloaded = workspaceRecord('untitled:session-2', temp.dir, first.key, { token: 'empty-window', folders: [] });
+		keepWorkspaceUri('untitled:session-2', reloaded, temp.dir);
+		assert.deepStrictEqual([fs.existsSync(path.join(temp.dir, 'workspace-uris.json')), reloaded.key], [false, first.key]);
 	});
 
 	test('exact saved URI shares the moved owner in a fresh profile; a copied URI never inherits by folders', () => {
@@ -158,5 +168,14 @@ suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3
 		fs.utimesSync(broken, new Date(Date.now() - 31 * 24 * 60 * 60_000), new Date(Date.now() - 31 * 24 * 60 * 60_000));
 		keepWindowKey('session-2', key, ['file:///work/docs'], temp.dir);
 		assert.deepStrictEqual([fs.existsSync(broken), windowKeyOf('session-2', ['file:///work/docs'], temp.dir)], [false, key]);
+	});
+});
+
+suite('Record: the Facade directory (ARCHITECTURE-3.1)', () => {
+	test('FACADE_HOME names an absolute folder; a relative one is refused, never read as the person\'s own ~/.facade, and an empty one is unset', () => {
+		const absolute = path.resolve('facade-root');
+		assert.strictEqual(facadeHome({ FACADE_HOME: absolute }), path.join(absolute, 'extension'));
+		assert.throws(() => facadeHome({ FACADE_HOME: path.join('tests', 'facade') }), /FACADE_HOME must name an absolute folder/);
+		assert.strictEqual(facadeHome({ FACADE_HOME: '' }), path.join(os.homedir(), '.facade', 'extension'));
 	});
 });

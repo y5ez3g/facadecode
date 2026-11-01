@@ -26,6 +26,11 @@ export interface WorkspaceRecord {
 	readonly binding: { readonly uri: string; readonly key?: string; readonly previousUri?: string };
 	/** Handover validated against the same ledger snapshot used for URI resolution. */
 	readonly handedOver?: string;
+	/**
+	 * A window without folders: it starts no agent (RULES-2.1), and its URI - `untitled:` with its session, a new one each - is kept in
+	 * no ledger, which would grow by one at each such window and reload (RULES-5.3).
+	 */
+	readonly folderless?: true;
 }
 
 interface WorkspaceUris {
@@ -90,7 +95,7 @@ export function workspaceRecord(workspaceUri: string, home: string = facadeHome(
 	if (!fs.existsSync(identity)) {
 		replaceFile(identity, `${JSON.stringify({ workspace: workspaceUri }, undefined, '\t')}\n`);
 	}
-	return { key, dir, binding: { uri, key: state.bindings[uri], previousUri: state.owners[key] }, handedOver };
+	return { key, dir, binding: { uri, key: state.bindings[uri], previousUri: state.owners[key] }, handedOver, ...window && !window.folders.length ? { folderless: true } : {} };
 }
 
 /**
@@ -101,6 +106,9 @@ export function keepWorkspaceUri(workspaceUri: string, record: WorkspaceRecord, 
 	const uri = normalizedUri(workspaceUri);
 	if (record.binding.uri !== uri || !validKey(record.key)) {
 		throw new Error('Workspace URI registration does not match its resolved identity.');
+	}
+	if (record.folderless) {
+		return;
 	}
 	const file = uriFile(home);
 	withFileLock(file, () => {

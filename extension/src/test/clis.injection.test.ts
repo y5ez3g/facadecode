@@ -15,6 +15,7 @@ import { museAdapter } from '../clis/muse';
 import { openCodeAdapter } from '../clis/opencode';
 import { piAdapter } from '../clis/pi';
 import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconcileRuns, releaseProject, releaseRun } from '../clis/injected';
+import { sessionDirOf, sessionFileOf } from '../clis/identity';
 import { DestinationEnvironment, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
 import { INPUT_ADAPTERS } from '../ptyd/composer';
 import { McpServer, ProjectWrite, runDirOf, ToolsInput } from '../clis/tools';
@@ -84,6 +85,17 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.strictEqual(planned.tools.state, 'injected');
 	});
 
+	test('an explicit model and effort replace their configured options in every spelling the CLI takes: Codex\'s -m and its --config, given apart or with = (CLIS-1.4)', () => {
+		const configured = (cli: string, args: readonly string[]) => catalogOf(name => name === `facade.${cli}.launch` ? { arguments: args } : undefined);
+		const codex = planLaunch(configured('codex', ['--config', 'model_reasoning_effort="low"', '-m', 'gpt-4.1', '-c=model_reasoning_effort="medium"', '--config=unrelated=true']),
+			{ cli: 'codex', alias: '#a1', cwd, yolo: true, model: 'gpt-5', effort: 'high' }, destination);
+		assert.deepStrictEqual(codex.args.filter(arg => /model_reasoning_effort|^-m$|^--model$|gpt-/.test(arg)), ['--model', 'gpt-5', 'model_reasoning_effort="high"']);
+		assert.strictEqual(codex.args.at(-1), '--config=unrelated=true');
+		const muse = planLaunch(configured('muse', ['--config', 'reasoning_effort="low"', '--verbose']), { cli: 'muse', alias: '#a1', cwd, yolo: true, effort: 'high' }, destination);
+		assert.deepStrictEqual(muse.args.filter(arg => /reasoning_effort/.test(arg)), ['reasoning_effort="high"', 'model_reasoning_efforts={}']);
+		assert.ok(muse.args.includes('--verbose'));
+	});
+
 	test('a custom CLI keeps its configured start without invented MCP injection or message input support', () => {
 		const catalog = catalogOf(name => name === 'facade.custom' ? { custom: { path: path.join(temp.dir, 'bin', 'claude'), launch: { start: ['literal'], resume: ['resume', '${sessionId}'] } } } : undefined);
 		const planned = planLaunch(catalog, { cli: 'custom', alias: '#a1', cwd, yolo: true, tools }, destination);
@@ -127,7 +139,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			'-c', 'mcp_servers.facade.args=["/ext/\\"quoted\\"/shim.js"]',
 			'-c', 'mcp_servers.facade.env={ "ELECTRON_RUN_AS_NODE" = "1", "FACADE_RUN" = "run-1", "FACADE_PTYD" = "/tmp/ptyd.sock", "A.B" = "x\\ny" }',
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
-			'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
+			'-c', 'mcp_servers.facade.tool_timeout_sec=3660',
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
 			// Its first turn waits for a server that starts slowly, as T3 Code found it must (D101)
 			'-c', 'mcp_optional_startup_grace_ms=10000',
@@ -154,7 +166,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
 		const loaded = await importModule(pathToFileURL(extension).href);
 		loaded.default({ registerMcpServer: (name: string, config: unknown) => registered.push([name, config]) });
-		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3600, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
+		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3660, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
 	});
 
 	test('Antigravity: a plugin in the folder\'s .agents/plugins/facade, shared, the run\'s variables in its environment; its tools allowed for the session beside the person\'s own rules; its MCP panel opened before the first turn', () => {
@@ -215,7 +227,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		const skill = path.join(tools.runDir, 'skills', 'facade', 'SKILL.md');
 		assert.deepStrictEqual(planned.args, ['--standalone', '--prompt', 'Explain main.ts']);
 		assert.deepStrictEqual(planned.injection!.runFiles, [{ path: skill, content: FACADE_SKILL }]);
-		const facade = { type: 'local', command: [SERVER.command, ...SERVER.args], environment: SERVER.env, enabled: true, timeout: 3_600_000 };
+		const facade = { type: 'local', command: [SERVER.command, ...SERVER.args], environment: SERVER.env, enabled: true, timeout: 3_660_000 };
 		assert.deepStrictEqual(JSON.parse(planned.env.OPENCODE_CONFIG_CONTENT), { mcp: { facade }, permission: { 'facade_*': 'allow' }, instructions: [skill] });
 		assert.deepStrictEqual(planned.injection!.project, []);
 		// The person's own inline configuration stays, Facade's rule after theirs
@@ -273,6 +285,18 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			if (cli === 'pi') { assert.strictEqual(planned.args.filter(value => value === '-e' || value === '--extension').length, 2); }
 		});
 	}
+
+	test('a CLI whose own settings its session integration cannot read still starts as configured, its tools given, no identity tracking claimed (CLIS-2.4)', () => {
+		const session = { sessionFile: path.join(temp.dir, 'our.session.json'), sessionHook: 'our-hook' };
+		const write = (file: string, text: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+		write(path.join(temp.dir, '.config', 'muse', 'settings.json'), '{ "hooks": ');
+		write(path.join(temp.dir, '.config', 'opencode', 'cli.json'), '{ "plugins": "oops" }');
+		for (const cli of ['muse', 'opencode']) {
+			const planned = plan({ cli, tools, ...session });
+			assert.deepStrictEqual([planned.exactResume, planned.tools.state, planned.files], [false, 'injected', undefined], cli);
+			assert.ok(!planned.args.some(arg => arg.startsWith('hooks=')) && !('OPENCODE_CLI_CONFIG_CONTENT' in planned.env), `${cli}: ${planned.args.join(' ')}`);
+		}
+	});
 
 	test('without tools - orchestration off - nothing is injected and no file is named; planning writes nothing', () => {
 		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
@@ -435,6 +459,19 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.deepStrictEqual([fs.existsSync(path.join(cwd, '.agents')), fs.existsSync(record)], [false, false]);
 	});
 
+	test('runs of one folder spelled in another case - where the system ignores case - hold one file: the first to end leaves it to the other', function () {
+		if (process.platform !== 'win32' && process.platform !== 'darwin') {
+			this.skip();
+		}
+		const other = cwd.toUpperCase() === cwd ? cwd.toLowerCase() : cwd.toUpperCase();
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, [skill()]), undefined);
+		assert.strictEqual(acquireProject(record, 'run-b', other, [skill()]), undefined);
+		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
+		assert.strictEqual(textOf(skillFile()), 'skill v1\n', 'the run of the other spelling still uses it');
+		assert.deepStrictEqual(releaseProject(record, 'run-b'), []);
+		assert.strictEqual(fs.existsSync(path.join(cwd, '.agents')), false);
+	});
+
 	test('a folder of the person\'s stays; a file changed after Facade wrote it stays, with a diagnostic', () => {
 		fs.mkdirSync(path.join(cwd, '.agents', 'skills', 'mine'), { recursive: true });
 		acquireProject(record, 'run-a', cwd, [skill()]);
@@ -490,6 +527,19 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		markPlanned(home, 'run-d');
 		assert.deepStrictEqual(releaseRun(home, 'run-d'), []);
 		assert.strictEqual(fs.existsSync(path.dirname(runDirOf(home, 'run-d'))), false);
+	});
+
+	test('reconcile leaves a run\'s session folder beside the run folders: a live run\'s CLI still calls the hook it holds (CLIS-2.4)', () => {
+		const home = path.dirname(record);
+		const session = sessionDirOf(sessionFileOf(home, 'run-live'));
+		fs.mkdirSync(runDirOf(home, 'run-live'), { recursive: true });
+		fs.mkdirSync(session, { recursive: true });
+		fs.writeFileSync(path.join(session, 'hook.cjs'), '// hook');
+		assert.deepStrictEqual(reconcileRuns(home, ['run-live']), []);
+		assert.deepStrictEqual([fs.existsSync(path.join(session, 'hook.cjs')), fs.existsSync(runDirOf(home, 'run-live'))], [true, true]);
+		// Its process gone, its run folder goes; the session folder goes with the run's own ending, which reads its last record first
+		assert.deepStrictEqual(reconcileRuns(home, []), []);
+		assert.deepStrictEqual([fs.existsSync(path.join(session, 'hook.cjs')), fs.existsSync(path.dirname(runDirOf(home, 'run-live')))], [true, false]);
 	});
 
 	test('a record that cannot be read is never replaced: a project write is refused with why, and release and reconcile leave it', () => {
@@ -596,6 +646,29 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		assert.deepStrictEqual([fs.existsSync(path.join(runDirOf(home, 'run-1'), 'mcp.json')), textOf(path.join(location.path, '.agents', 'skills', 'facade', 'SKILL.md'))], [true, FACADE_SKILL]);
 		reconcileRuns(home, ['run-2'], Date.now() + PLANNED_ALIVE_MS + 1_000);
 		assert.deepStrictEqual([fs.existsSync(runDirOf(home, 'run-1')), fs.existsSync(path.join(location.path, '.agents', 'skills', 'facade', 'SKILL.md'))], [false, true]);
+	});
+
+	test('Resume asks the conversation\'s own CLI alone whether it can start here: no other CLI\'s environment or program is looked for (LIFECYCLE-3.2)', () => {
+		let composed = 0;
+		const host = new Proxy(destination.host as { [name: string]: string }, { ownKeys: target => { composed++; return Reflect.ownKeys(target); } });
+		destination = { ...destination, host };
+		assert.strictEqual(clis().resumeProblem('codex', location), undefined);
+		assert.strictEqual(composed, 1, 'one CLI\'s environment, not the catalog\'s');
+		settings['facade.pi.path'] = './nowhere/pi';
+		assert.match(clis().resumeProblem('pi', location)!, /^facade\.pi\.path is "\.\/nowhere\/pi", and .* is not a program that can be run$/);
+		settings['facade.codex.enabled'] = false;
+		assert.strictEqual(clis().resumeProblem('codex', location), 'This CLI cannot resume conversations here.');
+	});
+
+	test('a window opening while runs live - its reconcile - keeps their session hooks: their conversations go on being recorded (CLIS-2.4)', async () => {
+		const planner = clis();
+		const claude = await planner.plan(request('claude', 'run-1'));
+		const hook = path.join(sessionDirOf(sessionFileOf(home, 'run-1')), 'hook.cjs');
+		assert.deepStrictEqual([claude.exactResume, fs.existsSync(hook)], [true, true]);
+		await clis().reconcile(['run-1']);
+		assert.ok(fs.existsSync(hook), 'the live run\'s CLI still calls it');
+		reconcileRuns(home, ['run-1'], Date.now() + PLANNED_ALIVE_MS + 1_000);
+		assert.ok(fs.existsSync(hook), 'long after its plan too');
 	});
 
 	test('describe states, for a start here, the choices each CLI takes, its native prompt mapping, its input reader and nothing it does not stand behind; it writes nothing', () => {

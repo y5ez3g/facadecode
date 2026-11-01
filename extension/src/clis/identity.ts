@@ -25,7 +25,10 @@ export interface SessionIntegrationInput {
 
 /** Per-process integration only. The host materializes owned files after validating the complete launch. */
 export interface SessionIntegration {
-	/** Native settings were unreadable: let the CLI show its own error, without claiming identity tracking. */
+	/**
+	 * Native settings or per-launch configuration the integration cannot read: the launch keeps them as configured and lets the CLI show
+	 * its own error, without claiming identity tracking - never a start refused over them.
+	 */
 	readonly unavailable?: boolean;
 	readonly args?: readonly string[];
 	/** Config overrides merged into the integration replace only their original argument pair. */
@@ -50,8 +53,21 @@ export function sessionFileOf(home: string, run: string): string {
 	return path.join(home, 'runs', `${run}.session.json`);
 }
 
+/** The folder beside a run's session file `file` that holds what its session integration runs: its hook, plugin or extension. */
+export function sessionDirOf(file: string): string {
+	return file.replace(/\.json$/, '.d');
+}
+
 /** A session file's name, or the name of the hook's copy being written in its place: its run, by its ID. */
 const SESSION_FILE_NAME = /^(?<run>.+)\.session\.(?:json(?:\.\d+\.tmp)?|d)$/;
+
+/**
+ * Whether `name`, in the folder of the runs' files, is a run's session file or folder rather than a run's own folder: it goes with its
+ * run's process, never with a reconcile of the runs' tool files (CLIS-2.2, 2.4).
+ */
+export function isSessionFileName(name: string): boolean {
+	return SESSION_FILE_NAME.test(name);
+}
 
 /** The session files in the Facade directory `home` - the hook's unfinished copies too - by the run they are of (RULES-5.3). */
 export function sessionFilesIn(home: string): readonly { readonly run: string; readonly file: string }[] {
@@ -71,18 +87,23 @@ export function sessionFilesIn(home: string): readonly { readonly run: string; r
 /**
  * The hook's script, run as Node: data capture only (CLIS-2.4). It reads the hook input and, for a SessionStart of a conversation
  * with a UUID, writes its ID and how the session started to the file the run's {@link SESSION_FILE_VARIABLE} names - whole, by a
- * rename. Anything else - another event, input that is no JSON, no such variable - it leaves alone; it never fails the session.
+ * rename. Anything else - another event, input that is no JSON, no such variable - it leaves alone; it never fails the session. A
+ * background job of the run's Claude Code - `CLAUDE_JOB_DIR` set - inherits its hooks, and its own session is never the run's: it
+ * records nothing, and on Windows ends before taking its input, which its caller may never close. Antigravity's title callback, which
+ * it also is, goes on to the person's own title command whatever the record makes of the input.
  */
 export const SESSION_HOOK_SCRIPT = [
 	'const fs = require("fs"), path = require("path");',
+	'const job = !!process.env.CLAUDE_JOB_DIR;',
+	'if (job && process.platform === "win32") process.exit(0);',
 	`const file = process.argv.at(-1)?.endsWith(".session.json") ? process.argv.at(-1) : process.env.${SESSION_FILE_VARIABLE};`,
 	'const chunks = [];',
 	'process.stdin.on("data", chunk => chunks.push(chunk));',
-	'process.stdin.on("end", () => { const data = Buffer.concat(chunks); let input; try {',
-	'if (!file || !path.isAbsolute(file) || !file.endsWith(".session.json")) return;',
-	'input = JSON.parse(data.toString("utf8"));',
-	'const status = input && input.product === "antigravity" && typeof input.conversation_id === "string";',
-	'if (!input || (!status && !["SessionStart","UserPromptSubmit","Stop","SessionEnd"].includes(input.hook_event_name))) return;',
+	'process.stdin.on("end", () => { const data = Buffer.concat(chunks); let input; try { input = JSON.parse(data.toString("utf8")); } catch { }',
+	'(() => { try {',
+	'if (job || !input || !file || !path.isAbsolute(file) || !file.endsWith(".session.json")) return;',
+	'const status = input.product === "antigravity" && typeof input.conversation_id === "string";',
+	'if (!status && !["SessionStart","UserPromptSubmit","Stop","SessionEnd"].includes(input.hook_event_name)) return;',
 	'if (process.env.MUSE_THREAD_ID && process.env.MUSE_SESSION_ID && process.env.MUSE_THREAD_ID !== process.env.MUSE_SESSION_ID) return;',
 	'let id = status ? input.conversation_id || null : input.session_id;',
 	`if (id !== null && (typeof id !== "string" || !${SESSION_ID.toString()}.test(id))) return;`,
@@ -94,7 +115,7 @@ export const SESSION_HOOK_SCRIPT = [
 	'const temp = file + "." + process.pid + ".tmp";',
 	'fs.writeFileSync(temp, JSON.stringify({ session_id: id, pending_session_id: pending, transcript_path: input.transcript_path, cwd: input.cwd, source: status ? "status" : input.source || input.hook_event_name }), { mode: 0o600 });',
 	'fs.renameSync(temp, file);',
-	'} catch { }',
+	'} catch { } })();',
 	// The native title callback is a process-bound state report. Forward an existing user command unchanged, with the same input.
 	'if (input && input.product === "antigravity" && process.env.FACADE_CODE_TITLE_COMMAND) {',
 	'const env = {...process.env}; delete env.ELECTRON_RUN_AS_NODE;',
@@ -112,18 +133,19 @@ function shellWord(text: string): string {
 
 /**
  * The command of the session hook: `runtime` - the extension host's own binary, run as Node for this command alone, as an agent's
- * environment does not carry ELECTRON_RUN_AS_NODE (CLIS-1.2) - with the script, each one shell word; a Windows path with forward
- * slashes, which Git Bash takes. Never a `node` from PATH, which a CLI's installation need not have.
+ * environment does not carry ELECTRON_RUN_AS_NODE (CLIS-1.2) - with the run's copy of the script, `script`, and its session file
+ * `file`, each one shell word; a Windows path with forward slashes, which Git Bash takes. Never a `node` from PATH, which a CLI's
+ * installation need not have.
  */
-export function sessionHookCommand(runtime: string, platform: NodeJS.Platform = process.platform, cli = 'claude', file?: string, script?: string): string {
+export function sessionHookCommand(runtime: string, platform: NodeJS.Platform, cli: string, file: string, script: string): string {
 	if (platform === 'win32' && cli !== 'claude') {
 		// Native Windows hooks use cmd.exe, not Claude's Git Bash. Encoded PowerShell keeps paths and JS out of cmd parsing.
 		const word = (value: string) => `'${value.replace(/'/g, "''")}'`;
-		const command = `$env:ELECTRON_RUN_AS_NODE='1'; & ${word(runtime)} ${script ? word(script) : `-e ${word(SESSION_HOOK_SCRIPT)}`}${file ? ` ${word(file)}` : ''}; exit $LASTEXITCODE`;
+		const command = `$env:ELECTRON_RUN_AS_NODE='1'; & ${word(runtime)} ${word(script)} ${word(file)}; exit $LASTEXITCODE`;
 		return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(command, 'utf16le').toString('base64')}`;
 	}
-	const program = platform === 'win32' ? runtime.replace(/\\/g, '/') : runtime;
-	return `ELECTRON_RUN_AS_NODE=1 ${shellWord(program)} ${script ? shellWord(platform === 'win32' ? script.replace(/\\/g, '/') : script) : `-e ${shellWord(SESSION_HOOK_SCRIPT)}`}${file ? ` ${shellWord(file)}` : ''}`;
+	const posix = (each: string) => platform === 'win32' ? each.replace(/\\/g, '/') : each;
+	return `ELECTRON_RUN_AS_NODE=1 ${shellWord(posix(runtime))} ${shellWord(posix(script))} ${shellWord(file)}`;
 }
 
 /** The conversation a run's session file records; none where there is no valid record. */

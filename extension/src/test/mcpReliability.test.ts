@@ -72,6 +72,47 @@ suite('MCP reliability: retries through the real delivery service', () => {
 		}
 	});
 
+	test('a retry after a lost cross-window reply asks the window that holds its message, though its agent closed and another took its name elsewhere (MCP-1.1, D119)', async () => {
+		const a = setUp(), b = setUp(), c = setUp();
+		b.deps.window = { id: 'win-2', label: 'Receiver', environment: 'test' };
+		c.deps.window = { id: 'win-3', label: 'Elsewhere', environment: 'test' };
+		const ma = delivery(a), mb = delivery(b), mc = delivery(c);
+		try {
+			const lead = runFacts(1, { yolo: true }), worker = runFacts(20, { name: 'worker' }), namesake = runFacts(30, { name: 'worker' });
+			a.agents.add(lead);
+			b.agents.add(worker);
+			const network = new FakeNetwork();
+			network.window(2, 'Receiver', [remoteAgent(20, { name: 'worker' })]);
+			a.deps.network = network;
+			const receivers = new Map([['win-2', createToolServices(b.deps)], ['win-3', createToolServices(c.deps)]]);
+			let lost = true;
+			network.respond = async route => {
+				const result = await receivers.get(route.window)!.serve({ from: 'win-1', op: route.op, args: route.args, deadlineMs: route.deadlineMs });
+				if (lost) {
+					lost = false;
+					return { ok: false, reason: 'timeout', effects: 'unknown', message: 'Reply lost after delivery.' };
+				}
+				return { ok: true, result };
+			};
+			const args = { to: '@worker', text: 'Do this once.', request_id: 'once' };
+			const first = resultOf(await a.call(lead, 'send_message', args));
+			assert.deepStrictEqual([first.status, first.effects.outcome, mb.pastes.length], ['failure', 'unknown', 1]);
+			// The worker closes; another agent named worker starts in a third window
+			b.agents.runs.delete(worker.id);
+			network.windows = [];
+			network.window(2, 'Receiver', []);
+			c.agents.add(namesake);
+			network.window(3, 'Elsewhere', [remoteAgent(30, { name: 'worker' })]);
+			for (const to of ['@worker', worker.id]) {
+				const retry = resultOf(await a.call(lead, 'send_message', { ...args, to }));
+				assert.deepStrictEqual([retry.status, retry.data.message_id, retry.data.target, retry.data.repeated], ['success', 'm-1', worker.id, true], to);
+			}
+			assert.deepStrictEqual([mb.pastes.length, mc.pastes.length, ma.copies.get('m-1')?.delivery.status], [1, 0, 'success']);
+		} finally {
+			ma.service.dispose(); mb.service.dispose(); mc.service.dispose(); a.dispose(); b.dispose(); c.dispose();
+		}
+	});
+
 	test('a lost cross-window reply, followed by retry and loss of the sender copy, never repastes and returns the original ID', async () => {
 		const a = setUp(), b = setUp();
 		b.deps.window = { id: 'win-2', label: 'Receiver', environment: 'test' };

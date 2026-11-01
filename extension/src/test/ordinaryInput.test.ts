@@ -8,6 +8,7 @@ import type { CapabilityState, RunFacts, RunId } from '../core/ports';
 import { PtydLost, PtydNotSent } from '../host/execution/ptydClient';
 import { OrdinaryInput } from '../host/input';
 import { isOwnDraft, isSameDraft } from '../ptyd/drafts';
+import { codedOf } from '../schema/result';
 import type { InputEffect, InputReading, InputState } from '../ptyd/protocol';
 
 const RUN = 'run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -195,6 +196,26 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.deepStrictEqual(await unsent.typeDirect(RUN, 'yes', true), { outcome: 'partial', pasted: true, entered: false });
 	});
 
+	test('direct text and keys ptyd was never given - unreachable, or a runtime that takes no MCP input - are refused with no effect, a lost answer staying unknown (MCP-1.2, D120)', async () => {
+		const refusing = (err: Error) => new OrdinaryInput({
+			get: () => ({ id: RUN, alias: '#a2', displayName: 'Claude Code', lifecycle: 'running', inputAdapter: 'claude-frame', inputCapability: SUPPORTED } as RunFacts),
+			inspectInput: async () => undefined,
+			typeText: async () => { throw err; },
+			pressKeys: async () => { throw err; },
+			wait: async () => undefined
+		});
+		const unsent = refusing(new PtydNotSent('This agent\'s runtime uses protocol 8, which does not support MCP screen or input requests: no request was sent.'));
+		for (const direct of [() => unsent.typeDirect(RUN, 'yes', true), () => unsent.typeDirect(RUN, 'yes', false), () => unsent.typeDirect(RUN, '', true), () => unsent.pressDirect(RUN, ['Enter'])]) {
+			await assert.rejects(direct(), (err: unknown) => {
+				assert.deepStrictEqual(codedOf(err), { code: 'UNAVAILABLE', reason: 'unavailable', message: 'This agent\'s runtime uses protocol 8, which does not support MCP screen or input requests: no request was sent.' });
+				return true;
+			});
+		}
+		const lost = refusing(new PtydLost('lost'));
+		await assert.rejects(lost.typeDirect(RUN, 'yes', true), (err: unknown) => err instanceof PtydLost && codedOf(err) === undefined);
+		await assert.rejects(lost.pressDirect(RUN, ['Enter']), (err: unknown) => err instanceof PtydLost);
+	});
+
 	test('the message goes in as one paste without Enter, Enter once the CLI shows it as a draft, and is confirmed once its input is empty again', async () => {
 		const { input, terminal, waits } = setUp();
 		const text = '[Facade message #m1 | from @lead #a1 | window Design]\nReview the API.\n[/Facade message #m1]';
@@ -317,7 +338,12 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 			[`[paste #1 ${chars + 1} chars]`, false],
 			[`[paste #1 +3 lines]`, true],
 			[`[paste #1 +4 lines]`, false],
-			[`[Pasted Content ${chars} chars]`, false]
+			[`[Pasted Content ${chars} chars]`, false],
+			// A person's later paste whose count ends in the message's: its number never runs into its count (RULES-1.6)
+			[`[paste #2 1${chars} chars]`, false],
+			[`[paste #3 5${chars} chars]`, false],
+			// Its placeholder wrapped onto two rows is the same placeholder
+			[`[paste #1\n${chars} chars]`, true]
 		] as const) {
 			assert.strictEqual(isOwnDraft(draft, wide, 'pi-frame'), own, draft);
 		}
@@ -397,6 +423,22 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.strictEqual(setUp().input.pasteTime(RUN, 'x'.repeat(8_000)), 0);
 		assert.strictEqual(setUp({}, 'win32').input.pasteTime(RUN, 'x'.repeat(8_000)), 2 * 100);
 		assert.strictEqual(setUp({ inputAdapter: 'agy-frame' }).input.pasteTime(RUN, 'a\nb\nc'), 3 * 45);
+	});
+
+	test('Codex on Windows reads a paste a key at a time: 3 ms a UTF-16 unit, in a paste\'s time beyond the usual, the wait for its draft and type_text\'s Enter (D105)', async () => {
+		// 9,249 UTF-16 units, as in Orca's measurement of 21.1 s: a character outside the BMP is two key events
+		const text = `${'x'.repeat(9_247)}😀`;
+		const codex = setUp({ inputAdapter: 'codex-prompt' }, 'win32');
+		assert.strictEqual(codex.input.pasteTime(RUN, text), 2 * 100 + 3 * 9_249);
+		assert.strictEqual(setUp({ inputAdapter: 'codex-prompt' }).input.pasteTime(RUN, text), 0, 'elsewhere Codex takes a bracketed paste whole');
+		assert.strictEqual(setUp({}, 'win32').input.pasteTime(RUN, text), 2 * 100, 'Claude Code on Windows takes it at ConPTY\'s rate alone');
+		// A draft drawn only after 21 seconds of reading is waited for, and gets its Enter
+		codex.terminal.showsPasteAfter = 211;
+		assert.deepStrictEqual(await effects(codex.input.submit(RUN, text)), CONFIRMED);
+		assert.ok(codex.terminal.calls.includes('keys Enter'));
+		const direct = setUp({ inputAdapter: 'codex-prompt' }, 'win32');
+		await direct.input.typeDirect(RUN, 'y'.repeat(1_000), true);
+		assert.deepStrictEqual(direct.waits, [100 + 3 * 1_000]);
 	});
 
 	test('Enter goes only over the message\'s own draft: a CLI\'s placeholder for it, never a draft a person changed (RULES-1.6)', async () => {

@@ -14,10 +14,11 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
-import { readJsonFile, replaceFile } from '../base/files';
+import { isEqualPath, readJsonFile, replaceFile } from '../base/files';
 import { canonicalJson, isJsonObject } from '../base/json';
 import { addMembers, applyJsonEdits, JsonEdit, JsonMember, JsonObjectNode, jsonStyleOf, memberOf, nodeValue, replaceValue } from '../base/jsonc';
 import { withFileLock } from '../base/lock';
+import { isSessionFileName } from './identity';
 import { Injection, ProjectWrite, runDirOf } from './tools';
 
 /** The record's file in the Facade directory `home`: what Facade put into project folders and the runs that use it. */
@@ -359,7 +360,10 @@ export function acquireProject(recordFile: string, run: string, cwd: string, wri
 		}
 		const steps: Step[] = [];
 		for (const write of writes) {
-			const file = path.join(cwd, write.path);
+			// The file as the record already names it, where a run of another spelling of the folder - another case, where the
+			// system ignores case - holds it: one file, one count of its runs
+			const named = path.join(cwd, write.path);
+			const file = Object.keys(record).find(each => isEqualPath(each, named)) ?? named;
 			let step: Step | string;
 			try {
 				step = write.kind === 'file' ? fileStep(file, write.content, record[file]) : entryStep(file, write, record[file]);
@@ -424,11 +428,14 @@ export function markPlanned(home: string, run: string): void {
 	});
 }
 
-/** The runs of the Facade directory `home` with a folder of their own files, by run ID. */
+/**
+ * The runs of the Facade directory `home` with a folder of their own files, by run ID. A run's session folder beside them is no
+ * run's: it holds the hook a live run's CLI still calls, and goes with that run's process (CLIS-2.4).
+ */
 function runFoldersIn(home: string): string[] {
 	const runs = path.dirname(runFolderOf(home, 'run'));
 	try {
-		return fs.readdirSync(runs, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name);
+		return fs.readdirSync(runs, { withFileTypes: true }).filter(entry => entry.isDirectory() && !isSessionFileName(entry.name)).map(entry => entry.name);
 	} catch {
 		return [];
 	}

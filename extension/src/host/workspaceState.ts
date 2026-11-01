@@ -9,6 +9,26 @@ import { isJsonObject } from '../base/json';
 import type { OwnedWrite } from '../base/ownership';
 
 /**
+ * How long a change through `update` waits to be written with those after it: a burst of them - the panel's order as a window
+ * restores its cards one by one - is one write of the file, not a flushed write each.
+ */
+const COALESCE_MS = 100;
+
+/** A change through `update`, written with the others waiting, and who waits for it. */
+interface Waiting {
+	readonly key: string;
+	resolve(): void;
+	reject(err: unknown): void;
+}
+
+/** A successor activation of this workspace owns its state now: this one keeps nothing more of it (ARCHITECTURE-2.2). */
+export class NotOwnedError extends Error {
+	constructor() {
+		super('Another window owns this workspace.');
+	}
+}
+
+/**
  * The window's workspace state - known locations, last launch, panel order, the workspace key - kept beside its runs as well
  * (ARCHITECTURE-2.2, D70). A folder window that becomes a multi-root workspace gets an empty workspace state from the editor, which
  * does not carry an extension's over: a window that `carried` its runs over that way takes what it kept in `file` where its
@@ -16,7 +36,12 @@ import type { OwnedWrite } from '../base/ownership';
  */
 export class KeptWorkspaceState implements vscode.Memento {
 
-	private readonly values = new Map<string, unknown>();
+	/** What it holds as read: what the file holds, with the changes waiting to be written over it. */
+	private values = new Map<string, unknown>();
+	/** What the file holds, as written last. */
+	private written = new Map<string, unknown>();
+	private waiting: Waiting[] = [];
+	private timer: ReturnType<typeof setTimeout> | undefined;
 
 	constructor(private readonly state: vscode.Memento, private readonly file: string, carried: boolean, private readonly log: (text: string) => void, private readonly writeIfOwned: OwnedWrite = write => write()) {
 		this.writeIfOwned(() => {
@@ -31,9 +56,10 @@ export class KeptWorkspaceState implements vscode.Memento {
 					void Promise.resolve(state.update(key, value)).catch(err => this.log(`Could not keep ${key} in the workspace: ${String(err)}`));
 				}
 			} else {
-				this.write();
+				this.write(this.values);
 			}
 		});
+		this.written = new Map(this.values);
 	}
 
 	keys(): readonly string[] {
@@ -46,28 +72,85 @@ export class KeptWorkspaceState implements vscode.Memento {
 		return this.values.has(key) ? this.values.get(key) as T : defaultValue;
 	}
 
+	/**
+	 * Read as it is at once, and written with the changes that come within {@link COALESCE_MS}: settles once the file and the editor
+	 * keep it. One the file cannot keep, or that a successor activation's ownership refuses, is taken back, and rejects.
+	 */
 	update(key: string, value: unknown): Thenable<void> {
-		try {
-			return this.keep(key, value);
-		} catch (error) {
-			return Promise.reject(error);
-		}
+		return new Promise<void>((resolve, reject) => {
+			this.set(this.values, key, value);
+			this.waiting.push({ key, resolve, reject });
+			if (!this.timer) {
+				this.timer = setTimeout(() => this.flush(), COALESCE_MS);
+				this.timer.unref?.();
+			}
+		});
 	}
 
-	/** Commit to the owned sidecar before a synchronous action acknowledges it; disk/ownership failures throw. */
+	/**
+	 * Commit to the owned sidecar before a synchronous action acknowledges it - with the changes waiting - and then to the editor;
+	 * disk failures, and a successor activation's ownership, throw (LIFECYCLE-3.4).
+	 */
 	keep(key: string, value: unknown): Thenable<void> {
-		let result: Thenable<void> = Promise.resolve();
-		this.writeIfOwned(() => {
-			const next = new Map(this.values);
-			if (value === undefined) { next.delete(key); } else { next.set(key, value); }
+		const next = new Map(this.values);
+		this.set(next, key, value);
+		return this.commit(next, [{ key, resolve: () => undefined, reject: () => undefined }], true);
+	}
+
+	/** Writes the changes waiting now: as the window goes, none waits for a write that would come too late. */
+	flush(): void {
+		const next = new Map(this.values);
+		void this.commit(next, [], false);
+	}
+
+	/**
+	 * Writes `next` with the changes waiting and `changes`: the file first, so that a handover never reads an older file than the
+	 * editor's state, then the editor's. Not written, the changes waiting are taken back and rejected, and `rethrow` throws.
+	 */
+	private commit(next: Map<string, unknown>, changes: readonly Waiting[], rethrow: boolean): Thenable<void> {
+		clearTimeout(this.timer);
+		this.timer = undefined;
+		const all = [...this.waiting.splice(0), ...changes];
+		if (!all.length) {
+			return Promise.resolve();
+		}
+		try {
+			let wrote = false;
 			// Persist the handover source before confirming it in memory or the editor. A failed sidecar write must not
 			// acknowledge a newer Memento value that a subsequent handover would overwrite with the old sidecar.
-			this.write(next);
-			this.values.clear();
-			for (const [name, kept] of next) { this.values.set(name, kept); }
-			result = this.state.update(key, value);
-		});
-		return result;
+			this.writeIfOwned(() => {
+				this.write(next);
+				wrote = true;
+			});
+			if (!wrote) {
+				throw new NotOwnedError();
+			}
+		} catch (err) {
+			this.values = new Map(this.written);
+			for (const change of all) {
+				change.reject(err);
+			}
+			if (rethrow) {
+				throw err;
+			}
+			return Promise.resolve();
+		}
+		this.written = new Map(next);
+		this.values = new Map(next);
+		const updates = new Map<string, Thenable<void>>();
+		for (const { key } of all) {
+			if (!updates.has(key)) {
+				updates.set(key, Promise.resolve(this.state.update(key, next.get(key))));
+			}
+		}
+		for (const change of all) {
+			updates.get(change.key)!.then(() => change.resolve(), err => change.reject(err));
+		}
+		return updates.get(changes.at(-1)?.key ?? '') ?? Promise.resolve();
+	}
+
+	private set(values: Map<string, unknown>, key: string, value: unknown): void {
+		if (value === undefined) { values.delete(key); } else { values.set(key, value); }
 	}
 
 	/** What was kept, where it can be read. */
@@ -80,7 +163,7 @@ export class KeptWorkspaceState implements vscode.Memento {
 		}
 	}
 
-	private write(values: ReadonlyMap<string, unknown> = this.values): void {
+	private write(values: ReadonlyMap<string, unknown>): void {
 		try {
 			replaceFile(this.file, `${JSON.stringify(Object.fromEntries(values))}\n`);
 		} catch (err) {

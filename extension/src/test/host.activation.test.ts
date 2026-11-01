@@ -69,13 +69,20 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual(shown, [{ text: failure.message, items: [] }], 'no Reload Window that cannot help');
 	});
 
-	test('a handover record that cannot be read now - not damaged - fails the window component with a reload, which may read it then', () => {
+	test('a handover record that cannot be read now - not damaged - is said by the window component, and the workspace component offers the reload that may read it then - never to install a component that is there', async () => {
 		const vscode = api();
 		// A folder where the record would be: reading it fails, as a lock or a lack of file handles would
 		fs.mkdirSync(path.join(temp, 'handover.json'));
 		const { activate } = withModules({ vscode })<typeof import('../host/window')>(require.resolve('../host/window'));
-		assert.throws(() => activate({ logUri: { fsPath: temp }, subscriptions: [] } as never), /Could not restore agents for this window\. Reload the window to try again\./);
-		assert.deepStrictEqual([...commands.keys()], [], 'nothing answers as damaged');
+		activate({ logUri: { fsPath: temp }, subscriptions: [] } as never);
+		assert.deepStrictEqual([...commands.keys()], [WINDOW_IDENTITY_COMMAND], 'no terminal registry without an identity');
+		const answer = await commands.get(WINDOW_IDENTITY_COMMAND)!(session) as { unreadable?: unknown };
+		assert.deepStrictEqual([typeof answer.unreadable, 'damaged' in answer, 'token' in answer], ['string', false, false]);
+		const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
+		const failure = await service.activateFacade({ subscriptions: [] } as never).then(() => assert.fail('Facade started'), (err: unknown) => err);
+		assert.ok(failure instanceof service.ActivationError);
+		assert.deepStrictEqual([failure.message, failure.reloadHelps], ['Could not restore agents for this window. Reload the window to try again.', true]);
+		assert.ok(!executed.includes(WINDOW_TERMINALS_COMMAND));
 	});
 
 	test('a missing window component uses its installation wait and missing-component explanation, without inventing an identity', async () => {

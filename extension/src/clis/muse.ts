@@ -3,12 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'path';
-import { CliAdapter, sigintExit } from './adapter';
+import { CliAdapter, configOverrides, sigintExit } from './adapter';
 import * as fs from 'fs';
+import { readJsonFile } from '../base/files';
 import { isJsonObject } from '../base/json';
-import { executableAt, homeOf, launchTarget, LaunchTarget } from './executable';
+import { executableAt, launchTarget, LaunchTarget, xdgDirOf } from './executable';
 import { variableOf } from './environment';
-import type { SessionIntegration, SessionIntegrationInput } from './identity';
+import { sessionDirOf, type SessionIntegration, type SessionIntegrationInput } from './identity';
 import { museDataDir } from './history/muse';
 import { RUN_VARIABLE, Environment } from './environment';
 import { SERVER_NAME, serverEntry, sharedServer, ToolsIntegration } from './tools';
@@ -33,40 +34,33 @@ export function museTarget(file: string, platform: NodeJS.Platform, env: Environ
 	} catch { return target; }
 }
 
-/** Preserve the user's hook groups; managed and project hooks remain loaded by Muse itself. */
+/**
+ * Preserve the user's hook groups; managed and project hooks remain loaded by Muse itself. Settings or per-launch hooks it cannot read -
+ * its settings file read as such files are, comments and trailing commas allowed - stay as they are, for Muse Code to say what is wrong
+ * with them, and the launch claims no identity tracking (CLIS-2.4).
+ */
 export function museSession({ file, hook, env, extra, throughCmd, platform }: SessionIntegrationInput): SessionIntegration {
 	if (throughCmd) { return { unavailable: true }; }
-	const xdg = variableOf(env, 'XDG_CONFIG_HOME', platform);
-	const settings = path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(homeOf(env, platform), '.config'), 'muse', 'settings.json');
-	let hooks: unknown;
-	if (fs.existsSync(settings)) {
-		let parsed: unknown;
-		try { parsed = JSON.parse(fs.readFileSync(settings, 'utf8')); }
-		catch { throw new Error(`Muse Code settings in ${settings} are not readable JSON.`); }
-		hooks = isJsonObject(parsed) ? parsed.hooks : undefined;
+	const settings = readJsonFile(path.join(xdgDirOf('config', env, platform), 'muse', 'settings.json'));
+	if (settings.kind === 'other') { return { unavailable: true }; }
+	let hooks = settings.kind === 'object' ? settings.value.hooks : undefined;
+	const overrides = configOverrides(extra).filter(each => each.key === 'hooks' && each.value !== undefined);
+	if (overrides.length > 1) { return { unavailable: true }; }
+	for (const { value } of overrides) {
+		try { hooks = JSON.parse(value!) as unknown; }
+		catch { return { unavailable: true }; }
 	}
-	const remaining: string[] = [];
-	let overridden = false;
-	for (let i = 0; i < extra.length; i++) {
-		const start = i;
-		const arg = extra[i] === '-c' || extra[i] === '--config' ? extra[++i] : extra[i].startsWith('--config=') ? extra[i].slice(9) : undefined;
-		if (arg?.startsWith('hooks=')) {
-			if (overridden) { throw new Error('Muse Code hooks configuration is repeated.'); }
-			overridden = true;
-			try { hooks = JSON.parse(arg.slice(6)); }
-			catch { throw new Error('Muse Code per-launch hooks must be valid JSON.'); }
-		} else { remaining.push(...extra.slice(start, i + 1)); }
-	}
-	if (hooks !== undefined && !isJsonObject(hooks)) { throw new Error(`Muse Code hooks in ${settings} must be an object.`); }
-	const previous = isJsonObject(hooks) ? hooks : {};
-	const merged = { ...previous };
+	if (hooks !== undefined && !isJsonObject(hooks)) { return { unavailable: true }; }
+	const merged = { ...isJsonObject(hooks) ? hooks : {} };
 	for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
 		const groups = merged[event];
-		if (groups !== undefined && !Array.isArray(groups)) { throw new Error(`Muse Code ${event} hooks in ${settings} must be an array.`); }
+		if (groups !== undefined && !Array.isArray(groups)) { return { unavailable: true }; }
 		merged[event] = [...(groups ?? []), { hooks: [{ type: 'command', command: hook, timeout: 5 }] }];
 	}
-	return { extra: remaining, args: ['-c', `hooks=${JSON.stringify(merged)}`],
-		files: [{ file: path.join(file.replace(/\.json$/, '.d'), 'muse.json'), content: JSON.stringify({ data: museDataDir(env, platform) }) }] };
+	// The per-launch override consumed: its hooks go in the run's own, once
+	const consumed = new Set(overrides.flatMap(({ index, span }) => span === 2 ? [index, index + 1] : [index]));
+	return { extra: extra.filter((_, index) => !consumed.has(index)), args: ['-c', `hooks=${JSON.stringify(merged)}`],
+		files: [{ file: path.join(sessionDirOf(file), 'muse.json'), content: JSON.stringify({ data: museDataDir(env, platform) }) }] };
 }
 
 /** The project's MCP file Muse Code reads in a trusted folder, and where it reads skills there (CLIS-2.2). */

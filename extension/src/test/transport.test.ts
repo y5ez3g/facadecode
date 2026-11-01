@@ -11,12 +11,13 @@ import * as os from 'os';
 import * as path from 'path';
 import { lineReader } from '../base/lines';
 import { RUN_VARIABLE } from '../clis/environment';
+import { PTYD_PROTOCOL } from '../ptyd/protocol';
 import { instructionsFor } from '../schema/instructions';
 import { TOOL_PROTOCOL, type ToolAnswer } from '../schema/protocol';
 import { QUERY_ROUTE_MS, TOOLS } from '../schema/tools';
 import { SHIM_AGENT, SHIM_PTYD, SHIM_RUN, shimLaunch } from '../transport/launch';
 import { McpShim } from '../transport/mcpServer';
-import { CallFailed, PtydLink, SHIM_PTYD_PROTOCOL } from '../transport/ptydLink';
+import { CallFailed, PtydLink } from '../transport/ptydLink';
 
 /** The shim as compiled: run as its CLI runs it, with Node, over stdio. */
 const SHIM = path.join(__dirname, '..', 'transport', 'shim.js');
@@ -103,7 +104,7 @@ class FakePtyd {
 	private readonly sockets = new Set<net.Socket>();
 	private readonly server: net.Server;
 
-	constructor(readonly socketPath: string, private readonly protocol = SHIM_PTYD_PROTOCOL) {
+	constructor(readonly socketPath: string, private readonly protocol = PTYD_PROTOCOL) {
 		this.server = net.createServer(socket => {
 			this.sockets.add(socket);
 			socket.on('close', () => this.sockets.delete(socket));
@@ -295,7 +296,7 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		await shim.request('initialize', { protocolVersion: '2025-06-18' });
 		// Initializing says hello at once, so that the window learns the run's tools are there
 		const hello = await until('the hello', () => fake.hellos()[0]);
-		assert.deepStrictEqual(hello.params, { protocol: SHIM_PTYD_PROTOCOL, role: 'shim', run: 'run-2' });
+		assert.deepStrictEqual(hello.params, { protocol: PTYD_PROTOCOL, role: 'shim', run: 'run-2' });
 		const first = shim.call('send_message', { to: '@human', text: 'first' }, 7);
 		const second = shim.call('list_agents', {}, 'x');
 		const omitted = shim.request('tools/call', { name: 'list_agents' }, 'no-arguments');
@@ -376,10 +377,10 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 	});
 
 	test('a ptyd that answers with another protocol is reported protocol_incompatible, with no effect', async () => {
-		await ptyd(SHIM_PTYD_PROTOCOL - 1);
+		await ptyd(PTYD_PROTOCOL - 1);
 		const result = await shimOf('run-6').call('list_agents', {});
 		assert.deepStrictEqual(failureOf(result), ['UNAVAILABLE', 'protocol_incompatible', 'none']);
-		assert.match(result.content[0].text, new RegExp(`speaks protocol ${SHIM_PTYD_PROTOCOL}, and its agent runtime \\(ptyd\\) protocol ${SHIM_PTYD_PROTOCOL - 1}`));
+		assert.match(result.content[0].text, new RegExp(`speaks protocol ${PTYD_PROTOCOL}, and its agent runtime \\(ptyd\\) protocol ${PTYD_PROTOCOL - 1}`));
 	});
 
 	test('its input ending, it answers what was asked and ends; a window that took a call goes on with it', async () => {

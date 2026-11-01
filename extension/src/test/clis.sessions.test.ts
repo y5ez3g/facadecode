@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { parse as parseToml } from 'smol-toml';
 import { codexSession } from '../clis/codex';
 import { museSession, museTarget } from '../clis/muse';
@@ -59,12 +59,47 @@ suite('Native session integration preserves configuration and exact identity (CL
 		const original = '{// own plugins\n"plugins":["own-plugin", "-builtin", {"package":"custom", "options":{"color":"blue"}},],"theme":{"name":"own"}}';
 		fs.writeFileSync(file, original);
 		const result = openCodeSession(input);
-		const content = JSON.parse(result.env.OPENCODE_CLI_CONFIG_CONTENT);
+		const content = JSON.parse(result.env!.OPENCODE_CLI_CONFIG_CONTENT);
 		assert.deepStrictEqual(content.plugins.slice(0, -1), ['own-plugin', '-builtin', { package: 'custom', options: { color: 'blue' } }]);
 		assert.strictEqual(fs.readFileSync(file, 'utf8'), original);
 		const overlay = openCodeSession({ ...input, env: { ...input.env, OPENCODE_CLI_CONFIG_CONTENT: '{"plugins":["overlay"],"theme":{"name":"run"}}' } });
-		assert.deepStrictEqual(JSON.parse(overlay.env.OPENCODE_CLI_CONFIG_CONTENT).plugins.slice(0, -1), ['overlay']);
-		assert.deepStrictEqual(JSON.parse(overlay.env.OPENCODE_CLI_CONFIG_CONTENT).theme, { name: 'run' });
+		assert.deepStrictEqual(JSON.parse(overlay.env!.OPENCODE_CLI_CONFIG_CONTENT).plugins.slice(0, -1), ['overlay']);
+		assert.deepStrictEqual(JSON.parse(overlay.env!.OPENCODE_CLI_CONFIG_CONTENT).theme, { name: 'run' });
+	});
+
+	test('settings or per-launch configuration an integration cannot read leave the launch as configured, without identity tracking, for the CLI to say what is wrong: never a start refused (CLIS-2.4)', () => {
+		const write = (file: string, text: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+		const unavailable = { unavailable: true };
+		// Muse Code's settings, read as such files are: comments and trailing commas allowed
+		const museSettings = path.join(temp.dir, 'config', 'muse', 'settings.json');
+		write(museSettings, '{\n  // my hooks\n  "hooks": { "Stop": [{ "hooks": [{ "type": "command", "command": "mine" }] }], },\n}\n');
+		assert.strictEqual(JSON.parse(museSession(input).args![1].slice(6)).Stop[0].hooks[0].command, 'mine');
+		write(museSettings, '{ "hooks": ');
+		assert.deepStrictEqual(museSession(input), unavailable);
+		write(museSettings, '{ "hooks": [] }');
+		assert.deepStrictEqual(museSession(input), unavailable);
+		write(museSettings, '{}');
+		assert.deepStrictEqual([museSession({ ...input, extra: ['-c', 'hooks=not json'] }), museSession({ ...input, extra: ['-c', 'hooks={}', '--config=hooks={}'] })], [unavailable, unavailable]);
+		// OpenCode's configuration and its inline overlay
+		const openCode = path.join(temp.dir, 'config', 'opencode', 'cli.json');
+		for (const text of ['{ "plugins": "oops" }', '{ broken', '[]']) {
+			write(openCode, text);
+			assert.deepStrictEqual(openCodeSession(input), unavailable, text);
+		}
+		fs.rmSync(openCode);
+		assert.deepStrictEqual(openCodeSession({ ...input, env: { ...input.env, OPENCODE_CLI_CONFIG_CONTENT: '{ not json' } }), unavailable);
+		// Codex's per-launch hooks, as any spelling of its configuration option gives them
+		for (const extra of [['-c', 'hooks=[[['], ['--config', 'hooks=1'], ['--config=hooks.SessionStart="x"'], ['-c=hooks.Stop=[{ hooks = [{ type = "command", command = "x", at = 1979-05-27T07:32:00Z }] }]']]) {
+			assert.deepStrictEqual(codexSession({ ...input, extra }), unavailable, extra.join(' '));
+		}
+		// Antigravity's settings and its per-launch settings
+		const agy = path.join(temp.dir, '.gemini', 'antigravity-cli', 'settings.json');
+		assert.deepStrictEqual(antigravityAdapter.sessionIntegration!({ ...input, extra: ['--settings', 'missing.json'] }), unavailable);
+		assert.deepStrictEqual(antigravityAdapter.sessionIntegration!({ ...input, extra: ['--settings', '{"theme": '] }), unavailable);
+		write(agy, '{ "title": ');
+		assert.deepStrictEqual(antigravityAdapter.sessionIntegration!(input), unavailable);
+		write(agy, '{\n  // mine\n  "title": { "command": "native-title" },\n}');
+		assert.strictEqual(antigravityAdapter.sessionIntegration!(input).env?.FACADE_CODE_TITLE_COMMAND, 'native-title');
 	});
 
 	test('Antigravity preserves native title passthrough and all other per-run settings without writing the user file', () => {
@@ -131,6 +166,26 @@ suite('Native session integration preserves configuration and exact identity (CL
 		assert.strictEqual(recordedSession(input.file)?.sessionId, null);
 		run(two, 'UserPromptSubmit'); run(one, 'Stop');
 		assert.deepStrictEqual(recordedSession(input.file), { sessionId: two, cwd: temp.dir, source: 'UserPromptSubmit' });
+	});
+
+	test('a background job of the run\'s Claude Code, which inherits its hooks, never records its own session as the run\'s (CLIS-2.4)', () => {
+		const id = '86da4482-2bae-4a45-b193-a5664c19826a';
+		const hook = (env: NodeJS.ProcessEnv) => spawnSync(process.execPath, ['-e', SESSION_HOOK_SCRIPT, input.file], { env, input: JSON.stringify({ session_id: id, hook_event_name: 'SessionStart', cwd: temp.dir }) });
+		hook({ CLAUDE_JOB_DIR: path.join(temp.dir, 'jobs', '1') });
+		assert.strictEqual(fs.existsSync(input.file), false, 'the job records nothing');
+		hook({});
+		assert.strictEqual(recordedSession(input.file)?.sessionId, id, 'the run itself does');
+	});
+
+	test('Antigravity\'s title callback reaches the person\'s own title command whatever the record makes of its input', () => {
+		const forwarded = path.join(temp.dir, 'forwarded.json');
+		const command = path.join(temp.dir, 'title.cjs');
+		fs.writeFileSync(command, `require('fs').writeFileSync(${JSON.stringify(forwarded)}, require('fs').readFileSync(0));`);
+		for (const [given, argument] of [[{ product: 'antigravity', title: 'no conversation yet' }, input.file], [{ product: 'antigravity', conversation_id: 'not-a-uuid' }, input.file], [{ product: 'antigravity', conversation_id: '' }, 'not a session file']] as const) {
+			fs.rmSync(forwarded, { force: true });
+			execFileSync(process.execPath, ['-e', SESSION_HOOK_SCRIPT, argument], { env: { ...process.env, FACADE_CODE_TITLE_COMMAND: `"${process.execPath}" "${command}"` }, input: JSON.stringify(given) });
+			assert.deepStrictEqual(JSON.parse(fs.readFileSync(forwarded, 'utf8')), given, JSON.stringify(given));
+		}
 	});
 
 	test('Windows hook commands stay within cmd limits and encode Unicode and shell metacharacters as literal PowerShell data', () => {

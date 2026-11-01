@@ -139,6 +139,19 @@ suite('CLIs: the catalog and its settings (CLIS-1.1, 1.2, 3.1)', () => {
 			owned('pi', ['--approve', '--model', 'x']).extra
 		], [['--sandbox'], ['--mode'], ['--disable-sandbox'], ['--auto'], ['-c', 'model_reasoning_effort=high'], ['--approve', '--model', 'x']]);
 	});
+
+	test('an option the adapter sets is refused in every spelling its CLI takes - a short form, an alias - which would undo the run\'s YOLO mapping (CLIS-3.1, RULES-4.3)', () => {
+		const owned = (cli: string, args: readonly string[]) => catalogOf(settings({ [`facade.${cli}.launch`]: { arguments: args } })).entries.find(entry => entry.adapter.setting === `facade.${cli}`)!;
+		assert.deepStrictEqual([
+			owned('codex', ['--yolo']).problems.map(problem => problem.said.values[2]),
+			owned('codex', ['-s', 'danger-full-access']).problems.map(problem => problem.said.values[2]),
+			owned('codex', ['-s=read-only']).problems.map(problem => problem.said.values[2]),
+			owned('opencode', ['--yolo']).problems.map(problem => problem.said.values[2]),
+			owned('opencode', ['--dangerously-skip-permissions']).problems.map(problem => problem.said.values[2]),
+			// A model is the person's default: an explicit choice replaces it, in any spelling, at a start that makes one
+			owned('codex', ['-m', 'gpt-5']).extra
+		], [['--yolo'], ['-s'], ['-s'], ['--yolo'], ['--dangerously-skip-permissions'], ['-m', 'gpt-5']]);
+	});
 });
 
 suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
@@ -194,6 +207,28 @@ suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
 			const cmd = path.join(temp.dir, 'claude.cmd');
 			fs.writeFileSync(cmd, '');
 			assert.strictEqual(which('claude', { Path: temp.dir, PathExt: '.EXE;.CMD' }, 'win32'), cmd);
+		} finally {
+			temp.remove();
+		}
+	});
+
+	test('on Windows only what a launch can start is a program: a PowerShell or Windows Script Host script is not, on PATH or configured (CLIS-1.2)', () => {
+		const temp = tempDir('fd-exe-');
+		try {
+			const first = path.join(temp.dir, 'first'), second = path.join(temp.dir, 'second');
+			fs.mkdirSync(first); fs.mkdirSync(second);
+			for (const script of ['claude.vbs', 'claude.ps1']) {
+				fs.writeFileSync(path.join(first, script), '');
+			}
+			fs.writeFileSync(path.join(second, 'claude.exe'), '');
+			// PATHEXT may list a script Windows runs by its file association, which a launch cannot: the next folder's program is found
+			assert.strictEqual(which('claude', { Path: `${first};${second}`, PATHEXT: '.VBS;.EXE' }, 'win32'), path.join(second, 'claude.exe'));
+			const configured = resolveExecutable(path.join(first, 'claude.ps1'), 'claude', 'facade.claude', { PATHEXT: '.EXE' }, temp.dir, 'win32');
+			assert.deepStrictEqual(configured.problem !== undefined && configured.said, { kind: 'not_runnable', values: ['facade.claude', JSON.stringify(path.join(first, 'claude.ps1')), path.join(first, 'claude.ps1')] });
+			for (const runnable of ['x.exe', 'x.com', 'x.cmd', 'x.bat', 'cli.js', 'cli.cjs', 'cli.mjs']) {
+				fs.writeFileSync(path.join(second, runnable), '');
+				assert.strictEqual(resolveExecutable(path.join(second, runnable), 'claude', 'facade.claude', {}, temp.dir, 'win32').executable, path.join(second, runnable), runnable);
+			}
 		} finally {
 			temp.remove();
 		}
@@ -590,6 +625,28 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 			said = err instanceof CliPlanError ? [err.reason, err.message.includes('Hunter2'), err.said] : err;
 		}
 		assert.deepStrictEqual(said, ['unsupported', false, { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'facade.pi.launch.arguments', '1', '"!"', 'facade.pi'] }]);
+	});
+
+	test('a refused configured argument is named with its own character; where the adapter\'s own arguments cannot pass either, those are named, as taking the configured one out would not help (CLIS-1.2)', () => {
+		const bin = path.join(temp.dir, 'winbin');
+		fs.mkdirSync(bin);
+		const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.CMD', USERPROFILE: temp.dir }, platform: 'win32' };
+		const said = (cli: string, args: readonly string[]) => {
+			try {
+				plan({ cli }, { [`facade.${cli}.launch`]: { arguments: args } }, windows);
+				return undefined;
+			} catch (err) {
+				return err instanceof CliPlanError ? err.said : err;
+			}
+		};
+		fs.writeFileSync(path.join(bin, 'pi.cmd'), '@echo off\r\nsomething.exe %*\r\n');
+		// Another argument before it holds a quote: the character named is the configured one's own
+		assert.deepStrictEqual(said('pi', ['--append-system-prompt', 'say "hi"', '--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'facade.pi.launch.arguments', '1', '"\\""', 'facade.pi'] });
+		assert.deepStrictEqual(said('pi', ['--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'facade.pi.launch.arguments', '1', '"&"', 'facade.pi'] });
+		// Claude Code's own run settings are JSON: a configured argument is not blamed for them
+		fs.writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\r\nsomething.exe %*\r\n');
+		const claude = said('claude', ['--append-system-prompt', 'a&b']) as { kind: string; values: string[] };
+		assert.deepStrictEqual([claude.kind, claude.values[1].startsWith('"{\\"env\\"')], ['cmd_unsafe', true]);
 	});
 
 	test('a launcher that goes through cmd.exe from a folder whose path cmd.exe reads as its own - a profile named R&D - is refused before anything starts, with the setting that fixes it', () => {

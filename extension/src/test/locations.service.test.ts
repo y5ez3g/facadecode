@@ -137,6 +137,25 @@ suite('Locations: the window\'s location service (WORKTREES-1, 3; RULES-2.4)', (
 		return started;
 	}
 
+	test('a conversation\'s location is found by each location\'s known key: the path asked about is the only one read, however many locations there are', async () => {
+		const many = Array.from({ length: 30 }, (_, n) => `/w/repo.worktrees/w${n}`);
+		many.forEach(each => world.present.add(each));
+		world.lists.set(COMMON, [listed(MAIN, { main: true, branch: 'main' }), ...many.map(each => listed(each, { branch: path.posix.basename(each) }))]);
+		world.setFolders(MAIN);
+		const keyed: string[] = [];
+		const { service } = serviceIn(world, { keyOf: location => { keyed.push(location); return location; } });
+		try {
+			await service.refresh();
+			const cwd = `${many[17]}/packages/api`;
+			world.present.add(cwd);
+			keyed.length = 0;
+			const found = service.conversationLocation(cwd);
+			assert.deepStrictEqual([found?.path, found?.folders.map(each => each.path), keyed.filter(each => each !== cwd)], [cwd, [MAIN], []]);
+		} finally {
+			service.dispose();
+		}
+	});
+
 	test('a successful Resume remembers only an existing scoped cwd; uncertainty preserves it and confirmed deletion removes it', async () => {
 		const world = new World();
 		world.setFolders(MAIN);

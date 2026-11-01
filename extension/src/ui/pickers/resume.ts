@@ -7,16 +7,19 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { isEqualPath, isInsideFolder, realFolderOf } from '../../base/files';
 import { conversationId } from '../../core/ports';
-import type { Catalog, ConversationDiscoveryPort, ConversationEntry, ConversationKey, HumanPort, Location, LocationPort, RunId } from '../../core/ports';
+import type { Catalog, ConversationDiscoveryPort, ConversationEntry, ConversationKey, ConversationPager, HumanPort, Location, LocationPort, RunId } from '../../core/ports';
 import { locationLabel } from '../cardView';
-import { cliIcon, plainText } from '../presentation';
+import { ago, cliIcon, plainText } from '../presentation';
 import { BACK, Flow } from './stepping';
 
 export interface ResumeDeps {
-	/** Opens a folder the person chooses, returning to the Facade Code view once it has (PANEL-1.2); the editor's own otherwise. */
-	readonly openFolder?: () => Promise<void>;
 	readonly conversations: ConversationDiscoveryPort;
 	readonly locations: Pick<LocationPort, 'snapshot'>;
+	/**
+	 * What is read before the conversations are: this window's agents, its locations and the conversations other windows hold. The
+	 * picker shows at once, busy, meanwhile (UX-1.1); a failure ends it and is said.
+	 */
+	readonly prepared?: Promise<unknown>;
 	/** Whether a run holds the conversation now, here or in another window: one already running is not offered again (D69). */
 	readonly running: (key: ConversationKey) => boolean;
 	/** `agents.resume(entry, { reveal: true })`: a new run, or the run already holding that conversation (LIFECYCLE-3.2, 3.3). */
@@ -33,20 +36,6 @@ export interface ResumeDeps {
 
 /** How far down the list the person may come before the next batch is read: a page of the picker. */
 const READ_AHEAD = 10;
-
-/** How long ago `time` was, in the window's language, as briefly as it says it: now, 5 min. ago, yesterday (UX-2.4). */
-export function ago(time: number, now: number, language: string): string {
-	const format = new Intl.RelativeTimeFormat(language, { numeric: 'auto', style: 'short' });
-	const minutes = Math.floor(Math.max(0, now - time) / 60_000);
-	if (minutes < 1) {
-		return format.format(0, 'second');
-	}
-	if (minutes < 60) {
-		return format.format(-minutes, 'minute');
-	}
-	const hours = Math.floor(minutes / 60);
-	return hours < 24 ? format.format(-hours, 'hour') : format.format(-Math.floor(hours / 24), 'day');
-}
 
 /**
  * Where a conversation was, as the window names it: its location, a subdirectory of one after it, else its path. Compared as the
@@ -74,35 +63,23 @@ type Item = vscode.QuickPickItem & { readonly entry?: ConversationEntry; readonl
  * narrow it; nothing is deleted or hidden.
  */
 export function resumeAgent(deps: ResumeDeps): Promise<void> {
-	const catalog = deps.locations.snapshot();
 	const picker = vscode.window.createQuickPick<Item>();
 	picker.title = vscode.l10n.t("Resume Agent");
 	picker.placeholder = vscode.l10n.t("Search saved conversations by title or location");
 	picker.matchOnDescription = true;
 	picker.matchOnDetail = true;
-	if (!catalog.locations.length) {
-		const item: Item = { label: vscode.l10n.t("Open Folder..."), detail: vscode.l10n.t("Open a folder to resume its conversations."), iconPath: new vscode.ThemeIcon('folder-opened'), openFolder: true };
-		picker.items = [item];
-		return new Promise(resolve => {
-			picker.onDidAccept(() => {
-				picker.hide();
-				void (deps.openFolder ? deps.openFolder() : vscode.commands.executeCommand('vscode.openFolder'));
-			});
-			picker.onDidHide(() => {
-				picker.dispose();
-				resolve();
-			});
-			picker.show();
-		});
-	}
+	// Shown at once, busy until the conversations are there to read (UX-1.1)
+	picker.busy = true;
 	const now = deps.now ?? Date.now;
-	const pager = deps.conversations.open({ environment: catalog.locations[0].environment, directories: [...new Set(catalog.locations.map(location => location.path))] });
+	/** The window's histories, open once what they depend on is read; none before, or where no folder is open. */
+	let pager: ConversationPager | undefined;
+	let catalog: Catalog = { locations: [], folders: [], pending: false };
+	let reals: readonly { readonly location: Location; readonly real: string }[] = [];
 	const entries: ConversationEntry[] = [];
 	const seen = new Set<string>();
 	let done = false;
 	let open = true;
 	let reading: Promise<void> | undefined;
-	const reals = catalog.locations.map(location => ({ location, real: realFolderOf(location.path) }));
 	const places = new Map<string, string>();
 	const placeIn = (cwd: string) => places.get(cwd) ?? places.set(cwd, placeOf(cwd, reals, catalog)).get(cwd)!;
 	// One line (LIFECYCLE-3.2, D64): its icon names its CLI; when, then where - what a long title cuts off last comes first
@@ -124,12 +101,12 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 		}
 	};
 	/** Reads the next batch, once at a time; deduplicated by environment, CLI and session ID, most recent first. */
-	const readNext = (): Promise<void> => reading ??= (async () => {
+	const readNext = (): Promise<void> => !pager ? Promise.resolve() : reading ??= (async (histories: ConversationPager) => {
 		picker.busy = true;
 		try {
 			const before = entries.length;
 			do {
-				const batch = await pager.next();
+				const batch = await histories.next();
 				if (!open) {
 					return;
 				}
@@ -156,14 +133,39 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 				show();
 			}
 		}
-	})();
+	})(pager);
 	/** A search goes on past what was read, batch after batch, while it is typed (LIFECYCLE-3.2). */
 	const readAll = async () => {
-		while (open && !done && picker.value.trim()) {
+		while (open && pager && !done && picker.value.trim()) {
 			await readNext();
 		}
 	};
-	void readNext();
+	/** What is read first, then the window's histories, or Open Folder where no folder is open (PANEL-1.2). */
+	const begin = async () => {
+		try {
+			await deps.prepared;
+		} catch (err) {
+			if (open) {
+				picker.hide();
+				deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {});
+			}
+			return;
+		}
+		if (!open) {
+			return;
+		}
+		catalog = deps.locations.snapshot();
+		if (!catalog.locations.length) {
+			picker.items = [{ label: vscode.l10n.t("Open Folder..."), detail: vscode.l10n.t("Open a folder to resume its conversations."), iconPath: new vscode.ThemeIcon('folder-opened'), openFolder: true }];
+			picker.busy = false;
+			return;
+		}
+		reals = catalog.locations.map(location => ({ location, real: realFolderOf(location.path) }));
+		pager = deps.conversations.open({ environment: catalog.locations[0].environment, directories: [...new Set(catalog.locations.map(location => location.path))] });
+		// A search typed meanwhile goes on past the first batch
+		await readNext();
+		await readAll();
+	};
 	return new Promise(resolve => {
 		let accepting = false;
 		const subscriptions: vscode.Disposable[] = [
@@ -174,7 +176,13 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 				}
 			}),
 			picker.onDidAccept(async () => {
-				let entry = picker.activeItems[0]?.entry;
+				const active = picker.activeItems[0];
+				if (active?.openFolder) {
+					picker.hide();
+					void vscode.commands.executeCommand('vscode.openFolder');
+					return;
+				}
+				let entry = active?.entry;
 				if (!entry) {
 					return;
 				}
@@ -209,11 +217,12 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 			picker.onDidHide(() => {
 				open = false;
 				subscriptions.forEach(each => each.dispose());
-				pager.dispose();
+				pager?.dispose();
 				picker.dispose();
 				if (!accepting) { resolve(); }
 			})
 		];
 		picker.show();
+		void begin();
 	});
 }

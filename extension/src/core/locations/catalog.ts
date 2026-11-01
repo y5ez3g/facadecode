@@ -4,7 +4,7 @@
 
 import * as crypto from 'crypto';
 import * as path from 'path';
-import { Catalog, GitState, Location, LocationId, WorkspaceFolderInfo } from '../ports';
+import { Catalog, GitState, Location, LocationId, RunFacts, WorkspaceFolderInfo } from '../ports';
 
 // The one current-window catalog (WORKTREES-1.2) as a pure function of what was read: its order, deduplication, labels
 // and identities are decided here, without Git, a disk or an editor.
@@ -204,6 +204,21 @@ export function isDeletableWorktree(location: Location, folders: readonly Worksp
 	}
 	const key = keyOf(location.path);
 	return !folders.some(each => isWithin(keyOf(each.path), key));
+}
+
+/**
+ * The runs launched in the worktree at `root` (WORKTREES-3.2, 3.3): their launch location is the worktree or a location inside it - a
+ * subdirectory where a conversation was resumed - as `locations` lists it, or, for one the catalog does not list yet, the run's own
+ * launch directory, whose identity its location is. Never a process's current directory. A deletion counts them, closes them first
+ * and waits for their processes.
+ */
+export function runsLaunchedIn<T extends Pick<RunFacts, 'location' | 'cwd' | 'environment'>>(runs: readonly T[], root: string, locations: readonly Location[], keyOf: (path: string) => string): T[] {
+	const paths = new Map(locations.map(each => [each.id, each.path]));
+	const rootKey = keyOf(root);
+	return runs.filter(run => {
+		const launched = paths.get(run.location) ?? (locationIdOf(run.environment, keyOf(run.cwd)) === run.location ? run.cwd : undefined);
+		return launched !== undefined && isWithin(keyOf(launched), rootKey);
+	});
 }
 
 /** Whether the key `inner` is `outer` or below it. */

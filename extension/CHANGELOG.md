@@ -23,6 +23,9 @@ Agents that work together, six native CLIs, and saved conversations.
 - **Installing in a remote window.** Facade Code now waits up to a minute for its Window Component while VS Code installs it, so a first install in a remote window usually needs no reload. If the component is missing or turned off, the panel says so and offers **Show Window Component**.
 - **Updating from 0.0.1.** Agents started before the update keep their cards and terminals. Operations supported by their original runtime continue to work; new launch integrations apply to new agents.
 - **Fixed on Windows.** Closing an agent, or several agents ending at once, could crash the background process that keeps agents running, which ended every agent in every window.
+- **Safer worktree deletion.** Deleting a worktree now also closes agents working in its subfolders first. On Windows, a worktree that contains a link to another folder is not deleted with a Git older than 2.54, which would delete the linked folder's files too; long paths are handled, and Facade says when Git leaves the folder behind.
+- **Agents start with a clean environment.** Agents get the environment a VS Code terminal gets, without VS Code's internal variables or those of another agent session Facade Code was opened from.
+- **Steadier after reloads.** Messages on their way when a window reloads are still delivered, or their senders are told; when the background process that keeps agents running is slow to answer, Facade waits for it instead of starting a second one; and a window keeps trying until every one of its agents shows.
 
 ## 0.0.1
 

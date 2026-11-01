@@ -148,7 +148,7 @@ export interface McpServerLaunch {
  * Why a run has no Facade tools, for the person's words (CLIS-2.2): its CLI runs through cmd.exe, its files could not be written, a
  * file of the person's is in the way, or a variable of theirs the tools' would go on could not be read.
  */
-export type ToolsProblem = 'cmd' | 'files' | 'conflict' | 'variable';
+export type ToolsProblem = 'cmd' | 'files' | 'conflict' | 'variable' | 'disconnected';
 
 /** A capability as an adapter stands behind it (CLIS-2.1). */
 export interface CapabilityState {
@@ -313,6 +313,8 @@ export interface ExecutionPort {
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */
 	readonly onDidConnectTools?: Event<RunId>;
+	/** No MCP shim of a run is connected any more: its tools are unavailable (RULES-3.1). */
+	readonly onDidDisconnectTools?: Event<RunId>;
 }
 
 /** What ptyd keeps with a run so a reloaded window can show it again. Plain JSON. */
@@ -641,6 +643,8 @@ export interface StartOutcome {
 }
 
 export interface Agents {
+	/** Whether this window still owns its workspace's agents: once another window took them over, none is this window's (RULES-4.1). */
+	owned?(): boolean;
 	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' };
 	holding(key: ConversationKey): RunId | 'elsewhere' | undefined;
 	refreshConversations(): Promise<void>;

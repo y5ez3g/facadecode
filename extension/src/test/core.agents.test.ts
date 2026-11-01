@@ -51,6 +51,7 @@ class FakeExecution implements ExecutionPort {
 	failSpawnFor?: (plan: LaunchPlan) => boolean;
 	readonly transfers = new Emitter<void>();
 	readonly toolConnections = new Emitter<RunId>();
+	readonly toolDisconnections = new Emitter<RunId>();
 	readonly reveals = new Map<RunId, boolean>();
 	readonly reopened: RunId[] = [];
 	liveRuns: LiveRun[] = [];
@@ -65,6 +66,7 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
+	readonly onDidDisconnectTools = this.toolDisconnections.event;
 	openPair(facts: PairFacts, options: { reveal: boolean }): void { this.pairs.set(facts.run, facts); this.reveals.set(facts.run, options.reveal); }
 	note(run: RunId, text: string): void { this.notes.push({ run, text }); }
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ pid: number; startedAt: number }> {
@@ -315,11 +317,36 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 			(err: unknown) => err instanceof FacadeError && err.reason === 'ownership_lost' && /owned by another window/.test(err.message));
 	});
 
-	test('a damaged retained record is ignored without stopping restoration', async () => {
+	test('a retained record that cannot be removed - the store refuses the write - never keeps the live agents from being shown again (RULES-4.1, D86)', async () => {
+		const world = setUp();
+		const creator = 'run-' + 'c'.repeat(32);
+		const expired = 'run-' + '1'.repeat(32);
+		world.retained.set(expired, { id: expired, origin: 'agent', root: creator, creator, requestId: 'old', requestOnly: true, tools: 'not_injected', alias: '#a1', name: 'Old', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'running', activity: 'unknown', reporting: false });
+		world.retained.delete = () => { throw new Error('EBUSY: resource busy or locked, unlink retained.json'); };
+		const live = 'run-' + '2'.repeat(32);
+		world.execution.liveRuns = [{ run: live, meta: { alias: '#a2', name: 'Live', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 5 }, pid: 22, startedAt: 6, claimedElsewhere: false }];
+		world.advance(2 * 60 * 60_000);
+		assert.strictEqual(await world.agents.restore(), 0);
+		assert.deepStrictEqual(world.agents.list().map(run => run.id), [live], 'the live agent is shown again');
+		assert.ok(world.log.some(line => /Could not remove the kept record of run-1+: EBUSY/.test(line)), 'the failed cleanup is said in the log');
+		assert.strictEqual(world.agents.requested(creator, 'old'), undefined, 'a request lookup is not failed by the same cleanup');
+	});
+
+	test('a damaged retained record is ignored without stopping restoration, said once however often the window restores (ARCHITECTURE-4.2)', async () => {
 		const world = setUp();
 		world.retained.set('bad', { id: 'bad', alias: '#a1', name: 'Incomplete' } as RunFacts);
 		await world.agents.restore();
+		await world.agents.restore();
 		assert.deepStrictEqual([world.agents.list(), [...world.execution.pairs], world.log], [[], [], ['Ignored an invalid retained agent record.']]);
+	});
+
+	test('a run that ends normally while it is reattached is never announced afterwards as added (RULES-3.3, LIFECYCLE-3.5)', async () => {
+		const world = setUp();
+		const run = 'run-' + '7'.repeat(32);
+		world.execution.liveRuns = [{ run, meta: { alias: '#a7', name: 'Done', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 5 }, pid: 77, startedAt: 6, claimedElsewhere: false }];
+		world.execution.attach = async live => { world.execution.exits.fire({ run: live.run, code: 0, interruptVerified: false }); };
+		await world.agents.restore();
+		assert.deepStrictEqual([world.agents.list(), world.changes.map(change => change.kind)], [[], ['removed']]);
 	});
 
 	test('an accepted launch creates its pair at once, before the process, and keeps the same run through startup (J01, LIFECYCLE-1.5)', async () => {
@@ -428,13 +455,26 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.get(id), undefined, 'its later exit does not bring it back');
 	});
 
-	test('closing during startup prevents the later spawn (WORKTREES-2.5, RULES-5.2)', async () => {
+	test('a close removes the card and terminal at once even where its kept record cannot be removed - the store refuses the write (LIFECYCLE-3.1)', async () => {
+		const world = setUp({ planError: new PlanError('claude is not installed in this environment.', 'not_found') });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		assert.ok(world.retained.has(id), 'its failed start is kept for a reload');
+		world.retained.delete = () => { throw new Error('Timed out after 5 seconds waiting for another window to release the lock'); };
+		assert.strictEqual(await world.agents.close(id), 'already_ended');
+		assert.deepStrictEqual([world.agents.get(id), world.execution.removed, world.changes.filter(change => change.kind === 'removed').map(change => change.run)], [undefined, [id], [id]]);
+		assert.ok(world.log.some(line => /Could not remove the kept record of run-.*: Timed out/.test(line)));
+	});
+
+	test('closing during startup prevents the later spawn; one already asked for is ended, and the close says how it went, never that nothing started - a worktree is deleted only once its processes ended (WORKTREES-2.5, 3.2, RULES-5.2)', async () => {
 		const world = setUp();
 		let release!: () => void;
 		world.execution.spawnGate = new Promise(resolve => release = resolve);
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		assert.strictEqual(await world.agents.close(id), 'not_started');
+		world.execution.cleanup = 'unconfirmed';
+		assert.strictEqual(await world.agents.close(id), 'unconfirmed');
+		assert.deepStrictEqual(world.execution.terminated, [id]);
 		release();
 		await settle();
 		assert.strictEqual(world.agents.get(id), undefined);
@@ -546,6 +586,32 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		await settle();
 		assert.strictEqual(world.agents.get(id), undefined);
 		assert.deepStrictEqual(world.execution.terminated, [id]);
+	});
+
+	test('a removed location\'s agents close and its Pins go, one by one, where the Pin store refuses a write - which is said (RULES-2.4, 4.2)', async () => {
+		const world = continuitySetup();
+		const [first, second] = ['A', 'B'].map(name => world.agents.launch({ name, location: 'loc-1', cli: 'claude', origin: 'human' }));
+		await settle();
+		world.agents.pin(first);
+		world.agents.pin(second);
+		const store = (world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore;
+		store.remove = () => { throw new Error('disk full'); };
+		world.removals.fire({ ids: ['loc-1'], cause: 'folder' });
+		await settle();
+		assert.deepStrictEqual([world.agents.list(), world.execution.terminated.sort()], [[], [first, second].sort()]);
+		assert.ok(world.log.some(line => /Could not unpin "A", whose working location was removed: disk full/.test(line)));
+	});
+
+	test('a tab closed by the person whose close fails - its Unpin could not be saved - keeps the agent, opens its terminal again and tells the person (LIFECYCLE-3.1, RULES-1.8)', async () => {
+		const world = continuitySetup();
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.agents.pin(id);
+		(world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.remove = () => { throw new Error('disk full'); };
+		world.execution.tabCloses.fire(id);
+		await settle();
+		assert.deepStrictEqual([world.agents.get(id)?.pin !== undefined, world.execution.reopened, world.failures.map(failure => [failure.kind, failure.reason])], [true, [id], [['pin', 'disk full']]]);
+		assert.ok(world.log.some(line => /Could not close #a1 as its tab was closed: disk full/.test(line)));
 	});
 
 	test('a natively closed tab is an explicit close (LIFECYCLE-3.1)', async () => {
@@ -879,6 +945,26 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.strictEqual(world.plans.length, 2, 'queued third Pin never starts after disposal');
 	});
 
+	test('Pins are restored only once the running conversations are known in every ptyd: a listing that fails is asked again, never guessed (LIFECYCLE-3.5, RULES-4.2)', async () => {
+		const world = setUp();
+		const deps = (world.agents as unknown as { deps: { pinStore: { save(p: Pin): void }; wait?: (ms: number) => Promise<void> } }).deps;
+		// One runs in a ptyd of an earlier protocol that is not answering yet; the other runs nowhere
+		deps.pinStore.save({ id: 'pin-held', conversation: { ...ENTRY.key, sessionId: 'held' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Held' });
+		deps.pinStore.save({ id: 'pin-free', conversation: { ...ENTRY.key, sessionId: 'free' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Free' });
+		let asked = 0;
+		world.execution.conversations = async () => {
+			if (++asked < 3) {
+				throw new Error('The ptyd of protocol 9 took no connection now.');
+			}
+			return [{ ...ENTRY.key, sessionId: 'held' }];
+		};
+		const waits: number[] = [];
+		deps.wait = async ms => { waits.push(ms); assert.deepStrictEqual(world.plans, [], 'nothing starts while the listing is incomplete'); };
+		await world.agents.restorePins();
+		assert.deepStrictEqual([asked, waits.length, world.plans.map(plan => plan.resume?.sessionId)], [3, 2, ['free']]);
+		assert.strictEqual(world.log.filter(line => /Could not list the conversations running/.test(line)).length, 1, 'the same failure said once');
+	});
+
 	test('manual Resume after an explicit Unpin does not restore that Pin', async () => {
 		const world = setUp();
 		const first = world.agents.resume(ENTRY, { reveal: true }) as RunId;
@@ -908,6 +994,20 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.ok(!world.pins().some(pin => pin.id === 'pin-gone'), 'closing its card Unpins');
 	});
 
+	test('Pins of a location removed while no host ran - removing the first folder restarts the extensions - are unpinned, never restored red (RULES-2.4, 4.2)', async () => {
+		const world = setUp({ removedWhileAway: ['loc-gone'] });
+		const save = (pin: Pin) => (world.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save(pin);
+		const pin = (id: string): Pin => ({ id, conversation: { environment: 'local', cli: 'claude', sessionId: id }, location: 'loc-gone', cwd: '/work/gone', name: id });
+		save(pin('pin-unheld'));
+		save(pin('pin-held'));
+		// A failed restoration of that folder's Pin, kept red for a reload
+		const failed = 'run-' + '8'.repeat(32);
+		world.retained.set(failed, { id: failed, origin: 'human', root: failed, tools: 'not_injected', alias: '#a8', name: 'Held', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-gone', cwd: '/work/gone', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, resumable: true, sessionId: 'pin-held', pin: 'pin-held', end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
+		await world.agents.restore();
+		await world.agents.restorePins();
+		assert.deepStrictEqual([world.pins(), world.agents.list(), world.errors], [[], [], []]);
+	});
+
 	test('Resuming a crashed pinned conversation hands its Pin to the new card; closing the old card keeps the Pin (LIFECYCLE-3.4)', async () => {
 		const world = setUp();
 		const first = world.agents.resume(ENTRY, { reveal: false }) as RunId;
@@ -927,6 +1027,32 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		(world.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save({ id: 'pin-x', conversation: { environment: 'local', cli: 'claude', sessionId: 'x' }, location: 'loc-1', cwd: '/work/app', name: 'Ada' });
 		await world.agents.restorePins();
 		assert.deepStrictEqual(world.errors.map(error => error.text), ['Could not restore Ada: claude is not installed in this environment.']);
+	});
+
+	test('a conversation has one Pin: pinning a card whose CLI resumed a pinned conversation takes that Pin to the very top, and a pinned card switching to it replaces it - Unpin then leaves none to restore (RULES-4.2, LIFECYCLE-3.4, PANEL-2.1)', async () => {
+		const world = setUp();
+		const store = (world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore;
+		const save = (pin: Pin) => store.save(pin);
+		save({ id: 'pin-k', conversation: { ...ENTRY.key, sessionId: 'k' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Earlier' });
+		save({ id: 'pin-top', conversation: { ...ENTRY.key, sessionId: 'top' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Top' });
+		const id = world.agents.launch({ name: 'New', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		// Its CLI's own resume picks the pinned conversation; the person pins the card, from its menu or its tab
+		world.execution.identities.fire({ run: id, sessionId: 'k' });
+		world.agents.pin(id);
+		assert.deepStrictEqual([world.pins().map(pin => [pin.id, pin.name]), world.agents.get(id)?.pin], [[['pin-k', 'New'], ['pin-top', 'Top']], 'pin-k']);
+		world.agents.unpin(id);
+		store.remove('pin-top');
+		assert.deepStrictEqual(world.pins(), []);
+		// A pinned card whose CLI switches to a conversation another Pin names
+		save({ id: 'pin-m', conversation: { ...ENTRY.key, sessionId: 'm' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Other' });
+		world.agents.pin(id);
+		const own = world.agents.get(id)!.pin;
+		world.execution.identities.fire({ run: id, sessionId: 'm' });
+		assert.deepStrictEqual(world.pins().map(pin => [pin.id, pin.conversation.sessionId]), [[own, 'm']]);
+		world.agents.unpin(id);
+		await world.agents.restorePins();
+		assert.deepStrictEqual([world.pins(), world.plans.filter(plan => plan.resume).length], [[], 0], 'nothing is restored after the Unpin');
 	});
 
 	test('a CLI that changes its session updates the record and the Pin once the new identity is known (LIFECYCLE-3.4)', async () => {
@@ -1092,11 +1218,19 @@ suite('Agents started by agents, and their tools (RULES-4.3, LIFECYCLE-2.2, CLIS
 		world.execution.toolConnections.fire(id);
 		assert.strictEqual(world.agents.get(id)?.tools, 'available');
 		assert.strictEqual(world.execution.metas.get(id)?.tools, 'available');
+		// Its shim gone, none other connected: its tools are unavailable, said so, until a shim says hello again (RULES-3.1)
+		world.execution.toolDisconnections.fire(id);
+		assert.deepStrictEqual([world.agents.get(id)?.tools, world.agents.get(id)?.toolsProblem, world.execution.metas.get(id)?.tools], ['unavailable', 'disconnected', 'unavailable']);
+		world.execution.toolConnections.fire(id);
+		assert.deepStrictEqual([world.agents.get(id)?.tools, world.agents.get(id)?.toolsProblem, world.agents.get(id)?.toolsReason], ['available', undefined, undefined]);
 		// Tools the plan could not give leave the CLI running without them, with why
 		const without = setUp({ tools: true, plan: { tools: { state: 'unavailable', reason: 'another facade skill is in the project' } } });
 		const other = without.agents.launch({ name: 'b', location: 'loc-1', cli: 'codex', origin: 'human' });
 		await settle();
 		assert.deepStrictEqual([without.agents.get(other)?.lifecycle, without.agents.get(other)?.tools, without.agents.get(other)?.toolsReason], ['running', 'unavailable', 'another facade skill is in the project']);
+		// A shim going says nothing of tools that never connected: theirs stays why the plan gave none
+		without.execution.toolDisconnections.fire(other);
+		assert.deepStrictEqual([without.agents.get(other)?.tools, without.agents.get(other)?.toolsProblem], ['unavailable', undefined]);
 	});
 
 	test('started() settles once the process started, the launch failed or the run was closed first, with how its prompt goes in', async () => {

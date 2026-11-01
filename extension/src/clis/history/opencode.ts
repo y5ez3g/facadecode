@@ -6,7 +6,7 @@
 
 import * as path from 'path';
 import { variableOf } from '../environment';
-import { homeOf } from '../executable';
+import { xdgDirOf } from '../executable';
 import { inScope, titleOf } from './scope';
 import { openReadOnly } from './sqlite';
 import type { Candidate, VendorStore } from './store';
@@ -40,8 +40,7 @@ export function openCodeCandidates(file: string, directories: readonly string[])
 export const OPENCODE_STORE: VendorStore = {
 	cli: 'opencode',
 	dirOf: (env, cwd) => {
-		const xdg = variableOf(env, 'XDG_DATA_HOME');
-		const data = path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(homeOf(env), '.local', 'share'), 'opencode');
+		const data = path.join(xdgDirOf('data', env), 'opencode');
 		const file = variableOf(env, 'OPENCODE_DB') || 'opencode.db';
 		return file === ':memory:' ? file : path.resolve(cwd, data, file);
 	},

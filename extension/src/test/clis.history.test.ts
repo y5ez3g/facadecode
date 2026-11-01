@@ -8,7 +8,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { BATCH, MOST_READS_PER_BATCH, VendorHistory } from '../clis/history';
 import { claudeProjectFolderName } from '../clis/history/claude';
-import { piSessionDirectory } from '../clis/history/pi';
+import { piCandidates, piSessionDirectory, piSessionFolderName } from '../clis/history/pi';
 import { tempDir } from './util';
 
 // Fixtures in the store formats these readers were written against: they test Facade's readers, not what a current CLI writes,
@@ -41,18 +41,35 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 
 	test('Pi reads native and overridden session roots, original cwd and the latest rename, without confusing encoded neighbour folders', async () => {
 		const agent = path.join(temp.dir, 'pi');
-		const dir = path.join(agent, 'sessions', '--work-repo--');
-		fs.mkdirSync(dir, { recursive: true });
-		const write = (n: number, cwd: string) => fs.writeFileSync(path.join(dir, `2026-10-31T00-00-00-000Z_${id(n)}.jsonl`), [
-			{ type: 'session', version: 3, id: id(n), timestamp: '2026-10-31T00:00:00Z', cwd },
-			{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Fix the test\nDetails' }] } },
-			{ type: 'session_info', name: 'Named native work' }
-		].map(line => JSON.stringify(line)).join('\n'));
-		write(1, path.join(repo, 'pkg')); write(2, `${repo}-other`);
-		for (const env of [{ PI_CODING_AGENT_DIR: agent }, { PI_CODING_AGENT_SESSION_DIR: dir }]) {
+		// Each session in the folder Pi names for its cwd; an override keeps them all in one folder
+		const flat = path.join(temp.dir, 'pi-sessions');
+		const write = (n: number, cwd: string, dir = path.join(agent, 'sessions', piSessionFolderName(cwd))) => {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, `2026-10-31T00-00-00-000Z_${id(n)}.jsonl`), [
+				{ type: 'session', version: 3, id: id(n), timestamp: '2026-10-31T00:00:00Z', cwd },
+				{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Fix the test\nDetails' }] } },
+				{ type: 'session_info', name: 'Named native work' }
+			].map(line => JSON.stringify(line)).join('\n'));
+		};
+		for (const dir of [undefined, flat]) {
+			write(1, path.join(repo, 'pkg'), dir); write(2, `${repo}-other`, dir);
+		}
+		for (const env of [{ PI_CODING_AGENT_DIR: agent }, { PI_CODING_AGENT_SESSION_DIR: flat }]) {
 			const result = await new VendorHistory({ environment: () => ({ pi: env }) }).open({ environment: 'local', directories: [repo] }).next();
 			assert.deepStrictEqual(result.entries.map(each => [each.key.sessionId, each.cwd, each.title]), [[id(1), path.join(repo, 'pkg'), 'Named native work']]);
 		}
+	});
+
+	test('Pi\'s sessions of folders outside the scope are not read at all: its folders are named for their cwd, as Pi 1.4 names them (LIFECYCLE-3.2)', () => {
+		const sessions = path.join(temp.dir, 'pi', 'sessions');
+		assert.strictEqual(piSessionFolderName(process.platform === 'win32' ? 'C:\\Users\\me\\repo' : '/home/me/repo'), process.platform === 'win32' ? '--C--Users-me-repo--' : '--home-me-repo--');
+		for (const cwd of [repo, path.join(repo, 'pkg'), `${repo}-other`, path.join(temp.dir, 'elsewhere')]) {
+			fs.mkdirSync(path.join(sessions, piSessionFolderName(cwd)), { recursive: true });
+			fs.writeFileSync(path.join(sessions, piSessionFolderName(cwd), `${id(1)}.jsonl`), '{}\n');
+		}
+		const listed = piCandidates(sessions, [repo]).map(candidate => path.basename(path.dirname(candidate.file))).sort();
+		// The sibling sharing a prefix is a candidate, read and left out by its header; elsewhere is not read
+		assert.deepStrictEqual(listed, [repo, path.join(repo, 'pkg'), `${repo}-other`].map(piSessionFolderName).sort());
 	});
 
 	test('Pi discovery resolves native session-dir overrides in launch, environment, project and global precedence', () => {
@@ -409,6 +426,22 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		const limited = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, ...homeEnv(temp.dir) }), unavailable: cli => cli === 'codex' ? 'codex was not found on the PATH' : undefined });
 		const batch = await limited.open({ environment: 'local', directories: [repo] }).next();
 		assert.strictEqual(batch.entries[0].unavailable, 'codex was not found on the PATH');
+	});
+
+	test('a picker session asks once per CLI and folder whether a conversation can be resumed there, however many it lists (LIFECYCLE-3.2)', async () => {
+		const base = Date.UTC(2026, 9, 27, 12);
+		for (let n = 0; n < 12; n++) {
+			claude(repo, id(n), base + n * 1_000);
+		}
+		claude(path.join(repo, 'pkg'), id(20), base + 20_000);
+		codex(repo, id(30), base + 30_000);
+		const asked: string[] = [];
+		const counting = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, ...homeEnv(temp.dir) }), unavailable: (cli, cwd) => { asked.push(`${cli} ${path.relative(repo, cwd) || '.'}`); return undefined; } });
+		const pager = counting.open({ environment: 'local', directories: [repo] });
+		assert.strictEqual((await pager.next()).entries.length, 14);
+		assert.deepStrictEqual(asked.sort(), ['claude .', `claude pkg`, 'codex .']);
+		await counting.open({ environment: 'local', directories: [repo] }).next();
+		assert.strictEqual(asked.length, 6, 'a new picker session asks again: a CLI installed meanwhile is found');
 	});
 
 	test('batches of 100, with no age cutoff; a batch that reaches its read bound ends early and the next goes on, so an older match stays reachable', async () => {

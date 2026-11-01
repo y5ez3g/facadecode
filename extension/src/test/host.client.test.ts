@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { AGENTS_ROUTE_COMMAND, WINDOW_ALLOCATE_COMMAND, WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND } from '../base/windowNetwork';
+import { AGENTS_ROUTE_COMMAND, WINDOW_ALLOCATE_COMMAND, WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND, WORKSPACE_REPUBLISH_COMMAND } from '../base/windowNetwork';
 import type { RunChange, RunFacts } from '../core/ports';
 import { allocateNumbers } from '../record/windowRegistry';
 import { runFacts } from './contractFakes';
@@ -171,5 +171,29 @@ suite('The workspace extension on the client network (ARCHITECTURE-2.1; RULES-1.
 		changes.fire({ run: runs[1].id, kind: 'renamed' });
 		await new Promise(resolve => setTimeout(resolve, 300));
 		assert.strictEqual(published.length, 2);
+	});
+
+	test('a component that cannot listen is said in the log, once, and its return too; a component that started again is told the agents at once, as it asks (ARCHITECTURE-2.1)', async () => {
+		const editor = fakeEditor();
+		let status: unknown = { listening: false, problem: 'listen EADDRINUSE' };
+		let published = 0;
+		editor.handlers.set(WINDOW_PUBLISH_COMMAND, () => { published++; return status; });
+		const logged: string[] = [];
+		const runs: RunFacts[] = [runFacts(1, { name: 'lead' })];
+		const changes = new TestEmitter<RunChange>();
+		const publication = editor.client.publishAgents({ list: () => runs, onDidChange: changes.event }, 'Window', line => logged.push(line), 'session-1');
+		await new Promise(resolve => setTimeout(resolve, 0));
+		const republish = editor.registered.get(WORKSPACE_REPUBLISH_COMMAND)!;
+		republish('session-1');
+		await new Promise(resolve => setTimeout(resolve, 0));
+		assert.strictEqual(published, 2, 'a starting component asks, and is told at once');
+		assert.deepStrictEqual(logged, ['Other Facade windows cannot reach this window now: listen EADDRINUSE']);
+		republish('another-session');
+		status = { listening: true };
+		republish('session-1');
+		await new Promise(resolve => setTimeout(resolve, 0));
+		assert.deepStrictEqual([published, logged], [3, ['Other Facade windows cannot reach this window now: listen EADDRINUSE', 'Other Facade windows can reach this window again.']]);
+		publication.dispose();
+		assert.ok(!editor.registered.has(WORKSPACE_REPUBLISH_COMMAND));
 	});
 });

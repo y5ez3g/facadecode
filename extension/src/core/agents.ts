@@ -2,6 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { timeout, untilAnswered } from '../base/async';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { displayLine } from '../base/text';
@@ -43,6 +44,8 @@ export interface AgentServiceDeps {
 	 */
 	readonly warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
 	readonly newRunId: () => RunId;
+	/** Waits `ms` before a listing that failed is asked again; the service's own timer where none is given. */
+	readonly wait?: (ms: number) => Promise<void>;
 }
 
 interface Run {
@@ -50,10 +53,10 @@ interface Run {
 	facts: RunFacts;
 	/** Known startup creation effects, retained if later CLI planning or spawning fails. */
 	worktree?: WorktreeCreationEffects;
-	/** Whether an explicit close of this run was requested: its exit is then normal (RULES-3.3). */
-	closing: boolean;
 	/** Settles once its process started, its launch failed or it was closed first (MCP-2.3). */
 	settled: Promise<void>;
+	/** Whether its process was asked for and the answer is not in yet: a close then cannot say none started (WORKTREES-3.2). */
+	spawning?: boolean;
 	/** How its creation prompt goes in, once planned. */
 	prompt?: LaunchPlan['prompt'];
 	/** Settles once what its start types before its first turn is done or given up (COLLABORATION-2.2). */
@@ -73,6 +76,9 @@ function keyOf(facts: RunFacts): ConversationKey | undefined {
 }
 function sameConversation(a: ConversationKey, b: ConversationKey): boolean { return conversationId(a) === conversationId(b); }
 const RESTORE_CONCURRENCY = 2;
+/** How long a failed listing of the running conversations waits before it is asked again, at first and at most. */
+const CONVERSATIONS_RETRY_MS = 2_000;
+const MOST_CONVERSATIONS_RETRY_MS = 30_000;
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -87,6 +93,8 @@ export class AgentService implements Agents, Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	private ownershipLost = false;
 	private disposed = false;
+	/** Aborted as the service is disposed: what waits on a timer stops waiting. */
+	private readonly stopping = new AbortController();
 	private readonly elsewhere = new Set<string>();
 	private readonly restoring = new Set<RunId>();
 	private pinsRestored = false;
@@ -106,6 +114,8 @@ export class AgentService implements Agents, Disposable {
 	private readonly released = new Set<RunId>();
 	/** Why the last listing of this window's runs failed, said once until it changes. */
 	private listingFailure: string | undefined;
+	/** Whether an invalid retained record was said in the log already. */
+	private ignoredRecord = false;
 
 	readonly onDidChange: Event<RunChange> = listener => {
 		this.listeners.add(listener);
@@ -135,6 +145,9 @@ export class AgentService implements Agents, Disposable {
 		if (execution.onDidConnectTools) {
 			this.subscriptions.push(execution.onDidConnectTools(run => this.toolsConnected(run)));
 		}
+		if (execution.onDidDisconnectTools) {
+			this.subscriptions.push(execution.onDidDisconnectTools(run => this.toolsDisconnected(run)));
+		}
 		if (execution.onDidLoseOwnership) {
 			this.subscriptions.push(execution.onDidLoseOwnership(() => {
 				this.ownershipLost = true;
@@ -148,6 +161,7 @@ export class AgentService implements Agents, Disposable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.stopping.abort();
 		for (const subscription of this.subscriptions) {
 			subscription.dispose();
 		}
@@ -156,6 +170,10 @@ export class AgentService implements Agents, Disposable {
 
 	list(): readonly RunFacts[] {
 		return [...this.runs.values()].map(run => run.facts);
+	}
+
+	owned(): boolean {
+		return !this.ownershipLost;
 	}
 
 	get(run: RunId): RunFacts | undefined {
@@ -167,7 +185,7 @@ export class AgentService implements Agents, Disposable {
 		const kept = this.deps.retained.list().filter(record => isRetainedRun(record) || isRequestRun(record));
 		for (const record of kept) {
 			if (record.requestOnly && record.createdAt <= cutoff) {
-				this.deps.retained.remove(record.id);
+				this.forgetRetained(record.id);
 			}
 		}
 		return [...this.list(), ...kept].find(run => run.creator === from && run.requestId === requestId && run.createdAt > cutoff);
@@ -187,6 +205,18 @@ export class AgentService implements Agents, Disposable {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Removes a retained record. One the store cannot remove now - a lock not let go, a file the system holds - stays for a later try,
+	 * said in the log: cleanup never holds up showing this window's agents or answering an operation (RULES-4.1, D86).
+	 */
+	private forgetRetained(id: RunId): void {
+		try {
+			this.deps.retained.remove(id);
+		} catch (err) {
+			this.deps.log.event(`Could not remove the kept record of ${id}: ${messageOf(err)}`);
+		}
 	}
 
 	/**
@@ -217,28 +247,33 @@ export class AgentService implements Agents, Disposable {
 		if (this.ownershipLost) {
 			return 0;
 		}
+		this.unpinRemoved();
 		const liveIds = new Set(live.map(run => run.run));
 		for (const kept of this.deps.retained.list()) {
 			if (isRequestRun(kept)) {
 				if (kept.createdAt <= this.deps.clock.now() - REQUEST_MS) {
-					this.deps.retained.remove(kept.id);
+					this.forgetRetained(kept.id);
 				}
 				continue;
 			}
 			if (!isRetainedRun(kept)) {
-				this.deps.log.event('Ignored an invalid retained agent record.');
+				// Said once a window, not at each restore (ARCHITECTURE-4.2)
+				if (!this.ignoredRecord) {
+					this.ignoredRecord = true;
+					this.deps.log.event('Ignored an invalid retained agent record.');
+				}
 				continue;
 			}
 			const facts = retainedFacts(kept);
 			// Its location removed while no window showed it: closed as the removal would have closed it (RULES-2.4)
 			if (liveIds.has(facts.id) || this.deps.locations.removalOf(facts.location)) {
-				this.deps.retained.remove(facts.id);
+				this.forgetRetained(facts.id);
 				continue;
 			}
 			if (!this.runs.has(facts.id) && !this.released.has(facts.id)) {
 				const pin = facts.pin && this.pins().find(pin => pin.id === facts.pin);
 				const { pin: _previousPin, ...rest } = facts;
-				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, closing: false, exactResume: facts.resumable, settled: Promise.resolve() });
+				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, exactResume: facts.resumable, settled: Promise.resolve() });
 				this.deps.execution.openPair(pairOf(facts), { reveal: false });
 				if (facts.error) {
 					this.deps.execution.note(facts.id, facts.error.reason);
@@ -266,7 +301,7 @@ export class AgentService implements Agents, Disposable {
 				pid: each.pid,
 				startedAt: each.startedAt
 			};
-			const run: Run = { facts, closing: false, exactResume: each.meta.exactResume, settled: Promise.resolve() };
+			const run: Run = { facts, exactResume: each.meta.exactResume, settled: Promise.resolve() };
 			this.runs.set(each.run, run);
 			try {
 				await this.deps.execution.attach(each, pairOf(facts));
@@ -275,6 +310,10 @@ export class AgentService implements Agents, Disposable {
 					this.runs.delete(each.run);
 				}
 				this.deps.log.event(`Could not reattach ${facts.alias}: ${messageOf(err)}`);
+				continue;
+			}
+			if (this.runs.get(each.run) !== run) {
+				// Ended normally or closed as it was reattached: already removed, never announced afterwards (RULES-3.3)
 				continue;
 			}
 			this.emit({ run: each.run, kind: 'added' });
@@ -287,6 +326,26 @@ export class AgentService implements Agents, Disposable {
 		}
 		this.settlePins();
 		return elsewhere;
+	}
+
+	/**
+	 * Unpins the Pins whose location this session reported removed: a removal found as the extensions restart - removing the first
+	 * folder restarts them - is reported before this service hears it, and unpins as one heard does (RULES-2.4, 4.2).
+	 */
+	private unpinRemoved(): void {
+		this.unpinGone(this.pins().filter(pin => this.deps.locations.removalOf(pin.location)));
+	}
+
+	/** Unpins `pins`, whose location was removed, each on its own: one the store cannot remove now is said, and holds up no other. */
+	private unpinGone(pins: readonly Pin[]): void {
+		for (const pin of pins) {
+			try {
+				this.pinStore.remove(pin.id);
+				this.deps.log.event(`Unpinned ${JSON.stringify(pin.name)}: its working location was removed`);
+			} catch (err) {
+				this.deps.log.event(`Could not unpin ${JSON.stringify(pin.name)}, whose working location was removed: ${messageOf(err)}`);
+			}
+		}
 	}
 
 	private settlePins(): void {
@@ -333,7 +392,7 @@ export class AgentService implements Agents, Disposable {
 			return { state: 'closed' };
 		}
 		await run.settled;
-		const facts = this.runs.get(id) === run && !run.closing ? run.facts : undefined;
+		const facts = this.runs.get(id) === run ? run.facts : undefined;
 		const prompt = run.prompt ? { prompt: run.prompt } : {};
 		if (!facts) {
 			return { state: 'closed', ...prompt };
@@ -420,7 +479,7 @@ export class AgentService implements Agents, Disposable {
 			for (const other of this.runs.values()) { if (other.facts.pin === options.pin) { this.losePin(other); } }
 		}
 		let settle!: () => void;
-		const run: Run = { facts, closing: false, settled: new Promise(resolve => settle = resolve) };
+		const run: Run = { facts, settled: new Promise(resolve => settle = resolve) };
 		// Persist a request-bearing accepted run before creating its worktree or process, including starts interrupted by reload.
 		this.rememberRequest(facts, true);
 		if (options.restoring) { this.restoring.add(id); }
@@ -491,7 +550,8 @@ export class AgentService implements Agents, Disposable {
 		}, 'lifecycle');
 		try {
 			const meta = metaOf(run.facts, run.exactResume);
-			const started = await this.deps.execution.spawn(run.facts.id, plan, meta);
+			run.spawning = true;
+			const started = await this.deps.execution.spawn(run.facts.id, plan, meta).finally(() => { run.spawning = false; });
 			if (!this.live(run)) {
 				return;
 			}
@@ -531,7 +591,18 @@ export class AgentService implements Agents, Disposable {
 	private toolsConnected(id: RunId): void {
 		const run = this.runs.get(id);
 		if (run && run.facts.lifecycle !== 'ended' && run.facts.tools !== 'available') {
-			this.update(run, { tools: 'available' }, 'reported');
+			this.update(run, { tools: 'available', toolsProblem: undefined, toolsReason: undefined }, 'reported');
+			if (run.facts.pid !== undefined) {
+				this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
+			}
+		}
+	}
+
+	/** Its MCP shim went, none other connected: its tools, once there, are unavailable, and the card says so (RULES-3.1, PANEL-1.4). */
+	private toolsDisconnected(id: RunId): void {
+		const run = this.runs.get(id);
+		if (run && run.facts.lifecycle !== 'ended' && run.facts.tools === 'available') {
+			this.update(run, { tools: 'unavailable', toolsProblem: 'disconnected', toolsReason: 'its Facade MCP server disconnected' }, 'reported');
 			if (run.facts.pid !== undefined) {
 				this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 			}
@@ -540,7 +611,7 @@ export class AgentService implements Agents, Disposable {
 
 	/** Whether the run is still wanted: closing it during startup prevents a later spawn (WORKTREES-2.5, RULES-5.2). */
 	private live(run: Run): boolean {
-		return !this.disposed && !this.ownershipLost && this.runs.get(run.facts.id) === run && !run.closing;
+		return !this.disposed && !this.ownershipLost && this.runs.get(run.facts.id) === run;
 	}
 
 	/** The launch failed: its pair kept red with why in the person's words, the English in the log (RULES-3.3, UX-2.4). */
@@ -576,27 +647,35 @@ export class AgentService implements Agents, Disposable {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
 		this.unpinned(run);
-		run.closing = true;
+		return this.closeRun(run);
+	}
+
+	/** Removes `run`'s pair at once and ends its process in the background (LIFECYCLE-3.1), its Pin already seen to. */
+	private async closeRun(run: Run): Promise<CleanupResult | 'already_ended' | 'not_started'> {
+		const id = run.facts.id;
 		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
 		this.released.add(id);
 		const key = keyOf(run.facts);
 		if (key) { this.elsewhere.delete(conversationId(key)); }
-		if (!kept) {
-			this.deps.retained.remove(id);
-		}
 		this.deps.execution.removePair(id);
 		this.emit({ run: id, kind: 'removed', cause: 'close' });
 		this.release(id);
+		// Its card and terminal are gone first: a record the store cannot remove now holds up neither, nor its process's end (RULES-4.1)
+		if (!kept) {
+			this.forgetRetained(id);
+		}
 		if (run.facts.lifecycle === 'ended') {
 			this.deps.log.event(`Closed ${run.facts.alias}`);
 			return 'already_ended';
 		}
-		if (run.facts.pid === undefined) {
-			// Closed before its process started: it never starts; one already spawning is ended in the background (WORKTREES-2.5)
+		if (run.facts.pid === undefined && !run.spawning) {
+			// Closed before its process was asked for: it never starts (WORKTREES-2.5)
 			this.deps.log.event(`Closed ${run.facts.alias} before its process started`);
 			return 'not_started';
 		}
+		// A process asked for may be starting now: ended as it starts, the close answers how that went - never that none started, for a
+		// deletion that waits for every process of a worktree to end (WORKTREES-3.2, LIFECYCLE-4.2)
 		const result = await this.deps.execution.terminate(id).catch(err => {
 			this.deps.log.event(`Could not end ${run.facts.alias}: ${messageOf(err)}`);
 			return 'failed' as const;
@@ -645,7 +724,15 @@ export class AgentService implements Agents, Disposable {
 			return;
 		}
 		if (this.runs.get(id) === run) {
-			await this.close(id).catch(() => undefined);
+			await this.close(id).catch(err => {
+				const reason = messageOf(err);
+				this.deps.log.event(`Could not close ${run.facts.alias} as its tab was closed: ${reason}`);
+				if (this.runs.get(id) === run) {
+					// Kept, as its Unpin could not be saved: its terminal opens again, and the person who closed it is told (RULES-1.8)
+					this.deps.execution.reopen?.(id);
+					this.deps.human.failed({ kind: 'pin', name: labelOf(run.facts), reason }, { show: id });
+				}
+			});
 		}
 	}
 
@@ -661,7 +748,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' } {
-		const running = this.running(entry.key);
+		const running = this.holding(entry.key);
 		if (running) {
 			return { running };
 		}
@@ -698,8 +785,20 @@ export class AgentService implements Agents, Disposable {
 		if (run.facts.pin) {
 			return;
 		}
-		const pin: Pin = { id: (this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`), conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
+		// One Pin a conversation (RULES-4.2): one its CLI resumed by itself may be pinned already - that Pin is this card's now, rather
+		// than a second one an Unpin would leave behind to restore
+		const earlier = this.pinOf(key);
+		const pin: Pin = { id: earlier?.id ?? this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`, conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
 		this.pinStore.save(pin);
+		if (earlier) {
+			// Pin moves it to the very top (PANEL-2.1), as a new Pin goes; where that order cannot be saved, the Pin still is
+			try {
+				this.pinStore.reorder([pin.id, ...this.pins().map(each => each.id).filter(each => each !== pin.id)]);
+			} catch (err) {
+				this.deps.log.event(`Could not move the Pin of ${run.facts.alias} to the top: ${messageOf(err)}`);
+			}
+		}
+		for (const other of this.runs.values()) { if (other !== run && other.facts.pin === pin.id) { this.losePin(other); } }
 		this.update(run, { pin: pin.id }, 'lifecycle');
 		this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 		this.deps.execution.pinTab?.(id, true);
@@ -725,16 +824,32 @@ export class AgentService implements Agents, Disposable {
 	async restorePins(): Promise<void> {
 		if (this.pinsRestored || this.ownershipLost || this.disposed) { return; }
 		this.pinsRestored = true;
-		await this.refreshConversations().catch(err => this.deps.log.event(`Could not list running conversations before restoring Pins: ${messageOf(err)}`));
-		if (this.ownershipLost || this.disposed) { return; }
+		// The conversations running in every ptyd of this environment first: one that does not answer - an earlier protocol's, whose runs
+		// a first restore may not have shown - is asked again, never guessed, as a Pin started meanwhile runs one twice (LIFECYCLE-3.5)
+		let failure: string | undefined;
+		const listed = await untilAnswered(() => this.refreshConversations().then(() => true as const), {
+			first: CONVERSATIONS_RETRY_MS,
+			most: MOST_CONVERSATIONS_RETRY_MS,
+			stopped: () => this.ownershipLost || this.disposed,
+			failed: err => {
+				if (messageOf(err) !== failure) {
+					failure = messageOf(err);
+					this.deps.log.event(`Could not list the conversations running in this environment; the Pins are restored once they are known: ${failure}`);
+				}
+			},
+			wait: ms => this.deps.wait?.(ms) ?? timeout(ms, this.stopping.signal).catch(() => undefined)
+		});
+		if (!listed || this.ownershipLost || this.disposed) { return; }
+		this.unpinRemoved();
 		// A Pin a card already holds - running, or retained red after an abnormal exit or a failed restore - is not started again
 		// on a reload: restoration happens once per opening, without a restart loop (RULES-4.2)
 		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
-		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.running(pin.conversation));
+		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holding(pin.conversation));
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
 		const failed: { readonly id: RunId; readonly name: string; readonly reason: string }[] = [];
 		const restoreOne = async (pin: Pin): Promise<void> => {
-			if (!this.pins().some(saved => saved.id === pin.id) || this.running(pin.conversation)) { return; }
+			// One whose location was removed is no failure to show: its removal unpins it, even where that write failed (RULES-2.4)
+			if (!this.pins().some(saved => saved.id === pin.id) || this.holding(pin.conversation) || this.deps.locations.removalOf(pin.location)) { return; }
 			const location = this.locationFor(pin.location, pin.cwd);
 			if (!location || location.environment !== pin.conversation.environment) {
 				const reason = `Its working location ${pin.cwd} is not available in this window.`;
@@ -779,7 +894,7 @@ export class AgentService implements Agents, Disposable {
 			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, resumable: true,
 			sessionId: pin.conversation.sessionId, pin: pin.id, end: { kind: 'failed', at }, error: { reason, source: 'location', at }
 		};
-		const run: Run = { facts, closing: false, exactResume: true, settled: Promise.resolve() };
+		const run: Run = { facts, exactResume: true, settled: Promise.resolve() };
 		this.runs.set(id, run);
 		this.deps.execution.openPair(pairOf(facts), { reveal: false });
 		this.deps.execution.note(id, reason);
@@ -789,12 +904,8 @@ export class AgentService implements Agents, Disposable {
 		return id;
 	}
 
-	/** The run holding this exact conversation: in this window, or `elsewhere` in another window of this workspace. */
+	/** The run holding this exact conversation: in this window, or `elsewhere` - a process another window's run holds it in. */
 	holding(key: ConversationKey): RunId | 'elsewhere' | undefined {
-		return this.running(key);
-	}
-
-	private running(key: ConversationKey): RunId | 'elsewhere' | undefined {
 		for (const run of this.runs.values()) {
 			if (run.facts.lifecycle !== 'ended' && run.facts.sessionId === key.sessionId && run.facts.cli === key.cli && run.facts.environment === key.environment) {
 				return run.facts.id;
@@ -861,8 +972,15 @@ export class AgentService implements Agents, Disposable {
 		this.update(run, { sessionId: sessionId ?? run.facts.sessionId, resumable: !!sessionId && run.exactResume, ...cwd ? { cwd } : {} }, 'lifecycle');
 		const pin = run.facts.pin ? this.pins().find(each => each.id === run.facts.pin) : undefined;
 		if (pin && sessionId) {
-			try { this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: keyOf(run.facts)! }); }
-			catch (err) {
+			try {
+				const key = keyOf(run.facts)!;
+				this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: key });
+				// One Pin a conversation (RULES-4.2): another Pin of the one it switched to goes, as this card's names it now
+				for (const other of this.pins().filter(each => each.id !== pin.id && sameConversation(each.conversation, key))) {
+					this.pinStore.remove(other.id);
+					for (const holder of this.runs.values()) { if (holder.facts.pin === other.id) { this.losePin(holder); } }
+				}
+			} catch (err) {
 				const reason = messageOf(err);
 				this.deps.log.event(`Could not update the Pin of ${run.facts.alias}: ${reason}`);
 				this.deps.human.failed({ kind: 'pin', name: labelOf(run.facts), reason }, { show: id });
@@ -912,8 +1030,9 @@ export class AgentService implements Agents, Disposable {
 		if (!run) {
 			return;
 		}
-		// A signal's end is abnormal though its code be 0, as node-pty reports a process killed on Linux and macOS (RULES-3.3)
-		const normal = (exit.code === 0 && !exit.signal) || run.closing || exit.interruptVerified;
+		// A signal's end is abnormal though its code be 0, as node-pty reports a process killed on Linux and macOS (RULES-3.3). A run
+		// explicitly closed - a completed stop, normal - is no longer here, so its exit is never classified
+		const normal = (exit.code === 0 && !exit.signal) || exit.interruptVerified;
 		this.release(exit.run);
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
@@ -949,12 +1068,12 @@ export class AgentService implements Agents, Disposable {
 
 	private locationsRemoved(removal: LocationRemoval): void {
 		const removed = new Set(removal.ids);
-		for (const pin of this.pins()) { if (removed.has(pin.location)) { this.pinStore.remove(pin.id); } }
-		for (const run of [...this.runs.values()]) {
-			if (removed.has(run.facts.location)) {
-				this.deps.log.event(`Closing ${run.facts.alias}: its working location was ${removal.cause === 'folder' ? 'removed from the workspace' : 'deleted'}`);
-				void this.close(run.facts.id).catch(() => undefined);
-			}
+		const closing = [...this.runs.values()].filter(run => removed.has(run.facts.location));
+		this.unpinGone(this.pins().filter(pin => removed.has(pin.location) || closing.some(run => run.facts.pin === pin.id)));
+		for (const run of closing) {
+			this.deps.log.event(`Closing ${run.facts.alias}: its working location was ${removal.cause === 'folder' ? 'removed from the workspace' : 'deleted'}`);
+			// Whatever became of its Pin, said above: its process may be writing in a folder that is gone (RULES-2.4)
+			void this.closeRun(run).catch(err => this.deps.log.event(`Could not close ${run.facts.alias}: ${messageOf(err)}`));
 		}
 	}
 
@@ -1055,7 +1174,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(typeof meta.version === 'string' ? { version: meta.version } : {}),
 		tools: meta.tools === 'connecting' || meta.tools === 'available' || meta.tools === 'unavailable' ? meta.tools : 'not_injected',
 		...(typeof meta.toolsReason === 'string' ? { toolsReason: meta.toolsReason } : {}),
-		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' ? { toolsProblem: meta.toolsProblem } : {}),
+		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' || meta.toolsProblem === 'disconnected' ? { toolsProblem: meta.toolsProblem } : {}),
 		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
 		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
 		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),

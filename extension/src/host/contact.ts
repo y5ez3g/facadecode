@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { messageOf } from '../base/errors';
 import { displayLine } from '../base/text';
 import type { HumanContactPort, MessageRecord } from '../core/messagePorts';
 import { recordText, sideName } from '../ui/pickers/messageHistory';
@@ -46,10 +47,11 @@ export class WindowContact implements HumanContactPort, vscode.Disposable {
 		const text = vscode.l10n.t("{0}: {1}", sideName(record.from), displayLine(first, 300));
 		const sender = record.from.run;
 		void vscode.window.showInformationMessage(notificationText(text), open, show).then(choice => {
+			// What it opens failing to open changes nothing else, and is no unhandled failure of the window's
 			if (choice === open) {
-				void this.open(record);
+				this.open(record).catch(err => console.error(`Could not open message ${record.alias}: ${messageOf(err)}`));
 			} else if (choice === show && sender !== 'facade' && sender !== '@human') {
-				void this.reveal(sender);
+				this.reveal(sender).catch(err => console.error(`Could not show the agent of message ${record.alias}: ${messageOf(err)}`));
 			}
 		});
 		return true;

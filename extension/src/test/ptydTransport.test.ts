@@ -5,7 +5,8 @@
 import * as assert from 'assert';
 import * as net from 'net';
 import { PtydClient, PtydLost, PtydNotSent, ptydSocketPath } from '../host/execution/ptydClient';
-import { isPtydEvent, lineReader, PTYD_PROTOCOL, type Request, type RunEvent } from '../ptyd/protocol';
+import { lineReader } from '../base/lines';
+import { isPtydEvent, PTYD_PROTOCOL, type Request, type RunEvent } from '../ptyd/protocol';
 import { FakeClock } from './clock';
 import { tempDir } from './util';
 import { withModules } from './withModules';
@@ -26,7 +27,7 @@ suite('ptyd transport boundaries', () => {
 				} else {
 					received(request);
 				}
-			}));
+			}, err => { throw err; }));
 		});
 		await new Promise<void>(resolve => server.listen(socketPath, resolve));
 		let client: PtydClient | undefined;
@@ -60,7 +61,7 @@ suite('ptyd transport boundaries', () => {
 			socket.on('data', lineReader(line => {
 				const request = JSON.parse(line) as Request;
 				socket.write(`${JSON.stringify({ id: request.id, result: request.method === 'hello' ? { protocol: PTYD_PROTOCOL, pid: 1 } : [] })}\n`);
-			}));
+			}, err => { throw err; }));
 		});
 		await new Promise<void>(resolve => server.listen(socketPath, resolve));
 		let client: PtydClient | undefined;
@@ -88,7 +89,7 @@ suite('ptyd transport boundaries', () => {
 		const didClose = new Promise<void>(resolve => closed = resolve);
 		const server = net.createServer(socket => {
 			socket.on('close', closed);
-			socket.on('data', lineReader(line => socket.write(`${JSON.stringify({ id: (JSON.parse(line) as Request).id, error: 'rejected hello' })}\n`)));
+			socket.on('data', lineReader(line => socket.write(`${JSON.stringify({ id: (JSON.parse(line) as Request).id, error: 'rejected hello' })}\n`), err => { throw err; }));
 		});
 		await new Promise<void>(resolve => server.listen(socketPath, resolve));
 		try {
@@ -133,9 +134,8 @@ suite('ptyd transport boundaries', () => {
 
 	test('an oversized reply disconnects the client and rejects pending requests with the framing failure', async () => {
 		// A smaller reader limit exercises the real socket client's failure path without sending 64 MiB over a test socket.
-		const { PtydClient: Client } = withModules({ '../../ptyd/protocol': {
-			isPtydEvent, PTYD_PROTOCOL,
-			lineReader: (onLine: (line: string) => void, onError: (err: Error) => void) => lineReader(onLine, onError, 128)
+		const { PtydClient: Client } = withModules({ '../../base/lines': {
+			lineReader: (onLine: (line: string) => void, onError: (err: Error) => void) => lineReader(onLine, onError, { maxBytes: 128 })
 		} })<typeof import('../host/execution/ptydClient')>(require.resolve('../host/execution/ptydClient'));
 		const temp = tempDir('fc-frame-');
 		const socketPath = ptydSocketPath(temp.dir);
@@ -150,13 +150,13 @@ suite('ptyd transport boundaries', () => {
 				socket.write(request.method === 'hello'
 					? `${JSON.stringify({ id: request.id, result: { protocol: PTYD_PROTOCOL, pid: 1 } })}\n`
 					: 'x'.repeat(129));
-			}));
+			}, err => { throw err; }));
 		});
 		await new Promise<void>(resolve => server.listen(socketPath, resolve));
 		let client: PtydClient | undefined;
 		try {
 			client = await Client.connect(socketPath, '/must-not-start', '/unused');
-			await assert.rejects(client.request('list', { owner: 'unused' }), /frame exceeds 128 bytes/);
+			await assert.rejects(client.request('list', { owner: 'unused' }), /exceeds 128 bytes/);
 			await didClose;
 			await assert.rejects(client.request('list', { owner: 'unused' }), /not connected/);
 		} finally {

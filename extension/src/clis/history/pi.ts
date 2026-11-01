@@ -12,28 +12,50 @@ import { isJsonObject } from '../../base/json';
 import { variableOf } from '../environment';
 import { homeOf } from '../executable';
 import { SESSION_ID } from '../identity';
-import { headLines, mtimeOf, namesIn, PROMPT_BYTES, tailLines, titleOf } from './scope';
+import { formsOf, headLines, mtimeOf, namesIn, PROMPT_BYTES, tailLines, titleOf } from './scope';
 import type { Candidate, Found, VendorStore } from './store';
 
-export function piCandidates(dir: string): Candidate[] {
-	// A session-dir override stores files directly; the default has one encoded directory per cwd.
-	const directories = [dir, ...namesIn(dir, /^--.*--$/).map(name => path.join(dir, name))];
-	return directories.flatMap(directory => namesIn(directory, /\.jsonl$/).flatMap(name => {
+/** The folder Pi 1.4 keeps the sessions of `cwd` in by default: its path, a leading separator dropped, each separator and colon a dash, between `--`. */
+export function piSessionFolderName(cwd: string): string {
+	return `--${path.resolve(cwd).replace(/^[/\\]/, '').replace(/[/\\:]/g, '-')}--`;
+}
+
+/**
+ * The session files in the store at `dir` that may be of `directories` or a folder below them (LIFECYCLE-3.2): in the default layout,
+ * those of the folders named for them, as `claudeCandidates` lists Claude Code's - a sibling's that shares a prefix is read and left
+ * out by its header - and every file a session-dir override keeps directly, which has no folder per cwd.
+ */
+export function piCandidates(dir: string, directories: readonly string[] = []): Candidate[] {
+	const caseless = process.platform === 'win32' || process.platform === 'darwin';
+	const compared = (name: string) => caseless ? name.toLowerCase() : name;
+	const prefixes = [...new Set(directories.flatMap(formsOf).map(each => compared(piSessionFolderName(each).slice(0, -2))))];
+	const scoped = (name: string) => !directories.length || prefixes.some(prefix => compared(name) === `${prefix}--` || compared(name).startsWith(`${prefix}-`));
+	const folders = [dir, ...namesIn(dir, /^--.*--$/).filter(scoped).map(name => path.join(dir, name))];
+	return folders.flatMap(directory => namesIn(directory, /\.jsonl$/).flatMap(name => {
 		const file = path.join(directory, name);
 		const at = mtimeOf(file);
 		return at === undefined ? [] : [{ cli: 'pi', file, at }];
 	}));
 }
 
+/** Whether `line` is a user's message: the first gives a session its title where it has no name. */
+function userMessage(line: { readonly [key: string]: unknown }): boolean {
+	return line.type === 'message' && isJsonObject(line.message) && line.message.role === 'user';
+}
+
 export async function piConversation(candidate: Candidate): Promise<Found | undefined> {
-	const lines = await headLines(candidate.file, PROMPT_BYTES);
+	// The head first, read on only where it holds no first message - a long first line, or a long preamble - as far as list metadata goes
+	let lines = await headLines(candidate.file);
+	if (!lines.some(userMessage)) {
+		lines = await headLines(candidate.file, PROMPT_BYTES);
+	}
 	const header = lines[0];
 	if (header?.type !== 'session' || typeof header.id !== 'string' || !SESSION_ID.test(header.id) || typeof header.cwd !== 'string') {
 		return undefined;
 	}
 	const tail = await tailLines(candidate.file);
 	const name = [...lines, ...tail].findLast(line => line.type === 'session_info' && typeof line.name === 'string')?.name;
-	const first = lines.find(line => line.type === 'message' && isJsonObject(line.message) && line.message.role === 'user');
+	const first = lines.find(userMessage);
 	const message = first && isJsonObject(first.message) ? first.message : undefined;
 	const content = message?.content;
 	const prompt = typeof content === 'string' ? content : Array.isArray(content)

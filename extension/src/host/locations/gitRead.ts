@@ -19,6 +19,45 @@ const GIT_REMOVE_TIMEOUT_MS = 300_000;
 /** The variables that point Git at another repository than the one it finds from `-C`: an editor started from a hook can carry them. */
 const REPOSITORY_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_IMPLICIT_WORK_TREE', 'GIT_PREFIX'];
 
+/**
+ * The program Git for Windows asks whether to try again to delete a file another program holds - a dialog, where a Git tool set one.
+ * Without it Git asks no one, as no terminal is there, and fails as it does: no prompt is Facade's (WORKTREES-3.2, UX-1.1).
+ */
+const PROMPT_VARIABLES = ['GIT_ASK_YESNO'];
+
+/** What Facade's Git reads its messages in, and how it takes the repository: answers in English, its optional locks not taken. */
+const SET_VARIABLES: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' };
+
+/**
+ * The environment Facade runs Git in: `env` without the variables that would point it at another repository or have it ask anyone, with
+ * its own language and locks. Their names are compared whatever their case, as Windows compares them.
+ */
+export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const dropped = new Set([...REPOSITORY_VARIABLES, ...PROMPT_VARIABLES, ...Object.keys(SET_VARIABLES)]);
+	return { ...Object.fromEntries(Object.entries(env).filter(([name]) => !dropped.has(name.toUpperCase()))), ...SET_VARIABLES };
+}
+
+/**
+ * `git worktree remove` of `worktree` in the repository whose shared Git directory is `commonDir`, without `--force` (WORKTREES-3.2): its
+ * own check sees untracked files whatever the repository's status.showUntrackedFiles says, and on Windows it reaches the files deeper
+ * than the 260 characters a path long had, as `node_modules` holds them.
+ */
+export function removeWorktreeArgs(commonDir: string, worktree: string, platform: NodeJS.Platform = process.platform): string[] {
+	return [...platform === 'win32' ? ['-c', 'core.longpaths=true'] : [], '-C', commonDir, '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', worktree];
+}
+
+/** The Git command `args` run, such as `worktree`: the first that is neither an option nor the value of `-C` or `-c`. */
+function commandOf(args: readonly string[]): string | undefined {
+	for (let at = 0; at < args.length; at++) {
+		if (args[at] === '-C' || args[at] === '-c') {
+			at++;
+		} else if (!args[at].startsWith('-')) {
+			return args[at];
+		}
+	}
+	return undefined;
+}
+
 /** A Git call that failed, with what Git said. */
 export class GitError extends Error {
 	constructor(
@@ -69,26 +108,28 @@ function isInstallerStub(): Promise<boolean> {
 	return installerStub;
 }
 
-/** Git's output; rejects with a `GitError` carrying Git's own words. */
-function runGit(git: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
-	const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' };
-	for (const name of REPOSITORY_VARIABLES) {
-		delete env[name];
-	}
-	return new Promise((resolve, reject) => execFile(git, [...args], { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env }, (err, stdout, stderr) => {
-		if (!err) {
-			resolve(String(stdout));
-		} else if (err.code === 'ENOENT') {
-			reject(new GitError(`Git was not found: ${git}`, undefined, true));
-		} else if (typeof err.code === 'number') {
-			reject(new GitError(String(stderr).trim() || err.message, err.code));
-		} else if (err.killed && err.code === null) {
-			const command = args[0] === '-C' ? args[2] : args[0];
-			reject(new GitError(`Git did not answer within ${timeoutMs / 1000} seconds (git ${command}).`, undefined));
-		} else {
-			reject(new GitError(String(stderr).trim() || err.message, undefined));
+/** Git's output; rejects with a `GitError` carrying Git's own words. `input`, where given, is what Git reads on its standard input. */
+function runGit(git: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS, input?: string): Promise<string> {
+	return new Promise((resolve, reject) => {
+		const child = execFile(git, [...args], { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: gitEnvironment() }, (err, stdout, stderr) => {
+			if (!err) {
+				resolve(String(stdout));
+			} else if (err.code === 'ENOENT') {
+				reject(new GitError(`Git was not found: ${git}`, undefined, true));
+			} else if (typeof err.code === 'number') {
+				reject(new GitError(String(stderr).trim() || err.message, err.code));
+			} else if (err.killed && err.code === null) {
+				reject(new GitError(`Git did not answer within ${timeoutMs / 1000} seconds (git ${commandOf(args)}).`, undefined));
+			} else {
+				reject(new GitError(String(stderr).trim() || err.message, undefined));
+			}
+		});
+		if (input !== undefined) {
+			// Git that ends before it read everything closes its end: that is its answer, not a failure of this write
+			child.stdin?.on('error', () => undefined);
+			child.stdin?.end(input);
 		}
-	}));
+	});
 }
 
 /** The lines of Git's output, without the line break that ends the last. */
@@ -265,21 +306,88 @@ export async function hasChanges(git: string, folder: string): Promise<boolean> 
 		return true;
 	}
 	// `S` is skip-worktree, a lower-case tag assume-unchanged; one with no file in the folder - a sparse checkout's - is no edit
-	const hidden = (await runGit(git, ['-C', folder, 'ls-files', '-v', '-z'])).split('\0')
+	const hidden = new Set((await runGit(git, ['-C', folder, 'ls-files', '-v', '-z'])).split('\0')
 		.filter(entry => entry.length > 2 && (entry[0] === 'S' || (entry[0] >= 'a' && entry[0] <= 'z')))
 		.map(entry => entry.slice(2))
-		.filter(file => fs.existsSync(path.join(folder, file)));
-	for (const file of hidden) {
-		const [mode, indexed] = (await runGit(git, ['-C', folder, 'ls-files', '-s', '--', file])).trim().split(/\s+/);
-		if (mode === '160000') {
-			continue;
+		.filter(file => fs.existsSync(path.join(folder, file))));
+	if (!hidden.size) {
+		return false;
+	}
+	// Their index entries in one read, each found by its own name: a name given as a pathspec could match others, as `a[1]` does `a1`
+	const indexed = new Map<string, { readonly mode: string; readonly object: string }>();
+	for (const entry of (await runGit(git, ['-C', folder, 'ls-files', '-s', '-z'])).split('\0')) {
+		const fields = /^(\d+) ([0-9a-f]+) \d+\t([\s\S]+)$/.exec(entry);
+		if (fields && hidden.has(fields[3])) {
+			indexed.set(fields[3], { mode: fields[1], object: fields[2] });
 		}
-		const now = (await runGit(git, ['-C', folder, 'hash-object', '--', file])).trim();
-		if (now !== indexed) {
+	}
+	// A submodule's entry is its commit, not a file's content
+	const files = [...hidden].filter(file => indexed.get(file)?.mode !== '160000');
+	// Their content as Git would store it: in one call for every name a line can hold, a name with a line break alone
+	const listed = files.filter(file => !/[\r\n]/.test(file));
+	const now = listed.length ? linesOf(await runGit(git, ['-C', folder, 'hash-object', '--stdin-paths'], GIT_TIMEOUT_MS, `${listed.join('\n')}\n`)) : [];
+	if (listed.some((file, at) => now[at] !== indexed.get(file)?.object)) {
+		return true;
+	}
+	for (const file of files.filter(each => /[\r\n]/.test(each))) {
+		if ((await runGit(git, ['-C', folder, 'hash-object', '--', file])).trim() !== indexed.get(file)?.object) {
 			return true;
 		}
 	}
 	return false;
+}
+
+/** What `git --version` answers, such as `git version 2.53.0.windows.3`. */
+export async function gitVersionOf(git: string): Promise<string> {
+	return (await runGit(git, ['--version'])).trim();
+}
+
+/**
+ * Whether the Git that answered `version` deletes what a link to a folder leads to, as part of a worktree it removes: Git for Windows
+ * before 2.54 follows NTFS junctions in `git worktree remove`, as its 2.54 release notes say. A version that cannot be read is taken
+ * to (WORKTREES-3.2).
+ */
+export function followsFolderLinks(version: string | undefined): boolean {
+	const found = /(\d+)\.(\d+)/.exec(version ?? '');
+	if (!found) {
+		return true;
+	}
+	const [major, minor] = [Number(found[1]), Number(found[2])];
+	return major < 2 || (major === 2 && minor < 54);
+}
+
+/**
+ * The first link to a folder within `folder` - an NTFS junction or a symbolic link to a directory, which Node tells as symbolic links -
+ * as its path from `folder`; undefined where there is none. No link is followed, folders are read one at a time, and the walk stops at
+ * the first link. A folder that cannot be read is passed over: Git could not delete through it either.
+ */
+export async function folderLinkIn(folder: string): Promise<string | undefined> {
+	const pending = [folder];
+	for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+		let entries: fs.Dirent[];
+		try {
+			entries = await fs.promises.readdir(dir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				pending.push(full);
+			} else if (entry.isSymbolicLink()) {
+				// Any reparse point, as a directory read tells it: a link or junction leading to a folder, else what it is - a cloud file's folder
+				const link = await fs.promises.lstat(full).catch(() => undefined);
+				if (link?.isSymbolicLink()) {
+					if ((await fs.promises.stat(full).catch(() => undefined))?.isDirectory()) {
+						return path.relative(folder, full);
+					}
+				} else if (link?.isDirectory()) {
+					pending.push(full);
+				}
+			}
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -288,6 +396,5 @@ export async function hasChanges(git: string, folder: string): Promise<boolean> 
  * is kept. Rejects with a `GitError` carrying Git's own words.
  */
 export async function removeWorktree(git: string, commonDir: string, worktree: string): Promise<void> {
-	// Its own check sees untracked files whatever the repository's status.showUntrackedFiles says
-	await runGit(git, ['-C', commonDir, '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', worktree], GIT_REMOVE_TIMEOUT_MS);
+	await runGit(git, removeWorktreeArgs(commonDir, worktree), GIT_REMOVE_TIMEOUT_MS);
 }

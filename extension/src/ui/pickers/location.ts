@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { compactPath, folderKeyOf, homeRelative } from '../../base/files';
 import { isJsonObject } from '../../base/json';
-import { isDeletableWorktree } from '../../core/locations/catalog';
+import { isDeletableWorktree, runsLaunchedIn } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
 import type { Agents, Catalog, HumanPort, Location, LocationId, LocationPort, LogPort, WorkspaceFolderInfo, WorktreePlan, WorktreePort } from '../../core/ports';
 import { plainText } from '../presentation';
@@ -70,6 +70,10 @@ function wordsOf(problem: WorktreeProblem): string {
 		case 'worktree_nested': return vscode.l10n.t("Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.", problem.name, problem.nested);
 		// {0} is the worktree's name
 		case 'agents_not_ended': return vscode.l10n.t("Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.", problem.name);
+		// {0} is the worktree's name, {1} the link inside it, as its path from the worktree's folder
+		case 'worktree_linked': return vscode.l10n.t("Cannot delete worktree \"{0}\": it contains a link to another folder ({1}), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.", problem.name, problem.link);
+		// {0} is the worktree's name, {1} its folder's full path
+		case 'worktree_left': return vscode.l10n.t("Deleted worktree \"{0}\", but Git left its folder {1} behind.", problem.name, problem.folder);
 		// {0} is the worktree's name, {1} what Git said
 		case 'deletion_failed': return deletionFailed(problem.name, problem.detail);
 	}
@@ -154,8 +158,66 @@ export function inStepOrder(locations: readonly Location[], folder: WorkspaceFol
 	return [...locations].sort((a, b) => rank(a) - rank(b));
 }
 
+/** A location's row in a step: its label, its path from the home folder beside it - searched too - and its icon. */
+export function locationRow(location: Location): vscode.QuickPickItem & { readonly location: Location } {
+	return { label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location };
+}
+
+/** A workspace folder's row, as VS Code lists recent folders: its name, then the folder that holds it, the home folder as ~. */
+export function folderRow(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.QuickPickItem & { readonly folder: WorkspaceFolderInfo } {
+	return { label: plainText(folder.name), description: plainText(homeRelative(path.dirname(folder.path))), iconPath: folderIconOf(catalog, folder), folder };
+}
+
 function locationItems(locations: readonly Location[], folder: WorkspaceFolderInfo): LocationItem[] {
-	return inStepOrder(locations, folder).map(location => ({ label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location }));
+	return inStepOrder(locations, folder).map(locationRow);
+}
+
+/** What a step that follows the catalog shows and where it starts, by the key `keyOf` gives each item. */
+export interface CatalogStepOptions<T extends vscode.QuickPickItem> {
+	readonly title: string;
+	readonly placeholderOf: (catalog: Catalog) => string;
+	readonly itemsOf: (catalog: Catalog) => T[];
+	readonly keyOf: (item: T) => string | undefined;
+	/** Where the step opens. */
+	readonly at?: string;
+	/** Where it is once the item under the cursor is gone: none keeps the editor's own choice. */
+	readonly atOf?: (catalog: Catalog) => string;
+	readonly back: boolean;
+	readonly matchOnDescription?: boolean;
+}
+
+/**
+ * One step that follows the catalog (WORKTREES-1.3): busy while the locations are first read, its items and hint read again as they
+ * change - the item under the cursor staying under it where it still is, else at `atOf`'s.
+ */
+export async function catalogStep<T extends vscode.QuickPickItem>(flow: Flow, locations: Pick<LocationPort, 'snapshot' | 'onDidChange'>, options: CatalogStepOptions<T>): Promise<T | typeof BACK | undefined> {
+	const catalog = locations.snapshot();
+	const items = options.itemsOf(catalog);
+	const picked = await flow.pick<T>({
+		title: options.title,
+		placeholder: options.placeholderOf(catalog),
+		items,
+		active: items.find(item => options.at !== undefined && options.keyOf(item) === options.at),
+		back: options.back,
+		busy: catalog.pending,
+		matchOnDescription: options.matchOnDescription ?? false,
+		live: picker => locations.onDidChange(() => {
+			const active = picker.activeItems.at(0);
+			const now = locations.snapshot();
+			const next = options.itemsOf(now);
+			const still = active && next.find(item => options.keyOf(item) === options.keyOf(active));
+			picker.items = next;
+			picker.placeholder = options.placeholderOf(now);
+			picker.busy = now.pending;
+			if (options.atOf) {
+				const at = still ? options.keyOf(still) : options.atOf(now);
+				picker.activeItems = next.filter(item => options.keyOf(item) === at);
+			} else if (still) {
+				picker.activeItems = [still];
+			}
+		})
+	});
+	return picked === undefined || picked === BACK ? picked : picked.item;
 }
 
 /**
@@ -207,7 +269,7 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
 		const items: FolderItem[] = [
 			// Its name, then the folder that holds it, as VS Code lists recent folders: the home folder as ~. Removing one is offered
 			// where another stays (D73)
-			...catalog.folders.map((each): FolderItem => ({ label: plainText(each.name), description: plainText(homeRelative(path.dirname(each.path))), iconPath: folderIconOf(catalog, each), folder: each, buttons: [remove] })),
+			...catalog.folders.map((each): FolderItem => ({ ...folderRow(catalog, each), buttons: [remove] })),
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
 			{ label: vscode.l10n.t("Add Folder to Workspace..."), iconPath: new vscode.ThemeIcon('add'), add: true }
 		];
@@ -456,7 +518,8 @@ function foldersSettled(locations: FolderStepDeps['locations'], settled: (folder
 
 /** Asks before Delete Worktree (D73): its folder, the branch kept - or that it has none - and the agents that will close. */
 function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolean> {
-	const closing = deps.agents.list().filter(run => run.location === worktree.id).length;
+	// Those launched in a location inside it too, as a resumed conversation's subdirectory (WORKTREES-3.2)
+	const closing = runsLaunchedIn(deps.agents.list(), worktree.path, deps.locations.snapshot().locations, folderKeyOf).length;
 	const message = vscode.l10n.t("Delete worktree \"{0}\"?", worktree.label);
 	// Keep the exact full path in the detail, separate from the short decision question.
 	const target = worktree.branch !== undefined
@@ -472,9 +535,11 @@ function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolea
  * processes ended, before Git removes it. Why it was not deleted goes to the person. Never rejects.
  */
 async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<void> {
+	// Its locations as the catalog lists them now: while it is deleted they are out of the catalog (WORKTREES-3.2)
+	const locations = deps.locations.snapshot().locations;
 	// True only once every agent's process is known to have ended: Git removes nothing a process may still be writing in
 	const closeAgents = async () => {
-		const results = await Promise.all(deps.agents.list().filter(run => run.location === worktree.id).map(run => deps.agents.close(run.id).then(
+		const results = await Promise.all(runsLaunchedIn(deps.agents.list(), worktree.path, locations, folderKeyOf).map(run => deps.agents.close(run.id).then(
 			result => {
 				deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`);
 				return result === 'terminated' || result === 'already_exited' || result === 'already_ended' || result === 'not_started';
@@ -533,7 +598,10 @@ export function copyPathAction(destination: string): StepAction {
  * the caller decides when to create. Back and Escape return without accepting a plan or starting creation.
  */
 export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source: Location, asked: WorktreeRefInput): Promise<WorktreePlan | typeof BACK | undefined> {
+	const prefix = asked.kind === 'branch' ? branchPrefixOf(source).trim() : '';
 	const value = asked.kind === 'branch' ? asked.value ?? branchPrefixOf(source) : asked.value;
+	/** Whether `text` names no branch yet: nothing typed, or git.branchPrefix alone (LIFECYCLE-1.3). */
+	const unnamed = (text: string) => !text.trim() || (prefix !== '' && text.trim() === prefix);
 	/** The plans the checks made, by the text each was for: the one taken is never planned twice. */
 	const plans = new Map<string, WorktreePlan>();
 	const typed = await flow.text({
@@ -544,9 +612,11 @@ export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source
 		placeholder: asked.kind === 'branch' ? vscode.l10n.t("Branch name") : vscode.l10n.t("Commit, branch, or tag (e.g. HEAD)"),
 		prompt: asked.kind === 'branch' ? vscode.l10n.t("Starts from {0}", asked.base ?? worktreeSourceLabel(source)) : vscode.l10n.t("Base ref for {0}", asked.branch),
 		back: asked.back,
+		// The prefix the field starts with is where the person types, not a branch to judge yet
+		pristine: asked.kind === 'branch' && prefix !== '' && unnamed(value),
 		validate: value => {
 			asked.typed?.(value);
-			return value.trim() ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' });
+			return !unnamed(value) ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' });
 		},
 		check: async value => {
 			try {

@@ -9,8 +9,8 @@
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import {
-	AGENTS_ROUTE_COMMAND, Directory, isAllocation, isDirectory, isRouteResponse, isServedRoute, RouteResponse, ServedRoute, WINDOW_ALLOCATE_COMMAND,
-	WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND
+	AGENTS_ROUTE_COMMAND, Directory, isAllocation, isDirectory, isPublishStatus, isRouteResponse, isServedRoute, RouteResponse, ServedRoute,
+	WINDOW_ALLOCATE_COMMAND, WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND, WORKSPACE_REPUBLISH_COMMAND
 } from '../base/windowNetwork';
 import { directoryAgentOf, NetworkPort, RouteOp } from '../contract/network';
 import type { Agents, AliasPort, Disposable } from '../core/ports';
@@ -81,18 +81,33 @@ export function serveRoutes(serve: (route: ServedRoute) => Promise<unknown>): vs
 export function publishAgents(agents: Pick<Agents, 'list' | 'onDidChange'>, label: string, log: (line: string) => void, session: string = vscode.env.sessionId): Disposable {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
+	/** Why other windows cannot reach this one, as its component said last: said in the log as it changes. */
+	let unreachable: string | undefined;
 	const publish = () => {
+		clearTimeout(timer);
 		timer = undefined;
 		if (disposed) {
 			return;
 		}
-		void Promise.resolve(vscode.commands.executeCommand(WINDOW_PUBLISH_COMMAND, session, agents.list().map(directoryAgentOf), label))
-			.catch(err => log(`Could not tell the other Facade windows about this window's agents: ${messageOf(err)}`));
+		void Promise.resolve(vscode.commands.executeCommand<unknown>(WINDOW_PUBLISH_COMMAND, session, agents.list().map(directoryAgentOf), label)).then(status => {
+			// The component listens, or says why other windows cannot reach this one (ARCHITECTURE-2.1)
+			const now = isPublishStatus(status) && !status.listening ? status.problem ?? 'its window component does not listen' : undefined;
+			if (now !== unreachable && !disposed) {
+				log(now !== undefined ? `Other Facade windows cannot reach this window now: ${now}` : 'Other Facade windows can reach this window again.');
+			}
+			unreachable = now;
+		}, err => log(`Could not tell the other Facade windows about this window's agents: ${messageOf(err)}`));
 	};
 	const subscription = agents.onDidChange(change => {
 		// What it is doing stays here: only who it is, its tree and its lifecycle are told
 		if (change.kind !== 'reported') {
 			timer ??= setTimeout(publish, PUBLISH_DELAY_MS);
+		}
+	});
+	// A window component that started again - its extension host restarted while this one went on - asks for them (ARCHITECTURE-2.1)
+	const republish = vscode.commands.registerCommand(WORKSPACE_REPUBLISH_COMMAND, (asked: unknown) => {
+		if (asked === session) {
+			publish();
 		}
 	});
 	publish();
@@ -101,6 +116,7 @@ export function publishAgents(agents: Pick<Agents, 'list' | 'onDidChange'>, labe
 			disposed = true;
 			clearTimeout(timer);
 			subscription.dispose();
+			republish.dispose();
 		}
 	};
 }

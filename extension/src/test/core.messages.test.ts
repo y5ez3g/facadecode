@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { formatMessage, MESSAGE_LEAD, messageIdOf, MessageService } from '../core/messages';
+import { formatMessage, MESSAGE_LEAD, messageIdOf, MessageService, MessageServiceDeps } from '../core/messages';
 import type { InputEffects, InputPort, MessageRecord, SendResult, Submission } from '../core/messagePorts';
 import type { CapabilityState, Disposable, Event, RunChange, RunFacts, RunId } from '../core/ports';
 import { settled, sleep, useFakeClock } from './clock';
@@ -45,6 +45,8 @@ class FakeInput implements InputPort {
 	submitMs = 0;
 	readonly inspected: { readonly run: RunId; readonly at: number; readonly own?: string; readonly seen?: string }[] = [];
 	readonly submitted: { readonly run: RunId; readonly text: string; readonly at: number; readonly end: number; readonly lead?: string }[] = [];
+	/** The run of each submission, as it began. */
+	readonly begun: RunId[] = [];
 	/** What each submission was told would stop it, in the order they began. */
 	readonly signals: (AbortSignal | undefined)[] = [];
 	/** Inspections and pastes under way together, at most. */
@@ -64,8 +66,9 @@ class FakeInput implements InputPort {
 		return !script?.length ? 'usable' : script.length > 1 ? script.shift()! : script[0];
 	}
 
-	async submit(run: RunId, text: string, signal?: AbortSignal, lead?: string): Promise<Submission> {
+	async submit(run: RunId, text: string, signal?: AbortSignal, lead?: string, canPaste?: () => boolean): Promise<Submission> {
 		const at = Date.now();
+		this.begun.push(run);
 		this.signals.push(signal);
 		const lost = next(this.throws.get(run));
 		if (lost) {
@@ -76,6 +79,10 @@ class FakeInput implements InputPort {
 			await new Promise(resolve => setTimeout(resolve, this.submitMs));
 		}
 		this.busy--;
+		// Checked just before the paste, as the input does: a read meanwhile leaves it unstarted
+		if (canPaste?.() === false) {
+			return { effects: { outcome: 'none', text_written: 'none', enter_written: false }, shown: false };
+		}
 		this.submitted.push({ run, text, at, end: Date.now(), ...lead !== undefined ? { lead } : {} });
 		const effects = next(this.effects.get(run)) ?? CONFIRMED;
 		const shown = next(this.shown.get(run)) ?? effects.text_written === 'full';
@@ -114,12 +121,13 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	const contacts: MessageRecord[] = [];
 	let saved: (id: string) => MessageRecord | undefined = () => undefined;
 	let reachable = true;
+	let owned = true;
 	const stored = new Map<string, MessageRecord>();
 	const log: string[] = [];
 	let n = 0;
 	let spent = 0;
-	const service = new MessageService({
-		agents: { get: run => runs.get(run), onDidChange: changes.event },
+	const deps: MessageServiceDeps = {
+		agents: { get: run => runs.get(run), onDidChange: changes.event, owned: () => owned },
 		input,
 		human: { contact: (record, lookup) => { contacts.push(record); saved = lookup; return reachable; } },
 		store: {
@@ -140,12 +148,20 @@ function setUp(options: { readonly createMs?: number } = {}) {
 		environment: 'local',
 		workspace: 'ws-1',
 		log: { event: text => log.push(text) }
-	});
+	};
+	let service = new MessageService(deps);
 	return {
 		service, runs, input, contacts, stored, log,
+		/** The window reloads: its message service goes, and a new one opens on the same records. */
+		reload: () => {
+			service.dispose();
+			return service = new MessageService(deps);
+		},
 		/** The saved record of a message, as the person's Show reads it. */
 		saved: (id: string) => saved(id),
 		unreachable: () => { reachable = false; },
+		/** Another window takes the workspace's agents over. */
+		disown: () => { owned = false; },
 		/** Closes a run as Close Agent does: its card goes at once. */
 		close: (run: RunId) => { runs.delete(run); changes.fire({ run, kind: 'removed', cause: 'close' }); },
 		end: (run: RunId) => { runs.set(run, { ...runs.get(run)!, lifecycle: 'ended' }); changes.fire({ run, kind: 'lifecycle' }); }
@@ -390,6 +406,57 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.length], [0, 0]);
 	});
 
+	test('a run whose launch is not planned yet has an input not known yet: tried within the stage, never failed at once as unsupported (RULES-1.4, MCP-1.2)', async () => {
+		const { service, input, runs } = setUp();
+		const unplanned: CapabilityState = { state: 'unverified', reason: 'How the message input of Codex is read is not known before its launch is planned.' };
+		runs.set(B, { ...runs.get(B)!, lifecycle: 'starting' });
+		input.capabilities.set(B, unplanned);
+		input.states.set(B, ['unknown', 'usable']);
+		const start = Date.now();
+		const answer = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.deepStrictEqual([answer.status, answer.obstacle], ['accepted', 'input_unknown']);
+		// Planned meanwhile: its reader reads it, and the next slot delivers it
+		input.capabilities.delete(B);
+		runs.set(B, { ...runs.get(B)!, lifecycle: 'running' });
+		await sleep(5_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.at - start), [3_000]);
+		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.delivery.status, 'success');
+		// Planned as a CLI without a reader: failed at its next attempt, not waited out (RULES-1.5)
+		const none = setUp();
+		none.runs.set(B, { ...none.runs.get(B)!, lifecycle: 'starting' });
+		none.input.capabilities.set(B, unplanned);
+		none.input.states.set(B, ['unknown']);
+		const begun = Date.now();
+		await settled(none.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		none.input.capabilities.set(B, { state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI.' });
+		await sleep(4_000);
+		const failed = none.service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.attempts], ['failure', 'unsupported', 1]);
+		assert.strictEqual(none.service.inbox(A, { all: true, limit: 10 }).records[0].at - begun, 3_000);
+		// A running agent whose runtime has no reader on record - an earlier protocol's - still fails at once
+		const earlier = setUp();
+		earlier.input.capabilities.set(B, unplanned);
+		const refused = await settled(earlier.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.deepStrictEqual([refused.status, refused.reason], ['failure', 'unsupported']);
+	});
+
+	test('a whole text whose Enter never went is no partial input at its deadline: its submission is unconfirmed, as its result says (MCP-1.2)', async () => {
+		const { service, input } = setUp();
+		input.effects.set(B, [{ outcome: 'partial', text_written: 'full', enter_written: false }]);
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(20_000);
+		const failed = service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.effects], ['failure', 'submission_unconfirmed', { outcome: 'partial', text_written: 'full', enter_written: false }]);
+		const result = service.inbox(A, { all: true, limit: 10 }).records.find(record => record.about === 'm-1')!;
+		assert.match(result.text, /its CLI did not confirm the submission \(submission_unconfirmed\)/);
+		// Part of the text is partial input
+		const part = setUp();
+		part.input.effects.set(B, [{ outcome: 'partial', text_written: 'partial', enter_written: false }]);
+		await settled(part.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(20_000);
+		assert.strictEqual(part.service.history().find(record => record.id === 'm-1')!.delivery.reason, 'partial_input');
+	});
+
 	test('a later Enter is only over the draft its paste showed as - its placeholder, its number too - which every later look is given (D118)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);
@@ -528,6 +595,40 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		const second = service.report({ to: A, text: 'Later result.' });
 		assert.strictEqual(second.delivery.deadline, first.at + 36_000);
 		service.dispose();
+	});
+
+	test('Facade results that come together - those of three sends that end with their recipient - go in one paste, the clock moving between them (D115)', async () => {
+		// Each record written takes a millisecond: results made one after another are never at the same instant
+		const { service, input, close } = setUp({ createMs: 1 });
+		input.states.set(B, ['draft']);
+		input.states.set(A, ['unknown', 'usable']);
+		for (const text of ['One', 'Two', 'Three']) {
+			assert.strictEqual((await settled(service.send({ from: A, to: B, text, elapsedMs: 0 }))).status, 'accepted');
+		}
+		close(B);
+		await sleep(10_000);
+		const toA = input.submitted.filter(each => each.run === A);
+		assert.deepStrictEqual(toA.map(each => (each.text.match(/^\[Facade result #m\d+/gm) ?? []).length), [3]);
+		const results = service.inbox(A, { all: true, limit: 10 }).records;
+		assert.deepStrictEqual(results.map(each => [each.delivery.status, each.delivery.via]), [['success', 'terminal'], ['success', 'terminal'], ['success', 'terminal']]);
+		// Each with its whole stage: the later ones a moment after the first
+		assert.ok(results.every(each => each.delivery.deadline! - each.at >= 15_000), results.map(each => each.delivery.deadline! - each.at).join(', '));
+	});
+
+	test('a result that comes just after a read delivered the one waiting before it is never left behind with it: it goes in a paste of its own (D115, COLLABORATION-3.1)', async () => {
+		const { service, input } = setUp();
+		input.states.set(A, ['draft', 'usable']);
+		input.submitMs = 500;
+		const first = service.report({ to: A, text: 'First result.' });
+		// Held at first; at 3 s its input is usable, and its submission is under way when the read comes, before it pastes
+		await sleep(3_100);
+		service.markDelivered(A, [first.id]);
+		await sleep(500);
+		const second = service.report({ to: A, text: 'Second result.' });
+		await sleep(20_000);
+		const pastes = input.submitted.filter(each => each.run === A).map(each => [each.text.includes('First result.'), each.text.includes('Second result.')]);
+		assert.deepStrictEqual(pastes, [[false, true]]);
+		assert.deepStrictEqual(service.inbox(A, { all: true, limit: 10 }).records.map(each => [each.id, each.delivery.status, each.delivery.via]), [[first.id, 'success', 'read'], [second.id, 'success', 'terminal']]);
 	});
 
 	test('Facade results that come while none of them is typed go to their sender in one paste, one turn of its model (D115)', async () => {
@@ -793,6 +894,129 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 		assert.deepStrictEqual(service.inbox(A, { limit: 10 }).records, []);
 		const result = service.inbox(A, { ids: ['m-2'], limit: 1 }).records[0];
 		assert.deepStrictEqual([result.delivery.status, result.delivery.via], ['success', 'read']);
+	});
+
+	test('a listener that fails - Message History - stops no delivery and no other listener; a send whose time spent is not a number has its whole budget, never none', async () => {
+		const { service, input, log } = setUp();
+		const told: string[] = [];
+		service.onDidRecord(() => { throw new Error('the picker went'); });
+		service.onDidRecord(record => told.push(record.id));
+		const sent = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.deepStrictEqual([sent.status, sent.record.delivery.status, told.at(-1)], ['success', 'success', 'm-1']);
+		assert.ok(log.some(line => line === 'Could not show message #m1 where it is listed: the picker went'), log.join('\n'));
+		input.states.set(B, ['draft']);
+		const start = Date.now();
+		const held = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: Number.NaN }));
+		assert.deepStrictEqual([held.status, held.record.delivery.deadline! - start], ['accepted', 600_000]);
+		service.dispose();
+	});
+
+	test('a delivery under way as its window reloads goes on after it, within its own deadline, and its sender is told how it went (RULES-1.7, 1.9)', async () => {
+		const { service, input, stored, reload } = setUp();
+		input.states.set(B, ['draft']);
+		const start = Date.now();
+		assert.strictEqual((await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, callId: 'call-1' }))).status, 'accepted');
+		await sleep(4_000);
+		const reopened = reload();
+		input.states.set(B, ['usable']);
+		await sleep(1_000);
+		assert.strictEqual(input.submitted.filter(each => each.run === B).length, 0, 'nothing goes on before the window found its agents again');
+		reopened.resume();
+		await sleep(5_000);
+		// Its first response came at 2 s, the reload at 6 s, and the window found its agents again at 7 s
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.at - start), [7_000]);
+		const original = stored.get('m-1')!;
+		assert.deepStrictEqual([original.delivery.status, original.delivery.via, original.delivery.deadline! - start], ['success', 'terminal', 600_000]);
+		const result = reopened.inbox(A, { all: true, limit: 10 }).records;
+		assert.deepStrictEqual(result.map(each => [each.kind, each.about, each.text]), [['result', 'm-1', `Your message #m1 to @Bob #a2 (${B}) was submitted to its CLI. This is a Facade result, not a reply from the recipient.`]]);
+	});
+
+	test('a paste under way as its window reloads is never pasted again after it: kept as maybe in the input before it was issued, it only waits for its own draft (RULES-1.6, D104)', async () => {
+		const { service, input, stored, reload } = setUp();
+		input.submitMs = 60_000;
+		const start = Date.now();
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.strictEqual(stored.get('m-1')!.delivery.pasted, true, 'kept before the paste was issued');
+		const reopened = reload();
+		reopened.resume();
+		await sleep(20_000);
+		// The one paste issued before the reload is the only one; its draft never showed, so no Enter either
+		assert.deepStrictEqual([input.begun.filter(run => run === B).length, input.entered.length], [1, 0]);
+		const failed = stored.get('m-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.effects, failed.delivery.deadline! - start], ['failure', 'submission_unconfirmed', { outcome: 'unknown', text_written: 'unknown', enter_written: null }, 15_000]);
+		// Its own draft, shown after the reload, gets its Enter, and nothing is typed again
+		const other = setUp();
+		other.input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }]);
+		other.input.states.set(B, ['usable', 'draft']);
+		await settled(other.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		const again = other.reload();
+		other.input.states.set(B, ['own']);
+		again.resume();
+		await sleep(5_000);
+		assert.deepStrictEqual([other.input.submitted.filter(each => each.run === B).length, other.input.entered.map(each => each.seen)], [1, ['[Pasted text #1 +1 lines]']]);
+		assert.strictEqual(other.stored.get('m-1')!.delivery.status, 'success');
+	});
+
+	test('a delivery whose deadline passed while its window reloaded, or whose agent is gone, ends with its sender told, claiming no input that never went (RULES-1.7, 1.9, MCP-1.2)', async () => {
+		const { service, input, stored, reload, runs } = setUp();
+		input.states.set(B, ['draft']);
+		input.states.set(C, ['draft']);
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await settled(service.send({ from: A, to: C, text: 'Hi', elapsedMs: 0 }));
+		await sleep(4_000);
+		const reopened = reload();
+		runs.delete(C);
+		await sleep(600_000);
+		reopened.resume();
+		await sleep(5_000);
+		assert.deepStrictEqual(['m-1', 'm-2'].map(id => [stored.get(id)!.delivery.status, stored.get(id)!.delivery.reason, stored.get(id)!.delivery.effects]), [['failure', 'timeout', { outcome: 'none', text_written: 'none', enter_written: false }], ['failure', 'timeout', { outcome: 'none', text_written: 'none', enter_written: false }]]);
+		const results = reopened.inbox(A, { all: true, limit: 10 }).records;
+		assert.deepStrictEqual(results.map(each => each.about), ['m-1', 'm-2']);
+		assert.match(results[0].text, /was not delivered: the delivery deadline passed \(timeout\)\. Input effects: none\./);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B || each.run === C), []);
+		// One an earlier version kept, which cannot tell what went in, ends at its deadline, typing nothing, and its sender is told
+		const legacy = setUp();
+		const at = Date.now();
+		legacy.stored.set('m-9', {
+			id: 'm-9', alias: '#m9', kind: 'message', from: { run: A, alias: '#a1', name: 'Ada' }, to: { run: B, alias: '#a2', name: 'Bob' }, window: 'win-1', environment: 'local', workspace: 'ws-1', at, text: 'x', length: 1,
+			delivery: { status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, deadline: at + 15_000, attempts: 1 }
+		});
+		legacy.service.resume();
+		await sleep(16_000);
+		assert.deepStrictEqual([legacy.stored.get('m-9')!.delivery.status, legacy.stored.get('m-9')!.delivery.effects.outcome, legacy.input.submitted.filter(each => each.run === B).length], ['failure', 'unknown', 0]);
+		assert.deepStrictEqual(legacy.service.inbox(A, { all: true, limit: 10 }).records.map(each => each.about), ['m-9']);
+	});
+
+	test('after a reload, a delivery to an agent not shown yet goes on once it is, and a window another took the workspace over from goes on with none (RULES-1.9, 4.1)', async () => {
+		const { service, input, stored, reload, runs } = setUp();
+		input.states.set(C, ['draft']);
+		assert.strictEqual((await settled(service.send({ from: A, to: C, text: 'Hello', elapsedMs: 0 }))).status, 'accepted');
+		// Its header's window label is kept with it, so that it is pasted and recognized the same after a reload renamed the window
+		assert.strictEqual(stored.get('m-1')!.label, 'Design');
+		// Its agent is not shown when the window has its others again - one of an earlier protocol's ptyd, restored later
+		const cy = runs.get(C)!;
+		runs.delete(C);
+		const reopened = reload();
+		reopened.resume();
+		await sleep(5_000);
+		assert.deepStrictEqual([stored.get('m-1')!.delivery.status, input.submitted.filter(each => each.run === C).length], ['pending', 0], 'never taken for an agent that ended');
+		runs.set(C, cy);
+		input.states.set(C, ['usable']);
+		reopened.resume();
+		await sleep(5_000);
+		assert.deepStrictEqual([stored.get('m-1')!.delivery.status, input.submitted.filter(each => each.run === C).length], ['success', 1]);
+		// Another window took the agents over as this one reloaded: it neither goes on with a delivery nor settles one at its deadline
+		const other = setUp();
+		other.input.states.set(B, ['draft']);
+		await settled(other.service.send({ from: A, to: B, text: 'Hi', elapsedMs: 0 }));
+		const lost = other.reload();
+		other.disown();
+		other.input.states.set(B, ['usable']);
+		lost.resume();
+		await sleep(601_000);
+		lost.inbox(B, { limit: 10 });
+		assert.deepStrictEqual([other.stored.get('m-1')!.delivery.status, other.input.submitted.filter(each => each.run === B).length], ['pending', 0]);
+		assert.deepStrictEqual(lost.inbox(A, { all: true, limit: 10 }).records, [], 'its sender is told nothing by a window that owns none of it');
 	});
 
 	test('a pending record no delivery here owns, past its deadline, reads as failed by its deadline', () => {

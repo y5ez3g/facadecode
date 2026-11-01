@@ -120,6 +120,18 @@ specification audit read UTF-8 documents using Windows' default code page. Their
 Native Windows/macOS and remote Resume/Pin remain unverified; fake-CLI editor coverage does not certify those native
 vendor integrations. No earlier platform result certifies this merged build.
 
+Release review of 2026-11-01 (`feature/76-release-review`, D131-D138), official VS Code 1.144.0 in isolated profiles with
+fake CLIs, Node 24.18.0. Before any change, at `076527d4`: Windows x64 passed 1000 units and the integration suite, Linux
+x64 1003 units and the integration suite. After the review's fixes and its independent cross-branch review, at
+`ff14745b`: Linux x64 (Ubuntu, under xvfb) passed a clean `npm ci`, compilation, 1089 units (5 POSIX-only checks pending,
+none failing), the translations (299 runtime texts, 64 manifest strings, 11 languages), the linux-x64 and window packages,
+the 11 package checks and the whole integration suite; Windows x64 (10.0.26200, in the desktop session, ConPTY and named
+pipes) passed compilation, the translations, the win32-x64 and window packages, the 11 package checks and the whole
+integration suite, and 1088 of 1089 units: a Windows-only flake of a POSIX working-folder check, which compared 64-bit
+NTFS file IDs as JavaScript numbers, fixed in `3229090d` and then passing five runs in a row. The specification audit
+passes 12 documents, 185 rules and 80 links. Not run: macOS (the test Mac was offline), real CLIs (their test
+credentials are on that Mac), Remote-SSH, WSL, containers and the minimum VS Code 1.105.
+
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
 the available environment, complete independent work and record the exact missing evidence and required next action.
@@ -353,6 +365,7 @@ for review, not acceptance evidence.
 
 ## Change log
 
+- 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
 - 2026-11-01: U13 covers the panel status, stable-name and responsive-location decisions D127/D128.
 

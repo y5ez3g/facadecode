@@ -62,12 +62,7 @@ const holding = new Set<string>();
  * path is another program's lock, taken as proper-lockfile takes one, and is waited for as well.
  */
 export function withFileLock<T>(file: string, fn: () => T, options: FileLockOptions = {}): T {
-	const lock = `${file}.lock`;
-	fs.mkdirSync(path.dirname(lock), { recursive: true });
-	const mark = `${process.pid} ${processStartTime(process.pid) ?? '-'} ${crypto.randomBytes(6).toString('hex')}`;
-	if (leftHeld.size) {
-		letGoAgain();
-	}
+	const { lock, mark } = preparedLock(file);
 	const waitMs = options.waitMs ?? WAIT_MS;
 	const deadline = Date.now() + waitMs;
 	while (!tryAcquire(lock, mark, options)) {
@@ -83,6 +78,26 @@ export function withFileLock<T>(file: string, fn: () => T, options: FileLockOpti
 		holding.delete(mark);
 		release(lock, mark);
 	}
+}
+
+/** This process's id and start, which tell it from a later process given the same id: how each of its marks begins. */
+function ownPrefix(): string {
+	return `${process.pid} ${processStartTime(process.pid) ?? '-'} `;
+}
+
+/** A mark of this process's own for one hold: its id and start, and what tells this hold from its others. */
+function newMark(): string {
+	return `${ownPrefix()}${crypto.randomBytes(6).toString('hex')}`;
+}
+
+/** `<file>.lock`, its folder made, and this hold's mark, once the locks this process could not let go of were let go again. */
+function preparedLock(file: string): { readonly lock: string; readonly mark: string } {
+	const lock = `${file}.lock`;
+	fs.mkdirSync(path.dirname(lock), { recursive: true });
+	if (leftHeld.size) {
+		letGoAgain();
+	}
+	return { lock, mark: newMark() };
 }
 
 function tryAcquire(lock: string, mark: string, options: FileLockOptions): boolean {
@@ -243,12 +258,7 @@ const LONG_RETRY_MS = 100;
  * process still runs, as `keepLive` has it. Throws once the wait is over.
  */
 export async function withLongFileLock<T>(file: string, fn: () => Promise<T>, waitMs: number): Promise<T> {
-	const lock = `${file}.lock`;
-	fs.mkdirSync(path.dirname(lock), { recursive: true });
-	const mark = `${process.pid} ${processStartTime(process.pid) ?? '-'} ${crypto.randomBytes(6).toString('hex')}`;
-	if (leftHeld.size) {
-		letGoAgain();
-	}
+	const { lock, mark } = preparedLock(file);
 	const deadline = Date.now() + waitMs;
 	while (!tryTake(lock, mark)) {
 		await breakStaleLock(lock);
@@ -296,14 +306,14 @@ export async function breakStaleLock(lock: string): Promise<void> {
  */
 export function removeLockIfUnchanged(lock: string, content: string): void {
 	const breaking = `${lock}.break`;
-	const mine = `${process.pid} ${processStartTime(process.pid) ?? '-'} ${crypto.randomBytes(6).toString('hex')}`;
+	const mine = newMark();
 	if (!publishOnce(breaking, mine)) {
 		// Another breaks it now; or one that ended left its hold, which goes for the next try
 		try {
 			const held = fs.readFileSync(breaking, 'utf8');
 			const age = Date.now() - fs.statSync(breaking).mtimeMs;
 			// This process's own, which it could not remove as it let go - it breaks one at a time - or one kept past any pause
-			const own = held.startsWith(`${process.pid} ${processStartTime(process.pid) ?? '-'} `);
+			const own = held.startsWith(ownPrefix());
 			if (own || (breakerEnded(held) ?? age > ABANDONED_AFTER_MS) || age > HOLD_FORSAKEN_MS) {
 				removeIfStill(breaking, held);
 			}

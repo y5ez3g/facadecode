@@ -188,7 +188,9 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const { place, words } = input;
 	const status = statusOf(facts, words);
 	const described = facts.title || facts.promptLine;
-	const tools = facts.tools === 'unavailable' ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile) : undefined;
+	// Its tools going as its process ended - its MCP server ends with its CLI - is no problem of an ended card's: the exit says it
+	const gone = facts.lifecycle === 'ended' && facts.toolsProblem === 'disconnected';
+	const tools = facts.tools === 'unavailable' && !gone ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile) : undefined;
 	const tooltip = [
 		[facts.name, facts.alias, facts.displayName].filter(Boolean).join(' · '),
 		...described ? [described] : [],

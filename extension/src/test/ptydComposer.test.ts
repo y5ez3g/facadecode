@@ -5,8 +5,10 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Terminal } from '@xterm/headless';
+import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { isOwnDraft } from '../ptyd/drafts';
-import { INPUT_ADAPTERS, InputCell, InputScreen, InputState, readInput } from '../ptyd/composer';
+import { INPUT_ADAPTERS, InputCell, InputScreen, InputState, inputScreenOf, readInput } from '../ptyd/composer';
 
 /**
  * The rendered screens of real signed-in CLIs, probed in a 120x40 headless terminal (VERIFICATION G3): Claude Code, Codex and Muse
@@ -63,13 +65,34 @@ interface Probed {
 	readonly screen: InputScreen;
 }
 
-/** The screen a fixture keeps, each row padded to the terminal's width. */
+/** A headless terminal as ptyd's draws characters: by Unicode 11, an emoji or a CJK character two cells wide. */
+function headless(cols: number, rows: number): Terminal {
+	const terminal = new Terminal({ cols, rows, allowProposedApi: true });
+	terminal.loadAddon(new Unicode11Addon());
+	terminal.unicode.activeVersion = '11';
+	return terminal;
+}
+
+/** How many columns a cell's characters take, by the width table ptyd's terminals draw them with. */
+const columnsOf = (() => {
+	const widths = (headless(10, 1) as unknown as { _core: { unicodeService: { getStringCellWidth(text: string): number } } })._core.unicodeService;
+	return (chars: string) => Math.max(1, widths.getStringCellWidth(chars));
+})();
+
+/** The screen a fixture keeps, each cell at its column - a wide character takes two - and each row padded to the terminal's width. */
 function screenOf(fixture: Fixture): InputScreen {
 	const within = (runs: readonly (readonly [number, number])[] | undefined, x: number) => (runs ?? []).some(([start, end]) => x >= start && x < end);
 	return {
 		rows: fixture.rows.map(row => {
 			const chars = typeof row.cells === 'string' ? [...row.cells] : row.cells;
-			return Array.from({ length: Math.max(fixture.cols, chars.length) }, (_, x): InputCell => ({ chars: chars[x] ?? ' ', dim: within(row.dim, x), inverse: within(row.inverse, x) }));
+			const cells: InputCell[] = [];
+			let column = 0;
+			for (let index = 0; index < chars.length || column < fixture.cols; index++) {
+				const char = chars[index] ?? ' ';
+				cells.push({ chars: char, x: column, dim: within(row.dim, index), inverse: within(row.inverse, index) });
+				column += columnsOf(char);
+			}
+			return cells;
 		}),
 		cursor: fixture.cursor
 	};
@@ -223,7 +246,7 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		const bar = answered.screen.rows[cursor.y].findIndex(cell => cell.chars === '┃');
 		const drawn = (rows: { readonly [y: number]: string }): InputScreen => ({
 			...answered.screen,
-			rows: answered.screen.rows.map((row, y) => rows[y] === undefined ? row : Array.from(row, (_, x) => ({ chars: [...rows[y]][x] ?? ' ', dim: false, inverse: false })))
+			rows: answered.screen.rows.map((row, y) => rows[y] === undefined ? row : Array.from(row, (_, x) => ({ chars: [...rows[y]][x] ?? ' ', x, dim: false, inverse: false })))
 		});
 		const barAlone = `${' '.repeat(bar)}┃`;
 		const text = `${' '.repeat(bar)}┃  first line`;
@@ -244,6 +267,23 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		assert.strictEqual(readInput({ ...slash.screen, cursor: { x: 0, y: 0 } }, 'pi-frame').state, 'unknown');
 	});
 
+	test('Pi\'s own cursor is found by its column after wide characters: a person\'s Chinese or emoji draft is a draft, never unknown (RULES-1.4, D106)', async () => {
+		// Pi's editor as ptyd's terminal draws it: its rules, the draft with Pi's own cursor in inverse video after it, its footer
+		const draw = (draft: string, columns: number) => new Promise<InputScreen>(resolve => {
+			const terminal = headless(40, 10);
+			const rule = '─'.repeat(40);
+			terminal.write(`\x1b[4;1H${rule}\x1b[5;1H${draft}\x1b[7m \x1b[27m\x1b[6;1H${rule}\x1b[7;1H~/work (main)\x1b[8;1H0.0%/131k (auto)\x1b[5;${columns + 1}H`, () => {
+				resolve(inputScreenOf(terminal));
+				terminal.dispose();
+			});
+		});
+		for (const [draft, columns] of [['abcdef', 6], ['请检查', 6], ['fix 登录', 8], ['ship 🚀', 7]] as const) {
+			const screen = await draw(draft, columns);
+			assert.deepStrictEqual([screen.cursor, screen.rows[4].find(cell => cell.x === columns)?.inverse], [{ x: columns, y: 4 }, true], draft);
+			assert.deepStrictEqual(readInput(screen, 'pi-frame'), { state: 'draft', evidence: 'the editor at row 5 holds text', draft }, draft);
+		}
+	});
+
 	test('an empty input is usable only with the cursor where it starts; dim text under the prompt row is no placeholder', () => {
 		const empty = PROBED.filter(each => each.fixture.expect === 'usable');
 		for (const each of empty) {
@@ -257,7 +297,7 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		// A draft's letter under a cursor the CLI draws itself is still the draft's
 		const empties = PROBED.find(each => each.folder === 'claude-2.1.312' && each.fixture.name === 'empty')!;
 		assert.strictEqual(readInput(empties.screen, 'claude-frame').state, 'usable');
-		const lettered = { ...empties.screen, rows: empties.screen.rows.map((row, y) => y === empties.screen.cursor.y ? row.map((cell, x) => x === 2 ? { chars: 'a', dim: false, inverse: true } : cell) : row) };
+		const lettered = { ...empties.screen, rows: empties.screen.rows.map((row, y) => y === empties.screen.cursor.y ? row.map((cell, x) => x === 2 ? { ...cell, chars: 'a', dim: false, inverse: true } : cell) : row) };
 		assert.strictEqual(readInput(lettered, 'claude-frame').state, 'draft');
 	});
 

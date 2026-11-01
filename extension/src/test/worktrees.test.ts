@@ -9,9 +9,9 @@ import * as path from 'path';
 import { branchFolderOf, plannedDestination, whyNotFolderName } from '../core/locations/destination';
 import { worktreeProblemOf } from '../core/locations/problems';
 import { LocationRemoval, WorktreeError, WorktreePlan } from '../core/ports';
-import { checkoutOf, hasChanges, removeWorktree, worktreesOf } from '../host/locations/gitRead';
+import { checkoutOf, folderLinkIn, followsFolderLinks, gitEnvironment, gitVersionOf, hasChanges, removeWorktree, removeWorktreeArgs, worktreesOf } from '../host/locations/gitRead';
 import { LocationService } from '../host/locations/service';
-import { NativeCreator, NativeGit, WorktreeGit, WorktreeService } from '../host/locations/worktrees';
+import { NativeCreator, NativeGit, WorktreeGit, WorktreeService, WorktreeServiceDeps } from '../host/locations/worktrees';
 import { tempDir } from './util';
 
 function git(cwd: string, ...args: string[]): string {
@@ -67,7 +67,7 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 	}
 
 	/** A window with `folders` open, its locations read from this disk with this Git, and `native` as its editor's Git API. */
-	async function windowWith(folders: readonly string[], native: Partial<NativeGit> & { creator?: NativeCreator['createWorktree'] } = {}, gitCalls: Partial<WorktreeGit> = {}) {
+	async function windowWith(folders: readonly string[], native: Partial<NativeGit> & { creator?: NativeCreator['createWorktree'] } = {}, gitCalls: Partial<WorktreeGit> = {}, more: Partial<WorktreeServiceDeps> = {}) {
 		const locations = new LocationService({
 			environment: 'local',
 			folders: { folders: () => folders.map((each, index) => ({ index, name: path.basename(each), uri: `file://${each}`, path: each })), onDidChange: () => ({ dispose: () => undefined }) },
@@ -94,7 +94,8 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 			},
 			settings: { branchPrefix: () => settings.prefix, branchValidationRegex: () => settings.pattern },
 			locks: path.join(temp.dir, 'locks'),
-			log: { event: () => undefined }
+			log: { event: () => undefined },
+			...more
 		});
 		const idOf = (location: string) => {
 			const found = locations.locationAt(location);
@@ -393,6 +394,22 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 			assert.deepStrictEqual([during, refusedDuring, seen(refusedId)], [[[false, false], [true, true]], [false, false], [true, true]]);
 		});
 
+		test('a location inside it - a resumed conversation\'s subdirectory - is out of the catalog with it: no launch or resume goes there while it is deleted', async () => {
+			const going = path.join(temp.dir, 'going');
+			git(repo, 'worktree', 'add', '-q', '-b', 'going', going);
+			const api = path.join(going, 'packages', 'api');
+			fs.mkdirSync(api, { recursive: true });
+			const { worktrees, idOf, locations } = await windowWith([repo]);
+			const subId = locations.rememberLocation(api)!;
+			const seen = () => [locations.resolve(subId) !== undefined, locations.snapshot().locations.some(each => each.id === subId), locations.conversationLocation(api) !== undefined];
+			const before = seen();
+			let during: boolean[] = [];
+
+			await removed(worktrees, idOf(going), () => { during = seen(); }, false);
+
+			assert.deepStrictEqual([before, during, seen()], [[true, true, true], [false, false, false], [true, true, true]]);
+		});
+
 		test('a file Git is told to assume unchanged or to skip, edited, is a change not committed: refused untouched; one a sparse checkout leaves out is none', async () => {
 			for (const name of ['skipped.json', 'assumed.json', 'sparse.json']) {
 				fs.writeFileSync(path.join(repo, name), '{}');
@@ -419,6 +436,171 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 				{ outcome: 'fulfilled', closed: 1 }
 			]);
 			assert.deepStrictEqual([fs.readFileSync(path.join(skipped, 'skipped.json'), 'utf8'), fs.readFileSync(path.join(assumed, 'assumed.json'), 'utf8')], ['{"local": "edit"}', '{"local": "edit"}']);
+		});
+
+		test('Git removes it without --force, on Windows past the 260 characters a path had, asking no one to retry: no prompt variable, in any case, reaches it', () => {
+			assert.deepStrictEqual([removeWorktreeArgs('/r/.git', '/r.worktrees/x', 'linux'), removeWorktreeArgs('C:\\r\\.git', 'C:\\r.worktrees\\x', 'win32')], [
+				['-C', '/r/.git', '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', '/r.worktrees/x'],
+				['-c', 'core.longpaths=true', '-C', 'C:\\r\\.git', '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', 'C:\\r.worktrees\\x']
+			]);
+			const env = gitEnvironment({ PATH: '/bin', GIT_ASK_YESNO: 'ask.exe', Git_Ask_YesNo: 'ask.exe', git_dir: '/elsewhere', Lang: 'fr_FR.UTF-8', GIT_ASKPASS: 'pass.exe' });
+			assert.deepStrictEqual(env, { PATH: '/bin', GIT_ASKPASS: 'pass.exe', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' });
+		});
+
+		test('on Windows, what lies deeper than 260 characters - dependencies Git ignores - goes with it', async function () {
+			if (process.platform !== 'win32') {
+				this.skip();
+			}
+			fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n');
+			git(repo, 'add', '.gitignore');
+			git(repo, 'commit', '-q', '-m', 'ignore');
+			const deep = path.join(temp.dir, 'deep');
+			git(repo, 'worktree', 'add', '-q', '-b', 'deep', deep);
+			let folder = path.join(deep, 'node_modules');
+			while (folder.length < 300) {
+				folder = path.join(folder, 'a-dependency-with-a-long-folder-name');
+			}
+			fs.mkdirSync(folder, { recursive: true });
+			fs.writeFileSync(path.join(folder, 'index.js'), '');
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			assert.deepStrictEqual(await removed(worktrees, idOf(deep)), { outcome: 'fulfilled', closed: 1 });
+			assert.ok(!fs.existsSync(deep));
+		});
+
+		test('Git for Windows before 2.54 follows a folder link as it deletes; 2.54 and later do not, nor does any Git elsewhere; a version that cannot be read is taken to', () => {
+			assert.deepStrictEqual(
+				['git version 2.53.0.windows.3', 'git version 2.39.5', 'git version 1.9.5.msysgit.1', 'git version 2.54.0.windows.1', 'git version 2.55.0.windows.3', 'git version 3.0.0', 'nonsense', undefined].map(followsFolderLinks),
+				[true, true, true, false, false, false, true, true]
+			);
+		});
+
+		test('the first link to a folder in a worktree - an NTFS junction, as `npm link` makes in node_modules - is found without following it; plain folders hold none', async function () {
+			if (process.platform !== 'win32') {
+				this.skip();
+			}
+			const outside = path.join(temp.dir, 'outside');
+			fs.mkdirSync(outside);
+			fs.writeFileSync(path.join(outside, 'precious.txt'), 'kept');
+			const tree = path.join(temp.dir, 'tree');
+			fs.mkdirSync(path.join(tree, 'src', 'deep'), { recursive: true });
+			fs.writeFileSync(path.join(tree, 'src', 'deep', 'a.txt'), '');
+			const plain = await folderLinkIn(tree);
+			fs.mkdirSync(path.join(tree, 'node_modules'));
+			fs.symlinkSync(outside, path.join(tree, 'node_modules', 'linked'), 'junction');
+
+			assert.deepStrictEqual([plain, await folderLinkIn(tree), await folderLinkIn(path.join(temp.dir, 'no-such-folder'))], [undefined, path.join('node_modules', 'linked'), undefined]);
+			assert.strictEqual(fs.readFileSync(path.join(outside, 'precious.txt'), 'utf8'), 'kept');
+		});
+
+		test('on Windows, with a Git before 2.54, one holding a link to a folder is refused untouched, before its agents close and again as they end; another Git, or another platform, removes it', async () => {
+			const gated = path.join(temp.dir, 'gated');
+			git(repo, 'worktree', 'add', '-q', '-b', 'gated', gated);
+			let links: (string | undefined)[] = [];
+			let walked = 0;
+			const linkIn = async () => { walked++; return links.shift(); };
+			const old = { versionOf: async () => 'git version 2.53.0.windows.3', folderLinkIn: linkIn };
+			const refusedFirst = await (async () => {
+				const { worktrees, idOf } = await windowWith([repo], {}, old, { platform: 'win32' });
+				links = ['node_modules\\linked'];
+				return removed(worktrees, idOf(gated));
+			})();
+			const refusedAfterClose = await (async () => {
+				const { worktrees, idOf } = await windowWith([repo], {}, old, { platform: 'win32' });
+				// None as it is asked; one an agent made as it ended
+				links = [undefined, 'node_modules\\made'];
+				return removed(worktrees, idOf(gated));
+			})();
+			const walksBefore = walked;
+			const elsewhere = await (async () => {
+				const { worktrees, idOf } = await windowWith([repo], {}, old, { platform: 'linux' });
+				links = ['node_modules\\linked'];
+				return removed(worktrees, idOf(gated));
+			})();
+
+			assert.deepStrictEqual([refusedFirst, refusedAfterClose, walksBefore, elsewhere, walked], [
+				{ outcome: 'worktree_linked {"kind":"worktree_linked","name":"gated","link":"node_modules\\\\linked"}', closed: 0 },
+				{ outcome: 'worktree_linked {"kind":"worktree_linked","name":"gated","link":"node_modules\\\\made"}', closed: 1 },
+				3,
+				{ outcome: 'fulfilled', closed: 1 },
+				3
+			]);
+			assert.ok(!fs.existsSync(gated));
+		});
+
+		test('Git 2.54 or later on Windows is not asked for links: it removes the worktree as it is', async () => {
+			const current = path.join(temp.dir, 'current');
+			git(repo, 'worktree', 'add', '-q', '-b', 'current', current);
+			let walked = 0;
+			const { worktrees, idOf } = await windowWith([repo], {}, { versionOf: async () => 'git version 2.55.0.windows.3', folderLinkIn: async () => { walked++; return 'node_modules\\linked'; } }, { platform: 'win32' });
+
+			assert.deepStrictEqual([await removed(worktrees, idOf(current)), walked], [{ outcome: 'fulfilled', closed: 1 }, 0]);
+		});
+
+		test('Git that succeeds but leaves the folder behind is said to have, the folder kept as Git left it: Facade deletes nothing itself', async () => {
+			const left = path.join(temp.dir, 'left');
+			git(repo, 'worktree', 'add', '-q', '-b', 'left', left);
+			const { worktrees, idOf } = await windowWith([repo], {}, {
+				removeWorktree: async (gitPath, commonDir, worktree) => {
+					await removeWorktree(gitPath, commonDir, worktree);
+					// What Git could not take, as a link it does not go through
+					fs.mkdirSync(path.join(worktree, 'node_modules'), { recursive: true });
+				}
+			});
+
+			assert.deepStrictEqual(await removed(worktrees, idOf(left)), { outcome: `deletion_incomplete ${JSON.stringify({ kind: 'worktree_left', name: 'left', folder: left })}`, closed: 1 });
+			assert.ok(fs.existsSync(path.join(left, 'node_modules')));
+			assert.ok(!git(repo, 'worktree', 'list', '--porcelain').includes(left));
+		});
+
+		test('on Windows, a worktree holding a junction to a folder outside it never costs that folder its content, whatever this Git: refused before 2.54, else removed by Git and any folder it left said', async function () {
+			if (process.platform !== 'win32') {
+				this.skip();
+			}
+			fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n');
+			git(repo, 'add', '.gitignore');
+			git(repo, 'commit', '-q', '-m', 'ignore');
+			const linked = path.join(temp.dir, 'linked');
+			git(repo, 'worktree', 'add', '-q', '-b', 'linked', linked);
+			const outside = path.join(temp.dir, 'outside');
+			fs.mkdirSync(outside);
+			fs.writeFileSync(path.join(outside, 'precious.txt'), 'kept');
+			fs.mkdirSync(path.join(linked, 'node_modules'));
+			fs.symlinkSync(outside, path.join(linked, 'node_modules', 'dep'), 'junction');
+			const old = followsFolderLinks(await gitVersionOf('git'));
+			const { worktrees, idOf } = await windowWith([repo], {}, { versionOf: gitVersionOf, folderLinkIn });
+
+			const result = await removed(worktrees, idOf(linked));
+
+			assert.strictEqual(fs.readFileSync(path.join(outside, 'precious.txt'), 'utf8'), 'kept');
+			if (old) {
+				assert.deepStrictEqual(result, { outcome: `worktree_linked ${JSON.stringify({ kind: 'worktree_linked', name: 'linked', link: path.join('node_modules', 'dep') })}`, closed: 0 });
+			} else {
+				assert.ok(result.outcome === 'fulfilled' || result.outcome.startsWith('deletion_incomplete {"kind":"worktree_left"'), result.outcome);
+				assert.strictEqual(result.outcome === 'fulfilled', !fs.existsSync(linked));
+			}
+		});
+
+		test('a hidden file is compared under its own name, never as a pattern: `a[1].txt` unedited beside `a1.txt` is no change; edited to `a1.txt`\'s content, it is one', async () => {
+			fs.writeFileSync(path.join(repo, 'a1.txt'), 'one');
+			fs.writeFileSync(path.join(repo, 'a[1].txt'), 'bracketed');
+			git(repo, 'add', '.');
+			git(repo, 'commit', '-q', '-m', 'brackets');
+			const kept = path.join(temp.dir, 'kept');
+			const edited = path.join(temp.dir, 'edited');
+			for (const each of [kept, edited]) {
+				git(repo, 'worktree', 'add', '-q', '-b', path.basename(each), each);
+				git(each, 'update-index', '--assume-unchanged', 'a[1].txt');
+			}
+			// What a pattern would match first is `a1.txt`'s entry, whose content this edit now has
+			fs.writeFileSync(path.join(edited, 'a[1].txt'), 'one');
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			assert.deepStrictEqual([await removed(worktrees, idOf(kept)), await removed(worktrees, idOf(edited))], [
+				{ outcome: 'fulfilled', closed: 1 },
+				{ outcome: 'worktree_changed {"kind":"worktree_changed","name":"edited"}', closed: 0 }
+			]);
+			assert.strictEqual(fs.readFileSync(path.join(edited, 'a[1].txt'), 'utf8'), 'one');
 		});
 
 		test('only a linked worktree no workspace folder is in: the main checkout, a plain folder, an opened worktree and one holding a workspace folder are refused untouched; a detached one goes', async () => {

@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import { displayLine, inertCommandLinks } from '../../base/text';
 import type { MessageRecord } from '../../core/messagePorts';
-import { ago } from '../presentation';
+import { ago, plainText } from '../presentation';
 
 type Party = MessageRecord['from'] | MessageRecord['to'];
 
@@ -184,10 +184,11 @@ export function pickConversation(deps: MessageHistoryPickDeps): Promise<void> {
 	const itemOf = (conversation: Conversation): Item => {
 		const count = conversation.records.length;
 		const latest = conversation.records[conversation.records.length - 1];
+		// Agents' names and words as they wrote them: `$(name)` in them is text, not the icon the editor would draw (PANEL-3.2)
 		return {
-			label: conversationTitle(conversation),
+			label: plainText(conversationTitle(conversation)),
 			description: count === 1 ? vscode.l10n.t("1 message") : vscode.l10n.t("{0} messages", count),
-			detail: [ago(conversation.last, now(), deps.language), displayLine(latest.text, 120)].join(' · '),
+			detail: plainText([ago(conversation.last, now(), deps.language), displayLine(latest.text, 120)].join(' · ')),
 			conversation
 		};
 	};

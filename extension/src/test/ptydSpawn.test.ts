@@ -94,6 +94,29 @@ suite('ptyd native spawn options (ARCHITECTURE-1.2)', () => {
 });
 
 suite('ptyd: a Windows console is ended once (LIFECYCLE-4.2)', () => {
+	test('a console node-pty never made ready - which queues its kill until then - is ended through its agent at once, and once', () => {
+		const counts = { agent: 0, queued: 0, released: 0 };
+		const console = (ready: boolean) => ({
+			pid: ready ? 4242 : 0, _isReady: ready,
+			_agent: { kill: () => counts.agent++, _conoutSocketWorker: { dispose: () => counts.released++ } },
+			onData() {}, onExit() {}, kill: () => counts.queued++, resize() {}, write() {}
+		});
+		const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+		try {
+			Object.defineProperty(process, 'platform', { value: 'win32' });
+			for (const ready of [false, true]) {
+				const { Run } = withModules({ 'node-pty': { spawn: () => console(ready) } })<typeof import('../ptyd/run')>(require.resolve('../ptyd/run'));
+				const run = new Run({ run: 'test', owner: 'test', file: 'agent.exe', args: [], cwd: 'work', env: {}, cols: 80, rows: 24, meta: {} });
+				run.dispose();
+				run.dispose();
+			}
+			// Never ready: its agent ends it and lets go of its pipes; ready: node-pty's own kill, as ever - each once
+			assert.deepStrictEqual(counts, { agent: 1, queued: 1, released: 1 });
+		} finally {
+			Object.defineProperty(process, 'platform', original);
+		}
+	});
+
 	test('terminate past its grace, a resize and the run forgotten end its console once: node-pty\'s second kill reaches a console already freed', async () => {
 		let kills = 0;
 		let resizes = 0;

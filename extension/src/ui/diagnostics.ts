@@ -72,10 +72,24 @@ function agentLines({ facts, input, screen }: DiagnosedAgent): string[] {
 }
 
 /**
+ * `text` with the home folder written `~` wherever it appears (D116), as `platform` compares paths: whatever its case on Windows and
+ * macOS, and whichever its separators on Windows - VS Code writes a drive letter in lower case, Node in upper. A home of one character,
+ * a root, stays as it is.
+ */
+function withHomeAsTilde(text: string, home: string, platform: NodeJS.Platform): string {
+	if (home.length <= 1) {
+		return text;
+	}
+	const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+	const pattern = platform === 'win32' ? escaped.replace(/\\\\|\//g, '[\\\\/]') : escaped;
+	return text.replace(new RegExp(pattern, platform === 'win32' || platform === 'darwin' ? 'gi' : 'g'), '~');
+}
+
+/**
  * The text Copy Diagnostics puts on the clipboard (ARCHITECTURE-3.3, D116): in English, as the agents log is, with the home folder
  * written `~`. Nothing in it is sent anywhere.
  */
-export function diagnosticsText(diagnostics: Diagnostics): string {
+export function diagnosticsText(diagnostics: Diagnostics, platform: NodeJS.Platform = process.platform): string {
 	const lines = [
 		`Facade Code diagnostics, ${iso(diagnostics.at)}`,
 		diagnostics.about.join('; '),
@@ -89,6 +103,5 @@ export function diagnosticsText(diagnostics: Diagnostics): string {
 		`Agents log, its last ${diagnostics.log.length} lines`,
 		...diagnostics.log
 	];
-	const text = `${lines.join('\n')}\n`;
-	return diagnostics.home.length > 1 ? text.split(diagnostics.home).join('~') : text;
+	return withHomeAsTilde(`${lines.join('\n')}\n`, diagnostics.home, platform);
 }

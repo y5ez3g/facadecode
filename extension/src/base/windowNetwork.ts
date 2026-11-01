@@ -15,8 +15,16 @@ export const WINDOW_NETWORK_PROTOCOL = 1;
 export const WINDOW_DIRECTORY_COMMAND = 'facade.window.directory';
 /** The workspace extension asks its window component to carry one request to another window and back. */
 export const WINDOW_ROUTE_COMMAND = 'facade.window.route';
-/** The workspace extension tells its window component the agents this window holds, for every other window to resolve. */
+/**
+ * The workspace extension tells its window component the agents this window holds, for every other window to resolve; the component
+ * answers whether other windows can reach this one (`PublishStatus`).
+ */
 export const WINDOW_PUBLISH_COMMAND = 'facade.window.publish';
+/**
+ * A window component that starts asks its window's workspace extension to publish the agents it holds again: its extension host may
+ * have restarted while the workspace extension went on, which publishes only as its agents change.
+ */
+export const WORKSPACE_REPUBLISH_COMMAND = 'facade.workspace.republish';
 /** The workspace extension takes numbers for `#aN` and `#mN` aliases, unique on this computer (RULES-1.1, 2.2). */
 export const WINDOW_ALLOCATE_COMMAND = 'facade.window.allocate';
 /** A window component asks its own window's workspace extension to serve a request another window routed to it. */
@@ -73,6 +81,16 @@ export type RouteFailure = 'window_unavailable' | 'protocol_incompatible' | 'tim
 export type RouteResponse =
 	| { readonly ok: true; readonly result: unknown }
 	| { readonly ok: false; readonly reason: RouteFailure; readonly message: string; readonly effects: 'none' | 'unknown' };
+
+/** Whether other windows can reach this one through its component - it listens - and why not where they cannot. */
+export interface PublishStatus {
+	readonly listening: boolean;
+	readonly problem?: string;
+}
+
+export function isPublishStatus(value: unknown): value is PublishStatus {
+	return isJsonObject(value) && typeof value.listening === 'boolean' && (value.problem === undefined || typeof value.problem === 'string');
+}
 
 /** Numbers taken for aliases: `count` of them from `first` on, none ever given again. */
 export interface Allocation {

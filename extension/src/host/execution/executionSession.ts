@@ -52,6 +52,8 @@ export class ExecutionSession {
 	}
 
 	get closed(): boolean { return this.disposed || this.transferredAway; }
+	/** This activation's claim, which fences what it writes beside its runs. */
+	get ownerClaim(): OwnerClaim { return this.claim; }
 	get ownershipLost(): boolean { return this.transferredAway; }
 	get current(): Promise<PtydClient> | undefined { return this.connection; }
 	get needsRecovery(): boolean { return this.lost; }
@@ -104,8 +106,10 @@ export class ExecutionSession {
 				client.onDidClose(() => {
 					if (this.connection === connection) {
 						this.connection = undefined;
-						this.options.log('The connection to ptyd closed: agents keep running, and this window claims them again.');
-						this.lose(PTYD_PROTOCOL);
+						if (!this.closed) {
+							this.options.log('The connection to ptyd closed: agents keep running, and this window claims them again.');
+							this.lose(PTYD_PROTOCOL);
+						}
 					}
 				});
 				void this.earlier.find();
@@ -140,6 +144,8 @@ export class ExecutionSession {
 		this.earlier.dispose();
 		clearInterval(this.reconcileTimer);
 		clearTimeout(this.reconnectTimer);
+		// Its connection claims nothing any more: let go of, so that the ptyd holds no socket for a window that shows no run of it
+		void this.connection?.then(client => client.dispose(), () => undefined);
 		this.options.transferred();
 	}
 
