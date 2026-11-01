@@ -149,9 +149,10 @@ const PASTE_UNKNOWN: InputEffects = { outcome: 'unknown', text_written: 'unknown
 /** A submission whose input emptied after its Enter, at that attempt or a later one (RULES-1.3). */
 const CONFIRMED: InputEffects = { outcome: 'confirmed', text_written: 'full', enter_written: true };
 
-const OBSTACLES = { draft: 'input_draft', own: 'input_draft', interaction: 'input_interaction', unknown: 'input_unknown' } as const;
+/** The obstacle an input that is not usable is, as a delivery reports it. */
+const OBSTACLES: { readonly [state: string]: string | undefined } = { draft: 'input_draft', interaction: 'input_interaction', unknown: 'input_unknown' };
 /** What holds an input for a person or its CLI, and is waited for (RULES-1.5, D106): unlike an input that cannot be read. */
-const HELD: ReadonlySet<string> = new Set([OBSTACLES.draft, OBSTACLES.interaction]);
+const HELD: ReadonlySet<string> = new Set(['input_draft', 'input_interaction']);
 
 /** Why delivery did not succeed, as a Facade result says it. */
 const REASONS: { readonly [reason: string]: string } = {
@@ -255,7 +256,7 @@ export class MessageService implements Messages, Disposable {
 		const extra = this.deps.input.pasteTime?.(request.to, text) ?? 0;
 		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra, start: deadline - STAGE_MS } });
 		const stage = this.newStage(request.to, pending.id, start, extra);
-		const delivered = Promise.race([this.stage(stage, pending, text, MESSAGE_LEAD), stage.read]);
+		const delivered = Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.read]);
 		const first = await this.within(delivered, RESPONSE_BUDGET_MS - (this.mono() - start));
 		if (first !== 'deadline') {
 			return { record: this.finish(pending.id, first) ?? pending, status: first.status, ...(first.reason ? { reason: first.reason } : {}) };
@@ -510,7 +511,7 @@ export class MessageService implements Messages, Disposable {
 	private deliverResults(record: MessageRecord, text: string, stage: Stage): MessageRecord {
 		const batch = stage.batch!;
 		const typed = () => batch.typed ??= batch.records.map(id => batch.texts.get(id)!).join('\n\n');
-		void Promise.race([this.stage(stage, record, batch.typed !== undefined ? text : typed), stage.read]).then(outcome => {
+		void Promise.race([this.stage(stage, batch.typed !== undefined ? text : typed), stage.read]).then(outcome => {
 			for (const id of batch.records) {
 				this.finish(id, outcome);
 			}
@@ -536,7 +537,7 @@ export class MessageService implements Messages, Disposable {
 	 * question holds the input its deadline moves on, to ten minutes from its start; an ended run ends it at once. A slot that went by
 	 * during an attempt is not made up for. At the deadline, input not yet started is dropped and what went in is reported.
 	 */
-	private async stage(stage: Stage, record: MessageRecord, text: string | (() => string), lead?: string): Promise<Outcome> {
+	private async stage(stage: Stage, text: string | (() => string), lead?: string): Promise<Outcome> {
 		const { start } = stage;
 		try {
 			for (let slot = 0; ;) {
@@ -592,7 +593,7 @@ export class MessageService implements Messages, Disposable {
 						stage.heldUntil = this.deps.clock.now() + (stage.deadline - this.mono());
 					}
 				}
-				for (const id of stage.batch?.records ?? [record.id]) {
+				for (const id of stage.batch?.records ?? [stage.message]) {
 					this.progress(id, stage);
 				}
 				slot = Math.max(slot + 1, Math.ceil((this.mono() - start) / SLOT_MS));
@@ -983,7 +984,7 @@ export class MessageService implements Messages, Disposable {
 			this.deliverResults(record, text, stage);
 			return;
 		}
-		void Promise.race([this.stage(stage, record, text, MESSAGE_LEAD), stage.read]).then(outcome => {
+		void Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.read]).then(outcome => {
 			const final = this.finish(record.id, outcome);
 			if (final && !this.disposed) {
 				this.reportOutcome(final, undefined);

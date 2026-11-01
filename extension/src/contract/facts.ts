@@ -155,15 +155,14 @@ export function messageFile(records: readonly MessageRecord[]): string {
 const SEND_FAILURES: { readonly [reason: string]: readonly [ErrorCode, string] } = {
 	ended: ['UNAVAILABLE', 'The recipient has ended.'],
 	window_unavailable: ['UNAVAILABLE', 'The recipient\'s window is not available.'],
-	capacity_exceeded: ['UNAVAILABLE', 'Facade has no capacity for another delivery now.'],
 	input_draft: ['FAILED', 'The recipient\'s input held a draft, which is never typed over.'],
 	input_interaction: ['FAILED', 'The recipient\'s CLI was showing a menu, login or permission question.'],
 	input_unknown: ['FAILED', 'The recipient\'s input state could not be established.'],
 	timeout: ['FAILED', 'The delivery deadline passed before the recipient\'s CLI accepted the message.'],
 	submission_unconfirmed: ['FAILED', 'The text went in, but its submission was not confirmed.'],
 	partial_input: ['FAILED', 'Only part of the message went in.'],
+	// Another window refused it before recording it: its agent gone, or out of the sender's reach (MCP-1.2)
 	not_found: ['NOT_FOUND', 'The recipient was not found.'],
-	out_of_tree: ['REFUSED', 'The recipient is not in the sender\'s creation tree.'],
 	// No input reader for the recipient's CLI: a permanent obstacle, failed at once (MCP-1.2, D89)
 	unsupported: ['UNAVAILABLE', 'Facade cannot type messages into the recipient\'s CLI; type_text still reaches its terminal.']
 };

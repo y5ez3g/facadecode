@@ -21,6 +21,11 @@ export function referenceOf(facts: Pick<RunFacts, 'name' | 'alias'>): string {
 /** An ID that ends a reference: `#aN` or an exact run ID, alone or after a display name. */
 const TRAILING_ID = /^(?:[\s\S]*?\s)?(?<id>#a\d+|run-[0-9a-f]{32})$/;
 
+/** The `#aN` or exact run ID that ends `reference`, alone or after a display name: what decides it (RULES-2.3). */
+export function trailingId(reference: string): string | undefined {
+	return TRAILING_ID.exec(reference.trim())?.groups?.id;
+}
+
 /** What resolving a reference reads of a run: its IDs and name - a run of this window, or one another window lists (RULES-2.3). */
 export type Named = Pick<RunFacts, 'id' | 'alias' | 'name'>;
 
@@ -51,7 +56,7 @@ export function resolveAgent<T extends Named>(reference: string, candidates: rea
 			? new FacadeError('INVALID', 'ambiguous_reference', `@human names the person and ${named.length === 1 ? 'an agent' : `${named.length} agents`} named "human": ${named.map(run => `${referenceOf(run)} (${run.id})`).join(', ')}. Use #human for the person, or the agent's ID.`)
 			: new FacadeError('INVALID', 'invalid_argument', '@human is the person, not an agent.');
 	}
-	const id = TRAILING_ID.exec(text)?.groups?.id ?? (candidates.some(run => run.id === text) || options.outside?.some(run => run.id === text) ? text : undefined);
+	const id = trailingId(text) ?? (candidates.some(run => run.id === text) || options.outside?.some(run => run.id === text) ? text : undefined);
 	if (id !== undefined) {
 		const named = (run: T) => run.id === id || run.alias === id;
 		const found = candidates.filter(named);

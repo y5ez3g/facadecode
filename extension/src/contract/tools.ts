@@ -12,7 +12,7 @@ import { FacadeError } from '../core/errors';
 import { HOLD_MS, RESPONSE_BUDGET_MS, STAGE_MS } from '../core/messages';
 import type { InputPort, MessageRecord, Messages, SendResult } from '../core/messagePorts';
 import type { Agents, CapabilityState, CliChoice, CliChoices, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
-import { reaches, referenceOf, resolveAgent, ResolveOptions } from '../core/reach';
+import { reaches, referenceOf, resolveAgent, ResolveOptions, trailingId } from '../core/reach';
 import type { StartChoices } from '../record/choices';
 import type { ServedRoute } from '../base/windowNetwork';
 import { ServedAnswer, TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
@@ -381,7 +381,7 @@ class ToolService {
 	private async locate(reference: string, caller: Caller, eligible?: (run: Reachable) => boolean): Promise<Located> {
 		const self = this.deps.window.id;
 		const here = this.deps.agents.list().map(run => ({ facts: run, reachable: { id: run.id, alias: run.alias, name: run.name, root: run.root, yolo: run.yolo, lifecycle: run.lifecycle, window: self } }));
-		const id = /(?:^|\s)(#a\d+|run-[0-9a-f]{32})$/.exec(reference.trim())?.[1] ?? reference.trim();
+		const id = trailingId(reference) ?? reference.trim();
 		const exact = here.find(each => each.facts.id === id || each.facts.alias === id);
 		const network = this.deps.network;
 		if (exact || !network || caller.window !== undefined) {
