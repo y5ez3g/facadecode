@@ -363,6 +363,26 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([launched, selected, picker.shown, ui.current], [[{ name: 'Ada', location: MAIN.id, cli: 'claude', origin: 'human' }], ['run-new'], false, undefined]);
 		});
 
+		test('LIFECYCLE-1.3, D63: a lone folder Git has not read yet is a label; Change Working Location comes once Git finds a repository there, the CLI in focus kept', async () => {
+			const SHOP_FOLDER = place('loc-shop', 'shop', SHOP, { kind: 'folder', git: 'pending', opened: true, uri: SHOP.uri, path: SHOP.path });
+			catalog = { locations: [SHOP_FOLDER], folders: [SHOP], pending: true };
+			last = { location: SHOP_FOLDER.id, cli: 'claude' };
+			const done = start();
+			await settle();
+			const picker = ui.current!;
+			const pending = [picker.labels(), picker.activeItems.map(item => item.label)];
+			catalog = { locations: [{ ...SHOP_FOLDER, kind: 'checkout', git: 'ok', isMain: true, branch: 'main' }], folders: [SHOP], pending: false };
+			changed.fire();
+			const read = [picker.labels(), picker.activeItems.map(item => item.label)];
+			picker.hide();
+			await done;
+			assert.deepStrictEqual([pending, read, launched], [
+				[['Claude Code', 'shop', 'Change Name...'], ['Claude Code']],
+				[['Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Claude Code']],
+				[]
+			]);
+		});
+
 		test('from the filtered empty panel it starts at the filtered location, still changeable; one no longer offered gives way to the remembered location (LIFECYCLE-1.2)', async () => {
 			let done = start(LOGIN.id);
 			await settle();

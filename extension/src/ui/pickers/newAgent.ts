@@ -159,24 +159,29 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	// The current choices stay in sight while the CLIs are filtered or scrolled
 	const summary = vscode.l10n.t("{0} · {1} · {2}", at.title, at.name, titleWhere);
 	const configure: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: configureAgentsLabel() };
-	// Nothing to change it to - one folder whose only location is a plain folder - is said as a label, never an action that does
-	// nothing (LIFECYCLE-1.3)
-	const inFolder = catalog.locations.filter(each => each.folders.some(folder => folder.uri === location.folders[0]?.uri));
-	const changeable = catalog.folders.length > 1 || inFolder.length > 1 || inFolder.some(each => each.kind === 'checkout') || !!worktree;
-	const bottom: Item[] = [
-		// A labeled line: the editor draws one without a label as all but invisible. The location said as a label is its own line.
-		...!changeable
-			? [{ label: plainText(where), kind: vscode.QuickPickItemKind.Separator }]
-			: [{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator }, {
-				label: vscode.l10n.t("Change Working Location..."),
-				description: plainText(where),
-				iconPath: new vscode.ThemeIcon('folder'),
-				alwaysShow: true,
-				does: 'location' as const
-			}],
-		{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
-	];
-	const itemsOf = (choices: CliChoices | Error): { readonly items: Item[]; readonly active?: Item } => {
+	/**
+	 * The step's bottom as the catalog is now (LIFECYCLE-1.3): nothing to change the location to - one folder whose only location is a
+	 * plain folder - is said as a label, never an action that does nothing; a folder Git then finds in a repository offers its change.
+	 */
+	const bottomOf = (now: Catalog): Item[] => {
+		const inFolder = now.locations.filter(each => each.folders.some(folder => folder.uri === location.folders[0]?.uri));
+		const changeable = now.folders.length > 1 || inFolder.length > 1 || inFolder.some(each => each.kind === 'checkout') || !!worktree;
+		return [
+			// A labeled line: the editor draws one without a label as all but invisible. The location said as a label is its own line.
+			...!changeable
+				? [{ label: plainText(where), kind: vscode.QuickPickItemKind.Separator }]
+				: [{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator }, {
+					label: vscode.l10n.t("Change Working Location..."),
+					description: plainText(where),
+					iconPath: new vscode.ThemeIcon('folder'),
+					alwaysShow: true,
+					does: 'location' as const
+				}],
+			{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
+		];
+	};
+	const itemsOf = (choices: CliChoices | Error, now: Catalog): { readonly items: Item[]; readonly active?: Item } => {
+		const bottom = bottomOf(now);
 		if (choices instanceof Error) {
 			const item: Item = { label: vscode.l10n.t("Configure Agents..."), detail: choices.message, iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' };
 			return { items: [item, ...bottom], active: item };
@@ -202,19 +207,24 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		// Change item shown meanwhile would leave the focus on another CLI than the one preselected, which an Enter then starts
 		items: [],
 		busy: true,
-		// The CLIs of the location's environment, found as the step shows (CLIS-1.1); the step up keeps its place meanwhile
+		// The CLIs of the location's environment, found as the step shows (CLIS-1.1); the step up keeps its place meanwhile. Git metadata
+		// read later changes the bottom alone, the item in focus kept, so that an Enter right then takes what the person sees (D71)
 		live: picker => {
 			let up = true;
-			const show = (choices: CliChoices | Error) => {
-				if (up) {
-					const { items, active } = itemsOf(choices);
+			let found: CliChoices | Error | undefined;
+			const show = () => {
+				if (up && found) {
+					const before = picker.activeItems[0];
+					const { items, active } = itemsOf(found, deps.locations.snapshot());
+					const kept = before && items.find(item => item.does === before.does && item.cli?.id === before.cli?.id && item.label === before.label);
 					picker.items = items;
-					picker.activeItems = active ? [active] : [];
+					picker.activeItems = kept ? [kept] : active ? [active] : [];
 					picker.busy = false;
 				}
 			};
-			deps.clis.list(location).then(show, err => show(err instanceof Error ? err : new Error(messageOf(err))));
-			return { dispose: () => { up = false; } };
+			deps.clis.list(location).then(choices => { found = choices; show(); }, err => { found = err instanceof Error ? err : new Error(messageOf(err)); show(); });
+			const listening = deps.locations.onDidChange(show);
+			return { dispose: () => { up = false; listening.dispose(); } };
 		}
 	});
 	return picked && picked !== BACK ? picked.item : undefined;
