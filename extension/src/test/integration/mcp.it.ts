@@ -223,8 +223,9 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		// Muse Code goes through cmd.exe on Windows, which cannot be given a message block as an argument: it goes after startup there
-		const native = CLI === 'muse' && process.platform === 'win32' ? undefined : NATIVE[CLI];
+		// These fixtures run directly, including the Node-backed Muse fixture on Windows. The adapter's unknown-batch-wrapper
+		// fallback is checked separately; it must not change what this direct launch can carry as a native prompt.
+		const native = NATIVE[CLI];
 		assert.deepStrictEqual([started.data.prompt.path, started.data.yolo, started.data.creator], [native ? 'native' : 'post_start', true, card.runId]);
 		// After startup it may still be on its way when the start answers - a CLI slow to draw its input - and is delivered then (MCP-2.3)
 		assert.ok(native ? started.data.prompt.status === 'success' : ['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));

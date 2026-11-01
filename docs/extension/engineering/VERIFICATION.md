@@ -82,17 +82,36 @@ A new normal installed-VSIX window uses `/tmp/fc74-metadata-__g4nc_l`, titled `F
 `95c852f7334c39f0f0534bde00545ca1b860cb5b3b8aed68cfe95b0a4a029e18`); it has no driver or fake CLI, and uses the user's
 normal native CLI configuration. This window is for the owner to test, not an automated test subject.
 
-The merged candidate integrates MCP main `b9bd5996` with Resume/Pin. Linux checks on 2026-10-31 pass compilation,
-989 unit tests (one Windows-only file-lock test pending), 11 package checks, 296 runtime and 64 manifest strings in
-English plus 11 translations, and the specification audit (185 rules, 80 local links). Logs are
-`/tmp/fc74-reviewed-full-tests.log`, `/tmp/fc74-reviewed-package-tests.log` and `/tmp/fc74-review-focused.log`.
+The merged candidate integrates MCP main `b9bd5996` with Resume/Pin. Linux checks on 2026-10-31, at `ee355c07`,
+pass compilation, 990 unit tests (one Windows-only file-lock test pending), 11 package checks, 296 runtime and
+64 manifest strings in English plus 11 translations, and the specification audit (185 rules, 80 local links).
+Logs are `/tmp/fc74-final-unit.log`, `/tmp/fc74-final-package-tests.log` and `/tmp/fc74-tabs-unit.log`.
 Native Linux exact Resume with the combined MCP and session configuration passes for all six built-ins; Claude,
 Codex and Pi also change native sessions and resume the new ID, using isolated stores and a local model stub.
 MCP configuration probes use a local MCP stub and observe initialization/tool discovery; real Facade tools are exercised
 by the separate editor journeys. Logs are `/tmp/fc74-reviewed-{claude,codex,pi,muse-opencode,agy}.log`.
-The final merged editor journeys, including close/reopen for every built-in and the actual five-minute expiry followed
-by exact Pin restoration, are in progress. Three-platform CI runs the same isolated editor suite with fake CLIs;
-native Windows/macOS and remote Resume/Pin remain unverified. No earlier platform result certifies this merged build.
+
+On official VS Code 1.144.0, every built-in passes actual Pin/Unpin reload and folder-to-workspace conversion
+(`/tmp/fc74-final-conversion.log`, `/tmp/fdit-SFAhpD`), and real close/immediate reopen preserves the original run ID,
+PID, saved session and one terminal (`/tmp/fc74-final-reopen.log`, `/tmp/fdit-1b3daX`). The shared lifetime policy is
+checked with its actual production timer: after closing the window, its process ends at 298,974 ms; reopening starts
+one new run and process with the exact previously pinned session (`/tmp/fc74-final-expiry.log`, `/tmp/fdit-CsfAwA`).
+The complete human and MCP journeys pass 33 tests across the six built-ins and custom CLI
+(`/tmp/fc74-final-journeys.log`, `/tmp/fdit-wpL7YA`). Cross-window journeys pass five tests (`/tmp/fc74-final-cross.log`, `/tmp/fdit-yvzB2W`).
+The minimum official VS Code 1.105.0 passes all six built-ins' Resume/Pin/Unpin and the custom launch journey
+(15 tests; `/tmp/fc74-minimum-integration2.log`, `/tmp/fdit-7xriwE`), plus all six reload/conversion journeys
+(`/tmp/fc74-minimum-conversion.log`, `/tmp/fdit-WXSIkt`). This found and fixed a native Pin defect: VS Code can
+replace every public Tab object through its tab-group event; stale bindings now expire and rebind only from the exact
+active Terminal/Tab correlation, including terminals with duplicate names. No name or position matching is used.
+
+The three-platform workflow runs compilation, units, translations, audit, packaging and the complete isolated editor
+suite on Linux x64, Windows x64 and macOS arm64. Its current result is attached to
+[PR 41](https://github.com/y5ez3g/facadecode/pull/41/checks); do not infer a platform pass from a queued or incomplete check.
+At `ee355c07`, Linux and macOS pass 990 units, Windows passes 988 (the Unix old-Git fixture and three Unix-socket checks skipped).
+CI also found two test-tool defects: an overlong fake CLI footer wrapped over its input on macOS, and the Python
+specification audit read UTF-8 documents using Windows' default code page. Their fixes preserve the product assertions.
+Native Windows/macOS and remote Resume/Pin remain unverified; fake-CLI editor coverage does not certify those native
+vendor integrations. No earlier platform result certifies this merged build.
 
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in

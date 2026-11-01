@@ -99,17 +99,20 @@ const inverse = (text: string) => `\x1b[7m${text}\x1b[27m`;
 function inputRows(width: number, shown: string): Row[] {
 	const rule = '─'.repeat(width);
 	const length = [...shown].length;
+	// A footer is one physical row, even under macOS's long temporary directory or a deep workspace path.
+	// Letting it wrap overwrites the following row and no longer represents the CLI's input layout.
+	const footer = (text: string) => [...text].slice(0, width).join('');
 	switch (as) {
 		case 'codex':
-			return [{ text: `› ${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: '' }, { text: `  gpt-fake max · ${process.cwd()}` }, { text: '  ? for shortcuts' }];
+			return [{ text: `› ${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: '' }, { text: footer(`  gpt-fake max · ${process.cwd()}`) }, { text: '  ? for shortcuts' }];
 		case 'agy':
 			return [{ text: rule }, { text: shown ? `> ${shown}` : '>', cursor: 2 + length }, { text: rule }, { text: '? for shortcuts' }];
 		case 'muse': {
 			const label = '── Voice input (⌥ + v to start) ';
-			return [{ text: `${label}${'─'.repeat(Math.max(2, width - [...label].length))}` }, { text: shown ? `❯ ${shown}` : '❯', cursor: 2 + length }, { text: rule }, { text: `  muse-spark-1.3 · minimal · ${process.cwd()}` }];
+			return [{ text: `${label}${'─'.repeat(Math.max(2, width - [...label].length))}` }, { text: shown ? `❯ ${shown}` : '❯', cursor: 2 + length }, { text: rule }, { text: footer(`  muse-spark-1.3 · minimal · ${process.cwd()}`) }];
 		}
 		case 'pi':
-			return [{ text: rule }, { text: `${shown}${inverse(' ')}`, cursor: length }, { text: rule }, { text: process.cwd() }, { text: '↑0 ↓0 0.0%/131k (auto)' }];
+			return [{ text: rule }, { text: `${shown}${inverse(' ')}`, cursor: length }, { text: rule }, { text: footer(process.cwd()) }, { text: '↑0 ↓0 0.0%/131k (auto)' }];
 		case 'opencode':
 			return [{ text: '  ┃' }, { text: `  ┃  ${shown || 'Ask anything… "Fix broken tests"'}`, cursor: 5 + length }, { text: '  ┃' }, { text: '  ┃  Build · qwen3.8-flash' }, { text: `  ╹${'▀'.repeat(Math.max(2, width - 3))}` }];
 		default:
