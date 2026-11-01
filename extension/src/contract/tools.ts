@@ -1022,37 +1022,10 @@ class ToolService {
 		const to = target?.id ?? '@human';
 		// The window's time so far comes off the same two seconds as the hops before it (RULES-1.2, 1.5)
 		const sent = await this.deps.messages.send({ from: caller.id, to, text: args.text, ...replyTo ? { replyTo } : {}, elapsedMs: this.elapsed(call), callId: call.callId, ...args.request_id !== undefined ? { requestId: args.request_id } : {} });
-		const { record } = sent;
 		// A concurrent request may already have resolved this key to another target. Report its authoritative record.
+		const { record } = sent;
 		const actual = record.to.run === '@human' ? undefined : this.deps.agents.get(record.to.run);
-		const shown = record.to.run === '@human' ? '#human' : actual ? referenceOf(actual) : record.to.alias ?? record.to.run;
-		const data = defined({
-			message_id: record.id,
-			alias: record.alias,
-			target: record.to.run === '@human' ? '#human' : record.to.run,
-			target_reference: shown,
-			reply_to: record.replyTo,
-			length: record.length
-		});
-		const effects = defined({ ...record.delivery.effects });
-		switch (sent.status) {
-			case 'success':
-				return {
-					result: success({ ...data, disposition: record.delivery.via === 'read' ? 'read_messages' : record.to.run === '@human' ? 'notified' : 'submitted_to_cli' }, effects),
-					headline: record.delivery.via === 'read' ? `Message ${record.alias} was delivered to ${shown} through read_messages.` : record.to.run !== '@human' ? `Message ${record.alias} was submitted to ${shown}'s CLI.` : `Message ${record.alias} was handed to the person's notifications in this window.`
-				};
-			case 'accepted': {
-				const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
-				return {
-					result: accepted(defined({ ...data, deadline, obstacle: sent.obstacle }), effects),
-					headline: `Message ${record.alias} to ${shown} is accepted but not yet submitted${sent.obstacle ? ` (${sent.obstacle})` : ''}; delivery continues${deadline ? ` until ${deadline}` : ''}, and its outcome is ${LATER}.`
-				};
-			}
-			case 'failure': {
-				const error = sendFailureOf(sent.reason ?? record.delivery.reason);
-				return { result: failure(error, data, effects), headline: `Message ${record.alias} to ${shown} was not delivered: ${error.message}` };
-			}
-		}
+		return sendOutcome(record, sent.status, { shown: actual ? referenceOf(actual) : shownOf(record.to), reason: sent.reason, obstacle: sent.obstacle });
 	}
 
 	/**
@@ -1076,55 +1049,25 @@ class ToolService {
 		};
 		// The two seconds hold across the hops; the route waits a little longer for the other window's own first response (RULES-1.2)
 		const response = await this.deps.network!.route(target.window, 'deliver', delivery, Math.max(0, RESPONSE_MS - this.elapsed(call)) + ROUTE_SLACK_MS);
-		let data = defined({ message_id: id, alias, target: target.id, target_reference: shown, reply_to: replyTo, length: codePoints(args.text), window_id: target.window });
+		const data = defined({ message_id: id, alias, target: target.id, target_reference: shown, reply_to: replyTo, length: codePoints(args.text), window_id: target.window });
 		if (!response.ok) {
 			const effects: Effects = response.effects === 'unknown' ? { outcome: 'unknown', text_written: 'unknown', enter_written: null } : { outcome: 'none', text_written: 'none', enter_written: false };
 			return { result: failure({ code: 'UNAVAILABLE', reason: response.reason === 'protocol_incompatible' ? 'protocol_incompatible' : 'window_unavailable', message: response.message }, data, effects), headline: `Message ${alias} to ${shown}: ${response.effects === 'unknown' ? 'whether it was delivered is not known' : 'it was not delivered'}. ${response.message}` };
 		}
-		const answered = response.result as { readonly status?: string; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord } | undefined;
+		const answered = response.result as { readonly status?: SendResult['status']; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord } | undefined;
 		const record = answered?.record;
 		if (!answered || !record || (answered.status !== 'success' && answered.status !== 'accepted' && answered.status !== 'failure')) {
 			return { result: failure({ code: 'FAILED', reason: 'internal_error', message: `The Facade window of ${shown} answered with nothing this window can read: whether the message went in is not known.` }, data, { outcome: 'unknown' }) };
 		}
 		this.deps.messages.keepSent(args.request_id !== undefined ? { ...record, requestId: args.request_id } : record);
 		// The destination may have deduplicated a retry whose first reply was lost: its original ID, never the proposed new one.
-		data = defined({ ...data, message_id: record.id, alias: record.alias, target: record.to.run, reply_to: record.replyTo, length: record.length });
-		const effects = defined({ ...record.delivery.effects });
-		switch (answered.status) {
-			case 'success':
-				return { result: success({ ...data, disposition: record.delivery.via === 'read' ? 'read_messages' : 'submitted_to_cli' }, effects), headline: record.delivery.via === 'read' ? `Message ${record.alias} was delivered to ${shown} through read_messages.` : `Message ${record.alias} was submitted to ${shown}'s CLI.` };
-			case 'accepted': {
-				const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
-				return {
-					result: accepted(defined({ ...data, deadline, obstacle: answered.obstacle }), effects),
-					headline: `Message ${record.alias} to ${shown} is accepted but not yet submitted${answered.obstacle ? ` (${answered.obstacle})` : ''}; delivery continues${deadline ? ` until ${deadline}` : ''}, and its outcome is ${LATER}.`
-				};
-			}
-			case 'failure': {
-				const error = sendFailureOf(answered.reason ?? record.delivery.reason);
-				return { result: failure(error, data, effects), headline: `Message ${record.alias} to ${shown} was not delivered: ${error.message}` };
-			}
-		}
+		return sendOutcome(record, answered.status, { shown, reason: answered.reason, obstacle: answered.obstacle, window: target.window });
 	}
 
 	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1, D110). */
 	private sentBefore(record: MessageRecord, args: ToolArguments['send_message']): Outcome {
-		const shown = record.to.run === '@human' ? '#human' : record.to.alias ? referenceOf({ name: record.to.name ?? '', alias: record.to.alias }) : record.to.run;
-		const data = defined({ message_id: record.id, alias: record.alias, target: record.to.run, target_reference: shown, reply_to: record.replyTo, length: record.length, request_id: args.request_id, repeated: true });
-		const effects = defined({ ...record.delivery.effects });
-		const again = `Request ${args.request_id} sent message ${record.alias} to ${shown} already: nothing was sent again.`;
-		switch (record.delivery.status) {
-			case 'success':
-				return { result: success(data, effects), headline: `${again} It was delivered.` };
-			case 'pending': {
-				const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
-				return { result: accepted(defined({ ...data, deadline }), effects), headline: `${again} It is still being delivered, and its outcome is ${LATER}.` };
-			}
-			case 'failure': {
-				const error = sendFailureOf(record.delivery.reason);
-				return { result: failure(error, data, effects), headline: `${again} It was not delivered: ${error.message} A new request_id sends it anew.` };
-			}
-		}
+		const status = record.delivery.status === 'pending' ? 'accepted' : record.delivery.status;
+		return sendOutcome(record, status, { shown: shownOf(record.to), requestId: args.request_id });
 	}
 
 	private async readMessages(args: ToolArguments['read_messages'], caller: Caller): Promise<Outcome> {
@@ -1364,6 +1307,49 @@ function capabilitiesOf(facts: CliFacts | undefined, problem: string | undefined
 			? { state: facts.initialPrompt.capability.state, reason: facts.initialPrompt.capability.reason, path: facts.initialPrompt.mapping ? 'native' : 'post_start' }
 			: unverified('No native prompt argument is known for it; a start prompt goes as the first message after startup.')
 	};
+}
+
+/** A message's recipient as an answer names it: `#human`, or its reference as its record keeps it. */
+function shownOf(party: MessageRecord['to']): string {
+	return party.run === '@human' ? '#human' : party.alias ? referenceOf({ name: party.name ?? '', alias: party.alias }) : party.run;
+}
+
+/**
+ * What a send came to, as its caller is answered (MCP-4.1): the message's facts and its delivery as it stands - success, accepted with
+ * its deadline, or failure with why - and, for a repeated `requestId`, that nothing was sent again (MCP-1.1, D110).
+ */
+function sendOutcome(record: MessageRecord, status: SendResult['status'], how: { readonly shown: string; readonly reason?: string; readonly obstacle?: string; readonly window?: string; readonly requestId?: string }): Outcome {
+	const { shown } = how;
+	const repeated = how.requestId !== undefined;
+	const data = defined({
+		message_id: record.id, alias: record.alias, target: record.to.run === '@human' ? '#human' : record.to.run, target_reference: shown, reply_to: record.replyTo,
+		length: record.length, window_id: how.window, ...repeated ? { request_id: how.requestId, repeated: true } : {}
+	});
+	const effects = defined({ ...record.delivery.effects });
+	const again = repeated ? `Request ${how.requestId} sent message ${record.alias} to ${shown} already: nothing was sent again. ` : '';
+	switch (status) {
+		case 'success':
+			return {
+				result: success({ ...data, disposition: record.delivery.via === 'read' ? 'read_messages' : record.to.run === '@human' ? 'notified' : 'submitted_to_cli' }, effects),
+				headline: repeated ? `${again}It was delivered.` : record.delivery.via === 'read' ? `Message ${record.alias} was delivered to ${shown} through read_messages.`
+					: record.to.run !== '@human' ? `Message ${record.alias} was submitted to ${shown}'s CLI.` : `Message ${record.alias} was handed to the person's notifications in this window.`
+			};
+		case 'accepted': {
+			const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
+			return {
+				result: accepted(defined({ ...data, deadline, obstacle: how.obstacle }), effects),
+				headline: repeated ? `${again}It is still being delivered, and its outcome is ${LATER}.`
+					: `Message ${record.alias} to ${shown} is accepted but not yet submitted${how.obstacle ? ` (${how.obstacle})` : ''}; delivery continues${deadline ? ` until ${deadline}` : ''}, and its outcome is ${LATER}.`
+			};
+		}
+		case 'failure': {
+			const error = sendFailureOf(how.reason ?? record.delivery.reason);
+			return {
+				result: failure(error, data, effects),
+				headline: repeated ? `${again}It was not delivered: ${error.message} A new request_id sends it anew.` : `Message ${record.alias} to ${shown} was not delivered: ${error.message}`
+			};
+		}
+	}
 }
 
 function stopped(target: RunFacts, cleanup: Awaited<ReturnType<Agents['close']>>): Outcome {
