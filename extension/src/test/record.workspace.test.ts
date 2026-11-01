@@ -5,9 +5,11 @@
 import * as assert from 'assert';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
+import { facadeHome } from '../record/paths';
 import { tempDir } from './util';
 
 suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3.1)', () => {
@@ -158,5 +160,14 @@ suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3
 		fs.utimesSync(broken, new Date(Date.now() - 31 * 24 * 60 * 60_000), new Date(Date.now() - 31 * 24 * 60 * 60_000));
 		keepWindowKey('session-2', key, ['file:///work/docs'], temp.dir);
 		assert.deepStrictEqual([fs.existsSync(broken), windowKeyOf('session-2', ['file:///work/docs'], temp.dir)], [false, key]);
+	});
+});
+
+suite('Record: the Facade directory (ARCHITECTURE-3.1)', () => {
+	test('FACADE_HOME names an absolute folder; a relative one is refused, never read as the person\'s own ~/.facade, and an empty one is unset', () => {
+		const absolute = path.resolve('facade-root');
+		assert.strictEqual(facadeHome({ FACADE_HOME: absolute }), path.join(absolute, 'extension'));
+		assert.throws(() => facadeHome({ FACADE_HOME: path.join('tests', 'facade') }), /FACADE_HOME must name an absolute folder/);
+		assert.strictEqual(facadeHome({ FACADE_HOME: '' }), path.join(os.homedir(), '.facade', 'extension'));
 	});
 });

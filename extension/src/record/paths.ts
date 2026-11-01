@@ -15,5 +15,9 @@ export const FACADE_HOME_VARIABLE = 'FACADE_HOME';
  */
 export function facadeHome(env: NodeJS.ProcessEnv = process.env): string {
 	const named = env[FACADE_HOME_VARIABLE];
-	return path.join(named && path.isAbsolute(named) ? named : path.join(os.homedir(), '.facade'), 'extension');
+	// A relative one is refused, not read as unset: a test or tool that meant its own root never works in the person's (ARCHITECTURE-3.1)
+	if (named && !path.isAbsolute(named)) {
+		throw new Error(`${FACADE_HOME_VARIABLE} must name an absolute folder; it names '${named}'.`);
+	}
+	return path.join(named || path.join(os.homedir(), '.facade'), 'extension');
 }
