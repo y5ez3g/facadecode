@@ -150,6 +150,30 @@ function start() {
 	return { term, child, reading, exited: () => exited, flush };
 }
 
+// What identifies a person on a recorded screen - a CLI draws its account's email address, and a path can carry the user name - is
+// kept out of the recorded cases. Each such text is replaced character for character, letters and digits by `x`, so that no row
+// wraps or moves differently from what the CLI drew.
+const user = os.userInfo().username;
+const userPattern = user.length >= 3 ? `|\\b${user.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b` : '';
+const identifying = new RegExp(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}${userPattern}`, 'gi');
+const masked = text => text.replace(identifying, found => found.replace(/[A-Za-z0-9]/g, 'x'));
+
+/** A row's characters with what identifies a person masked in place: one cell each where a row holds wide characters. */
+function redactedCells(chars) {
+	const joined = chars.join('');
+	const safe = masked(joined);
+	if (safe === joined) {
+		return chars;
+	}
+	// Masking changes letters and digits alone, one for one: each cell takes back its own span of the masked text
+	let at = 0;
+	return chars.map(char => {
+		const cell = safe.slice(at, at + char.length);
+		at += char.length;
+		return cell;
+	});
+}
+
 /** A screen as the recorded cases keep it: each row's characters, its trailing spaces cut, and its dim and inverse runs. */
 function compact(name, expect, term) {
 	const screen = inputScreenOf(term);
@@ -174,7 +198,7 @@ function compact(name, expect, term) {
 				end--;
 			}
 			const cut = row.slice(0, end);
-			const chars = cut.map(cell => cell.chars);
+			const chars = redactedCells(cut.map(cell => cell.chars));
 			const dim = runs(cut, 'dim');
 			const inverse = runs(cut, 'inverse');
 			return { cells: chars.every(char => [...char].length === 1) ? chars.join('') : chars, ...dim.length ? { dim } : {}, ...inverse.length ? { inverse } : {} };
@@ -200,7 +224,7 @@ for (const each of CASES) {
 		// What it showed instead, saved to look at: a question of its own, a sign-in, an update
 		const shown = run.term.buffer.active;
 		const text = Array.from({ length: rows }, (_, y) => shown.getLine(shown.viewportY + y)?.translateToString(true) ?? '').join('\n');
-		fs.writeFileSync(path.join(saved, `${each.name}.blocked.txt`), text);
+		fs.writeFileSync(path.join(saved, `${each.name}.blocked.txt`), masked(text));
 		results.push({ name: each.name, ok: false, why: run.exited() ? `it exited (${JSON.stringify(run.exited())})` : `its input never read usable: ${ready?.state} (${ready?.evidence}); its screen is in ${each.name}.blocked.txt` });
 		run.child.kill();
 		continue;
