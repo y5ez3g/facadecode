@@ -985,6 +985,29 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.deepStrictEqual(world.errors.map(error => error.text), ['Could not restore Ada: claude is not installed in this environment.']);
 	});
 
+	test('a conversation has one Pin: pinning a card whose CLI resumed a pinned conversation takes that Pin, and a pinned card switching to it replaces it - Unpin then leaves none to restore (RULES-4.2, LIFECYCLE-3.4)', async () => {
+		const world = setUp();
+		const save = (pin: Pin) => (world.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save(pin);
+		save({ id: 'pin-k', conversation: { ...ENTRY.key, sessionId: 'k' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Earlier' });
+		const id = world.agents.launch({ name: 'New', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		// Its CLI's own resume picks the pinned conversation; the person pins the card, from its menu or its tab
+		world.execution.identities.fire({ run: id, sessionId: 'k' });
+		world.agents.pin(id);
+		assert.deepStrictEqual([world.pins().map(pin => [pin.id, pin.name]), world.agents.get(id)?.pin], [[['pin-k', 'New']], 'pin-k']);
+		world.agents.unpin(id);
+		assert.deepStrictEqual(world.pins(), []);
+		// A pinned card whose CLI switches to a conversation another Pin names
+		save({ id: 'pin-m', conversation: { ...ENTRY.key, sessionId: 'm' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Other' });
+		world.agents.pin(id);
+		const own = world.agents.get(id)!.pin;
+		world.execution.identities.fire({ run: id, sessionId: 'm' });
+		assert.deepStrictEqual(world.pins().map(pin => [pin.id, pin.conversation.sessionId]), [[own, 'm']]);
+		world.agents.unpin(id);
+		await world.agents.restorePins();
+		assert.deepStrictEqual([world.pins(), world.plans.filter(plan => plan.resume).length], [[], 0], 'nothing is restored after the Unpin');
+	});
+
 	test('a CLI that changes its session updates the record and the Pin once the new identity is known (LIFECYCLE-3.4)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });

@@ -738,8 +738,12 @@ export class AgentService implements Agents, Disposable {
 		if (run.facts.pin) {
 			return;
 		}
-		const pin: Pin = { id: (this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`), conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
+		// One Pin a conversation (RULES-4.2): one its CLI resumed by itself may be pinned already - that Pin is this card's now, in its
+		// place, rather than a second one an Unpin would leave behind to restore
+		const earlier = this.pinOf(key);
+		const pin: Pin = { id: earlier?.id ?? this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`, conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
 		this.pinStore.save(pin);
+		for (const other of this.runs.values()) { if (other !== run && other.facts.pin === pin.id) { this.losePin(other); } }
 		this.update(run, { pin: pin.id }, 'lifecycle');
 		this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 		this.deps.execution.pinTab?.(id, true);
@@ -917,8 +921,15 @@ export class AgentService implements Agents, Disposable {
 		this.update(run, { sessionId: sessionId ?? run.facts.sessionId, resumable: !!sessionId && run.exactResume, ...cwd ? { cwd } : {} }, 'lifecycle');
 		const pin = run.facts.pin ? this.pins().find(each => each.id === run.facts.pin) : undefined;
 		if (pin && sessionId) {
-			try { this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: keyOf(run.facts)! }); }
-			catch (err) {
+			try {
+				const key = keyOf(run.facts)!;
+				this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: key });
+				// One Pin a conversation (RULES-4.2): another Pin of the one it switched to goes, as this card's names it now
+				for (const other of this.pins().filter(each => each.id !== pin.id && sameConversation(each.conversation, key))) {
+					this.pinStore.remove(other.id);
+					for (const holder of this.runs.values()) { if (holder.facts.pin === other.id) { this.losePin(holder); } }
+				}
+			} catch (err) {
 				const reason = messageOf(err);
 				this.deps.log.event(`Could not update the Pin of ${run.facts.alias}: ${reason}`);
 				this.deps.human.failed({ kind: 'pin', name: labelOf(run.facts), reason }, { show: id });
