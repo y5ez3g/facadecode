@@ -88,8 +88,8 @@ protection.
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
 or environments consume the same budget. No extra attempts on input-change events, indefinite retries, or bursts to catch
-missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for: Orca holds its
-notices while a person types, and so does Facade, never submitting the person's text with the message (D106). At the
+missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for. Competitive
+analysis informed this behavior: Facade never submits the person's text with the message (D106). At the
 deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage
 whose input was never held ends at fifteen seconds; once held, its deadline is ten minutes from its start, whatever the
 input shows after. A long paste adds the time it takes, at CLIS-2.1's paste rates, to each of its stage's deadlines, so
@@ -106,9 +106,9 @@ extend a deadline.
 
 **Once a message's text went into the input whole, later attempts never type it again; they press Enter only over the message's own draft.**
 
-A submission the CLI takes slowly is not lost: Orca found that typing it again delivers it twice, and counts a written
-prompt as delivered (D104). A later attempt of the same delivery reads the input: the message's own draft alone - its
-text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
+A submission the CLI takes slowly is not lost: competitive analysis identified duplicate delivery when a prompt is
+typed again before the CLI has processed it (D104). A later attempt of the same delivery reads the input: the message's
+own draft alone - its text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
 this delivery confirms the submission; anything else is waited for under 1.4 and 1.5. A paste that never showed in the
 input is not typed again either: a CLI busy with its turn draws it late, and its own draft then gets Enter. A paste whose
 answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. Once a paste
@@ -130,7 +130,7 @@ A returned immediate final result needs no second notification. An accepted asyn
 labeled Facade result with the original message ID, target and outcome - delivered, including delivery through
 read_messages, or not delivered - using the finite result budget if needed. The result is not authored by B and
 requests no response. Results that come for one terminal while none of them is typed yet go in one paste, one turn of its
-model for them all, as T3 Code wakes a parent once for the tasks that finished together; a result read meanwhile is left out
+model for them all, following competitive analysis of batching completed-task results; a result read meanwhile is left out
 of it (D115). Failure to return it never resends the original message. A message whose result already said
 it was not delivered and that its recipient reads later becomes delivered without a second result.
 If A is gone or result delivery fails, finish the handoff; do not generate another error for B or a human popup.
@@ -155,8 +155,8 @@ A retained red card is not permission to duplicate an agent's operation error as
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
 to contact a person. One fact does go to an agent: an agent another agent of the same window started, whose CLI has waited
 twenty seconds on its own permission, question or sign-in, is reported to that creator once each time it starts waiting, as
-a Facade result naming who can answer - the person's permission and sign-in are theirs (D109). Orca tells its coordinator of
-a worker stopped at a prompt; without it, a child waiting on a question no one sees stalls its creator's work. A person is
+a Facade result naming who can answer - the person's permission and sign-in are theirs (D109). Competitive analysis
+highlighted how a child waiting on an unseen question can stall its creator's work. A person is
 never told by it. The notice reports the blocker without asking its creator to contact the person, forward the notice or
 escalate it. Whether an agent contacts the person follows the person's task instructions, not this automatic notice.
 Permission and sign-in remain the person's to authorize or perform; reporting the blocker grants no authority to answer it.
@@ -400,6 +400,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
+- 2026-11-01: Describe competitive-analysis findings without naming individual products; behavior is unchanged.
 - 2026-11-01: 3.2 separates reliable idle from native blockers: grey idle, yellow permission/answer/sign-in, with green work and red error/unknown retained (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 

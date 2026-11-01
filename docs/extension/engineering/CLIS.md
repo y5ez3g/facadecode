@@ -144,7 +144,8 @@ logged. A message's lead, where its CLI takes one (COLLABORATION-2.1), is typed 
 the draft is the message's own with it, or without it where an older ptyd typed none (D108). Use complete paste plus Enter
 for ordinary messages: Enter only once the input holds the message's own draft and
 the CLI has had the time a paste of that size takes - its bytes at 4 KB a millisecond, ConPTY's 64 bytes on Windows, and
-45 ms a line more for Antigravity, which takes seconds to expand a long paste, as Orca measured (D105) - and delivery
+45 ms a line more for Antigravity, which takes seconds to expand a long paste, based on measurements reviewed during
+competitive analysis (D105) - and delivery
 confirmed once the input box is empty again. State actual full/partial/unknown effects. A later attempt never types the
 text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require a reconciliation API.
 An unknown version still starts its terminal, and its activity can still be verified per run under 2.3. Unproved
@@ -462,6 +463,7 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-01: Describe competitive-analysis evidence without naming individual products; CLI behavior is unchanged.
 - 2026-11-01: 2.3 restores every CLI's visible title, including status symbols, generic names and default session
   titles, at the owner's request to defer title cleanup (D126); report precedence and safe display bounds remain.
 - 2026-10-31: D123 completes the six built-in history/identity adapters, preserves user integration settings, and records native Linux evidence and platform limits. Antigravity multi-folder metadata retains its cwd ambiguity.
