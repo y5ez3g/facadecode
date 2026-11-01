@@ -44,8 +44,16 @@ scripts to discover extra variables; shell-only PATH changes are not part of Fac
 
 In every configured environment map, a string sets the value, null removes the variable and an omitted key inherits
 the preceding layer. `${env:NAME}` in environment values reads the host environment (missing becomes empty); Windows
-keys compare case-insensitively. Remove `ELECTRON_RUN_AS_NODE` from agent CLIs. Set `TERM_PROGRAM=vscode`,
-`COLORTERM=truecolor`, `FACADE_AGENT` to the run's `#aN` alias. Never copy credentials from the client to a remote environment.
+keys compare case-insensitively. The execution extension host environment is taken as VS Code's integrated terminal
+inherits it: without what its `sanitizeProcessEnvironment` removes - `ELECTRON_*`; `VSCODE_*` except `VSCODE_PORTABLE`,
+`VSCODE_SHELL_LOGIN`, `VSCODE_ENV_REPLACE`/`_APPEND`/`_PREPEND` and `VSCODE_IPC_HOOK_CLI`; `SNAP*`; `GDK_PIXBUF_*` -
+with, on macOS, `NODE_OPTIONS` and `NODE_REPL_EXTERNAL_MODULE` restored from their `VSCODE_` copies; and without
+inherited run markers, which would make a run act as another's: Facade's own run variables (`FACADE_AGENT`,
+`FACADE_CODE_SESSION_FILE`, `FACADE_CODE_TITLE_COMMAND`, `FACADE_RUN`, `FACADE_PTYD`, `FACADE_ELECTRON_RUN_AS_NODE`) and a
+Claude Code session's (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_BRIDGE_SESSION_ID`,
+`CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_JOB_DIR`), as Orca drops them. A configured layer may set any of
+them again (D129). Set `TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `FACADE_AGENT` to the run's `#aN` alias. Never copy
+credentials from the client to a remote environment.
 
 Empty `.path` means command on PATH. A simple name is searched on that PATH; relative path is from launch cwd; leading
 `~` uses that environment's home; absolute path is exact. Whitespace-only is invalid, no silent fallback to another CLI.
@@ -57,7 +65,9 @@ quoting adapter passes every argument safely. Reject unsupported quoting/control
 unescaped shell string. cmd.exe starts in no UNC folder - a network share's, a WSL distribution's `\\wsl$` one - but in
 the Windows directory, so a launch through it from such a folder is refused before execution. On Windows, which cannot
 run a script itself, a `.js`, `.cjs` or `.mjs` program - the Node entry point those refusals advise - runs with the Node
-on the launch's PATH; with none there it is refused. PATH discovery and effective launch must agree. Checks requiring a new worktree's actual cwd
+on the launch's PATH; with none there it is refused. A Windows program is one a launch can start - `.exe`, `.com`, `.cmd`,
+`.bat` or such a Node script; a PowerShell or Windows Script Host script, found on PATH or configured, is not available
+(D129). PATH discovery and effective launch must agree. Checks requiring a new worktree's actual cwd
 follow the validation stages in 4.2.
 
 ### 1.3 Permissions and native CLI interaction
@@ -94,8 +104,9 @@ catalog, labeled complete/partial/unknown with its source. Past success is a use
 availability or an exhaustive allowlist. Do not invent model IDs or require not_applicable placeholder objects.
 An explicit model or effort in a `start_agent` call is passed through the CLI's own option for this launch only. An
 omitted field adds no override: the CLI's native default or saved session state applies. The call's explicit choice
-takes precedence over the matching mapped option in `.launch.arguments`; remove that configured option and its value
-before adding the explicit choice, preserving other literal arguments and unrelated configuration keys. Versioned adapters map these
+takes precedence over the matching mapped option in `.launch.arguments`; remove that configured option and its value, in
+any spelling the CLI takes - a short form such as `-m`, or a `-c`/`--config` override of the same key, with or without `=`
+(D129) - before adding the explicit choice, preserving other literal arguments and unrelated configuration keys. Versioned adapters map these
 choices to their CLI argument/configuration mechanism and report requested versus observed values separately. An
 ignored override is not verified success. Do not track every in-CLI change to reconstruct session settings. Previously
 observed choices remain discovery/display facts, not restore inputs. Claude Code, Antigravity and Pi take `--model` and
@@ -143,8 +154,10 @@ Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lin
 logged. A message's lead, where its CLI takes one (COLLABORATION-2.1), is typed ahead of the paste in the same write, and
 the draft is the message's own with it, or without it where an older ptyd typed none (D108). Use complete paste plus Enter
 for ordinary messages: Enter only once the input holds the message's own draft and
-the CLI has had the time a paste of that size takes - its bytes at 4 KB a millisecond, ConPTY's 64 bytes on Windows, and
-45 ms a line more for Antigravity, which takes seconds to expand a long paste, as Orca measured (D105) - and delivery
+the CLI has had the time a paste of that size takes - its bytes at 4 KB a millisecond, ConPTY's 64 bytes on Windows,
+45 ms a line more for Antigravity, which takes seconds to expand a long paste, as Orca measured (D105), and 3 ms a
+character (UTF-16 code unit) more for Codex on Windows, which reads console input one key at a time - Orca measured 21.1 s
+for 9,249 characters - in the paste's own time, the wait for its draft and type_text's wait before Enter (D127) - and delivery
 confirmed once the input box is empty again. State actual full/partial/unknown effects. A later attempt never types the
 text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require a reconciliation API.
 An unknown version still starts its terminal, and its activity can still be verified per run under 2.3. Unproved
@@ -264,6 +277,9 @@ user's hooks. An initial prompt remains after all launch options. On Windows, Mu
 the active native executable named by its `.muse-version`, only in the installed channel. This bypasses the launcher's
 argument conversion so native JSON hooks reach Muse unchanged; that Facade launch does not run the launcher's update check.
 An unrecognized batch wrapper still starts as configured, without claiming session tracking it cannot install safely.
+Likewise, native settings or a per-launch configuration file an identity integration cannot read leave the launch as
+configured, with no session tracking claimed: the CLI reports its own settings' problem, and the start is never refused
+for it. A Claude Code background job (`CLAUDE_JOB_DIR`) never records its session as its run's (D129).
 
 ## 3 Launch configuration
 
@@ -282,8 +298,9 @@ Arrays are replaced as a whole, not merged by named groups. There is no public a
 deep-merged native settings object, generic trust-file merge, unattended overlay, taskDelay or enterDelay setting.
 Custom start/Resume argument templates are the limited exception defined in 3.4. Invalid or retired fields report their
 setting path; do not silently translate ambiguous old configuration. Preserve the user's values so they can correct
-them. An argument that repeats an option the adapter sets itself - its run settings or its YOLO mapping in either mode -
-is a configuration error naming its place in `arguments`: the CLI would take the person's value in place of Facade's
+them. An argument that repeats an option the adapter sets itself - its run settings or its YOLO mapping in either mode,
+in any spelling its CLI takes, such as Codex's `-s` and `--yolo` or OpenCode's `--yolo` and `--dangerously-skip-permissions`
+(D129) - is a configuration error naming its place in `arguments`: the CLI would take the person's value in place of Facade's
 (RULES-4.3). A problem names a received value by its JSON type, never the value, which may be a secret. Running
 processes keep their actual plan.
 
@@ -461,6 +478,10 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-01: From the owner-requested release review: 1.2 takes the host environment as VS Code's terminal does, without
+  inherited run markers, and only programs a launch can start on Windows; 1.4 and 3.1 recognize every spelling of an option;
+  2.1 gives Codex on Windows its per-character paste time; 2.4 starts without session tracking where settings cannot be
+  read (D127, D129).
 - 2026-10-31: D123 completes the six built-in history/identity adapters, preserves user integration settings, and records native Linux evidence and platform limits. Antigravity multi-folder metadata retains its cwd ambiguity.
 
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.

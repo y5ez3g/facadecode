@@ -36,7 +36,9 @@ within an hour answers what the first call started or sent, as it stands, and do
 run or message record - a message to another window's agent carries it there, where its record is made - and a repeated
 start answers as its start went: accepted while its process still starts, the start's failure where it could not start,
 success otherwise (D118). Concurrent calls share that operation. The recipient deduplicates a routed send before input,
-so a lost route reply cannot make a retry send again. Request-bearing run metadata remains available for the original
+so a lost route reply cannot make a retry send again. A send whose route answer was lost, so that the message may have
+arrived, keeps the sender's copy with its outcome unknown; a retry with the same `request_id` asks the window that holds
+the message and never resolves `to` again, which could now name another agent (D127). Request-bearing run metadata remains available for the original
 one-hour request period even after its card closes or its process exits; it does not restore a closed card or process.
 An interrupted start whose outcome was not recorded reports unknown effects instead of starting again. Removing a
 card does not prove process termination: a repeated request reports that process state as unknown where no exit was
@@ -80,6 +82,9 @@ timeout, submission_unconfirmed, partial_input, repository_required, commit_requ
 An ordinary message to a CLI that has no input reader fails immediately with `unsupported`, a permanent obstacle under
 RULES-1.5. A reader that does not recognize the input box leaves it untouched; the send ends at its deadline with
 `input_unknown`, and the message names the CLI and the version Facade found (CLIS-2.1).
+A request refused before it reached its effect reports no effect: a routed message the destination refuses before
+recording it - its agent gone or out of reach - is `NOT_FOUND`, and direct text or keys that never reached the terminal's
+runtime are `UNAVAILABLE` (D127).
 CLI/Git/transport errors retain their actual useful diagnostic. Error results do not instruct agents how to organize,
 retry or escalate work. Agent-operation errors never create an automatic human notification.
 
@@ -89,6 +94,8 @@ retry or escalate work. Agent-operation errors never create an automatic human n
 
 Queries use a ten-second route deadline and report unavailable windows rather than invent an empty result.
 `facade.collaboration.waitSeconds` is 1–3600 seconds, default 120, for startup/stop/control waiting. Completion can return sooner.
+A CLI that times its MCP calls is given 3660 seconds for one of Facade's - the longest wait and a minute for the call's
+own route and answer - so that it never gives up on a call Facade is still answering within its wait (D127).
 An actual continuing operation may return accepted with its run/effects; later completion returns to its initiating
 agent through a Facade system result. The accepted response and later result identify the same originating tool call
 and target run, using existing call correlation facts so concurrent calls, including calls to the same target, are
@@ -190,7 +197,8 @@ read_messages remains limited to the caller's inbox even if list_agents can see 
 
 Arguments: `agent:string` required. No delete_worktree, discard_changes, recipient array or request ID.
 Resolve an allowed run, remove card/terminal, prevent new input, then terminate its process as needed.
-Do not stop children. Already-ended known runs can return already_ended; missing IDs fail without guessing.
+Do not stop children. Already-ended known runs can return already_ended; missing IDs fail without guessing. A stop
+while the agent's process is being started answers how that start's cleanup ended, never that none started (D126).
 Return agent_id, actual process/cleanup state and effects. Accepted/unknown cleanup is not proof of exit, but does not
 restore a Stopping card. Self-stop may end the caller before it receives a result; no public recovery tool is added.
 Errors go to the invoking agent, with no automatic human popup. External location deletion is observed separately.
@@ -349,6 +357,9 @@ No migration guide for already-published user skills is required: this is the fi
 
 ## Change log
 
+- 2026-11-01: From the owner-requested release review: 1.1 retries a cross-window send whose answer was lost through the
+  window holding it; 1.2 reports refusals before any effect as no effect; 3.2 answers a stop during a start with its
+  actual cleanup (D126, D127).
 - 2026-10-31: Request IDs cover concurrent calls, lost route replies and removed runs; read delivery does not orphan
   a complete Facade draft (D119).
 - 2026-10-31: 1.1's repeated start answers as its start went, and a request ID travels with a message to another window
