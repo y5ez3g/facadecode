@@ -268,12 +268,19 @@ export class LocationService implements LocationPort, Disposable {
 	private locationInside(cwd: string, catalog: Catalog, checkExists = true): Location | undefined {
 		if (!path.isAbsolute(cwd) || (checkExists && !this.isDirectory(cwd))) { return undefined; }
 		const key = this.keyOf(cwd);
-		const anchor = [...catalog.locations].filter(each => isWithin(key, this.keyOf(each.path)))
-			.sort((a, b) => this.keyOf(b.path).length - this.keyOf(a.path).length)[0];
+		// The innermost location holding it, each by the key its identity is made of: a real path read per location, per call, is what a
+		// Resume listing a hundred conversations paid for every one of them
+		let anchor: { readonly location: Location; readonly key: string } | undefined;
+		for (const each of catalog.locations) {
+			const at = this.keyOfLocation(each);
+			if (isWithin(key, at) && (!anchor || at.length > anchor.key.length)) {
+				anchor = { location: each, key: at };
+			}
+		}
 		if (!anchor) { return undefined; }
-		if (this.keyOf(anchor.path) === key) { return anchor; }
-		return { id: locationIdOf(this.deps.environment, key), path: cwd, uri: this.deps.uriOf(anchor.uri, cwd),
-			environment: this.deps.environment, label: path.basename(cwd), folders: anchor.folders, kind: 'folder', opened: false, git: 'none' };
+		if (anchor.key === key) { return anchor.location; }
+		return { id: locationIdOf(this.deps.environment, key), path: cwd, uri: this.deps.uriOf(anchor.location.uri, cwd),
+			environment: this.deps.environment, label: path.basename(cwd), folders: anchor.location.folders, kind: 'folder', opened: false, git: 'none' };
 	}
 
 	/**
