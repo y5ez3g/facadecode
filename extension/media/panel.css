@@ -43,35 +43,99 @@ button {
 	color: inherit;
 }
 
+.item,
+button {
+	scroll-margin-top: var(--facade-clip-top, 0px);
+	scroll-margin-bottom: var(--facade-clip-bottom, 0px);
+}
+
 [hidden] {
 	display: none !important;
 }
 
 /*
- * The page scrolls as any page does (PANEL-3.3), its scrollbar drawn as VS Code draws those of its own parts that scroll so: 10px
- * wide, as its lists' sliders are, in the theme's slider colours, over no track. VS Code's own webview default colours the root's
- * scrollbar with `scrollbar-color`, with which Chromium ignores the rules below and draws a wider bar on the editor's background.
+ * Native page scrolling with a VS Code list scrollbar over the content (PANEL-3.3). Hide the browser's bar so neither it nor
+ * the overlay reserves layout width. These unlayered rules also override VS Code's webview-default scrollbar styling.
  */
 html {
-	scrollbar-color: auto;
+	scrollbar-width: none;
+	scrollbar-gutter: auto;
 }
 
-::-webkit-scrollbar {
+html::-webkit-scrollbar {
+	display: none;
+	width: 0;
+	height: 0;
+}
+
+/* Content and overlay use the same clip correction; the first row keeps its existing top position. */
+body {
+	padding: var(--facade-clip-top, 0px) var(--facade-clip-right, 0px)
+		var(--facade-clip-bottom, 0px) var(--facade-clip-left, 0px);
+}
+
+body.facade-modern {
+	/* Clear the webview's rounded clip; the editor already supplies its outer spacing. */
+	--facade-scrollbar-end-gap: 2px;
+	--facade-scrollbar-side-gap: 1px;
+}
+
+/* An independent viewport measurement; no paint, hit area or layout space. */
+.facade-scrollbar-viewport {
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+}
+
+.facade-scrollbar {
+	position: fixed;
+	top: calc(var(--facade-clip-top, 0px) + var(--facade-scrollbar-end-gap, 0px));
+	right: calc(var(--facade-clip-right, 0px) + var(--facade-scrollbar-side-gap, 0px));
+	bottom: calc(var(--facade-clip-bottom, 0px) + var(--facade-scrollbar-end-gap, 0px));
 	width: 10px;
+	z-index: 10;
+	background: var(--vscode-scrollbar-background, transparent);
+	opacity: 0;
+	pointer-events: none;
+	touch-action: none;
+	transition: opacity 800ms linear;
 }
 
-::-webkit-scrollbar-thumb {
+.facade-scrollbar.visible {
+	opacity: 1;
+	pointer-events: auto;
+	transition-duration: 100ms;
+}
+
+.facade-scrollbar.reduced-motion {
+	transition: none;
+}
+
+.facade-scrollbar-thumb {
+	position: absolute;
+	top: 0;
+	left: 0;
+	width: 100%;
 	background: var(--vscode-scrollbarSlider-background);
+	contain: strict;
 }
 
-::-webkit-scrollbar-thumb:hover {
+/* Match ModernUIContribution and roundedCorners.css for native sidebar lists, independently of the color theme. */
+.facade-scrollbar.modern {
+	width: 8px;
+}
+
+.facade-scrollbar.modern .facade-scrollbar-thumb {
+	border-radius: var(--vscode-cornerRadius-small, 4px);
+}
+
+.facade-scrollbar-thumb:hover {
 	background: var(--vscode-scrollbarSlider-hoverBackground);
 }
 
-::-webkit-scrollbar-thumb:active {
+.facade-scrollbar.dragging .facade-scrollbar-thumb {
 	background: var(--vscode-scrollbarSlider-activeBackground);
 }
-
 
 /* ---- Controls, as the workbench draws them ---- */
 
@@ -138,11 +202,12 @@ body.vscode-context-menu-visible #list .item.menu-target {
 
 /* ---- The agents ---- */
 
-/* The cards as VS Code lists rows in a view: 4px in from its sides, the first right under its title */
+/* The cards keep their 4px sides; existing right padding absorbs the raster guard instead of doubling it. */
 #list {
 	display: flex;
 	flex-direction: column;
 	padding: 0 var(--vscode-spacing-size40, 4px);
+	padding-right: max(0px, calc(var(--vscode-spacing-size40, 4px) - var(--facade-clip-guard, 0px)));
 }
 
 /*

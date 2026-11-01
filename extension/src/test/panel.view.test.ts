@@ -116,15 +116,37 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		const scrolls = () => posted.filter(message => message.type === 'scrolling').map(message => [message.page, message.scrolling]);
 		settings = { 'workbench.list.mouseWheelScrollSensitivity': 'much' };
 		await say({ type: 'ready', page: page(1) });
-		settings = { 'workbench.list.mouseWheelScrollSensitivity': 2, 'workbench.list.fastScrollSensitivity': 3, 'workbench.list.smoothScrolling': true, 'window.zoomLevel': 1 };
+		settings = { 'workbench.list.mouseWheelScrollSensitivity': 2, 'workbench.list.fastScrollSensitivity': 3, 'workbench.list.smoothScrolling': true, 'workbench.list.scrollByPage': true, 'window.zoomLevel': 1 };
 		configChanged.fire({ affectsConfiguration: section => section === 'editor.fontSize' });
 		configChanged.fire({ affectsConfiguration: section => section === 'workbench.list' });
 		configChanged.fire({ affectsConfiguration: section => section === 'window.zoomLevel' });
 		assert.deepStrictEqual(scrolls(), [
-			[page(1), { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1 }],
-			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2 }],
-			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2 }]
+			[page(1), { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1, scrollByPage: false, modernUI: false }],
+			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2, scrollByPage: true, modernUI: false }],
+			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2, scrollByPage: true, modernUI: false }]
 		]);
+	});
+
+	test('PANEL-3.3: effective Modern UI is sent before cards, updated live independently of color theme and refreshed after hiding', async () => {
+		settings = { 'workbench.experimental.modernUI': true };
+		await say({ type: 'ready', page: page(1) });
+		assert.deepStrictEqual(posted.map(message => message.type), ['scrolling', 'state']);
+		for (const value of [false, undefined, 'true', true]) {
+			settings['workbench.experimental.modernUI'] = value;
+			configChanged.fire({ affectsConfiguration: section => section === 'workbench.experimental.modernUI' });
+		}
+		configChanged.fire({ affectsConfiguration: section => section === 'workbench.colorTheme' });
+		assert.deepStrictEqual(posted.filter(message => message.type === 'scrolling').map(message => (message.scrolling as { modernUI: boolean }).modernUI), [true, false, false, false, true]);
+		assert.equal(states().length, 1, 'appearance changes do not rebuild cards');
+		view.visible = false;
+		visibility.fire();
+		settings['workbench.experimental.modernUI'] = false;
+		configChanged.fire({ affectsConfiguration: section => section === 'workbench.experimental.modernUI' });
+		assert.equal(posted.length, 6, 'a hidden page is not sent stale settings');
+		view.visible = true;
+		await say({ type: 'ready', page: page(2) });
+		assert.deepStrictEqual(posted.slice(-2).map(message => [message.type, message.page]), [['scrolling', page(2)], ['state', page(2)]]);
+		assert.equal((posted.at(-2)!.scrolling as { modernUI: boolean }).modernUI, false);
 	});
 
 	test('a message of an unknown type, without a field its type has, with a field of the wrong type or any other field is refused and logged, and nothing is done (PANEL-3.2)', async () => {

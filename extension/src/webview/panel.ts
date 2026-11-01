@@ -7,11 +7,13 @@
 // keeps only its scroll position and the card the keyboard is on, and reports what the person did (PANEL-3.1). The list is one Tab
 // stop that the arrows, Home, End and the page keys move, typing goes to a card by its name, Enter or Space opens it and F2 renames
 // it, as VS Code's lists have it (UX-2.3); a wheel scrolls it as one of those lists, by the person's list settings, and its
-// scrollbar is the page's own (PANEL-3.3).
+// scrollbar overlays the content without taking layout width (PANEL-3.3).
 
 import { act, Browsing, Check, contrastOf, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
 import { Card, PanelState, Scrolling } from './protocol';
 import { cancelSmoothScroll, setScrolling, takeWheel } from './wheel';
+import { installScrollbar } from './scrollbar';
+import { installViewport, pageDimensions } from './viewport';
 
 /** Defined by the build: true only in the integration suite's build, whose probe the shipped page compiles out (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
@@ -56,7 +58,7 @@ const isState: Check = value => isShaped(value, {
 });
 
 /** What the extension may send this page, by type: the fields each has beside its type and its page, and those it may have (PANEL-3.2). */
-const isScrolling: Check = value => isShaped(value, { sensitivity: isNumber, fastSensitivity: isNumber, smooth: isBoolean, zoomFactor: value => isNumber(value) && (value as number) > 0 });
+const isScrolling: Check = value => isShaped(value, { sensitivity: isNumber, fastSensitivity: isNumber, smooth: isBoolean, zoomFactor: value => isNumber(value) && (value as number) > 0 }, { scrollByPage: isBoolean, modernUI: isBoolean });
 const INCOMING: { readonly [type: string]: readonly [required: Readonly<Record<string, Check>>, optional?: Readonly<Record<string, Check>>] } = {
 	state: [{ state: isState }],
 	outcome: [{ action: isString, ok: isBoolean }, { reason: value => value === 'gone' || value === 'failed' }],
@@ -100,6 +102,7 @@ window.addEventListener('message', event => {
 			break;
 		case 'scrolling':
 			setScrolling(message.scrolling as Scrolling);
+			scrollbar.setOptions(message.scrolling as Scrolling);
 			break;
 		default:
 			if (typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE && message.type === 'probe') {
@@ -116,6 +119,12 @@ const probe = typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? (op:
 	const found = [...document.querySelectorAll<HTMLElement>(selector)];
 	if (op === 'read') {
 		return found.map(each => each.textContent ?? '');
+	}
+	if (op === 'style') {
+		return found.map(each => {
+			const style = getComputedStyle(each);
+			return { width: style.width, top: style.top, bottom: style.bottom, clipBottom: style.getPropertyValue('--facade-clip-bottom') || '0px', borderRadius: style.borderRadius, backgroundColor: style.backgroundColor };
+		});
 	}
 	if (op === 'layout') {
 		const root = document.scrollingElement ?? document.documentElement;
@@ -230,7 +239,7 @@ new MutationObserver(checkAllInitials).observe(document.body, { attributes: true
 /** The saved scroll position on the cards drawn from the host's state, kept within the list. */
 function restoreBrowsing(saved: Browsing): void {
 	const root = document.scrollingElement ?? document.documentElement;
-	root.scrollTop = Math.min(saved.scrollTop, Math.max(0, root.scrollHeight - window.innerHeight));
+	root.scrollTop = Math.min(saved.scrollTop, pageDimensions().range);
 	// The keyboard's card again where it still is, as the Tab stop alone: the input focus is not taken
 	if (saved.target !== undefined && drawn?.has(saved.target)) {
 		keyed = saved.target;
@@ -252,7 +261,9 @@ function rememberBrowsing(): void {
 	});
 }
 window.addEventListener('scroll', rememberBrowsing, { passive: true });
+installViewport();
 takeWheel(reducedMotion);
+const scrollbar = installScrollbar(reducedMotion);
 
 /** One part of the empty panel: words, or a button - the main action's primary, another's secondary. */
 type EmptyPart =
@@ -586,9 +597,10 @@ function goTo(card: HTMLElement | undefined): void {
 
 /** How far Page Up and Page Down move: the cards fully in view, less one, and at least one (PANEL-3.3). */
 function pageOf(cards: readonly HTMLElement[]): number {
+	const { visibleTop, visibleBottom } = pageDimensions();
 	const visible = cards.filter(card => {
 		const box = card.getBoundingClientRect();
-		return box.top >= 0 && box.bottom <= window.innerHeight;
+		return box.top >= visibleTop && box.bottom <= visibleBottom;
 	}).length;
 	return Math.max(1, visible - 1);
 }

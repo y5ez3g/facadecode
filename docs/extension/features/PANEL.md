@@ -188,7 +188,7 @@ nodes survive ordinary text changes; initial draw/filter changes do not animate.
 
 ### 3.3 Scrolling
 
-**A wheel scrolls the list as VS Code's own lists scroll; the scrollbar is the page's, in VS Code's colors.**
+**The list scrolls and shows an overlay scrollbar as VS Code's own lists do, without reserving a gutter.**
 
 The wheel follows VS Code's list code, ported, not imitated: `workbench.list.mouseWheelScrollSensitivity` (default 1),
 `fastScrollSensitivity` (default 5, with Alt), `smoothScrolling` and the window's zoom. Wheel baseline 50 px per line;
@@ -200,9 +200,42 @@ physical mouse wheel; the keyboard or any other scroll ends it where it is, and 
 undoes the zoom `window.zoomLevel` says, the only one a page is told: a window zoomed alone (`window.zoomPerWindow`) can
 have a mouse wheel's scroll taken for a touchpad's, and not glide.
 
-The scrollbar is the page's own (D87): 10 px in the theme's scrollbarSlider colors over no track, its dragging and track
-clicks the browser's, so `scrollByPage` does not apply. Keyboard Page Up/Down moves fully visible row count minus one
-(minimum one).
+The page retains native scrolling, with its browser scrollbar hidden. Its right-edge overlay follows the native sidebar
+lists (D125): 10 px wide with square corners normally; 8 px wide with `cornerRadius.small` corners (4 px fallback) when
+`workbench.experimental.modernUI` is true. The host supplies the effective setting at startup and on changes; an absent
+setting uses the traditional appearance. The theme name does not decide this mode. Slider colors follow `scrollbarSlider.*`
+and the track follows `scrollbar.background`, transparent when unset. The entire page content and the overlay share
+the visible viewport through the host's clipping ancestors. Fractional-scale iframe rounding must not crop the last
+card or remove a column of the slider. Cross-origin intersection bounds may enclose a partially clipped device pixel;
+keep the right and bottom edges one device pixel inside those reported bounds. The correction follows sidebar resizing
+and display/zoom changes, including without overflow. It is independent of the scrollbar's visibility and reserves no
+scrollbar gutter. Hit testing follows the corrected track.
+
+The list has no additional top or bottom padding beyond the clipping correction; its existing 4 px side padding
+already accommodates its rounded corners. Its right padding absorbs the one-device-pixel guard instead of adding it
+again, keeping the two side gaps balanced within host raster rounding. This applies in both appearance modes so a
+mode change does not move cards. Modern UI leaves 2 px at both scrollbar ends and 1 px at the right, measured
+from the safe visible viewport. This is clearance for the scrollbar beside the webview's additional rounded clip;
+it does not add list padding or duplicate the editor's existing outer spacing.
+Traditional UI adds no decorative clearance; both modes compensate host
+clipping for all page content, including empty states. A mode change preserves card order and focus and keeps scrolling
+within the resulting valid range. Both caps and first/last card corners must remain visible; shared antialiased boundary
+pixels do not require exact equality. Slider placement uses fractional track dimensions and stays inside the track at
+both ends, rather than mixing a rounded clientHeight with a fractional CSS height. The thumb reaches its track end
+when the native scroller clamps within one device pixel of the outward-rounded range. The last card can stop less than
+one device pixel inside the safe visible edge because of native scroll quantization. Native scrolling, dragging and the
+wheel reach the complete content range. Slider sizing and pointer mapping use the
+remaining track, while page clicks still move one viewport. The overlay reserves no width, whether visible or hidden,
+and is absent without overflow. Its slider is proportional to the viewport, at least 20 px and at most the usable track's length. Slider position,
+dragging and track clicks follow VS Code's list code: a click centers the slider, or moves one viewport when
+`workbench.list.scrollByPage` is true (default false). Dragging captures the pointer outside the view; on Windows, moving
+more than 140 px sideways resets to the drag's starting scroll position. The overlay adds no Tab stop.
+
+The scrollbar starts hidden unless the pointer is over the view, appears on hover or scrolling, and stays visible while
+hovered or dragged. Leaving the view fades it out; a scroll without hover reveals it until 500 ms after the last scroll.
+Reveal is 100 ms linear and hide is 800 ms linear, as in VS Code's lists; reduced motion makes both immediate. Release
+outside the view, canceled dragging and loss of window focus cannot leave it stuck visible. Keyboard Page Up/Down moves
+fully visible row count minus one (minimum one).
 
 ## Checks
 
@@ -215,6 +248,8 @@ clicks the browser's, so `scrollByPage` does not apply. Keyboard Page Up/Down mo
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
+
+- 2026-10-31: Use an auto-hiding overlay that follows native Modern UI settings, compensates webview clipping and preserves complete card/slider corners without list top or bottom padding (D125).
 
 - 2026-10-31: Adjusted the Pin's size, name spacing and selected/high-contrast colors after the owner's visual review (D122).
 
