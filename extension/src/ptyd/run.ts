@@ -114,9 +114,14 @@ const START_WAIT_MS = 10_000;
 /** How soon after what it drew a screen read as its status is read again (CLIS-2.3): at most this often, while it draws. */
 const SCREEN_READ_MS = 200;
 
-/** What node-pty 1.2 keeps of a Windows console: the pipes to it, and the worker thread that reads its output. */
+/**
+ * What node-pty 1.2 keeps of a Windows console: whether it is ready - its program connected and its first output read - and its
+ * agent, with the pipes to it and the worker thread that reads its output.
+ */
 interface WindowsConsole {
+	readonly _isReady?: boolean;
 	readonly _agent?: {
+		kill?(): void;
 		readonly _conoutSocketWorker?: { dispose?(): void };
 		readonly _outSocket?: { destroy?(): void };
 		readonly _inSocket?: { destroy?(): void };
@@ -530,7 +535,15 @@ export class Run {
 				return true;
 			}
 			try {
-				this.pty.kill();
+				// node-pty queues its kill until the console is ready, and one never ready would never be ended: it is ended through its
+				// agent at once, as node-pty ends a console it gave up on, and nothing is queued to end it again
+				const console = this.pty as unknown as WindowsConsole;
+				if (console._isReady === false && console._agent?.kill) {
+					console._agent.kill();
+					releaseConsole(this.pty);
+				} else {
+					this.pty.kill();
+				}
 				this.consoleEnded = true;
 				return true;
 			} catch {
