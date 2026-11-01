@@ -63,6 +63,11 @@ export const STAGE_MS = 15_000;
 export const SLOT_MS = 3_000;
 /** How long from its start a stage waits for an input that another draft or a native question holds (RULES-1.5, D106). */
 export const HOLD_MS = 10 * 60_000;
+/**
+ * Facade results this close together came together - those of sends that ended with their recipient - and go in one paste, the
+ * later ones keeping their whole stage (D115).
+ */
+const TOGETHER_MS = 50;
 
 /**
  * Facade results on their way to one run's terminal (RULES-1.7, D115): those that come while none of them is typed yet go in one
@@ -453,16 +458,20 @@ export class MessageService implements Messages, Disposable {
 			return this.finish(record.id, { status: 'failure', reason: capability ? 'unsupported' : 'ended', effects: NO_EFFECTS, attempts: 0 }) ?? record;
 		}
 		const start = this.mono();
-		// A result's own budget is never cut short: it joins only results with a whole stage's time still before them (RULES-1.5)
-		const open = [...this.stages].find(each => each.target === run && each.batch !== undefined && each.batch.typed === undefined && !each.stop.signal.aborted && each.deadline - start >= STAGE_MS + each.extra);
+		// A result's own budget is never cut short: it joins only results with a whole stage's time still before them, or that came
+		// together with it, and never a paste a read has delivered already, which ends at its next slot (RULES-1.5, D115, D118)
+		const open = [...this.stages].find(each => each.target === run && each.batch !== undefined && each.batch.typed === undefined && !each.stop.signal.aborted
+			&& !each.settled && each.deadline - start >= STAGE_MS + each.extra - TOGETHER_MS);
 		if (open?.batch) {
 			// Typed with the results already waiting for this terminal, one turn of its model for them all, by their deadline (D115)
 			open.batch.records.push(record.id);
 			open.batch.texts.set(record.id, text);
 			const extra = this.deps.input.pasteTime?.(run, open.batch.records.map(id => open.batch!.texts.get(id)!).join('\n\n')) ?? 0;
-			if (extra > open.extra) {
-				open.deadline += extra - open.extra;
-				open.extra = extra;
+			// Its whole stage, for one that came a moment after the others; the paste's added time for all of them
+			const deadline = Math.max(open.deadline + Math.max(0, extra - open.extra), start + STAGE_MS + extra);
+			if (deadline > open.deadline) {
+				open.deadline = deadline;
+				open.extra = Math.max(open.extra, extra);
 				open.heldUntil = this.deps.clock.now() + open.deadline - start;
 				for (const id of open.batch.records) {
 					this.progress(id, open);

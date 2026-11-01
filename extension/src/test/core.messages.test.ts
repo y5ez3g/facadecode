@@ -64,7 +64,7 @@ class FakeInput implements InputPort {
 		return !script?.length ? 'usable' : script.length > 1 ? script.shift()! : script[0];
 	}
 
-	async submit(run: RunId, text: string, signal?: AbortSignal, lead?: string): Promise<Submission> {
+	async submit(run: RunId, text: string, signal?: AbortSignal, lead?: string, canPaste?: () => boolean): Promise<Submission> {
 		const at = Date.now();
 		this.signals.push(signal);
 		const lost = next(this.throws.get(run));
@@ -76,6 +76,10 @@ class FakeInput implements InputPort {
 			await new Promise(resolve => setTimeout(resolve, this.submitMs));
 		}
 		this.busy--;
+		// Checked just before the paste, as the input does: a read meanwhile leaves it unstarted
+		if (canPaste?.() === false) {
+			return { effects: { outcome: 'none', text_written: 'none', enter_written: false }, shown: false };
+		}
 		this.submitted.push({ run, text, at, end: Date.now(), ...lead !== undefined ? { lead } : {} });
 		const effects = next(this.effects.get(run)) ?? CONFIRMED;
 		const shown = next(this.shown.get(run)) ?? effects.text_written === 'full';
@@ -545,6 +549,40 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		const second = service.report({ to: A, text: 'Later result.' });
 		assert.strictEqual(second.delivery.deadline, first.at + 36_000);
 		service.dispose();
+	});
+
+	test('Facade results that come together - those of three sends that end with their recipient - go in one paste, the clock moving between them (D115)', async () => {
+		// Each record written takes a millisecond: results made one after another are never at the same instant
+		const { service, input, close } = setUp({ createMs: 1 });
+		input.states.set(B, ['draft']);
+		input.states.set(A, ['unknown', 'usable']);
+		for (const text of ['One', 'Two', 'Three']) {
+			assert.strictEqual((await settled(service.send({ from: A, to: B, text, elapsedMs: 0 }))).status, 'accepted');
+		}
+		close(B);
+		await sleep(10_000);
+		const toA = input.submitted.filter(each => each.run === A);
+		assert.deepStrictEqual(toA.map(each => (each.text.match(/^\[Facade result #m\d+/gm) ?? []).length), [3]);
+		const results = service.inbox(A, { all: true, limit: 10 }).records;
+		assert.deepStrictEqual(results.map(each => [each.delivery.status, each.delivery.via]), [['success', 'terminal'], ['success', 'terminal'], ['success', 'terminal']]);
+		// Each with its whole stage: the later ones a moment after the first
+		assert.ok(results.every(each => each.delivery.deadline! - each.at >= 15_000), results.map(each => each.delivery.deadline! - each.at).join(', '));
+	});
+
+	test('a result that comes just after a read delivered the one waiting before it is never left behind with it: it goes in a paste of its own (D115, COLLABORATION-3.1)', async () => {
+		const { service, input } = setUp();
+		input.states.set(A, ['draft', 'usable']);
+		input.submitMs = 500;
+		const first = service.report({ to: A, text: 'First result.' });
+		// Held at first; at 3 s its input is usable, and its submission is under way when the read comes, before it pastes
+		await sleep(3_100);
+		service.markDelivered(A, [first.id]);
+		await sleep(500);
+		const second = service.report({ to: A, text: 'Second result.' });
+		await sleep(20_000);
+		const pastes = input.submitted.filter(each => each.run === A).map(each => [each.text.includes('First result.'), each.text.includes('Second result.')]);
+		assert.deepStrictEqual(pastes, [[false, true]]);
+		assert.deepStrictEqual(service.inbox(A, { all: true, limit: 10 }).records.map(each => [each.id, each.delivery.status, each.delivery.via]), [[first.id, 'success', 'read'], [second.id, 'success', 'terminal']]);
 	});
 
 	test('Facade results that come while none of them is typed go to their sender in one paste, one turn of its model (D115)', async () => {
