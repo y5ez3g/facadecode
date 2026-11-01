@@ -134,6 +134,19 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		disposables.forEach(each => each.dispose());
 	});
 
+	test('an agent\'s name or words holding $(...) are shown as written, not as the theme icon the editor would draw (PANEL-3.2)', async () => {
+		const editor = fakeEditor();
+		const records = [record(1, { from: { ...ada, name: '$(rocket) Ada' }, to: bob, text: 'Run $(debug-start) now' }, T)];
+		const disposables = editor.host.registerMessageHistory({ messages: { history: () => records, onDidRecord: () => ({ dispose: () => undefined }) }, language: 'en' });
+		const done = editor.commands.get('facade.messageHistory')!() as Promise<void>;
+		const [item] = editor.picker.items;
+		const shown = [item.label, (item.detail ?? '').split(' · ').pop()];
+		editor.picker.accept(0);
+		await done;
+		disposables.forEach(each => each.dispose());
+		assert.deepStrictEqual(shown, ['\\$(rocket) Ada #a1 ↔ Bob #a2', 'Run \\$(debug-start) now']);
+	});
+
 	test('with no records the picker says so, and offers nothing to send or delete', async () => {
 		const editor = fakeEditor();
 		editor.host.registerMessageHistory({ messages: { history: () => [], onDidRecord: () => ({ dispose: () => undefined }) }, language: 'en' });
