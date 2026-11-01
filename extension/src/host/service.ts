@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { untilAnswered } from '../base/async';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
 import { VendorHistory } from '../clis/history';
@@ -250,11 +251,18 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	// cannot list them yet - its ptyd not answering - keeps trying, as they end five minutes after no window claims them (RULES-4.1)
 	let restoreRetry: ReturnType<typeof setTimeout> | undefined;
 	let disposed = false;
-	const restored = (async () => {
-		for (let wait = RECONCILE_MS; await agents.restore() === undefined && !disposed; wait = Math.min(wait * 2, MOST_RESTORE_WAIT_MS)) {
-			await new Promise<void>(resolve => { restoreRetry = setTimeout(resolve, wait); });
+	const retry = { first: RECONCILE_MS, most: MOST_RESTORE_WAIT_MS, stopped: () => disposed, wait: (ms: number) => new Promise<void>(resolve => { restoreRetry = setTimeout(resolve, ms); }) };
+	// A restore that fails outright is tried again as one whose listing failed: one failed write leaves no agent unseen (RULES-4.1, D86)
+	let restoreFailure: string | undefined;
+	const restored = untilAnswered(() => agents.restore(), {
+		...retry,
+		failed: err => {
+			if (messageOf(err) !== restoreFailure) {
+				restoreFailure = messageOf(err);
+				log.event(`Could not show this window's agents, trying again: ${restoreFailure}`);
+			}
 		}
-	})();
+	});
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
 	// Then a ptyd listing runs of this window that it shows no pair of - one of an earlier protocol found late, or a failed reattach -
 	// restores again, one restore at a time: no started agent is left out (RULES-4.1, D86)

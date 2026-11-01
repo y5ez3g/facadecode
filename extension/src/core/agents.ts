@@ -167,7 +167,7 @@ export class AgentService implements Agents, Disposable {
 		const kept = this.deps.retained.list().filter(record => isRetainedRun(record) || isRequestRun(record));
 		for (const record of kept) {
 			if (record.requestOnly && record.createdAt <= cutoff) {
-				this.deps.retained.remove(record.id);
+				this.forgetRetained(record.id);
 			}
 		}
 		return [...this.list(), ...kept].find(run => run.creator === from && run.requestId === requestId && run.createdAt > cutoff);
@@ -187,6 +187,18 @@ export class AgentService implements Agents, Disposable {
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Removes a retained record. One the store cannot remove now - a lock not let go, a file the system holds - stays for a later try,
+	 * said in the log: cleanup never holds up showing this window's agents or answering an operation (RULES-4.1, D86).
+	 */
+	private forgetRetained(id: RunId): void {
+		try {
+			this.deps.retained.remove(id);
+		} catch (err) {
+			this.deps.log.event(`Could not remove the kept record of ${id}: ${messageOf(err)}`);
+		}
 	}
 
 	/**
@@ -221,7 +233,7 @@ export class AgentService implements Agents, Disposable {
 		for (const kept of this.deps.retained.list()) {
 			if (isRequestRun(kept)) {
 				if (kept.createdAt <= this.deps.clock.now() - REQUEST_MS) {
-					this.deps.retained.remove(kept.id);
+					this.forgetRetained(kept.id);
 				}
 				continue;
 			}
@@ -232,7 +244,7 @@ export class AgentService implements Agents, Disposable {
 			const facts = retainedFacts(kept);
 			// Its location removed while no window showed it: closed as the removal would have closed it (RULES-2.4)
 			if (liveIds.has(facts.id) || this.deps.locations.removalOf(facts.location)) {
-				this.deps.retained.remove(facts.id);
+				this.forgetRetained(facts.id);
 				continue;
 			}
 			if (!this.runs.has(facts.id) && !this.released.has(facts.id)) {
