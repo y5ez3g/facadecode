@@ -69,26 +69,33 @@ function isInstallerStub(): Promise<boolean> {
 	return installerStub;
 }
 
-/** Git's output; rejects with a `GitError` carrying Git's own words. */
-function runGit(git: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS): Promise<string> {
+/** Git's output; rejects with a `GitError` carrying Git's own words. `input`, where given, is what Git reads on its standard input. */
+function runGit(git: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS, input?: string): Promise<string> {
 	const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' };
 	for (const name of REPOSITORY_VARIABLES) {
 		delete env[name];
 	}
-	return new Promise((resolve, reject) => execFile(git, [...args], { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env }, (err, stdout, stderr) => {
-		if (!err) {
-			resolve(String(stdout));
-		} else if (err.code === 'ENOENT') {
-			reject(new GitError(`Git was not found: ${git}`, undefined, true));
-		} else if (typeof err.code === 'number') {
-			reject(new GitError(String(stderr).trim() || err.message, err.code));
-		} else if (err.killed && err.code === null) {
-			const command = args[0] === '-C' ? args[2] : args[0];
-			reject(new GitError(`Git did not answer within ${timeoutMs / 1000} seconds (git ${command}).`, undefined));
-		} else {
-			reject(new GitError(String(stderr).trim() || err.message, undefined));
+	return new Promise((resolve, reject) => {
+		const child = execFile(git, [...args], { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env }, (err, stdout, stderr) => {
+			if (!err) {
+				resolve(String(stdout));
+			} else if (err.code === 'ENOENT') {
+				reject(new GitError(`Git was not found: ${git}`, undefined, true));
+			} else if (typeof err.code === 'number') {
+				reject(new GitError(String(stderr).trim() || err.message, err.code));
+			} else if (err.killed && err.code === null) {
+				const command = args[0] === '-C' ? args[2] : args[0];
+				reject(new GitError(`Git did not answer within ${timeoutMs / 1000} seconds (git ${command}).`, undefined));
+			} else {
+				reject(new GitError(String(stderr).trim() || err.message, undefined));
+			}
+		});
+		if (input !== undefined) {
+			// Git that ends before it read everything closes its end: that is its answer, not a failure of this write
+			child.stdin?.on('error', () => undefined);
+			child.stdin?.end(input);
 		}
-	}));
+	});
 }
 
 /** The lines of Git's output, without the line break that ends the last. */
@@ -265,17 +272,31 @@ export async function hasChanges(git: string, folder: string): Promise<boolean> 
 		return true;
 	}
 	// `S` is skip-worktree, a lower-case tag assume-unchanged; one with no file in the folder - a sparse checkout's - is no edit
-	const hidden = (await runGit(git, ['-C', folder, 'ls-files', '-v', '-z'])).split('\0')
+	const hidden = new Set((await runGit(git, ['-C', folder, 'ls-files', '-v', '-z'])).split('\0')
 		.filter(entry => entry.length > 2 && (entry[0] === 'S' || (entry[0] >= 'a' && entry[0] <= 'z')))
 		.map(entry => entry.slice(2))
-		.filter(file => fs.existsSync(path.join(folder, file)));
-	for (const file of hidden) {
-		const [mode, indexed] = (await runGit(git, ['-C', folder, 'ls-files', '-s', '--', file])).trim().split(/\s+/);
-		if (mode === '160000') {
-			continue;
+		.filter(file => fs.existsSync(path.join(folder, file))));
+	if (!hidden.size) {
+		return false;
+	}
+	// Their index entries in one read, each found by its own name: a name given as a pathspec could match others, as `a[1]` does `a1`
+	const indexed = new Map<string, { readonly mode: string; readonly object: string }>();
+	for (const entry of (await runGit(git, ['-C', folder, 'ls-files', '-s', '-z'])).split('\0')) {
+		const fields = /^(\d+) ([0-9a-f]+) \d+\t([\s\S]+)$/.exec(entry);
+		if (fields && hidden.has(fields[3])) {
+			indexed.set(fields[3], { mode: fields[1], object: fields[2] });
 		}
-		const now = (await runGit(git, ['-C', folder, 'hash-object', '--', file])).trim();
-		if (now !== indexed) {
+	}
+	// A submodule's entry is its commit, not a file's content
+	const files = [...hidden].filter(file => indexed.get(file)?.mode !== '160000');
+	// Their content as Git would store it: in one call for every name a line can hold, a name with a line break alone
+	const listed = files.filter(file => !/[\r\n]/.test(file));
+	const now = listed.length ? linesOf(await runGit(git, ['-C', folder, 'hash-object', '--stdin-paths'], GIT_TIMEOUT_MS, `${listed.join('\n')}\n`)) : [];
+	if (listed.some((file, at) => now[at] !== indexed.get(file)?.object)) {
+		return true;
+	}
+	for (const file of files.filter(each => /[\r\n]/.test(each))) {
+		if ((await runGit(git, ['-C', folder, 'hash-object', '--', file])).trim() !== indexed.get(file)?.object) {
 			return true;
 		}
 	}

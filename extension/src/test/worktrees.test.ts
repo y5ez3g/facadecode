@@ -437,6 +437,28 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 			assert.deepStrictEqual([fs.readFileSync(path.join(skipped, 'skipped.json'), 'utf8'), fs.readFileSync(path.join(assumed, 'assumed.json'), 'utf8')], ['{"local": "edit"}', '{"local": "edit"}']);
 		});
 
+		test('a hidden file is compared under its own name, never as a pattern: `a[1].txt` unedited beside `a1.txt` is no change; edited to `a1.txt`\'s content, it is one', async () => {
+			fs.writeFileSync(path.join(repo, 'a1.txt'), 'one');
+			fs.writeFileSync(path.join(repo, 'a[1].txt'), 'bracketed');
+			git(repo, 'add', '.');
+			git(repo, 'commit', '-q', '-m', 'brackets');
+			const kept = path.join(temp.dir, 'kept');
+			const edited = path.join(temp.dir, 'edited');
+			for (const each of [kept, edited]) {
+				git(repo, 'worktree', 'add', '-q', '-b', path.basename(each), each);
+				git(each, 'update-index', '--assume-unchanged', 'a[1].txt');
+			}
+			// What a pattern would match first is `a1.txt`'s entry, whose content this edit now has
+			fs.writeFileSync(path.join(edited, 'a[1].txt'), 'one');
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			assert.deepStrictEqual([await removed(worktrees, idOf(kept)), await removed(worktrees, idOf(edited))], [
+				{ outcome: 'fulfilled', closed: 1 },
+				{ outcome: 'worktree_changed {"kind":"worktree_changed","name":"edited"}', closed: 0 }
+			]);
+			assert.strictEqual(fs.readFileSync(path.join(edited, 'a[1].txt'), 'utf8'), 'one');
+		});
+
 		test('only a linked worktree no workspace folder is in: the main checkout, a plain folder, an opened worktree and one holding a workspace folder are refused untouched; a detached one goes', async () => {
 			const plain = path.join(temp.dir, 'plain');
 			const opened = path.join(temp.dir, 'opened');
