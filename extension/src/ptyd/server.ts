@@ -189,10 +189,10 @@ interface PendingCall {
 	readonly receivedAt: number;
 	/** The window it was given to; none while it waits for one. */
 	window?: Connection;
-	/** Until a window claims its run. */
+	/** Whether it is a query, which has its route deadline for a window's answer, waiting for a claim as well (MCP-1.3). */
+	readonly query: boolean;
+	/** Its one deadline: a call's two seconds for a window to claim its run, a query's route deadline for its answer. */
 	timer?: ReturnType<typeof setTimeout>;
-	/** Until a query's route deadline. */
-	routeTimer?: ReturnType<typeof setTimeout>;
 }
 
 /**
@@ -273,7 +273,6 @@ export class PtydServer {
 		releaseLock(this.lockPath);
 		for (const pending of this.calls.values()) {
 			clearTimeout(pending.timer);
-			clearTimeout(pending.routeTimer);
 		}
 		this.calls.clear();
 		for (const run of this.runs.values()) {
@@ -638,8 +637,9 @@ export class PtydServer {
 
 	/**
 	 * A shim's call `request`, for the window that claims its caller: given to it at once, or - no window claiming the run, as while
-	 * one reloads - once one does, within the call's two seconds from the shim's ingress (RULES-1.2). The shim is answered that
-	 * window's answer as it comes, or why none came; a query once its route deadline passed without one (MCP-1.3).
+	 * one reloads - once one does, within the call's two seconds from the shim's ingress (RULES-1.2), or a query's route deadline
+	 * (ARCHITECTURE-2.3, MCP-1.3). The shim is answered that window's answer as it comes, or why none came; a query once its route
+	 * deadline passed without one.
 	 */
 	private call(call: ShimCall, shim: Connection, receivedAt: number, request: number): void {
 		if (shim.role !== 'shim') {
@@ -655,31 +655,30 @@ export class PtydServer {
 		if ([...this.calls.values()].filter(pending => pending.run === run.id).length >= MOST_RUN_CALLS) {
 			throw new CallRefused('capacity_exceeded', 'none', `${MOST_RUN_CALLS} tool calls of ${run.id} are under way already: this one had no effect.`);
 		}
-		const pending: PendingCall = { id: this.nextCall++, run: run.id, shim, request, call, receivedAt };
+		const routeDeadlineMs = typeof call.routeDeadlineMs === 'number' && Number.isFinite(call.routeDeadlineMs) ? call.routeDeadlineMs : undefined;
+		const pending: PendingCall = { id: this.nextCall++, run: run.id, shim, request, call, receivedAt, query: routeDeadlineMs !== undefined };
 		this.calls.set(pending.id, pending);
-		const spent = () => Math.max(0, call.elapsedMs) + performance.now() - receivedAt;
-		if (typeof call.routeDeadlineMs === 'number' && Number.isFinite(call.routeDeadlineMs)) {
-			const seconds = Math.round(call.routeDeadlineMs / 100) / 10;
-			const tool = typeof call.tool === 'string' ? call.tool : 'The query';
-			pending.routeTimer = setTimeout(() => this.refuse(pending, new CallRefused('window_unavailable', 'none',
-				`No Facade Code window answered ${tool} of ${run.id} within ${seconds} seconds: a query, it had no effect.`)), Math.max(0, call.routeDeadlineMs - spent()));
-		}
+		const spent = Math.max(0, call.elapsedMs) + performance.now() - receivedAt;
+		const tool = typeof call.tool === 'string' ? call.tool : 'The query';
+		const refusal = routeDeadlineMs !== undefined
+			? `No Facade Code window answered ${tool} of ${run.id} within ${Math.round(routeDeadlineMs / 100) / 10} seconds: a query, it had no effect.`
+			: `No Facade Code window holds ${run.id} now: the call had no effect.`;
+		pending.timer = setTimeout(() => this.refuse(pending, new CallRefused('window_unavailable', 'none', refusal)), Math.max(0, (routeDeadlineMs ?? CLAIM_WAIT_MS) - spent));
 		const claimant = this.claims.get(run);
 		if (claimant && !claimant.closed && !this.attaching.has(run)) {
 			this.forward(pending, claimant);
-			return;
 		}
-		pending.timer = setTimeout(() => {
-			if (!pending.window) {
-				this.refuse(pending, new CallRefused('window_unavailable', 'none', `No Facade Code window holds ${run.id} now: the call had no effect.`));
-			}
-		}, Math.max(0, CLAIM_WAIT_MS - spent()));
 	}
 
-	/** Gives `pending` to `window`, with the time it spent in ptyd added to how long it has been under way. */
+	/**
+	 * Gives `pending` to `window`, with the time it spent in ptyd added to how long it has been under way: a call no longer waits for
+	 * a deadline, a query still for its route's.
+	 */
 	private forward(pending: PendingCall, window: Connection): void {
-		clearTimeout(pending.timer);
-		pending.timer = undefined;
+		if (!pending.query) {
+			clearTimeout(pending.timer);
+			pending.timer = undefined;
+		}
 		pending.window = window;
 		const elapsedMs = pending.call.elapsedMs + Math.ceil(performance.now() - pending.receivedAt);
 		window.send({ event: 'call', id: pending.id, call: { ...pending.call, elapsedMs } });
@@ -688,7 +687,6 @@ export class PtydServer {
 	/** `pending` is answered or refused: ptyd keeps it no longer. */
 	private settle(pending: PendingCall): void {
 		clearTimeout(pending.timer);
-		clearTimeout(pending.routeTimer);
 		this.calls.delete(pending.id);
 	}
 

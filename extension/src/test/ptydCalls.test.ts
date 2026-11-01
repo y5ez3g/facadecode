@@ -176,6 +176,30 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		assert.deepStrictEqual((await waiting).result, answerOf('after the reload'));
 	});
 
+	test('with no window claiming the run, a query waits for one within its route deadline, past a call\'s two seconds (ARCHITECTURE-2.3, MCP-1.3)', async () => {
+		const reloading = await connect();
+		await spawn(reloading, 'r20');
+		reloading.dispose();
+		const shim = await shimOf('r20');
+		await new Promise(resolve => setTimeout(resolve, 100));
+		const waiting = shim.call({ tool: 'list_agents', routeDeadlineMs: CLAIM_WAIT_MS + 3_000 });
+		// The window reloads for longer than a call's two seconds, within the query's deadline
+		await new Promise(resolve => setTimeout(resolve, CLAIM_WAIT_MS + 500));
+		const reloaded = await connect();
+		const calls = callsOf(reloaded);
+		await reloaded.request('attach', { run: 'r20' });
+		await until('the waiting query', () => calls.length === 1);
+		await reloaded.request('answer', { id: calls[0].id, answer: answerOf('after a long reload') });
+		assert.deepStrictEqual((await waiting).result, answerOf('after a long reload'));
+		// With no window at all, it is refused at its deadline, not before
+		reloaded.dispose();
+		await new Promise(resolve => setTimeout(resolve, 100));
+		const began = Date.now();
+		const unanswered = await shim.call({ tool: 'read_messages', routeDeadlineMs: CLAIM_WAIT_MS + 1_000 });
+		assert.deepStrictEqual([unanswered.reason, unanswered.effects], ['window_unavailable', 'none']);
+		assert.ok(Date.now() - began >= CLAIM_WAIT_MS + 800, String(Date.now() - began));
+	});
+
 	test('a window that goes holding a call leaves its effects unknown; a shim that goes cancels nothing a window took', async () => {
 		const window = await connect();
 		const calls = callsOf(window);
