@@ -594,12 +594,13 @@ export class AgentService implements Agents, Disposable {
 		this.released.add(id);
 		const key = keyOf(run.facts);
 		if (key) { this.elsewhere.delete(conversationId(key)); }
-		if (!kept) {
-			this.deps.retained.remove(id);
-		}
 		this.deps.execution.removePair(id);
 		this.emit({ run: id, kind: 'removed', cause: 'close' });
 		this.release(id);
+		// Its card and terminal are gone first: a record the store cannot remove now holds up neither, nor its process's end (RULES-4.1)
+		if (!kept) {
+			this.forgetRetained(id);
+		}
 		if (run.facts.lifecycle === 'ended') {
 			this.deps.log.event(`Closed ${run.facts.alias}`);
 			return 'already_ended';

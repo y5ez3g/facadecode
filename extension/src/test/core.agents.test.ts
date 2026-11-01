@@ -443,6 +443,17 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.get(id), undefined, 'its later exit does not bring it back');
 	});
 
+	test('a close removes the card and terminal at once even where its kept record cannot be removed - the store refuses the write (LIFECYCLE-3.1)', async () => {
+		const world = setUp({ planError: new PlanError('claude is not installed in this environment.', 'not_found') });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		assert.ok(world.retained.has(id), 'its failed start is kept for a reload');
+		world.retained.delete = () => { throw new Error('Timed out after 5 seconds waiting for another window to release the lock'); };
+		assert.strictEqual(await world.agents.close(id), 'already_ended');
+		assert.deepStrictEqual([world.agents.get(id), world.execution.removed, world.changes.filter(change => change.kind === 'removed').map(change => change.run)], [undefined, [id], [id]]);
+		assert.ok(world.log.some(line => /Could not remove the kept record of run-.*: Timed out/.test(line)));
+	});
+
 	test('closing during startup prevents the later spawn (WORKTREES-2.5, RULES-5.2)', async () => {
 		const world = setUp();
 		let release!: () => void;
