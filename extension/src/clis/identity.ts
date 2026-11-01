@@ -87,18 +87,23 @@ export function sessionFilesIn(home: string): readonly { readonly run: string; r
 /**
  * The hook's script, run as Node: data capture only (CLIS-2.4). It reads the hook input and, for a SessionStart of a conversation
  * with a UUID, writes its ID and how the session started to the file the run's {@link SESSION_FILE_VARIABLE} names - whole, by a
- * rename. Anything else - another event, input that is no JSON, no such variable - it leaves alone; it never fails the session.
+ * rename. Anything else - another event, input that is no JSON, no such variable - it leaves alone; it never fails the session. A
+ * background job of the run's Claude Code - `CLAUDE_JOB_DIR` set - inherits its hooks, and its own session is never the run's: it
+ * records nothing, and on Windows ends before taking its input, which its caller may never close. Antigravity's title callback, which
+ * it also is, goes on to the person's own title command whatever the record makes of the input.
  */
 export const SESSION_HOOK_SCRIPT = [
 	'const fs = require("fs"), path = require("path");',
+	'const job = !!process.env.CLAUDE_JOB_DIR;',
+	'if (job && process.platform === "win32") process.exit(0);',
 	`const file = process.argv.at(-1)?.endsWith(".session.json") ? process.argv.at(-1) : process.env.${SESSION_FILE_VARIABLE};`,
 	'const chunks = [];',
 	'process.stdin.on("data", chunk => chunks.push(chunk));',
-	'process.stdin.on("end", () => { const data = Buffer.concat(chunks); let input; try {',
-	'if (!file || !path.isAbsolute(file) || !file.endsWith(".session.json")) return;',
-	'input = JSON.parse(data.toString("utf8"));',
-	'const status = input && input.product === "antigravity" && typeof input.conversation_id === "string";',
-	'if (!input || (!status && !["SessionStart","UserPromptSubmit","Stop","SessionEnd"].includes(input.hook_event_name))) return;',
+	'process.stdin.on("end", () => { const data = Buffer.concat(chunks); let input; try { input = JSON.parse(data.toString("utf8")); } catch { }',
+	'(() => { try {',
+	'if (job || !input || !file || !path.isAbsolute(file) || !file.endsWith(".session.json")) return;',
+	'const status = input.product === "antigravity" && typeof input.conversation_id === "string";',
+	'if (!status && !["SessionStart","UserPromptSubmit","Stop","SessionEnd"].includes(input.hook_event_name)) return;',
 	'if (process.env.MUSE_THREAD_ID && process.env.MUSE_SESSION_ID && process.env.MUSE_THREAD_ID !== process.env.MUSE_SESSION_ID) return;',
 	'let id = status ? input.conversation_id || null : input.session_id;',
 	`if (id !== null && (typeof id !== "string" || !${SESSION_ID.toString()}.test(id))) return;`,
@@ -110,7 +115,7 @@ export const SESSION_HOOK_SCRIPT = [
 	'const temp = file + "." + process.pid + ".tmp";',
 	'fs.writeFileSync(temp, JSON.stringify({ session_id: id, pending_session_id: pending, transcript_path: input.transcript_path, cwd: input.cwd, source: status ? "status" : input.source || input.hook_event_name }), { mode: 0o600 });',
 	'fs.renameSync(temp, file);',
-	'} catch { }',
+	'} catch { } })();',
 	// The native title callback is a process-bound state report. Forward an existing user command unchanged, with the same input.
 	'if (input && input.product === "antigravity" && process.env.FACADE_CODE_TITLE_COMMAND) {',
 	'const env = {...process.env}; delete env.ELECTRON_RUN_AS_NODE;',

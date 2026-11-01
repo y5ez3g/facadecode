@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawnSync } from 'child_process';
 import { parse as parseToml } from 'smol-toml';
 import { codexSession } from '../clis/codex';
 import { museSession, museTarget } from '../clis/muse';
@@ -166,6 +166,26 @@ suite('Native session integration preserves configuration and exact identity (CL
 		assert.strictEqual(recordedSession(input.file)?.sessionId, null);
 		run(two, 'UserPromptSubmit'); run(one, 'Stop');
 		assert.deepStrictEqual(recordedSession(input.file), { sessionId: two, cwd: temp.dir, source: 'UserPromptSubmit' });
+	});
+
+	test('a background job of the run\'s Claude Code, which inherits its hooks, never records its own session as the run\'s (CLIS-2.4)', () => {
+		const id = '86da4482-2bae-4a45-b193-a5664c19826a';
+		const hook = (env: NodeJS.ProcessEnv) => spawnSync(process.execPath, ['-e', SESSION_HOOK_SCRIPT, input.file], { env, input: JSON.stringify({ session_id: id, hook_event_name: 'SessionStart', cwd: temp.dir }) });
+		hook({ CLAUDE_JOB_DIR: path.join(temp.dir, 'jobs', '1') });
+		assert.strictEqual(fs.existsSync(input.file), false, 'the job records nothing');
+		hook({});
+		assert.strictEqual(recordedSession(input.file)?.sessionId, id, 'the run itself does');
+	});
+
+	test('Antigravity\'s title callback reaches the person\'s own title command whatever the record makes of its input', () => {
+		const forwarded = path.join(temp.dir, 'forwarded.json');
+		const command = path.join(temp.dir, 'title.cjs');
+		fs.writeFileSync(command, `require('fs').writeFileSync(${JSON.stringify(forwarded)}, require('fs').readFileSync(0));`);
+		for (const [given, argument] of [[{ product: 'antigravity', title: 'no conversation yet' }, input.file], [{ product: 'antigravity', conversation_id: 'not-a-uuid' }, input.file], [{ product: 'antigravity', conversation_id: '' }, 'not a session file']] as const) {
+			fs.rmSync(forwarded, { force: true });
+			execFileSync(process.execPath, ['-e', SESSION_HOOK_SCRIPT, argument], { env: { ...process.env, FACADE_CODE_TITLE_COMMAND: `"${process.execPath}" "${command}"` }, input: JSON.stringify(given) });
+			assert.deepStrictEqual(JSON.parse(fs.readFileSync(forwarded, 'utf8')), given, JSON.stringify(given));
+		}
 	});
 
 	test('Windows hook commands stay within cmd limits and encode Unicode and shell metacharacters as literal PowerShell data', () => {
