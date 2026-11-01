@@ -200,6 +200,24 @@ suite('Window terminal registration: actual objects across workspace host genera
 		assert.deepStrictEqual([oldA.disposed, oldB.disposed, terminals.length], [1, 1, 2]);
 	});
 
+	test('a window component that started again while this activation went on is told its claim again, and registers its next terminal (ARCHITECTURE-2.2)', async () => {
+		// The local extension host restarted alone: its new registry knows no owner, and this activation did not activate again
+		registry.dispose();
+		const { WindowTerminals: Registry } = load<typeof import('../host/windowTerminals')>(require.resolve('../host/windowTerminals'));
+		registry = new Registry({ directory: storage.dir, log: () => undefined });
+		const runtime = manager();
+		runtime.create({ run: 'run-a', name: 'Ada', cli: 'claude' }, false).open(false);
+		await clock.tick(0);
+		assert.deepStrictEqual(commands.map(each => each.kind), ['begin', 'activate', 'begin', 'finish']);
+		// Registered: the next activation's terminal for the run replaces exactly this object
+		nextHost();
+		const later = manager();
+		later.create({ run: 'run-a', name: 'Ada', cli: 'claude' }, false).open(false);
+		await clock.tick(0);
+		assert.deepStrictEqual(terminals.map(each => each.disposed), [0]);
+		assert.strictEqual(terminals.length, 1);
+	});
+
 	test('local runtime supplies the actual object and never a title-shaped reconstruction', async () => {
 		const runtime = manager(false); const handle = runtime.create({ run: 'run-a', name: 'Ada', cli: 'claude' }, false);
 		handle.open(false); await clock.tick(0);
