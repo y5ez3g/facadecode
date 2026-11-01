@@ -870,6 +870,17 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		});
 	});
 
+	test('WORKTREES-3.2: a link this Git would delete through, and a folder Git left behind, are said in the person\'s words', () => {
+		const { worktreeProblemText } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+		assert.deepStrictEqual([
+			worktreeProblemText({ problem: { kind: 'worktree_linked', name: 'feat', link: 'node_modules\\dep' } }, 'English'),
+			worktreeProblemText({ problem: { kind: 'worktree_left', name: 'feat', folder: 'C:\\repo.worktrees\\feat' } }, 'English')
+		], [
+			'Cannot delete worktree "feat": it contains a link to another folder (node_modules\\dep), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.',
+			'Deleted worktree "feat", but Git left its folder C:\\repo.worktrees\\feat behind.'
+		]);
+	});
+
 	suite('Resume Agent', () => {
 		const NOW = Date.UTC(2026, 9, 28, 12);
 		const entry = (n: number, more: Partial<ConversationEntry> = {}): ConversationEntry => ({

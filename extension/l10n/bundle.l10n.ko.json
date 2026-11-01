@@ -277,6 +277,8 @@
 	"Disconnected; exit cause unknown": "연결이 끊어졌습니다(종료 원인 알 수 없음)",
 	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "작업 트리 \"{0}\"을(를) 삭제할 수 없습니다: 작업 트리 \"{1}\"이(가) 그 안에 있습니다. 먼저 그 작업 트리를 삭제하거나 옮긴 후 다시 시도하세요.",
 	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "작업 트리 \"{0}\"을(를) 삭제할 수 없습니다: 그 안의 에이전트 프로세스가 끝났는지 확인할 수 없습니다. 끝난 후 다시 시도하세요.",
+	"Cannot delete worktree \"{0}\": it contains a link to another folder ({1}), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.": "작업 트리 \"{0}\"을(를) 삭제할 수 없습니다: 다른 폴더에 대한 링크({1})가 들어 있으며, 이 버전의 Git은 링크를 따라가 그 폴더의 내용까지 삭제합니다. 링크를 제거하거나 Git을 2.54 이상으로 업데이트한 후 다시 시도하세요.",
+	"Deleted worktree \"{0}\", but Git left its folder {1} behind.": "작업 트리 \"{0}\"을(를) 삭제했지만 Git이 폴더 {1}을(를) 남겨 두었습니다.",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "이 창의 Facade Code 기록이 손상되어 여기에서 에이전트를 복원할 수 없습니다. 이 창을 닫고 폴더 또는 작업 영역을 다시 열거나 {0}을(를) 다시 시작하세요.",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0}은(는) cmd.exe를 통해 실행되지만 cmd.exe는 UNC 폴더 {1}에서 실행할 수 없습니다. {2}.path를 CLI 자체 프로그램 또는 Node 진입점으로 설정하세요",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0}은(는) Node 스크립트이지만 이를 실행할 Node가 PATH에 없습니다",

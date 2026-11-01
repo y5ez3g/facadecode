@@ -277,6 +277,8 @@
 	"Disconnected; exit cause unknown": "连接断开（退出原因未知）",
 	"Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.": "无法删除工作树“{0}”：工作树“{1}”位于其中。请先删除或移走该工作树，然后重试。",
 	"Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.": "无法删除工作树“{0}”：无法确认其中 agent 的进程已结束。请在其结束后重试。",
+	"Cannot delete worktree \"{0}\": it contains a link to another folder ({1}), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.": "无法删除工作树“{0}”：其中包含指向其他目录的链接（{1}），此版本的 Git 会顺着该链接删除那个目录中的内容。请移除该链接，或将 Git 更新到 2.54 或更高版本后重试。",
+	"Deleted worktree \"{0}\", but Git left its folder {1} behind.": "已删除工作树“{0}”，但 Git 留下了它的目录 {1}。",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "此窗口的 Facade Code 记录已损坏，无法在此恢复其 Agent。请关闭此窗口并重新打开其文件夹或工作区，或重启 {0}。",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，而 cmd.exe 无法在 UNC 文件夹 {1} 中运行；请将 {2}.path 设置为 CLI 自身的程序或 Node 入口点",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} 是 Node 脚本，但 PATH 上没有可运行它的 Node",

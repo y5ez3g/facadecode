@@ -337,6 +337,59 @@ export async function hasChanges(git: string, folder: string): Promise<boolean> 
 	return false;
 }
 
+/** What `git --version` answers, such as `git version 2.53.0.windows.3`. */
+export async function gitVersionOf(git: string): Promise<string> {
+	return (await runGit(git, ['--version'])).trim();
+}
+
+/**
+ * Whether the Git that answered `version` deletes what a link to a folder leads to, as part of a worktree it removes: Git for Windows
+ * before 2.54 follows NTFS junctions in `git worktree remove`, as its 2.54 release notes say. A version that cannot be read is taken
+ * to (WORKTREES-3.2).
+ */
+export function followsFolderLinks(version: string | undefined): boolean {
+	const found = /(\d+)\.(\d+)/.exec(version ?? '');
+	if (!found) {
+		return true;
+	}
+	const [major, minor] = [Number(found[1]), Number(found[2])];
+	return major < 2 || (major === 2 && minor < 54);
+}
+
+/**
+ * The first link to a folder within `folder` - an NTFS junction or a symbolic link to a directory, which Node tells as symbolic links -
+ * as its path from `folder`; undefined where there is none. No link is followed, folders are read one at a time, and the walk stops at
+ * the first link. A folder that cannot be read is passed over: Git could not delete through it either.
+ */
+export async function folderLinkIn(folder: string): Promise<string | undefined> {
+	const pending = [folder];
+	for (let dir = pending.pop(); dir !== undefined; dir = pending.pop()) {
+		let entries: fs.Dirent[];
+		try {
+			entries = await fs.promises.readdir(dir, { withFileTypes: true });
+		} catch {
+			continue;
+		}
+		for (const entry of entries) {
+			const full = path.join(dir, entry.name);
+			if (entry.isDirectory()) {
+				pending.push(full);
+			} else if (entry.isSymbolicLink()) {
+				// Any reparse point, as a directory read tells it: a link or junction leading to a folder, else what it is - a cloud file's folder
+				const link = await fs.promises.lstat(full).catch(() => undefined);
+				if (link?.isSymbolicLink()) {
+					if ((await fs.promises.stat(full).catch(() => undefined))?.isDirectory()) {
+						return path.relative(folder, full);
+					}
+				} else if (link?.isDirectory()) {
+					pending.push(full);
+				}
+			}
+		}
+	}
+	return undefined;
+}
+
 /**
  * Removes the linked worktree at `worktree` from the repository whose shared Git directory is `commonDir`: `git worktree remove`
  * without `--force`, so Git itself refuses one with changes, a locked one and the main worktree (WORKTREES-3.2, D73). Its branch

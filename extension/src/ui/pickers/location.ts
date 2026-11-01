@@ -70,6 +70,10 @@ function wordsOf(problem: WorktreeProblem): string {
 		case 'worktree_nested': return vscode.l10n.t("Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.", problem.name, problem.nested);
 		// {0} is the worktree's name
 		case 'agents_not_ended': return vscode.l10n.t("Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.", problem.name);
+		// {0} is the worktree's name, {1} the link inside it, as its path from the worktree's folder
+		case 'worktree_linked': return vscode.l10n.t("Cannot delete worktree \"{0}\": it contains a link to another folder ({1}), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.", problem.name, problem.link);
+		// {0} is the worktree's name, {1} its folder's full path
+		case 'worktree_left': return vscode.l10n.t("Deleted worktree \"{0}\", but Git left its folder {1} behind.", problem.name, problem.folder);
 		// {0} is the worktree's name, {1} what Git said
 		case 'deletion_failed': return deletionFailed(problem.name, problem.detail);
 	}

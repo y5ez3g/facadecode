@@ -56,6 +56,13 @@ export type WorktreeProblem =
 	| { readonly kind: 'worktree_nested'; readonly name: string; readonly nested: string }
 	/** An agent of the worktree `name` was closed, but its process could not be confirmed to have ended: nothing was deleted. */
 	| { readonly kind: 'agents_not_ended'; readonly name: string }
+	/**
+	 * The worktree `name` holds `link`, a junction or link to a folder, which this Git - Git for Windows before 2.54 - would delete
+	 * through: nothing was deleted.
+	 */
+	| { readonly kind: 'worktree_linked'; readonly name: string; readonly link: string }
+	/** Git removed the worktree `name` from its repository but left its folder `folder` behind, which Facade does not delete itself. */
+	| { readonly kind: 'worktree_left'; readonly name: string; readonly folder: string }
 	/** `git worktree remove` refused or failed; `detail` is what Git said. */
 	| { readonly kind: 'deletion_failed'; readonly name: string; readonly detail: string };
 
