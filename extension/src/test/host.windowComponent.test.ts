@@ -132,4 +132,21 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 		shown.dispose();
 		assert.strictEqual(editor.providers.size, 0);
 	});
+
+	test('the editor telling of the change before it activates the component: the component is asked for again, and the reload offered once it answers (ARCHITECTURE-4.3)', async function () {
+		this.timeout(10_000);
+		const editor = fakeEditor();
+		const shown = editor.component.showComponentMissing({ subscriptions: [] } as never, SESSION);
+		// Installed and enabled now, activated a moment later
+		editor.extensionsChanged.fire();
+		await new Promise(resolve => setTimeout(resolve, 700));
+		assert.strictEqual(editor.notices.filter(notice => notice.kind === 'information').length, 0);
+		editor.handlers.set(WINDOW_IDENTITY_COMMAND, () => IDENTITY);
+		const deadline = Date.now() + 3_000;
+		while (!editor.notices.some(notice => notice.kind === 'information')) {
+			assert.ok(Date.now() < deadline, 'the reload is offered once the component answers');
+			await new Promise(resolve => setTimeout(resolve, 50));
+		}
+		shown.dispose();
+	});
 });

@@ -24,6 +24,12 @@ export const COMPONENT_WAIT_MS = 60_000;
 const RETRY_MS = 500;
 
 /**
+ * How long after extensions change a missing component is asked for again: the editor tells of the change before it activates
+ * the component, whose command answers only then.
+ */
+const OFFER_WAIT_MS = 10_000;
+
+/**
  * This window's identity from its local component, as soon as it answers: at once, or once the editor installs or activates it,
  * within {@link COMPONENT_WAIT_MS}. None where it never answers, or answers for another window.
  */
@@ -95,17 +101,21 @@ export function showComponentMissing(context: vscode.ExtensionContext, session: 
 		}
 	});
 	let offered = false;
-	// Its command answering is what says it is there now, in whichever extension host the editor runs it
+	let asking = false;
+	// Its command answering is what says it is there now, in whichever extension host the editor runs it. The editor tells of the
+	// change before it activates the component: it is asked for a while, as activation waits for it (ARCHITECTURE-4.3)
 	const installed = vscode.extensions.onDidChange(async () => {
-		if (offered) {
+		if (offered || asking) {
 			return;
 		}
+		asking = true;
+		let identity: unknown;
 		try {
-			await vscode.commands.executeCommand(WINDOW_IDENTITY_COMMAND, session);
-		} catch {
-			return;
+			identity = await waitForWindowIdentity(session, OFFER_WAIT_MS);
+		} finally {
+			asking = false;
 		}
-		if (offered) {
+		if (!identity || offered) {
 			return;
 		}
 		offered = true;
