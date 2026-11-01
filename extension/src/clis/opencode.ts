@@ -84,7 +84,7 @@ export function openCodeSession({ file, env, platform }: SessionIntegrationInput
 		]
 	};
 }
-import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';
+import { McpServer, MOST_CALL_SECONDS, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** OpenCode's inline configuration: read after its configuration files, it goes on them for the run alone (CLIS-1.2). */
 export const OPENCODE_CONFIG = 'OPENCODE_CONFIG_CONTENT';
@@ -93,7 +93,7 @@ export const OPENCODE_CONFIG = 'OPENCODE_CONFIG_CONTENT';
 const SKILL_PATH = path.join('skills', SERVER_NAME, 'SKILL.md');
 
 /** How long one call to the server may take, in milliseconds: its default 30 seconds is shorter than a start may be. */
-const CALL_MS = 3_600_000;
+const CALL_MS = MOST_CALL_SECONDS * 1000;
 
 /**
  * The run's inline configuration: the server, its tools - named `facade_<tool>` - allowed whatever the person's own rules say, a rule

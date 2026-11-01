@@ -65,7 +65,7 @@ function inlineToml(value: unknown): string | undefined {
 	if (!parts || parts.some(part => part === undefined)) { return undefined; }
 	return Array.isArray(value) ? `[${parts.join(',')}]` : `{${parts.join(',')}}`;
 }
-import { SERVER_NAME, ToolsIntegration } from './tools';
+import { MOST_CALL_SECONDS, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** A TOML basic string for Codex's per-launch configuration (CLIS-3.2), including every control character. */
 export function tomlString(text: string): string {
@@ -127,7 +127,7 @@ export const codexAdapter: CliAdapter = {
 			'-c', 'mcp_servers.facade.args=${mcpArgs}',
 			'-c', 'mcp_servers.facade.env=${mcpEnv}',
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
-			'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
+			'-c', `mcp_servers.facade.tool_timeout_sec=${MOST_CALL_SECONDS}`,
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
 			// Its first model request waits this long for the server, not its 1 s default, which leaves a slow start out (D101)
 			'-c', 'mcp_optional_startup_grace_ms=10000'

@@ -139,7 +139,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			'-c', 'mcp_servers.facade.args=["/ext/\\"quoted\\"/shim.js"]',
 			'-c', 'mcp_servers.facade.env={ "ELECTRON_RUN_AS_NODE" = "1", "FACADE_RUN" = "run-1", "FACADE_PTYD" = "/tmp/ptyd.sock", "A.B" = "x\\ny" }',
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
-			'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
+			'-c', 'mcp_servers.facade.tool_timeout_sec=3660',
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
 			// Its first turn waits for a server that starts slowly, as T3 Code found it must (D101)
 			'-c', 'mcp_optional_startup_grace_ms=10000',
@@ -166,7 +166,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
 		const loaded = await importModule(pathToFileURL(extension).href);
 		loaded.default({ registerMcpServer: (name: string, config: unknown) => registered.push([name, config]) });
-		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3600, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
+		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3660, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
 	});
 
 	test('Antigravity: a plugin in the folder\'s .agents/plugins/facade, shared, the run\'s variables in its environment; its tools allowed for the session beside the person\'s own rules; its MCP panel opened before the first turn', () => {
@@ -227,7 +227,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		const skill = path.join(tools.runDir, 'skills', 'facade', 'SKILL.md');
 		assert.deepStrictEqual(planned.args, ['--standalone', '--prompt', 'Explain main.ts']);
 		assert.deepStrictEqual(planned.injection!.runFiles, [{ path: skill, content: FACADE_SKILL }]);
-		const facade = { type: 'local', command: [SERVER.command, ...SERVER.args], environment: SERVER.env, enabled: true, timeout: 3_600_000 };
+		const facade = { type: 'local', command: [SERVER.command, ...SERVER.args], environment: SERVER.env, enabled: true, timeout: 3_660_000 };
 		assert.deepStrictEqual(JSON.parse(planned.env.OPENCODE_CONFIG_CONTENT), { mcp: { facade }, permission: { 'facade_*': 'allow' }, instructions: [skill] });
 		assert.deepStrictEqual(planned.injection!.project, []);
 		// The person's own inline configuration stays, Facade's rule after theirs
