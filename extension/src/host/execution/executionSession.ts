@@ -52,6 +52,8 @@ export class ExecutionSession {
 	}
 
 	get closed(): boolean { return this.disposed || this.transferredAway; }
+	/** This activation's claim, which fences what it writes beside its runs. */
+	get ownerClaim(): OwnerClaim { return this.claim; }
 	get ownershipLost(): boolean { return this.transferredAway; }
 	get current(): Promise<PtydClient> | undefined { return this.connection; }
 	get needsRecovery(): boolean { return this.lost; }

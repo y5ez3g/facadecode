@@ -610,6 +610,25 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([identified, nextIdentified], [[], []]);
 	});
 
+	test('a close its ptyd did not confirm is recorded: a reload before then ends the run and does not show it again (ARCHITECTURE-2.3, LIFECYCLE-3.1)', async function () {
+		this.timeout(20_000);
+		const first = portOf();
+		first.openPair(facts('run-48'), { reveal: false });
+		open(terminals[0]);
+		await first.spawn('run-48', plan(QUIET), meta('run-48'));
+		await until('its screen', () => screenOf(terminals[0]).includes('ready'));
+		failTerminateOnce = true;
+		first.removePair('run-48');
+		assert.strictEqual(await first.terminate('run-48'), 'unconfirmed');
+		// The window reloads before its next check would end the run
+		ports.splice(ports.indexOf(first), 1);
+		first.dispose();
+		const next = portOf();
+		assert.deepStrictEqual(await next.live(), [], 'a run the person closed is not shown again');
+		await until('the run ended and forgotten', async () => !(await next.allRunIds()).includes('run-48') && (await next.live()).length === 0);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(home, 'workspaces', 'workspace-1', 'closing.json'), 'utf8')), [], 'its record goes once ptyd confirms it');
+	});
+
 	test('a window that shows no run connects again when its connection goes: its claim, which ptyd would let expire, is kept (RULES-4.1, D75)', async function () {
 		this.timeout(20_000);
 		const port = portOf();

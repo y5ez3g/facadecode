@@ -4,10 +4,13 @@
 
 import { SessionIdentity } from './sessionIdentity';
 import type { ConversationKey } from '../../core/ports';
+import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { replaceFile } from '../../base/files';
+import { writeAsOwner } from '../../record/ownership';
 import { timeout } from '../../base/async';
 import type { TerminalOwner } from '../../base/windowIdentity';
 import { activityOf, cliTitle, interruptVerified } from '../../clis/activity';
@@ -567,10 +570,43 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		if (!pair || (!pair.process && !pair.starting) || this.session.ownershipLost) {
 			return;
 		}
+		// Recorded until ptyd confirms it: a reload before then ends the run, and never shows it again (ARCHITECTURE-2.3)
+		this.markClosing(run, true);
 		if (pair.exited) {
 			void this.forget(run);
 		} else {
 			void this.cleanup(run);
+		}
+	}
+
+	/** Where the runs whose close ptyd has not confirmed yet are recorded, beside this window's runs. */
+	private get closingFile(): string {
+		return path.join(this.options.home, 'workspaces', this.options.owner, 'closing.json');
+	}
+
+	/** The runs whose close the person made and ptyd has not confirmed: none where the record cannot be read. */
+	private closing(): Set<RunId> {
+		try {
+			const value: unknown = JSON.parse(fs.readFileSync(this.closingFile, 'utf8'));
+			return new Set(Array.isArray(value) ? value.filter((run): run is RunId => typeof run === 'string') : []);
+		} catch {
+			return new Set();
+		}
+	}
+
+	/** Records `run` as closed and not confirmed yet, or takes it out once ptyd forgot it: only while this activation owns the runs. */
+	private markClosing(run: RunId, closing: boolean): void {
+		try {
+			writeAsOwner(this.session.ownerClaim, this.options.home, () => {
+				const runs = this.closing();
+				if (runs.has(run) === closing) {
+					return;
+				}
+				if (closing) { runs.add(run); } else { runs.delete(run); }
+				replaceFile(this.closingFile, `${JSON.stringify([...runs])}\n`);
+			});
+		} catch (err) {
+			this.options.log(`Could not record the close of ${run}: ${messageOf(err)}`);
 		}
 	}
 
@@ -628,6 +664,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			}
 		}
 		const runs: LiveRun[] = [];
+		const closing = this.closing();
 		for (const [protocol, run] of listed) {
 			// One run ID is one run: this window's own ptyd first, as it starts no run in another
 			if (!isRunMeta(run.meta) || runs.some(each => each.run === run.run)) {
@@ -635,6 +672,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			}
 			if (protocol !== PTYD_PROTOCOL) {
 				this.where.set(run.run, protocol);
+			}
+			if (closing.has(run.run)) {
+				// The person closed it before a reload, and ptyd had not confirmed it: it ends now, and is not shown (ARCHITECTURE-2.3)
+				closing.delete(run.run);
+				void this.cleanup(run.run);
+				continue;
 			}
 			runs.push({
 				run: run.run,
@@ -644,6 +687,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				...(run.exited ? { exited: this.exitOf(String(run.meta.cli), run.exited) } : {}),
 				claimedElsewhere: run.claimedElsewhere
 			});
+		}
+		// Closed and listed by no ptyd now: ended and gone meanwhile, its record taken out as ptyd says so
+		for (const run of closing) {
+			void this.cleanup(run);
 		}
 		return runs;
 	}
@@ -891,6 +938,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 		this.pendingForget.delete(run);
 		this.where.delete(run);
+		this.markClosing(run, false);
 	}
 
 	private transferred(): void {
