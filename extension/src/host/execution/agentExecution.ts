@@ -531,7 +531,17 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			pair.terminal.pty.exited(this.endLine(info.exited));
 		}
 		this.tell(pair);
-		return this.openRestored(pair, live.run);
+		await this.openRestored(pair, live.run);
+		const exit = info.exited;
+		if (exit && !live.exited) {
+			// It ended after it was listed, before it was claimed: ptyd told nobody, as nobody claimed it. Told once the core shows it,
+			// as the core tells the end of one the listing said ended, so that its card does not stay running for good (RULES-3.3)
+			setImmediate(() => {
+				if (this.pairs.get(live.run) === pair) {
+					this.exits.fire({ run: live.run, ...this.exitOf(pair.cli, exit) });
+				}
+			});
+		}
 	}
 
 	/**

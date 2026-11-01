@@ -556,6 +556,34 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await next.terminate('run-45'), 'terminated');
 	});
 
+	test('a run that ends after a reloaded window lists it, before the window claims it, is told ended once the window shows it: its card does not stay running (RULES-3.3)', async function () {
+		this.timeout(20_000);
+		const first = portOf();
+		first.openPair(facts('run-46'), { reveal: false });
+		open(terminals[0]);
+		await first.spawn('run-46', plan(`process.stdout.write('ready\\r\\n'); setTimeout(() => process.exit(5), 3000);`), meta('run-46'));
+		await until('its screen', () => screenOf(terminals[0]).includes('ready'));
+		ports.splice(ports.indexOf(first), 1);
+		first.dispose();
+		const next = portOf();
+		const exits: ExitReport[] = [];
+		next.onDidExit(exit => exits.push(exit));
+		const listed = await until('the run listed, still running', async () => {
+			const runs = await next.live();
+			return runs.length === 1 && !runs[0].exited && runs;
+		});
+		await until('the run ended, unclaimed', async () => (await next.live())[0]?.exited, 10_000);
+		const count = terminals.length;
+		const attaching = next.attach(listed[0], facts('run-46'));
+		await until('its restored terminal', () => terminals.length > count);
+		open(terminals[terminals.length - 1]);
+		await attaching;
+		assert.deepStrictEqual(exits, [], 'told once the core has shown it');
+		await until('its end told', () => exits.length > 0);
+		assert.deepStrictEqual(exits, [{ run: 'run-46', code: 5, interruptVerified: false }]);
+		assert.ok(screenOf(terminals[terminals.length - 1]).includes('[Agent process exited with code 5]'));
+	});
+
 	test('a window that shows no run connects again when its connection goes: its claim, which ptyd would let expire, is kept (RULES-4.1, D75)', async function () {
 		this.timeout(20_000);
 		const port = portOf();
