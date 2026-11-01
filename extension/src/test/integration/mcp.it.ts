@@ -256,11 +256,18 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 
 		// What Copy Diagnostics copies, with both agents running (ARCHITECTURE-3.3, D116, D117): the versions, each agent with what its
 		// input reads and its last rows, and the log with each tool call, the home folder written ~
-		const diagnostics = await vscode.commands.executeCommand<string>('facade.diagnostics');
+		const inputLine = (each: string) => new RegExp(`^- @\\S+ ${each} run-\\w+: .*\\n {2}running, .*; tools available; input reader ${INPUT[CLI]}, reads usable\\n {2}\\| `, 'm');
+		let diagnostics = '';
+		// The background terminal can still receive its first resize after the child prints its task. During that redraw
+		// an unknown input is correct; judge the completed screen and tool connection, not an arbitrary startup instant.
+		await until('both agents\' completed diagnostic screens', async () => {
+			diagnostics = await vscode.commands.executeCommand<string>('facade.diagnostics');
+			return [alias, childAlias].every(each => inputLine(each).test(diagnostics)) ? true : undefined;
+		}, 10_000).catch(error => { throw new Error(`${String(error)}\n${diagnostics}`); });
 		const version = vscode.extensions.getExtension('facade.facadecode')!.packageJSON.version as string;
 		assert.ok(diagnostics.startsWith('Facade Code diagnostics, ') && diagnostics.includes(`\nFacade Code ${version}; window component ${version}; `), diagnostics.slice(0, 400));
 		for (const each of [alias, childAlias]) {
-			assert.match(diagnostics, new RegExp(`^- @\\S+ ${each} run-\\w+: .*\\n {2}running, .*; input reader ${INPUT[CLI]}, reads usable\\n {2}\\| `, 'm'), diagnostics);
+			assert.match(diagnostics, inputLine(each), diagnostics);
 		}
 		for (const tool of ['list_start_options', 'start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
 			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms$`, 'm'), `${tool} is logged`);
