@@ -8,6 +8,7 @@ import * as path from 'path';
 import { pathToFileURL } from 'url';
 import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
+import { piSessionFolderName } from '../../clis/history/pi';
 import type { PanelState } from '../../webview/protocol';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -56,7 +57,8 @@ function resumeFixture(cwd: string): { sessionId: string; args: string[] } {
 			{ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: title }] } }
 		].map(value => JSON.stringify(value)).join('\n'));
 	} else if (CLI === 'pi') {
-		write(path.join(AGENTS_HOME!, '.pi', 'agent', 'sessions', '--integration--', `${id}.jsonl`), [
+		// In the folder Pi 1.4 keeps the sessions of `cwd` in, named for it, where its history reader looks
+		write(path.join(AGENTS_HOME!, '.pi', 'agent', 'sessions', piSessionFolderName(cwd), `${id}.jsonl`), [
 			{ type: 'session', version: 3, id, cwd }, { type: 'message', message: { role: 'user', content: title } }
 		].map(value => JSON.stringify(value)).join('\n'));
 	} else if (CLI === 'agy') {

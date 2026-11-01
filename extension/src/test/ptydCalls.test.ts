@@ -110,7 +110,8 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		await spawn(first, 'r1');
 		const shim = await shimOf('r1');
 		assert.deepStrictEqual(shim.hello, { id: 1, result: { protocol: PTYD_PROTOCOL, pid: process.pid } });
-		assert.deepStrictEqual(await until('the tools event', () => toolsOf(events).length && toolsOf(events)), [{ event: 'tools', run: 'r1' }]);
+		// A count of 0 is no answer: `until` waits until the event came
+		assert.deepStrictEqual(await until('the tools event', () => toolsOf(events).length > 0 && toolsOf(events)), [{ event: 'tools', run: 'r1' }]);
 		// The window reloads: the one that claims the run next is told, once however often it attaches
 		first.dispose();
 		await until('the claim to go', async () => !(await shim.ask('call', { caller: 'r1', elapsedMs: CLAIM_WAIT_MS })).result);
