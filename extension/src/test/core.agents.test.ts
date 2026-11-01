@@ -454,13 +454,15 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.ok(world.log.some(line => /Could not remove the kept record of run-.*: Timed out/.test(line)));
 	});
 
-	test('closing during startup prevents the later spawn (WORKTREES-2.5, RULES-5.2)', async () => {
+	test('closing during startup prevents the later spawn; one already asked for is ended, and the close says how it went, never that nothing started - a worktree is deleted only once its processes ended (WORKTREES-2.5, 3.2, RULES-5.2)', async () => {
 		const world = setUp();
 		let release!: () => void;
 		world.execution.spawnGate = new Promise(resolve => release = resolve);
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		assert.strictEqual(await world.agents.close(id), 'not_started');
+		world.execution.cleanup = 'unconfirmed';
+		assert.strictEqual(await world.agents.close(id), 'unconfirmed');
+		assert.deepStrictEqual(world.execution.terminated, [id]);
 		release();
 		await settle();
 		assert.strictEqual(world.agents.get(id), undefined);

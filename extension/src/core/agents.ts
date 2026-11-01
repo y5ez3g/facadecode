@@ -57,6 +57,8 @@ interface Run {
 	closing: boolean;
 	/** Settles once its process started, its launch failed or it was closed first (MCP-2.3). */
 	settled: Promise<void>;
+	/** Whether its process was asked for and the answer is not in yet: a close then cannot say none started (WORKTREES-3.2). */
+	spawning?: boolean;
 	/** How its creation prompt goes in, once planned. */
 	prompt?: LaunchPlan['prompt'];
 	/** Settles once what its start types before its first turn is done or given up (COLLABORATION-2.2). */
@@ -530,7 +532,8 @@ export class AgentService implements Agents, Disposable {
 		}, 'lifecycle');
 		try {
 			const meta = metaOf(run.facts, run.exactResume);
-			const started = await this.deps.execution.spawn(run.facts.id, plan, meta);
+			run.spawning = true;
+			const started = await this.deps.execution.spawn(run.facts.id, plan, meta).finally(() => { run.spawning = false; });
 			if (!this.live(run)) {
 				return;
 			}
@@ -632,11 +635,13 @@ export class AgentService implements Agents, Disposable {
 			this.deps.log.event(`Closed ${run.facts.alias}`);
 			return 'already_ended';
 		}
-		if (run.facts.pid === undefined) {
-			// Closed before its process started: it never starts; one already spawning is ended in the background (WORKTREES-2.5)
+		if (run.facts.pid === undefined && !run.spawning) {
+			// Closed before its process was asked for: it never starts (WORKTREES-2.5)
 			this.deps.log.event(`Closed ${run.facts.alias} before its process started`);
 			return 'not_started';
 		}
+		// A process asked for may be starting now: ended as it starts, the close answers how that went - never that none started, for a
+		// deletion that waits for every process of a worktree to end (WORKTREES-3.2, LIFECYCLE-4.2)
 		const result = await this.deps.execution.terminate(id).catch(err => {
 			this.deps.log.event(`Could not end ${run.facts.alias}: ${messageOf(err)}`);
 			return 'failed' as const;
