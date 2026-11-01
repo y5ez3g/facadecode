@@ -104,8 +104,10 @@ export class ExecutionSession {
 				client.onDidClose(() => {
 					if (this.connection === connection) {
 						this.connection = undefined;
-						this.options.log('The connection to ptyd closed: agents keep running, and this window claims them again.');
-						this.lose(PTYD_PROTOCOL);
+						if (!this.closed) {
+							this.options.log('The connection to ptyd closed: agents keep running, and this window claims them again.');
+							this.lose(PTYD_PROTOCOL);
+						}
 					}
 				});
 				void this.earlier.find();
@@ -140,6 +142,8 @@ export class ExecutionSession {
 		this.earlier.dispose();
 		clearInterval(this.reconcileTimer);
 		clearTimeout(this.reconnectTimer);
+		// Its connection claims nothing any more: let go of, so that the ptyd holds no socket for a window that shows no run of it
+		void this.connection?.then(client => client.dispose(), () => undefined);
 		this.options.transferred();
 	}
 

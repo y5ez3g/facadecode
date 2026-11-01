@@ -128,7 +128,8 @@ suite('Execution session: ownership and recovery across asynchronous boundaries'
 		await session.recover(true, async () => { batches++; return true; });
 		await assert.rejects(session.client(), PtydNotSent);
 		assert.deepStrictEqual([session.ownershipLost, transfers, batches], [true, 1, 2]);
+		assert.strictEqual(peers[0].disposals, 1, 'a transferred activation lets go of its connection, which claims nothing any more');
 		await clock.tick(3_000);
-		assert.deepStrictEqual([reconnects, reconciles], [0, 0], 'a transferred activation owns no more scheduled work');
+		assert.deepStrictEqual([reconnects, reconciles, peers.length], [0, 0, 1], 'a transferred activation owns no more scheduled work, and connects no more');
 	});
 });
