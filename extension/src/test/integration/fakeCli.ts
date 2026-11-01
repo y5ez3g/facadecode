@@ -403,6 +403,8 @@ interface Step {
 	readonly save?: { readonly [name: string]: string };
 	/** Repeats the call, a fifth of a second apart, until its answer contains this text, for at most `wait` milliseconds (10 s). */
 	readonly until?: string;
+	/** Also wait for this text to disappear, so an acknowledged key need not have redrawn its terminal already. */
+	readonly untilAbsent?: string;
 	readonly wait?: number;
 }
 
@@ -444,7 +446,9 @@ async function drive(server: { command: string; args: string[]; env: { [name: st
 		for (const step of steps) {
 			let answer = await request('tools/call', { name: step.tool, arguments: filled(step.arguments) });
 			const end = Date.now() + (step.wait ?? 10_000);
-			while (step.until && !JSON.stringify(answer).includes(step.until) && Date.now() < end) {
+			const waitingForScreen = () => (step.until && !JSON.stringify(answer).includes(step.until))
+				|| (step.untilAbsent && JSON.stringify(answer).includes(step.untilAbsent));
+			while (waitingForScreen() && Date.now() < end) {
 				await new Promise(resolve => setTimeout(resolve, 200));
 				answer = await request('tools/call', { name: step.tool, arguments: filled(step.arguments) });
 			}

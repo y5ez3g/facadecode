@@ -71,6 +71,7 @@ interface Step {
 	readonly arguments: { readonly [key: string]: unknown };
 	readonly save?: { readonly [name: string]: string };
 	readonly until?: string;
+	readonly untilAbsent?: string;
 	readonly wait?: number;
 }
 
@@ -215,7 +216,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'typed by its creator' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'typed by its creator' },
 			{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
-			{ tool: 'read_screen', arguments: { agent: '$child' } }
+			// Keys sent is not a redraw barrier: wait for the CLI to consume Ctrl+U and paint its now-empty input.
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', untilAbsent: 'typed by its creator' }
 		]);
 		const options = ran.content('list_start_options');
 		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
@@ -252,6 +254,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.deepStrictEqual([ran.content('type_text')?.status, ran.content('type_text')?.effects.text_written, ran.content('type_text')?.effects.enter_written], ['success', 'full', false]);
 		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('typed by its creator'), 'direct text is a draft in its box');
 		assert.deepStrictEqual([ran.content('press_keys')?.status, ran.content('press_keys')?.effects.keys_sent], ['success', 1], JSON.stringify(ran.content('press_keys')));
+		assert.strictEqual(ran.content('read_screen', 2)?.status, 'success', JSON.stringify(ran.content('read_screen', 2)));
+		assert.ok(JSON.stringify(ran.content('read_screen', 2)).includes('Review the README.'), 'the completed screen keeps its earlier output');
 		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
 
 		// What Copy Diagnostics copies, with both agents running (ARCHITECTURE-3.3, D116, D117): the versions, each agent with what its
