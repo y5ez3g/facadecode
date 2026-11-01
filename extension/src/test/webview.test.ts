@@ -117,7 +117,8 @@ suite('The agent panel in Chromium', function () {
 		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 2, mobile: false });
 		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
 		await load();
-		await wait(30);
+		// The initial cards schedule a ResizeObserver update; input tests need its overlay ready first.
+		await until(() => evaluate(`!document.querySelector('.facade-scrollbar').hidden && document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().height > 0`));
 		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 

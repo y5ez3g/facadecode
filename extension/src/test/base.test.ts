@@ -5,7 +5,7 @@
 
 import * as assert from 'assert';
 import { spawn, spawnSync } from 'child_process';
-import { getEventListeners } from 'events';
+import { getEventListeners, once } from 'events';
 import * as fs from 'fs';
 import * as path from 'path';
 import { sleepSync, timeout } from '../base/async';
@@ -219,29 +219,36 @@ suite('Base: files', () => {
 		if (process.platform !== 'win32') {
 			this.skip();
 		}
-		this.timeout(10_000);
+		this.timeout(30_000);
 		const file = path.join(temp.dir, 'held.json');
 		fs.writeFileSync(file, 'old');
 		// Opened sharing nothing, as a scanner may hold it, for a quarter of a second: until then it cannot be replaced.
 		// Direct sleep avoids counting PowerShell's first module import as part of the intended 250 ms hold.
 		const script = '$file = [System.IO.File]::Open($env:HELD, \'Open\', \'Read\', \'None\'); [Console]::Out.Write(\'held\'); [Console]::Out.Flush(); [System.Threading.Thread]::Sleep(250); $file.Close()';
-		const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, HELD: file } });
-		await new Promise(resolve => holder.stdout.once('data', resolve));
-		const exited = new Promise(resolve => holder.once('exit', resolve));
-		// A rename over it fails while it is held: replaceFile gets through only by trying again.
-		const probe = path.join(temp.dir, 'probe');
-		fs.writeFileSync(probe, 'probe');
-		let whileHeld = 'renamed';
+		// Allow cold PowerShell startup separately from the 250 ms hold, and subscribe before awaiting its output.
+		const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, HELD: file }, windowsHide: true, timeout: 20_000 });
+		const exited = once(holder, 'close');
+		let errors = '';
+		holder.stderr.on('data', data => { errors += data; });
 		try {
-			fs.renameSync(probe, file);
-		} catch (err) {
-			whileHeld = codeOf(err) ?? messageOf(err);
-		}
-		fs.rmSync(probe, { force: true });
-		replaceFile(file, 'new');
-		await exited;
+			await Promise.race([once(holder.stdout, 'data'), exited.then(([code, signal]) => { throw new Error(`File holder closed before acquiring the lock (${code ?? signal}): ${errors}`); })]);
+			// A rename over it fails while it is held: replaceFile gets through only by trying again.
+			const probe = path.join(temp.dir, 'probe');
+			fs.writeFileSync(probe, 'probe');
+			let whileHeld = 'renamed';
+			try {
+				fs.renameSync(probe, file);
+			} catch (err) {
+				whileHeld = codeOf(err) ?? messageOf(err);
+			}
+			fs.rmSync(probe, { force: true });
+			replaceFile(file, 'new');
+			assert.strictEqual((await exited)[0], 0, errors);
 
-		assert.deepStrictEqual({ whileHeld, content: fs.readFileSync(file, 'utf8'), left: fs.readdirSync(temp.dir) }, { whileHeld: 'EPERM', content: 'new', left: ['held.json'] });
+			assert.deepStrictEqual({ whileHeld, content: fs.readFileSync(file, 'utf8'), left: fs.readdirSync(temp.dir) }, { whileHeld: 'EPERM', content: 'new', left: ['held.json'] });
+		} finally {
+			holder.kill();
+		}
 	});
 
 	test('a JSON file is read with the layout it has - its byte order mark, line endings, indentation and final newline - and written back in it', () => {
