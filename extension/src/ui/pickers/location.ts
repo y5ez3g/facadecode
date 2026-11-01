@@ -540,7 +540,10 @@ export function copyPathAction(destination: string): StepAction {
  * the caller decides when to create. Back and Escape return without accepting a plan or starting creation.
  */
 export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source: Location, asked: WorktreeRefInput): Promise<WorktreePlan | typeof BACK | undefined> {
+	const prefix = asked.kind === 'branch' ? branchPrefixOf(source).trim() : '';
 	const value = asked.kind === 'branch' ? asked.value ?? branchPrefixOf(source) : asked.value;
+	/** Whether `text` names no branch yet: nothing typed, or git.branchPrefix alone (LIFECYCLE-1.3). */
+	const unnamed = (text: string) => !text.trim() || (prefix !== '' && text.trim() === prefix);
 	/** The plans the checks made, by the text each was for: the one taken is never planned twice. */
 	const plans = new Map<string, WorktreePlan>();
 	const typed = await flow.text({
@@ -551,9 +554,11 @@ export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source
 		placeholder: asked.kind === 'branch' ? vscode.l10n.t("Branch name") : vscode.l10n.t("Commit, branch, or tag (e.g. HEAD)"),
 		prompt: asked.kind === 'branch' ? vscode.l10n.t("Starts from {0}", asked.base ?? worktreeSourceLabel(source)) : vscode.l10n.t("Base ref for {0}", asked.branch),
 		back: asked.back,
+		// The prefix the field starts with is where the person types, not a branch to judge yet
+		pristine: asked.kind === 'branch' && prefix !== '' && unnamed(value),
 		validate: value => {
 			asked.typed?.(value);
-			return value.trim() ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' });
+			return !unnamed(value) ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' });
 		},
 		check: async value => {
 			try {

@@ -45,6 +45,8 @@ interface TextOptions {
 	readonly placeholder?: string;
 	readonly prompt?: string;
 	readonly back?: boolean;
+	/** Whether `value` is only where typing starts, as a branch prefix: nothing is said of it until it is edited or Enter is pressed. */
+	readonly pristine?: boolean;
 	/** Why the text cannot be taken, shown under the field as it is typed; Enter takes only a text without one (UX-1.1). */
 	readonly validate?: (value: string) => string | undefined;
 	/**
@@ -161,8 +163,8 @@ export class Flow {
 				timer = setTimeout(() => void runCheck(value), CHECK_DELAY_MS);
 			}
 		};
-		// An empty field is no mistake yet: what is wrong is said as the person types
-		if (options.value) {
+		// An empty field is no mistake yet, nor one that holds only where typing starts: what is wrong is said as the person types
+		if (options.value && !options.pristine) {
 			changed(options.value);
 		}
 		return this.show<string | typeof BACK>(input, finish => {

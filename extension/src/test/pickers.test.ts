@@ -208,6 +208,33 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.strictEqual(ui.clipboard.length, 2);
 	});
 
+	test('LIFECYCLE-1.3: a branch input that starts with git.branchPrefix alone says nothing of it until the person types; the prefix alone names no branch', async () => {
+		const { Flow } = load<typeof import('../ui/pickers/stepping')>(require.resolve('../ui/pickers/stepping'));
+		const { askWorktreeRef } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+		ui.branchPrefix = 'feat/';
+		const planned: string[] = [];
+		const port: WorktreePort = {
+			availability: async () => ({ available: true }),
+			plan: async (source, branch) => { planned.push(branch); return { source, branch, baseRef: 'HEAD', baseCommit: 'abc', destination: `/repo.worktrees/${branch}` }; },
+			create: async () => { throw new Error('input must not create'); },
+			remove: async () => undefined
+		};
+		const result = askWorktreeRef(new Flow(), port, MAIN, { kind: 'branch', title: 'New Agent', back: true });
+		const input = ui.current!;
+		await new Promise(resolve => setTimeout(resolve, 200));
+		const opened = [input.value, input.prompt, input.validationMessage, [...planned]];
+		input.type('feat/x');
+		input.type('feat/');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		const prefixAgain = [input.validationMessage, [...planned]];
+		input.accept();
+		await settle();
+		const entered = [input.shown, input.validationMessage];
+		input.hide();
+		assert.strictEqual(await result, undefined);
+		assert.deepStrictEqual([opened, prefixAgain, entered], [['feat/', 'Starts from main', undefined, []], ['Enter a branch name.', []], [true, 'Enter a branch name.']]);
+	});
+
 	test('a remote environment is named as VS Code\'s remote indicator names it, from the authority the local window sees (LIFECYCLE-1.1, D67)', () => {
 		const { environmentLabel } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
 		const hex = Buffer.from(JSON.stringify({ hostName: 'build.example.com', user: 'me' })).toString('hex');
