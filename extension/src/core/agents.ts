@@ -2,6 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { timeout, untilAnswered } from '../base/async';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { displayLine } from '../base/text';
@@ -43,6 +44,8 @@ export interface AgentServiceDeps {
 	 */
 	readonly warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
 	readonly newRunId: () => RunId;
+	/** Waits `ms` before a listing that failed is asked again; the service's own timer where none is given. */
+	readonly wait?: (ms: number) => Promise<void>;
 }
 
 interface Run {
@@ -73,6 +76,9 @@ function keyOf(facts: RunFacts): ConversationKey | undefined {
 }
 function sameConversation(a: ConversationKey, b: ConversationKey): boolean { return conversationId(a) === conversationId(b); }
 const RESTORE_CONCURRENCY = 2;
+/** How long a failed listing of the running conversations waits before it is asked again, at first and at most. */
+const CONVERSATIONS_RETRY_MS = 2_000;
+const MOST_CONVERSATIONS_RETRY_MS = 30_000;
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -87,6 +93,8 @@ export class AgentService implements Agents, Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	private ownershipLost = false;
 	private disposed = false;
+	/** Aborted as the service is disposed: what waits on a timer stops waiting. */
+	private readonly stopping = new AbortController();
 	private readonly elsewhere = new Set<string>();
 	private readonly restoring = new Set<RunId>();
 	private pinsRestored = false;
@@ -148,6 +156,7 @@ export class AgentService implements Agents, Disposable {
 
 	dispose(): void {
 		this.disposed = true;
+		this.stopping.abort();
 		for (const subscription of this.subscriptions) {
 			subscription.dispose();
 		}
@@ -756,8 +765,22 @@ export class AgentService implements Agents, Disposable {
 	async restorePins(): Promise<void> {
 		if (this.pinsRestored || this.ownershipLost || this.disposed) { return; }
 		this.pinsRestored = true;
-		await this.refreshConversations().catch(err => this.deps.log.event(`Could not list running conversations before restoring Pins: ${messageOf(err)}`));
-		if (this.ownershipLost || this.disposed) { return; }
+		// The conversations running in every ptyd of this environment first: one that does not answer - an earlier protocol's, whose runs
+		// a first restore may not have shown - is asked again, never guessed, as a Pin started meanwhile runs one twice (LIFECYCLE-3.5)
+		let failure: string | undefined;
+		const listed = await untilAnswered(() => this.refreshConversations().then(() => true as const), {
+			first: CONVERSATIONS_RETRY_MS,
+			most: MOST_CONVERSATIONS_RETRY_MS,
+			stopped: () => this.ownershipLost || this.disposed,
+			failed: err => {
+				if (messageOf(err) !== failure) {
+					failure = messageOf(err);
+					this.deps.log.event(`Could not list the conversations running in this environment; the Pins are restored once they are known: ${failure}`);
+				}
+			},
+			wait: ms => this.deps.wait?.(ms) ?? timeout(ms, this.stopping.signal).catch(() => undefined)
+		});
+		if (!listed || this.ownershipLost || this.disposed) { return; }
 		this.unpinRemoved();
 		// A Pin a card already holds - running, or retained red after an abnormal exit or a failed restore - is not started again
 		// on a reload: restoration happens once per opening, without a restart loop (RULES-4.2)

@@ -901,6 +901,26 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.strictEqual(world.plans.length, 2, 'queued third Pin never starts after disposal');
 	});
 
+	test('Pins are restored only once the running conversations are known in every ptyd: a listing that fails is asked again, never guessed (LIFECYCLE-3.5, RULES-4.2)', async () => {
+		const world = setUp();
+		const deps = (world.agents as unknown as { deps: { pinStore: { save(p: Pin): void }; wait?: (ms: number) => Promise<void> } }).deps;
+		// One runs in a ptyd of an earlier protocol that is not answering yet; the other runs nowhere
+		deps.pinStore.save({ id: 'pin-held', conversation: { ...ENTRY.key, sessionId: 'held' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Held' });
+		deps.pinStore.save({ id: 'pin-free', conversation: { ...ENTRY.key, sessionId: 'free' }, location: 'loc-1', cwd: ENTRY.cwd, name: 'Free' });
+		let asked = 0;
+		world.execution.conversations = async () => {
+			if (++asked < 3) {
+				throw new Error('The ptyd of protocol 9 took no connection now.');
+			}
+			return [{ ...ENTRY.key, sessionId: 'held' }];
+		};
+		const waits: number[] = [];
+		deps.wait = async ms => { waits.push(ms); assert.deepStrictEqual(world.plans, [], 'nothing starts while the listing is incomplete'); };
+		await world.agents.restorePins();
+		assert.deepStrictEqual([asked, waits.length, world.plans.map(plan => plan.resume?.sessionId)], [3, 2, ['free']]);
+		assert.strictEqual(world.log.filter(line => /Could not list the conversations running/.test(line)).length, 1, 'the same failure said once');
+	});
+
 	test('manual Resume after an explicit Unpin does not restore that Pin', async () => {
 		const world = setUp();
 		const first = world.agents.resume(ENTRY, { reveal: true }) as RunId;
