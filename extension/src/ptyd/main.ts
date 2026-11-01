@@ -5,19 +5,12 @@
 // ptyd's entry: `node ptyd.js <socket> [<log file>]`, started detached by the first window that needs it, run by the editor's
 // own extension-host binary as Node (ELECTRON_RUN_AS_NODE). It exits by itself once it has no runs and no windows a while.
 
-import * as fs from 'fs';
+import { logTo } from './log';
 import { PtydServer } from './server';
 
 const [socketPath, logFile] = process.argv.slice(2);
-const log = (message: string) => {
-	if (logFile) {
-		try {
-			fs.appendFileSync(logFile, `${new Date().toISOString()} ${message}\n`);
-		} catch {
-			// The log is a help, never a reason to stop
-		}
-	}
-};
+// Its size bounded, its oldest lines let go of first (ARCHITECTURE-3.3)
+const log = logTo(logFile);
 
 if (!socketPath) {
 	process.stderr.write('usage: ptyd <socket> [<log file>]\n');
