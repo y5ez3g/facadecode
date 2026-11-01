@@ -172,6 +172,10 @@ export class AgentService implements Agents, Disposable {
 		return [...this.runs.values()].map(run => run.facts);
 	}
 
+	owned(): boolean {
+		return !this.ownershipLost;
+	}
+
 	get(run: RunId): RunFacts | undefined {
 		return this.runs.get(run)?.facts;
 	}

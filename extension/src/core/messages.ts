@@ -33,7 +33,7 @@ export interface ResultRoute {
 }
 
 export interface MessageServiceDeps {
-	readonly agents: Pick<Agents, 'get' | 'onDidChange'>;
+	readonly agents: Pick<Agents, 'get' | 'onDidChange' | 'owned'>;
 	readonly input: InputPort;
 	readonly human: HumanContactPort;
 	readonly store: MessageStore;
@@ -183,6 +183,8 @@ export class MessageService implements Messages, Disposable {
 	private readonly lanes = new Map<RunId, Promise<void>>();
 	/** The deadlines of deliveries an earlier opening began that this one cannot go on with (RULES-1.9). */
 	private readonly timers = new Set<AbortController>();
+	/** The pending records `expireAt` ends at their deadlines. */
+	private readonly expiring = new Set<string>();
 	private readonly mono: () => number;
 	private readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
 	private disposed = false;
@@ -235,7 +237,9 @@ export class MessageService implements Messages, Disposable {
 			text: request.text,
 			...(request.replyTo !== undefined ? { replyTo: request.replyTo } : {}),
 			...(request.sender ? { fromWindow: request.sender.window } : {}),
-			...(request.sender?.label !== undefined ? { label: request.sender.label } : {}),
+			// The label its header shows, kept: a delivery that goes on after a reload pastes and recognizes the same text, though the
+			// window was renamed meanwhile, as a folder becoming a multi-root workspace renames it (RULES-1.6, 1.9)
+			label: request.sender?.label ?? this.deps.window.label,
 			...(request.requestId !== undefined ? { requestId: request.requestId } : {})
 		}, PENDING, true, request.id);
 		if (request.to === '@human') {
@@ -928,7 +932,8 @@ export class MessageService implements Messages, Disposable {
 			if (record.delivery.status !== 'pending' || this.live.has(record.id) || record.delivery.deadline === undefined || record.delivery.deadline > now) {
 				return record;
 			}
-			return record.workspace === this.deps.workspace ? this.abandon(record, 'timeout') : settledAt(record, 'timeout');
+			// Settled by the window that owns its workspace's agents alone: one another took over reads it so, as another window's
+			return record.workspace === this.deps.workspace && this.deps.agents.owned?.() !== false ? this.abandon(record, 'timeout') : settledAt(record, 'timeout');
 		});
 	}
 
@@ -939,6 +944,10 @@ export class MessageService implements Messages, Disposable {
 	 * deadline, typing nothing.
 	 */
 	resume(): void {
+		// A window another took the workspace over from has none of its deliveries to go on with: the window that owns them does
+		if (this.deps.agents.owned?.() === false) {
+			return;
+		}
 		const now = this.deps.clock.now();
 		for (const record of this.deps.store.list()) {
 			const { deadline, start } = record.delivery;
@@ -946,7 +955,10 @@ export class MessageService implements Messages, Disposable {
 				continue;
 			}
 			const facts = this.deps.agents.get(record.to.run);
-			if (!facts || facts.lifecycle === 'ended') {
+			if (!facts) {
+				// Not shown here yet - one of an earlier protocol's ptyd restored later - goes on once it is, else ends at its deadline
+				this.expireAt(record);
+			} else if (facts.lifecycle === 'ended') {
 				this.abandon(record, 'ended');
 			} else if (deadline <= now) {
 				this.abandon(record, 'timeout');
@@ -994,11 +1006,19 @@ export class MessageService implements Messages, Disposable {
 
 	/** Ends at its deadline a pending record this window cannot go on with, as `records` settles it then (RULES-1.9). */
 	private expireAt(record: MessageRecord): void {
+		// Once for each record, however often `resume` finds it waiting
+		if (this.expiring.has(record.id)) {
+			return;
+		}
+		this.expiring.add(record.id);
 		const stop = new AbortController();
 		this.timers.add(stop);
 		void this.wait(Math.max(0, record.delivery.deadline! - this.deps.clock.now()), stop.signal)
 			.then(() => this.records(), () => undefined)
-			.finally(() => this.timers.delete(stop));
+			.finally(() => {
+				this.timers.delete(stop);
+				this.expiring.delete(record.id);
+			});
 	}
 
 	/** A pending record nothing delivers any more, ended - as `reason` says - with what may have gone in, and its sender told (RULES-1.7). */

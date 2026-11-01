@@ -276,7 +276,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	}).catch(err => log.event(`Could not restore pinned agents: ${messageOf(err)}`));
 	let restoring: Promise<unknown> = ready;
 	const found = execution.onDidFindRuns(() => {
-		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`));
+		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`))
+			// Deliveries to the agents shown now go on, within their own deadlines (RULES-1.9)
+			.then(() => disposed ? undefined : messages.resume()).catch(err => log.event(`Could not go on with this window's deliveries: ${messageOf(err)}`));
 	});
 	// The nine tools, for every run of this window whose shim calls in (MCP-1.1, 6.1)
 	const services = createToolServices({

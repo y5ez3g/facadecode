@@ -121,12 +121,13 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	const contacts: MessageRecord[] = [];
 	let saved: (id: string) => MessageRecord | undefined = () => undefined;
 	let reachable = true;
+	let owned = true;
 	const stored = new Map<string, MessageRecord>();
 	const log: string[] = [];
 	let n = 0;
 	let spent = 0;
 	const deps: MessageServiceDeps = {
-		agents: { get: run => runs.get(run), onDidChange: changes.event },
+		agents: { get: run => runs.get(run), onDidChange: changes.event, owned: () => owned },
 		input,
 		human: { contact: (record, lookup) => { contacts.push(record); saved = lookup; return reachable; } },
 		store: {
@@ -159,6 +160,8 @@ function setUp(options: { readonly createMs?: number } = {}) {
 		/** The saved record of a message, as the person's Show reads it. */
 		saved: (id: string) => saved(id),
 		unreachable: () => { reachable = false; },
+		/** Another window takes the workspace's agents over. */
+		disown: () => { owned = false; },
 		/** Closes a run as Close Agent does: its card goes at once. */
 		close: (run: RunId) => { runs.delete(run); changes.fire({ run, kind: 'removed', cause: 'close' }); },
 		end: (run: RunId) => { runs.set(run, { ...runs.get(run)!, lifecycle: 'ended' }); changes.fire({ run, kind: 'lifecycle' }); }
@@ -966,7 +969,7 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 		await sleep(600_000);
 		reopened.resume();
 		await sleep(5_000);
-		assert.deepStrictEqual(['m-1', 'm-2'].map(id => [stored.get(id)!.delivery.status, stored.get(id)!.delivery.reason, stored.get(id)!.delivery.effects]), [['failure', 'timeout', { outcome: 'none', text_written: 'none', enter_written: false }], ['failure', 'ended', { outcome: 'none', text_written: 'none', enter_written: false }]]);
+		assert.deepStrictEqual(['m-1', 'm-2'].map(id => [stored.get(id)!.delivery.status, stored.get(id)!.delivery.reason, stored.get(id)!.delivery.effects]), [['failure', 'timeout', { outcome: 'none', text_written: 'none', enter_written: false }], ['failure', 'timeout', { outcome: 'none', text_written: 'none', enter_written: false }]]);
 		const results = reopened.inbox(A, { all: true, limit: 10 }).records;
 		assert.deepStrictEqual(results.map(each => each.about), ['m-1', 'm-2']);
 		assert.match(results[0].text, /was not delivered: the delivery deadline passed \(timeout\)\. Input effects: none\./);
@@ -982,6 +985,38 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 		await sleep(16_000);
 		assert.deepStrictEqual([legacy.stored.get('m-9')!.delivery.status, legacy.stored.get('m-9')!.delivery.effects.outcome, legacy.input.submitted.filter(each => each.run === B).length], ['failure', 'unknown', 0]);
 		assert.deepStrictEqual(legacy.service.inbox(A, { all: true, limit: 10 }).records.map(each => each.about), ['m-9']);
+	});
+
+	test('after a reload, a delivery to an agent not shown yet goes on once it is, and a window another took the workspace over from goes on with none (RULES-1.9, 4.1)', async () => {
+		const { service, input, stored, reload, runs } = setUp();
+		input.states.set(C, ['draft']);
+		assert.strictEqual((await settled(service.send({ from: A, to: C, text: 'Hello', elapsedMs: 0 }))).status, 'accepted');
+		// Its header's window label is kept with it, so that it is pasted and recognized the same after a reload renamed the window
+		assert.strictEqual(stored.get('m-1')!.label, 'Design');
+		// Its agent is not shown when the window has its others again - one of an earlier protocol's ptyd, restored later
+		const cy = runs.get(C)!;
+		runs.delete(C);
+		const reopened = reload();
+		reopened.resume();
+		await sleep(5_000);
+		assert.deepStrictEqual([stored.get('m-1')!.delivery.status, input.submitted.filter(each => each.run === C).length], ['pending', 0], 'never taken for an agent that ended');
+		runs.set(C, cy);
+		input.states.set(C, ['usable']);
+		reopened.resume();
+		await sleep(5_000);
+		assert.deepStrictEqual([stored.get('m-1')!.delivery.status, input.submitted.filter(each => each.run === C).length], ['success', 1]);
+		// Another window took the agents over as this one reloaded: it neither goes on with a delivery nor settles one at its deadline
+		const other = setUp();
+		other.input.states.set(B, ['draft']);
+		await settled(other.service.send({ from: A, to: B, text: 'Hi', elapsedMs: 0 }));
+		const lost = other.reload();
+		other.disown();
+		other.input.states.set(B, ['usable']);
+		lost.resume();
+		await sleep(601_000);
+		lost.inbox(B, { limit: 10 });
+		assert.deepStrictEqual([other.stored.get('m-1')!.delivery.status, other.input.submitted.filter(each => each.run === B).length], ['pending', 0]);
+		assert.deepStrictEqual(lost.inbox(A, { all: true, limit: 10 }).records, [], 'its sender is told nothing by a window that owns none of it');
 	});
 
 	test('a pending record no delivery here owns, past its deadline, reads as failed by its deadline', () => {

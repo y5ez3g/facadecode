@@ -643,6 +643,8 @@ export interface StartOutcome {
 }
 
 export interface Agents {
+	/** Whether this window still owns its workspace's agents: once another window took them over, none is this window's (RULES-4.1). */
+	owned?(): boolean;
 	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' };
 	holding(key: ConversationKey): RunId | 'elsewhere' | undefined;
 	refreshConversations(): Promise<void>;
