@@ -8,7 +8,7 @@ import * as path from 'path';
 import { tempDir } from './util';
 import { folderKeyOf } from '../base/files';
 import { locationIdOf } from '../core/locations/catalog';
-import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
+import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunChange, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
 
@@ -1385,7 +1385,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		test('U06, LIFECYCLE-2.3: this window\'s agents, one line each - the name, then short ID, CLI, state, location and title, searched alike - duplicates told apart by short ID; an ID or copied reference finds its run; each copies or closes; choosing shows its terminal', async () => {
 			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
 			let runs = [run(1, { title: 'Fix login' }), run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }), run(3, { lifecycle: 'starting', phase: 'launching_cli' })];
-			const changed = new TestEmitter<void>();
+			const changed = new TestEmitter<RunChange>();
 			const did: string[] = [];
 			const words = {
 				worktreeFailure: (reason: string) => reason,
@@ -1401,7 +1401,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				media: { path: '/extension/media' } as never,
 				reveal: async run => void did.push(`reveal ${run}`),
 				copyReference: async run => void did.push(`copy ${run}`),
-				close: async run => { did.push(`close ${run}`); runs = runs.filter(each => each.id !== run); changed.fire(); }
+				close: async run => { did.push(`close ${run}`); runs = runs.filter(each => each.id !== run); changed.fire({ run, kind: 'removed', cause: 'close' }); }
 			});
 			const picker = ui.current!;
 			const listed = picker.items.map(item => [item.label, item.description, item.detail]);
@@ -1429,6 +1429,40 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				['#a1 · Claude Code · Working · main · Fix login', '#a3 · Claude Code · Starting · main'],
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
+		});
+
+		test('PANEL-3.1: what a CLI reports reaches the open picker at most once per 300 ms, as it does the panel; an agent added or gone at once', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const runs = [run(1)];
+			const changed = new TestEmitter<RunChange>();
+			let reads = 0;
+			const words = {
+				worktreeFailure: (reason: string) => reason,
+				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by ${creator}`
+			};
+			const done = goToAgent({
+				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
+				agents: { onDidChange: changed.event },
+				words,
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined,
+				copyReference: async () => undefined,
+				close: async () => undefined
+			});
+			const picker = ui.current!;
+			const before = reads;
+			for (let i = 0; i < 20; i++) {
+				changed.fire({ run: runs[0].id, kind: 'reported' });
+			}
+			const burst = reads - before;
+			await new Promise(resolve => setTimeout(resolve, 350));
+			const coalesced = reads - before;
+			changed.fire({ run: runs[0].id, kind: 'added' });
+			const added = reads - before;
+			picker.hide();
+			await done;
+			assert.deepStrictEqual([burst, coalesced, added], [0, 1, 2]);
 		});
 
 		test('a name or CLI title that holds $(...) is shown word for word, not as the theme icon the editor would draw (PANEL-3.2)', async () => {

@@ -5,7 +5,7 @@
 import * as vscode from 'vscode';
 import type { Agents, RunFacts, RunId } from '../../core/ports';
 import { CardWords, statusOf } from '../cardView';
-import { PanelModel } from '../model';
+import { PanelModel, REPORT_COALESCE_MS } from '../model';
 import { cliIcon, plainText } from '../presentation';
 
 export interface GoToAgentDeps {
@@ -72,9 +72,23 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 		}
 	};
 	refresh(true);
+	/** A refresh for reported text and activity under way: they come at most once per {@link REPORT_COALESCE_MS}, as to the panel. */
+	let reported: ReturnType<typeof setTimeout> | undefined;
 	return new Promise(resolve => {
 		const subscriptions: vscode.Disposable[] = [
-			deps.agents.onDidChange(() => refresh(true)),
+			// An agent added, gone, renamed or changing state at once; what its CLI reports coalesced, as the panel has it (PANEL-3.1, UX-5.2)
+			deps.agents.onDidChange(change => {
+				if (change.kind === 'reported') {
+					reported ??= setTimeout(() => {
+						reported = undefined;
+						refresh(true);
+					}, REPORT_COALESCE_MS);
+					return;
+				}
+				clearTimeout(reported);
+				reported = undefined;
+				refresh(true);
+			}),
 			picker.onDidChangeValue(() => refresh(false)),
 			picker.onDidAccept(() => {
 				const run = picker.activeItems[0]?.run;
@@ -85,6 +99,7 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 			}),
 			picker.onDidTriggerItemButton(({ item, button }) => void (button === copy ? deps.copyReference(item.run) : deps.close(item.run))),
 			picker.onDidHide(() => {
+				clearTimeout(reported);
 				subscriptions.forEach(each => each.dispose());
 				picker.dispose();
 				resolve();
