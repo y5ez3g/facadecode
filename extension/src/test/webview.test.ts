@@ -689,7 +689,8 @@ suite('The agent panel in Chromium', function () {
 					assert.ok(Math.abs(seen.card - (width - 8)) < 0.05, 'card layout follows the same visible width as the track');
 				}
 				await inside('scrollTo(0, document.documentElement.scrollHeight)');
-				await wait(30);
+				// Scroll events update the overlay on the next animation frame, which can be delayed on CI.
+				await until(() => inside(`Math.abs(document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().bottom - ${modernUI ? 298 : 300}) < 0.05`));
 				const end = await inside(`({ card: document.querySelector('.agent:last-child').getBoundingClientRect().bottom, thumb: document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().bottom })`);
 				assert.ok(Math.abs(end.card - 300) < 0.05);
 				assert.ok(Math.abs(end.thumb + (modernUI ? 2 : 0) - end.card) < 1 / deviceScaleFactor, 'only the modern slider is inset from the safe content bottom: ' + JSON.stringify({ deviceScaleFactor, modernUI, end }));
@@ -737,7 +738,7 @@ suite('The agent panel in Chromium', function () {
 			await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor, mobile: false });
 			for (const bottom of [false, true]) {
 				await evaluate(`scrollTo(0, ${bottom ? 'document.documentElement.scrollHeight' : '0'}); document.getElementById('host-clip-fixture').style.borderRadius = '0'`);
-				await wait(40);
+				await until(async () => (await box())[bottom ? 'bottom' : 'top'] === (bottom ? 298 : 2));
 				assert.equal((await box())[bottom ? 'bottom' : 'top'], bottom ? 298 : 2, `The thumb reaches the track endpoint at scale ${deviceScaleFactor}, including fractional scroll limits`);
 				const before = await cap(bottom);
 				assert.ok(before.some((value, index) => index % 4 === 1 && value === 0), 'the reference contains the painted red cap');
@@ -747,7 +748,9 @@ suite('The agent panel in Chromium', function () {
 				let filledPixelsLost = 0, edgePixelsLost = 0;
 				for (let pixel = 0; pixel < before.length; pixel += 4) {
 					if (before[pixel + 1] === 0 && after[pixel + 1] !== 0) { filledPixelsLost++; }
-					else if (before[pixel + 1] < 255 && after[pixel + 1] === 255) { edgePixelsLost++; }
+					// Red on white: green measures uncovered area. Preserve the half-coverage contour;
+					// subpixel fringes outside it can disappear where the two antialiased clips meet.
+					else if (before[pixel + 1] < 128 && after[pixel + 1] >= 128) { edgePixelsLost++; }
 				}
 				if (filledPixelsLost || edgePixelsLost) { clippedCaps.push({ scale: deviceScaleFactor, bottom, filledPixelsLost, edgePixelsLost }); }
 				if (deviceScaleFactor === 1) { await snapshot(`scrollbar-${bottom ? 'bottom' : 'top'}-host-clip`); }
@@ -797,7 +800,9 @@ suite('The agent panel in Chromium', function () {
 			await call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
 			for (const count of [2, 30, 100, 2]) {
 				await evaluate(`agents = Array.from({ length: ${count} }, (_, i) => newCard(i + 1)); redraw({ revision: ${revision++} }); scrollTo(0, 0)`);
-				await wait(60);
+				// Card layout is synchronous, but ResizeObserver schedules the overlay's next frame.
+				await until(() => evaluate(`document.querySelector('.facade-scrollbar').hidden === ${count === 2}
+					&& (${count === 2} || document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().top === 0)`));
 				const geometry = await evaluate(`(() => {
 					const bar = document.querySelector('.facade-scrollbar'), thumb = bar.firstElementChild, card = document.querySelector('.agent').getBoundingClientRect();
 					return { gutter: innerWidth - document.documentElement.clientWidth, content: document.documentElement.scrollWidth,
