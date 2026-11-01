@@ -8,7 +8,6 @@
 // run's startup is over (D81): a quiet screen proves nothing. Titles are the CLI's own words, sanitized and capped, the report's
 // preferred over OSC 0/2.
 
-import * as path from 'path';
 import { displayLine } from '../base/text';
 import { BUILT_IN_ADAPTERS } from './catalog';
 
@@ -62,42 +61,15 @@ export function activityOf(status: ReportedStatus | undefined): ActivityFacts {
 }
 
 /**
- * How a CLI's titles are read: the status marks they start with, the names that alone make no title, and the placeholder its
- * reports give before it has a title (CLIS-2.3).
+ * The title a run shows for its CLI (CLIS-2.3, D126): the report's nonempty title over the terminal's OSC 0/2 title, with visible
+ * symbols and words intact. Invisible formatting and controls removed, at most 300 code points with an ellipsis.
  */
-interface TitleRules {
-	readonly decoration?: RegExp;
-	readonly names: readonly string[];
-	readonly placeholder?: RegExp;
-}
-
-/** The title rules of the CLI `cli`: its built-in adapter's own; without one, its display name alone. */
-function titleRulesOf(cli: string, displayName: string): TitleRules {
-	return BUILT_IN_ADAPTERS.find(adapter => adapter.id === cli)?.title ?? { names: [displayName] };
-}
-
-/** Separators a CLI joins names in a generic title with: `Qwen - shop-app`. */
-const NAME_JOINS = /\s+[-–—|·:]\s+/;
-
-/**
- * The title a run shows for its CLI (CLIS-2.3): the report's title over the terminal's OSC 0/2 title - unless it is the placeholder
- * the adapter knows the CLI reports before it has a title; without the status marks its adapter knows it starts with; none where it
- * only names the CLI, its folder or the agent - alone or joined - as CLIs title their terminal until there is work to name.
- * Invisible formatting and controls removed, at most 300 code points with an ellipsis.
- */
-export function cliTitle(cli: string, displayName: string, titles: { readonly reported?: string; readonly terminal?: string }, context: { readonly cwd: string; readonly name: string }): string | undefined {
-	const rules = titleRulesOf(cli, displayName);
-	for (const [raw, reported] of [[titles.reported, true], [titles.terminal, false]] as const) {
-		const clean = displayLine(raw ?? '', Number.MAX_SAFE_INTEGER);
-		const text = (rules.decoration ? clean.replace(rules.decoration, '') : clean).trim();
-		if (!text || (reported && rules.placeholder?.test(text))) {
-			continue;
+export function cliTitle(titles: { readonly reported?: string; readonly terminal?: string }): string | undefined {
+	for (const raw of [titles.reported, titles.terminal]) {
+		const text = displayLine(raw ?? '', MOST_SHOWN);
+		if (text) {
+			return text;
 		}
-		const names = new Set([...rules.names, displayName, path.basename(context.cwd), context.name].map(each => each.trim().toLocaleLowerCase()).filter(Boolean));
-		if (text.split(NAME_JOINS).every(part => names.has(part.trim().toLocaleLowerCase()))) {
-			return undefined;
-		}
-		return displayLine(text, MOST_SHOWN);
 	}
 	return undefined;
 }

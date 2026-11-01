@@ -814,7 +814,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	/** The title `pair`'s CLI gives its tab now (CLIS-2.3). */
 	private titleOf(pair: Pair): string | undefined {
-		return cliTitle(pair.cli, pair.facts.displayName, { reported: pair.status?.title, terminal: pair.terminalTitle }, { cwd: pair.facts.cwd, name: pair.facts.name });
+		return cliTitle({ reported: pair.status?.title, terminal: pair.terminalTitle });
 	}
 
 	/** Ends `run`'s process in the background, once, and forgets it: the actual result for whoever asks (LIFECYCLE-3.1, 4.2). */

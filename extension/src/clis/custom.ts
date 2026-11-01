@@ -156,7 +156,6 @@ export function customAdapterOf(settings: CustomCliSettings): CliAdapter {
 		values: () => ({}),
 		sandbox: () => ({ state: 'unknown' }),
 		approvals: () => ({ state: 'unknown' }),
-		title: { names: [settings.key] },
 		interruptExit: () => false
 	};
 }

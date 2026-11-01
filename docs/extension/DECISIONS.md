@@ -172,6 +172,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D123 | Owner correction 2026-10-31: Resume, Pin and Unpin must meet release quality across all six built-ins. The initial four history readers and Claude-only Pin were an incomplete implementation, not an approved scope reduction. Verify native identity changes and preservation of user configuration for each adapter; record actual release evidence and remaining blockers. Native checks also established that Antigravity loses the original cwd when `--add-dir` is used; the implementation preserves that ambiguity and asks for a working location rather than inventing an original cwd | CLIS-2.4, LIFECYCLE-3.2, LIFECYCLE-3.4 |
 | D124 | Owner's 2026-10-31 comparison with native Claude `/resume` exposed missing AI/custom titles, file mtime shown as activity and a superseded segment shown twice. Correct native metadata and continuation handling, including cache invalidation and pagination order; the all-CLI scope does not justify different facts for the same conversation | CLIS-2.4, LIFECYCLE-3.2 |
 | D125 | Owner-approved 2026-10-31: the panel scrollbar auto-hides, overlays existing content without taking width, and follows the effective Modern UI setting automatically. Correct the visible webview boundary independently of decorative clearance. Modern UI leaves 2 px at the scrollbar ends and 1 px at its right; the list keeps its 4 px sides and has no additional top or bottom padding. Traditional UI has no decorative scrollbar clearance. Both modes compensate clipping for content and overlay. This supersedes D87's choice of the browser scrollbar | PANEL-3.3 |
+| D126 | Owner-revised 2026-11-01 during the panel review: defer all CLI title cleanup and restore the original visible content, including status symbols, CLI/folder/agent names and default session titles. A nonempty reported title still takes precedence over the terminal title; invisible-format sanitation and the existing display bound remain. This withdraws the generic-title, decoration and OpenCode placeholder filters without deciding the separate location-layout discussion | CLIS-2.3 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -245,6 +246,7 @@ full spec revision; it does not authorize publication or unrelated source change
 
 ## Change log
 
+- 2026-11-01: Recorded D126: the owner deferred CLI title cleanup and requested that filtered content be restored.
 - 2026-10-31: Recorded the accepted overlay scrollbar, automatic Modern UI appearance and separate content/scrollbar clipping clearance (D125).
 
 - 2026-10-31: D120 records the resolved intersections with main; earlier source evidence remains separate from merged-build verification.
