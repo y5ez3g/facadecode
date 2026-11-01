@@ -6,6 +6,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { tempDir } from './util';
+import { folderKeyOf } from '../base/files';
+import { locationIdOf } from '../core/locations/catalog';
 import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
@@ -807,6 +809,31 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				[LOGIN.id],
 				[['main', '', 'New Worktree...'], true, [], ['run-1']],
 				[['main', '', 'New Worktree...'], false],
+				[]
+			]);
+		});
+
+		test('D73, WORKTREES-3.2: Delete Worktree names and closes the agents launched inside it too - a resumed conversation\'s subdirectory, listed or not yet - and no other', async () => {
+			const API = place('loc-login-api', 'api', SHOP, { kind: 'folder', path: `${LOGIN.path}/api`, uri: 'file:///login-fix/api' });
+			catalog = { locations: [MAIN, LOGIN, API], folders: [SHOP], pending: false };
+			const tools = `${LOGIN.path}/tools`;
+			runs = [runAt(1, API), { ...runAt(2, MAIN), location: locationIdOf('local', folderKeyOf(tools)), cwd: tools }, runAt(3, MAIN)];
+			ui.answer = 'Delete';
+			remove = async (_id, closeAgents) => { await closeAgents(); };
+			const done = start();
+			await settle();
+			ui.current!.accept('Change Working Location...');
+			await settle();
+			const offered = buttonsOf(ui.current!);
+			ui.current!.press(1, ui.current!.items[1].buttons![0]);
+			await settle();
+			await settle();
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual([offered, ui.dialogs[0].args, closed, errors], [
+				[['login-fix', 'close: Delete Worktree']],
+				['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\n2 associated agents will be closed.' }, 'Delete'],
+				['run-1', 'run-2'],
 				[]
 			]);
 		});

@@ -7,7 +7,7 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { compactPath, folderKeyOf, homeRelative } from '../../base/files';
 import { isJsonObject } from '../../base/json';
-import { isDeletableWorktree } from '../../core/locations/catalog';
+import { isDeletableWorktree, runsLaunchedIn } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
 import type { Agents, Catalog, HumanPort, Location, LocationId, LocationPort, LogPort, WorkspaceFolderInfo, WorktreePlan, WorktreePort } from '../../core/ports';
 import { plainText } from '../presentation';
@@ -456,7 +456,8 @@ function foldersSettled(locations: FolderStepDeps['locations'], settled: (folder
 
 /** Asks before Delete Worktree (D73): its folder, the branch kept - or that it has none - and the agents that will close. */
 function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolean> {
-	const closing = deps.agents.list().filter(run => run.location === worktree.id).length;
+	// Those launched in a location inside it too, as a resumed conversation's subdirectory (WORKTREES-3.2)
+	const closing = runsLaunchedIn(deps.agents.list(), worktree.path, deps.locations.snapshot().locations, folderKeyOf).length;
 	const message = vscode.l10n.t("Delete worktree \"{0}\"?", worktree.label);
 	// Keep the exact full path in the detail, separate from the short decision question.
 	const target = worktree.branch !== undefined
@@ -472,9 +473,11 @@ function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolea
  * processes ended, before Git removes it. Why it was not deleted goes to the person. Never rejects.
  */
 async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<void> {
+	// Its locations as the catalog lists them now: while it is deleted they are out of the catalog (WORKTREES-3.2)
+	const locations = deps.locations.snapshot().locations;
 	// True only once every agent's process is known to have ended: Git removes nothing a process may still be writing in
 	const closeAgents = async () => {
-		const results = await Promise.all(deps.agents.list().filter(run => run.location === worktree.id).map(run => deps.agents.close(run.id).then(
+		const results = await Promise.all(runsLaunchedIn(deps.agents.list(), worktree.path, locations, folderKeyOf).map(run => deps.agents.close(run.id).then(
 			result => {
 				deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`);
 				return result === 'terminated' || result === 'already_exited' || result === 'already_ended' || result === 'not_started';

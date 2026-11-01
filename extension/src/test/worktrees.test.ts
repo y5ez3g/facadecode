@@ -393,6 +393,22 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 			assert.deepStrictEqual([during, refusedDuring, seen(refusedId)], [[[false, false], [true, true]], [false, false], [true, true]]);
 		});
 
+		test('a location inside it - a resumed conversation\'s subdirectory - is out of the catalog with it: no launch or resume goes there while it is deleted', async () => {
+			const going = path.join(temp.dir, 'going');
+			git(repo, 'worktree', 'add', '-q', '-b', 'going', going);
+			const api = path.join(going, 'packages', 'api');
+			fs.mkdirSync(api, { recursive: true });
+			const { worktrees, idOf, locations } = await windowWith([repo]);
+			const subId = locations.rememberLocation(api)!;
+			const seen = () => [locations.resolve(subId) !== undefined, locations.snapshot().locations.some(each => each.id === subId), locations.conversationLocation(api) !== undefined];
+			const before = seen();
+			let during: boolean[] = [];
+
+			await removed(worktrees, idOf(going), () => { during = seen(); }, false);
+
+			assert.deepStrictEqual([before, during, seen()], [[true, true, true], [false, false, false], [true, true, true]]);
+		});
+
 		test('a file Git is told to assume unchanged or to skip, edited, is a change not committed: refused untouched; one a sparse checkout leaves out is none', async () => {
 			for (const name of ['skipped.json', 'assumed.json', 'sparse.json']) {
 				fs.writeFileSync(path.join(repo, name), '{}');

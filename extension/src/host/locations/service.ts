@@ -137,8 +137,11 @@ export class LocationService implements LocationPort, Disposable {
 	private catalog: Catalog;
 	private subdirectories: string[] = [];
 	private byId = new Map<LocationId, Location>();
-	/** Locations whose worktrees are being deleted, and the catalog without them that others see meanwhile. */
-	private readonly deleting = new Set<LocationId>();
+	/**
+	 * Worktrees being deleted, by location ID, with their comparison keys, and the catalog others see meanwhile: without them and
+	 * every location inside them (WORKTREES-3.2).
+	 */
+	private readonly deleting = new Map<LocationId, string | undefined>();
 	private visible: Catalog | undefined;
 	private keys = new Map<LocationId, string>();
 	private readonly removals = new Map<LocationId, LocationRemoval['cause']>();
@@ -193,15 +196,17 @@ export class LocationService implements LocationPort, Disposable {
 		if (!this.deleting.size) {
 			return this.catalog;
 		}
-		return this.visible ??= { ...this.catalog, locations: this.catalog.locations.filter(each => !this.deleting.has(each.id)) };
+		return this.visible ??= { ...this.catalog, locations: this.catalog.locations.filter(each => !this.isDeleting(each)) };
 	}
 
 	/**
-	 * Takes `id` out of the catalog others see and out of `resolve` while its worktree is deleted (WORKTREES-3.2): no launch goes
-	 * there meanwhile. Its removal, once confirmed, is still told. The result puts it back where it is not gone.
+	 * Takes `id` and every location inside it - a resumed conversation's subdirectory - out of the catalog others see, out of `resolve`
+	 * and out of `conversationLocation` while its worktree is deleted (WORKTREES-3.2): no launch goes there meanwhile. Its removal, once
+	 * confirmed, is still told. The result puts them back where they are not gone.
 	 */
 	markDeleting(id: LocationId): () => void {
-		this.deleting.add(id);
+		const location = this.byId.get(id);
+		this.deleting.set(id, location && this.keyOfLocation(location));
 		this.visible = undefined;
 		this.changedEmitter.fire();
 		let done = false;
@@ -216,12 +221,26 @@ export class LocationService implements LocationPort, Disposable {
 	}
 
 	resolve(id: LocationId): Location | undefined {
-		if (this.deleting.has(id)) {
-			return undefined;
-		}
 		const location = this.byId.get(id);
 		// Revalidated on use (WORKTREES-1.2): a location whose directory is gone is no place to start a CLI
-		return location && this.isDirectory(location.path) ? location : undefined;
+		return location && !this.isDeleting(location) && this.isDirectory(location.path) ? location : undefined;
+	}
+
+	/** Whether `location` is a worktree being deleted, or inside one (WORKTREES-3.2). */
+	private isDeleting(location: Location): boolean {
+		if (!this.deleting.size) {
+			return false;
+		}
+		if (this.deleting.has(location.id)) {
+			return true;
+		}
+		const key = this.keyOfLocation(location);
+		return [...this.deleting.values()].some(root => root !== undefined && isWithin(key, root));
+	}
+
+	/** A location's comparison key: the one the catalog was indexed with, its identity being made of it, else its path's. */
+	private keyOfLocation(location: Pick<Location, 'id' | 'path'>): string {
+		return this.keys.get(location.id) ?? this.keyOf(location.path);
 	}
 
 	/** Reads every folder and repository again; rejects with a `LocationRefreshError` for what could not be read (WORKTREES-1.1, 1.3). */
@@ -231,7 +250,9 @@ export class LocationService implements LocationPort, Disposable {
 
 	/** A saved conversation's exact cwd, scoped to the window's existing folders/worktrees. */
 	conversationLocation(cwd: string): Location | undefined {
-		return this.locationInside(cwd, this.catalog);
+		const location = this.locationInside(cwd, this.catalog);
+		// Not one of a worktree being deleted: no conversation resumes there meanwhile (WORKTREES-3.2)
+		return location && !this.isDeleting(location) ? location : undefined;
 	}
 
 	rememberLocation(cwd: string): LocationId | undefined {
