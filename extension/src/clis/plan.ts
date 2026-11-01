@@ -145,8 +145,18 @@ export function inputOf(adapter: CliAdapter): { readonly adapter?: string; reado
 
 /** The environment `entry`'s CLI is found and started with in `cwd`'s destination, before its run's own variables (CLIS-1.2). */
 export function environmentOf(entry: CatalogEntry, destination: DestinationEnvironment): { [name: string]: string } {
-	const env = composeEnvironment({ host: destination.host, terminal: destination.terminal, profile: destination.profile, launch: entry.environment }, destination.platform);
-	entry.adapter.adjustEnvironment?.(env, destination.platform);
+	return adjustedEnvironment(entry, layeredEnvironmentOf(entry, destination), destination.platform);
+}
+
+/** The layers of `entry`'s environment in `destination`, before its adapter changes anything for a quirk of its CLI (CLIS-1.2). */
+export function layeredEnvironmentOf(entry: CatalogEntry, destination: DestinationEnvironment): { [name: string]: string } {
+	return composeEnvironment({ host: destination.host, terminal: destination.terminal, profile: destination.profile, launch: entry.environment }, destination.platform);
+}
+
+/** `layered` as `entry`'s adapter changes it for a quirk of its CLI (CLIS-1.2): a copy, `layered` left as it is. */
+export function adjustedEnvironment(entry: CatalogEntry, layered: { readonly [name: string]: string }, platform: NodeJS.Platform): { [name: string]: string } {
+	const env = { ...layered };
+	entry.adapter.adjustEnvironment?.(env, platform);
 	return env;
 }
 

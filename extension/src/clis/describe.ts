@@ -10,8 +10,8 @@
 import type { ApprovalFact, SandboxFact } from './adapter';
 import type { Catalog, CatalogEntry } from './catalog';
 import type { CliProblem, CliSaid } from './config';
-import { AGENT_TERMINAL_VARIABLES, composeEnvironment, EnvironmentMap, RUN_VARIABLE } from './environment';
-import { CliPlanError, DestinationEnvironment, environmentOf, executableOf, LaunchTrust, planLaunch, targetOf } from './plan';
+import { AGENT_TERMINAL_VARIABLES, EnvironmentMap, RUN_VARIABLE } from './environment';
+import { adjustedEnvironment, CliPlanError, DestinationEnvironment, executableOf, layeredEnvironmentOf, LaunchTrust, planLaunch, targetOf } from './plan';
 import { redacted, redactedText } from './redact';
 
 /**
@@ -80,8 +80,8 @@ export function describeLaunches(catalog: Catalog, destination: DestinationEnvir
 function describeOne(entry: CatalogEntry, catalog: Catalog, destination: DestinationEnvironment, cwd: string, yolo: boolean): LaunchDescription {
 	const { adapter } = entry;
 	const { platform } = destination;
-	const env = environmentOf(entry, destination);
-	const unadjusted = composeEnvironment({ host: destination.host, terminal: destination.terminal, profile: destination.profile, launch: entry.environment }, platform);
+	const unadjusted = layeredEnvironmentOf(entry, destination);
+	const env = adjustedEnvironment(entry, unadjusted, platform);
 	// What the adapter changes for a quirk of its CLI's (CLIS-1.2): the variables it removes or sets differently
 	const adjusted: { source: EnvironmentSource; name: string; value: string | null }[] = [
 		...Object.keys(unadjusted).filter(name => !Object.hasOwn(env, name)).map(name => ({ source: 'adapter' as const, name, value: null })),

@@ -133,18 +133,19 @@ function shellWord(text: string): string {
 
 /**
  * The command of the session hook: `runtime` - the extension host's own binary, run as Node for this command alone, as an agent's
- * environment does not carry ELECTRON_RUN_AS_NODE (CLIS-1.2) - with the script, each one shell word; a Windows path with forward
- * slashes, which Git Bash takes. Never a `node` from PATH, which a CLI's installation need not have.
+ * environment does not carry ELECTRON_RUN_AS_NODE (CLIS-1.2) - with the run's copy of the script, `script`, and its session file
+ * `file`, each one shell word; a Windows path with forward slashes, which Git Bash takes. Never a `node` from PATH, which a CLI's
+ * installation need not have.
  */
-export function sessionHookCommand(runtime: string, platform: NodeJS.Platform = process.platform, cli = 'claude', file?: string, script?: string): string {
+export function sessionHookCommand(runtime: string, platform: NodeJS.Platform, cli: string, file: string, script: string): string {
 	if (platform === 'win32' && cli !== 'claude') {
 		// Native Windows hooks use cmd.exe, not Claude's Git Bash. Encoded PowerShell keeps paths and JS out of cmd parsing.
 		const word = (value: string) => `'${value.replace(/'/g, "''")}'`;
-		const command = `$env:ELECTRON_RUN_AS_NODE='1'; & ${word(runtime)} ${script ? word(script) : `-e ${word(SESSION_HOOK_SCRIPT)}`}${file ? ` ${word(file)}` : ''}; exit $LASTEXITCODE`;
+		const command = `$env:ELECTRON_RUN_AS_NODE='1'; & ${word(runtime)} ${word(script)} ${word(file)}; exit $LASTEXITCODE`;
 		return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(command, 'utf16le').toString('base64')}`;
 	}
-	const program = platform === 'win32' ? runtime.replace(/\\/g, '/') : runtime;
-	return `ELECTRON_RUN_AS_NODE=1 ${shellWord(program)} ${script ? shellWord(platform === 'win32' ? script.replace(/\\/g, '/') : script) : `-e ${shellWord(SESSION_HOOK_SCRIPT)}`}${file ? ` ${shellWord(file)}` : ''}`;
+	const posix = (each: string) => platform === 'win32' ? each.replace(/\\/g, '/') : each;
+	return `ELECTRON_RUN_AS_NODE=1 ${shellWord(posix(runtime))} ${shellWord(posix(script))} ${shellWord(file)}`;
 }
 
 /** The conversation a run's session file records; none where there is no valid record. */
