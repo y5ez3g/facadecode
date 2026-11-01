@@ -176,6 +176,11 @@ export class Run {
 	private seq = 0;
 	/** What was written to the headless terminal and is not drawn yet, in UTF-8 bytes. */
 	private undrawn = 0;
+	/**
+	 * For each write to the headless terminal not drawn yet, oldest first, what waits for it to be drawn: the barrier after all that was
+	 * written is the last write's own callback, never an empty write, which xterm may drop with its callback (`afterDrawn`).
+	 */
+	private readonly drawing: (() => void)[][] = [];
 	private title = '';
 	private lastOutput: number | undefined;
 	private exited: RunExit | undefined;
@@ -252,7 +257,7 @@ export class Run {
 			const ctrlC = this.ctrlCAt !== undefined && Date.now() - this.ctrlCAt <= INTERRUPT_EVIDENCE_MS;
 			this.queue.end();
 			// Told once what it wrote last is drawn
-			this.terminal.write('', () => {
+			this.afterDrawn(() => {
 				if (!this.disposed && this.terminal.buffer.active.type === 'alternate') {
 					// It ended on the alternate screen: that is its last frame, and the normal buffer its final output
 					this.keepFrame();
@@ -334,12 +339,12 @@ export class Run {
 	}
 
 	/**
-	 * Its screen as it stands, with the number of the last output in it (ARCHITECTURE-2.3): the empty write is the cut, so what
-	 * was written before it is the screen and what comes after is numbered after `seq`.
+	 * Its screen as it stands, with the number of the last output in it (ARCHITECTURE-2.3): the drawing of the last output is the cut,
+	 * read in its own callback, so what was written before is the screen and what comes after is numbered after `seq`.
 	 */
 	snapshot(): Promise<{ readonly screen: string; readonly seq: number }> {
 		const seq = this.seq;
-		return new Promise((resolve, reject) => this.terminal.write('', () => {
+		return new Promise((resolve, reject) => this.afterDrawn(() => {
 			try {
 				resolve({ screen: this.serializer.serialize({ scrollback: scrollbackRows(this.terminal.cols) }), seq });
 			} catch (err) {
@@ -578,23 +583,46 @@ export class Run {
 
 	/** Draws `data` in the headless terminal; while more than {@link MOST_RUN_BUFFER} waits to be drawn, the CLI waits. */
 	private draw(data: string): void {
+		if (!data) {
+			return;
+		}
 		const size = Buffer.byteLength(data, 'utf8');
 		this.undrawn += size;
 		if (this.undrawn > MOST_RUN_BUFFER) {
 			this.hold(DRAWING);
 		}
+		const waiting: (() => void)[] = [];
 		this.terminal.write(data, () => {
+			// xterm calls its writes' callbacks in order: this write's is the oldest waiting
+			this.drawing.shift();
 			this.undrawn -= size;
 			if (this.undrawn <= MOST_RUN_BUFFER / 2) {
 				this.release(DRAWING);
 			}
 			this.readScreenSoon();
+			for (const then of waiting) {
+				then();
+			}
 		});
+		this.drawing.push(waiting);
+	}
+
+	/**
+	 * Calls `then` once all that was written to the headless terminal is drawn: at once where nothing waits, else in the callback of
+	 * the last write, before anything written after it is drawn.
+	 */
+	private afterDrawn(then: () => void): void {
+		const last = this.drawing[this.drawing.length - 1];
+		if (last) {
+			last.push(then);
+		} else {
+			then();
+		}
 	}
 
 	/** Settles once all that was written to the headless terminal is drawn. */
 	private parsed(): Promise<void> {
-		return new Promise(resolve => this.terminal.write('', resolve));
+		return new Promise(resolve => this.afterDrawn(resolve));
 	}
 
 	private keyModes(): KeyModes {
