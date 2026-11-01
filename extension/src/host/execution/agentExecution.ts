@@ -215,12 +215,25 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	pinTab(run: RunId, pinned: boolean): void { this.terminals.pin(run, pinned); }
+	/**
+	 * The exact conversations a process holds in this environment: this window's ptyd says them itself, leaving out a run being closed;
+	 * each ptyd of an earlier protocol, which has no such request, is read from its runs. Rejects where one of them cannot be asked -
+	 * never a partial list, which would let a Pin start a conversation that still runs (LIFECYCLE-3.5).
+	 */
 	async conversations(): Promise<readonly ConversationKey[]> {
-		return (await this.allRuns()).flatMap(run => {
-			const meta = run.meta;
-			return !run.exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
-				? [{ sessionId: meta.sessionId, cli: meta.cli, environment: meta.environment }] : [];
-		});
+		const held = [...await this.ask('conversations', {})];
+		for (const protocol of EARLIER_PROTOCOLS.filter(value => value >= 9)) {
+			const client = await PtydClient.join(ptydSocketPath(this.options.home, protocol), protocol);
+			if (!client) { continue; }
+			try {
+				held.push(...(await within(client.request('list', {}))).flatMap(run => {
+					const meta = run.meta;
+					return !run.exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
+						? [{ sessionId: meta.sessionId, cli: meta.cli, environment: meta.environment }] : [];
+				}));
+			} finally { client.dispose(); }
+		}
+		return held;
 	}
 
 	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void {

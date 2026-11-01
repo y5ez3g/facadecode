@@ -937,6 +937,18 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			assert.deepStrictEqual(await port.live(), [], 'no ownership of another window was taken');
 		} finally { prior.server.close(); }
 	});
+	test('the running conversations leave out a run being closed: its process may still be ending, and its conversation is free to resume (LIFECYCLE-3.2, 3.5)', async () => {
+		const port = portOf();
+		port.openPair(facts('run-c'), { reveal: false });
+		open(terminals[0]);
+		await port.spawn('run-c', plan(ECHO), { ...meta('run-c'), sessionId: 'exact-closing' });
+		assert.deepStrictEqual(await port.conversations(), [{ environment: 'local', cli: 'claude', sessionId: 'exact-closing' }]);
+		// Let go of as a close lets go of it, before its process has ended
+		const client = await (port as unknown as { session: { client(): Promise<PtydClient> } }).session.client();
+		await client.request('forget', { run: 'run-c' });
+		assert.deepStrictEqual(await port.conversations(), []);
+	});
+
 	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1, D86)', async function () {
 		this.timeout(20_000);
 		const protocol = EARLIER_PROTOCOLS[0];
