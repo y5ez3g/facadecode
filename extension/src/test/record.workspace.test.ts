@@ -49,6 +49,14 @@ suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3
 		assert.match(folder.key, /^[0-9a-f]{16}$/);
 	});
 
+	test('a window without folders, which starts no agent, keeps no ledger entry for its URI - a new one each session - and keeps its key across its reloads (RULES-5.3, ARCHITECTURE-2.4)', () => {
+		const first = workspaceRecord('untitled:session-1', temp.dir, undefined, { token: 'empty-window', folders: [] });
+		keepWorkspaceUri('untitled:session-1', first, temp.dir);
+		const reloaded = workspaceRecord('untitled:session-2', temp.dir, first.key, { token: 'empty-window', folders: [] });
+		keepWorkspaceUri('untitled:session-2', reloaded, temp.dir);
+		assert.deepStrictEqual([fs.existsSync(path.join(temp.dir, 'workspace-uris.json')), reloaded.key], [false, first.key]);
+	});
+
 	test('exact saved URI shares the moved owner in a fresh profile; a copied URI never inherits by folders', () => {
 		const folder = 'file:///work/shop';
 		const saved = 'file:///work/shop.code-workspace';
