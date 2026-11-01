@@ -120,7 +120,8 @@ length/character restrictions. `human` is an allowed agent name, including durin
 identity `#human`; an agent uses its own run ID, including when named `human`. A display name never overrides an ID.
 Human creation provides an editable random name, a short machine word such as `Bolt` or
 `Pixel`; agent creation supplies its own `name` under MCP-2.2. A name is not a filesystem path, branch or shell argument
-template. Rename uses a native Input Box and changes no run/session/location identity. Copy Agent Reference copies
+template. CLI titles, activity and task progress never rename the agent; the creation name stays until the person
+explicitly renames it (D127). Rename uses a native Input Box and changes no run/session/location identity. Copy Agent Reference copies
 `@name #aN` without a toast. APIs accept an exact ID or an unambiguous name under RULES-2.3, which also decides
 `#human` and `@human`. The name plus ID is descriptive; stale display text must not redirect the run.
 
@@ -263,6 +264,7 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 
 ## Change log
 
+- 2026-11-01: 2.1 explicitly keeps names stable across CLI titles, activity and task progress (D127).
 - 2026-10-31: A native workspace set with no recorded cwd uses an observed Facade cwd or asks for a working location; no directory-order guess (D123).
 
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.

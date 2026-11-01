@@ -257,12 +257,13 @@ immediately. A stale observation is labeled as such rather than treated as proof
 
 ### 3.2 The dot says only what is known
 
-**Working is green, not working is yellow, and an error or unavailable reliable status is red.**
+**Starting or working is green, idle is grey, a native blocker is yellow, and an error or unavailable reliable status is red.**
 
 An unresolved error takes precedence. Without such an error, observed work/startup is green - startup lasting until the
-CLI first shows its activity, within CLIS-2.3's bound - and observed not-working is yellow. Native permission/login questions are yellow unless a separate error exists. Unknown activity is an error:
-use red and explain the unavailable status in the second line; there is no neutral/outline fourth state.
-A quiet screen does not prove idle. A turn ending becomes yellow without a notification. Recovery clears only the
+CLI first shows its activity, within CLIS-2.3's bound. Observed not-working with no blocker is grey; native permission,
+answer and sign-in blockers are yellow. Unknown activity remains red, including beside a known blocker, and the second
+line explains the unavailable status. Grey requires reliable idle evidence; it never stands for an unknown state (D127).
+A quiet screen does not prove idle. A turn ending becomes grey without a notification or a task-completion claim. Recovery clears only the
 corresponding error. Reduced motion removes breathing, never the accessible state description.
 
 ### 3.3 Exit classification is independent of who caused it
@@ -391,7 +392,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 | --- | --- |
 | 1.1–1.10 | One recipient; response/attempt budgets; delivery by terminal, native prompt or read_messages; one delivery state; stable duplicate IDs; drafts and unrecognized input boxes untouched; no human fallback; closure |
 | 2.1–2.4 | Client network across local and remote windows, unique run IDs, duplicate names, `#human` and `@human`, tree survival, remote paths, folder/worktree removal |
-| 3.1–3.4 | Unknown red, idle yellow, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
+| 3.1–3.4 | Work green, idle grey, native blockers yellow, errors/unknown red, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
 
@@ -399,6 +400,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
+- 2026-11-01: 3.2 separates reliable idle from native blockers: grey idle, yellow permission/answer/sign-in, with green work and red error/unknown retained (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: The owner's clarification of 1.8: automatic blocker notices never direct an agent to contact the person.

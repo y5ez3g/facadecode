@@ -69,7 +69,7 @@ part failed.
 | Hover | `list.hoverBackground` |
 | Selection | `list.activeSelectionBackground`, `list.activeSelectionForeground` even after panel loses focus |
 | Keyboard focus | 1 px `list.focusOutline` inside row |
-| Work / idle / error | `charts.green` / `charts.yellow` / `charts.red` |
+| Work / idle / blocker / error | `charts.green` / `descriptionForeground` / `charts.yellow` / `charts.red` |
 | Status meaning and unknown evidence | RULES-3.2; second-line wording is PANEL-1.4 |
 | Controls | `button.*`, `input.*`, `inputValidation.*`, `scrollbarSlider.*` |
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
@@ -261,6 +261,7 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 
 ## Change log
 
+- 2026-11-01: 2.1 gives reliable idle its own neutral theme colour and reserves yellow for native blockers (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 3.1 adds Copy Diagnostics (D116).

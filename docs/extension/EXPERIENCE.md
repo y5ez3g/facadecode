@@ -75,8 +75,9 @@ Native Git post-create preparation does not gate CLI startup once the worktree e
 
 **The panel shows this window's agents; each editor terminal remains directly usable by the person.**
 
-Working is green, not working is yellow, and errors or unavailable reliable activity are red. The second line explains
-an error; absence of reliable status is never a neutral fourth state. A turn ending becomes yellow without a notification.
+Starting or working is green, reliable idle is grey, native permission/answer/sign-in blockers are yellow, and errors or
+unavailable reliable activity are red. The second line names a blocker or error; absence of reliable status is never
+shown as idle. A turn ending becomes grey without a notification or a claim that the task is complete.
 Clicking a card opens that same terminal. Human search and management stay within the current window.
 
 ### 2.2 Only errors and explicit calls to the person notify
@@ -219,6 +220,7 @@ Evidence is recorded in [Verification](engineering/VERIFICATION.md); these scena
 
 ## Change log
 
+- 2026-11-01: 2.1 follows the owner's four dot meanings and separates idle from a native blocker (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-30: 4.3 says a panel filter affects display only (PANEL-2.3).

@@ -313,8 +313,8 @@ body.vscode-context-menu-visible #list .item.menu-target {
 
 /*
  * What is known of the agent, on its avatar's corner as a chat app's presence, cut out of the row so that it reads on any background
- * (RULES-3.2): green and breathing for its start or its CLI working; yellow and still for its CLI not working; red and still for an
- * error, unknown activity included - there is no fourth state.
+ * (RULES-3.2): green and breathing for startup/work; grey and still for reliable idle; yellow and still for a native blocker;
+ * red and still for an error, unknown activity included (D127).
  */
 .dot {
 	position: absolute;
@@ -338,7 +338,12 @@ body.vscode-context-menu-visible #list .item.menu-target {
 	opacity: 0;
 	animation: facade-breathe 1.8s ease-in-out infinite;
 }
-.dot.not-working { background: var(--vscode-charts-yellow); }
+/* Description text can be translucent (notably in high contrast): paint it over the row, never over the avatar beneath it. */
+.dot.not-working {
+	background: linear-gradient(var(--vscode-descriptionForeground), var(--vscode-descriptionForeground)),
+		linear-gradient(var(--facade-row-background), var(--facade-row-background)), var(--facade-base-background);
+}
+.dot.blocked { background: var(--vscode-charts-yellow); }
 .dot.error { background: var(--vscode-charts-red); }
 
 /* Work: the dot fades towards the row and back - by opacity alone, its cut-out ring staying as it is (PANEL-1.4) */
@@ -402,7 +407,7 @@ body.vscode-reduce-motion .dot.working::after {
 }
 
 .name {
-	flex: 0 1 auto;
+	flex: 0 0 auto;
 	min-width: 0;
 	overflow: hidden;
 	white-space: nowrap;
@@ -426,12 +431,11 @@ body.vscode-reduce-motion .dot.working::after {
 }
 
 /*
- * Where it works, at the line's end where a chat app puts the time: its own width, never squeezed by the name, but at most 40% of the
- * line and cut beyond that; the name has the rest (PANEL-1.3, D72).
+ * Name and location keep a short label whole and share the remaining width; the page measures their displayed fonts and assigns
+ * the widths (PANEL-1.3, D128). Location stays at the line's end, its folder and worktree ellipsized separately in the middle.
  */
 .place {
 	flex: 0 0 auto;
-	max-width: 40%;
 	min-width: 0;
 	margin-left: auto;
 	overflow: hidden;
@@ -442,15 +446,15 @@ body.vscode-reduce-motion .dot.working::after {
 }
 
 /*
- * Where it works, after its workspace folder's name where the window has several: the folder's name gives way first, the location's
- * last - each trimmed to its letters as the rest of the line is (PANEL-1.3).
+ * Keep the folder and worktree as separate labels, their separator visible even when either label needs an ellipsis (PANEL-1.3).
  */
-.place.within {
+.place {
 	display: flex;
 	align-items: baseline;
 }
 
-.place.within > span {
+.place > span {
+	flex: 0 0 auto;
 	min-width: 0;
 	overflow: hidden;
 	white-space: pre;
@@ -458,25 +462,6 @@ body.vscode-reduce-motion .dot.working::after {
 	text-box: trim-both cap alphabetic;
 	padding-block: 4px;
 	margin-block: -4px;
-}
-
-/* The folder's name gives way first, whole: where the place has no room for it, it and its separator go (`narrow`); then the location's, to its ellipsis */
-.place.within > .folder {
-	flex: 0 1000 auto;
-	min-width: 1.5em;
-}
-
-.place.within.narrow > .folder,
-.place.within.narrow > .bullet {
-	display: none;
-}
-
-.place.within > .bullet {
-	flex: 0 0 auto;
-}
-
-.place.within > .tree {
-	flex: 0 1 auto;
 }
 
 .title {
