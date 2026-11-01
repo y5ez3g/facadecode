@@ -19,6 +19,45 @@ const GIT_REMOVE_TIMEOUT_MS = 300_000;
 /** The variables that point Git at another repository than the one it finds from `-C`: an editor started from a hook can carry them. */
 const REPOSITORY_VARIABLES = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_COMMON_DIR', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_IMPLICIT_WORK_TREE', 'GIT_PREFIX'];
 
+/**
+ * The program Git for Windows asks whether to try again to delete a file another program holds - a dialog, where a Git tool set one.
+ * Without it Git asks no one, as no terminal is there, and fails as it does: no prompt is Facade's (WORKTREES-3.2, UX-1.1).
+ */
+const PROMPT_VARIABLES = ['GIT_ASK_YESNO'];
+
+/** What Facade's Git reads its messages in, and how it takes the repository: answers in English, its optional locks not taken. */
+const SET_VARIABLES: Readonly<Record<string, string>> = { GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' };
+
+/**
+ * The environment Facade runs Git in: `env` without the variables that would point it at another repository or have it ask anyone, with
+ * its own language and locks. Their names are compared whatever their case, as Windows compares them.
+ */
+export function gitEnvironment(env: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const dropped = new Set([...REPOSITORY_VARIABLES, ...PROMPT_VARIABLES, ...Object.keys(SET_VARIABLES)]);
+	return { ...Object.fromEntries(Object.entries(env).filter(([name]) => !dropped.has(name.toUpperCase()))), ...SET_VARIABLES };
+}
+
+/**
+ * `git worktree remove` of `worktree` in the repository whose shared Git directory is `commonDir`, without `--force` (WORKTREES-3.2): its
+ * own check sees untracked files whatever the repository's status.showUntrackedFiles says, and on Windows it reaches the files deeper
+ * than the 260 characters a path long had, as `node_modules` holds them.
+ */
+export function removeWorktreeArgs(commonDir: string, worktree: string, platform: NodeJS.Platform = process.platform): string[] {
+	return [...platform === 'win32' ? ['-c', 'core.longpaths=true'] : [], '-C', commonDir, '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', worktree];
+}
+
+/** The Git command `args` run, such as `worktree`: the first that is neither an option nor the value of `-C` or `-c`. */
+function commandOf(args: readonly string[]): string | undefined {
+	for (let at = 0; at < args.length; at++) {
+		if (args[at] === '-C' || args[at] === '-c') {
+			at++;
+		} else if (!args[at].startsWith('-')) {
+			return args[at];
+		}
+	}
+	return undefined;
+}
+
 /** A Git call that failed, with what Git said. */
 export class GitError extends Error {
 	constructor(
@@ -71,12 +110,8 @@ function isInstallerStub(): Promise<boolean> {
 
 /** Git's output; rejects with a `GitError` carrying Git's own words. `input`, where given, is what Git reads on its standard input. */
 function runGit(git: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS, input?: string): Promise<string> {
-	const env: NodeJS.ProcessEnv = { ...process.env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' };
-	for (const name of REPOSITORY_VARIABLES) {
-		delete env[name];
-	}
 	return new Promise((resolve, reject) => {
-		const child = execFile(git, [...args], { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env }, (err, stdout, stderr) => {
+		const child = execFile(git, [...args], { windowsHide: true, timeout: timeoutMs, maxBuffer: 64 * 1024 * 1024, env: gitEnvironment() }, (err, stdout, stderr) => {
 			if (!err) {
 				resolve(String(stdout));
 			} else if (err.code === 'ENOENT') {
@@ -84,8 +119,7 @@ function runGit(git: string, args: readonly string[], timeoutMs = GIT_TIMEOUT_MS
 			} else if (typeof err.code === 'number') {
 				reject(new GitError(String(stderr).trim() || err.message, err.code));
 			} else if (err.killed && err.code === null) {
-				const command = args[0] === '-C' ? args[2] : args[0];
-				reject(new GitError(`Git did not answer within ${timeoutMs / 1000} seconds (git ${command}).`, undefined));
+				reject(new GitError(`Git did not answer within ${timeoutMs / 1000} seconds (git ${commandOf(args)}).`, undefined));
 			} else {
 				reject(new GitError(String(stderr).trim() || err.message, undefined));
 			}
@@ -309,6 +343,5 @@ export async function hasChanges(git: string, folder: string): Promise<boolean> 
  * is kept. Rejects with a `GitError` carrying Git's own words.
  */
 export async function removeWorktree(git: string, commonDir: string, worktree: string): Promise<void> {
-	// Its own check sees untracked files whatever the repository's status.showUntrackedFiles says
-	await runGit(git, ['-C', commonDir, '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', worktree], GIT_REMOVE_TIMEOUT_MS);
+	await runGit(git, removeWorktreeArgs(commonDir, worktree), GIT_REMOVE_TIMEOUT_MS);
 }

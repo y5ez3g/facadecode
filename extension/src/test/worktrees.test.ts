@@ -9,7 +9,7 @@ import * as path from 'path';
 import { branchFolderOf, plannedDestination, whyNotFolderName } from '../core/locations/destination';
 import { worktreeProblemOf } from '../core/locations/problems';
 import { LocationRemoval, WorktreeError, WorktreePlan } from '../core/ports';
-import { checkoutOf, hasChanges, removeWorktree, worktreesOf } from '../host/locations/gitRead';
+import { checkoutOf, gitEnvironment, hasChanges, removeWorktree, removeWorktreeArgs, worktreesOf } from '../host/locations/gitRead';
 import { LocationService } from '../host/locations/service';
 import { NativeCreator, NativeGit, WorktreeGit, WorktreeService } from '../host/locations/worktrees';
 import { tempDir } from './util';
@@ -435,6 +435,36 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 				{ outcome: 'fulfilled', closed: 1 }
 			]);
 			assert.deepStrictEqual([fs.readFileSync(path.join(skipped, 'skipped.json'), 'utf8'), fs.readFileSync(path.join(assumed, 'assumed.json'), 'utf8')], ['{"local": "edit"}', '{"local": "edit"}']);
+		});
+
+		test('Git removes it without --force, on Windows past the 260 characters a path had, asking no one to retry: no prompt variable, in any case, reaches it', () => {
+			assert.deepStrictEqual([removeWorktreeArgs('/r/.git', '/r.worktrees/x', 'linux'), removeWorktreeArgs('C:\\r\\.git', 'C:\\r.worktrees\\x', 'win32')], [
+				['-C', '/r/.git', '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', '/r.worktrees/x'],
+				['-c', 'core.longpaths=true', '-C', 'C:\\r\\.git', '-c', 'status.showUntrackedFiles=normal', 'worktree', 'remove', '--', 'C:\\r.worktrees\\x']
+			]);
+			const env = gitEnvironment({ PATH: '/bin', GIT_ASK_YESNO: 'ask.exe', Git_Ask_YesNo: 'ask.exe', git_dir: '/elsewhere', Lang: 'fr_FR.UTF-8', GIT_ASKPASS: 'pass.exe' });
+			assert.deepStrictEqual(env, { PATH: '/bin', GIT_ASKPASS: 'pass.exe', GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'en_US.UTF-8', LANG: 'en_US.UTF-8', LANGUAGE: 'en' });
+		});
+
+		test('on Windows, what lies deeper than 260 characters - dependencies Git ignores - goes with it', async function () {
+			if (process.platform !== 'win32') {
+				this.skip();
+			}
+			fs.writeFileSync(path.join(repo, '.gitignore'), 'node_modules/\n');
+			git(repo, 'add', '.gitignore');
+			git(repo, 'commit', '-q', '-m', 'ignore');
+			const deep = path.join(temp.dir, 'deep');
+			git(repo, 'worktree', 'add', '-q', '-b', 'deep', deep);
+			let folder = path.join(deep, 'node_modules');
+			while (folder.length < 300) {
+				folder = path.join(folder, 'a-dependency-with-a-long-folder-name');
+			}
+			fs.mkdirSync(folder, { recursive: true });
+			fs.writeFileSync(path.join(folder, 'index.js'), '');
+			const { worktrees, idOf } = await windowWith([repo]);
+
+			assert.deepStrictEqual(await removed(worktrees, idOf(deep)), { outcome: 'fulfilled', closed: 1 });
+			assert.ok(!fs.existsSync(deep));
 		});
 
 		test('a hidden file is compared under its own name, never as a pattern: `a[1].txt` unedited beside `a1.txt` is no change; edited to `a1.txt`\'s content, it is one', async () => {
