@@ -12,7 +12,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { EDITOR_FLAGS, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { EDITOR_FLAGS, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
 import { probeEnvironment } from './probeState';
 
 /** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
@@ -176,7 +176,9 @@ async function main(): Promise<void> {
 		// The flags runTests gives the other parts too: Electron's sandbox cannot start where unprivileged user namespaces are
 		// restricted, as on Ubuntu 24.04 and later
 		let editorOutput = '';
+		const editors: ReturnType<typeof spawn>[] = [];
 		const capture = (child: ReturnType<typeof spawn>) => {
+			editors.push(child);
 			const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
 			child.stdout?.on('data', append);
 			child.stderr?.on('data', append);
@@ -237,9 +239,12 @@ async function main(): Promise<void> {
 			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
 			throw error;
 		} finally {
-			editor.kill('SIGTERM');
-			endMatching(user);
-			endMatching(path.join(facade, 'extension', 'ptyd'));
+			try {
+				await endEditors(editors);
+			} finally {
+				endMatching(user);
+				endMatching(path.join(facade, 'extension', 'ptyd'));
+			}
 		}
 	};
 	/**

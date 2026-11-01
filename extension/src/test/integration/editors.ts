@@ -5,7 +5,7 @@
 // What the integration runners share (ARCHITECTURE-5.2): the official VS Code they run, the environment they leave it, the flags of
 // the editors they start themselves, the repositories they open and how they see another editor's window join the Facade windows.
 
-import { execFileSync, spawnSync } from 'child_process';
+import { ChildProcess, execFileSync, spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -106,6 +106,36 @@ export function endMatching(text: string): void {
 	}
 	const script = 'Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($env:FACADE_IT_END) -and $_.ProcessId -ne $PID } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }';
 	spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, FACADE_IT_END: text }, stdio: 'ignore' });
+}
+
+/**
+ * Reap every editor this journey launched, including the application macOS keeps after its last window closes.
+ * A second launch can exit after forwarding to that original process; retaining only its handle loses the application.
+ * Only these owned handles receive signals. Release captured pipes too, so helpers cannot keep the test runner alive.
+ */
+export async function endEditors(editors: readonly ChildProcess[]): Promise<void> {
+	await Promise.all(editors.map(editor => new Promise<void>((resolve, reject) => {
+		const release = () => { editor.stdout?.destroy(); editor.stderr?.destroy(); };
+		if (!editor.pid || editor.exitCode !== null || editor.signalCode !== null) {
+			release();
+			resolve();
+			return;
+		}
+		const cleanup = () => {
+			clearTimeout(force);
+			clearTimeout(deadline);
+			editor.removeListener('exit', exited);
+			release();
+		};
+		const exited = () => { cleanup(); resolve(); };
+		const force = setTimeout(() => editor.kill('SIGKILL'), 2_000);
+		const deadline = setTimeout(() => {
+			cleanup();
+			reject(new Error(`The test editor process ${editor.pid} did not exit after termination.`));
+		}, 4_000);
+		editor.once('exit', exited);
+		editor.kill('SIGTERM');
+	})));
 }
 
 /** Where the suite's agent CLI is, in `root`: the program each built-in's path names, and the launchers some are installed with. */
