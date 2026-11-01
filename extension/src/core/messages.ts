@@ -224,7 +224,7 @@ export class MessageService implements Messages, Disposable {
 				...earlier.delivery.reason ? { reason: earlier.delivery.reason } : {} };
 		}
 		// Queueing and forwarding before Facade had it spent the same budgets, and so does making its record (RULES-1.2, 1.5)
-		const elapsed = Math.max(0, request.elapsedMs);
+		const elapsed = Number.isFinite(request.elapsedMs) ? Math.max(0, request.elapsedMs) : 0;
 		const start = this.mono() - elapsed;
 		const deadline = this.deps.clock.now() - elapsed + STAGE_MS;
 		const record = this.create({
@@ -1020,9 +1020,14 @@ export class MessageService implements Messages, Disposable {
 		return facts ? { run, alias: facts.alias, name: facts.name } : { run };
 	}
 
+	/** Tells each listener - Message History - of `record`; one that fails stops no delivery, nor any listener after it. */
 	private emit(record: MessageRecord): void {
 		for (const listener of [...this.listeners]) {
-			listener(record);
+			try {
+				listener(record);
+			} catch (err) {
+				this.deps.log.event(`Could not show message ${record.alias} where it is listed: ${messageOf(err)}`);
+			}
 		}
 	}
 }

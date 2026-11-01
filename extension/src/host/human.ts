@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
+import { messageOf } from '../base/errors';
 import type { HumanFailure, HumanPort, RunId } from '../core/ports';
 import { COMMANDS } from '../ui/catalog';
 import { configureAgentsLabel, launchFailureText } from '../ui/presentation';
@@ -68,10 +69,11 @@ export class WindowHuman implements HumanPort {
 		const configureLabel = configureAgentsLabel();
 		const actions = [...options.show ? [showLabel] : [], ...options.configure ? [configureLabel] : []];
 		void vscode.window.showErrorMessage(notificationText(text), ...actions).then(choice => {
+			// What an action opens failing to open is no unhandled failure of the window's
 			if (choice === showLabel && options.show) {
-				void this.show(options.show);
+				this.show(options.show).catch(err => console.error(`Could not show the agent: ${messageOf(err)}`));
 			} else if (choice === configureLabel) {
-				void vscode.commands.executeCommand(COMMANDS.configureAgents);
+				Promise.resolve(vscode.commands.executeCommand(COMMANDS.configureAgents)).catch(err => console.error(`Could not open the agent settings: ${messageOf(err)}`));
 			}
 		});
 	}

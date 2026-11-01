@@ -893,6 +893,21 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 		assert.deepStrictEqual([result.delivery.status, result.delivery.via], ['success', 'read']);
 	});
 
+	test('a listener that fails - Message History - stops no delivery and no other listener; a send whose time spent is not a number has its whole budget, never none', async () => {
+		const { service, input, log } = setUp();
+		const told: string[] = [];
+		service.onDidRecord(() => { throw new Error('the picker went'); });
+		service.onDidRecord(record => told.push(record.id));
+		const sent = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.deepStrictEqual([sent.status, sent.record.delivery.status, told.at(-1)], ['success', 'success', 'm-1']);
+		assert.ok(log.some(line => line === 'Could not show message #m1 where it is listed: the picker went'), log.join('\n'));
+		input.states.set(B, ['draft']);
+		const start = Date.now();
+		const held = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: Number.NaN }));
+		assert.deepStrictEqual([held.status, held.record.delivery.deadline! - start], ['accepted', 600_000]);
+		service.dispose();
+	});
+
 	test('a delivery under way as its window reloads goes on after it, within its own deadline, and its sender is told how it went (RULES-1.7, 1.9)', async () => {
 		const { service, input, stored, reload } = setUp();
 		input.states.set(B, ['draft']);

@@ -36,7 +36,7 @@ const RECORDS: readonly MessageRecord[] = [
 ];
 
 /** The editor, as far as Message History and the person's notifications use it. */
-function fakeEditor() {
+function fakeEditor(overrides: { readonly openTextDocument?: () => Promise<unknown> } = {}) {
 	const none = { dispose: () => undefined };
 	const listeners = <T>() => {
 		const set = new Set<(value: T) => void>();
@@ -67,7 +67,7 @@ function fakeEditor() {
 		},
 		workspace: {
 			registerTextDocumentContentProvider: (scheme: string, provider: { provideTextDocumentContent(uri: unknown): string }) => { providers.set(scheme, provider); return none; },
-			openTextDocument: async (uri: { scheme: string; path: string; query: string }) => { const text = providers.get(uri.scheme)!.provideTextDocumentContent(uri); opened.push({ uri, text }); return { uri }; },
+			openTextDocument: overrides.openTextDocument ?? (async (uri: { scheme: string; path: string; query: string }) => { const text = providers.get(uri.scheme)!.provideTextDocumentContent(uri); opened.push({ uri, text }); return { uri }; }),
 			onDidCloseTextDocument: () => none
 		},
 		commands: { registerCommand: (id: string, run: (...args: unknown[]) => unknown) => { commands.set(id, run); return none; } }
@@ -175,6 +175,30 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		await flush();
 		assert.deepStrictEqual([editor.revealed, editor.opened.length], [[ada.run], 0]);
 		port.dispose();
+	});
+
+	test('#human: a message or an agent that fails to open is no unhandled failure of the window', async () => {
+		const unhandled: unknown[] = [];
+		const onUnhandled = (reason: unknown) => void unhandled.push(reason);
+		process.on('unhandledRejection', onUnhandled);
+		const errors = console.error;
+		console.error = () => undefined;
+		try {
+			for (const action of ['Open Message', 'Show Agent']) {
+				const editor = fakeEditor({ openTextDocument: () => Promise.reject(new Error('cannot open')) });
+				editor.choose(action);
+				const port = new editor.contact.WindowContact(() => Promise.reject(new Error('cannot show')), 'en');
+				const message = record(12, { from: ada, to: { run: '@human' }, text: 'Please review the plan.' }, T);
+				port.contact(message, () => message);
+				await flush();
+				await flush();
+				port.dispose();
+			}
+		} finally {
+			console.error = errors;
+			process.off('unhandledRejection', onUnhandled);
+		}
+		assert.deepStrictEqual(unhandled, []);
 	});
 
 	test('#human: Open Message looks the message up by its ID, however many came since; one no longer kept says so', async () => {
