@@ -217,14 +217,9 @@
 					"group": "1_locations@2"
 				},
 				{
-					"command": "facade.messageHistory",
-					"when": "view == facade.agents",
-					"group": "9_configure@1"
-				},
-				{
 					"command": "facade.configureAgents",
 					"when": "view == facade.agents",
-					"group": "9_configure@2"
+					"group": "9_configure@1"
 				}
 			],
 			"webview/context": [

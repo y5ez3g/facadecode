@@ -22,7 +22,8 @@ card loading. Title actions in order: Filter by Working Location (`filter`, fill
 (Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
 The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Message History... and Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log are Command Palette entries, not view-menu items (D83). Facade commands
+Configure Agents... in a separate group. Message History..., Go to Agent..., Show Agent Launch and Show Agents Log
+are Command Palette entries, not view-menu items (D83, D129). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
 
@@ -262,6 +263,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
+- 2026-11-01: Removed Message History... from the view's More Actions menu at the owner's request; its Command
+  Palette entry remains (D129).
 - 2026-11-01: Combined D128 with the upstream Pin and overlay scrollbar: fit text within the space left by the Pin,
   refitting when it is added or removed, while retaining PANEL-3.3's clipping and scrolling behavior.
 - 2026-11-01: Clarified 1.3 after the owner spotted a gap before the location separator: fitting budgets and final

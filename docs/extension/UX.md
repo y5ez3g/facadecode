@@ -142,7 +142,7 @@ run and are validated against current state, without falling back to the selecti
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `copyAgentReference` | Copy Agent Reference | Known owned record; card/Go to Agent | LIFECYCLE-2.1 |
 | `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
-| `messageHistory` | Message History... | Always; this window's records; panel `…` menu | COLLABORATION-3.2 |
+| `messageHistory` | Message History... | Always; this window's records; Command Palette | COLLABORATION-3.2 |
 | `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
 | `clearFilter` | Clear Filter | Active filter; card/empty state | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
