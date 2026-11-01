@@ -15,7 +15,10 @@ import { EARLIER_PROTOCOLS } from '../ptyd/protocol';
 suite('Reaching this window\'s own ptyd: only one that is not there is started (ARCHITECTURE-2.3)', () => {
 	const busy: Reached = { absent: false, reason: 'it took no connection within 2 seconds' };
 	const absent: Reached = { absent: true, reason: 'connect ENOENT' };
-	const socketPath = path.join(os.tmpdir(), 'unused-ptyd.sock');
+	// In a private folder of its own, as a ptyd socket on POSIX must be; nothing listens there
+	const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-reach-'));
+	const socketPath = ptydSocketPath(directory);
+	suiteTeardown(() => fs.rmSync(directory, { recursive: true, force: true }));
 
 	test('a ptyd that is there but busy - a slow Windows pipe - is waited for, and no second one is started', async () => {
 		let starts = 0;

@@ -65,16 +65,24 @@ suite('Window network: window components register and carry requests between win
 		const caller = windowOf(TOKEN_A, 'Caller', async () => undefined);
 		await caller.start();
 		const blocked = windowOf(TOKEN_B, 'Backend', async () => 'reached', 'local', { retryMs: 100 });
-		// Another listener holds its socket now, as nothing should: its listen fails
-		const squatter = net.createServer(socket => socket.destroy());
-		await new Promise<void>((resolve, reject) => { squatter.once('error', reject); squatter.listen(blocked.socketPath, resolve); });
+		// Something holds its socket's place now, as nothing should, and its listen fails: another listener of its Windows pipe; on
+		// POSIX, where a socket file left there is replaced, a folder in its place
+		let release: () => Promise<void>;
+		if (process.platform === 'win32') {
+			const squatter = net.createServer(socket => socket.destroy());
+			await new Promise<void>((resolve, reject) => { squatter.once('error', reject); squatter.listen(blocked.socketPath, resolve); });
+			release = () => new Promise<void>(resolve => squatter.close(() => resolve()));
+		} else {
+			fs.mkdirSync(blocked.socketPath, { recursive: true });
+			release = async () => fs.rmdirSync(blocked.socketPath);
+		}
 		await assert.rejects(blocked.start());
 		blocked.publish([AGENT], 'Backend');
 		assert.ok(!fs.existsSync(entryOf(blocked.window)), 'no entry names a socket it does not listen on');
 		assert.deepStrictEqual(blocked.status().listening, false);
 		assert.ok(blocked.status().problem);
 		assert.strictEqual(logs.filter(line => /cannot reach this window/.test(line)).length, 1);
-		await new Promise<void>(resolve => squatter.close(() => resolve()));
+		await release();
 		const deadline = Date.now() + 5_000;
 		while (!blocked.status().listening) {
 			assert.ok(Date.now() < deadline, 'it listens again once it can');
