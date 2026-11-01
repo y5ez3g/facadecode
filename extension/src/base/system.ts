@@ -60,14 +60,26 @@ export function processStartTime(pid: number, fresh = false): number | undefined
 	const asked = Date.now();
 	let start: number | undefined;
 	if (process.platform === 'win32') {
-		const found = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`], { encoding: 'utf8', timeout: PROCESS_READ_TIMEOUT_MS, windowsHide: true });
-		const time = found.status === 0 ? Date.parse(found.stdout.trim()) : NaN;
-		start = Number.isNaN(time) ? undefined : time;
+		const found = spawnSync('powershell.exe', startQuestion(pid), POWERSHELL_OPTIONS);
+		start = found.status === 0 ? startAnswered(found.stdout) : undefined;
 	} else {
 		start = processStartedAt(pid);
 	}
 	keepStart(pid, start, asked);
 	return start;
+}
+
+/** How PowerShell is asked when the process `pid` started: in UTC, to the millisecond. */
+function startQuestion(pid: number): readonly string[] {
+	return ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`];
+}
+
+const POWERSHELL_OPTIONS = { encoding: 'utf8', timeout: PROCESS_READ_TIMEOUT_MS, windowsHide: true } as const;
+
+/** The start PowerShell answered, in milliseconds since the epoch; undefined where its answer is none. */
+function startAnswered(answer: string): number | undefined {
+	const time = Date.parse(answer.trim());
+	return Number.isNaN(time) ? undefined : time;
 }
 
 /**
@@ -102,9 +114,8 @@ export function processStartTimeAsync(pid: number, fresh = false): Promise<numbe
 		return shared;
 	}
 	const asked = Date.now();
-	const reading = new Promise<number | undefined>(resolve => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid} -ErrorAction Stop).StartTime.ToUniversalTime().ToString('o')`], { encoding: 'utf8', timeout: PROCESS_READ_TIMEOUT_MS, windowsHide: true }, (err, stdout) => {
-		const time = err ? NaN : Date.parse(String(stdout).trim());
-		const start = Number.isNaN(time) ? undefined : time;
+	const reading = new Promise<number | undefined>(resolve => execFile('powershell.exe', startQuestion(pid), POWERSHELL_OPTIONS, (err, stdout) => {
+		const start = err ? undefined : startAnswered(String(stdout));
 		keepStart(pid, start, asked);
 		if (startsReading.get(pid) === reading) {
 			startsReading.delete(pid);
