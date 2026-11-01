@@ -8,6 +8,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { performance } from 'perf_hooks';
+import { provesAbsent } from '../base/connect';
 import { codeOf, messageOf } from '../base/errors';
 import { lineReader } from '../base/lines';
 import { isAgentKey } from './keys';
@@ -812,8 +813,9 @@ function isAlive(pid: number): boolean {
 }
 
 /**
- * What answers on the socket at `socketPath`: a connection proves a ptyd there, `alive`; a refusal or no socket at all proves none,
- * `gone`; a timeout or any other error proves nothing - a ptyd too busy to answer at once, say - and is `unknown`, never `gone`.
+ * What answers on the socket at `socketPath`: a connection proves a ptyd there, `alive`; what `provesAbsent` takes for nothing
+ * listening - no socket at all, or on POSIX a refusal - proves none, `gone`; a timeout or any other error proves nothing - a ptyd too
+ * busy to answer at once, say - and is `unknown`, never `gone`.
  */
 export function probe(socketPath: string, ms = 1_000): Promise<'alive' | 'gone' | 'unknown'> {
 	return new Promise(resolve => {
@@ -824,7 +826,7 @@ export function probe(socketPath: string, ms = 1_000): Promise<'alive' | 'gone' 
 			resolve(found);
 		};
 		socket.once('connect', () => done('alive'));
-		socket.once('error', err => done(['ECONNREFUSED', 'ENOENT'].includes(codeOf(err) ?? '') ? 'gone' : 'unknown'));
+		socket.once('error', err => done(provesAbsent(codeOf(err)) ? 'gone' : 'unknown'));
 		const timer = setTimeout(() => done('unknown'), ms);
 		timer.unref?.();
 	});

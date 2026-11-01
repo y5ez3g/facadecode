@@ -12,6 +12,15 @@ import * as net from 'net';
  */
 export type Reached = { readonly socket: net.Socket } | { readonly socket?: undefined; readonly absent: boolean; readonly reason: string };
 
+/**
+ * Whether a failure to connect, by its `code`, proves nothing listens there (ARCHITECTURE-2.3): no such name; or on POSIX a name
+ * nothing listens on, as a process that ended leaves its socket file. A Windows pipe goes with its process, so a refusal there
+ * proves nothing. The one rule for the windows that start ptyd and for a ptyd that takes over its socket.
+ */
+export function provesAbsent(code: string | undefined): boolean {
+	return code === 'ENOENT' || (process.platform !== 'win32' && code === 'ECONNREFUSED');
+}
+
 /** Connects to `socketPath` within `ms` (ARCHITECTURE-2.1, 2.3): see {@link Reached}. */
 export function connectWithin(socketPath: string, ms: number): Promise<Reached> {
 	return new Promise(resolve => {
@@ -30,7 +39,7 @@ export function connectWithin(socketPath: string, ms: number): Promise<Reached> 
 		}, ms);
 		const failed = (err: NodeJS.ErrnoException) => {
 			socket.destroy();
-			settle({ absent: err.code === 'ENOENT' || (process.platform !== 'win32' && err.code === 'ECONNREFUSED'), reason: err.message });
+			settle({ absent: provesAbsent(err.code), reason: err.message });
 		};
 		socket.once('error', failed);
 		socket.once('connect', () => {

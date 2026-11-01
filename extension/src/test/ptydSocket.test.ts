@@ -120,7 +120,8 @@ suite('ptyd liveness: only a connection proves a ptyd there, only a refusal or n
 
 	test('a ptyd too busy to answer at once, or one whose socket fails otherwise, is no ptyd gone: a new one gives way and takes no lock', async function () {
 		this.timeout(10_000);
-		for (const found of ['silence', 'EACCES', 'EPERM', 'EAGAIN']) {
+		// A Windows pipe goes with its process: a refusal there proves nothing (provesAbsent)
+		for (const found of ['silence', 'EACCES', 'EPERM', 'EAGAIN', ...process.platform === 'win32' ? ['ECONNREFUSED'] : []]) {
 			const place = ptydPlace('fc-busy-');
 			try {
 				const { PtydServer: Server, probe } = probing(found);
@@ -136,7 +137,7 @@ suite('ptyd liveness: only a connection proves a ptyd there, only a refusal or n
 	});
 
 	test('a socket refused or absent is a ptyd that died, taken over; one that takes the connection is alive, and kept', async () => {
-		for (const found of ['ECONNREFUSED', 'ENOENT']) {
+		for (const found of ['ENOENT', ...process.platform === 'win32' ? [] : ['ECONNREFUSED']]) {
 			const place = ptydPlace('fc-gone-');
 			const { PtydServer: Server, probe } = probing(found);
 			const taking = new Server(place.socket);
