@@ -235,6 +235,26 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.deepStrictEqual([opened, prefixAgain, entered], [['feat/', 'Starts from main', undefined, []], ['Enter a branch name.', []], [true, 'Enter a branch name.']]);
 	});
 
+	test('UX-2.4: how long ago is said by one formatter for each language, however many rows a picker says it for', () => {
+		const original = Intl.RelativeTimeFormat;
+		let made = 0;
+		const counting = class extends original {
+			constructor(...args: ConstructorParameters<typeof original>) {
+				super(...args);
+				made++;
+			}
+		};
+		(Intl as { RelativeTimeFormat: unknown }).RelativeTimeFormat = counting;
+		try {
+			const { ago } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+			const now = Date.UTC(2026, 10, 1, 12);
+			const said = Array.from({ length: 100 }, (_, n) => ago(now - n * 60_000, now, 'en'));
+			assert.deepStrictEqual([said[0], said[5], made], ['now', '5 min. ago', 1]);
+		} finally {
+			(Intl as { RelativeTimeFormat: unknown }).RelativeTimeFormat = original;
+		}
+	});
+
 	test('a remote environment is named as VS Code\'s remote indicator names it, from the authority the local window sees (LIFECYCLE-1.1, D67)', () => {
 		const { environmentLabel } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
 		const hex = Buffer.from(JSON.stringify({ hostName: 'build.example.com', user: 'me' })).toString('hex');

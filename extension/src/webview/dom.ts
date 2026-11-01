@@ -153,9 +153,17 @@ export function contrastOf(text: string, background: string): number | undefined
 	return (light + 0.05) / (dark + 0.05);
 }
 
+/** A formatter for each language the page is in: each state makes every card's hover, and making one costs far more than using it. */
+const relativeTimeFormats = new Map<string, Intl.RelativeTimeFormat>();
+
 /** How long ago `time` was, as the browser says it in the window's language: now, 5 min. ago, yesterday, 3 days ago (UX-2.4). */
 export function relativeTime(time: number): string {
-	const format = new Intl.RelativeTimeFormat(document.documentElement.lang || undefined, { numeric: 'auto', style: 'short' });
+	const language = document.documentElement.lang;
+	let format = relativeTimeFormats.get(language);
+	if (!format) {
+		format = new Intl.RelativeTimeFormat(language || undefined, { numeric: 'auto', style: 'short' });
+		relativeTimeFormats.set(language, format);
+	}
 	const minutes = Math.floor((Date.now() - time) / 60_000);
 	if (minutes < 1) {
 		return format.format(0, 'second');

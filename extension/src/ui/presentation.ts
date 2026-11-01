@@ -133,9 +133,16 @@ export function configureAgentsLabel(): string {
 	return vscode.l10n.t("Configure Agents");
 }
 
+/** A formatter for each language: making one costs far more than using it, and a picker says how long ago for each of its rows. */
+const relativeTimeFormats = new Map<string, Intl.RelativeTimeFormat>();
+
 /** How long ago `time` was, in the window's language, as briefly as it says it: now, 5 min. ago, yesterday (UX-2.4). */
 export function ago(time: number, now: number, language: string): string {
-	const format = new Intl.RelativeTimeFormat(language, { numeric: 'auto', style: 'short' });
+	let format = relativeTimeFormats.get(language);
+	if (!format) {
+		format = new Intl.RelativeTimeFormat(language, { numeric: 'auto', style: 'short' });
+		relativeTimeFormats.set(language, format);
+	}
 	const minutes = Math.floor(Math.max(0, now - time) / 60_000);
 	if (minutes < 1) {
 		return format.format(0, 'second');
