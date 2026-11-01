@@ -124,9 +124,9 @@ const ROUTE_INPUT_MS = 30_000;
 
 /**
  * The hops back from another window, charged to a message's two seconds before that window answers it: forwarding spends the same
- * allowance, and the answer comes within them (RULES-1.2).
+ * allowance, and the answer comes within them (RULES-1.2). Half a second: a remote window's hops cross its SSH connection.
  */
-const ROUTE_TRANSIT_MS = 250;
+const ROUTE_TRANSIT_MS = 500;
 
 /** How a later outcome reaches the caller: what accepted texts say of it (MCP-1.3, RULES-1.7). */
 const LATER = 'recorded later as a Facade result in your inbox, and typed into your terminal where your CLI\'s message input allows';
