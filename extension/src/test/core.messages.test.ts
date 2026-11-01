@@ -390,6 +390,23 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.length], [0, 0]);
 	});
 
+	test('a whole text whose Enter never went is no partial input at its deadline: its submission is unconfirmed, as its result says (MCP-1.2)', async () => {
+		const { service, input } = setUp();
+		input.effects.set(B, [{ outcome: 'partial', text_written: 'full', enter_written: false }]);
+		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(20_000);
+		const failed = service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.effects], ['failure', 'submission_unconfirmed', { outcome: 'partial', text_written: 'full', enter_written: false }]);
+		const result = service.inbox(A, { all: true, limit: 10 }).records.find(record => record.about === 'm-1')!;
+		assert.match(result.text, /its CLI did not confirm the submission \(submission_unconfirmed\)/);
+		// Part of the text is partial input
+		const part = setUp();
+		part.input.effects.set(B, [{ outcome: 'partial', text_written: 'partial', enter_written: false }]);
+		await settled(part.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(20_000);
+		assert.strictEqual(part.service.history().find(record => record.id === 'm-1')!.delivery.reason, 'partial_input');
+	});
+
 	test('a later Enter is only over the draft its paste showed as - its placeholder, its number too - which every later look is given (D118)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);

@@ -942,12 +942,15 @@ function effectsText(effects: InputEffects): string {
 	return `${effects.outcome} (text ${effects.text_written ?? 'unknown'}, ${enter})`;
 }
 
-/** Why a stage that ran out of time failed: what went in, if anything did, else what stood in the way (MCP-1.2). */
+/**
+ * Why a stage that ran out of time failed: what went in, if anything did - part of its text, or its text without a confirmed
+ * submission, its Enter not written or not taken - else what stood in the way (MCP-1.2).
+ */
 function finalReason(stage: Stage): string {
-	if (stage.effects.outcome === 'partial') {
+	if (stage.effects.text_written === 'partial') {
 		return 'partial_input';
 	}
-	if (stage.effects.outcome === 'unknown') {
+	if (stage.effects.outcome === 'partial' || stage.effects.outcome === 'unknown') {
 		return 'submission_unconfirmed';
 	}
 	return stage.obstacle ?? 'timeout';
