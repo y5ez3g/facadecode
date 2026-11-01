@@ -22,7 +22,7 @@ card loading. Title actions in order: Filter by Working Location (`filter`, fill
 (Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
 The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log are Command Palette entries, not view-menu items (D83). Facade commands
+Message History... and Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log are Command Palette entries, not view-menu items (D83). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
 
@@ -75,9 +75,12 @@ all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibili
 **The second line adds the most useful known fact without claiming task completion.**
 
 Priority: retained failure or specific connection/status error; known native blocker; generic activity-unavailable
-explanation; active startup stage, active until the CLI first shows its activity (CLIS-2.3); CLI title; fallback. When a known native blocker coexists with unavailable activity,
-lead with the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
-Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
+explanation; unavailable Facade tools; active startup stage, active until the CLI first shows its activity (CLIS-2.3);
+CLI title; creation prompt first line; fallback. When a known native blocker coexists with unavailable activity, lead with
+the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
+A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file} in this folder`,
+and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
+title. Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
 `Ready for your first message`. Never `Done, waiting for you` from a turn end. Native blockers use CLI words or
 `Needs permission`, `Sign-in required`, `Waiting for an answer`; no popup solely for them.
 
@@ -90,8 +93,11 @@ unavailable`; the accessible label preserves it. No unread dot, completed check,
 
 **Every fact cut from a card remains readable without relying on color.**
 
-Card tooltip lines, one fact per line: name, short run ID and CLI; full title; state and reason; started relative time;
-qualified location; its path, the home folder written `~` except on Windows; window. Accessible label: name, short run
+Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason; for
+a working agent, how long ago its CLI reported that work, `Reported working 25 min. ago` - the CLI's last word, which a long
+silence leaves for the person to judge rather than turning it into idle or done, as Orca shows `No update in …` (D114);
+started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
+written `~` except on Windows; window. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,
 options with `aria-selected`, decorative icons hidden, one roving Tab stop. Update labels in place. State-change
 announcements are polite, coalesced, and do not repeatedly announce spinner/progress ticks.
@@ -102,8 +108,8 @@ announcements are polite, coalesced, and do not repeatedly announce spinner/prog
 
 **The list is a manually reorderable stack; state changes do not move cards.**
 
-A new card goes first. Move Up/Down works within the list. Explicit close removes a card immediately; no stopping card
-remains. There are no batch actions. Click selects immediately and reveals its terminal. Selection follows the last
+A new card goes first, whether a person or an agent started it. Move Up/Down works within the list. Explicit close
+removes a card immediately; no stopping card remains. There are no batch actions or automatic creation-tree grouping. Click selects immediately and reveals its terminal. Selection follows the last
 active owned agent terminal, survives focus on a file/unrelated terminal, and disappears when that record is removed. A
 failed launch remains selected. Keyboard focus and selection are independent.
 
@@ -169,7 +175,7 @@ CSP:
 `default-src 'none'; style-src <cspSource>; font-src <cspSource>; img-src <cspSource>; script-src 'nonce-<nonce>';`.
 Nonce is 16 random bytes per page. Escape `<` in embedded localization JSON, use textContent for CLI/user strings,
 validate incoming actions and reject unknown keys/types. Local resource roots are only bundled media/webview output. No
-external image fetches, remote scripts, injected HTML or secrets in state. Cards, focus, open context framing and avatar
+external image fetches, remote scripts, injected HTML, command links from messages or secrets in state. Cards, focus, open context framing and avatar
 nodes survive ordinary text changes; initial draw/filter changes do not animate.
 
 ### 3.3 Scrolling
@@ -202,6 +208,10 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
+- 2026-10-31: 1.5's hover says how long ago a working agent's CLI reported its work (D114).
+- 2026-10-30: Step 2 of the Facade Code extension: 1.1 adds Message History... to the view menu; 1.4 adds an
+  unavailable-tools explanation and a creation prompt's first line; 1.5 names an agent's creator; 2.1 places agent-started
+  cards like any other without tree grouping; 3.2 renders no command links from messages.
 - 2026-10-31: 3.3's wheel is VS Code's list code, ported, and its scrollbar the page's own (D87).
 - 2026-10-31: 1.1's New Agent shows Facade's own copy of `new-session`, which VS Code before 1.111 does not have (D85).
 - 2026-10-31: 2.3's Filter by Working Location steps by folder; All Locations and All Worktrees replace All

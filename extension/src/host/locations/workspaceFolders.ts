@@ -7,12 +7,7 @@ import { checkoutOf, gitExecutableOf, hasChanges, removeWorktree, worktreesOf } 
 import { FolderSource } from './service';
 import { GitCreationSettings, WorktreeGit } from './worktrees';
 
-/** The execution environment of this window's workspace (PRODUCT-5.3): `local`, or the remote it runs in. */
-export function editorEnvironment(): string {
-	// The remote authority names the host too (`ssh-remote+build-box`), so two hosts of one kind never share location IDs
-	const authority = (vscode.workspace.workspaceFolders ?? [])[0]?.uri.authority;
-	return vscode.env.remoteName ? authority || vscode.env.remoteName : 'local';
-}
+export { editorEnvironment } from '../editorEnvironment';
 
 /** The window's workspace folders, in editor order, each with its original URI and its path in its environment. */
 export function editorFolders(): FolderSource {

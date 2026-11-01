@@ -92,3 +92,52 @@ suite('ptyd native spawn options (ARCHITECTURE-1.2)', () => {
 		});
 	}
 });
+
+suite('ptyd: a Windows console is ended once (LIFECYCLE-4.2)', () => {
+	test('terminate past its grace, a resize and the run forgotten end its console once: node-pty\'s second kill reaches a console already freed', async () => {
+		let kills = 0;
+		let resizes = 0;
+		let exit: ((event: { exitCode: number; signal?: number }) => void) | undefined;
+		const pty = { spawn: () => ({ pid: 4242, onData() {}, onExit(listener: typeof exit) { exit = listener; }, kill() { kills++; }, resize() { resizes++; }, write() {} }) };
+		const { Run } = withModules({ 'node-pty': pty })<typeof import('../ptyd/run')>(require.resolve('../ptyd/run'));
+		const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+		try {
+			Object.defineProperty(process, 'platform', { value: 'win32' });
+			const run = new Run({ run: 'test', owner: 'test', file: 'agent.exe', args: [], cwd: 'work', env: {}, cols: 80, rows: 24, meta: {} });
+			// Its end comes only after the grace, as node-pty's kill there first lists the console's processes
+			setTimeout(() => exit!({ exitCode: 1 }), 200);
+			const ending = run.terminate(50);
+			run.resize(100, 30);
+			assert.strictEqual(await ending, 'terminated');
+			run.dispose();
+			assert.deepStrictEqual([kills, resizes], [1, 0]);
+		} finally {
+			Object.defineProperty(process, 'platform', original);
+		}
+	});
+});
+
+suite('ptyd: a run counts as started once its program has a PID (ARCHITECTURE-2.3)', () => {
+	/** A Run on a stand-in console that starts its program `startAfter` ms after the spawn, or reports an exit then instead. */
+	function delayed(outcome: { readonly pid?: number; readonly exitCode?: number }) {
+		const pty = { pid: 0, onData() {}, exit: undefined as ((event: { exitCode: number }) => void) | undefined, onExit(listener: (event: { exitCode: number }) => void) { this.exit = listener; }, kill() {}, write() {}, resize() {} };
+		const { Run } = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/run')>(require.resolve('../ptyd/run'));
+		const run = new Run({ run: 'test', owner: 'test', file: 'agent.exe', args: [], cwd: 'work', env: {}, cols: 80, rows: 24, meta: {} });
+		setTimeout(() => outcome.pid !== undefined ? pty.pid = outcome.pid : pty.exit!({ exitCode: outcome.exitCode! }), 60);
+		return run;
+	}
+
+	test('a program started after the spawn - as node-pty 1.2 starts a Windows console\'s - is started once its PID is there', async () => {
+		const run = delayed({ pid: 4242 });
+		assert.strictEqual(run.info(false).pid, 0);
+		await run.started();
+		assert.strictEqual(run.info(false).pid, 4242);
+		run.dispose();
+	});
+
+	test('a program that ends before it has a PID never started: Windows\' error is said as node-pty said it when it threw', async () => {
+		const run = delayed({ exitCode: 2 });
+		await assert.rejects(run.started(), /^Error: Cannot create process \(error code: 2\)$/);
+		run.dispose();
+	});
+});

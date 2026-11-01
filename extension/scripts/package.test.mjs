@@ -197,7 +197,8 @@ test('the packaged window dependency runs locally, exports no API and contains n
 	assert.deepEqual(manifest.extensionKind, ['ui']);
 	assert.equal(manifest.api, 'none');
 	assert.equal(manifest.version, runtime.version);
-	assert.ok(runtime.extensionDependencies.includes(`${manifest.publisher}.${manifest.name}`));
+	assert.ok(runtime.extensionPack.includes(`${manifest.publisher}.${manifest.name}`));
+	assert.equal(runtime.extensionDependencies, undefined);
 	assert.equal(manifest.contributes, undefined);
 	assert.equal(manifest.dependencies, undefined);
 	const files = filesOfZip(path.join(root, 'build', 'vsix', `${manifest.name}-${manifest.version}.vsix`));

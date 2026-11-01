@@ -68,6 +68,13 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 		]);
 	});
 
+	test('withheld folder trust is shown as not granted, with no claim that a file entry will be written', () => {
+		const launch = codex({ trust: { kind: 'file', target: { file: '/home/ada/.claude.json', keys: ['projects', '/home/ada', 'hasTrustDialogAccepted'], entry: { value: true }, folder: '/home/ada', withheld: 'the home folder covers all projects' } } });
+		const text = launchDocument({ location: { label: 'home', path: '/home/ada' }, yolo: { value: false }, launches: [launch], entries: [], problems: [], now });
+		assert.match(text, /Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal/);
+		assert.ok(!text.includes('merged into'));
+	});
+
 	test('a CLI turned off, misconfigured, not found or unable to start says why, and no plan or program is invented for it', () => {
 		const sections = (launch: LaunchDescription) => launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: { value: true }, launches: [launch], entries: [], problems: [], now }).split('\n').slice(5);
 		const off = sections(codex({ enabled: false, args: undefined, trust: undefined }));

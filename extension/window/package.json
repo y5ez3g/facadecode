@@ -2,7 +2,7 @@
 	"name": "facadecode-window",
 	"displayName": "%windowDisplayName%",
 	"description": "%windowDescription%",
-	"version": "0.0.1",
+	"version": "0.2.0",
 	"preview": true,
 	"private": true,
 	"publisher": "facade",

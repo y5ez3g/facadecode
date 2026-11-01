@@ -8,8 +8,8 @@ import { replaceFile } from '../base/files';
 import type { OwnedWrite } from '../base/ownership';
 
 /**
- * Launches that failed before a process existed, kept red until closed (LIFECYCLE-1.5): a process that ran is remembered by
- * ptyd instead. One small JSON file per workspace, rewritten whole (ARCHITECTURE-2.4).
+ * Launches that failed before a process existed, kept red until closed (LIFECYCLE-1.5), and request-bearing run metadata for
+ * one hour (MCP-1.1). Request-only records never restore a pair; ptyd owns live processes. One JSON file per workspace.
  */
 export class RetainedFile<T extends { readonly id: string; readonly name: string; readonly alias: string }> {
 	private readonly file: string;

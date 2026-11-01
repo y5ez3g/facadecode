@@ -152,6 +152,7 @@ export function customAdapterOf(settings: CustomCliSettings): CliAdapter {
 		setting: settings.setting,
 		command: settings.path,
 		groups: {},
+		takes: { model: false, effort: false },
 		values: () => ({}),
 		sandbox: () => ({ state: 'unknown' }),
 		approvals: () => ({ state: 'unknown' }),

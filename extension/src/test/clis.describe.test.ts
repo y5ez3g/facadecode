@@ -66,7 +66,9 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 		assert.deepStrictEqual(claude.environment.variables.filter(each => each.source === 'adapter'), [{ source: 'adapter', name: 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE', value: null }]);
 		// The trust each start is given, as its arguments, or as the entry merged into the CLI's file - named, never written (CLIS-3.3)
 		const trusted = ['-c', `projects={ ${tomlString(fs.realpathSync(cwd))} = { trust_level = "trusted" } }`];
-		assert.deepStrictEqual([claude.sandbox, codex.trust, codex.args!.slice(2, 4)], [{ state: 'on' }, { kind: 'arguments', args: trusted }, trusted]);
+		const trustAt = codex.args!.indexOf(trusted[1]);
+		assert.ok(trustAt > 0, 'the planned invocation includes its trust override');
+		assert.deepStrictEqual([claude.sandbox, codex.trust, codex.args!.slice(trustAt - 1, trustAt + 1)], [{ state: 'on' }, { kind: 'arguments', args: trusted }, trusted]);
 		assert.deepStrictEqual(claude.trust, { kind: 'file', target: { file: path.join(temp.dir, '.claude.json'), keys: ['projects', fs.realpathSync(cwd), 'hasTrustDialogAccepted'], entry: { value: true }, folder: fs.realpathSync(cwd) } });
 		assert.ok(!fs.existsSync(path.join(temp.dir, '.claude.json')));
 		// A built-in turned off is described, with no plan

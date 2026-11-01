@@ -65,6 +65,8 @@ export async function activate(): Promise<void> {
 		}
 		const runId = (JSON.parse(fs.readFileSync(OUT, 'utf8').split('\n')[0]) as { runId: string }).runId;
 		const card = await until('the same card in the workspace', async () => (await state()).cards.find(each => each.runId === runId)).catch(() => undefined);
+		// The editor closes the terminals of the extension host it restarted in its own time: what the window settles to is judged
+		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => each.name === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name } : null, terminals: vscode.window.terminals.map(each => each.name) });
 	} catch (err) {
 		write({ phase: 'error', error: String(err) });

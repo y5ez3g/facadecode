@@ -120,6 +120,36 @@ export interface PlanRequest {
 	readonly cli: string;
 	readonly location: Location;
 	readonly yolo: boolean;
+	/** This start's own model and effort, over the configured launch arguments (CLIS-1.4). */
+	readonly model?: string;
+	readonly effort?: string;
+	/** The creation prompt, given natively where the CLI's adapter maps one (COLLABORATION-2.2). */
+	readonly prompt?: string;
+	/** The run's MCP shim, where orchestration is on for this start; absent, nothing is injected (RULES-4.4, CLIS-2.2). */
+	readonly tools?: McpServerLaunch;
+}
+
+/** An MCP stdio server as a CLI's configuration names it (MCP-6.1). */
+export interface McpServerLaunch {
+	readonly command: string;
+	readonly args: readonly string[];
+	readonly env: { readonly [name: string]: string };
+}
+
+/**
+ * Why an agent runs without its Facade tools, as the card says it in plain words (PANEL-1.4): its CLI starts through cmd.exe, which
+ * cannot take their arguments; the files they need could not be written; or its folder holds another `facade` skill or server.
+ */
+/**
+ * Why a run has no Facade tools, for the person's words (CLIS-2.2): its CLI runs through cmd.exe, its files could not be written, a
+ * file of the person's is in the way, or a variable of theirs the tools' would go on could not be read.
+ */
+export type ToolsProblem = 'cmd' | 'files' | 'conflict' | 'variable';
+
+/** A capability as an adapter stands behind it (CLIS-2.1). */
+export interface CapabilityState {
+	readonly state: 'supported' | 'unavailable' | 'unverified';
+	readonly reason: string;
 }
 
 /** A fully computed launch, made before any file or process exists (CLIS-4.2). */
@@ -132,8 +162,27 @@ export interface LaunchPlan {
 	readonly args: readonly string[];
 	readonly env: { readonly [name: string]: string };
 	readonly cwd: string;
+	/** The CLI's installed version where its installation says it: a diagnostic, never a gate (CLIS-2.1). */
+	readonly version?: string;
+	readonly model?: string;
+	readonly effort?: string;
+	/** Whether the Facade MCP server was injected, and why not where it could not be (CLIS-2.2), by kind for the person's words. */
+	readonly tools: { readonly state: 'injected' | 'not_injected' | 'unavailable'; readonly reason?: string; readonly problem?: ToolsProblem; readonly file?: string };
+	/** How a requested creation prompt goes in: in the invocation, or as the first message once the process starts. */
+	readonly prompt?: { readonly path: 'native' | 'post_start'; readonly capability: CapabilityState };
+	/**
+	 * The input reader of the run's ordinary-message input (CLIS-2.1): it recognizes the input by its layout, whatever the CLI's
+	 * version. A CLI without one is never typed a message into.
+	 */
+	readonly input: { readonly adapter?: string; readonly capability: CapabilityState };
 	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
 	readonly screenStatus?: string;
+	/**
+	 * What its start types before its first turn (COLLABORATION-2.2): `text` into its empty input, Enter once its screen shows `typed`,
+	 * then `close` once it shows `ready`, while it shows `opened` - regular expressions' sources - where its first turn could not use
+	 * the Facade tools otherwise.
+	 */
+	readonly warmUp?: { readonly text: string; readonly typed: string; readonly ready: string; readonly opened: string; readonly close: string };
 }
 
 /** A reason Facade itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */
@@ -151,6 +200,10 @@ export class PlanError extends Error {
 
 export interface LaunchPlanner {
 	plan(request: PlanRequest): Promise<LaunchPlan>;
+	/** The run ended or was closed: its injected files and project references go (CLIS-2.2). */
+	release(run: RunId): Promise<void>;
+	/** References of runs no longer alive are released, as after a window that ended without releasing them. */
+	reconcile(alive: readonly RunId[]): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -247,6 +300,8 @@ export interface ExecutionPort {
 	readonly onDidClosePair?: Event<RunId>;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
+	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */
+	readonly onDidConnectTools?: Event<RunId>;
 }
 
 /** What ptyd keeps with a run so a reloaded window can show it again. Plain JSON. */
@@ -261,6 +316,25 @@ export interface RunMeta {
 	readonly environment: string;
 	readonly yolo: boolean;
 	readonly createdAt: number;
+	/** Its creation tree's root, and the agent that started it where an agent did (RULES-2.2). Absent, it is a root of its own. */
+	readonly root?: RunId;
+	readonly creator?: RunId;
+	readonly creatorLabel?: string;
+	readonly origin?: 'human' | 'agent';
+	/** The creator's request ID for its start, where it gave one (MCP-1.1, D110). */
+	readonly requestId?: string;
+	readonly model?: string;
+	readonly effort?: string;
+	readonly version?: string;
+	/** Whether the Facade MCP server was injected and has connected, kept across a reload. */
+	readonly tools?: RunFacts['tools'];
+	readonly toolsReason?: string;
+	readonly toolsProblem?: ToolsProblem;
+	readonly toolsFile?: string;
+	readonly promptLine?: string;
+	/** Its ordinary-message input as its launch planned it, kept across a reload. */
+	readonly inputAdapter?: string;
+	readonly inputCapability?: CapabilityState;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -324,7 +398,7 @@ export interface RunError {
 
 export interface RunFacts {
 	readonly id: RunId;
-	/** `#aN` (LIFECYCLE-2.1); the number is unique in this environment until the client network allocates it (M4). */
+	/** `#aN` (LIFECYCLE-2.1, RULES-2.3): unique across the client network and never reassigned. */
 	readonly alias: string;
 	readonly name: string;
 	readonly cli: string;
@@ -340,6 +414,8 @@ export interface RunFacts {
 	readonly pid?: number;
 	readonly startedAt?: number;
 	readonly activity: Activity;
+	/** Epoch ms its CLI's report of its current activity came: how long ago it said so, never that it still does (RULES-3.2). */
+	readonly activitySince?: number;
 	readonly activityReason?: string;
 	/** Whether the run's CLI proved it reports activity; without it activity is unknown, shown red (RULES-3.2). */
 	readonly reporting: boolean;
@@ -351,6 +427,33 @@ export interface RunFacts {
 	readonly error?: RunError;
 	/** How the process ended, where it ended and the pair is retained (abnormal exit or failed launch, RULES-3.3). */
 	readonly end?: { readonly kind: 'abnormal' | 'failed'; readonly code?: number; readonly signal?: string; readonly at: number };
+	/** Its creation tree: the person's agent it comes from, and the agent that started it where an agent did (RULES-2.2, 4.3). */
+	readonly root: RunId;
+	readonly creator?: RunId;
+	/** The creator's reference as its window named it at the start, `@name #aN`: what the card's hover says started it (PANEL-1.5). */
+	readonly creatorLabel?: string;
+	readonly origin: 'human' | 'agent';
+	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1, D110). */
+	readonly requestId?: string;
+	/** The model and effort this start asked for, where it asked (CLIS-1.4). */
+	readonly model?: string;
+	readonly effort?: string;
+	/** Its CLI's installed version, where the installation says it: shown in diagnostics only (CLIS-2.1). */
+	readonly version?: string;
+	/** Tool connection axis (RULES-3.1): injected and connecting, connected, failed to inject, or none injected (CLIS-2.2). */
+	readonly tools: 'connecting' | 'available' | 'unavailable' | 'not_injected';
+	/** Why the Facade tools could not be injected, where they could not: the CLI runs without them. English, for agents and the log. */
+	readonly toolsReason?: string;
+	/** The same, by kind, for the person's words (PANEL-1.4). */
+	readonly toolsProblem?: ToolsProblem;
+	/** For a conflict, the folder's file Facade would not overwrite, relative to its folder: what the person moves or renames. */
+	readonly toolsFile?: string;
+	/** The first line of an agent's creation prompt, for the card's hover (PANEL-1.5). */
+	readonly promptLine?: string;
+	/** The input reader of its ordinary-message input, as its launch planned it (CLIS-2.1). */
+	readonly inputAdapter?: string;
+	/** Whether Facade can read that input, and why not; none before its launch is planned. */
+	readonly inputCapability?: CapabilityState;
 }
 
 export interface RunChange {
@@ -390,14 +493,17 @@ export interface WindowLifetimePort {
 	readonly onDidClose: Event<void>;
 }
 
-/** Durable facts of runs that have no live process to remember them: failed launches retained red (LIFECYCLE-1.5). */
+/** Request-bearing run metadata can remain without a visible pair until its request ID expires (MCP-1.1). */
+export type RetainedRun = RunFacts & { readonly requestOnly?: true };
+
+/** Durable run metadata: failed launches retained red, or request-bearing records without a pair. */
 export interface RetainedStore {
-	list(): readonly RunFacts[];
-	put(run: RunFacts): void;
+	list(): readonly RetainedRun[];
+	put(run: RetainedRun): void;
 	remove(run: RunId): void;
 }
 
-/** Allocates `#aN` aliases, never reused in this environment (RULES-2.2); the client network replaces it in M4. */
+/** Allocates `#aN` aliases, unique across the client network and never reused (RULES-2.2). */
 export interface AliasPort {
 	next(): string;
 }
@@ -412,7 +518,7 @@ export interface LogPort {
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// What the UI calls (LIFECYCLE-4.1: one launch service and one run record for every origin)
+// What the UI and the tools call (LIFECYCLE-4.1: one launch service and one run record for every origin)
 
 export interface LaunchRequest {
 	readonly name: string;
@@ -420,11 +526,42 @@ export interface LaunchRequest {
 	readonly cli: string;
 	/** Create this new worktree from `location` first (WORKTREES-2.1); the launch runs in it. */
 	readonly worktree?: { readonly branch: string; readonly baseRef?: string };
+	readonly model?: string;
+	readonly effort?: string;
+	/**
+	 * Who starts it. The person's start shows its terminal; an agent's start opens it in the background (LIFECYCLE-2.2) and joins the
+	 * calling agent's creation tree - `creator` and its `root`, from whichever window the caller is in (RULES-4.3, COLLABORATION-1.1).
+	 */
+	readonly origin: 'human' | 'agent';
+	readonly creator?: { readonly run: RunId; readonly root: RunId; readonly label?: string };
+	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D110). */
+	readonly requestId?: string;
+	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
+	readonly prompt?: string;
+	/** The first line of the caller's own prompt text, shown in the card's hover. */
+	readonly promptLine?: string;
+}
+
+/** How an accepted launch turned out, once its process started or it failed (MCP-2.3). */
+export interface StartOutcome {
+	readonly state: 'running' | 'failed' | 'closed';
+	readonly error?: string;
+	/** How the creation prompt went in, where one was asked for. */
+	readonly prompt?: LaunchPlan['prompt'];
 }
 
 export interface Agents {
+	/** Finds a caller's accepted start within the last hour, including a run whose pair has been removed. */
+	requested(from: RunId, requestId: string): RunFacts | undefined;
 	/** Validates (all problems together) and, once accepted, creates the pair at once and returns its run ID (LIFECYCLE-1.5). */
 	launch(request: LaunchRequest): RunId;
+	/** Settles when the accepted run's process started, its launch failed or it was closed first. */
+	started(run: RunId): Promise<StartOutcome>;
+	/**
+	 * Settles once what the run's start types before its first turn is done or given up (COLLABORATION-2.2) - at once for a run whose
+	 * CLI needs none, or that this window does not hold.
+	 */
+	warmedUp(run: RunId): Promise<void>;
 	/** Close Agent, the single close action for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
 	close(run: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */

@@ -13,7 +13,9 @@ import { build } from 'esbuild';
 /** Real Chromium input and layout, in a throwaway headless profile. No installed browser profile or editor is attached. */
 suite('The agent panel in Chromium', function () {
 	this.timeout(15_000);
-	const executable = [process.env.CHROMIUM_EXECUTABLE, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser'].find(file => file && fs.existsSync(file));
+	// Chrome or Chromium where each platform installs it; CHROMIUM_EXECUTABLE names another
+	const windowsChrome = [process.env.PROGRAMFILES, process.env['PROGRAMFILES(X86)'], process.env.LOCALAPPDATA].filter((dir): dir is string => !!dir).map(dir => path.join(dir, 'Google', 'Chrome', 'Application', 'chrome.exe'));
+	const executable = [process.env.CHROMIUM_EXECUTABLE, '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', '/usr/bin/google-chrome', '/usr/bin/chromium', '/usr/bin/chromium-browser', ...windowsChrome].find(file => file && fs.existsSync(file));
 	let child: ChildProcess;
 	let profile: string;
 	let socket: WebSocket;

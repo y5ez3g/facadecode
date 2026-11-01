@@ -7,6 +7,7 @@ import * as path from 'path';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, variableOf } from './environment';
 import { LaunchTarget, nodeOnPath } from './executable';
+import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** `line` as a regular expression that matches it alone. */
 const literal = (line: string) => line.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -57,6 +58,47 @@ export function piInstallerTarget(file: string, platform: NodeJS.Platform, env: 
 	return node === undefined ? undefined : { executable: node, args: [script], throughCmd: false };
 }
 
+/** The run's own Pi extension, which registers the server, and its skill's folder: files of the run alone (CLIS-2.2). */
+const EXTENSION = 'facade-pi.mjs';
+const SKILL_DIR = path.join('skills', SERVER_NAME);
+
+/** How long one call to the server may take: Pi's default minute is shorter than a start or a long screen wait may be. */
+const CALL_SECONDS = 3_600;
+
+/**
+ * The extension Pi loads with `-e`: it registers `server` for its session alone - nothing saved - its tools declared to the model
+ * directly, as Pi's MCP servers otherwise reach the model only through its codemode scripts (CLIS-2.2).
+ */
+export function piExtensionText(server: McpServer): string {
+	const config = {
+		command: server.command,
+		args: [...server.args],
+		env: { ...server.env },
+		exposure: 'direct',
+		timeout: CALL_SECONDS,
+		description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.'
+	};
+	return `// Facade Code: this run's tools, registered for its session alone\nexport default function (pi) {\n\tpi.registerMcpServer(${JSON.stringify(SERVER_NAME)}, ${JSON.stringify(config)});\n}\n`;
+}
+
+/**
+ * Pi is given the server by a per-run extension, `-e`, which registers it for the session, and the skill in a per-run `--skill`
+ * folder: nothing in the project or the person's settings (CLIS-2.2). Pi has no approvals, so Facade's tools never ask (CLIS-1.3).
+ */
+const piTools: ToolsIntegration = {
+	capability: { state: 'unverified', reason: 'the server registered for the session by a per-run extension, -e, its tools declared to the model directly, and the skill in a per-run --skill folder' },
+	where: runDir => `-e ${path.join(runDir, EXTENSION)} and --skill ${path.join(runDir, SKILL_DIR)}, files of the run alone`,
+	inject: ({ server, skill, runDir }) => ({
+		values: { extension: path.join(runDir, EXTENSION), skillDir: path.join(runDir, SKILL_DIR) },
+		runFiles: [
+			{ path: path.join(runDir, EXTENSION), content: piExtensionText(server) },
+			{ path: path.join(runDir, SKILL_DIR, 'SKILL.md'), content: skill }
+		],
+		project: [],
+		env: {}
+	})
+};
+
 /**
  * Pi in its own UI (CLIS-1.3). It has no approvals and no sandbox, so YOLO has nothing to map: on or off, it runs as it natively
  * does (D79). Every launch trusts the folder it starts in for that launch alone with `--approve` - its project's settings,
@@ -69,11 +111,25 @@ export const piAdapter: CliAdapter = {
 	setting: 'facade.pi',
 	command: 'pi',
 	groups: {
-		trust: ['--approve']
+		connect: ['-e', '${extension}', '--skill', '${skillDir}'],
+		model: ['--model', '${model}'],
+		effort: ['--thinking', '${effort}'],
+		trust: ['--approve'],
+		// After the end of its options: its messages follow, where one that starts with @ would name a file
+		prompt: ['--', '${prompt}']
 	},
-	values: () => ({}),
+	takes: { model: true, effort: true },
+	values: input => ({
+		...input.model !== undefined ? { model: input.model } : {},
+		...input.effort !== undefined ? { effort: input.effort } : {}
+	}),
+	tools: piTools,
+	initialPrompt: { state: 'unverified', reason: 'the prompt as its message argument after --, which starts the interactive session with it' },
+	promptProblem: prompt => prompt.startsWith('@') ? 'Pi reads an argument that starts with @ as a file to attach' : undefined,
 	launchTarget: piInstallerTarget,
 	// `π - {folder}`, or `π - {session name} - {folder}` once the session is named
+	// Its input, recorded on macOS with Pi 1.4.0 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
+	input: { adapter: 'pi-frame', evidence: 'its editor between two rules above its footer, its own cursor drawn there: empty, a typed, pasted, multi-line, long-paste, history or slash-command draft, while working, and gone behind its trust question and model picker' },
 	title: { names: ['π', 'Pi', 'pi'] },
 	// No approvals and no sandbox: YOLO has nothing to map (D79)
 	sandbox: () => ({ state: 'none' }),

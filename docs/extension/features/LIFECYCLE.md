@@ -89,20 +89,24 @@ that worktree, busy until it ends; a refusal is the person's error (RULES-1.8) (
 
 ### 1.4 Shared launch entries
 
-**The toolbar, empty state and Command Palette invoke the same New Agent flow.**
+**The toolbar, empty state and Command Palette invoke the same New Agent flow; agents start agents through MCP.**
 
 There is no separate New Agent Here entry or public scripted-start command. Missing prerequisites are explained in
-the same flow. Human starts show the new terminal and create normal panel entries. The current filter stays unchanged
-even when it hides a person's newly created agent.
+the same flow. Agent starts use MCP-2 without human pickers; RULES-4.3 owns YOLO. UI and MCP call the same internal
+launch service. Human starts show the new terminal; agent starts remain in the background. All create normal panel
+entries in their destination window.
+The current filter stays unchanged even when it hides a newly created agent.
 
 ### 1.5 Accepted launch and failure
 
-**An accepted launch immediately creates one card and editor terminal before process readiness.**
+**An accepted launch immediately creates one card and editor terminal before process or tool readiness.**
 
 Reject malformed requests first. Once accepted, keep one pair throughout `creating_worktree`, `launching_cli` and
-`running`. Do not create a second terminal at transition. An actual creation/process failure retains that pair red and
-reports the error to its initiator. Native Git post-create setup is not a required phase and does not gate CLI start.
-Native login/permission prompts stay in the terminal without a separate popup.
+`running`; tool connection is independent. Do not create a second terminal at transition. An actual creation/process
+failure retains that pair red and reports the error to its initiator. A usable CLI whose Facade tools fail remains
+usable with the reason in the second line. Native Git post-create setup is not a required phase and does not gate CLI
+start. Native login/permission prompts stay in the terminal without a separate popup. An actual tool-connection failure
+is distinct from process launch failure and does not terminate a usable CLI.
 
 ## 2 Identity and terminal
 
@@ -115,17 +119,18 @@ uniqueness requirement or add arbitrary
 length/character restrictions. `human` is an allowed agent name, including during rename. The person has the distinct
 identity `#human`; an agent uses its own run ID, including when named `human`. A display name never overrides an ID.
 Human creation provides an editable random name, a short machine word such as `Bolt` or
-`Pixel`. A name is not a filesystem path, branch or shell argument template. Rename uses a native Input Box and changes
-no run/session/location identity. Copy Agent Reference copies `@name #aN` without a toast. The name plus ID is
-descriptive; stale display text must not redirect the run.
+`Pixel`; agent creation supplies its own `name` under MCP-2.2. A name is not a filesystem path, branch or shell argument
+template. Rename uses a native Input Box and changes no run/session/location identity. Copy Agent Reference copies
+`@name #aN` without a toast. APIs accept an exact ID or an unambiguous name under RULES-2.3, which also decides
+`#human` and `@human`. The name plus ID is descriptive; stale display text must not redirect the run.
 
 ### 2.2 Terminal placement and focus
 
 **Each visible agent has one terminal in an editor group; no terminal-panel placement option is provided.**
 
-Human New shows the terminal. Card/Go to Agent reveals the same terminal without launching another. Tab title uses the
-agent name and, when present, the native tabs separator plus CLI title. Use the CLI's theme-appropriate logo; custom CLIs
-use a terminal icon. Do not put
+Human New shows the terminal; agent creation preserves focus. Card/Go to Agent reveals the same terminal without
+launching another. Tab title uses the
+agent name and, when present, the native tabs separator plus CLI title. Use the CLI's theme-appropriate logo; custom CLIs use a terminal icon. Do not put
 status in the name. Native tab renames synchronize the display name when valid. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
 as an alternative.
@@ -138,8 +143,8 @@ Match name, CLI, title, working location and run ID. Accept the existing short I
 input; an ID in a copied reference matches that run even if its descriptive name is stale. Show the short ID in picker
 detail alongside status/location so duplicate names are distinguishable. Include starting/running and retained-error
 cards. Copy Reference and Close Agent actions target that exact run. No cross-window picker, focus transfer or proxy
-card is provided. The person switches editor windows to manage another window. Terminal-tab context actions require
-accurate public context; do not substitute the foreground terminal when unknown.
+card is provided. The person switches editor windows to manage another window; agents can use MCP across windows.
+Terminal-tab context actions require accurate public context; do not substitute the foreground terminal when unknown.
 
 ## 3 End and continuity
 
@@ -149,8 +154,9 @@ accurate public context; do not substitute the foreground terminal when unknown.
 
 Card menus, Go to Agent, Command Palette and terminal closure use the lifecycle effect in RULES-4.1: immediate pair
 removal, with process cleanup in the background where a process exists. There is no separate human Stop Agent command.
-Return actual cleanup status to the initiator without recreating a closed card or claiming an unreachable process is
-dead. No worktree/files/history deletion is attached. Unsolicited exits follow RULES-3.3.
+MCP keeps `stop_agent` under MCP-3.2 and uses the same close service. Return actual cleanup status to the initiator
+without recreating a closed card or claiming an unreachable process is dead. No worktree/files/history deletion is
+attached. Closing an agent does not close the agents it started. Unsolicited exits follow RULES-3.3.
 
 Closing a live agent's terminal tab, alone or together with other editors (Close All, Close Others, Close Saved), first
 asks once in a modal warning for every tab closed together: `Close {0}?` or `Close {0} agents?`, with `Close Agent` or
@@ -193,15 +199,18 @@ integration evidence, not a fact established by this document.
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching, editable name, last CLI/location, filter unchanged, immediate pair and initiator-owned errors |
+| 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
 | 2.1–2.3 | Empty/duplicate/spaced names and `human`, editor-only terminals, ID/copied-reference search, distinguishable picker details |
-| 3.1, 3.5 | One human Close action, reload/disconnect reuse, proven folder/worktree removal |
+| 3.1, 3.5 | One human Close action shared with `stop_agent`, children kept, reload/disconnect reuse, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
 
 See [Verification](../engineering/VERIFICATION.md). Runtime results remain unverified.
 
 ## Change log
 
+- 2026-10-30: Step 2 of the Facade Code extension: 1.4 and 2.2 add agent starts through MCP in the background; 1.5
+  keeps a usable CLI when its Facade tools fail; 2.1 adds agent-supplied names and RULES-2.3's references; 2.3 and 3.1
+  add MCP across windows and `stop_agent`.
 - 2026-10-31: 1.1 offers configured custom CLIs after the built-ins; 2.2 gives their tabs a terminal icon.
 
 - 2026-10-30: 1.2 starts New Agent from the filtered empty panel at the filtered location; 1.4 leaves the filter as

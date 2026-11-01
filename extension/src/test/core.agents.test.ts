@@ -7,7 +7,7 @@ import { AgentService } from '../core/agents';
 import { FacadeError } from '../core/errors';
 import {
 	ActivityReport, CleanupResult, Disposable, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, Location, LocationPort,
-	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RunChange, RunFacts, RunId, RunMeta, WorktreeError, WorktreePlan
+	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RetainedRun, RunChange, RunFacts, RunId, RunMeta, WorktreeError, WorktreePlan
 } from '../core/ports';
 
 class Emitter<T> {
@@ -40,6 +40,7 @@ class FakeExecution implements ExecutionPort {
 	readonly tabCloses = new Emitter<RunId>();
 	readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
 	readonly transfers = new Emitter<void>();
+	readonly toolConnections = new Emitter<RunId>();
 	readonly reveals = new Map<RunId, boolean>();
 	readonly reopened: RunId[] = [];
 	liveRuns: LiveRun[] = [];
@@ -53,6 +54,7 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidClosePair = this.tabCloses.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
+	readonly onDidConnectTools = this.toolConnections.event;
 	openPair(facts: PairFacts, options: { reveal: boolean }): void { this.pairs.set(facts.run, facts); this.reveals.set(facts.run, options.reveal); }
 	note(run: RunId, text: string): void { this.notes.push({ run, text }); }
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ pid: number; startedAt: number }> {
@@ -80,6 +82,12 @@ const WORKTREE: Location = { ...LOCATION, id: 'loc-wt', path: '/work/app.worktre
 function setUp(options: {
 	planError?: PlanError; worktreeError?: WorktreeError; worktreeGate?: Promise<void>; removedWhileAway?: readonly string[];
 	confirm?: (agent: { readonly run: RunId; readonly label: string }) => Promise<boolean>; describe?: (err: unknown, english: string) => string;
+	/** What each plan adds to the test's plain one: its tools, input reader, prompt path, version. */
+	plan?: Partial<LaunchPlan>;
+	/** Orchestration on: each start is given its own shim. */
+	tools?: boolean;
+	/** What the window does with a start's typing before its first turn: recorded, and settled as the test says. */
+	warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
 } = {}) {
 	const execution = new FakeExecution();
 	const removals = new Emitter<LocationRemoval>();
@@ -97,7 +105,9 @@ function setUp(options: {
 	const errors: { text: string; show?: RunId }[] = [];
 	const failures: HumanFailure[] = [];
 	const remembered: { location: string; cli: string }[] = [];
-	const retained = new Map<RunId, RunFacts>();
+	const retained = new Map<RunId, RetainedRun>();
+	const released: RunId[] = [];
+	const shims: RunId[] = [];
 	const log: string[] = [];
 	let next = 0;
 	let alias = 0;
@@ -110,8 +120,13 @@ function setUp(options: {
 				if (options.planError) {
 					throw options.planError;
 				}
-				return { cli: request.cli, displayName: 'Claude Code', command: 'claude', executable: '/bin/claude', args: [], env: {}, cwd: request.location.path };
-			}
+				return {
+					cli: request.cli, displayName: 'Claude Code', command: 'claude', executable: '/bin/claude', args: [], env: {}, cwd: request.location.path,
+					tools: { state: 'not_injected' }, input: { capability: { state: 'unavailable', reason: 'no input reader in this test' } }, ...options.plan
+				};
+			},
+			release: async run => void released.push(run),
+			reconcile: async () => undefined
 		},
 		locations,
 		worktrees: {
@@ -145,26 +160,128 @@ function setUp(options: {
 		log: { event: text => log.push(text) },
 		lifetime: { onDidClose: closes.event },
 		yolo: () => true,
+		...(options.tools ? { tools: (run: RunId) => (shims.push(run), { command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } }) } : {}),
 		...(options.describe ? { describe: options.describe } : {}),
+		...(options.warmUp ? { warmUp: options.warmUp } : {}),
 		newRunId: () => `run-${(++next).toString(16).padStart(32, '0')}`
 	});
 	const changes: RunChange[] = [];
 	agents.onDidChange(change => changes.push(change));
-	return { agents, execution, removals, closes, errors, failures, remembered, retained, log, changes, created, plans };
+	return { agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, log, changes, created, plans, advance: (ms: number) => { now += ms; } };
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
+suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
+	const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once' } as const;
+
+	for (const end of ['close', 'exit', 'failed'] as const) {
+		test(`${end}: the first request survives removal and reload without restoring a closed pair`, async () => {
+			const world = setUp();
+			if (end === 'failed') {
+				world.execution.spawnError = new Error('could not start');
+			}
+			const id = world.agents.launch(request);
+			await world.agents.started(id);
+			if (end === 'exit') {
+				world.execution.exits.fire({ run: id, code: 0, interruptVerified: false });
+			} else {
+				await world.agents.close(id);
+			}
+			const facts = world.agents.requested(creator, request.requestId)!;
+			assert.deepStrictEqual([facts.id, facts.lifecycle, facts.end?.kind], [id, 'ended', end === 'failed' ? 'failed' : undefined]);
+			assert.strictEqual(world.agents.get(id), undefined);
+			assert.strictEqual(world.agents.requested('another-caller', request.requestId), undefined);
+			const reload = setUp();
+			reload.retained.set(id, world.retained.get(id)!);
+			await reload.agents.restore();
+			assert.deepStrictEqual([reload.agents.list(), [...reload.execution.pairs]], [[], []]);
+			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.id, id);
+			reload.advance(60 * 60_000);
+			assert.strictEqual(reload.agents.requested(creator, request.requestId), undefined);
+			assert.strictEqual(reload.retained.size, 0, 'expired metadata is removed');
+		});
+	}
+
+	test('a request is recorded before asynchronous planning, even when a reload interrupts startup', async () => {
+		const world = setUp();
+		const id = world.agents.launch(request);
+		assert.strictEqual(world.execution.spawned.length, 0);
+		const saved = world.retained.get(id)!;
+		assert.deepStrictEqual([saved.lifecycle, saved.requestOnly], ['starting', true]);
+		const reload = setUp();
+		reload.retained.set(id, saved);
+		await reload.agents.restore();
+		assert.strictEqual(reload.agents.requested(creator, request.requestId)?.lifecycle, 'starting');
+		assert.deepStrictEqual([reload.agents.list(), reload.execution.spawned], [[], []]);
+		await world.agents.close(id);
+		await world.agents.started(id);
+	});
+
+	test('closing a failed launch after the request expires removes its retained card too', async () => {
+		const world = setUp();
+		world.execution.spawnError = new Error('could not start');
+		const id = world.agents.launch(request);
+		await world.agents.started(id);
+		world.advance(60 * 60_000);
+		await world.agents.close(id);
+		await world.agents.restore();
+		assert.deepStrictEqual([world.retained.size, world.agents.list()], [0, []]);
+	});
+
+	test('damaged request metadata is neither returned nor restored as a card', async () => {
+		const world = setUp();
+		world.retained.set('bad', { id: 'bad', requestOnly: true, creator, requestId: request.requestId, createdAt: 10_000 } as RetainedRun);
+		assert.strictEqual(world.agents.requested(creator, request.requestId), undefined);
+		await world.agents.restore();
+		assert.deepStrictEqual([world.agents.list(), [...world.execution.pairs], world.log], [[], [], ['Ignored an invalid retained agent record.']]);
+	});
+});
+
+suite('A start\'s typing before the first turn (COLLABORATION-2.2)', () => {
+	const WARM_UP = { text: '/mcp', typed: '^> /mcp\\s*$', ready: '✓\\s+facade_facade\\b', opened: '^MCP Servers\\s*$', close: 'Escape' };
+
+	test('a running start whose plan has it is handed to the window once its process started; warmedUp settles after it, at once for any other', async () => {
+		const asked: [RunId, unknown][] = [];
+		let finish!: () => void;
+		const world = setUp({ plan: { warmUp: WARM_UP }, warmUp: async (run, warmUp) => { asked.push([run, warmUp]); await new Promise<void>(resolve => finish = resolve); } });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'human' });
+		await world.agents.started(id);
+		assert.deepStrictEqual(asked, [[id, WARM_UP]]);
+		let warmed = false;
+		const waiting = world.agents.warmedUp(id).then(() => warmed = true);
+		await settle();
+		assert.strictEqual(warmed, false, 'not before the window is done');
+		finish();
+		await waiting;
+		await world.agents.warmedUp('run-unknown');
+		const plain = setUp({ warmUp: async () => { throw new Error('never asked'); } });
+		const other = plain.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await plain.agents.started(other);
+		await plain.agents.warmedUp(other);
+	});
+
+	test('one the window could not do is logged and settles: the run goes on', async () => {
+		const world = setUp({ plan: { warmUp: WARM_UP }, warmUp: async () => { throw new Error('ptyd went away'); } });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'human' });
+		await world.agents.started(id);
+		await world.agents.warmedUp(id);
+		assert.ok(world.log.some(line => /Could not prepare #a1's tools before its first turn: ptyd went away/.test(line)), world.log.join('\n'));
+		assert.strictEqual(world.agents.get(id)?.lifecycle, 'running');
+	});
+});
+
 suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () => {
 	test('ownership transfer drops cards and pending starts without closing or forgetting the transferred processes', async () => {
 		const world = setUp();
-		const live = world.agents.launch({ name: 'Live', location: 'loc-1', cli: 'claude' });
+		const live = world.agents.launch({ name: 'Live', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.spawnError = new Error('retain me');
-		const failed = world.agents.launch({ name: 'Failed', location: 'loc-1', cli: 'claude' });
+		const failed = world.agents.launch({ name: 'Failed', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.spawnError = undefined;
-		const pending = world.agents.launch({ name: 'Pending', location: 'loc-1', cli: 'claude' });
+		const pending = world.agents.launch({ name: 'Pending', location: 'loc-1', cli: 'claude', origin: 'human' });
 		world.execution.transfers.fire();
 		await settle();
 		await world.agents.restore();
@@ -173,7 +290,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 			retained: [...world.retained.keys()], started: world.execution.spawned.map(each => each.run),
 			transferred: world.changes.filter(each => each.cause === 'transfer').map(each => each.run)
 		}, { runs: [], terminated: [], removed: [], retained: [failed], started: [live], transferred: [live, failed, pending] });
-		assert.throws(() => world.agents.launch({ name: 'Stale', location: 'loc-1', cli: 'claude' }),
+		assert.throws(() => world.agents.launch({ name: 'Stale', location: 'loc-1', cli: 'claude', origin: 'human' }),
 			(err: unknown) => err instanceof FacadeError && err.reason === 'ownership_lost' && /owned by another window/.test(err.message));
 	});
 
@@ -186,7 +303,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('an accepted launch creates its pair at once, before the process, and keeps the same run through startup (J01, LIFECYCLE-1.5)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: '  Ada Lovelace ', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: '  Ada Lovelace ', location: 'loc-1', cli: 'claude', origin: 'human' });
 		assert.ok(world.execution.pairs.has(id), 'the terminal exists before the process');
 		assert.deepStrictEqual(world.agents.get(id)?.lifecycle, 'starting');
 		assert.strictEqual(world.agents.get(id)?.name, 'Ada Lovelace');
@@ -201,7 +318,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 	test('names are labels: empty strings, spaces, duplicates and human are accepted with distinct run IDs (LIFECYCLE-2.1)', () => {
 		const world = setUp();
 		const names = ['Ada Lovelace', 'Ada Lovelace', 'human', '@Human', '', '   '];
-		const ids = names.map(name => world.agents.launch({ name, location: 'loc-1', cli: 'claude' }));
+		const ids = names.map(name => world.agents.launch({ name, location: 'loc-1', cli: 'claude', origin: 'human' }));
 		assert.strictEqual(new Set(ids).size, names.length);
 		assert.deepStrictEqual(ids.map(id => world.agents.get(id)?.name), names.map(name => name.trim()));
 		assert.strictEqual(world.execution.pairs.size, names.length);
@@ -209,14 +326,14 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('missing fields are reported together before any effect (RULES-5.1, M02)', () => {
 		const world = setUp();
-		assert.throws(() => world.agents.launch({ name: undefined as unknown as string, location: '', cli: '' }), (err: unknown) =>
+		assert.throws(() => world.agents.launch({ name: undefined as unknown as string, location: '', cli: '', origin: 'human' }), (err: unknown) =>
 			err instanceof FacadeError && /name must be a string/.test(err.message) && /working location is required/.test(err.message) && /CLI is required/.test(err.message));
 		assert.strictEqual(world.execution.pairs.size, 0);
 	});
 
 	test('a launch that cannot be planned keeps its pair red, retained, and tells the person who started it (J04, RULES-1.8)', async () => {
 		const world = setUp({ planError: new PlanError('claude is not installed in this environment.', 'not_found') });
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		const facts = world.agents.get(id)!;
 		assert.deepStrictEqual([facts.lifecycle, facts.end?.kind, facts.error?.reason], ['ended', 'failed', 'claude is not installed in this environment.']);
@@ -229,7 +346,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 	test('a failed launch whose record cannot be written - a full disk - still tells the person who started it and keeps its red pair here (RULES-1.8, LIFECYCLE-1.5)', async () => {
 		const world = setUp({ planError: new PlanError('claude is not installed in this environment.', 'not_found') });
 		world.retained.set = () => { throw new Error('ENOSPC: no space left on device'); };
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		assert.deepStrictEqual([world.agents.get(id)?.end?.kind, world.errors, world.log.filter(line => /Could not keep|ENOSPC/.test(line))], [
 			'failed',
@@ -241,7 +358,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 	test('a restore whose listing fails answers undefined and shows nothing; tried again once ptyd answers, it shows the live and retained agents, never one this window closed meanwhile (LIFECYCLE-3.5, 3.1, PANEL-1.1)', async () => {
 		const world = setUp();
 		const failed = 'run-' + '9'.repeat(32);
-		world.retained.set(failed, { id: failed, alias: '#a9', name: 'Failed', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
+		world.retained.set(failed, { id: failed, origin: 'human', root: failed, tools: 'not_injected', alias: '#a9', name: 'Failed', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
 		const meta = (name: string): RunMeta => ({ alias: '#a7', name, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: true, createdAt: 5 });
 		const kept = 'run-' + '7'.repeat(32);
 		let answering = false;
@@ -258,7 +375,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(await world.agents.restore(), undefined);
 		assert.deepStrictEqual([world.agents.list(), [...world.execution.pairs.keys()]], [[], []], 'nothing shown before ownership is known');
 		// Meanwhile the person launched and closed an agent: its process's cleanup is not done when the listing answers
-		const closed = world.agents.launch({ name: 'Closed', location: 'loc-1', cli: 'claude' });
+		const closed = world.agents.launch({ name: 'Closed', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		await world.agents.close(closed);
 		answering = true;
@@ -273,14 +390,14 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 	test('a failed card of a location removed while no window showed it is not brought back after the restart (RULES-2.4)', async () => {
 		const world = setUp({ removedWhileAway: ['loc-gone'] });
 		const id = 'run-' + '8'.repeat(32);
-		world.retained.set(id, { id, alias: '#a8', name: 'Gone', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-gone', cwd: '/work/gone', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
+		world.retained.set(id, { id, origin: 'human', root: id, tools: 'not_injected', alias: '#a8', name: 'Gone', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-gone', cwd: '/work/gone', environment: 'local', yolo: true, createdAt: 1, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, end: { kind: 'failed', at: 2 }, error: { reason: 'boom', source: 'launch', at: 2 } });
 		await world.agents.restore();
 		assert.deepStrictEqual([world.agents.list().map(run => run.id), world.execution.pairs.has(id), world.retained.has(id)], [[], false, false]);
 	});
 
 	test('explicit close removes card and terminal at once and cleans up in the background (J07, LIFECYCLE-3.1)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		const closing = world.agents.close(id);
 		assert.strictEqual(world.agents.get(id), undefined, 'gone from the record at once');
@@ -294,7 +411,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const world = setUp();
 		let release!: () => void;
 		world.execution.spawnGate = new Promise(resolve => release = resolve);
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		assert.strictEqual(await world.agents.close(id), 'not_started');
 		release();
@@ -305,9 +422,9 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('exit 0 or a verified interrupt removes the pair; an unexplained nonzero exit keeps it red with its code and no popup (J06, RULES-3.3)', async () => {
 		const world = setUp();
-		const normal = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
-		const interrupted = world.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude' });
-		const crashed = world.agents.launch({ name: 'C', location: 'loc-1', cli: 'claude' });
+		const normal = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const interrupted = world.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const crashed = world.agents.launch({ name: 'C', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.exits.fire({ run: normal, code: 0, interruptVerified: false });
 		world.execution.exits.fire({ run: interrupted, code: 130, interruptVerified: true });
@@ -325,7 +442,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const world = setUp({ confirm: async agent => { asked.push(agent.run); return false; } });
 		let release!: () => void;
 		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.exits.fire({ run: id, code: 1, interruptVerified: false });
 		release();
@@ -340,7 +457,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const world = setUp();
 		let release!: () => void;
 		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.agents.rename(id, 'Grace');
 		release();
@@ -350,8 +467,8 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('a CLI a signal ended is abnormal though its code is 0 - as node-pty reports a process killed on Linux and macOS - and keeps its red pair; the person\'s own close is not (RULES-3.3)', async () => {
 		const world = setUp();
-		const killed = world.agents.launch({ name: 'K', location: 'loc-1', cli: 'claude' });
-		const closed = world.agents.launch({ name: 'C', location: 'loc-1', cli: 'claude' });
+		const killed = world.agents.launch({ name: 'K', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const closed = world.agents.launch({ name: 'C', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.exits.fire({ run: killed, code: 0, signal: 'SIGKILL', interruptVerified: false });
 		const closing = world.agents.close(closed);
@@ -365,7 +482,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('activity reports set the facts; a reported error clears only when the CLI recovers (RULES-3.2)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Fix login' });
 		assert.deepStrictEqual([world.agents.get(id)?.activity, world.agents.get(id)?.title], ['working', 'Fix login']);
@@ -374,11 +491,18 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		world.execution.reports.fire({ run: id, activity: 'working', reporting: true });
 		assert.strictEqual(world.agents.get(id)?.error, undefined);
 		assert.strictEqual(world.agents.get(id)?.title, 'Fix login', 'the last title stays until the CLI sets another');
+		// When its CLI reported its current activity: the same report again keeps that time, another activity takes its own
+		const since = world.agents.get(id)!.activitySince;
+		assert.strictEqual(typeof since, 'number');
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Still' });
+		assert.strictEqual(world.agents.get(id)!.activitySince, since);
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true });
+		assert.ok(world.agents.get(id)!.activitySince! >= since!);
 	});
 
 	test('a run is awaiting its CLI\'s activity while its reports say so, and no longer once one does not (CLIS-2.3, D81)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, awaitingActivity: true });
 		assert.deepStrictEqual([world.agents.get(id)?.lifecycle, world.agents.get(id)?.awaitingActivity, world.agents.get(id)?.activityReason], ['running', true, undefined]);
@@ -389,7 +513,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('confirmed location removal closes the agents there; other locations continue (W05, RULES-2.4)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.removals.fire({ ids: ['loc-other'], cause: 'deleted' });
 		assert.ok(world.agents.get(id));
@@ -401,7 +525,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('a natively closed tab is an explicit close (LIFECYCLE-3.1)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabCloses.fire(id);
 		await settle();
@@ -413,8 +537,8 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const asked: { readonly run: RunId; readonly label: string }[] = [];
 		let answer = false;
 		const world = setUp({ confirm: async agent => { asked.push(agent); return answer; } });
-		const named = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
-		const unnamed = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude' });
+		const named = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const unnamed = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabCloses.fire(named);
 		world.execution.tabCloses.fire(unnamed);
@@ -432,14 +556,14 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		let release!: () => void;
 		const world = setUp({ confirm: async agent => { asked.push(agent.run); return false; } });
 		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
-		const starting = world.agents.launch({ name: 'S', location: 'loc-1', cli: 'claude' });
+		const starting = world.agents.launch({ name: 'S', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabCloses.fire(starting);
 		await settle();
 		release();
 		world.execution.spawnGate = Promise.resolve();
 		world.execution.spawnError = new Error('no program');
-		const failed = world.agents.launch({ name: 'F', location: 'loc-1', cli: 'claude' });
+		const failed = world.agents.launch({ name: 'F', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabCloses.fire(failed);
 		await settle();
@@ -450,7 +574,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 	test('a failure says Facade\'s own reason in the person\'s words and an empty name by its #aN, while the log keeps the English (UX-2.4, LIFECYCLE-2.1)', async () => {
 		const world = setUp({ planError: new PlanError('facade.claude.path is "x", which was not found', 'not_found', { kind: 'path_not_on_path', values: ['facade.claude', '"x"', '/work/app'] }),
 			describe: (err, english) => err instanceof PlanError && err.said ? `translated ${err.said.kind}` : english });
-		const id = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		assert.deepStrictEqual({ reason: world.agents.get(id)?.error?.reason, failure: world.failures.map(each => [each.name, each.reason]), log: world.log.filter(line => line.startsWith('Could not start')) },
 			{ reason: 'translated path_not_on_path', failure: [['#a1', 'translated path_not_on_path']], log: ['Could not start #a1: facade.claude.path is "x", which was not found'] });
@@ -515,7 +639,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('rename keeps the run identity with human or an empty label (LIFECYCLE-2.1)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.agents.rename(id, '  Grace Hopper ');
 		assert.strictEqual(world.agents.get(id)?.name, 'Grace Hopper');
@@ -528,7 +652,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('a person\'s rename of an agent\'s tab renames the agent as Rename Agent does: its card and reference, the record its process keeps and its tab (LIFECYCLE-2.2)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabRenames.fire({ run: id, name: '  Grace Hopper ' });
 		assert.deepStrictEqual([world.agents.get(id)?.name, world.execution.pairs.get(id)?.name, world.execution.metas.get(id)?.name], ['Grace Hopper', 'Grace Hopper', 'Grace Hopper']);
@@ -536,7 +660,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual(world.errors, []);
 		// A failed launch's red card keeps a tab rename across a reload too
 		world.execution.spawnError = new Error('boom');
-		const failed = world.agents.launch({ name: 'Bea', location: 'loc-1', cli: 'claude' });
+		const failed = world.agents.launch({ name: 'Bea', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabRenames.fire({ run: failed, name: 'Cy' });
 		assert.strictEqual(world.retained.get(failed)?.name, 'Cy');
@@ -544,7 +668,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 
 	test('a tab can be renamed to human or an empty string; a run no longer here is left alone (LIFECYCLE-2.1, 2.2, RULES-1.8)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude' });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabRenames.fire({ run: id, name: '@Human' });
 		world.execution.tabRenames.fire({ run: id, name: '   ' });
@@ -560,7 +684,7 @@ suite('Agent launches into new worktrees (WORKTREES-2)', () => {
 	test('partial Git failures retain only confirmed effects and carry them through notifications and reload', async () => {
 		for (const effects of [{}, { branchCreated: true }, { destinationCreated: WORKTREE.path }, { branchCreated: true, destinationCreated: WORKTREE.path }]) {
 			const world = setUp({ worktreeError: new WorktreeError('disk full', 'creation_failed', effects) });
-			const id = world.agents.launch({ name: '', location: LOCATION.id, cli: 'claude', worktree: { branch: 'fix' } });
+			const id = world.agents.launch({ name: '', location: LOCATION.id, cli: 'claude', origin: 'human', worktree: { branch: 'fix' } });
 			await settle();
 			const expected = effects.branchCreated || effects.destinationCreated
 				? { ...(effects.branchCreated ? { branch: 'fix' } : {}), ...(effects.destinationCreated ? { folder: WORKTREE.path } : {}) } : undefined;
@@ -580,7 +704,7 @@ suite('Agent launches into new worktrees (WORKTREES-2)', () => {
 		for (const stage of ['plan', 'spawn']) {
 			const world = setUp(stage === 'plan' ? { planError: new PlanError('CLI missing', 'not_found') } : {});
 			if (stage === 'spawn') { world.execution.spawnError = new Error('spawn refused'); }
-			const id = world.agents.launch({ name: 'Ada', location: LOCATION.id, cli: 'claude', worktree: { branch: 'fix' } });
+			const id = world.agents.launch({ name: 'Ada', location: LOCATION.id, cli: 'claude', origin: 'human', worktree: { branch: 'fix' } });
 			await settle();
 			const expected = { branch: 'fix', folder: WORKTREE.path };
 			assert.strictEqual(world.created.length, 1);
@@ -593,10 +717,10 @@ suite('Agent launches into new worktrees (WORKTREES-2)', () => {
 	test('closing a run before its process started says so, rather than that it had ended; a renamed red card keeps its name in ptyd (LIFECYCLE-2.1, 3.1)', async () => {
 		let release!: () => void;
 		const world = setUp({ worktreeGate: new Promise(resolve => release = resolve) });
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', worktree: { branch: 'fix' } });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human', worktree: { branch: 'fix' } });
 		assert.strictEqual(await world.agents.close(id), 'not_started');
 		release();
-		const crashed = world.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude' });
+		const crashed = world.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.exits.fire({ run: crashed, code: 3, interruptVerified: false });
 		world.agents.rename(crashed, 'Bea');
@@ -605,14 +729,14 @@ suite('Agent launches into new worktrees (WORKTREES-2)', () => {
 
 	test('a launch with a new worktree creates it first, then starts the CLI there; closing during creation prevents the spawn and keeps the worktree (W03, WORKTREES-2.5)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', worktree: { branch: 'fix' } });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human', worktree: { branch: 'fix' } });
 		assert.strictEqual(world.agents.get(id)?.phase, 'creating_worktree');
 		await settle();
 		assert.deepStrictEqual([world.agents.get(id)?.location, world.agents.get(id)?.cwd, world.agents.get(id)?.phase], ['loc-wt', WORKTREE.path, 'running']);
 
 		let release!: () => void;
 		const gated = setUp({ worktreeGate: new Promise(resolve => release = resolve) });
-		const closing = gated.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', worktree: { branch: 'fix' } });
+		const closing = gated.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'human', worktree: { branch: 'fix' } });
 		await gated.agents.close(closing);
 		release();
 		await settle();
@@ -622,8 +746,125 @@ suite('Agent launches into new worktrees (WORKTREES-2)', () => {
 
 	test('a worktree that cannot be made keeps the pair red with the actual reason (J04, WORKTREES-2.1)', async () => {
 		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', worktree: { branch: 'bad name' } });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human', worktree: { branch: 'bad name' } });
 		await settle();
 		assert.deepStrictEqual([world.agents.get(id)?.end?.kind, world.agents.get(id)?.error?.reason], ['failed', 'bad name is not a valid branch name.']);
+	});
+});
+
+suite('Agents started by agents, and their tools (RULES-4.3, LIFECYCLE-2.2, CLIS-2.2, MCP-2.3)', () => {
+
+	test('an agent\'s start opens in the background and joins its caller\'s tree, its YOLO read from the setting; only the person\'s own starts are remembered', async () => {
+		const world = setUp();
+		const lead = world.agents.launch({ name: 'lead', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		const worker = world.agents.launch({ name: 'worker', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: lead, root: lead } });
+		const helper = world.agents.launch({ name: 'helper', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: worker, root: lead } });
+		await settle();
+		assert.deepStrictEqual([lead, worker, helper].map(id => world.execution.reveals.get(id)), [true, false, false]);
+		const facts = (id: RunId) => { const run = world.agents.get(id)!; return [run.origin, run.root, run.creator, run.yolo, run.lifecycle]; };
+		assert.deepStrictEqual([facts(lead), facts(worker), facts(helper)], [
+			['human', lead, undefined, true, 'running'], ['agent', lead, lead, true, 'running'], ['agent', lead, worker, true, 'running']
+		]);
+		assert.deepStrictEqual(world.remembered, [{ location: 'loc-1', cli: 'claude' }]);
+		// What ptyd keeps carries the tree, so that a reload finds it again
+		const kept = world.execution.spawned.find(each => each.run === helper)!.meta;
+		assert.deepStrictEqual([kept.root, kept.creator, kept.origin], [lead, worker, 'agent']);
+	});
+
+	test('an agent\'s start without its calling agent is refused before any effect; model and effort are nonempty where given', () => {
+		const world = setUp();
+		assert.throws(() => world.agents.launch({ name: 'x', location: 'loc-1', cli: 'claude', origin: 'agent' }), (err: unknown) =>
+			err instanceof FacadeError && err.reason === 'invalid_argument' && /An agent start needs its calling agent/.test(err.message));
+		assert.throws(() => world.agents.launch({ name: 'x', location: 'loc-1', cli: 'claude', origin: 'human', model: '  ' }), /The model must be a nonempty string where given/);
+		assert.strictEqual(world.execution.pairs.size, 0);
+	});
+
+	test('a start an agent asked for that fails tells no person: its card is red with why, for the calling agent to hear (RULES-1.8)', async () => {
+		const world = setUp({ planError: new PlanError('claude was not found on PATH.', 'not_found') });
+		const id = world.agents.launch({ name: 'worker', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead', root: 'run-lead' } });
+		await settle();
+		assert.deepStrictEqual([world.agents.get(id)?.lifecycle, world.agents.get(id)?.error?.reason, world.failures.length], ['ended', 'claude was not found on PATH.', 0]);
+		assert.deepStrictEqual(await world.agents.started(id), { state: 'failed', error: 'claude was not found on PATH.' });
+		// The person's own failed start still tells the person
+		world.agents.launch({ name: 'mine', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		assert.strictEqual(world.failures.length, 1);
+	});
+
+	test('with orchestration on each start is given its own shim, with this start\'s model, effort and prompt; its first prompt line is shown, cleaned', async () => {
+		const world = setUp({ tools: true });
+		const id = world.agents.launch({ name: 'w', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead', root: 'run-lead' }, model: ' opus ', effort: 'high', prompt: '\n  Review\u202e the API  \nthen tests' });
+		await settle();
+		assert.deepStrictEqual(world.shims, [id]);
+		const [request] = world.plans;
+		assert.deepStrictEqual([request.tools?.env.FACADE_RUN, request.model, request.effort, request.prompt], [id, 'opus', 'high', '\n  Review\u202e the API  \nthen tests']);
+		assert.deepStrictEqual([world.agents.get(id)?.model, world.agents.get(id)?.promptLine], ['opus', 'Review the API']);
+		// Orchestration off: no shim asked, nothing to inject
+		const off = setUp();
+		off.agents.launch({ name: 'x', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		assert.deepStrictEqual([off.shims, off.plans[0].tools], [[], undefined]);
+	});
+
+	test('the plan\'s tools, input reader and version become the run\'s facts; its shim saying hello makes the tools available, kept for a reload', async () => {
+		const reader = { state: 'supported' as const, reason: 'claude-frame reads its input by its layout.' };
+		const world = setUp({ tools: true, plan: { tools: { state: 'injected' }, input: { adapter: 'claude-frame', capability: reader }, version: '2.1.314' } });
+		const id = world.agents.launch({ name: 'a', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		const facts = world.agents.get(id)!;
+		assert.deepStrictEqual([facts.tools, facts.inputAdapter, facts.inputCapability, facts.version], ['connecting', 'claude-frame', reader, '2.1.314']);
+		world.execution.toolConnections.fire(id);
+		assert.strictEqual(world.agents.get(id)?.tools, 'available');
+		assert.strictEqual(world.execution.metas.get(id)?.tools, 'available');
+		// Tools the plan could not give leave the CLI running without them, with why
+		const without = setUp({ tools: true, plan: { tools: { state: 'unavailable', reason: 'another facade skill is in the project' } } });
+		const other = without.agents.launch({ name: 'b', location: 'loc-1', cli: 'codex', origin: 'human' });
+		await settle();
+		assert.deepStrictEqual([without.agents.get(other)?.lifecycle, without.agents.get(other)?.tools, without.agents.get(other)?.toolsReason], ['running', 'unavailable', 'another facade skill is in the project']);
+	});
+
+	test('started() settles once the process started, the launch failed or the run was closed first, with how its prompt goes in', async () => {
+		const native = { path: 'native' as const, capability: { state: 'unverified' as const, reason: 'a positional argument' } };
+		const world = setUp({ plan: { prompt: native } });
+		const id = world.agents.launch({ name: 'a', location: 'loc-1', cli: 'claude', origin: 'human', prompt: 'go' });
+		assert.deepStrictEqual(await world.agents.started(id), { state: 'running', prompt: native });
+		let open!: () => void;
+		world.execution.spawnGate = new Promise(resolve => open = resolve);
+		const closing = world.agents.launch({ name: 'b', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const settled = world.agents.started(closing);
+		await settle();
+		await world.agents.close(closing);
+		open();
+		assert.strictEqual((await settled).state, 'closed');
+		assert.deepStrictEqual(await world.agents.started('run-unknown'), { state: 'closed' });
+	});
+
+	test('a run\'s injected files are released as it is closed, exits or cannot start (CLIS-2.2)', async () => {
+		const world = setUp();
+		const closed = world.agents.launch({ name: 'a', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const exited = world.agents.launch({ name: 'b', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		await world.agents.close(closed);
+		world.execution.exits.fire({ run: exited, code: 0, interruptVerified: false });
+		world.execution.spawnError = new Error('spawn EACCES');
+		const failed = world.agents.launch({ name: 'c', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		assert.deepStrictEqual([...world.released].sort(), [closed, exited, failed].sort());
+	});
+
+	test('a reload restores each run\'s tree and tools from what ptyd keeps; an earlier build\'s run is a root of its own, without tools', async () => {
+		const world = setUp();
+		const meta = (more: Partial<RunMeta>): RunMeta => ({ alias: '#a1', name: 'a', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local', yolo: false, createdAt: 1, ...more });
+		const reader = { state: 'supported' as const, reason: 'claude-frame' };
+		world.execution.liveRuns = [
+			{ run: 'run-old', meta: meta({}), pid: 1, startedAt: 1, claimedElsewhere: false },
+			{ run: 'run-child', meta: meta({ alias: '#a2', root: 'run-lead', creator: 'run-lead', origin: 'agent', tools: 'available', inputAdapter: 'claude-frame', inputCapability: reader, model: 'opus' }), pid: 2, startedAt: 2, claimedElsewhere: false }
+		];
+		await world.agents.restore();
+		const old = world.agents.get('run-old')!;
+		assert.deepStrictEqual([old.root, old.origin, old.creator, old.tools], ['run-old', 'human', undefined, 'not_injected']);
+		const child = world.agents.get('run-child')!;
+		assert.deepStrictEqual([child.root, child.origin, child.creator, child.tools, child.inputAdapter, child.inputCapability, child.model], ['run-lead', 'agent', 'run-lead', 'available', 'claude-frame', reader, 'opus']);
 	});
 });
