@@ -24,7 +24,7 @@ interface Waiting {
 /** A successor activation of this workspace owns its state now: this one keeps nothing more of it (ARCHITECTURE-2.2). */
 export class NotOwnedError extends Error {
 	constructor() {
-		super('Another window owns this workspace now: its state was not kept.');
+		super('Another window owns this workspace.');
 	}
 }
 
