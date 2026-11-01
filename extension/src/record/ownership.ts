@@ -38,18 +38,38 @@ export function nextOwnerClaim(owner: string, home: string): OwnerClaim {
 /** Synchronous disk writers also stop when a successor activation has been allocated, before its socket connects. */
 export function isCurrentOwner(claim: OwnerClaim, home: string): boolean {
 	try {
-		const current = JSON.parse(fs.readFileSync(claimFile(claim.owner, home), 'utf8')) as Partial<OwnerClaim>;
-		return current.generation === claim.generation && current.token === claim.token;
+		return holds(claim, home);
 	} catch {
 		return false;
 	}
 }
 
-/** The ownership check and final file replacement share the same lock as successor-generation allocation. */
-export function writeAsOwner(claim: OwnerClaim, home: string, write: () => void): void {
-	withFileLock(claimFile(claim.owner, home), () => {
-		if (isCurrentOwner(claim, home)) {
-			write();
+/** Whether `claim` is the one its owner's record names now: throws where that record cannot be read, never taking that for another. */
+function holds(claim: OwnerClaim, home: string): boolean {
+	let text: string;
+	try {
+		text = fs.readFileSync(claimFile(claim.owner, home), 'utf8');
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+			return false;
 		}
+		throw err;
+	}
+	const current = JSON.parse(text) as Partial<OwnerClaim>;
+	return current.generation === claim.generation && current.token === claim.token;
+}
+
+/**
+ * The ownership check and final file replacement share the same lock as successor-generation allocation. Answers whether it wrote:
+ * false where a successor activation owns the record now. Throws where the record cannot be read: a write is never skipped silently
+ * for a failure that is not another owner's claim.
+ */
+export function writeAsOwner(claim: OwnerClaim, home: string, write: () => void): boolean {
+	return withFileLock(claimFile(claim.owner, home), () => {
+		if (!holds(claim, home)) {
+			return false;
+		}
+		write();
+		return true;
 	}, { keepLive: true });
 }

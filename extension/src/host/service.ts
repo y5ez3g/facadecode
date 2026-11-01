@@ -352,6 +352,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	context.subscriptions.push(...disposables);
 	return async () => {
 		disposed = true;
+		// Its state's changes waiting to be written together are written now, while this activation may own them
+		workspaceState.flush();
 		clearTimeout(restoreRetry);
 		found.dispose();
 		tools.dispose();

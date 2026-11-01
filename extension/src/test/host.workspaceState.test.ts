@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
-import { KeptWorkspaceState } from '../host/workspaceState';
+import { KeptWorkspaceState, NotOwnedError } from '../host/workspaceState';
 import { tempDir } from './util';
 
 /** An editor's workspace state: what it holds, and what it was told to keep. */
@@ -30,15 +30,39 @@ suite('Host: the window\'s workspace state, kept beside its agents too (ARCHITEC
 	});
 	teardown(() => temp.remove());
 
-	test('a superseded activation cannot overwrite workspace history or the shared state file', async () => {
+	test('a superseded activation cannot overwrite workspace history or the shared state file, and is told so: nothing is acknowledged unkept (LIFECYCLE-3.4)', async () => {
 		let owns = true;
 		const editor = editorState();
 		const state = new KeptWorkspaceState(editor, file, false, () => undefined, write => { if (owns) { write(); } });
 		await state.update('facade.panel.order', ['b', 'a']);
 		owns = false;
-		await state.update('facade.panel.order', []);
-		assert.deepStrictEqual([state.get('facade.panel.order'), editor.get('facade.panel.order'), JSON.parse(fs.readFileSync(file, 'utf8'))],
-			[['b', 'a'], ['b', 'a'], { 'facade.panel.order': ['b', 'a'] }]);
+		await assert.rejects(Promise.resolve(state.update('facade.panel.order', [])), NotOwnedError);
+		assert.throws(() => state.keep('facade.pins', [{ id: 'pin-1' }]), NotOwnedError);
+		assert.deepStrictEqual([state.get('facade.panel.order'), state.get('facade.pins'), editor.get('facade.panel.order'), JSON.parse(fs.readFileSync(file, 'utf8'))],
+			[['b', 'a'], undefined, ['b', 'a'], { 'facade.panel.order': ['b', 'a'] }]);
+	});
+
+	test('changes that come together are one write, read as they are at once; a synchronous keep writes those waiting with it', async () => {
+		let writes = 0;
+		const editor = editorState();
+		const state = new KeptWorkspaceState(editor, file, false, () => undefined, write => { writes++; write(); });
+		writes = 0;
+		const orders = [['run-1'], ['run-2', 'run-1'], ['run-3', 'run-2', 'run-1']].map(order => state.update('facade.panel.order', order));
+		const filter = state.update('facade.panel.filter', { kind: 'folder', id: 'file:///shop', label: 'shop' });
+		assert.deepStrictEqual(state.get('facade.panel.order'), ['run-3', 'run-2', 'run-1'], 'read as it is at once');
+		await Promise.all([...orders, filter]);
+		assert.strictEqual(writes, 1, 'one write for the burst');
+		assert.deepStrictEqual([editor.get('facade.panel.order'), JSON.parse(fs.readFileSync(file, 'utf8'))['facade.panel.order']], [['run-3', 'run-2', 'run-1'], ['run-3', 'run-2', 'run-1']]);
+		const waiting = state.update('facade.panel.order', ['run-1']);
+		await state.keep('facade.pins', [{ id: 'pin-1' }]);
+		assert.strictEqual(writes, 2, 'the keep wrote what waited with it');
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { 'facade.panel.order': ['run-1'], 'facade.panel.filter': { kind: 'folder', id: 'file:///shop', label: 'shop' }, 'facade.pins': [{ id: 'pin-1' }] });
+		await waiting;
+		const last = state.update('facade.lastLaunch', { location: 'loc-1', cli: 'claude' });
+		state.flush();
+		assert.strictEqual(writes, 3, 'written at once as the window goes');
+		await last;
+		assert.deepStrictEqual(editor.get('facade.lastLaunch'), { location: 'loc-1', cli: 'claude' });
 	});
 
 	test('it is the editor\'s workspace state, and every change of it is kept in its file as well', async () => {
