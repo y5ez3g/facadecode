@@ -399,6 +399,22 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.strictEqual(setUp({ inputAdapter: 'agy-frame' }).input.pasteTime(RUN, 'a\nb\nc'), 3 * 45);
 	});
 
+	test('Codex on Windows reads a paste a key at a time: 3 ms a UTF-16 unit, in a paste\'s time beyond the usual, the wait for its draft and type_text\'s Enter (D105)', async () => {
+		// 9,249 UTF-16 units, as in Orca's measurement of 21.1 s: a character outside the BMP is two key events
+		const text = `${'x'.repeat(9_247)}😀`;
+		const codex = setUp({ inputAdapter: 'codex-prompt' }, 'win32');
+		assert.strictEqual(codex.input.pasteTime(RUN, text), 2 * 100 + 3 * 9_249);
+		assert.strictEqual(setUp({ inputAdapter: 'codex-prompt' }).input.pasteTime(RUN, text), 0, 'elsewhere Codex takes a bracketed paste whole');
+		assert.strictEqual(setUp({}, 'win32').input.pasteTime(RUN, text), 2 * 100, 'Claude Code on Windows takes it at ConPTY\'s rate alone');
+		// A draft drawn only after 21 seconds of reading is waited for, and gets its Enter
+		codex.terminal.showsPasteAfter = 211;
+		assert.deepStrictEqual(await effects(codex.input.submit(RUN, text)), CONFIRMED);
+		assert.ok(codex.terminal.calls.includes('keys Enter'));
+		const direct = setUp({ inputAdapter: 'codex-prompt' }, 'win32');
+		await direct.input.typeDirect(RUN, 'y'.repeat(1_000), true);
+		assert.deepStrictEqual(direct.waits, [100 + 3 * 1_000]);
+	});
+
 	test('Enter goes only over the message\'s own draft: a CLI\'s placeholder for it, never a draft a person changed (RULES-1.6)', async () => {
 		const { input, terminal } = setUp();
 		const text = Array.from({ length: 33 }, (_, line) => `line ${line + 1}`).join('\n');
