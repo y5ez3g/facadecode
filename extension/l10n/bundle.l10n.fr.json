@@ -231,5 +231,19 @@
 	"Reload Window": "Recharger la fenêtre",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "L'enregistrement Facade Code de cette fenêtre est endommagé : ses agents ne peuvent pas être restaurés ici. Fermez cette fenêtre et rouvrez son dossier ou son espace de travail, ou redémarrez {0}.",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} s'exécute via cmd.exe, qui ne peut pas s'exécuter dans le dossier UNC {1} ; définissez {2}.path sur le programme propre à la CLI ou le point d'entrée Node",
-	"{0} is a Node script, and Node is not on the PATH to run it": "{0} est un script Node, et aucun Node ne se trouve dans le PATH pour l'exécuter"
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} est un script Node, et aucun Node ne se trouve dans le PATH pour l'exécuter",
+	"Could not restore {0} pinned agents. Their cards show why.": "Impossible de restaurer {0} agents épinglés. Leurs cartes indiquent la raison.",
+	"Could not restore {0}: {1}": "Impossible de restaurer {0} : {1}",
+	"Could not pin {0}: {1}": "Impossible d’épingler {0} : {1}",
+	"Could not unpin {0}: {1}": "Impossible de désépingler {0} : {1}",
+	"Pinned": "Épinglé",
+	"Could not read the saved conversations: {0}": "Impossible de lire les conversations enregistrées : {0}",
+	"Resume Agent": "Reprendre un agent",
+	"Restores this conversation when the workspace opens again": "Restaure cette conversation à la réouverture de l’espace de travail",
+	"Search saved conversations by title or location": "Rechercher des conversations enregistrées par titre ou emplacement",
+	"Open a folder to resume its conversations.": "Ouvrez un dossier pour reprendre ses conversations.",
+	"Untitled conversation": "Conversation sans titre",
+	"No saved conversations in this window's folders": "Aucune conversation enregistrée dans les dossiers de cette fenêtre",
+	"Could not resume {0}: {1}": "Impossible de reprendre {0} : {1}",
+	"{0} is already running in another window.": "{0} est déjà en cours d’exécution dans une autre fenêtre."
 }

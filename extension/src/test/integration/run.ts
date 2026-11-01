@@ -138,10 +138,11 @@ async function main(): Promise<void> {
 	fs.mkdirSync(agentsHome);
 
 	/** What agents' terminals are given - the suite's home folder, and `more` - by the editor's terminal settings. */
+	const isolatedStorage = { XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state') };
 	const terminalEnv = (more: { readonly [name: string]: string } = {}) => ({
-		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, ...more },
-		'terminal.integrated.env.osx': { HOME: agentsHome, ...more },
-		'terminal.integrated.env.linux': { HOME: agentsHome, ...more }
+		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, ...isolatedStorage, ...more },
+		'terminal.integrated.env.osx': { HOME: agentsHome, ...isolatedStorage, ...more },
+		'terminal.integrated.env.linux': { HOME: agentsHome, ...isolatedStorage, ...more }
 	});
 	// Every built-in points to a fake: the suite never starts a person's real CLI.
 	const settings = {
@@ -192,17 +193,17 @@ async function main(): Promise<void> {
 	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake CLI in the
 	 * folder window and adds a folder, then, in the extension host the editor restarts, says what Facade shows; this judges it.
 	 */
-	const conversion = async () => {
-		const solo = path.join(root, 'solo');
-		const second = path.join(root, 'second');
-		const user = path.join(root, 'u-conversion');
-		const facade = path.join(home, 'conversion');
-		const out = path.join(root, 'conversion.jsonl');
-		const driver = path.join(root, 'driver');
+	const conversion = async (cli: typeof BUILT_INS[number]) => {
+		const solo = path.join(root, `solo-${cli.id}`);
+		const second = path.join(root, `second-${cli.id}`);
+		const user = path.join(root, `u-conversion-${cli.id}`);
+		const facade = path.join(home, `conversion-${cli.id}`);
+		const out = path.join(root, `conversion-${cli.id}.jsonl`);
+		const driver = path.join(root, `driver-${cli.id}`);
 		for (const dir of [solo, second, path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])) }));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'conversionDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
@@ -210,7 +211,7 @@ async function main(): Promise<void> {
 		}
 		// The flags runTests gives the other parts too: Electron's sandbox cannot start where unprivileged user namespaces are
 		// restricted, as on Ubuntu 24.04 and later
-		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-conversion'), '--shared-data-dir', path.join(root, 's-conversion'),
+		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, `x-conversion-${cli.id}`), '--shared-data-dir', path.join(root, `s-conversion-${cli.id}`),
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, '--no-sandbox', '--disable-gpu-sandbox', '--disable-updates', '--skip-welcome', '--skip-release-notes', '--disable-workspace-trust'], {
 			stdio: 'ignore',
 			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_SECOND: second, CLAUDE_CONFIG_DIR: claudeConfig }
@@ -224,12 +225,13 @@ async function main(): Promise<void> {
 			}
 			const said = lines();
 			const before = said.find(line => line.phase === 'folder') as { runId: string; name: string; pid: number } | undefined;
-			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string } | null; terminals: string[] } | undefined;
-			console.log(`  Journey: a folder window becomes a multi-root workspace and keeps its agents (ARCHITECTURE-2.2, D70)\n    ${JSON.stringify(said)}`);
-			if (!before || !after || after.folders !== 2 || after.card?.runId !== before.runId || !alive(before.pid) || after.terminals.filter(each => each === before.name).length !== 1) {
-				throw new Error('The agent of the folder window was not the same run, card, live process and one terminal in the workspace it became.');
+			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string; pinned: boolean } | null; terminals: string[] } | undefined;
+			console.log(`  Journey: ${cli.id}: Pin and Unpin survive reload; a folder window becomes a multi-root workspace and keeps its pinned agent (LIFECYCLE-3.4, ARCHITECTURE-2.2, D70)\n    ${JSON.stringify(said)}`);
+			if (!before || !after || after.folders !== 2 || after.card?.runId !== before.runId || !after.card.pinned || !alive(before.pid)
+				|| after.terminals.filter(each => each === before.name).length !== 1 || !['reload-pinned', 'reload-unpinned'].every(phase => said.some(line => line.phase === phase))) {
+				throw new Error('Pin/Unpin did not survive reload, or the folder agent was not the same pinned run, live process and one terminal in the workspace it became.');
 			}
-			console.log('    ✔ the agent started in the folder window is the same run, card, live process and one terminal in the workspace');
+			console.log('    ✔ Pin and Unpin survive reload; the same pinned run, live process and one terminal survive conversion');
 		} finally {
 			editor.kill('SIGTERM');
 			endProcessesWith(user);
@@ -251,7 +253,7 @@ async function main(): Promise<void> {
 			await run('custom', repo, { FACADE_IT_CLI: CUSTOM_CLI, FACADE_IT_AGENTS_HOME: agentsHome }, { ...off, 'facade.custom': custom });
 		}
 		if (only !== 'journeys') {
-			await conversion();
+			for (const cli of BUILT_INS) { await conversion(cli); }
 		}
 	} finally {
 		if (keep) {

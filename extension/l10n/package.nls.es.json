@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "Obligatorio: los argumentos que reanudan una conversación guardada exacta. `${sessionId}` se reemplaza por su ID de sesión y debe aparecer.",
 	"windowDisplayName": "Componente de ventana de Facade Code",
 	"windowDescription": "Coordinador de continuidad de sesión e identidad de ventana para Facade Code.",
-	"icon.newAgent": "Icono de Nuevo agente"
+	"icon.newAgent": "Icono de Nuevo agente",
+	"command.history": "Reanudar agente...",
+	"command.pinAgent": "Anclar agente",
+	"command.unpinAgent": "Desanclar agente"
 }

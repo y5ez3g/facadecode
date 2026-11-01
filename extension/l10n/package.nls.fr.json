@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "Obligatoire : les arguments qui reprennent une conversation enregistrée précise. `${sessionId}` est remplacé par son ID de session et doit figurer.",
 	"windowDisplayName": "Composant de fenêtre Facade Code",
 	"windowDescription": "Coordinateur d'identité de fenêtre et de continuité de session pour Facade Code.",
-	"icon.newAgent": "Icône de Nouvel agent"
+	"icon.newAgent": "Icône de Nouvel agent",
+	"command.history": "Reprendre un agent...",
+	"command.pinAgent": "Épingler l’agent",
+	"command.unpinAgent": "Désépingler l’agent"
 }

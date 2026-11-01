@@ -6,6 +6,7 @@
 // alone, before any file or process exists. Discovery and launch use the same environment, so the program found is the one
 // started; every prerequisite that can be checked is checked here, and a failure carries its actual reason.
 
+import { newSessionId, SESSION_FILE_VARIABLE } from './identity';
 import { expanded, invocation } from './adapter';
 import { BUILT_IN_ADAPTERS, Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
@@ -29,6 +30,9 @@ export interface DestinationEnvironment {
 
 /** What is asked of the planner (PlanRequest's facts, as plain data). */
 export interface PlanInput {
+	readonly resume?: { readonly sessionId: string };
+	readonly sessionFile?: string;
+	readonly sessionHook?: string;
 	readonly cli: string;
 	/** The run's `#aN` alias, which its environment carries (CLIS-1.2). */
 	readonly alias: string;
@@ -48,6 +52,9 @@ export type LaunchTrust = {
 
 /** A launch as planned: the same facts as the core's LaunchPlan, kept as plain data here. */
 export interface PlannedLaunch {
+	readonly files?: readonly { readonly file: string; readonly content: string }[];
+	readonly sessionId?: string;
+	readonly exactResume?: boolean;
 	readonly cli: string;
 	readonly displayName: string;
 	readonly command: string;
@@ -153,8 +160,14 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		throw new CliPlanError(found.problem, 'not_found', found.said);
 	}
 	const target = targetOf(entry, found.executable, env, platform, input.cwd);
-	const values = adapter.values({ yolo: input.yolo, cwd: input.cwd, platform });
-	const args = [...target.args, ...invocation(adapter.groups, entry.extra, { yolo: input.yolo }, values)];
+	if (input.resume && (!input.resume.sessionId || input.resume.sessionId.includes('\0') || (!entry.custom && !adapter.groups.resume))) {
+		throw new CliPlanError(`${adapter.displayName} cannot resume this exact conversation`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
+	}
+	const sessionId = input.resume?.sessionId ?? (adapter.groups.session && input.sessionFile ? newSessionId() : undefined);
+	const values = { ...adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, sessionId, sessionHook: input.sessionHook }), ...(sessionId ? { sessionId } : {}) };
+	const extra = input.resume && entry.custom ? entry.custom.resume.map(arg => arg.replace(/\$\{sessionId\}/g, () => input.resume!.sessionId)) : entry.extra;
+	const integration = input.sessionFile && input.sessionHook ? adapter.sessionIntegration?.({ file: input.sessionFile, hook: input.sessionHook, env, cwd: input.cwd, platform, extra }) : undefined;
+	const args = [...target.args, ...invocation(adapter.groups, [...integration?.extra ?? extra, ...integration?.args ?? []], { yolo: input.yolo, resume: !!input.resume && !entry.custom, session: !!sessionId }, values)];
 	if (isNodeScript(target.executable, platform)) {
 		// A Node entry point - what a refusal below advises - that no Node on the PATH can run: Windows cannot run it itself
 		throw new CliPlanError(`${target.executable} is a Node script, and Node is not on the PATH to run it`, 'not_found',
@@ -187,8 +200,13 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		}
 	}
 	const runEnv = runEnvironment(env, input.alias, platform);
+	if (adapter.sessionIdentity && input.sessionFile) { runEnv[SESSION_FILE_VARIABLE] = input.sessionFile; }
+	Object.assign(runEnv, integration?.env);
 	return {
+		...integration?.files ? { files: integration.files } : {},
 		cli: adapter.id,
+		...(sessionId ? { sessionId } : {}),
+		exactResume: !!adapter.sessionIdentity && !!input.sessionFile && !!input.sessionHook && !integration?.unavailable,
 		displayName: adapter.displayName,
 		command: adapter.command,
 		executable: target.executable,

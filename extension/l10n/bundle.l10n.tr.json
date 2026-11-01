@@ -231,5 +231,19 @@
 	"Reload Window": "Pencereyi Yeniden Yükle",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "Bu pencerenin Facade Code kaydı bozuk, bu yüzden aracıları burada geri yüklenemiyor. Bu pencereyi kapatıp klasörünü veya çalışma alanını yeniden açın ya da {0} uygulamasını yeniden başlatın.",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0}, cmd.exe aracılığıyla çalışıyor ve cmd.exe {1} UNC klasöründe çalışamaz; {2}.path değerini CLI'nin kendi programına veya Node giriş noktasına ayarlayın",
-	"{0} is a Node script, and Node is not on the PATH to run it": "{0} bir Node betiğidir ve onu çalıştıracak Node PATH üzerinde yok"
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} bir Node betiğidir ve onu çalıştıracak Node PATH üzerinde yok",
+	"Could not restore {0} pinned agents. Their cards show why.": "Sabitlenmiş {0} aracı geri yüklenemedi. Nedenleri kartlarında gösterilir.",
+	"Could not restore {0}: {1}": "{0} geri yüklenemedi: {1}",
+	"Could not pin {0}: {1}": "{0} sabitlenemedi: {1}",
+	"Could not unpin {0}: {1}": "{0} sabitlemesi kaldırılamadı: {1}",
+	"Pinned": "Sabitlendi",
+	"Could not read the saved conversations: {0}": "Kaydedilmiş konuşmalar okunamadı: {0}",
+	"Resume Agent": "Ajanı Sürdür",
+	"Restores this conversation when the workspace opens again": "Çalışma alanı yeniden açıldığında bu konuşmayı geri yükler",
+	"Search saved conversations by title or location": "Kaydedilmiş konuşmaları başlığa veya konuma göre ara",
+	"Open a folder to resume its conversations.": "Konuşmalarını sürdürmek için bir klasör açın.",
+	"Untitled conversation": "Adsız konuşma",
+	"No saved conversations in this window's folders": "Bu pencerenin klasörlerinde kaydedilmiş konuşma yok",
+	"Could not resume {0}: {1}": "{0} sürdürülemedi: {1}",
+	"{0} is already running in another window.": "{0} zaten başka bir pencerede çalışıyor."
 }

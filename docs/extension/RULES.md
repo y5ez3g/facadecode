@@ -35,10 +35,12 @@ own relevant notifications; no fallback to another window.
 | --- | --- |
 | Execution environment | Where files, CLIs and processes exist |
 | Window | One current editor window; reload reconnects it; true reopening is a new window |
-| Workspace | Saved editor workspace/folder context for preferences |
+| Workspace | Saved editor workspace/folder context for preferences and Pin intent |
+| Conversation key | Execution environment, CLI and exact vendor session ID |
+| Pin | Saved intent to restore an exact conversation |
 | Agent/run ID | One accepted launch, unique and never reassigned |
 
-Keep the same run ID through startup, rename and reattachment of the same process. A fresh start has a new run ID.
+Keep the same run ID through startup, rename and reattachment of the same process. A fresh start or Resume has a new run ID.
 
 ### 2.4 Locations preserve the opened folder and execution authority
 
@@ -101,10 +103,10 @@ state transition.
 
 **A window owns its agents.**
 
-Closing a window ends all its runs and removes their UI. No public editor signal tells a close from a reload, so a
+Closing a window ends all its runs and removes their UI, preserving Pin intent. No public editor signal tells a close from a reload, so a
 window's runs end five minutes after its extension host disconnects from the execution supervisor, unless a reloaded or
 reopened window of the same workspace claims them first (D75). A reload or a temporary remote disconnect - during which
-the remote extension host stays connected - retains/reconnects the original runs without launching duplicates. Explicit agent closure immediately removes card and terminal; process
+the remote extension host stays connected - retains/reconnects the original runs without launching duplicates. Explicit agent closure immediately removes card and terminal and Unpins; process
 cleanup happens in the background, using termination when needed. No fixed UI wait or Stopping card is required. Actual
 termination and uncertain remote cleanup remain distinct facts in the operation record. The five-minute timer is cleanup
 policy, not proof that a person closed the window: no other timer ends a process, and true close detection remains a
@@ -115,6 +117,21 @@ its terminal in the editor, across a reload, an extension host restart, an updat
 cannot reach its process or tell its state, the card is red and says why (3.2); Facade never leaves it out (D86). A window
 whose own identity record is gone or damaged cannot tell its agents from another window's (ARCHITECTURE-2.2) and is the
 exception.
+
+### 4.2 Restoration preserves intent, not an old process
+
+**Resume and Pin restore the exact conversation, original location in a new run.**
+
+Pin stores the conversation key, original location, name and order. Keep the conversation/location
+association for non-pinned Facade conversations too; short-lived message cleanup must not erase it. No copied account
+credentials. Use current CLI startup configuration and 4.3's YOLO rule for the new run. The CLI restores its native model/effort unless current launch arguments override it; Facade does not maintain a second saved model/effort configuration to restore.
+Existing processes keep their actual plan.
+
+Explicit agent close, normal exit or actual location removal Unpins. Abnormal exit and whole-window close preserve Pin.
+Unpin alone does not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation.
+Restore in the background once after reattachment on opening; retained failures prevent retries on reload; retain failures without a restart loop.
+If the exact conversation already runs in Facade, later windows skip launching it. Human UX stays local.
+Facade does not inspect or block an external application's writer; vendor resume errors are returned as actual errors.
 
 ### 4.3 Permissions remain explicit
 
@@ -169,6 +186,8 @@ accumulated-operation counter may permanently disable an otherwise usable enviro
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 4.1 keeps every agent a window started shown, red where Facade cannot reach it or tell its state (D86).
 - 2026-10-30: 4.4 refers to CLIS-1.1's `.enabled`, now part of the extension.

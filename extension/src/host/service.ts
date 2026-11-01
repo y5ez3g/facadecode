@@ -8,6 +8,9 @@ import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
 import { isDamagedWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { VendorHistory } from '../clis/history';
+import { ConversationFile } from '../record/conversations';
+import { WorkspacePins } from './pins';
 import { AgentService } from '../core/agents';
 import { PlanError, type LogPort, type RunFacts } from '../core/ports';
 import { PANEL_VIEW } from '../ui/catalog';
@@ -142,9 +145,10 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		terminalOwner: { ...terminalOwner, remote: vscode.env.remoteName !== undefined }
 	});
 	const worktrees = createWorktreeService(locations, log);
-	const clis = new HostClis({ log: line => log.event(line) });
+	const clis = new HostClis({ home, log: line => log.event(line) });
 	const history = new WorkspaceLaunchHistory(workspaceState, log);
 	const human = new WindowHuman(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
+	const conversations = new ConversationFile(home);
 	const agents = new AgentService({
 		execution,
 		planner: clis,
@@ -152,6 +156,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		worktrees,
 		history,
 		human,
+		conversations,
+		pinStore: new WorkspacePins(workspaceState, log),
+		newPinId: () => `pin-${crypto.randomBytes(16).toString('hex')}`,
 		retained: new RetainedFile<RunFacts>(record.dir, writeIfOwned),
 		aliases: new AliasCounter(home),
 		clock: { now: Date.now },
@@ -174,6 +181,10 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
 	// Then a ptyd listing runs of this window that it shows no pair of - one of an earlier protocol found late, or a failed reattach -
 	// restores again, one restore at a time: no started agent is left out (RULES-4.1, D86)
+	void ready.then(async () => {
+		try { await locations.refresh(); } catch (err) { log.event(`Could not refresh locations before restoring pins: ${messageOf(err)}`); }
+		if (!disposed) { await agents.restorePins(); }
+	}).catch(err => log.event(`Could not restore pinned agents: ${messageOf(err)}`));
 	let restoring: Promise<unknown> = ready;
 	const found = execution.onDidFindRuns(() => {
 		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`));
@@ -181,6 +192,12 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const disposables: vscode.Disposable[] = [
 		...registerUi({
 			agents,
+			conversations: new VendorHistory({
+				knownCwd: key => conversations.get(key)?.cwd,
+				arguments: () => clis.storeArguments(),
+				environment: cwd => { const location = locations.conversationLocation(cwd); return location ? clis.storeEnvironments(location) : {}; },
+				unavailable: (cli, cwd) => { const location = locations.conversationLocation(cwd); return location ? clis.resumeProblem(cli, location) : 'The original working directory is unavailable.'; }
+			}),
 			locations,
 			clis,
 			history,

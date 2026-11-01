@@ -210,8 +210,9 @@ own ptyd. Upgrade/reload behavior must be verified with in-flight work.
 
 | Store | Contents |
 | --- | --- |
-| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects and location metadata |
-| Editor workspace storage | Human CLI/location choices, filter, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, location metadata and Facade conversation names/locations |
+| Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
@@ -374,6 +375,8 @@ what was tested and what remains. Task assignments, pauses and discussion author
 See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this design.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 4.2 distinguishes unreleased development data from released runtime protocols, removing the stale
   claim that the extension has never been released.

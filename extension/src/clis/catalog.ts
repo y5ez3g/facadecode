@@ -46,7 +46,7 @@ export interface CatalogEntry {
  * repeating one would put the person's value in Facade's place, so it is refused (CLIS-3.1). Its folder's trust is not among them.
  */
 export function ownedOptions(adapter: CliAdapter): readonly string[] {
-	return [...adapter.groups.quiet ?? [], ...adapter.groups.yoloOn ?? [], ...adapter.groups.yoloOff ?? []].filter(token => token.startsWith('-'));
+	return [...adapter.groups.quiet ?? [], ...adapter.groups.yoloOn ?? [], ...adapter.groups.yoloOff ?? [], ...adapter.groups.resume ?? [], ...adapter.groups.session ?? [], ...adapter.identityOptions ?? []].filter(token => token.startsWith('-'));
 }
 
 /** How the catalog reads the settings: by their full names, as the destination environment's editor has them. */

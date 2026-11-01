@@ -2,6 +2,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { SessionIdentity } from './sessionIdentity';
+import type { ConversationKey } from '../../core/ports';
 import * as os from 'os';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
@@ -140,6 +142,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly activations = new Emitter<RunId | undefined>();
 	private readonly closes = new Emitter<RunId>();
 	private readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
+	private readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
+	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
+	readonly onDidIdentify = this.identities.event;
+	readonly onDidPinTab = this.tabPins.event;
 	private readonly transfers = new Emitter<void>();
 	readonly onDidReport = this.reports.event;
 	readonly onDidExit = this.exits.event;
@@ -154,8 +160,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidFindRuns = this.finds.event;
 	private readonly terminals: AgentTerminals;
 	private readonly session: ExecutionSession;
+	private readonly identity: SessionIdentity;
 
 	constructor(private readonly options: AgentExecutionOptions) {
+		this.identity = new SessionIdentity(options.home, (run, sessionId, cwd) => this.identities.fire({ run, sessionId, cwd }), options.log);
 		// Acquire the activation claim before subscribing any editor resources.
 		this.session = new ExecutionSession({
 			...options,
@@ -171,13 +179,17 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
 				closed: run => this.closes.fire(run),
-				renamed: (run, name) => this.tabRenames.fire({ run, name })
+				renamed: (run, name) => this.tabRenames.fire({ run, name }),
+			pinned: (run, pinned) => this.tabPins.fire({ run, pinned })
 			});
 		} catch (err) {
 			this.session.dispose();
 			throw err;
 		}
 	}
+
+	pinTab(run: RunId, pinned: boolean): void { this.terminals.pin(run, pinned); }
+	async conversations(): Promise<readonly ConversationKey[]> { return (await this.session.client()).request('conversations', {}); }
 
 	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void {
 		if (this.pairs.has(facts.run)) {
@@ -200,6 +212,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ readonly pid: number; readonly startedAt: number }> {
+		if (plan.exactResume) { this.identity.track(run); }
 		const pair = this.pairs.get(run);
 		if (!pair) {
 			throw new Error('The agent was closed before its CLI started.');
@@ -241,6 +254,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			throw new Error('The agent was closed before its CLI started.');
 		}
 		pair.process = { pid: info.pid, startedAt: info.startedAt };
+		this.identity.process(run, info.pid);
 		pair.startupEnds = this.startupEndOf(info.startedAt);
 		pair.starting = false;
 		pair.status = info.status;
@@ -291,6 +305,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	async attach(live: LiveRun, facts: PairFacts): Promise<void> {
+		if (live.meta.exactResume) { this.identity.track(live.run); this.identity.process(live.run, live.pid); }
 		// VS Code opens a background pseudoterminal lazily, ignoring name events until then. Its initial tab name must include
 		// the restored CLI title, so create the native terminal after the attach snapshot has supplied it (LIFECYCLE-2.2).
 		const pair = this.pairs.get(live.run) ?? this.create(facts, false, true);
@@ -375,6 +390,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	removePair(run: RunId): void {
+		this.identity.untrack(run);
 		const pair = this.detachPair(run);
 		if (!pair || (!pair.process && !pair.starting) || this.session.ownershipLost) {
 			return;
@@ -476,6 +492,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	dispose(): void {
+		this.identity.dispose();
+		this.identities.clear();
+		this.tabPins.clear();
 		this.session.dispose();
 		for (const pair of this.pairs.values()) {
 			pair.lifetime.abort();
@@ -656,6 +675,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			cleanup = cleanup.then(result => {
 				if (result === 'terminated' || result === 'already_exited') {
 					this.pendingCleanup.delete(run);
+					this.identity.forget(run);
 				} else if (!this.session.closed) {
 					this.pendingCleanup.add(run);
 				}

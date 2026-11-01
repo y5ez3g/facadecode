@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "必要: 用於接續某個確切已儲存對話的引數。`${sessionId}` 會由其工作階段 ID 取代，且必須出現。",
 	"windowDisplayName": "Facade Code 視窗元件",
 	"windowDescription": "Facade Code 的視窗身分與工作階段連續性協調元件。",
-	"icon.newAgent": "新增 Agent 圖示"
+	"icon.newAgent": "新增 Agent 圖示",
+	"command.history": "恢復 agent...",
+	"command.pinAgent": "釘選 agent",
+	"command.unpinAgent": "取消釘選 agent"
 }

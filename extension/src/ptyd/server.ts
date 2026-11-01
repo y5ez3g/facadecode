@@ -62,7 +62,7 @@ class Connection {
 		}
 		this.lastRequest = request.id;
 		const result = handle();
-		if (request.method === 'attach' || request.method === 'list' || request.method === 'hello') {
+		if (request.method === 'attach' || request.method === 'list' || request.method === 'conversations' || request.method === 'hello') {
 			return result;
 		}
 		const receipt = { body, result, bytes: 0 };
@@ -299,11 +299,21 @@ export class PtydServer {
 			case 'claim':
 				this.owners.claim(params as Requests['claim']['params'], connection);
 				return undefined;
+			case 'conversations':
+				return [...this.runs.values()].flatMap(run => {
+					const meta = run.meta;
+					return !run.removed && !run.info(false).exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
+						? [{ environment: meta.environment, cli: meta.cli, sessionId: meta.sessionId }] : [];
+				});
 			case 'spawn': {
 				const spawn = params as Requests['spawn']['params'];
 				this.owners.assert(spawn.owner, connection);
 				if (typeof spawn.run !== 'string' || !spawn.run || this.seen.has(spawn.run)) {
 					throw new Error(`Run ${JSON.stringify(spawn.run)} was started before: ptyd never starts a run ID twice.`);
+				}
+				if (typeof spawn.meta.sessionId === 'string' && [...this.runs.values()].some(run => !run.removed && !run.info(false).exited
+					&& run.meta.sessionId === spawn.meta.sessionId && run.meta.cli === spawn.meta.cli && run.meta.environment === spawn.meta.environment)) {
+					throw new Error('This conversation is already running in Facade.');
 				}
 				this.seen.add(spawn.run);
 				const run = new Run(spawn);

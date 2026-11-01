@@ -100,6 +100,14 @@ Temporary remote loss retains observations and reconciles the original processes
 minutes after it goes unless the workspace is opened again first, which shows them again (RULES-4.1). Other windows
 continue their work.
 
+### 2.5 Resume and Pin
+
+**Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
+
+Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are
+the same intent. Unpin keeps the current agent running. Explicit close and normal exit Unpin; abnormal exit and
+whole-window close preserve the intent. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
+
 ## 4 Completing the work
 
 ### 4.2 Changing direction and partial work
@@ -132,6 +140,8 @@ enters the normal panel data, and a filtered-out creation does not clear the per
 Evidence is recorded in [Verification](engineering/VERIFICATION.md); these scenarios have not been run by this rewrite.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-30: 4.3 says a panel filter affects display only (PANEL-2.3).
 

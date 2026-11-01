@@ -7,13 +7,18 @@
 // the next list and the next start. A start of a CLI that keeps its trust in a file of its own has its folder trusted there first;
 // where it cannot be, the start goes ahead and the CLI asks in its terminal (CLIS-3.3, D62).
 
+import { SESSION_HOOK_SCRIPT, sessionFileOf, sessionHookCommand } from '../clis/identity';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { StoreEnvironments } from '../clis/history';
+import { facadeHome } from '../record/paths';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { CatalogEntry, catalogOf, SettingsReader } from '../clis/catalog';
 import type { CliProblem } from '../clis/config';
 import { CUSTOM_SETTING } from '../clis/custom';
 import { describeLaunches, LaunchDescription } from '../clis/describe';
-import { CliPlanError, DestinationEnvironment, discover, planLaunch, PlannedLaunch } from '../clis/plan';
+import { CliPlanError, DestinationEnvironment, discover, environmentOf, planLaunch, PlannedLaunch } from '../clis/plan';
 import { writeTrust } from '../clis/trust';
 import { CliCatalogPort, CliChoice, CliChoices, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
 import { readSetting } from './settings';
@@ -26,11 +31,12 @@ export interface HostClisOptions {
 	readonly destination?: (location: Location | undefined) => DestinationEnvironment;
 	/** Where a diagnostic goes: a folder trusted or not (CLIS-3.3). */
 	readonly log?: (line: string) => void;
+	readonly home?: string;
 }
 
 /** The plan as the core has it: without the trust written for it. */
 function launchPlanOf(planned: PlannedLaunch): LaunchPlan {
-	const { trust, ...plan } = planned;
+	const { trust, files, ...plan } = planned;
 	return plan;
 }
 
@@ -42,14 +48,34 @@ function destinationOf(location: Location | undefined): DestinationEnvironment {
 /** CliCatalogPort and LaunchPlanner for this window's execution environment. */
 export class HostClis implements CliCatalogPort, LaunchPlanner {
 
+	private readonly home: string;
 	private readonly read: SettingsReader;
 	private readonly destination: (location: Location | undefined) => DestinationEnvironment;
 	private readonly log: (line: string) => void;
 
 	constructor(options: HostClisOptions = {}) {
+		this.home = options.home ?? facadeHome();
 		this.read = options.read ?? readSetting;
 		this.destination = options.destination ?? destinationOf;
 		this.log = options.log ?? (() => undefined);
+	}
+
+	storeEnvironments(location: Location): StoreEnvironments {
+		const destination = this.destination(location);
+		return Object.fromEntries(catalogOf(this.read).entries.filter(entry => entry.enabled && !entry.problems.length)
+			.map(entry => [entry.adapter.id, environmentOf(entry, destination)]));
+	}
+
+	storeArguments(): Readonly<Record<string, readonly string[]>> {
+		return Object.fromEntries(catalogOf(this.read).entries.map(entry => [entry.adapter.id, entry.extra]));
+	}
+
+	resumeProblem(cli: string, location: Location): string | undefined {
+		const catalog = catalogOf(this.read);
+		const entry = catalog.entries.find(each => each.adapter.id === cli);
+		if (!entry || !entry.enabled || (!entry.custom && !entry.adapter.groups.resume)) { return 'This CLI cannot resume conversations here.'; }
+		const found = discover(catalog, this.destination(location), location.path).find(each => each.entry === entry);
+		return found?.available ? undefined : found?.problem ?? 'This CLI is unavailable.';
 	}
 
 	/**
@@ -85,7 +111,14 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	 */
 	async plan(request: PlanRequest): Promise<LaunchPlan> {
 		try {
-			const planned = planLaunch(catalogOf(this.read), { cli: request.cli, alias: request.alias, cwd: request.location.path, yolo: request.yolo }, this.destination(request.location));
+			const destination = this.destination(request.location);
+			const file = sessionFileOf(this.home, request.run);
+			const script = path.join(file.replace(/\.json$/, '.d'), 'hook.cjs');
+			const planned = planLaunch(catalogOf(this.read), { cli: request.cli, alias: request.alias, cwd: request.location.path, yolo: request.yolo, resume: request.resume, sessionFile: file, sessionHook: sessionHookCommand(process.execPath, destination.platform, request.cli, file, script) }, destination);
+			for (const file of [...planned.files ?? [], ...planned.exactResume ? [{ file: script, content: SESSION_HOOK_SCRIPT }] : []]) {
+				fs.mkdirSync(path.dirname(file.file), { recursive: true, mode: 0o700 });
+				fs.writeFileSync(file.file, file.content, { mode: 0o600 });
+			}
 			this.trust(planned);
 			return launchPlanOf(planned);
 		} catch (err) {

@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "Gerekli: kaydedilmiş belirli bir konuşmayı sürdüren bağımsız değişkenler. `${sessionId}`, oturum kimliğiyle değiştirilir ve bulunmalıdır.",
 	"windowDisplayName": "Facade Code Pencere Bileşeni",
 	"windowDescription": "Facade Code için pencere kimliği ve oturum sürekliliği koordinatörü.",
-	"icon.newAgent": "Yeni Aracı simgesi"
+	"icon.newAgent": "Yeni Aracı simgesi",
+	"command.history": "Ajanı Sürdür...",
+	"command.pinAgent": "Ajanı Sabitle",
+	"command.unpinAgent": "Ajanın Sabitlemesini Kaldır"
 }

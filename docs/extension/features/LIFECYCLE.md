@@ -148,7 +148,7 @@ accurate public context; do not substitute the foreground terminal when unknown.
 **Close Agent is the single human action for removing a starting, live or retained-ended agent.**
 
 Card menus, Go to Agent, Command Palette and terminal closure use the lifecycle effect in RULES-4.1: immediate pair
-removal, with process cleanup in the background where a process exists. There is no separate human Stop Agent command.
+removal and Unpin, with process cleanup in the background where a process exists. There is no separate human Stop Agent command.
 Return actual cleanup status to the initiator without recreating a closed card or claiming an unreachable process is
 dead. No worktree/files/history deletion is attached. Unsolicited exits follow RULES-3.3.
 
@@ -160,9 +160,60 @@ the editor does for its own terminals. A starting or ended agent's tab closes it
 stopped from closing the tab itself, so the question follows the close. Messages name an agent with an empty name by its
 `#aN`.
 
+### 3.2 Resume picker
+
+**Resume searches vendor histories for this window's folders, subfolders and all associated worktrees.**
+
+Open from panel, empty state or Command Palette. Read only list metadata, recent activity first, paginated in batches
+of 100; search continues beyond the first page. Reuse already read metadata during the picker session rather than
+rescanning every log on each page or keystroke. Prefer vendor discovery; do not build a new conversation store.
+There is no 30-day age cutoff. A scan limit must not silently make older matching history permanently unreachable.
+Deduplicate by environment/CLI/session ID. Each conversation is one line: its CLI's icon and its title, then activity
+time and original location; the icon names the CLI, so no CLI name is repeated as text, and search covers title and
+location. Use the vendor's saved display title and conversation activity time, including native renames; file maintenance
+does not make an old conversation recently active. Ordering remains correct across page boundaries. Omit superseded
+history segments when the vendor's continuation points to an existing resumable conversation.
+A conversation that cannot be resumed now - its working directory gone, or its CLI turned off or not installed
+in this environment - is not listed, nor is one an agent already holds, in this window or another (CLIS-2.4). Do not list
+unrelated projects, or provide delete, hide or show-hidden controls. The panel's display filter does not change this history scope.
+When a vendor records a set of workspace folders without identifying the original cwd, use Facade's recorded cwd if known.
+Otherwise, choosing that conversation opens a native working-location picker for its folders in this window. Do not infer
+the original cwd from directory order. Cancellation starts nothing.
+If that exact conversation already runs in Facade, do not start it again; reveal it only when it belongs to this window,
+otherwise indicate that it is already running. Do not build cross-window navigation. External activity is not a gate:
+call vendor resume and return its result. No external-writer scan, lease or concurrency guarantee is required.
+
+### 3.3 Resume execution
+
+**Resume starts an exact saved conversation in its original CLI and location using current CLI startup settings.**
+
+Restore RULES-4.2's conversation context, use RULES-4.3's launch-time YOLO and leave model/effort to the native session and current launch arguments.
+Missing original session/location/configuration fails honestly without selecting another session or folder.
+For a vendor's ambiguous workspace-folder set under 3.2, the person's explicit location choice supplies the missing cwd.
+An accepted Resume creates its pair immediately and retains actual launch failure. Do not acquire an external conversation-writer lease or replay the original creation prompt.
+On process start, register the successful cwd under WORKTREES-1.2 and update human launch history under 1.2.
+
+### 3.4 Pin and native editor pins
+
+**Native terminal-tab Pin and Facade Pin express the same exact-conversation restoration intent in both directions.**
+
+Pin from either surface saves RULES-4.2's context and updates the other; Unpin synchronizes too. Native-to-Facade
+sync follows `tabGroups` pin changes on that agent's tab. Facade-to-native sync applies the documented
+`workbench.action.pinEditor` or `workbench.action.unpinEditor` command when that agent's tab next becomes the active
+editor, never stealing focus or revealing a tab just to pin it (ARCHITECTURE-1.2). Ordinary files and external
+terminals do not become agents. Match the terminal/run exactly without relying on names or stealing focus.
+The adapter must identify and resume the exact session. If a CLI changes that session, update the Pin only after its
+new identity is known; never substitute a folder's latest conversation.
+Restore Pins once per true opening in saved order in the background, with at most two concurrent launches. A session
+already running in Facade is skipped by later windows. Failures retain their individual entries without auto-looping.
+Explicit agent close/normal exit removes Pin; whole-window close preserves it.
+
 ### 3.5 Reload and remote loss
 
-**Reload and temporary disconnection reuse existing runs.**
+**Reload and temporary disconnection reuse existing runs; reopening restores saved Pins whose runs ended.**
+
+RULES-4.1 keeps runs for five minutes after disconnect. Reattach those runs before restoring Pins, never duplicating a
+conversation still held by Facade. A retained failed restoration is not retried on reload.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
 silence or a remote disconnect; RULES-4.1's five minutes after the extension host disconnects is the only time-based
@@ -195,12 +246,16 @@ integration evidence, not a fact established by this document.
 | --- | --- |
 | 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching, editable name, last CLI/location, filter unchanged, immediate pair and initiator-owned errors |
 | 2.1–2.3 | Empty/duplicate/spaced names and `human`, editor-only terminals, ID/copied-reference search, distinguishable picker details |
-| 3.1, 3.5 | One human Close action, reload/disconnect reuse, proven folder/worktree removal |
+| 3.1–3.5 | One human Close action, reload/disconnect reuse, exact Resume, linked Pins, bounded restoration, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
 
 See [Verification](../engineering/VERIFICATION.md). Runtime results remain unverified.
 
 ## Change log
+
+- 2026-10-31: A native workspace set with no recorded cwd uses an observed Facade cwd or asks for a working location; no directory-order guess (D90).
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 1.1 offers configured custom CLIs after the built-ins; 2.2 gives their tabs a terminal icon.
 

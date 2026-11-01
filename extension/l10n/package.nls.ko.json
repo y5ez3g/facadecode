@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "필수: 저장된 특정 대화를 정확히 재개하는 인수입니다. `${sessionId}`는 해당 세션 ID로 바뀌며 반드시 포함되어야 합니다.",
 	"windowDisplayName": "Facade Code 창 구성 요소",
 	"windowDescription": "Facade Code용 창 ID 및 세션 연속성 조정자입니다.",
-	"icon.newAgent": "새 에이전트 아이콘"
+	"icon.newAgent": "새 에이전트 아이콘",
+	"command.history": "에이전트 재개...",
+	"command.pinAgent": "에이전트 고정",
+	"command.unpinAgent": "에이전트 고정 해제"
 }

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { Catalog, Location, LocationRemoval, RunChange, RunFacts, WorkspaceFolderInfo } from '../core/ports';
+import type { Catalog, Pin, Location, LocationRemoval, RunChange, RunFacts, WorkspaceFolderInfo } from '../core/ports';
 import type { CardWords } from '../ui/cardView';
 import { locationOfFilter, PanelModel, REPORT_COALESCE_MS, Timers } from '../ui/model';
 import { PanelPrefs, Storage } from '../ui/order';
@@ -11,7 +11,7 @@ import type { PanelState } from '../webview/protocol';
 import { TestEmitter } from './withModules';
 
 const WORDS: CardWords = {
-	worktreeFailure: reason => reason,
+	worktreeFailure: reason => reason, pinned: 'Pinned',
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', working: 'Working', notWorking: 'Idle', error: reason => `Error: ${reason}`,
 	activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: label => `Window: ${label}`, locale: 'en'
@@ -43,6 +43,10 @@ class Agents {
 	readonly onDidChange = this.changes.event;
 	list(): readonly RunFacts[] { return [...this.runs.values()]; }
 	get(run: string): RunFacts | undefined { return this.runs.get(run); }
+	/** The saved Pins' IDs, in their saved order. */
+	saved: string[] = [];
+	pins(): readonly Pin[] { return this.saved.map(id => ({ id, conversation: { environment: 'local', cli: 'claude', sessionId: id }, location: MAIN.id, cwd: MAIN.path, name: id })); }
+	reorderPins(ids: readonly string[]): void { this.saved = [...ids]; }
 	add(facts: RunFacts): void { this.runs.set(facts.id, facts); this.changes.fire({ run: facts.id, kind: 'added' }); }
 	update(run: string, more: Partial<RunFacts>, kind: RunChange['kind']): void { this.runs.set(run, { ...this.runs.get(run)!, ...more }); this.changes.fire({ run, kind }); }
 	remove(run: string): void { this.runs.delete(run); this.changes.fire({ run, kind: 'removed' }); }
@@ -403,6 +407,61 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		await tick();
 		assert.deepStrictEqual([model.state().cardCount, model.state().cards.length, model.state().cards[0].name, model.state().cards[99].name], [100, 100, 'Agent 100', 'Agent 1']);
 	});
+	test('U05, PANEL-2.1: Pins come first in their kept order; a new Pin goes to the very top, an Unpin first below the Pins; Move Up/Down stays within its area; the order survives a new model', async () => {
+		agents.saved = ['pin-a'];
+		agents.add(run(1, { resumable: true, pin: 'pin-a' }));
+		agents.add(run(2, { resumable: true }));
+		agents.add(run(3, { resumable: false }));
+		let model = make();
+		await tick();
+		const restored = names(model.state());
+		const flags = model.state().cards.map(card => [card.name, !!card.pinned, !!card.menu.pin, !!card.menu.unpin]);
+		agents.saved = ['pin-b', 'pin-a'];
+		agents.update(id(2), { pin: 'pin-b' }, 'lifecycle');
+		await tick();
+		const pinned = [names(model.state()), model.state().cards[0].pinned, model.state().cards[0].label.includes('Pinned')];
+		const moves = [model.move(id(1), -1), model.move(id(1), -1), model.move(id(2), 1), model.move(id(3), -1)];
+		await tick();
+		const moved = names(model.state());
+		agents.saved = ['pin-b'];
+		agents.update(id(1), { pin: undefined }, 'lifecycle');
+		await tick();
+		const unpinned = names(model.state());
+		model.activated(id(2));
+		await tick();
+		const front = model.selectedAgent();
+		model.dispose();
+		model = make();
+		await tick();
+		assert.deepStrictEqual([restored, flags, pinned, moves, moved, unpinned, front, names(model.state()), agents.saved], [
+			['Agent 1', 'Agent 3', 'Agent 2'],
+			[['Agent 1', true, false, true], ['Agent 3', false, false, false], ['Agent 2', false, true, false]],
+			[['Agent 2', 'Agent 1', 'Agent 3'], true, true],
+			[true, false, false, false],
+			['Agent 1', 'Agent 2', 'Agent 3'],
+			['Agent 2', 'Agent 1', 'Agent 3'],
+			{ run: id(2), ended: false, pinned: true, resumable: true },
+			['Agent 2', 'Agent 1', 'Agent 3'],
+			['pin-b']
+		]);
+	});
+
+	test('PANEL-2.1: a hidden Pin keeps its slot as a shown one moves past it; Pins restored on a new window keep their saved order', async () => {
+		agents.saved = ['pin-a', 'pin-b', 'pin-c'];
+		agents.add(run(1, { resumable: true, pin: 'pin-c' }));
+		agents.add(run(2, { pin: 'pin-a', location: GUIDE.id }));
+		agents.add(run(3, { pin: 'pin-b' }));
+		const model = make();
+		model.setFilter({ kind: 'location', id: MAIN.id, label: 'main' });
+		await tick();
+		const saved = names(model.state());
+		assert.ok(model.move(id(1), -1));
+		model.setFilter(undefined);
+		await tick();
+		assert.deepStrictEqual([saved, names(model.state())], [['Agent 3', 'Agent 1'], ['Agent 2', 'Agent 1', 'Agent 3']]);
+	});
+
+
 });
 
 suite('New Agent from the filtered empty panel (PANEL-1.2, LIFECYCLE-1.2, D59)', () => {
@@ -417,4 +476,5 @@ suite('New Agent from the filtered empty panel (PANEL-1.2, LIFECYCLE-1.2, D59)',
 			locationOfFilter({ kind: 'location', id: 'loc-gone', label: 'gone' }, all)
 		], [LOGIN.id, 'loc-shop', GUIDE.id, undefined, undefined]);
 	});
+
 });

@@ -9,12 +9,13 @@
 import type { Environment } from './environment';
 import type { LaunchTarget } from './executable';
 import type { TrustTarget } from './trust';
+import type { SessionIntegration, SessionIntegrationInput } from './identity';
 
 /**
  * The argument groups of an invocation (CLIS-3.2): run settings, the YOLO mapping, per-launch trust, then the configured
  * `.launch.arguments` in the vendor's options position (CLIS-3.1).
  */
-export const GROUP_ORDER = ['quiet', 'yoloOn', 'yoloOff', 'trust', 'extra'] as const;
+export const GROUP_ORDER = ['resume', 'quiet', 'yoloOn', 'yoloOff', 'trust', 'session', 'extra'] as const;
 
 export type Group = (typeof GROUP_ORDER)[number];
 
@@ -23,12 +24,16 @@ export type Groups = { readonly [G in Exclude<Group, 'extra'>]?: readonly string
 
 /** What one launch applies (CLIS-3.2). */
 export interface LaunchUses {
+	readonly resume?: boolean;
+	readonly session?: boolean;
 	readonly yolo: boolean;
 }
 
 /** Whether `group` applies to a launch `uses` describes. */
 export function applies(group: Group, uses: LaunchUses): boolean {
 	switch (group) {
+		case 'resume': return !!uses.resume;
+		case 'session': return !!uses.session && !uses.resume;
 		case 'yoloOn': return uses.yolo;
 		case 'yoloOff': return !uses.yolo;
 		case 'quiet': return true;
@@ -66,6 +71,8 @@ export function invocation(groups: Groups, extra: readonly string[], uses: Launc
 
 /** What a launch is asked for and where, as an adapter's values are computed from it. */
 export interface LaunchInput {
+	readonly sessionId?: string;
+	readonly sessionHook?: string;
 	readonly yolo: boolean;
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
@@ -88,6 +95,12 @@ export type ApprovalFact = { readonly state: 'bypassed'; readonly by: readonly s
 export interface CliAdapter {
 	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, or a custom CLI's key (CLIS-1.1, 3.4). */
 	readonly id: string;
+	/** A maintained exact identity across native session changes, required for Pin. */
+	readonly sessionIdentity?: boolean;
+	/** Vendor integration for exact identity, scoped to this process and preserving native user settings. */
+	sessionIntegration?(input: SessionIntegrationInput): SessionIntegration;
+	/** Native shortcuts that can replace/fork the exact conversation selected by Facade. */
+	readonly identityOptions?: readonly string[];
 	readonly displayName: string;
 	/** Its settings: `facade.<segment>`, or `facade.custom.<key>`. */
 	readonly setting: string;

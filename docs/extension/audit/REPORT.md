@@ -1,6 +1,6 @@
 # Specification audit report
 
-The maintained documentation of the Facade Code extension is `docs/extension/`. This revision is the subset for step 1
+The maintained documentation of the Facade Code extension is `docs/extension/`. This revision is the subset for the first six steps
 of its sequence of owner-tested additive steps, carried from the Facade Dots specification with each rule's final number.
 
 ## Reproducible checks
@@ -10,7 +10,7 @@ The [saved result](review-2026-10-31.json) records the latest outcome and local-
 
 | Check | Scope |
 | --- | --- |
-| Structure | Ten normative documents, 128 rules, bold decisions, Checks and change logs |
+| Structure | Ten normative documents, 134 rules, bold decisions, Checks and change logs |
 | References | Local Markdown links/anchors and numbered cross-references |
 | Source coverage and migration | Run only when `audit/source-inventory.json`, `audit/migration.json` and `MIGRATION.md` are present; they join in the last step |
 
@@ -21,10 +21,11 @@ runtime behavior or performance.
 
 Specification completion, code completion and product verification remain separate. G2, G5 and all runtime acceptance
 requirements remain in [Verification](../engineering/VERIFICATION.md). Deleted historical test logs do not close a gate;
-new implementation claims need evidence from the actual build. No code, editor, CLI or platform suite ran for this spec
-revision.
+new implementation claims need evidence from the actual build. The audit does not run code, editor, CLI or platform suites; runtime results accompany the implementation handoff.
 
 ## Change log
+
+- 2026-10-31: Resume and linked Pin/Unpin extend the current step; 134 rules.
 
 - 2026-10-31: 128 rules, with CLIS-3.4.
 - 2026-10-30: 127 rules, with CLIS-4.1.

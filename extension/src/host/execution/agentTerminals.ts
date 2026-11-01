@@ -27,6 +27,9 @@ interface TerminalEntry {
 	opening?: boolean;
 	readonly lifetime: AbortController;
 	tab?: vscode.Tab;
+	observedPin?: boolean;
+	wantedPin?: boolean;
+	applyingPin?: boolean;
 	/** A restored terminal opens behind the editor it covered; this is not a human activation. */
 	background?: { readonly since: number; readonly covered?: vscode.Tab };
 }
@@ -37,6 +40,7 @@ interface TerminalOptions {
 	readonly terminalOwner?: TerminalOwner & { readonly remote: boolean };
 	readonly activated: (run: RunId | undefined) => void;
 	readonly closed: (run: RunId) => void;
+	readonly pinned?: (run: RunId, pinned: boolean) => void;
 	readonly renamed: (run: RunId, name: string) => void;
 }
 
@@ -74,6 +78,8 @@ export class AgentTerminals implements vscode.Disposable {
 					return;
 				}
 				pair.terminal = undefined;
+				pair.wantedPin ??= pair.observedPin;
+				pair.observedPin = undefined;
 				pair.tab = undefined;
 				this.opening = this.opening.filter(each => each.pair !== pair);
 				// The person closed the tab - not the window going - which they confirm for a live agent (LIFECYCLE-3.1). Its pair
@@ -89,6 +95,31 @@ export class AgentTerminals implements vscode.Disposable {
 				}
 			})
 		);
+	}
+
+	/** Queue a native pin change until this exact tab is active; never reveal it merely to pin it. */
+	pin(run: RunId, pinned: boolean): void {
+		const pair = this.entries.get(run);
+		if (pair) { pair.wantedPin = pinned; this.applyPin(pair); }
+	}
+
+	private applyPin(pair: TerminalEntry): void {
+		if (pair.wantedPin === undefined || !pair.tab || pair.applyingPin) { return; }
+		if (pair.tab.isPinned === pair.wantedPin) {
+			pair.observedPin = pair.tab.isPinned; pair.wantedPin = undefined; return;
+		}
+		if (pair.tab !== vscode.window.tabGroups.activeTabGroup.activeTab || vscode.window.activeTerminal !== pair.terminal) { return; }
+		const wanted = pair.wantedPin;
+		pair.applyingPin = true;
+		void vscode.commands.executeCommand(wanted ? 'workbench.action.pinEditor' : 'workbench.action.unpinEditor').then(() => {
+			pair.applyingPin = false;
+			if (pair.tab?.isPinned === wanted) {
+				pair.observedPin = wanted;
+				if (pair.wantedPin === wanted) { pair.wantedPin = undefined; }
+			}
+			// A second action while the command was in flight wins; never retry a failed/no-op command in a loop.
+			if (pair.wantedPin !== undefined && pair.wantedPin !== wanted) { this.applyPin(pair); }
+		}, err => { pair.applyingPin = false; this.options.log(`Could not synchronize the pin of ${pair.run}: ${messageOf(err)}`); });
 	}
 
 	/** Register the pseudoterminal first; the coordinator opens the native tab after registering its run. */
@@ -291,6 +322,15 @@ export class AgentTerminals implements vscode.Disposable {
 			this.tabActivatedAt = now;
 			this.correlate();
 		}
+		for (const tab of event.changed) {
+			const pair = this.pairOfTab(tab);
+			if (!pair) { continue; }
+			if (pair.wantedPin === undefined && !pair.applyingPin && pair.observedPin !== tab.isPinned) {
+				pair.observedPin = tab.isPinned;
+				this.options.pinned?.(pair.run, tab.isPinned);
+			}
+			this.applyPin(pair);
+		}
 		// A terminal's tab changes as its name does, which the editor has told its terminal by then
 		this.observeNames();
 	}
@@ -371,6 +411,11 @@ export class AgentTerminals implements vscode.Disposable {
 
 	private match(pair: TerminalEntry, tab: vscode.Tab): void {
 		pair.tab = tab;
+		if (pair.observedPin === undefined) {
+			pair.observedPin = tab.isPinned;
+			if (tab.isPinned && pair.wantedPin === undefined) { this.options.pinned?.(pair.run, true); }
+		}
+		this.applyPin(pair);
 	}
 
 	private pairOfTab(tab: vscode.Tab): TerminalEntry | undefined {

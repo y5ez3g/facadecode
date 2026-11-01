@@ -54,6 +54,28 @@ proves native support.
 | G2 True window lifetime | Distinguish reload, extension-host restart, remote loss, close-one, close-last and immediate reopen without mistaken replay/restart | Owner-accepted five-minute policy (D75) implemented in place of a close detector. Candidate 4/5 native evidence on a macOS VS Code 1.143.1 client with Remote-SSH to Linux x64 and Windows x64: reload and remote extension-host restart keep the original runs; close-last then immediate reopen keeps the original processes; no takeover ends them at about 300 s. Evidence stays with the handoff. True close detection remains OPEN |
 | G5 Native environment matrix | Native macOS/Windows/Linux, SSH, WSL and containers, compatible editor, native PTY ABI, paths/quoting/Unicode/keys and package install | Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. On 2026-10-30, a Windows x64 client with VS Code 1.140.0: the integration suite, and the four CLIs D77 adds started from the panel; a macOS arm64 client with VS Code 1.143.1: the native build, unit and package checks and the integration suite; Linux x64: the native build, unit and package checks. On 2026-10-31, a Windows x64 client with VS Code 1.144.0: Remote-SSH to Linux x64 and macOS arm64 hosts - an agent started there, a reload, a restarted remote extension host, a lost network, Close All's one question, reopening within five minutes, and the runs ending five minutes after the last window closed; the integration suite with VS Code 1.144.0 and the declared minimum 1.105.0, whose codicons have no `new-session` for New Agent's title button; Linux x64 under xvfb with VS Code 1.144.0: the integration suite. Not run: a full Windows or a Linux client walkthrough, Remote-SSH to a Windows host, WSL, containers, a compatible editor, other architectures. OPEN |
 
+Resume/Pin/Unpin evidence for the 2026-10-31 `feature/74-resume-pin` worktree: Linux x64 and official VS Code 1.144.0.
+The editor journey suite exercises native history fixtures and exact cwd/ID, card/native-tab Pin and Unpin for all six
+built-ins. For each built-in separately, real window reloads preserve Pin, preserve Unpin, and keep the same run ID,
+PID and single terminal when the folder becomes a multi-root workspace. The CLIs in these editor tests are fakes;
+CLIS-5.1 separately records the six actual native CLI probes. Native Windows/macOS/remote Resume/Pin regressions are
+not run in this handoff and G5 remains open for them. Reproduce editor coverage with `npm run test:integration`;
+`FACADE_IT_ONLY=journeys` and `conversion` select the two parts. Do not run them against a live owner profile.
+
+The Linux checks after D91's Claude metadata correction passed: `npm run compile`; `CHROMIUM_EXECUTABLE=/opt/google/chrome/chrome npm test`
+(577 passing, one Windows-only file-lock test pending); `npm run package` and `npm run test:package` (11 passing);
+`node scripts/l10n.mjs check` (247 runtime texts and 60 manifest strings, English plus 11 translations); the seven editor
+journeys (15 passing across six built-ins and one custom CLI); and all six Pin/Unpin reload/conversion journeys.
+The spec audit passes 134 rules and 70 local links. Test logs remain in `/tmp/fc74-claude-metadata-tests.log`,
+`/tmp/fc74-claude-metadata-package-tests.log` and `/tmp/fc74-claude-metadata-integration.log`; the complete editor run
+is retained at `/tmp/fdit-ddtoI0`. The actual Claude 2.1.316 picker comparison passed separately in
+`/tmp/fc74-claude-picker-fD68QO` (CLIS-5.1). Regression fixtures cover rename-sidecar and continuation-target cache
+invalidation, misleading mtimes, fork metadata, and activity ordering across the 100-entry pages and 1,000-read bound.
+A new normal installed-VSIX window uses `/tmp/fc74-metadata-__g4nc_l`, titled `Facade Code · Resume 修复版`, with only
+`facade.facadecode` and its window component installed. Its workspace bundle matches the VSIX (SHA-256
+`95c852f7334c39f0f0534bde00545ca1b860cb5b3b8aed68cfe95b0a4a029e18`); it has no driver or fake CLI, and uses the user's
+normal native CLI configuration. This window is for the owner to test, not an automated test subject.
+
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
 the available environment, complete independent work and record the exact missing evidence and required next action.
@@ -95,6 +117,8 @@ passes.
 | J06 | Normal exit 0; Ctrl+C ordinary interruption from the person; unexplained nonzero exit | Actor-independent classification; abnormal retained; unknown cause no popup; RULES-3.3 |
 | J07 | Close card/terminal, stop during creation, unreachable remote cleanup; close live agents' tabs alone and with Close All, then Cancel and confirm | Immediately remove pair; cleanup background, no fixed five-second wait; created files remain; one question for tabs closed together, Cancel reopens their terminals, confirm ends them; LIFECYCLE-3.1 |
 | J09 | Reload, extension-host restart, an update from the last released build with its agents running, remote loss, close-one, close-last, immediate reopen, close-last without reopen | G2 trace; original process survives reload/disconnect/update; after the update the earlier build's agents show and work through its ptyd, which exits once they are gone (ARCHITECTURE-2.4); reopen within five minutes claims the original runs; without it they end at five minutes (RULES-4.1) |
+| J11 | Resume an external and a Facade conversation, a nested cwd, old history beyond the first page, a disabled CLI and a running session | Exact ID/CLI/cwd, known name and current launch settings; no duplicate process or age cutoff; no implicit re-pin; LIFECYCLE-3.2, LIFECYCLE-3.3 |
+| J12 | Pin/Unpin from a card and native tab; reopen, failed restoration, session change, explicit close and normal/abnormal exit | One saved intent, pinned area/order, two background starts at most, no focus theft or retry loop; individual failure cards and one summary; LIFECYCLE-3.4, RULES-4.2 |
 | J13 | New VS Code user follows empty-panel explanation | First agent starts without a separate onboarding wizard |
 | J14 | 100 agents in one window, then request another | Panel/search/manual order remain usable at 100; no 100-agent hard cap |
 | J16 | Real VS Code user completes the common flows before public use | Record observed familiarity/usability; automated tests alone do not pass |
@@ -163,6 +187,10 @@ for review, not acceptance evidence.
 | 4.1, 4.3 | Handoff, spec-amendment log and independent review |
 
 ## Change log
+
+- 2026-10-31: J11/J12 now run for all six built-ins, with a separate real reload/conversion journey for each. Native Linux CLI observations are recorded separately from fake-CLI editor evidence (D90).
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: J09 includes an update from the last released build with its agents running (D86).
 - 2026-10-31: G5 records the night verification's Remote-SSH runs from a Windows x64 client, and the integration suite on

@@ -12,14 +12,14 @@
  * output, generation-fenced claims, explicit `terminate` and `endWindow`, and the selected five-minute disconnected-owner
  * cleanup. An upgrade alone never ends an earlier protocol's runs.
  */
-export const PTYD_PROTOCOL = 9;
+export const PTYD_PROTOCOL = 10;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
  * through those ptyds, and starts none there (ARCHITECTURE-2.4). None is ever dropped. 8, of 0.0.1, is 9 without `spawn`'s
- * `screenStatus`, which this window sends to no earlier ptyd.
+ * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. New requests go to neither.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9];
 
 import type { OwnerClaim } from '../base/ownership';
 import { isJsonObject } from '../base/json';
@@ -105,6 +105,8 @@ export type Termination = 'terminated' | 'already_exited' | 'unconfirmed' | 'fai
 
 /** The requests, by method: what each takes, and what it answers. */
 export interface Requests {
+	/** Exact conversations currently held anywhere in this execution environment. */
+	conversations: { params: Record<string, never>; result: readonly { readonly environment: string; readonly cli: string; readonly sessionId: string }[] };
 	/** The protocol each side speaks: a window of another protocol reports the difference and ends nothing (ARCHITECTURE-2.4). */
 	hello: { params: { readonly protocol: number }; result: { readonly protocol: number; readonly pid: number } };
 	/** Takes the workspace once, or resumes this activation. Older activations cannot claim it again. */

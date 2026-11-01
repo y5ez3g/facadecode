@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "Obrigatório: os argumentos que retomam uma conversa salva exata. `${sessionId}` é substituído pela ID da sessão dela e deve aparecer.",
 	"windowDisplayName": "Componente de Janela do Facade Code",
 	"windowDescription": "Coordenador de identidade de janela e continuidade de sessão para o Facade Code.",
-	"icon.newAgent": "Ícone de Novo Agente"
+	"icon.newAgent": "Ícone de Novo Agente",
+	"command.history": "Retomar Agente...",
+	"command.pinAgent": "Fixar Agente",
+	"command.unpinAgent": "Desafixar Agente"
 }

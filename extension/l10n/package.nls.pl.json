@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "Wymagane: argumenty, które wznawiają dokładnie określoną zapisaną rozmowę. Symbol zastępczy `${sessionId}` jest zastępowany identyfikatorem jej sesji i musi występować.",
 	"windowDisplayName": "Składnik okna Facade Code",
 	"windowDescription": "Koordynator tożsamości okna i ciągłości sesji dla Facade Code.",
-	"icon.newAgent": "Ikona polecenia „Nowy agent”"
+	"icon.newAgent": "Ikona polecenia „Nowy agent”",
+	"command.history": "Wznów agenta...",
+	"command.pinAgent": "Przypnij agenta",
+	"command.unpinAgent": "Odepnij agenta"
 }

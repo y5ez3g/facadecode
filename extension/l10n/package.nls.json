@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "Required: the arguments that resume an exact saved conversation. `${sessionId}` is replaced by its session ID and must appear.",
 	"windowDisplayName": "Facade Code Window Component",
 	"windowDescription": "Window identity and session continuity coordinator for Facade Code.",
-	"icon.newAgent": "New Agent icon"
+	"icon.newAgent": "New Agent icon",
+	"command.history": "Resume Agent...",
+	"command.pinAgent": "Pin Agent",
+	"command.unpinAgent": "Unpin Agent"
 }

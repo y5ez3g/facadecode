@@ -26,9 +26,10 @@ const TITLE_SWITCH = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
  * settings files after launch, so the run's settings clear the switch too. With YOLO off its sandbox is turned on where it has one;
  * with YOLO on its sandbox is its own setting's, as YOLO maps to the permission bypass alone.
  */
-export function claudeRunSettings(yolo: boolean, platform: NodeJS.Platform): object {
+export function claudeRunSettings(yolo: boolean, platform: NodeJS.Platform, sessionHook?: string): object {
 	return {
 		env: { [TITLE_SWITCH]: '' },
+		...(sessionHook ? { hooks: Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'].map(event => [event, [{ hooks: [{ type: 'command', command: sessionHook }] }]])) } : {}),
 		...!yolo && hasSandbox(platform) ? { sandbox: { enabled: true } } : {}
 	};
 }
@@ -121,15 +122,19 @@ export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string
  */
 export const claudeAdapter: CliAdapter = {
 	id: 'claude',
+	sessionIdentity: true,
+	identityOptions: ['--continue', '-c', '-r', '--fork-session', '--resume-session-at', '--no-session-persistence'],
 	displayName: 'Claude Code',
 	setting: 'facade.claude',
 	command: 'claude',
 	groups: {
+		session: ['--session-id', '${sessionId}'],
+		resume: ['--resume', '${sessionId}'],
 		quiet: ['--settings', '${runSettings}'],
 		yoloOn: ['--dangerously-skip-permissions']
 	},
 	values: input => ({
-		runSettings: JSON.stringify(claudeRunSettings(input.yolo, input.platform))
+		runSettings: JSON.stringify(claudeRunSettings(input.yolo, input.platform, input.sessionHook))
 	}),
 	trustTarget: (cwd, env, platform): TrustTarget => {
 		const folder = claudeProjectKey(cwd, platform);

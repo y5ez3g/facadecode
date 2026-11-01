@@ -103,6 +103,10 @@ rejected several of them. Their old implementation/tests must follow the current
 | D85 | Owner-decided 2026-10-31, after VS Code 1.105 - the declared minimum - showed New Agent's title button with no icon, its codicons having no `new-session` before 1.111: New Agent shows Facade's own copy of that glyph, shipped with the extension, in every editor. Using the editor's own where it has one would take a second New Agent command, listed beside the first in Keyboard Shortcuts. Neither the minimum version nor the icon's look changes | PANEL-1.1 |
 | D86 | Owner-decided 2026-10-31, after the night verification found that agents still running in 0.0.1's ptyd (protocol 8) were only kept alive, unseen, by a window updated to protocol 9: every agent Facade started stays shown in its window's panel and editor, whatever the reason, red where it is in error. As Orca keeps every released daemon protocol attachable, a build speaks each earlier released protocol and operates each run through the ptyd that holds it. A lost or damaged window identity record (ARCHITECTURE-2.2) stays the exception: refusing is safer there than guessing whose agents they are | RULES-4.1, ARCHITECTURE-2.4 |
 | D87 | Owner-decided 2026-10-31, after the night verification found the panel scrolling natively - about twice a list's step a wheel turn on Windows, gliding, its list settings unread - though R7 had kept the full contract: the wheel is VS Code's own list code, ported, so that it scrolls exactly as a list does; the scrollbar stays the page's, in VS Code's colors. An overlay scrollbar that hides and fades as VS Code's does would have to be drawn by Facade, a change of its own | PANEL-3.3 |
+| D88 | Owner-authorized 2026-10-31: use Facade Dots as the reference and implement Resume, Pin and Unpin in this extension. Preserve exact vendor conversation identity, original cwd, current launch configuration, native tab synchronization and saved Pin order. MCP is assigned separately; this step does not add it | RULES-4.2, LIFECYCLE-3.2, LIFECYCLE-3.3, LIFECYCLE-3.4, PANEL-2.1 |
+| D89 | Owner visual review 2026-10-31: the Pin looks disproportionately small beside the name. The preview uses a 14 px icon box, a 4 px name gap and the selected/high-contrast colors of secondary text; these sizes are the implementation's adjustment for the requested preview | PANEL-1.3 |
+| D90 | Owner correction 2026-10-31: Resume, Pin and Unpin must meet release quality across all six built-ins. The initial four history readers and Claude-only Pin were an incomplete implementation, not an approved scope reduction. Verify native identity changes and preservation of user configuration for each adapter; record actual release evidence and remaining blockers. Native checks also established that Antigravity loses the original cwd when `--add-dir` is used; the implementation preserves that ambiguity and asks for a working location rather than inventing an original cwd | CLIS-2.4, LIFECYCLE-3.2, LIFECYCLE-3.4 |
+| D91 | Owner's 2026-10-31 comparison with native Claude `/resume` exposed missing AI/custom titles, file mtime shown as activity and a superseded segment shown twice. Correct native metadata and continuation handling, including cache invalidation and pagination order; the all-CLI scope does not justify different facts for the same conversation | CLIS-2.4, LIFECYCLE-3.2 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -169,6 +173,15 @@ proven platform limitations instead of silently weakening a product promise. The
 full spec revision; it does not authorize publication or unrelated source changes.
 
 ## Change log
+
+- 2026-10-31: Corrected Claude native title, activity and continuation metadata after the owner's picker comparison (D91).
+
+- 2026-10-31: Recorded the Pin proportion feedback and preview adjustment (D89).
+
+- 2026-10-31: Owner authorized Resume, Pin and Unpin using Facade Dots as the reference. The additive step carries
+  exact vendor identity, original cwd, native tab pin synchronization and saved-order restoration; current ownership,
+  five-minute cleanup, commands and launch settings remain authoritative. Collaboration metadata follows its separate step.
+
 
 - 2026-10-31: Recorded the owner's decision on the panel's wheel and scrollbar (D87).
 - 2026-10-31: Recorded the owner's rule that every started agent stays shown, every released ptyd protocol spoken (D86).

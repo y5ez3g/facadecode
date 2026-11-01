@@ -7,6 +7,8 @@
 
 /** What a card's context menu offers beyond its fixed actions (PANEL-2.2): each only where it would do something now. */
 export interface CardMenu {
+	readonly pin?: boolean;
+	readonly unpin?: boolean;
 	readonly moveUp: boolean;
 	readonly moveDown: boolean;
 	/** Filter by This Location and Filter by This Folder: each only where it would show another set of cards (PANEL-2.3). */
@@ -20,6 +22,7 @@ export type AvatarColor = 'blue' | 'orange' | 'purple';
 
 /** One card (PANEL-1.3-1.5), every text already in the person's language. */
 export interface Card {
+	readonly pinned?: boolean;
 	readonly runId: string;
 	readonly selected: boolean;
 	readonly name: string;
@@ -75,7 +78,7 @@ export interface PanelState {
 }
 
 /** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons). */
-export type Act = 'open' | 'new' | 'clearFilter' | 'openFolder' | 'rename';
+export type Act = 'open' | 'new' | 'resume' | 'clearFilter' | 'openFolder' | 'rename';
 
 /** The host's answer to one action of the page that asked: `gone` (its card's run is gone) or `failed`. */
 export interface Outcome {
@@ -100,6 +103,8 @@ export interface Scrolling {
 export interface Strings {
 	readonly agents: string;
 	readonly newAgent: string;
+	readonly resumeAgent?: string;
+	readonly pinnedHint?: string;
 	readonly clearFilter: string;
 	/** The empty panel's words (PANEL-1.2): why it is empty. */
 	readonly noAgents: string;

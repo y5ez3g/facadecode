@@ -8,13 +8,16 @@ import { FacadeError, invalid } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
 import { labelOf, normalizeName } from './names';
 import {
-	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
-	LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, PairFacts, PlanError, RetainedStore, RunChange,
+	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
+	LaunchPlanner, LaunchRequest, LiveRun, Location, LocationId, LocationPort, LocationRemoval, LogPort, PairFacts, PlanError, RetainedStore, RunChange,
 	RunFacts, RunId, RunMeta, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
 
 export interface AgentServiceDeps {
 	readonly execution: ExecutionPort;
+	readonly conversations?: ConversationStore;
+	readonly pinStore?: PinStore;
+	readonly newPinId?: () => string;
 	readonly planner: LaunchPlanner;
 	readonly locations: LocationPort;
 	readonly worktrees: WorktreePort;
@@ -33,12 +36,28 @@ export interface AgentServiceDeps {
 }
 
 interface Run {
+	exactResume?: boolean;
+	settled?: Promise<void>;
 	facts: RunFacts;
 	/** Known startup creation effects, retained if later CLI planning or spawning fails. */
 	worktree?: WorktreeCreationEffects;
 	/** Whether an explicit close of this run was requested: its exit is then normal (RULES-3.3). */
 	closing: boolean;
 }
+
+interface StartOptions {
+	readonly reveal?: boolean;
+	readonly resume?: { readonly key: ConversationKey };
+	readonly remember?: boolean;
+	readonly pin?: string;
+	readonly restoring?: boolean;
+}
+
+function keyOf(facts: RunFacts): ConversationKey | undefined {
+	return facts.sessionId ? { environment: facts.environment, cli: facts.cli, sessionId: facts.sessionId } : undefined;
+}
+function sameConversation(a: ConversationKey, b: ConversationKey): boolean { return conversationId(a) === conversationId(b); }
+const RESTORE_CONCURRENCY = 2;
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -52,6 +71,22 @@ export class AgentService implements Agents, Disposable {
 	private readonly listeners = new Set<(change: RunChange) => void>();
 	private readonly subscriptions: Disposable[] = [];
 	private ownershipLost = false;
+	private disposed = false;
+	private readonly elsewhere = new Set<string>();
+	private readonly restoring = new Set<RunId>();
+	private pinsRestored = false;
+	private get pinStore(): PinStore {
+		if (!this.deps.pinStore) { throw new Error('Pin storage is unavailable.'); }
+		return this.deps.pinStore;
+	}
+	pins(): readonly Pin[] { return this.deps.pinStore?.list() ?? []; }
+	reorderPins(ids: readonly string[]): void { this.pinStore.reorder(ids); }
+	async refreshConversations(): Promise<void> {
+		if (!this.deps.execution.conversations) { return; }
+		const keys = await this.deps.execution.conversations();
+		this.elsewhere.clear();
+		for (const key of keys) { this.elsewhere.add(conversationId(key)); }
+	}
 	/** Runs this window closed or saw end: a listing still holding one, its cleanup not done, never brings it back (LIFECYCLE-3.1). */
 	private readonly released = new Set<RunId>();
 	/** Why the last listing of this window's runs failed, said once until it changes. */
@@ -70,6 +105,12 @@ export class AgentService implements Agents, Disposable {
 			deps.locations.onDidRemove(removal => this.locationsRemoved(removal)),
 			deps.lifetime.onDidClose(() => void execution.endWindow())
 		);
+		if (execution.onDidIdentify) {
+			this.subscriptions.push(execution.onDidIdentify(({ run, sessionId, cwd }) => this.identified(run, sessionId, cwd)));
+		}
+		if (execution.onDidPinTab) {
+			this.subscriptions.push(execution.onDidPinTab(({ run, pinned }) => this.tabPinned(run, pinned)));
+		}
 		if (execution.onDidClosePair) {
 			this.subscriptions.push(execution.onDidClosePair(run => void this.tabClosed(run)));
 		}
@@ -88,6 +129,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	dispose(): void {
+		this.disposed = true;
 		for (const subscription of this.subscriptions) {
 			subscription.dispose();
 		}
@@ -142,7 +184,9 @@ export class AgentService implements Agents, Disposable {
 				continue;
 			}
 			if (!this.runs.has(facts.id) && !this.released.has(facts.id)) {
-				this.runs.set(facts.id, { facts, closing: false });
+				const pin = facts.pin && this.pins().find(pin => pin.id === facts.pin);
+				const { pin: _previousPin, ...rest } = facts;
+				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, closing: false, exactResume: facts.resumable });
 				this.deps.execution.openPair(pairOf(facts), { reveal: false });
 				if (facts.error) {
 					this.deps.execution.note(facts.id, facts.error.reason);
@@ -164,12 +208,13 @@ export class AgentService implements Agents, Disposable {
 			}
 			const facts: RunFacts = {
 				...factsOf(each.run, each.meta),
+				...(each.meta.sessionId && this.pinOf({ environment: each.meta.environment, cli: each.meta.cli, sessionId: each.meta.sessionId }) ? { pin: this.pinOf({ environment: each.meta.environment, cli: each.meta.cli, sessionId: each.meta.sessionId })!.id } : {}),
 				lifecycle: 'running',
 				phase: 'running',
 				pid: each.pid,
 				startedAt: each.startedAt
 			};
-			const run: Run = { facts, closing: false };
+			const run: Run = { facts, closing: false, exactResume: each.meta.exactResume };
 			this.runs.set(each.run, run);
 			try {
 				await this.deps.execution.attach(each, pairOf(facts));
@@ -188,7 +233,39 @@ export class AgentService implements Agents, Disposable {
 				this.exited({ run: each.run, ...each.exited });
 			}
 		}
+		this.settlePins();
 		return elsewhere;
+	}
+
+	private settlePins(): void {
+		const holders = new Map<string, Run[]>();
+		for (const run of this.runs.values()) {
+			if (run.facts.pin) {
+				holders.set(run.facts.pin, [...holders.get(run.facts.pin) ?? [], run]);
+			}
+		}
+		for (const runs of holders.values()) {
+			const [keeper, ...others] = runs.sort((a, b) => Number(a.facts.lifecycle === 'ended') - Number(b.facts.lifecycle === 'ended') || b.facts.createdAt - a.facts.createdAt);
+			others.forEach(other => this.losePin(other));
+			this.deps.execution.pinTab?.(keeper.facts.id, true);
+		}
+	}
+
+	/** The run no longer holds its Pin, which another card of the same conversation took (LIFECYCLE-3.4). */
+	private losePin(run: Run): void {
+		this.update(run, { pin: undefined }, 'lifecycle');
+		if (run.facts.end?.kind === 'failed') {
+			this.retain(run);
+		}
+		this.deps.execution.pinTab?.(run.facts.id, false);
+	}
+
+	private remember(run: Run): void {
+		const key = keyOf(run.facts);
+		if (key) {
+			try { this.deps.conversations?.put(key, { location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name }); }
+			catch (err) { this.deps.log.event(`Could not keep conversation metadata: ${messageOf(err)}`); }
+		}
 	}
 
 	launch(request: LaunchRequest): RunId {
@@ -222,7 +299,7 @@ export class AgentService implements Agents, Disposable {
 		return location;
 	}
 
-	private accept(request: LaunchRequest, location: Location): RunId {
+	private accept(request: LaunchRequest, location: Location, options: StartOptions = {}): RunId {
 		const id = this.deps.newRunId();
 		const now = this.deps.clock.now();
 		const facts: RunFacts = {
@@ -240,19 +317,26 @@ export class AgentService implements Agents, Disposable {
 			lifecycle: 'starting',
 			phase: request.worktree ? 'creating_worktree' : 'launching_cli',
 			activity: 'unknown',
-			reporting: false
+			reporting: false,
+			...(options.resume ? { sessionId: options.resume.key.sessionId } : {}),
+			...(options.pin ? { pin: options.pin } : {})
 		};
+		if (options.pin) {
+			for (const other of this.runs.values()) { if (other.facts.pin === options.pin) { this.losePin(other); } }
+		}
 		const run: Run = { facts, closing: false };
+		if (options.restoring) { this.restoring.add(id); }
 		this.runs.set(id, run);
 		// The person's own launch shows its terminal (LIFECYCLE-2.2)
-		this.deps.execution.openPair(pairOf(facts), { reveal: true });
+		this.deps.execution.openPair(pairOf(facts), { reveal: options.reveal !== false });
+		if (options.pin) { this.deps.execution.pinTab?.(id, true); }
 		this.emit({ run: id, kind: 'added' });
 		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]`);
-		void this.start(run, request, location).catch(err => this.deps.log.event(`The start of ${run.facts.alias} failed unexpectedly: ${messageOf(err)}`));
+		run.settled = this.start(run, request, location, options).catch(err => this.deps.log.event(`The start of ${run.facts.alias} failed unexpectedly: ${messageOf(err)}`));
 		return id;
 	}
 
-	private async start(run: Run, request: LaunchRequest, source: Location): Promise<void> {
+	private async start(run: Run, request: LaunchRequest, source: Location, options: StartOptions): Promise<void> {
 		let location: Location | undefined = source;
 		if (request.worktree) {
 			try {
@@ -268,23 +352,25 @@ export class AgentService implements Agents, Disposable {
 			}
 			this.update(run, { location: location.id, cwd: location.path, phase: 'launching_cli' }, 'lifecycle');
 		} else {
-			location = this.deps.locations.resolve(run.facts.location);
+			location = options.resume ? this.locationFor(run.facts.location, run.facts.cwd) : this.deps.locations.resolve(run.facts.location);
 		}
 		if (!location) {
 			return this.fail(run, `The working location ${run.facts.cwd} is no longer available.`, 'location');
 		}
 		let plan;
 		try {
-			plan = await this.deps.planner.plan({ run: run.facts.id, alias: run.facts.alias, name: run.facts.name, cli: request.cli, location, yolo: run.facts.yolo });
+			plan = await this.deps.planner.plan({ run: run.facts.id, alias: run.facts.alias, name: run.facts.name, cli: request.cli, location, yolo: run.facts.yolo, ...(options.resume ? { resume: { sessionId: options.resume.key.sessionId } } : {}) });
 		} catch (err) {
 			return this.fail(run, err instanceof PlanError || err instanceof FacadeError ? err.message : messageOf(err), 'launch', err);
 		}
 		if (!this.live(run)) {
 			return;
 		}
-		this.update(run, { displayName: plan.displayName, command: plan.command, cwd: plan.cwd }, 'lifecycle');
+		run.exactResume = plan.exactResume;
+		const sessionId = plan.sessionId ?? run.facts.sessionId;
+		this.update(run, { displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: false }, 'lifecycle');
 		try {
-			const meta = metaOf(run.facts);
+			const meta = metaOf(run.facts, run.exactResume);
 			const started = await this.deps.execution.spawn(run.facts.id, plan, meta);
 			if (!this.live(run)) {
 				return;
@@ -294,10 +380,12 @@ export class AgentService implements Agents, Disposable {
 				? { pid: started.pid, startedAt: started.startedAt }
 				: { lifecycle: 'running', phase: 'running', pid: started.pid, startedAt: started.startedAt }, 'lifecycle');
 			// A rename while it started is kept with its process too, as a later one is: a reload shows it (LIFECYCLE-2.1, 3.5)
-			if (run.facts.name !== meta.name) {
-				this.deps.execution.setMeta(run.facts.id, metaOf(run.facts));
+			if (run.facts.name !== meta.name || run.facts.sessionId !== meta.sessionId) {
+				this.deps.execution.setMeta(run.facts.id, metaOf(run.facts, run.exactResume));
 			}
-			this.deps.history.remember(run.facts.location, run.facts.cli);
+			this.remember(run);
+			if (options.resume) { this.deps.locations.rememberLocation?.(run.facts.cwd); }
+			if (options.remember !== false) { this.deps.history.remember(run.facts.location, run.facts.cli); }
 			// The arguments may hold a credential: never logged (ARCHITECTURE-3.3, CLIS-4.2)
 			this.deps.log.event(`Started ${run.facts.alias} (${plan.cli}) pid ${started.pid}: ${plan.executable} with ${plan.args.length} argument${plan.args.length === 1 ? '' : 's'}`);
 		} catch (err) {
@@ -307,7 +395,7 @@ export class AgentService implements Agents, Disposable {
 
 	/** Whether the run is still wanted: closing it during startup prevents a later spawn (WORKTREES-2.5, RULES-5.2). */
 	private live(run: Run): boolean {
-		return this.runs.get(run.facts.id) === run && !run.closing;
+		return !this.disposed && !this.ownershipLost && this.runs.get(run.facts.id) === run && !run.closing;
 	}
 
 	/** The launch failed: its pair kept red with why in the person's words, the English in the log (RULES-3.3, UX-2.4). */
@@ -321,7 +409,7 @@ export class AgentService implements Agents, Disposable {
 		this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, source, at, ...effects } }, 'lifecycle');
 		this.deps.execution.note(run.facts.id, reason);
 		this.deps.log.event(`Could not start ${run.facts.alias}: ${english}`);
-		this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' });
+		if (!this.restoring.has(run.facts.id)) { this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' }); }
 		this.retain(run);
 	}
 
@@ -339,9 +427,12 @@ export class AgentService implements Agents, Disposable {
 		if (!run) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
+		this.unpinned(run);
 		run.closing = true;
 		this.runs.delete(id);
 		this.released.add(id);
+		const key = keyOf(run.facts);
+		if (key) { this.elsewhere.delete(conversationId(key)); }
 		this.deps.retained.remove(id);
 		this.deps.execution.removePair(id);
 		this.emit({ run: id, kind: 'removed', cause: 'close' });
@@ -373,9 +464,12 @@ export class AgentService implements Agents, Disposable {
 		}
 		this.update(run, { name }, 'renamed');
 		this.deps.execution.rename(id, name);
+		const pin = this.pins().find(each => each.id === run.facts.pin);
+		if (pin) { this.pinStore.save({ ...pin, name }); }
+		this.remember(run);
 		if (run.facts.pid !== undefined) {
 			// ptyd keeps an exited run's record too: a renamed red card keeps its name across a reload
-			this.deps.execution.setMeta(id, metaOf(run.facts));
+			this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 		}
 		if (run.facts.lifecycle === 'ended' && run.facts.end?.kind === 'failed') {
 			this.retain(run);
@@ -412,6 +506,212 @@ export class AgentService implements Agents, Disposable {
 			return;
 		}
 		this.rename(id, name);
+	}
+
+	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' } {
+		const running = this.running(entry.key);
+		if (running) {
+			return { running };
+		}
+		if (entry.unavailable) {
+			throw new FacadeError('INVALID', 'unsupported', entry.unavailable);
+		}
+		if (this.ownershipLost) { throw invalid('ownership_lost', 'Another window owns this workspace.'); }
+		if (!entry.key.sessionId || entry.key.sessionId.includes('\0')) { throw invalid('invalid_argument', 'An exact conversation ID is required.'); }
+		const meta = this.deps.conversations?.get(entry.key);
+		if (entry.cwdChoices?.length && !meta?.cwd) { throw invalid('invalid_argument', 'Choose a working location before resuming this conversation.'); }
+		const location = this.locationFor(meta?.location, meta?.cwd ?? entry.cwd);
+		if (!location || location.environment !== entry.key.environment) {
+			throw new FacadeError('INVALID', 'not_found', `The conversation's working location ${meta?.cwd ?? entry.cwd} is not available in this window.`);
+		}
+		// A name of its own, else its title, else a suggestion no agent here has (D57)
+		const name = meta?.name ?? entry.title?.trim() ?? entry.key.cli;
+		return this.accept(
+			{ name, location: location.id, cli: entry.key.cli },
+			location,
+			{ reveal: options.reveal, resume: { key: entry.key }, remember: true, ...this.pinOf(entry.key) ? { pin: this.pinOf(entry.key)!.id } : {} }
+		);
+	}
+
+	pin(id: RunId): void {
+		if (this.ownershipLost) { throw invalid('ownership_lost', 'Another window owns this workspace.'); }
+		const run = this.runs.get(id);
+		if (!run) {
+			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
+		}
+		const key = keyOf(run.facts);
+		if (!run.facts.resumable || !key) {
+			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI cannot resume this exact conversation, so it cannot be pinned.`);
+		}
+		if (run.facts.pin) {
+			return;
+		}
+		const pin: Pin = { id: (this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`), conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
+		this.pinStore.save(pin);
+		this.update(run, { pin: pin.id }, 'lifecycle');
+		this.deps.execution.pinTab?.(id, true);
+		this.deps.log.event(`Pinned ${run.facts.alias}`);
+	}
+
+	unpin(id: RunId): void {
+		if (this.ownershipLost) { throw invalid('ownership_lost', 'Another window owns this workspace.'); }
+		const run = this.runs.get(id);
+		if (!run) {
+			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
+		}
+		if (run.facts.pin) {
+			this.unpinned(run);
+			this.update(run, { pin: undefined }, 'lifecycle');
+			if (run.facts.end?.kind === 'failed') { this.retain(run); }
+			this.deps.execution.pinTab?.(id, false);
+			this.deps.log.event(`Unpinned ${run.facts.alias}`);
+		}
+	}
+
+	async restorePins(): Promise<void> {
+		if (this.pinsRestored || this.ownershipLost || this.disposed) { return; }
+		this.pinsRestored = true;
+		await this.refreshConversations().catch(err => this.deps.log.event(`Could not list running conversations before restoring Pins: ${messageOf(err)}`));
+		if (this.ownershipLost || this.disposed) { return; }
+		// A Pin a card already holds - running, or retained red after an abnormal exit or a failed restore - is not started again
+		// on a reload: restoration happens once per opening, without a restart loop (RULES-4.2)
+		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
+		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.running(pin.conversation));
+		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
+		const failed: { readonly id: RunId; readonly name: string; readonly reason: string }[] = [];
+		const restoreOne = async (pin: Pin): Promise<void> => {
+			if (!this.pins().some(saved => saved.id === pin.id) || this.running(pin.conversation)) { return; }
+			const location = this.locationFor(pin.location, pin.cwd);
+			if (!location || location.environment !== pin.conversation.environment) {
+				const reason = `Its working location ${pin.cwd} is not available in this window.`;
+				failed.push({ id: this.unrestorable(pin, reason), name: pin.name, reason });
+				return;
+			}
+			const id = this.accept(
+				{ name: pin.name, location: location.id, cli: pin.conversation.cli },
+				location,
+				{ resume: { key: pin.conversation }, reveal: false, remember: false, pin: pin.id, restoring: true }
+			);
+			await this.runs.get(id)?.settled;
+			this.restoring.delete(id);
+			const facts = this.runs.get(id)?.facts;
+			if (facts?.end?.kind === 'failed') {
+				failed.push({ id, name: facts.name, reason: facts.error?.reason ?? '' });
+			}
+		};
+		const workers = Array.from({ length: Math.min(RESTORE_CONCURRENCY, queue.length) }, async () => {
+			for (let pin = queue.shift(); pin && !this.ownershipLost && !this.disposed; pin = queue.shift()) {
+				await restoreOne(pin);
+			}
+		});
+		await Promise.all(workers);
+		if (failed.length && !this.ownershipLost && !this.disposed) {
+			// A known failure no agent is responsible for: one notification for this opening (RULES-1.8)
+			const [first] = failed;
+			this.deps.human.failed({ kind: 'restore', name: first.name, reason: first.reason, count: failed.length }, this.runs.has(first.id) ? { show: first.id } : {});
+		}
+	}
+
+	/**
+	 * A Pin that cannot start here keeps its own red card, holding the Pin, so the person sees why and can Close it, which
+	 * Unpins (LIFECYCLE-3.4: failures retain their individual entries).
+	 */
+	private unrestorable(pin: Pin, reason: string): RunId {
+		const id = this.deps.newRunId();
+		const at = this.deps.clock.now();
+		const facts: RunFacts = {
+			id, alias: this.deps.aliases.next(), name: pin.name, cli: pin.conversation.cli, displayName: pin.conversation.cli, command: pin.conversation.cli,
+			location: pin.location, cwd: pin.cwd, environment: pin.conversation.environment, yolo: this.deps.yolo(),
+			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, resumable: true,
+			sessionId: pin.conversation.sessionId, pin: pin.id, end: { kind: 'failed', at }, error: { reason, source: 'location', at }
+		};
+		const run: Run = { facts, closing: false, exactResume: true, settled: Promise.resolve() };
+		this.runs.set(id, run);
+		this.deps.execution.openPair(pairOf(facts), { reveal: false });
+		this.deps.execution.note(id, reason);
+		this.retain(run);
+		this.emit({ run: id, kind: 'added' });
+		this.deps.log.event(`Could not restore the pinned ${JSON.stringify(pin.name)}: ${reason}`);
+		return id;
+	}
+
+	/** The run holding this exact conversation: in this window, or `elsewhere` in another window of this workspace. */
+	holding(key: ConversationKey): RunId | 'elsewhere' | undefined {
+		return this.running(key);
+	}
+
+	private running(key: ConversationKey): RunId | 'elsewhere' | undefined {
+		for (const run of this.runs.values()) {
+			if (run.facts.lifecycle !== 'ended' && run.facts.sessionId === key.sessionId && run.facts.cli === key.cli && run.facts.environment === key.environment) {
+				return run.facts.id;
+			}
+		}
+		return this.elsewhere.has(conversationId(key)) ? 'elsewhere' : undefined;
+	}
+
+	private locationFor(id: LocationId | undefined, cwd: string): Location | undefined {
+		const known = id ? this.deps.locations.resolve(id) : undefined;
+		if (known && known.path === cwd) {
+			return known;
+		}
+		const byPath = this.deps.locations.snapshot().locations.find(each => each.path === cwd);
+		if (byPath) {
+			return byPath;
+		}
+		return this.deps.locations.conversationLocation?.(cwd);
+	}
+
+	private pinOf(key: ConversationKey): Pin | undefined {
+		return this.pins().find(pin => sameConversation(pin.conversation, key));
+	}
+
+	private unpinned(run: Run): void {
+		const pin = run.facts.pin;
+		if (pin && ![...this.runs.values()].some(other => other !== run && other.facts.pin === pin)) {
+			this.pinStore.remove(pin);
+		}
+	}
+
+	private tabPinned(id: RunId, pinned: boolean): void {
+		const run = this.runs.get(id);
+		if (!run || pinned === !!run.facts.pin) {
+			return;
+		}
+		try {
+			if (!pinned) {
+				this.unpin(id);
+			} else if (run.facts.resumable) {
+				this.pin(id);
+			} else {
+				this.deps.log.event(`${run.facts.alias}'s tab was pinned, but its CLI cannot resume this exact conversation; no restoration intent was saved`);
+				this.deps.execution.pinTab?.(id, !!run.facts.pin);
+			}
+		} catch (err) {
+			this.deps.log.event(`Could not save the native pin of ${run.facts.alias}: ${messageOf(err)}`);
+			this.deps.execution.pinTab?.(id, !!run.facts.pin);
+		}
+	}
+
+	/** A CLI changed its session (for example after /clear): the record and Pin follow once the new identity is known (LIFECYCLE-3.4). */
+	private identified(id: RunId, sessionId: string | null, cwd?: string): void {
+		if (this.disposed || this.ownershipLost) { return; }
+		const run = this.runs.get(id);
+		if (!run || run.facts.lifecycle === 'ended' || (run.facts.sessionId === sessionId && run.facts.resumable && (!cwd || cwd === run.facts.cwd))) {
+			return;
+		}
+		// Keep the last saved key while a native new/home screen has no conversation. Its existing Pin stays associated across reload.
+		this.update(run, { sessionId: sessionId ?? run.facts.sessionId, resumable: !!sessionId && run.exactResume, ...cwd ? { cwd } : {} }, 'lifecycle');
+		const pin = run.facts.pin ? this.pins().find(each => each.id === run.facts.pin) : undefined;
+		if (pin && sessionId) {
+			try { this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: keyOf(run.facts)! }); }
+			catch (err) {
+				const reason = messageOf(err);
+				this.deps.log.event(`Could not update the Pin of ${run.facts.alias}: ${reason}`);
+				this.deps.human.failed({ kind: 'pin', name: labelOf(run.facts), reason }, { show: id });
+			}
+		}
+		this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
+		this.remember(run);
 	}
 
 	private reported(report: ActivityReport): void {
@@ -457,8 +757,11 @@ export class AgentService implements Agents, Disposable {
 		const normal = (exit.code === 0 && !exit.signal) || run.closing || exit.interruptVerified;
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
+			try { this.unpinned(run); } catch (err) { this.deps.log.event(`Could not remove the Pin of ${run.facts.alias}: ${messageOf(err)}`); }
 			this.runs.delete(exit.run);
 			this.released.add(exit.run);
+			const key = keyOf(run.facts);
+			if (key) { this.elsewhere.delete(conversationId(key)); }
 			this.deps.execution.removePair(exit.run);
 			this.emit({ run: exit.run, kind: 'removed', cause: 'exit' });
 			this.deps.log.event(`${run.facts.alias} exited${exit.code !== undefined ? ` with code ${exit.code}` : ''}`);
@@ -477,6 +780,7 @@ export class AgentService implements Agents, Disposable {
 
 	private locationsRemoved(removal: LocationRemoval): void {
 		const removed = new Set(removal.ids);
+		for (const pin of this.pins()) { if (removed.has(pin.location)) { this.pinStore.remove(pin.id); } }
 		for (const run of [...this.runs.values()]) {
 			if (removed.has(run.facts.location)) {
 				this.deps.log.event(`Closing ${run.facts.alias}: its working location was ${removal.cause === 'folder' ? 'removed from the workspace' : 'deleted'}`);
@@ -532,6 +836,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 	return {
 		id,
 		alias: meta.alias,
+		...(meta.sessionId ? { sessionId: meta.sessionId, resumable: false } : {}),
 		name: meta.name,
 		cli: meta.cli,
 		displayName: meta.displayName,
@@ -548,9 +853,11 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 	};
 }
 
-export function metaOf(facts: RunFacts): RunMeta {
+export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta {
 	return {
 		alias: facts.alias,
+		exactResume: !!exactResume,
+		...(facts.sessionId ? { sessionId: facts.sessionId } : {}),
 		name: facts.name,
 		cli: facts.cli,
 		displayName: facts.displayName,

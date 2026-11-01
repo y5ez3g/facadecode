@@ -8,6 +8,9 @@
 // as it runs on Windows instead: it reports nothing and draws its input frame, which ptyd reads (CLIS-2.3, D80).
 
 import * as fs from 'fs';
+import * as path from 'path';
+import { randomUUID } from 'crypto';
+import { DatabaseSync } from 'node:sqlite';
 
 const ESC = '\x1b';
 const ST = `${ESC}\\`;
@@ -18,6 +21,31 @@ const record = process.env.FACADE_IT_RECORD!;
 const agent = process.env.FACADE_AGENT!;
 fs.writeFileSync(`${record}.args.${agent}`, JSON.stringify({ cwd: process.cwd(), args: process.argv.slice(2) }));
 fs.writeFileSync(`${record}.${agent}`, `${process.pid}\n`);
+// Simulate the vendor's identity report explicitly; a launch argument alone no longer enables Pin.
+const sessionFile = process.env.FACADE_CODE_SESSION_FILE;
+if (sessionFile) {
+	const args = process.argv.slice(2);
+	const flag = args.findIndex(arg => ['--session-id', '--resume', '--conversation', '--session', 'resume'].includes(arg));
+	const session = flag >= 0 ? args[flag + 1] : randomUUID();
+	fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
+	const muse = path.join(sessionFile.replace(/\.json$/, '.d'), 'muse.json');
+	if (fs.existsSync(muse)) {
+		const { data } = JSON.parse(fs.readFileSync(muse, 'utf8')) as { data: string };
+		const runtime = path.join(data, 'runtime', 'muse');
+		fs.mkdirSync(path.join(runtime, 'sessions'), { recursive: true });
+		const endpoint = `ms-it${process.pid}.sock`, generation = `pid=${process.pid}`;
+		const native = { schema_version: 1, endpoint_hint: endpoint, process_generation_hint: generation };
+		fs.writeFileSync(path.join(runtime, `${endpoint}.lease`), JSON.stringify({ ...native, pid: process.pid }));
+		fs.writeFileSync(path.join(runtime, 'sessions', `${session}.json`), JSON.stringify({ ...native, session_id: session, target_eligibility: 'message_capable' }));
+		const log = path.join(data, `${session}.jsonl`);
+		fs.writeFileSync(log, '{}\n');
+		const db = new DatabaseSync(path.join(data, 'session-index.db'));
+		db.exec('CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, workspace_root TEXT, status TEXT, prompt_count INTEGER, session_log_path TEXT, first_user_prompt TEXT, updated_at_us INTEGER)');
+		db.prepare("INSERT OR REPLACE INTO sessions VALUES (?, ?, 'valid', 1, ?, 'Resume integration fixture', ?)").run(session, process.cwd(), log, Date.now() * 1000);
+		db.close();
+	}
+	fs.writeFileSync(sessionFile, JSON.stringify({ session_id: session, cwd: process.cwd(), source: 'startup' }));
+}
 process.stdout.write('fake agent ready\r\n');
 
 if (process.env.FACADE_IT_SCREEN === 'muse') {

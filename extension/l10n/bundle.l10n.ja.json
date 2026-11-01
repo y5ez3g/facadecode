@@ -231,5 +231,19 @@
 	"Reload Window": "ウィンドウの再読み込み",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "このウィンドウの Facade Code の記録が破損しているため、ここではエージェントを復元できません。このウィンドウを閉じてフォルダーまたはワークスペースを開き直すか、{0} を再起動してください。",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} は cmd.exe 経由で実行されますが、cmd.exe は UNC フォルダー {1} では実行できません。{2}.path を CLI 自身のプログラムまたは Node エントリ ポイントに設定してください",
-	"{0} is a Node script, and Node is not on the PATH to run it": "{0} は Node スクリプトですが、それを実行する Node が PATH にありません"
+	"{0} is a Node script, and Node is not on the PATH to run it": "{0} は Node スクリプトですが、それを実行する Node が PATH にありません",
+	"Could not restore {0} pinned agents. Their cards show why.": "ピン留めされた {0} 個のエージェントを復元できませんでした。理由は各カードに表示されます。",
+	"Could not restore {0}: {1}": "{0} を復元できませんでした: {1}",
+	"Could not pin {0}: {1}": "{0} をピン留めできませんでした: {1}",
+	"Could not unpin {0}: {1}": "{0} のピン留めを外せませんでした: {1}",
+	"Pinned": "ピン留め済み",
+	"Could not read the saved conversations: {0}": "保存された会話を読み取れませんでした: {0}",
+	"Resume Agent": "エージェントを再開",
+	"Restores this conversation when the workspace opens again": "ワークスペースを再度開くと、この会話を復元します",
+	"Search saved conversations by title or location": "タイトルまたは場所で保存された会話を検索",
+	"Open a folder to resume its conversations.": "フォルダーを開いて、その会話を再開してください。",
+	"Untitled conversation": "無題の会話",
+	"No saved conversations in this window's folders": "このウィンドウのフォルダーに保存された会話はありません",
+	"Could not resume {0}: {1}": "{0} を再開できませんでした: {1}",
+	"{0} is already running in another window.": "{0} は既に別のウィンドウで実行されています。"
 }

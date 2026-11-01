@@ -114,7 +114,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const vscodeApi = {
 			TabInputTerminal,
 			TabInputText,
-			commands: { executeCommand: async (command: string) => { commands.push(command); } },
+			commands: { executeCommand: async (command: string) => {
+				commands.push(command);
+				if (activeTab && (command === 'workbench.action.pinEditor' || command === 'workbench.action.unpinEditor')) {
+					Object.assign(activeTab, { isPinned: command === 'workbench.action.pinEditor' });
+					tabsChanged.fire({ opened: [], closed: [], changed: [activeTab] });
+				}
+			} },
 			EventEmitter: TestEmitter,
 			ThemeIcon: class { constructor(readonly id: string) { } },
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: path.posix.join(base.path, ...parts) }) },
@@ -266,6 +272,38 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	const resets = (terminal: FakeTerminal) => titled(terminal, terminal.options.name);
 	/** A CLI that echoes what it is typed and reports itself as a status-reporting CLI does. */
 	const ECHO = `process.stdin.setRawMode(true); process.stdout.write('ready\\r\\n'); process.stdin.on('data', d => { const s = d.toString(); if (s === 'q') process.exit(3); process.stdout.write('got ' + s + '\\r\\n'); }); setInterval(() => {}, 1000);`;
+
+	test('Pin waits for its exact active tab, never focuses a background terminal, and survives a kept tab reopening', async () => {
+		const port = portOf();
+		const changes: unknown[] = [];
+		port.onDidPinTab(change => changes.push(change));
+		port.openPair(facts('run-1'), { reveal: false });
+		const first = terminals[0];
+		open(first);
+		tabsChanged.fire({ opened: [first.tab], closed: [], changed: [] });
+		port.pinTab('run-1', true);
+		assert.deepStrictEqual([commands, first.shown], [[], []]);
+		activeTab = first.tab; activeTerminal = first;
+		activeChanged.fire(first);
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first.tab, { isActive: true })] });
+		await until('the exact tab pinned', () => first.tab.isPinned);
+		await Promise.resolve();
+		assert.deepStrictEqual(commands, ['workbench.action.pinEditor']);
+		assert.deepStrictEqual(changes, [], 'programmatic synchronization does not become another human Pin');
+		Object.assign(first.tab, { isPinned: false });
+		tabsChanged.fire({ opened: [], closed: [], changed: [first.tab] });
+		assert.deepStrictEqual(changes, [{ run: 'run-1', pinned: false }]);
+		port.pinTab('run-1', true);
+		await Promise.resolve();
+		closed.fire(first);
+		port.reopen('run-1');
+		const next = terminals[1];
+		open(next);
+		activeTab = next.tab; activeTerminal = next;
+		activeChanged.fire(next);
+		tabsChanged.fire({ opened: [Object.assign(next.tab, { isActive: true })], closed: [], changed: [] });
+		await until('the reopened tab pinned', () => next.tab.isPinned);
+	});
 
 	test('a pair is one editor terminal from acceptance on, with the agent\'s name and its CLI\'s logo; Facade\'s lines show before any process, and the process starts in that same terminal', async () => {
 		const port = portOf();

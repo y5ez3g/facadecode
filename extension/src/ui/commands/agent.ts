@@ -48,6 +48,17 @@ export class AgentActions {
 		return this.deps.execution.reveal(run, { preserveFocus: false });
 	}
 
+	pin(run: RunId, pinned: boolean): void {
+		const facts = this.deps.agents.get(run);
+		if (!facts) { return; }
+		try {
+			if (pinned) { this.deps.agents.pin(run); } else { this.deps.agents.unpin(run); }
+		} catch (err) {
+			this.deps.notifyError(pinned ? vscode.l10n.t("Could not pin {0}: {1}", labelOf(facts), messageOf(err))
+				: vscode.l10n.t("Could not unpin {0}: {1}", labelOf(facts), messageOf(err)), {});
+		}
+	}
+
 	/** Copies `@name #aN`, with no toast (LIFECYCLE-2.1). */
 	async copyReference(run: RunId): Promise<void> {
 		const facts = this.deps.agents.get(run);
@@ -122,6 +133,8 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 	};
 	return [
 		vscode.commands.registerCommand(COMMANDS.showActiveAgents, () => flows.goToAgent()),
+		on(COMMANDS.pinAgent, true, run => actions.pin(run, true)),
+		on(COMMANDS.unpinAgent, true, run => actions.pin(run, false)),
 		on(COMMANDS.renameAgent, true, run => actions.rename(run)),
 		on(COMMANDS.copyAgentReference, true, run => actions.copyReference(run)),
 		on(COMMANDS.closeAgent, true, run => actions.close(run)),

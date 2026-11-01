@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "Erforderlich: die Argumente, mit denen eine bestimmte gespeicherte Konversation fortgesetzt wird. `${sessionId}` wird durch ihre Sitzungs-ID ersetzt und muss enthalten sein.",
 	"windowDisplayName": "Facade Code-Fensterkomponente",
 	"windowDescription": "Fensteridentitäts- und Sitzungskontinuitätskoordinator für Facade Code.",
-	"icon.newAgent": "Symbol „Neuer Agent“"
+	"icon.newAgent": "Symbol „Neuer Agent“",
+	"command.history": "Agent fortsetzen...",
+	"command.pinAgent": "Agent anheften",
+	"command.unpinAgent": "Agent lösen"
 }

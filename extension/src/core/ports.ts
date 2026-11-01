@@ -68,6 +68,9 @@ export interface LocationRemoval {
 }
 
 export interface LocationPort {
+	/** Validates a conversation cwd inside this window, without changing successful-launch history. */
+	conversationLocation?(cwd: string): Location | undefined;
+	rememberLocation?(cwd: string): LocationId | undefined;
 	/** Returns at once; ordinary folders are always present, Git metadata follows (WORKTREES-1.1). */
 	snapshot(): Catalog;
 	resolve(id: LocationId): Location | undefined;
@@ -120,6 +123,7 @@ export interface PlanRequest {
 	readonly cli: string;
 	readonly location: Location;
 	readonly yolo: boolean;
+	readonly resume?: { readonly sessionId: string };
 }
 
 /** A fully computed launch, made before any file or process exists (CLIS-4.2). */
@@ -134,6 +138,9 @@ export interface LaunchPlan {
 	readonly cwd: string;
 	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
 	readonly screenStatus?: string;
+	readonly sessionId?: string;
+	/** Whether a run can keep identifying its exact conversation, including after native session changes. */
+	readonly exactResume?: boolean;
 }
 
 /** A reason Facade itself gives, by its kind and values, so that the person's language can say it (UX-2.4); the English is its message. */
@@ -210,6 +217,10 @@ export interface LiveRun {
 export type CleanupResult = 'terminated' | 'already_exited' | 'unconfirmed' | 'failed';
 
 export interface ExecutionPort {
+	readonly onDidIdentify?: Event<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>;
+	readonly onDidPinTab?: Event<{ readonly run: RunId; readonly pinned: boolean }>;
+	pinTab?(run: RunId, pinned: boolean): void;
+	conversations?(): Promise<readonly ConversationKey[]>;
 	/** Creates the run's editor terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). */
 	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void;
 	/** Writes a line of startup progress or failure into the run's terminal (UX-1.1: existing surfaces). */
@@ -251,6 +262,8 @@ export interface ExecutionPort {
 
 /** What ptyd keeps with a run so a reloaded window can show it again. Plain JSON. */
 export interface RunMeta {
+	readonly sessionId?: string;
+	readonly exactResume?: boolean;
 	readonly alias: string;
 	readonly name: string;
 	readonly cli: string;
@@ -261,6 +274,76 @@ export interface RunMeta {
 	readonly environment: string;
 	readonly yolo: boolean;
 	readonly createdAt: number;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------
+// Conversations (RULES-2.2, 4.2; CLIS-2.4; LIFECYCLE-3.2, 3.3)
+
+/** A conversation's identity: its execution environment, CLI and the vendor's exact session ID (RULES-2.2). */
+export interface ConversationKey {
+	readonly environment: string;
+	readonly cli: string;
+	readonly sessionId: string;
+}
+
+export function conversationId(key: ConversationKey): string {
+	return `${key.environment}\u0000${key.cli}\u0000${key.sessionId}`;
+}
+
+/** One vendor conversation the Resume picker lists: list metadata only (LIFECYCLE-3.2). */
+export interface ConversationEntry {
+	readonly key: ConversationKey;
+	readonly title?: string;
+	/** The conversation's original working directory in its environment. */
+	readonly cwd: string;
+	/** A vendor workspace set with no original cwd: the person must choose before Resume (LIFECYCLE-3.2). */
+	readonly cwdChoices?: readonly string[];
+	/** Last activity, in milliseconds since 1970, where known. */
+	readonly activityAt?: number;
+	/** Why it cannot be resumed, when it cannot (missing CLI, unsupported exact resume...). */
+	readonly unavailable?: string;
+}
+
+/** A Resume picker session: batches of 100, recent first, with metadata read once and reused (LIFECYCLE-3.2, D35). */
+export interface ConversationPager extends Disposable {
+	/** The next batch, or `done` once every relevant store is exhausted; never silently stops at a scan limit. */
+	next(): Promise<{ readonly entries: readonly ConversationEntry[]; readonly done: boolean }>;
+}
+
+export interface ConversationDiscoveryPort {
+	/** Vendor histories for these directories and their subdirectories (LIFECYCLE-3.2): the window's locations. */
+	open(scope: { readonly environment: string; readonly directories: readonly string[] }): ConversationPager;
+}
+
+/** What Facade keeps of its own conversations so Resume/Pin restore their place and name (RULES-4.2, ARCHITECTURE-3.1). */
+export interface ConversationMeta {
+	readonly location?: LocationId;
+	readonly cwd: string;
+	readonly name: string;
+}
+
+export interface ConversationStore {
+	get(key: ConversationKey): ConversationMeta | undefined;
+	put(key: ConversationKey, meta: ConversationMeta): void;
+}
+
+/** Saved intent to restore an exact conversation in this workspace (RULES-2.2, 4.2; LIFECYCLE-3.4). */
+export interface Pin {
+	/** `pin-<hex>`: identifies the Pin across runs; the panel orders the Pin area by it (PANEL-2.1). */
+	readonly id: string;
+	readonly conversation: ConversationKey;
+	readonly location: LocationId;
+	readonly cwd: string;
+	readonly name: string;
+}
+
+/** Pins in workspace storage, in their saved order (ARCHITECTURE-3.1). */
+export interface PinStore {
+	list(): readonly Pin[];
+	save(pin: Pin): void;
+	remove(id: string): void;
+	/** Saves the Pin area's order, top first. */
+	reorder(ids: readonly string[]): void;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -323,6 +406,9 @@ export interface RunError {
 }
 
 export interface RunFacts {
+	readonly sessionId?: string;
+	readonly resumable?: boolean;
+	readonly pin?: string;
 	readonly id: RunId;
 	/** `#aN` (LIFECYCLE-2.1); the number is unique in this environment until the client network allocates it (M4). */
 	readonly alias: string;
@@ -365,7 +451,9 @@ export interface RunChange {
 // The person (RULES-1.8, UX-1.2)
 
 /** A failure the core tells the person, as facts the window words in the person's language (UX-2.4). */
-export type HumanFailure = { readonly kind: 'start'; readonly name: string; readonly reason: string; readonly worktree?: WorktreeCreationEffects };
+export type HumanFailure = { readonly kind: 'restore'; readonly name: string; readonly reason: string; readonly count: number; readonly worktree?: never }
+	| { readonly kind: 'pin'; readonly name: string; readonly reason: string; readonly worktree?: never }
+	| { readonly kind: 'start'; readonly name: string; readonly reason: string; readonly worktree?: WorktreeCreationEffects };
 
 export interface HumanPort {
 	/** A human-operation error or a known failure with no responsible agent, in the related window only (RULES-1.8). */
@@ -423,6 +511,14 @@ export interface LaunchRequest {
 }
 
 export interface Agents {
+	resume(entry: ConversationEntry, options: { readonly reveal: boolean }): RunId | { readonly running: RunId | 'elsewhere' };
+	holding(key: ConversationKey): RunId | 'elsewhere' | undefined;
+	refreshConversations(): Promise<void>;
+	pin(run: RunId): void;
+	unpin(run: RunId): void;
+	pins(): readonly Pin[];
+	reorderPins(ids: readonly string[]): void;
+	restorePins(): Promise<void>;
 	/** Validates (all problems together) and, once accepted, creates the pair at once and returns its run ID (LIFECYCLE-1.5). */
 	launch(request: LaunchRequest): RunId;
 	/** Close Agent, the single close action for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */

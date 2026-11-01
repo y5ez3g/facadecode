@@ -77,7 +77,7 @@ same name have the same meaning. The owner's Apple-like reference means this cla
 
 **Facade provides agent operation and work locations.**
 
-Start, find, inspect, type into and stop agents; choose locations and optionally create/use worktrees. Each feature
+Start, find, inspect, type into, resume, pin/unpin and stop agents; choose locations and optionally create/use worktrees. Each feature
 states its limits honestly, including unsupported CLI capabilities. None imposes a workflow.
 
 ### 5.2 Operating boundaries
@@ -122,6 +122,8 @@ and retains access to failures. A passing build alone does not prove the product
 capabilities are named; technical limitations do not quietly redefine the product.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: Configured custom CLIs run interactively beside the built-ins (CLIS-3.4).
 

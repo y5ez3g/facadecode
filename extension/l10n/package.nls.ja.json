@@ -55,5 +55,8 @@
 	"config.custom.launch.resume": "必須: 保存された特定の会話を正確に再開する引数。`${sessionId}` はそのセッション ID に置き換えられ、必ず含める必要があります。",
 	"windowDisplayName": "Facade Code ウィンドウ コンポーネント",
 	"windowDescription": "Facade Code のウィンドウ ID およびセッション継続性コーディネーター。",
-	"icon.newAgent": "新しいエージェントのアイコン"
+	"icon.newAgent": "新しいエージェントのアイコン",
+	"command.history": "エージェントを再開...",
+	"command.pinAgent": "エージェントをピン留め",
+	"command.unpinAgent": "エージェントのピン留めを外す"
 }

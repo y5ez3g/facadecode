@@ -39,16 +39,16 @@ and do not reinstate a requirement explicitly superseded by the current body.
 deleted behavior must change its expectation; it is not evidence that the deleted feature should be restored.
 
 The Facade Code extension is committed in additive steps, and each commit carries only the specification its step needs.
-This is the subset for five of a sequence of owner-tested steps: step 1, Claude Code and Codex with the whole user
+This is the subset for six of a sequence of owner-tested steps: step 1, Claude Code and Codex with the whole user
 interface that serves them; the step that adds Antigravity, Muse Code, OpenCode and Pi at the same level (D77); the
 step that adds the panel's display filters; the step that adds each built-in's `.enabled` and `.launch` settings
-with Show Agent Launch and Show Agents Log; and the step that adds custom CLIs.
+with Show Agent Launch and Show Agents Log; the step that adds custom CLIs; and the step that adds Resume and linked Pin/Unpin.
 Every rule keeps its final number, so the numbering has gaps that later steps fill; their rules, decisions
 and checks are not part of these steps.
 
 ## 3 Coverage and evidence limits
 
-The set contains **10 normative documents and 128 numbered rules**. The [audit report](audit/REPORT.md) records
+The set contains **10 normative documents and 134 numbered rules**. The [audit report](audit/REPORT.md) records
 structural and reference checks; the migration ledger joins in the last step. These do not constitute a runtime pass.
 
 Required product evidence includes native/compatible-editor installation, true close versus reload/disconnect, each
@@ -68,6 +68,8 @@ Resolve routine engineering details within scope; raise concrete rule/scenario/e
 the owner to repeatedly approve speculative edge cases. Verification states remain separate for spec, code and product.
 
 ## Change log
+
+- 2026-10-31: Resume and linked Pin/Unpin extend the current step; 134 rules.
 
 - 2026-10-31: The step summary includes custom CLIs; CLIS-3.4 makes 128 rules.
 

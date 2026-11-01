@@ -342,6 +342,37 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		return 'planned';
 	};
 
+	test('Resume uses the selected exact session and current launch settings; only a maintained identity permits Pin', () => {
+		const sessionId = '6e6d2b8f-84b6-4b74-a68a-12522896cad1';
+		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
+			const segment = cli === 'agy' ? 'antigravity' : cli;
+			const launch = plan({ cli, resume: { sessionId }, sessionFile: '/isolated/run.session.json', sessionHook: 'capture-session', yolo: false }, {
+				[`facade.${segment}.path`]: program(temp.dir, cli), [`facade.${segment}.launch`]: { arguments: ['--model', 'selected-model'] }
+			});
+			assert.deepStrictEqual(launch.args.slice(0, 2), [cli === 'claude' ? '--resume' : cli === 'agy' ? '--conversation' : cli === 'pi' || cli === 'opencode' ? '--session' : 'resume', sessionId]);
+			assert.strictEqual(launch.args[launch.args.indexOf('--model') + 1], 'selected-model');
+			assert.strictEqual(launch.exactResume, true);
+			assert.ok(!launch.args.includes('--session-id'));
+		}
+		const fresh = plan({ cli: 'claude', sessionFile: '/isolated/run.session.json', sessionHook: 'capture-session' });
+		assert.match(fresh.sessionId!, /^[0-9a-f-]{36}$/);
+		assert.strictEqual(fresh.args[fresh.args.indexOf('--session-id') + 1], fresh.sessionId);
+		assert.strictEqual(fresh.env.FACADE_CODE_SESSION_FILE, '/isolated/run.session.json');
+		assert.ok(fresh.args.some(arg => arg.includes('capture-session')));
+		const custom = plan({ cli: 'custom', resume: { sessionId: '$& literal' } }, {
+			'facade.custom': { custom: { path: program(temp.dir, 'custom'), launch: { start: ['start-only'], resume: ['resume', '${sessionId}'] } } }
+		});
+		assert.deepStrictEqual(custom.args, ['resume', '$& literal']);
+		assert.strictEqual(custom.exactResume, false);
+	});
+
+	test('configured native continuation shortcuts cannot override the selected exact conversation', () => {
+		for (const [cli, argument] of [['claude', '--continue'], ['claude', '-r'], ['claude', '--fork-session'], ['codex', '--last']]) {
+			assert.throws(() => plan({ cli, resume: { sessionId: 'selected-session' } }, { [`facade.${cli}.launch`]: { arguments: [argument] } }),
+				(err: unknown) => err instanceof CliPlanError && err.reason === 'configuration_invalid');
+		}
+	});
+
 	test('Codex uses its native YOLO mapping and trusts this folder by an argument alone, with no later-step integrations', () => {
 		for (const yolo of [true, false]) {
 			const launch = plan({ cli: 'codex', yolo });
@@ -386,7 +417,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 	});
 
 	test('the groups go in their order: the run\'s own settings, the YOLO mapping, the folder\'s trust, then the configured arguments as they are (CLIS-3.1, 3.2)', () => {
-		assert.deepStrictEqual([...GROUP_ORDER], ['quiet', 'yoloOn', 'yoloOff', 'trust', 'extra']);
+		assert.deepStrictEqual([...GROUP_ORDER], ['resume', 'quiet', 'yoloOn', 'yoloOff', 'trust', 'session', 'extra']);
 		const groups = { quiet: ['q', '${value}'], yoloOn: ['on'], trust: ['t'] };
 		assert.deepStrictEqual(invocation(groups, [], { yolo: false }, { value: 'v' }), ['q', 'v', 't']);
 		// A person's literal option is never expanded: `${value}` stays as written

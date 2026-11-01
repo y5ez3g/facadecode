@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { Agents, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, WorktreePort } from '../../core/ports';
+import type { Agents, ConversationDiscoveryPort, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { AGENT_SETTINGS, COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
@@ -13,6 +13,8 @@ import { withWorktreeEffects } from '../presentation';
 import { pickFilter } from '../pickers/filter';
 import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
+import { resumeAgent } from '../pickers/resume';
+import { messageOf } from '../../base/errors';
 import { newAgent } from '../pickers/newAgent';
 import { PanelPrefs } from '../order';
 import { AgentActions, registerAgentCommands, targetOf } from './agent';
@@ -23,6 +25,7 @@ declare const FACADE_TEST_MODE: boolean;
 /** What the panel, its commands and its pickers are given by the composition root. */
 export interface UiDeps {
 	readonly agents: Agents;
+	readonly conversations?: ConversationDiscoveryPort;
 	readonly locations: LocationPort;
 	readonly clis: CliCatalogPort;
 	readonly history: LaunchHistoryPort;
@@ -46,6 +49,7 @@ export interface UiDeps {
 function cardWords(): CardWords {
 	return {
 		worktreeFailure: withWorktreeEffects,
+		pinned: vscode.l10n.t("Pinned"),
 		starting: vscode.l10n.t("Starting"),
 		// {0} is the CLI's name, such as Claude Code
 		startingCli: cli => vscode.l10n.t("Starting {0}...", cli),
@@ -90,6 +94,17 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	});
 	const agent = new AgentActions({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError });
 	const flows = {
+		resume: async () => {
+			if (!deps.conversations) { return; }
+			try {
+				await deps.ready;
+				await deps.locations.refresh().catch(err => deps.log.event(`Resume uses the known working locations: ${messageOf(err)}`));
+				await deps.agents.refreshConversations();
+				await resumeAgent({ conversations: deps.conversations, locations: deps.locations, running: key => !!deps.agents.holding(key),
+					resume: entry => deps.agents.resume(entry, { reveal: true }), reveal: run => agent.reveal(run), select: run => model.select(run),
+					notifyError: deps.notifyError, media, language: vscode.env.language });
+			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
+		},
 		newAgent: (startAt?: LocationId) => newAgent({ agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history, select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media, ...(deps.remote ? { remote: deps.remote } : {}) }, startAt),
 		goToAgent: () => goToAgent({ model, agents: deps.agents, words, media, reveal: run => agent.reveal(run), copyReference: run => agent.copyReference(run), close: run => agent.close(run) })
 	};
@@ -98,6 +113,9 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		switch (what) {
 			case 'open':
 				return target === undefined || !deps.agents.get(target) ? 'gone' : await agent.reveal(target) ? undefined : 'failed';
+			case 'resume':
+				await flows.resume();
+				return undefined;
 			case 'new':
 				// From the filtered empty panel, at the filtered location; from the other empty panel, where New Agent would (PANEL-1.2, LIFECYCLE-1.2)
 				await flows.newAgent(locationOfFilter(model.currentFilter(), deps.locations.snapshot().locations));
@@ -124,6 +142,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		view,
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
 		deps.execution.onDidActivate(run => model.activated(run)),
+		vscode.commands.registerCommand(COMMANDS.history, () => flows.resume()),
 		vscode.commands.registerCommand(COMMANDS.newAgent, () => flows.newAgent()),
 		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, deps.locations, deps.log)),
 		// The same, its title button filled while a filter is on (UX-3.2)

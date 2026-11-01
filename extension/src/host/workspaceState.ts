@@ -47,21 +47,26 @@ export class KeptWorkspaceState implements vscode.Memento {
 	}
 
 	update(key: string, value: unknown): Thenable<void> {
-		let result: Thenable<void> = Promise.resolve();
 		try {
-			this.writeIfOwned(() => {
-				const next = new Map(this.values);
-				if (value === undefined) { next.delete(key); } else { next.set(key, value); }
-				// Persist the handover source before confirming it in memory or the editor. A failed sidecar write must not
-				// acknowledge a newer Memento value that a subsequent handover would overwrite with the old sidecar.
-				this.write(next);
-				this.values.clear();
-				for (const [name, kept] of next) { this.values.set(name, kept); }
-				result = this.state.update(key, value);
-			});
+			return this.keep(key, value);
 		} catch (error) {
 			return Promise.reject(error);
 		}
+	}
+
+	/** Commit to the owned sidecar before a synchronous action acknowledges it; disk/ownership failures throw. */
+	keep(key: string, value: unknown): Thenable<void> {
+		let result: Thenable<void> = Promise.resolve();
+		this.writeIfOwned(() => {
+			const next = new Map(this.values);
+			if (value === undefined) { next.delete(key); } else { next.set(key, value); }
+			// Persist the handover source before confirming it in memory or the editor. A failed sidecar write must not
+			// acknowledge a newer Memento value that a subsequent handover would overwrite with the old sidecar.
+			this.write(next);
+			this.values.clear();
+			for (const [name, kept] of next) { this.values.set(name, kept); }
+			result = this.state.update(key, value);
+		});
 		return result;
 	}
 
