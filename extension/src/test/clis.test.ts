@@ -605,6 +605,28 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		assert.deepStrictEqual(said, ['unsupported', false, { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'facade.pi.launch.arguments', '1', '"!"', 'facade.pi'] }]);
 	});
 
+	test('a refused configured argument is named with its own character; where the adapter\'s own arguments cannot pass either, those are named, as taking the configured one out would not help (CLIS-1.2)', () => {
+		const bin = path.join(temp.dir, 'winbin');
+		fs.mkdirSync(bin);
+		const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.CMD', USERPROFILE: temp.dir }, platform: 'win32' };
+		const said = (cli: string, args: readonly string[]) => {
+			try {
+				plan({ cli }, { [`facade.${cli}.launch`]: { arguments: args } }, windows);
+				return undefined;
+			} catch (err) {
+				return err instanceof CliPlanError ? err.said : err;
+			}
+		};
+		fs.writeFileSync(path.join(bin, 'pi.cmd'), '@echo off\r\nsomething.exe %*\r\n');
+		// Another argument before it holds a quote: the character named is the configured one's own
+		assert.deepStrictEqual(said('pi', ['--append-system-prompt', 'say "hi"', '--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'facade.pi.launch.arguments', '1', '"\\""', 'facade.pi'] });
+		assert.deepStrictEqual(said('pi', ['--name', 'R&D']), { kind: 'cmd_unsafe_setting', values: [path.join(bin, 'pi.cmd'), 'facade.pi.launch.arguments', '1', '"&"', 'facade.pi'] });
+		// Claude Code's own run settings are JSON: a configured argument is not blamed for them
+		fs.writeFileSync(path.join(bin, 'claude.cmd'), '@echo off\r\nsomething.exe %*\r\n');
+		const claude = said('claude', ['--append-system-prompt', 'a&b']) as { kind: string; values: string[] };
+		assert.deepStrictEqual([claude.kind, claude.values[1].startsWith('"{\\"env\\"')], ['cmd_unsafe', true]);
+	});
+
 	test('a launcher that goes through cmd.exe from a folder whose path cmd.exe reads as its own - a profile named R&D - is refused before anything starts, with the setting that fixes it', () => {
 		for (const folder of ['R&D', '100%', 'a^b']) {
 			const bin = path.join(temp.dir, folder, 'muse');

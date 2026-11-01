@@ -293,12 +293,12 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		}
 		merged[name] = kept;
 	}
-	const launchWith = (active: Injection | undefined) => {
+	const launchWith = (active: Injection | undefined, configured: readonly string[] = extra.map(each => each.value)) => {
 		const started = { ...env };
 		if (active) {
 			for (const [name, value] of Object.entries(merged)) { setVariable(started, name, value, platform); }
 		}
-		const arguments_ = [...active?.args ?? [], ...invocation(adapter.groups, extra.map(each => each.value), {
+		const arguments_ = [...active?.args ?? [], ...invocation(adapter.groups, configured, {
 			yolo: input.yolo, resume: !!input.resume && !entry.custom, session: !!sessionId,
 			connect: active !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: false
 		}, { ...values, ...active?.values })];
@@ -334,18 +334,24 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 			throw new CliPlanError(`${target.executable} runs through cmd.exe, which cannot be given its path safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
 				{ kind: 'cmd_unsafe_path', values: [target.executable, adapter.setting] });
 		}
-		const unsafe = args.findIndex(unsafeForCmd);
-		// A configured argument is named by its place in the setting and its character, never quoted: it may be a secret (CLIS-4.1)
-		const configured = extra.find(each => unsafeForCmd(each.value))?.index ?? -1;
-		if (configured >= 0) {
-			const setting = entry.extraSetting;
-			const character = unsafeCharacterForCmd(args[unsafe])!;
-			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given ${setting}[${configured}] safely, as that argument contains ${character}; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
-				{ kind: 'cmd_unsafe_setting', values: [found.executable, setting, String(configured), character, adapter.setting] });
+		const refused = (arg: string) => new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(arg)} safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+			{ kind: 'cmd_unsafe', values: [found.executable, shown(arg), adapter.setting] });
+		// An argument of the adapter's own that cannot pass: no configured argument is to blame, nor would taking one out help
+		const own = launchWith(injection, []).args.find(unsafeForCmd);
+		if (own !== undefined) {
+			throw refused(own);
 		}
-		if (unsafe >= 0) {
-			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(args[unsafe])} safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
-				{ kind: 'cmd_unsafe', values: [found.executable, shown(args[unsafe]), adapter.setting] });
+		// A configured argument is named by its place in the setting and its own character, never quoted: it may be a secret (CLIS-4.1)
+		const configured = extra.find(each => unsafeForCmd(each.value));
+		if (configured) {
+			const setting = input.resume && entry.custom ? `${entry.custom.setting}.launch.resume` : entry.extraSetting;
+			const character = unsafeCharacterForCmd(configured.value)!;
+			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given ${setting}[${configured.index}] safely, as that argument contains ${character}; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unsafe_setting', values: [found.executable, setting, String(configured.index), character, adapter.setting] });
+		}
+		const unsafe = args.find(unsafeForCmd);
+		if (unsafe !== undefined) {
+			throw refused(unsafe);
 		}
 	}
 	const runEnv = runEnvironment(started, input.alias, platform);
