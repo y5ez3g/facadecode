@@ -169,23 +169,30 @@ export interface Discovered {
 	readonly said?: CliSaid;
 	/** A built-in with no configured path that is simply not installed here: New Agent does not offer it (LIFECYCLE-1.1). */
 	readonly notInstalled?: boolean;
+	/** The program found for an available CLI, and the environment it was found with: what its start would use. */
+	readonly executable?: string;
+	readonly env?: { readonly [name: string]: string };
 }
 
 /**
- * The catalog for a destination folder, as new starts are offered it (CLIS-1.1): the enabled built-ins in their order, then the
- * custom CLIs, each found with its own launch environment. A configuration problem is said in the person's language by its first (UX-2.4).
+ * One CLI for a destination folder (CLIS-1.1): whether a new run of it can start there, else why not - its program found with its own
+ * launch environment. A configuration problem is said in the person's language by its first (UX-2.4).
  */
+export function discoverEntry(entry: CatalogEntry, destination: DestinationEnvironment, cwd: string): Discovered {
+	if (entry.problems.length) {
+		return { entry, available: false, problem: entry.problems.map(each => each.text).join('; '), said: entry.problems[0].said };
+	}
+	const env = environmentOf(entry, destination);
+	const found = executableOf(entry, env, cwd, destination.platform);
+	if (found.problem !== undefined) {
+		return { entry, available: false, problem: found.problem, said: found.said, ...!entry.path ? { notInstalled: true } : {} };
+	}
+	return { entry, available: true, executable: found.executable, env };
+}
+
+/** The catalog for a destination folder, as new starts are offered it (CLIS-1.1): the enabled built-ins in their order, then the custom CLIs. */
 export function discover(catalog: Catalog, destination: DestinationEnvironment, cwd: string): readonly Discovered[] {
-	return catalog.entries.filter(entry => entry.enabled).map(entry => {
-		if (entry.problems.length) {
-			return { entry, available: false, problem: entry.problems.map(each => each.text).join('; '), said: entry.problems[0].said };
-		}
-		const found = executableOf(entry, environmentOf(entry, destination), cwd, destination.platform);
-		if (found.problem !== undefined) {
-			return { entry, available: false, problem: found.problem, said: found.said, ...!entry.path ? { notInstalled: true } : {} };
-		}
-		return { entry, available: true };
-	});
+	return catalog.entries.filter(entry => entry.enabled).map(entry => discoverEntry(entry, destination, cwd));
 }
 
 /** How a launch of `entry` trusts its folder `cwd` (CLIS-3.3, 3.4), found where the run will look for it: with the environment `env` it starts with. */

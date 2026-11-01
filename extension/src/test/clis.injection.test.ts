@@ -612,6 +612,18 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		assert.deepStrictEqual([fs.existsSync(runDirOf(home, 'run-1')), fs.existsSync(path.join(location.path, '.agents', 'skills', 'facade', 'SKILL.md'))], [false, true]);
 	});
 
+	test('Resume asks the conversation\'s own CLI alone whether it can start here: no other CLI\'s environment or program is looked for (LIFECYCLE-3.2)', () => {
+		let composed = 0;
+		const host = new Proxy(destination.host as { [name: string]: string }, { ownKeys: target => { composed++; return Reflect.ownKeys(target); } });
+		destination = { ...destination, host };
+		assert.strictEqual(clis().resumeProblem('codex', location), undefined);
+		assert.strictEqual(composed, 1, 'one CLI\'s environment, not the catalog\'s');
+		settings['facade.pi.path'] = './nowhere/pi';
+		assert.match(clis().resumeProblem('pi', location)!, /^facade\.pi\.path is "\.\/nowhere\/pi", and .* is not a program that can be run$/);
+		settings['facade.codex.enabled'] = false;
+		assert.strictEqual(clis().resumeProblem('codex', location), 'This CLI cannot resume conversations here.');
+	});
+
 	test('a window opening while runs live - its reconcile - keeps their session hooks: their conversations go on being recorded (CLIS-2.4)', async () => {
 		const planner = clis();
 		const claude = await planner.plan(request('claude', 'run-1'));

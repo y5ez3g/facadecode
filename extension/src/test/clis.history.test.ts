@@ -411,6 +411,22 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		assert.strictEqual(batch.entries[0].unavailable, 'codex was not found on the PATH');
 	});
 
+	test('a picker session asks once per CLI and folder whether a conversation can be resumed there, however many it lists (LIFECYCLE-3.2)', async () => {
+		const base = Date.UTC(2026, 9, 27, 12);
+		for (let n = 0; n < 12; n++) {
+			claude(repo, id(n), base + n * 1_000);
+		}
+		claude(path.join(repo, 'pkg'), id(20), base + 20_000);
+		codex(repo, id(30), base + 30_000);
+		const asked: string[] = [];
+		const counting = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, ...homeEnv(temp.dir) }), unavailable: (cli, cwd) => { asked.push(`${cli} ${path.relative(repo, cwd) || '.'}`); return undefined; } });
+		const pager = counting.open({ environment: 'local', directories: [repo] });
+		assert.strictEqual((await pager.next()).entries.length, 14);
+		assert.deepStrictEqual(asked.sort(), ['claude .', `claude pkg`, 'codex .']);
+		await counting.open({ environment: 'local', directories: [repo] }).next();
+		assert.strictEqual(asked.length, 6, 'a new picker session asks again: a CLI installed meanwhile is found');
+	});
+
 	test('batches of 100, with no age cutoff; a batch that reaches its read bound ends early and the next goes on, so an older match stays reachable', async () => {
 		const base = Date.UTC(2020, 0, 1);
 		for (let n = 0; n < 230; n++) {

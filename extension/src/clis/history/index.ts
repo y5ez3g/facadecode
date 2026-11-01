@@ -78,9 +78,22 @@ class VendorPager {
 	/** Enriched entries waiting until unread candidates can no longer precede them. Earliest activity first. */
 	private readonly pending: ResolvedCandidate[] = [];
 	private readonly seen = new Set<string>();
+	/**
+	 * Why each CLI cannot resume in each folder, as asked once in this picker session: its program is looked for on the PATH, which
+	 * the many conversations of one folder would otherwise each repeat, synchronously (LIFECYCLE-3.2).
+	 */
+	private readonly unavailable = new Map<string, string | undefined>();
 	private disposed = false;
 
 	constructor(private readonly history: VendorHistory, private readonly scope: { readonly environment: string; readonly directories: readonly string[] }) { }
+
+	private unavailableOf(cli: string, cwd: string): string | undefined {
+		const key = `${cli}\u0000${cwd}`;
+		if (!this.unavailable.has(key)) {
+			this.unavailable.set(key, this.history.unavailableOf(cli, cwd));
+		}
+		return this.unavailable.get(key);
+	}
 
 	async next(): Promise<{ readonly entries: readonly DiscoveredConversation[]; readonly done: boolean }> {
 		if (this.disposed) {
@@ -127,9 +140,9 @@ class VendorPager {
 			this.seen.add(key);
 			const conversation = { environment: this.scope.environment, cli: candidate.cli, sessionId: found.sessionId };
 			const known = found.cwdChoices && this.history.knownCwd(conversation);
-			const choices = known ? undefined : found.cwdChoices?.filter(folder => !this.history.unavailableOf(candidate.cli, folder));
+			const choices = known ? undefined : found.cwdChoices?.filter(folder => !this.unavailableOf(candidate.cli, folder));
 			const cwd = known || choices?.[0] || found.cwd;
-			const unavailable = this.history.unavailableOf(candidate.cli, cwd);
+			const unavailable = this.unavailableOf(candidate.cli, cwd);
 			entries.push({
 				key: conversation,
 				...found.title ? { title: found.title } : {},
@@ -146,6 +159,7 @@ class VendorPager {
 		this.disposed = true;
 		this.candidates = [];
 		this.pending.length = 0;
+		this.unavailable.clear();
 	}
 }
 

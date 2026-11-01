@@ -15,10 +15,9 @@ import type { StoreEnvironments } from '../clis/history';
 import { facadeHome } from '../record/paths';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
-import { CatalogEntry, catalogOf, SettingsReader } from '../clis/catalog';
+import { CatalogEntry, catalogOf, entryOf, SettingsReader } from '../clis/catalog';
 import { acquireProject, injectedRecordOf, markPlanned, reconcileRuns, releaseRun, removeRunFiles, writeRunFiles } from '../clis/injected';
-import { CliPlanError, DestinationEnvironment, discover, environmentOf, executableOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough } from '../clis/plan';
-import { launchTarget } from '../clis/executable';
+import { CliPlanError, DestinationEnvironment, discover, discoverEntry, environmentOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough, targetOf } from '../clis/plan';
 import { installedVersionOf } from '../clis/version';
 import { runDirOf, ToolsInput } from '../clis/tools';
 import { writeTrust } from '../clis/trust';
@@ -87,13 +86,11 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	describe(location: Location, _yolo: boolean): { readonly launches: readonly CliFacts[] } {
 		const destination = this.destination(location);
 		return {
-			launches: discover(catalogOf(this.read), destination, location.path).map(({ entry, available }): CliFacts => {
+			launches: discover(catalogOf(this.read), destination, location.path).map(({ entry, executable, env }): CliFacts => {
 				const { adapter } = entry;
-				const env = environmentOf(entry, destination);
-				const found = available ? executableOf(entry, env, location.path, destination.platform) : undefined;
-				const version = found?.executable ? installedVersionOf(adapter.id, found.executable) : undefined;
+				const version = executable ? installedVersionOf(adapter.id, executable) : undefined;
 				// As a start here would go: a choice whose arguments cmd.exe cannot carry is not offered where the CLI runs through it
-				const target = found?.executable ? adapter.launchTarget?.(found.executable, destination.platform, env, location.path) ?? launchTarget(found.executable, destination.platform, env, location.path) : undefined;
+				const target = executable && env ? targetOf(entry, executable, env, destination.platform, location.path) : undefined;
 				return {
 					cli: adapter.id,
 					takes: takesThrough(adapter, target?.throughCmd ?? false, location.path, destination.platform),
@@ -117,12 +114,15 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		return Object.fromEntries(catalogOf(this.read).entries.map(entry => [entry.adapter.id, entry.extra]));
 	}
 
+	/**
+	 * Why a conversation of `cli` cannot be resumed at `location` now, where it cannot (LIFECYCLE-3.2): its CLI alone is found there - the
+	 * picker asks for each conversation it lists, so no other CLI's program is looked for.
+	 */
 	resumeProblem(cli: string, location: Location): string | undefined {
-		const catalog = catalogOf(this.read);
-		const entry = catalog.entries.find(each => each.adapter.id === cli);
+		const entry = entryOf(catalogOf(this.read), cli);
 		if (!entry || !entry.enabled || (!entry.custom && !entry.adapter.groups.resume)) { return 'This CLI cannot resume conversations here.'; }
-		const found = discover(catalog, this.destination(location), location.path).find(each => each.entry === entry);
-		return found?.available ? undefined : found?.problem ?? 'This CLI is unavailable.';
+		const found = discoverEntry(entry, this.destination(location), location.path);
+		return found.available ? undefined : found.problem ?? 'This CLI is unavailable.';
 	}
 
 	/**
