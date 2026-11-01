@@ -10,13 +10,16 @@ import { performance } from 'perf_hooks';
 import * as os from 'os';
 import * as path from 'path';
 import { timeout } from '../../base/async';
+import { connectWithin } from '../../base/connect';
 import { messageOf } from '../../base/errors';
 import type { OwnerClaim } from '../../base/ownership';
 import { EARLIER_PROTOCOLS, CallEvent, isPtydEvent, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent } from '../../ptyd/protocol';
 import { ensurePtydSocket } from '../../ptyd/socket';
 
-/** How long a window waits for a ptyd it started to listen. */
+/** How long a window waits for a ptyd it started to listen, or for a busy one to take its connection. */
 const START_WAIT_MS = 5_000;
+/** How long one connection to a ptyd may take: a busy Windows pipe can take a while, and is tried again. */
+const CONNECT_WAIT_MS = 2_000;
 
 /** How long a ptyd of an earlier protocol has to answer as a window joins it. */
 const EARLIER_WAIT_MS = 2_000;
@@ -134,11 +137,10 @@ export class PtydClient {
 	 */
 	static async connect(socketPath: string, script: string, logFile: string, options: { readonly protocol?: number; readonly start?: boolean } = {}): Promise<PtydClient> {
 		const protocol = options.protocol ?? PTYD_PROTOCOL;
-		let socket = await connectTo(socketPath);
-		if (!socket && options.start === false) {
-			throw new Error(`Nothing listens on ${socketPath}.`);
-		}
-		if (!socket) {
+		const socket = await reachOrStart(socketPath, () => {
+			if (options.start === false) {
+				throw new Error(`Nothing listens on ${socketPath}.`);
+			}
 			fs.mkdirSync(path.dirname(logFile), { recursive: true });
 			const child = spawn(process.execPath, [script, socketPath, logFile], {
 				detached: true,
@@ -147,15 +149,7 @@ export class PtydClient {
 				env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
 			});
 			child.unref();
-			const deadline = Date.now() + START_WAIT_MS;
-			while (!socket && Date.now() < deadline) {
-				await timeout(100);
-				socket = await connectTo(socketPath);
-			}
-			if (!socket) {
-				throw new Error(`ptyd did not start: nothing listens on ${socketPath}. See ${logFile}.`);
-			}
-		}
+		}, `See ${logFile}.`);
 		return PtydClient.greeted(new PtydClient(socket), protocol, START_WAIT_MS,
 			spoken => `The ptyd at ${socketPath} speaks protocol ${spoken}, and this window protocol ${protocol}: its runs keep running, and this window cannot show them.`);
 	}
@@ -166,14 +160,15 @@ export class PtydClient {
 	 * connection in time, and where it does not answer in time, or as that protocol.
 	 */
 	static async join(socketPath: string, protocol: number): Promise<PtydClient | undefined> {
-		const reached = await reach(socketPath, EARLIER_WAIT_MS);
-		if (reached === 'none') {
-			return undefined;
+		ensurePtydSocket(socketPath);
+		const reached = await connectWithin(socketPath, EARLIER_WAIT_MS);
+		if (!reached.socket) {
+			if (reached.absent) {
+				return undefined;
+			}
+			throw new PtydNotSent(`The ptyd of protocol ${protocol} took no connection now: ${reached.reason}.`);
 		}
-		if (reached === 'not now') {
-			throw new PtydNotSent(`The ptyd of protocol ${protocol} took no connection now.`);
-		}
-		return PtydClient.greeted(new PtydClient(reached), protocol, EARLIER_WAIT_MS,
+		return PtydClient.greeted(new PtydClient(reached.socket), protocol, EARLIER_WAIT_MS,
 			spoken => `The ptyd at ${socketPath} for protocol ${protocol} speaks protocol ${spoken}: this window does not join it.`);
 	}
 
@@ -425,51 +420,28 @@ export function within<T>(answer: Promise<T>, ms = EARLIER_WAIT_MS): Promise<T> 
 }
 
 /**
- * A connection to `socketPath` within `ms`: 'none' where no ptyd is there - no such name, or on POSIX a name nothing listens on,
- * its ptyd gone - and 'not now' where one may be but took no connection: another failure, or one slower than `ms`, as a busy
- * Windows pipe is.
+ * A connection to this window's own ptyd at `socketPath`, `start`ing one only where none is there - no such name, or on POSIX a name
+ * nothing listens on - then waiting for it to listen. A ptyd that is there but slow to take a connection, as a busy Windows pipe
+ * can be, is waited for and never replaced: a second ptyd could take its socket and leave every run of the first one unclaimed
+ * (ARCHITECTURE-2.3). Rejects with PtydNotSent where none took a connection within `waitMs` without one being found absent.
  */
-function reach(socketPath: string, ms: number): Promise<net.Socket | 'none' | 'not now'> {
-	ensurePtydSocket(socketPath);
-	return new Promise(resolve => {
-		const socket = net.connect(socketPath);
-		let settled = false;
-		const settle = (reached: net.Socket | 'none' | 'not now') => {
-			if (!settled) {
-				settled = true;
-				clearTimeout(timer);
-				resolve(reached);
-			}
-		};
-		const timer = setTimeout(() => {
-			socket.destroy();
-			settle('not now');
-		}, ms);
-		const failed = (err: NodeJS.ErrnoException) => {
-			socket.destroy();
-			settle(err.code === 'ENOENT' || (process.platform !== 'win32' && err.code === 'ECONNREFUSED') ? 'none' : 'not now');
-		};
-		socket.once('error', failed);
-		socket.once('connect', () => {
-			socket.off('error', failed);
-			settle(socket);
-		});
-	});
-}
-
-/** A connection to `socketPath`, or undefined where nothing listens there. */
-function connectTo(socketPath: string): Promise<net.Socket | undefined> {
-	ensurePtydSocket(socketPath);
-	return new Promise(resolve => {
-		const socket = net.connect(socketPath);
-		const fail = () => {
-			socket.destroy();
-			resolve(undefined);
-		};
-		socket.once('connect', () => {
-			socket.off('error', fail);
-			resolve(socket);
-		});
-		socket.once('error', fail);
-	});
+export async function reachOrStart(socketPath: string, start: () => void, startHelp: string, connect = connectWithin, waitMs = START_WAIT_MS): Promise<net.Socket> {
+	const deadline = Date.now() + waitMs;
+	let started = false;
+	for (; ;) {
+		ensurePtydSocket(socketPath);
+		const reached = await connect(socketPath, Math.max(100, Math.min(CONNECT_WAIT_MS, deadline - Date.now())));
+		if (reached.socket) {
+			return reached.socket;
+		}
+		if (reached.absent && !started) {
+			start();
+			started = true;
+		}
+		if (Date.now() >= deadline) {
+			throw started && reached.absent ? new Error(`ptyd did not start: nothing listens on ${socketPath}. ${startHelp}`)
+				: new PtydNotSent(`The ptyd at ${socketPath} took no connection within ${waitMs / 1000} seconds (${reached.reason}); no other was started.`);
+		}
+		await timeout(100);
+	}
 }
