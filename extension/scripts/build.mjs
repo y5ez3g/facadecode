@@ -108,8 +108,7 @@ if (problems.length) {
 }
 console.info(`Native PTY: ${nativeManifest.version}, ${hostTarget()}, build runtime ${process.version} (Node-API ${process.versions.napi})`);
 
-// jsonc-parser's UMD wrapper hides its relative requires from esbuild; bundle its native ESM entry instead.
-const common = { bundle: true, alias: { 'jsonc-parser': 'jsonc-parser/lib/esm/main.js' }, sourcemap: !production, minify: production, minifySyntax: true, logLevel: 'info', define: { FACADE_TEST_MODE: 'false' } };
+const common = { bundle: true, sourcemap: !production, minify: production, minifySyntax: true, logLevel: 'info', define: { FACADE_TEST_MODE: 'false' } };
 const builds = [
 	{ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, outdir: dist, platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'] },
 	{ ...common, entryPoints: { window: path.join(root, 'src', 'host', 'window.ts') }, outdir: path.join(windowStage, 'dist'), platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'] },
