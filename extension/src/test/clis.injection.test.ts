@@ -459,6 +459,19 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.deepStrictEqual([fs.existsSync(path.join(cwd, '.agents')), fs.existsSync(record)], [false, false]);
 	});
 
+	test('runs of one folder spelled in another case - where the system ignores case - hold one file: the first to end leaves it to the other', function () {
+		if (process.platform !== 'win32' && process.platform !== 'darwin') {
+			this.skip();
+		}
+		const other = cwd.toUpperCase() === cwd ? cwd.toLowerCase() : cwd.toUpperCase();
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, [skill()]), undefined);
+		assert.strictEqual(acquireProject(record, 'run-b', other, [skill()]), undefined);
+		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
+		assert.strictEqual(textOf(skillFile()), 'skill v1\n', 'the run of the other spelling still uses it');
+		assert.deepStrictEqual(releaseProject(record, 'run-b'), []);
+		assert.strictEqual(fs.existsSync(path.join(cwd, '.agents')), false);
+	});
+
 	test('a folder of the person\'s stays; a file changed after Facade wrote it stays, with a diagnostic', () => {
 		fs.mkdirSync(path.join(cwd, '.agents', 'skills', 'mine'), { recursive: true });
 		acquireProject(record, 'run-a', cwd, [skill()]);

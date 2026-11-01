@@ -14,7 +14,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { codeOf, messageOf } from '../base/errors';
-import { readJsonFile, replaceFile } from '../base/files';
+import { isEqualPath, readJsonFile, replaceFile } from '../base/files';
 import { canonicalJson, isJsonObject } from '../base/json';
 import { addMembers, applyJsonEdits, JsonEdit, JsonMember, JsonObjectNode, jsonStyleOf, memberOf, nodeValue, replaceValue } from '../base/jsonc';
 import { withFileLock } from '../base/lock';
@@ -360,7 +360,10 @@ export function acquireProject(recordFile: string, run: string, cwd: string, wri
 		}
 		const steps: Step[] = [];
 		for (const write of writes) {
-			const file = path.join(cwd, write.path);
+			// The file as the record already names it, where a run of another spelling of the folder - another case, where the
+			// system ignores case - holds it: one file, one count of its runs
+			const named = path.join(cwd, write.path);
+			const file = Object.keys(record).find(each => isEqualPath(each, named)) ?? named;
 			let step: Step | string;
 			try {
 				step = write.kind === 'file' ? fileStep(file, write.content, record[file]) : entryStep(file, write, record[file]);
