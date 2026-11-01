@@ -212,6 +212,28 @@ suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {
 		}
 	});
 
+	test('on Windows only what a launch can start is a program: a PowerShell or Windows Script Host script is not, on PATH or configured (CLIS-1.2)', () => {
+		const temp = tempDir('fd-exe-');
+		try {
+			const first = path.join(temp.dir, 'first'), second = path.join(temp.dir, 'second');
+			fs.mkdirSync(first); fs.mkdirSync(second);
+			for (const script of ['claude.vbs', 'claude.ps1']) {
+				fs.writeFileSync(path.join(first, script), '');
+			}
+			fs.writeFileSync(path.join(second, 'claude.exe'), '');
+			// PATHEXT may list a script Windows runs by its file association, which a launch cannot: the next folder's program is found
+			assert.strictEqual(which('claude', { Path: `${first};${second}`, PATHEXT: '.VBS;.EXE' }, 'win32'), path.join(second, 'claude.exe'));
+			const configured = resolveExecutable(path.join(first, 'claude.ps1'), 'claude', 'facade.claude', { PATHEXT: '.EXE' }, temp.dir, 'win32');
+			assert.deepStrictEqual(configured.problem !== undefined && configured.said, { kind: 'not_runnable', values: ['facade.claude', JSON.stringify(path.join(first, 'claude.ps1')), path.join(first, 'claude.ps1')] });
+			for (const runnable of ['x.exe', 'x.com', 'x.cmd', 'x.bat', 'cli.js', 'cli.cjs', 'cli.mjs']) {
+				fs.writeFileSync(path.join(second, runnable), '');
+				assert.strictEqual(resolveExecutable(path.join(second, runnable), 'claude', 'facade.claude', {}, temp.dir, 'win32').executable, path.join(second, runnable), runnable);
+			}
+		} finally {
+			temp.remove();
+		}
+	});
+
 	test('npm\'s Windows shim is started as the script it runs with the Node beside it; another .cmd goes through cmd.exe, which is given no argument it reads as its own', () => {
 		const temp = tempDir('fd-shim-');
 		try {

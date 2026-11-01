@@ -60,10 +60,18 @@ function candidatesOf(base: string, env: Environment, platform: NodeJS.Platform)
 	return path.extname(base) === '' ? extensions.map(ext => base + ext) : [base, ...extensions.map(ext => base + ext)];
 }
 
-/** Whether `file` is a file that can be run: on Windows any file, its extension saying how; elsewhere one marked executable. */
+/**
+ * What a launch can start on Windows, by its extension: a program, a batch file cmd.exe runs, or a Node script it runs with Node. A
+ * PowerShell or Windows Script Host script - which PATHEXT may list - is no program Windows starts: it fails as it starts (CLIS-1.2).
+ */
+const WINDOWS_RUNNABLE = /\.(?:exe|com|cmd|bat|[cm]?js)$/i;
+
+/**
+ * Whether `file` is a file that can be run: on Windows one whose extension says how it starts; elsewhere one marked executable.
+ */
 function isExecutable(file: string, platform: NodeJS.Platform): boolean {
 	try {
-		if (!fs.statSync(file).isFile()) {
+		if (!fs.statSync(file).isFile() || (platform === 'win32' && !WINDOWS_RUNNABLE.test(file))) {
 			return false;
 		}
 		if (platform !== 'win32') {
