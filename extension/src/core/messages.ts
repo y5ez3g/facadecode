@@ -266,7 +266,7 @@ export class MessageService implements Messages, Disposable {
 
 	findRequest(from: RunId, requestId: string): MessageRecord | undefined {
 		const cutoff = this.deps.clock.now() - REQUEST_MS;
-		return this.history().find(record => record.kind === 'message' && record.from.run === from && record.requestId === requestId && record.at > cutoff);
+		return this.involving().find(record => record.kind === 'message' && record.from.run === from && record.requestId === requestId && record.at > cutoff);
 	}
 
 	allocate(request: { readonly from: RunId; readonly text: string; readonly party?: MessageRecord['from']; readonly label?: string }): { readonly id: string; readonly text: string } {
@@ -381,6 +381,14 @@ export class MessageService implements Messages, Disposable {
 	}
 
 	history(): readonly MessageRecord[] {
+		const now = this.deps.clock.now();
+		// A copy whose outcome its window never sent back, past its deadline: shown unconfirmed, as it is not known here (COLLABORATION-3.2)
+		return this.involving().map(record => record.delivery.status !== 'pending' || this.live.has(record.id) || record.delivery.deadline === undefined || record.delivery.deadline > now ? record
+			: { ...record, delivery: { ...record.delivery, status: 'failure', reason: 'submission_unconfirmed', effects: { ...record.delivery.effects, outcome: 'unknown' } } });
+	}
+
+	/** The records involving this window's runs or workspace, with the copies of what its agents sent to other windows, as kept. */
+	private involving(): readonly MessageRecord[] {
 		const here = (party: MessageRecord['from'] | MessageRecord['to']) => party.run !== 'facade' && party.run !== '@human' && !!this.deps.agents.get(party.run);
 		const records = this.records();
 		const kept = new Set(records.map(record => record.id));

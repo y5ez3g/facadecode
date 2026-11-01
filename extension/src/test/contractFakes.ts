@@ -266,8 +266,14 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 	/** Copies of messages sent to other windows' agents, as Message History keeps them. */
 	readonly kept: MessageRecord[] = [];
 
+	/** Kept by its ID, as the store of copies keeps it: a later copy replaces the earlier. */
 	keepSent(record: MessageRecord): void {
-		this.kept.push(record);
+		const at = this.kept.findIndex(each => each.id === record.id);
+		if (at < 0) {
+			this.kept.push(record);
+		} else {
+			this.kept[at] = record;
+		}
 	}
 
 	markDelivered(run: RunId, ids: readonly string[]): void {

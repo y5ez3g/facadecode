@@ -9,13 +9,14 @@
 import { monotonic } from '../base/clock';
 import { messageOf as errorText } from '../base/errors';
 import { FacadeError } from '../core/errors';
+import { HOLD_MS } from '../core/messages';
 import type { InputPort, MessageRecord, Messages, SendResult } from '../core/messagePorts';
 import type { Agents, CapabilityState, CliChoice, CliChoices, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
 import { reaches, referenceOf, resolveAgent, ResolveOptions } from '../core/reach';
 import type { StartChoices } from '../record/choices';
 import type { ServedRoute } from '../base/windowNetwork';
 import { ServedAnswer, TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
-import { accepted, answerOf, codedOf, Effects, errorResult, failure, Result, success } from '../schema/result';
+import { accepted, answerOf, codedOf, Effects, errorResult, failure, Result, resultErrorOf, success } from '../schema/result';
 import { MESSAGE_LIMIT, QUERY_TOOLS, ToolName, TOOLS } from '../schema/tools';
 import { ArgumentError, codePoints, ToolArguments, validateArguments } from '../schema/validate';
 import { agentOf, cliOf, Data, defined, isoOf, locationOf, messageFile, messageOf, sendFailureOf, ToolWindow } from './facts';
@@ -396,7 +397,7 @@ class ToolService {
 		let incomplete = false;
 		try {
 			const directory = await network.directory();
-			others = directory.windows.filter(window => window.window !== self).flatMap(window => window.agents.map(agent => reachableOf(agent, window.window)));
+			others = directory.windows.filter(window => window.window !== self).flatMap(window => window.agents.map(agent => reachableOf(agent, window.window, window.environment)));
 			incomplete = directory.unavailable.length > 0;
 		} catch (err) {
 			this.deps.log?.(`Could not read the other Facade windows' agents: ${errorText(err)}`);
@@ -559,7 +560,8 @@ class ToolService {
 		}
 		const target = this.deps.agents.get(delivery.to);
 		if (!target || !reaches(sender, target)) {
-			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${delivery.to} that the sender reaches is in this window.`);
+			// A refusal before any record or input, answered as one: thrown, the route could only say its effects are not known (MCP-1.2)
+			return { status: 'failure', error: { code: 'NOT_FOUND', reason: 'not_found', message: `No agent ${delivery.to} that the sender reaches is in this window.` } };
 		}
 		const sent = await this.deps.messages.send({
 			id: delivery.id, from: sender.id, sender: { party: { run: sender.id, alias: sender.alias, name: sender.name }, window: from, ...sender.windowLabel !== undefined ? { label: sender.windowLabel } : {} },
@@ -997,6 +999,11 @@ class ToolService {
 	private async sendMessage(args: ToolArguments['send_message'], caller: Caller, call: Received): Promise<Outcome> {
 		// A request ID the caller gave a send before: that message as it stands, sent no second time (MCP-1.1, D110)
 		const earlier = args.request_id !== undefined ? this.deps.messages.findRequest(caller.id, args.request_id) : undefined;
+		if (earlier && earlier.window !== this.deps.window.id && earlier.delivery.status === 'pending' && this.deps.network && caller.window === undefined) {
+			// Another window holds it, its outcome not told here yet - its reply lost, or its result: asked there, where it stands, and
+			// never sent to whoever its reference names now (MCP-1.1, D119)
+			return this.routeSend(earlier.window, { id: earlier.id, to: earlier.to, text: earlier.text, replyTo: earlier.replyTo, environment: earlier.environment }, args, caller, call, earlier);
+		}
 		if (earlier) {
 			return this.sentBefore(earlier, args);
 		}
@@ -1041,27 +1048,67 @@ class ToolService {
 			}
 		}
 		const { id } = this.deps.messages.allocate({ from: caller.id, text: args.text });
+		const to = { run: target.id, alias: target.alias, name: target.name };
+		return this.routeSend(target.window, { id, to, text: args.text, ...replyTo ? { replyTo } : {}, ...target.environment !== undefined ? { environment: target.environment } : {} }, args, caller, call);
+	}
+
+	/**
+	 * Delivers `message` in `window`, where its record is made under its ID, within what is left of the two seconds (RULES-1.2), and keeps
+	 * a copy here: the window's answer, or - where the answer may have been lost after the message arrived - the message with its outcome
+	 * not known, so that a retry with its request ID asks that window again, as `earlier` does (MCP-1.1, D119).
+	 */
+	private async routeSend(window: string, message: { readonly id: string; readonly to: MessageRecord['to']; readonly text: string; readonly replyTo?: string; readonly environment?: string }, args: ToolArguments['send_message'], caller: Caller, call: Received, earlier?: MessageRecord): Promise<Outcome> {
+		const { id, to, text, replyTo } = message;
 		const alias = `#m${id.slice(2)}`;
-		const shown = referenceOf(target);
+		const shown = shownOf(to);
 		const delivery: RoutedDelivery = {
-			id, from: this.guestOf(caller), to: target.id, text: args.text, ...replyTo ? { replyTo } : {}, callId: call.callId,
+			id, from: this.guestOf(caller), to: to.run as RunId, text, ...replyTo ? { replyTo } : {}, callId: call.callId,
 			...args.request_id !== undefined ? { requestId: args.request_id } : {}, elapsedMs: this.elapsed(call)
 		};
 		// The two seconds hold across the hops; the route waits a little longer for the other window's own first response (RULES-1.2)
-		const response = await this.deps.network!.route(target.window, 'deliver', delivery, Math.max(0, RESPONSE_MS - this.elapsed(call)) + ROUTE_SLACK_MS);
-		const data = defined({ message_id: id, alias, target: target.id, target_reference: shown, reply_to: replyTo, length: codePoints(args.text), window_id: target.window });
+		const response = await this.deps.network!.route(window, 'deliver', delivery, Math.max(0, RESPONSE_MS - this.elapsed(call)) + ROUTE_SLACK_MS);
+		const data = defined({
+			message_id: id, alias, target: to.run, target_reference: shown, reply_to: replyTo, length: codePoints(text), window_id: window,
+			...earlier ? { request_id: args.request_id, repeated: true } : {}
+		});
+		const unknown: Effects = { outcome: 'unknown', text_written: 'unknown', enter_written: null };
+		const none: Effects = { outcome: 'none', text_written: 'none', enter_written: false };
+		// What may have gone in there, kept here with its outcome not known (COLLABORATION-4.1)
+		const keepUnknown = () => {
+			if (!earlier) {
+				const at = this.now();
+				this.deps.messages.keepSent({
+					id, alias, kind: 'message', from: { run: caller.id, alias: caller.alias, name: caller.name }, to, window, environment: message.environment ?? '',
+					fromWindow: this.deps.window.id, at, ...replyTo ? { replyTo } : {}, ...args.request_id !== undefined ? { requestId: args.request_id } : {}, text, length: codePoints(text),
+					delivery: { status: 'pending', effects: unknown, deadline: at + HOLD_MS, attempts: 0 }
+				});
+			}
+		};
 		if (!response.ok) {
-			const effects: Effects = response.effects === 'unknown' ? { outcome: 'unknown', text_written: 'unknown', enter_written: null } : { outcome: 'none', text_written: 'none', enter_written: false };
-			return { result: failure({ code: 'UNAVAILABLE', reason: response.reason === 'protocol_incompatible' ? 'protocol_incompatible' : 'window_unavailable', message: response.message }, data, effects), headline: `Message ${alias} to ${shown}: ${response.effects === 'unknown' ? 'whether it was delivered is not known' : 'it was not delivered'}. ${response.message}` };
+			// An earlier attempt of it may have gone in: its effects stay unknown, whatever this route did
+			const effects = response.effects === 'unknown' || earlier ? unknown : none;
+			if (response.effects === 'unknown') {
+				keepUnknown();
+			}
+			return { result: failure({ code: 'UNAVAILABLE', reason: response.reason === 'protocol_incompatible' ? 'protocol_incompatible' : 'window_unavailable', message: response.message }, data, effects), headline: `Message ${alias} to ${shown}: ${effects === unknown ? 'whether it was delivered is not known' : 'it was not delivered'}. ${response.message}` };
 		}
-		const answered = response.result as { readonly status?: SendResult['status']; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord } | undefined;
+		const answered = response.result as { readonly status?: SendResult['status']; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord; readonly error?: unknown } | undefined;
+		const refused = resultErrorOf(answered?.error);
+		if (refused && !answered?.record) {
+			// Refused there before it was recorded - its agent gone, or out of the sender's reach: nothing went in, there or ever (MCP-1.2)
+			if (earlier) {
+				this.deps.messages.keepSent({ ...earlier, delivery: { ...earlier.delivery, status: 'failure', reason: refused.reason, effects: none } });
+			}
+			return { result: failure(refused, data, none), headline: `Message ${alias} to ${shown} was not delivered: ${refused.message}` };
+		}
 		const record = answered?.record;
 		if (!answered || !record || (answered.status !== 'success' && answered.status !== 'accepted' && answered.status !== 'failure')) {
-			return { result: failure({ code: 'FAILED', reason: 'internal_error', message: `The Facade window of ${shown} answered with nothing this window can read: whether the message went in is not known.` }, data, { outcome: 'unknown' }) };
+			keepUnknown();
+			return { result: failure({ code: 'FAILED', reason: 'internal_error', message: `The Facade window of ${shown} answered with nothing this window can read: whether the message went in is not known.` }, data, unknown) };
 		}
 		this.deps.messages.keepSent(args.request_id !== undefined ? { ...record, requestId: args.request_id } : record);
 		// The destination may have deduplicated a retry whose first reply was lost: its original ID, never the proposed new one.
-		return sendOutcome(record, answered.status, { shown, reason: answered.reason, obstacle: answered.obstacle, window: target.window });
+		return sendOutcome(record, answered.status, { shown, reason: answered.reason, obstacle: answered.obstacle, window, ...earlier ? { requestId: args.request_id } : {} });
 	}
 
 	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1, D110). */

@@ -88,10 +88,12 @@ export interface Reachable {
 	readonly lifecycle: RunFacts['lifecycle'];
 	/** The window that holds it. */
 	readonly window: string;
+	/** That window's execution environment, where the directory names it. */
+	readonly environment?: string;
 }
 
-export function reachableOf(agent: DirectoryAgent, window: string): Reachable {
-	return { id: agent.run, alias: agent.alias, name: agent.name, root: agent.root, yolo: agent.yolo, lifecycle: agent.lifecycle, window };
+export function reachableOf(agent: DirectoryAgent, window: string, environment?: string): Reachable {
+	return { id: agent.run, alias: agent.alias, name: agent.name, root: agent.root, yolo: agent.yolo, lifecycle: agent.lifecycle, window, ...environment !== undefined ? { environment } : {} };
 }
 
 export function directoryAgentOf(run: RunFacts): DirectoryAgent {

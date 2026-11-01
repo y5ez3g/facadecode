@@ -356,21 +356,70 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.deepStrictEqual(s.messages.kept.map(each => [each.id, each.delivery.status]), [['m-2', 'pending'], ['m-3', 'failure']]);
 		});
 
-		test('a route that never reached the other window had no effect; one that may have is unknown; an unreadable answer is unknown too; no copy is kept', async () => {
+		test('a route that never reached the other window had no effect and keeps no copy; one that may have - or an unreadable answer - is unknown, kept so (MCP-1.2)', async () => {
 			const { stranger } = team(s);
-			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
+			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })], 'ssh-remote+box');
 			network.respond = () => ({ ok: false, reason: 'window_unavailable', message: 'No open Facade window win-2 is on this computer: the request had no effect.', effects: 'none' });
 			const none = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
 			assert.deepStrictEqual([none.error?.code, none.error?.reason, none.effects], ['UNAVAILABLE', 'window_unavailable', { outcome: 'none', text_written: 'none', enter_written: false }]);
-			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 3 seconds.', effects: 'unknown' });
-			const unknown = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
-			assert.deepStrictEqual([unknown.error?.reason, unknown.effects], ['window_unavailable', { outcome: 'unknown', text_written: 'unknown', enter_written: null }]);
 			network.respond = () => ({ ok: false, reason: 'protocol_incompatible', message: 'The Facade window win-2 runs another version.', effects: 'none' });
 			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' })).error?.reason, 'protocol_incompatible');
+			assert.strictEqual(s.messages.kept.length, 0);
+			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 3 seconds.', effects: 'unknown' });
+			const unknown = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-1' }));
+			assert.deepStrictEqual([unknown.data.message_id, unknown.error?.reason, unknown.effects], ['m-3', 'window_unavailable', { outcome: 'unknown', text_written: 'unknown', enter_written: null }]);
 			network.respond = () => ({ ok: true, result: { status: 'delivered' } });
 			const unreadable = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
 			assert.deepStrictEqual([unreadable.error?.code, unreadable.error?.reason, unreadable.effects.outcome], ['FAILED', 'internal_error', 'unknown']);
-			assert.deepStrictEqual(s.messages.kept, []);
+			// What may have gone in there is kept here, its outcome not known: a retry asks that window, as its history shows it
+			assert.deepStrictEqual(s.messages.kept.map(copy => [copy.id, copy.window, copy.environment, copy.fromWindow, copy.to.run, copy.requestId, copy.delivery.status, copy.delivery.effects]), [
+				['m-3', 'win-2', 'ssh-remote+box', 'win-1', runId(20), 'ask-1', 'pending', { outcome: 'unknown', text_written: 'unknown', enter_written: null }],
+				['m-4', 'win-2', 'ssh-remote+box', 'win-1', runId(20), undefined, 'pending', { outcome: 'unknown', text_written: 'unknown', enter_written: null }]
+			]);
+		});
+
+		test('a retry whose message another window holds asks that window how it stands - after a lost reply or a lost result - and never sends it anywhere else (MCP-1.1, D119)', async () => {
+			const { stranger } = team(s);
+			const NOW = Date.UTC(2026, 9, 28, 22, 0, 0);
+			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
+			const pending: MessageRecord['delivery'] = { status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, deadline: Date.UTC(2026, 9, 28, 22, 10, 0), attempts: 1 };
+			network.respond = route => ({ ok: true, result: { status: 'accepted', obstacle: 'input_draft', record: { ...recordOf(route.args.id, stranger.id, runId(20), pending), at: NOW, requestId: route.args.requestId } } });
+			const args = { to: '@builder', text: 'Please check the build.', request_id: 'ask-2' };
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', args)).status, 'accepted');
+			// Its result never came back; long after its deadline, the window that holds it answers how it went, with its ID
+			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, runId(20), DELIVERED), at: NOW, requestId: route.args.requestId } } });
+			const again = await s.call(stranger, 'send_message', args);
+			const asked = resultOf(again);
+			assert.deepStrictEqual([asked.status, asked.data.message_id, asked.data.repeated, asked.data.window_id], ['success', 'm-1', true, 'win-2']);
+			assert.match(again.text, /^Request ask-2 sent message #m1 to @builder #a20 already: nothing was sent again\. It was delivered\./);
+			assert.deepStrictEqual(network.routed.map(route => [route.window, route.op, route.args.id, route.args.to, route.args.requestId]), [['win-2', 'deliver', 'm-1', runId(20), 'ask-2'], ['win-2', 'deliver', 'm-1', runId(20), 'ask-2']]);
+			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
+			// Once known, the copy answers: nothing is routed
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', args)).status, 'success');
+			assert.strictEqual(network.routed.length, 2);
+			// A window that cannot be asked leaves it unknown - never "still being delivered" past its deadline
+			network.respond = route => ({ ok: true, result: { status: 'accepted', record: { ...recordOf(route.args.id, stranger.id, runId(20), pending), at: NOW, requestId: route.args.requestId } } });
+			await s.call(stranger, 'send_message', { ...args, request_id: 'ask-3' });
+			network.respond = () => ({ ok: false, reason: 'window_unavailable', message: 'No open Facade window win-2 is on this computer: the request had no effect.', effects: 'none' });
+			const gone = resultOf(await s.call(stranger, 'send_message', { ...args, request_id: 'ask-3' }));
+			assert.deepStrictEqual([gone.status, gone.error?.reason, gone.data.message_id, gone.data.repeated, gone.effects.outcome], ['failure', 'window_unavailable', 'm-2', true, 'unknown']);
+		});
+
+		test('a delivery the other window refuses before recording it - its agent gone - is not found, with no effect, and settles the copy of a lost reply (MCP-1.2)', async () => {
+			const { stranger } = team(s);
+			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
+			const refusal = { status: 'failure', error: { code: 'NOT_FOUND', reason: 'not_found', message: `No agent ${runId(20)} that the sender reaches is in this window.` } };
+			network.respond = () => ({ ok: true, result: refusal });
+			const refused = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
+			assert.deepStrictEqual([refused.error?.code, refused.error?.reason, refused.effects], ['NOT_FOUND', 'not_found', { outcome: 'none', text_written: 'none', enter_written: false }]);
+			assert.strictEqual(s.messages.kept.length, 0);
+			// A lost reply, then the window says it never had it: not delivered, nothing went in
+			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 3 seconds.', effects: 'unknown' });
+			await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-4' });
+			network.respond = () => ({ ok: true, result: refusal });
+			const settled = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-4' }));
+			assert.deepStrictEqual([settled.error?.reason, settled.data.repeated, settled.effects.outcome], ['not_found', true, 'none']);
+			assert.deepStrictEqual(s.messages.kept.at(-1)?.delivery, { status: 'failure', reason: 'not_found', effects: { outcome: 'none', text_written: 'none', enter_written: false }, deadline: s.messages.kept[0].delivery.deadline, attempts: 0 });
 		});
 
 		test('an ended agent of another window takes no message, and #human is the person in this window, never routed', async () => {
@@ -446,8 +495,11 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			// Its request ID kept with it here, where its record is made, for the sender's retry to find (D110, D118)
 			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-77', from: runId(30), sender: { party: { run: runId(30), alias: '#a30', name: 'guest 30' }, window: 'win-2', label: 'Backend' }, to: stranger.id, text: 'Hi there', replyTo: 'm-70', elapsedMs: 900, callId: 'c-1', requestId: 'ask-9' }]);
 			// Out of a non-YOLO guest's tree: not found, nothing sent
-			await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-78', from: guestOf(31), to: lead.id, text: 'Hi', elapsedMs: 0 } }), /No agent .* that the sender reaches is in this window/);
-			await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-79', from: reaching, to: runId(99), text: 'Hi', elapsedMs: 0 } }), /No agent/);
+			// Refused before anything is recorded, as a refusal its sender can tell from a lost answer (MCP-1.2)
+			for (const [id, from, to] of [['m-78', guestOf(31), lead.id], ['m-79', reaching, runId(99)]] as const) {
+				assert.deepStrictEqual(await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id, from, to, text: 'Hi', elapsedMs: 0 } }),
+					{ status: 'failure', error: { code: 'NOT_FOUND', reason: 'not_found', message: `No agent ${to} that the sender reaches is in this window.` } });
+			}
 			await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-80', to: stranger.id, text: 'Hi', elapsedMs: 0 } }), /incomplete/);
 			assert.strictEqual(s.messages.sent.length, 1);
 		});

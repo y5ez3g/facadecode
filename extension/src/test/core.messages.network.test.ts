@@ -185,6 +185,22 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		assert.deepStrictEqual(recorded.filter(record => record.window === 'win-2').map(record => record.id), ['m-7', 'm-1', 'm-7']);
 	});
 
+	test('a copy whose outcome never came back is shown unconfirmed once its deadline passed, kept as it is for a retry to ask its window (COLLABORATION-3.2, D119)', () => {
+		const { service, copies } = setUp();
+		const at = Date.now();
+		const copy: MessageRecord = {
+			id: 'm-7', alias: '#m7', kind: 'message', from: { run: A, alias: '#a1', name: 'Ada' }, to: { run: GUEST, alias: '#a9', name: 'Gus' }, window: 'win-2',
+			environment: 'ssh-remote+box', fromWindow: 'win-1', at, text: 'Remote one.', length: 11, requestId: 'ask-1',
+			delivery: { status: 'pending', effects: { outcome: 'pending', text_written: 'full', enter_written: false }, deadline: at - 1, attempts: 1 }
+		};
+		service.keepSent(copy);
+		assert.deepStrictEqual(service.history().map(record => [record.id, record.delivery.status, record.delivery.reason, record.delivery.effects]), [['m-7', 'failure', 'submission_unconfirmed', { outcome: 'unknown', text_written: 'full', enter_written: false }]]);
+		assert.deepStrictEqual([copies.records.get('m-7')?.delivery.status, service.findRequest(A, 'ask-1')?.delivery.status], ['pending', 'pending']);
+		// Still within its deadline, it is being delivered
+		service.keepSent({ ...copy, delivery: { ...copy.delivery, deadline: at + 60_000 } });
+		assert.strictEqual(service.history()[0].delivery.status, 'pending');
+	});
+
 	test('without a store of copies a copy is not kept, and nothing fails', async () => {
 		const { service, recorded } = setUp({ sent: false });
 		service.keepSent({ id: 'm-7', alias: '#m7', kind: 'message', from: { run: A }, to: { run: GUEST }, window: 'win-2', environment: 'local', at: 1, text: 'x', length: 1, delivery: { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 } });

@@ -52,11 +52,13 @@ export function failure<T>(error: ResultError, data: T, effects: Effects = NO_EF
 
 /** An error with its MCP code and reason, as `FacadeError`, `ArgumentError` and a request that never left the window carry them. */
 export function codedOf(err: unknown): ResultError | undefined {
-	if (!(err instanceof Error)) {
-		return undefined;
-	}
-	const { code, reason } = err as { code?: unknown; reason?: unknown };
-	return typeof code === 'string' && CODES.includes(code) && typeof reason === 'string' ? { code: code as ErrorCode, reason, message: err.message } : undefined;
+	return err instanceof Error ? resultErrorOf({ code: (err as { code?: unknown }).code, reason: (err as { reason?: unknown }).reason, message: err.message }) : undefined;
+}
+
+/** `value` where it is a result's error, as another window answers one: its MCP code, reason and message. */
+export function resultErrorOf(value: unknown): ResultError | undefined {
+	const { code, reason, message } = (typeof value === 'object' && value !== null ? value : {}) as { code?: unknown; reason?: unknown; message?: unknown };
+	return typeof code === 'string' && CODES.includes(code) && typeof reason === 'string' && typeof message === 'string' ? { code: code as ErrorCode, reason, message } : undefined;
 }
 
 /**
