@@ -12,8 +12,9 @@ import * as path from 'path';
 import { timeout } from '../../base/async';
 import { connectWithin } from '../../base/connect';
 import { messageOf } from '../../base/errors';
+import { lineReader } from '../../base/lines';
 import type { OwnerClaim } from '../../base/ownership';
-import { EARLIER_PROTOCOLS, CallEvent, isPtydEvent, lineReader, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent } from '../../ptyd/protocol';
+import { EARLIER_PROTOCOLS, CallEvent, isPtydEvent, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent } from '../../ptyd/protocol';
 import { ensurePtydSocket } from '../../ptyd/socket';
 
 /** How long a window waits for a ptyd it started to listen, or for a busy one to take its connection. */

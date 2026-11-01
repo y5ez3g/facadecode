@@ -8,7 +8,8 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { EarlierPtyds, PtydClient, PtydGone, PtydNotSent, ptydSocketPath } from '../host/execution/ptydClient';
-import { EARLIER_PROTOCOLS, lineReader, PTYD_PROTOCOL, RunEvent, SpawnParams } from '../ptyd/protocol';
+import { lineReader } from '../base/lines';
+import { EARLIER_PROTOCOLS, PTYD_PROTOCOL, RunEvent, SpawnParams } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import * as runModule from '../ptyd/run';
 import { eachLine, finish, IDLE, program, programEnv, ptydPlace } from './ptydPlace';
@@ -472,7 +473,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		extra.push(raw);
 		raw.setEncoding('utf8');
 		const replies: { id?: number; error?: string; result?: unknown }[] = [];
-		raw.on('data', lineReader(line => replies.push(JSON.parse(line))));
+		raw.on('data', lineReader(line => replies.push(JSON.parse(line)), err => { throw err; }));
 		await new Promise(resolve => raw.once('connect', resolve));
 		const send = (id: number, method: string, params: object) => raw.write(`${JSON.stringify({ id, method, params })}\n`);
 		send(1, 'claim', { owner: 'w1', generation: 1, token: 'raw' });

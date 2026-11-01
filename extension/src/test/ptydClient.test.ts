@@ -8,8 +8,9 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { connectWithin, type Reached } from '../base/connect';
+import { lineReader } from '../base/lines';
 import { EarlierPtyds, ptydSocketPath, PtydNotSent, reachOrStart } from '../host/execution/ptydClient';
-import { EARLIER_PROTOCOLS, lineReader } from '../ptyd/protocol';
+import { EARLIER_PROTOCOLS } from '../ptyd/protocol';
 
 suite('Reaching this window\'s own ptyd: only one that is not there is started (ARCHITECTURE-2.3)', () => {
 	const busy: Reached = { absent: false, reason: 'it took no connection within 2 seconds' };

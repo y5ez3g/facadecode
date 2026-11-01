@@ -8,7 +8,8 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { PtydClient } from '../host/execution/ptydClient';
-import { CallEvent, InputReading, lineReader, PTYD_PROTOCOL, Response, RunEvent, ScreenRead } from '../ptyd/protocol';
+import { lineReader } from '../base/lines';
+import { CallEvent, InputReading, PTYD_PROTOCOL, Response, RunEvent, ScreenRead } from '../ptyd/protocol';
 import { SHIM_PTYD_PROTOCOL } from '../transport/ptydLink';
 import { CLAIM_WAIT_MS, MOST_RUN_CALLS, PtydServer } from '../ptyd/server';
 import { IDLE, program, ptydPlace } from './ptydPlace';
@@ -73,7 +74,7 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 			const response = JSON.parse(line) as Response;
 			waiting.get(response.id)?.(response);
 			waiting.delete(response.id);
-		}));
+		}, err => { throw err; }));
 		const ask: FakeShim['ask'] = (method, params) => new Promise(resolve => {
 			const id = next++;
 			waiting.set(id, resolve);
@@ -216,7 +217,7 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		await new Promise(resolve => socket.once('connect', resolve));
 		const lines: { id?: number; event?: string; result?: unknown }[] = [];
 		socket.setEncoding('utf8');
-		socket.on('data', lineReader(line => lines.push(JSON.parse(line))));
+		socket.on('data', lineReader(line => lines.push(JSON.parse(line)), err => { throw err; }));
 		socket.write(`${JSON.stringify({ id: 1, method: 'hello', params: { protocol: PTYD_PROTOCOL, role: 'window' } })}\n`);
 		socket.write(`${JSON.stringify({ id: 2, method: 'claim', params: { owner: 'w1', generation: ++generation, token: 'bare' } })}\n`);
 		socket.write(`${JSON.stringify({ id: 4, method: 'attach', params: { run: 'r9' } })}\n`);

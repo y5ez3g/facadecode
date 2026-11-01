@@ -36,10 +36,6 @@ export class InputQueue {
 	private draining = false;
 	private ended = false;
 
-	get isEnded(): boolean {
-		return this.ended;
-	}
-
 	add(run: QueuedInput['run'], notApplied: InputEffect): Promise<InputEffect> {
 		if (this.ended) {
 			return Promise.resolve({ ...notApplied, reason: 'ended' });
