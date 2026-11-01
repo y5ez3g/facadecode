@@ -84,7 +84,7 @@ explanation; unavailable Facade tools; active startup stage, active until the CL
 CLI title; creation prompt first line; fallback. When a known native blocker coexists with unavailable activity, lead with
 the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
 A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file} in this folder`,
-or `Cannot work with other agents: its Facade tools stopped` once its tools went away (D131), and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
+or `Cannot work with other agents: its Facade tools stopped` once its tools went away (D136), and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
 title. Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
 `Ready for your first message`. Never `Done, waiting for you` from a turn end. Native blockers use CLI words or
 `Needs permission`, `Sign-in required`, `Waiting for an answer`; no popup solely for them.
@@ -249,7 +249,7 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
-- 2026-11-01: 1.4 says when an agent's Facade tools went away (D131).
+- 2026-11-01: 1.4 says when an agent's Facade tools went away (D136).
 - 2026-10-31: Use an auto-hiding overlay that follows native Modern UI settings, compensates webview clipping and preserves complete card/slider corners without list top or bottom padding (D125).
 
 - 2026-10-31: Adjusted the Pin's size, name spacing and selected/high-contrast colors after the owner's visual review (D122).

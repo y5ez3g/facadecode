@@ -120,7 +120,7 @@ specification audit read UTF-8 documents using Windows' default code page. Their
 Native Windows/macOS and remote Resume/Pin remain unverified; fake-CLI editor coverage does not certify those native
 vendor integrations. No earlier platform result certifies this merged build.
 
-Release review of 2026-11-01 (`feature/76-release-review`, D126-D133), official VS Code 1.144.0 in isolated profiles with
+Release review of 2026-11-01 (`feature/76-release-review`, D131-D138), official VS Code 1.144.0 in isolated profiles with
 fake CLIs, Node 24.18.0. Before any change, at `076527d4`: Windows x64 passed 1000 units and the integration suite, Linux
 x64 1003 units and the integration suite. After the review's fixes and its independent cross-branch review, at
 `ff14745b`: Linux x64 (Ubuntu, under xvfb) passed a clean `npm ci`, compilation, 1089 units (5 POSIX-only checks pending,
@@ -364,7 +364,7 @@ for review, not acceptance evidence.
 
 ## Change log
 
-- 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D126-D133).
+- 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-10-31: U12 covers native overlay appearance and interaction, fractional-scale host clipping, full-range scrolling and card corners without decorative list padding; check balanced card sides when the right padding absorbs the device-pixel guard.
 
 - 2026-10-31: J11/J12 now run for all six built-ins, with a separate real reload/conversion journey for each. Native Linux CLI observations are recorded separately from fake-CLI editor evidence (D123).
