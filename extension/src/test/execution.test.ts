@@ -50,6 +50,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let config: { [key: string]: unknown };
 	/** The editor's tabs as the test has them: the active tab, its changes, and the commands run on the active editor. */
 	let tabsChanged: TestEmitter<{ opened: unknown[]; closed: unknown[]; changed: unknown[] }>;
+	let groupsChanged: TestEmitter<undefined>;
+	let visibleTabs: unknown[] | undefined;
 	let activeTab: unknown;
 	let activeTerminal: unknown;
 	let commands: string[];
@@ -94,6 +96,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		configChanged = new TestEmitter();
 		config = { 'terminal.integrated.tabs.separator': ' | ' };
 		tabsChanged = new TestEmitter();
+		groupsChanged = new TestEmitter();
+		visibleTabs = undefined;
 		activeTab = undefined;
 		activeTerminal = undefined;
 		commands = [];
@@ -131,7 +135,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			},
 			window: {
 				get activeTerminal() { return activeTerminal; },
-				tabGroups: { onDidChangeTabs: tabsChanged.event, get activeTabGroup() { return { activeTab }; } },
+				tabGroups: { onDidChangeTabs: tabsChanged.event, onDidChangeTabGroups: groupsChanged.event,
+					get all() { return [{ tabs: visibleTabs ?? terminals.filter(terminal => !terminal.disposed).map(terminal => terminal.tab) }]; },
+					get activeTabGroup() { return { activeTab }; } },
 				onDidChangeActiveTerminal: activeChanged.event,
 				onDidCloseTerminal: closed.event,
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => {
@@ -303,6 +309,35 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		activeChanged.fire(next);
 		tabsChanged.fire({ opened: [Object.assign(next.tab, { isActive: true })], closed: [], changed: [] });
 		await until('the reopened tab pinned', () => next.tab.isPinned);
+	});
+
+	test('a rebuilt tab-group model replaces stale objects; Pin follows only the exactly correlated terminal, including duplicate names', async () => {
+		const port = portOf();
+		port.openPair(facts('run-1'), { reveal: false });
+		const first = terminals[0]; open(first);
+		tabsChanged.fire({ opened: [first.tab], closed: [], changed: [] });
+		port.openPair(facts('run-2'), { reveal: false });
+		const second = terminals[1]; open(second);
+		tabsChanged.fire({ opened: [second.tab], closed: [], changed: [] });
+		activeTab = first.tab; activeTerminal = first;
+		activeChanged.fire(first);
+		port.pinTab('run-1', true);
+		await until('the original tab pinned', () => first.tab.isPinned);
+		await Promise.resolve();
+		const replacement = { ...first.tab, isActive: true }, other = { ...second.tab };
+		visibleTabs = [replacement, other]; activeTab = replacement;
+		groupsChanged.fire(undefined);
+		port.pinTab('run-1', false);
+		await until('the replacement tab unpinned', () => !replacement.isPinned);
+		assert.strictEqual(first.tab.isPinned, true, 'the obsolete object is never used as the command target');
+		port.pinTab('run-2', true);
+		assert.deepStrictEqual([other.isPinned, first.shown, second.shown], [false, [], []]);
+		// The other equal-name tab is correlated only when that terminal actually becomes active.
+		activeTab = other; activeTerminal = second;
+		activeChanged.fire(second);
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(other, { isActive: true })] });
+		await until('the second exact tab pinned', () => other.isPinned);
+		assert.strictEqual(replacement.isPinned, false);
 	});
 
 	test('a pair is one editor terminal from acceptance on, with the agent\'s name and its CLI\'s logo; Facade\'s lines show before any process, and the process starts in that same terminal', async () => {
@@ -887,7 +922,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const before = (await PtydClient.join(socket, protocol))!;
 		await before.request('claim', nextOwnerClaim(owner, home));
 		await before.request('spawn', {
-			run, owner, file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: { ...meta(run), ...extra }
+			run, owner, file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: { ...meta(run), ...extra }
 		});
 		before.dispose();
 		return { server, socket };

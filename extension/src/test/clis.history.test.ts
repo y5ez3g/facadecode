@@ -14,6 +14,8 @@ import { tempDir } from './util';
 // Fixtures in the store formats these readers were written against: they test Facade's readers, not what a current CLI writes,
 // which needs an isolated real CLI (CLIS-5.1). No test reads a real ~/.claude or ~/.codex: the stores are given by environment.
 
+const homeEnv = (home: string) => ({ HOME: home, USERPROFILE: home });
+
 const id = (n: number) => `0a1b2c3d-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
 /** Stores found by `env` for every directory, as both CLIs' launches would find them. */
@@ -33,7 +35,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		repo = path.join(temp.dir, 'repo');
 		fs.mkdirSync(path.join(repo, 'pkg'), { recursive: true });
 		fs.mkdirSync(`${repo}-other`);
-		history = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, HOME: path.join(temp.dir, 'home') }) });
+		history = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, ...homeEnv(path.join(temp.dir, 'home')) }) });
 	});
 	teardown(() => temp.remove());
 
@@ -312,7 +314,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 			{ id: id(7), folders: [path.join(temp.dir, 'elsewhere')], at: base + 7_000, title: 'Elsewhere' }
 		]);
 		db.close();
-		const history = new VendorHistory({ environment: () => ({ agy: { HOME: home } }) });
+		const history = new VendorHistory({ environment: () => ({ agy: homeEnv(home) }) });
 		const list = async () => (await history.open({ environment: 'local', directories: [repo] }).next()).entries.map(entry => [entry.key.cli, entry.key.sessionId, entry.title, entry.cwd, entry.activityAt]);
 		const listed = await list();
 		const left = fs.readdirSync(dir).filter(name => name.startsWith('conversation_summaries'));
@@ -320,7 +322,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		const writing = agy(path.join(temp.dir, 'agy-busy'), []);
 		writing.db.prepare('INSERT INTO conversation_summaries (conversation_id, title, last_modified_time, workspace_uris, last_user_input_time) VALUES (?, ?, ?, ?, ?)').run(id(8), 'Write Release Notes', '2026-10-29 18:01:33.762093+00:00', JSON.stringify([pathToFileURL(repo).href]), '2026-10-29 18:01:33+00:00');
 		fs.writeFileSync(path.join(writing.dir, 'conversations', `${id(8)}.db`), '');
-		const busy = await new VendorHistory({ environment: () => ({ agy: { HOME: path.join(temp.dir, 'agy-busy') } }) }).open({ environment: 'local', directories: [repo] }).next();
+		const busy = await new VendorHistory({ environment: () => ({ agy: { ...homeEnv(path.join(temp.dir, 'agy-busy')) } }) }).open({ environment: 'local', directories: [repo] }).next();
 		writing.db.close();
 		assert.deepStrictEqual([listed, left, busy.entries.map(entry => [entry.title, entry.activityAt])], [[
 			['agy', id(4), 'Translate Readme', spaced, base + 4_000],
@@ -334,7 +336,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		const home = path.join(temp.dir, 'agy-roots'), a = path.join(repo, 'a'), z = path.join(repo, 'z');
 		fs.mkdirSync(a); fs.mkdirSync(z);
 		const { db } = agy(home, [{ id: id(1), folders: [z, a], at: Date.now() }]); db.close();
-		const options = { environment: () => ({ agy: { HOME: home } }) };
+		const options = { environment: () => ({ agy: homeEnv(home) }) };
 		const scope = { environment: 'local', directories: [repo] };
 		const found = (await new VendorHistory(options).open(scope).next()).entries[0];
 		assert.deepStrictEqual(found.cwdChoices, [a, z]);
@@ -384,9 +386,9 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		]);
 		const listed = async (env: { readonly [name: string]: string }) => (await new VendorHistory({ environment: () => ({ muse: env }) }).open({ environment: 'local', directories: [repo] }).next()).entries
 			.map(entry => [entry.key.cli, entry.key.sessionId, entry.title, entry.cwd, entry.activityAt]);
-		const fromXdg = await listed({ XDG_DATA_HOME: path.join(temp.dir, 'xdg'), HOME: path.join(temp.dir, 'home') });
+		const fromXdg = await listed({ XDG_DATA_HOME: path.join(temp.dir, 'xdg'), ...homeEnv(path.join(temp.dir, 'home')) });
 		muse(path.join(temp.dir, 'home', '.local', 'share', 'muse'), [{ id: id(8), cwd: repo, prompt: 'In the home folder', at: base }]);
-		assert.deepStrictEqual([fromXdg, await listed({ HOME: path.join(temp.dir, 'home') })], [[
+		assert.deepStrictEqual([fromXdg, await listed({ ...homeEnv(path.join(temp.dir, 'home')) })], [[
 			['muse', id(3), 'Explain the build script.', path.join(repo, 'pkg'), base + 3_000],
 			['muse', id(2), 'login-refactor', repo, base + 2_000],
 			['muse', id(1), 'Add a README section about installing the CLI.', repo, base + 1_000]
@@ -404,7 +406,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 			[id(1), base + 5_000, undefined],
 			[id(2), base + 2_000, `Its working directory no longer exists: ${gone}`]
 		]);
-		const limited = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, HOME: temp.dir }), unavailable: cli => cli === 'codex' ? 'codex was not found on the PATH' : undefined });
+		const limited = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, ...homeEnv(temp.dir) }), unavailable: cli => cli === 'codex' ? 'codex was not found on the PATH' : undefined });
 		const batch = await limited.open({ environment: 'local', directories: [repo] }).next();
 		assert.strictEqual(batch.entries[0].unavailable, 'codex was not found on the PATH');
 	});
@@ -424,7 +426,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		}
 		assert.deepStrictEqual(sizes, [[BATCH, false], [BATCH, false], [30, true]]);
 		// Far more unrelated rollouts than a batch reads, all newer than the one that matches
-		const old = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: path.join(temp.dir, 'none'), CODEX_HOME: codexHome, HOME: temp.dir }) });
+		const old = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: path.join(temp.dir, 'none'), CODEX_HOME: codexHome, ...homeEnv(temp.dir) }) });
 		for (let n = 0; n < MOST_READS_PER_BATCH + 20; n++) {
 			codex(path.join(temp.dir, 'elsewhere'), id(1_000 + n), base + 10_000_000 + n, `rollout-x-${n}.jsonl`);
 		}
@@ -466,7 +468,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		const pager = history.open({ environment: 'local', directories: [repo] });
 		pager.dispose();
 		assert.deepStrictEqual(await pager.next(), { entries: [], done: true });
-		const empty = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: path.join(temp.dir, 'none'), CODEX_HOME: path.join(temp.dir, 'none'), HOME: temp.dir }) });
+		const empty = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: path.join(temp.dir, 'none'), CODEX_HOME: path.join(temp.dir, 'none'), ...homeEnv(temp.dir) }) });
 		assert.deepStrictEqual(await empty.open({ environment: 'local', directories: [repo] }).next(), { entries: [], done: true });
 	});
 
@@ -489,8 +491,8 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 			environment: directory => {
 				asked.push(directory);
 				return directory === repo
-					? { claude: { CLAUDE_CONFIG_DIR: claudeDir, HOME: otherHome }, codex: { CODEX_HOME: codexHome, HOME: otherHome } }
-					: { claude: { HOME: otherHome }, codex: { HOME: otherHome } };
+					? { claude: { CLAUDE_CONFIG_DIR: claudeDir, ...homeEnv(otherHome) }, codex: { CODEX_HOME: codexHome, ...homeEnv(otherHome) } }
+					: { claude: { ...homeEnv(otherHome) }, codex: { ...homeEnv(otherHome) } };
 			}
 		});
 		const pager = scoped.open({ environment: 'local', directories: [repo, other] });

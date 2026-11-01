@@ -66,12 +66,14 @@ export class AgentTerminals implements vscode.Disposable {
 				this.terminalActivatedAt = Date.now();
 				this.correlate();
 				const pair = terminal && this.pairOf(terminal);
+				if (pair) { this.applyPin(pair); }
 				// A terminal made behind the person's work, becoming active as it opens, moves no selection (PANEL-2.1)
 				if (!pair || !this.opensBehind(pair)) {
 					this.options.activated(pair?.run);
 				}
 			}),
 			vscode.window.tabGroups.onDidChangeTabs(event => this.tabsChanged(event)),
+			vscode.window.tabGroups.onDidChangeTabGroups(() => this.groupsChanged()),
 			vscode.window.onDidCloseTerminal(terminal => {
 				const pair = this.pairOf(terminal);
 				if (!pair) {
@@ -335,6 +337,18 @@ export class AgentTerminals implements vscode.Disposable {
 		this.observeNames();
 	}
 
+	/** VS Code 1.105 can replace every Tab object in a group-model update without a tab-change event. */
+	private groupsChanged(): void {
+		const present = new Set(vscode.window.tabGroups.all.flatMap(group => group.tabs));
+		for (const pair of this.entries.values()) {
+			if (pair.tab && !present.has(pair.tab)) { pair.tab = undefined; }
+		}
+		this.tabActivatedAt = Date.now();
+		this.correlate();
+		const pair = vscode.window.activeTerminal && this.pairOf(vscode.window.activeTerminal);
+		if (pair) { this.applyPin(pair); }
+	}
+
 	/**
 	 * What each run's tab shows now, read from the run's own terminal - never matched by a title, which can repeat (LIFECYCLE-2.2).
 	 * The editor's naming of a tab by the name its terminal was created with is undone. A person's rename of a tab is told, as the
@@ -411,9 +425,10 @@ export class AgentTerminals implements vscode.Disposable {
 
 	private match(pair: TerminalEntry, tab: vscode.Tab): void {
 		pair.tab = tab;
-		if (pair.observedPin === undefined) {
+		if (pair.observedPin !== tab.isPinned) {
+			const changed = pair.observedPin !== undefined || tab.isPinned;
 			pair.observedPin = tab.isPinned;
-			if (tab.isPinned && pair.wantedPin === undefined) { this.options.pinned?.(pair.run, true); }
+			if (changed && pair.wantedPin === undefined && !pair.applyingPin) { this.options.pinned?.(pair.run, tab.isPinned); }
 		}
 		this.applyPin(pair);
 	}

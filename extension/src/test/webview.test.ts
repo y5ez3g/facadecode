@@ -311,7 +311,7 @@ suite('The agent panel in Chromium', function () {
 		const back = await evaluate(`[(document.scrollingElement ?? document.documentElement).scrollTop, document.activeElement === document.body, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)]`);
 		// A scroll beyond the list is kept within it; a card no longer there, or what an earlier build saved beside it, is nothing
 		await load(shipped, { scrollTop: 1e6, target: 'run-99', focused: 'run-12' });
-		await wait(80);
+		await until(() => evaluate(`(() => { const root = document.scrollingElement ?? document.documentElement; return JSON.stringify(window.saved) === JSON.stringify({ scrollTop: root.scrollHeight - window.innerHeight, target: 'run-1' }); })()`));
 		const kept = await evaluate(`(() => { const root = document.scrollingElement ?? document.documentElement, end = root.scrollHeight - window.innerHeight; return [root.scrollTop === end, document.activeElement === document.body, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run), JSON.stringify(window.saved) === JSON.stringify({ scrollTop: end, target: 'run-1' })]; })()`);
 		await load();
 		assert.deepStrictEqual([saved, back, kept], [{ scrollTop: 400, target: 'run-12' }, [400, true, ['run-12']], [true, true, ['run-1'], true]]);

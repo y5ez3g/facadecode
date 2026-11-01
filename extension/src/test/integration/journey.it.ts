@@ -209,11 +209,16 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
 		const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 		assert.ok(sameFolder(launch.cwd, cwd));
-		assert.deepStrictEqual(launch.args.slice(0, 2), fixture.args);
+		const resumeAt = launch.args.indexOf(fixture.args[0]);
+		assert.ok(resumeAt >= 0, 'the native resume option accompanies the MCP configuration');
+		assert.deepStrictEqual(launch.args.slice(resumeAt, resumeAt + 2), fixture.args);
 		await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
 		await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 		await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
-		await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label.startsWith(card.name) && tab.isPinned) ? true : undefined);
+		await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label.startsWith(card.name) && tab.isPinned) ? true : undefined).catch(error => {
+			console.error('Native Pin state', JSON.stringify({ terminal: vscode.window.activeTerminal?.name, tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
+			throw error;
+		});
 		await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
 		await until('the unpinned card and tab', async () => !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label.startsWith(card.name) && !tab.isPinned) ? true : undefined);
 		// A native action saves the same restoration intent.

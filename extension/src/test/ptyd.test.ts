@@ -295,7 +295,9 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const events = eventsOf(client, 'r1');
 		const info = await spawn(client, 'r1', `process.stdout.write('started\\n'); ${eachLine(finish(`'got ' + line + '\\n'`, 3))}`);
 		assert.ok(info.pid > 1);
-		assert.deepStrictEqual([info.claimedElsewhere, info.seq], [false, 0]);
+		assert.strictEqual(info.claimedElsewhere, false);
+		// ConPTY can emit its terminal initialization before the spawn reply. All output still has consecutive sequence numbers.
+		assert.ok(Number.isSafeInteger(info.seq) && info.seq >= 0);
 		await until('its first line', () => outputOf(events).includes('started'));
 		await client.request('input', { run: 'r1', data: 'hello\r' });
 		await until('its answer', () => outputOf(events).includes('got hello'));

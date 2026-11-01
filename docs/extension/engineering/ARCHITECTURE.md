@@ -180,6 +180,9 @@ that capture; every extra open makes it ambiguous even if that extra object clos
 close events do not contaminate the capture. Same-host completion additionally validates the actual Terminal reference.
 Only successful registration replaces and disposes the prior registered object for that run. Names, empty names and CLI
 titles may repeat freely. Cancellation, expiration, an old claim or ambiguous events do not guess an association.
+An editor can replace its public Tab objects when rebuilding the tab-group model. Discard bindings to objects no longer
+present, then correlate the active terminal and tab through public activation/group events again; never recover them by
+title or index. Pending native Pin changes wait for that exact active association and do not reveal another editor.
 
 Queued creation retains only the latest explicit reveal request and cancels
 it on closure, so an earlier queued agent cannot steal focus after a later selection. Restoration after a reload waits up

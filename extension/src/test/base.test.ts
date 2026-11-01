@@ -223,7 +223,8 @@ suite('Base: files', () => {
 		const file = path.join(temp.dir, 'held.json');
 		fs.writeFileSync(file, 'old');
 		// Opened sharing nothing, as a scanner may hold it, for a quarter of a second: until then it cannot be replaced.
-		const script = '$file = [System.IO.File]::Open($env:HELD, \'Open\', \'Read\', \'None\'); [Console]::Out.Write(\'held\'); [Console]::Out.Flush(); Start-Sleep -Milliseconds 250; $file.Close()';
+		// Direct sleep avoids counting PowerShell's first module import as part of the intended 250 ms hold.
+		const script = '$file = [System.IO.File]::Open($env:HELD, \'Open\', \'Read\', \'None\'); [Console]::Out.Write(\'held\'); [Console]::Out.Flush(); [System.Threading.Thread]::Sleep(250); $file.Close()';
 		const holder = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { env: { ...process.env, HELD: file } });
 		await new Promise(resolve => holder.stdout.once('data', resolve));
 		const exited = new Promise(resolve => holder.once('exit', resolve));

@@ -88,7 +88,7 @@ suite('Window terminal registration: actual objects across workspace host genera
 			window: {
 				get terminals() { return terminals; },
 				onDidOpenTerminal: opened.event, onDidCloseTerminal: closed.event, onDidChangeActiveTerminal: changed.event,
-				tabGroups: { onDidChangeTabs: changed.event, activeTabGroup: {} },
+				tabGroups: { onDidChangeTabs: changed.event, onDidChangeTabGroups: changed.event, all: [], activeTabGroup: {} },
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => create(options.name, publishOpen, options)
 			},
 			commands: { executeCommand: async (_command: string, request: { kind: string }, actual?: unknown) => {
