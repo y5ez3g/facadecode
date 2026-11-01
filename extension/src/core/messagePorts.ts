@@ -43,6 +43,8 @@ export interface MessageRecord {
 	readonly length: number;
 	/** The sender's request ID for this send, where it gave one: the same one again answers this record (MCP-1.1, D110). */
 	readonly requestId?: string;
+	/** The window its header names, where its sender is another window's: what a delivery that goes on after a reload types again. */
+	readonly label?: string;
 	readonly delivery: {
 		readonly status: 'pending' | 'success' | 'failure';
 		readonly reason?: string;
@@ -57,6 +59,15 @@ export interface MessageRecord {
 		readonly via?: 'terminal' | 'read' | 'launch' | 'notification';
 		/** Epoch ms it was delivered. */
 		readonly deliveredAt?: number;
+		/**
+		 * While it is being delivered, what this window's next opening needs to go on with it within the same budget (RULES-1.9), kept
+		 * before the input they describe: when its stage started, whether its text may be in the input - from before its paste is issued
+		 * on, so that it is never pasted again (RULES-1.6) - the draft it showed as, and whether an Enter of it went. Never shown.
+		 */
+		readonly start?: number;
+		readonly pasted?: true;
+		readonly seen?: string;
+		readonly entered?: true;
 	};
 }
 

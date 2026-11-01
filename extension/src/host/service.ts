@@ -299,6 +299,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		...network ? { network } : {}
 	});
 	const tools = execution.serveTools((call, receivedAt) => services.answer(call, receivedAt));
+	// Deliveries this window's earlier opening began go on within their deadlines once its agents are known again (RULES-1.9)
+	void ready.then(() => disposed ? undefined : messages.resume()).catch(err => log.event(`Could not go on with this window's deliveries: ${messageOf(err)}`));
 	// Project files injected for runs that are gone everywhere in this environment are released (CLIS-2.2); old results expire
 	void ready.then(() => execution.allRunIds()).then(alive => clis.reconcile(alive)).catch(err => log.event(`Could not release injected files of ended agents: ${messageOf(err)}`));
 	try {

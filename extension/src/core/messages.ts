@@ -106,6 +106,8 @@ interface Stage {
 	/** The record it delivers. */
 	readonly message: string;
 	readonly stop: AbortController;
+	/** When it started, on this process's monotonic clock: its slots and its ten minutes count from then (RULES-1.5). */
+	readonly start: number;
 	/**
 	 * Its deadline on this process's monotonic clock: fifteen seconds from its start and the time a paste of its text takes beyond the
 	 * usual (D105, D118), moved on to ten minutes from its start while the input is held (RULES-1.5, D106).
@@ -178,6 +180,8 @@ export class MessageService implements Messages, Disposable {
 	private readonly stages = new Set<Stage>();
 	/** Each terminal's attempts, one after another (RULES-1.10). */
 	private readonly lanes = new Map<RunId, Promise<void>>();
+	/** The deadlines of deliveries an earlier opening began that this one cannot go on with (RULES-1.9). */
+	private readonly timers = new Set<AbortController>();
 	private readonly mono: () => number;
 	private readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
 	private disposed = false;
@@ -193,11 +197,17 @@ export class MessageService implements Messages, Disposable {
 		this.subscriptions.push(deps.agents.onDidChange(change => this.changed(change)));
 	}
 
-	/** Stops this window's deliveries without recording an outcome: a reload is not closure, and expired ones are settled on reading. */
+	/**
+	 * Stops this window's deliveries without recording an outcome: a reload is not closure, and its next opening goes on with them
+	 * within their deadlines, or settles them (RULES-1.9).
+	 */
 	dispose(): void {
 		this.disposed = true;
 		for (const stage of this.stages) {
 			stage.stop.abort();
+		}
+		for (const timer of this.timers) {
+			timer.abort();
 		}
 		for (const subscription of this.subscriptions) {
 			subscription.dispose();
@@ -224,6 +234,7 @@ export class MessageService implements Messages, Disposable {
 			text: request.text,
 			...(request.replyTo !== undefined ? { replyTo: request.replyTo } : {}),
 			...(request.sender ? { fromWindow: request.sender.window } : {}),
+			...(request.sender?.label !== undefined ? { label: request.sender.label } : {}),
 			...(request.requestId !== undefined ? { requestId: request.requestId } : {})
 		}, PENDING, true, request.id);
 		if (request.to === '@human') {
@@ -242,9 +253,9 @@ export class MessageService implements Messages, Disposable {
 		const text = formatMessage(record, request.sender?.label ?? this.deps.window.label);
 		// A long paste gets the time it takes, beyond the usual, at every deadline of its stage (D105, D118)
 		const extra = this.deps.input.pasteTime?.(request.to, text) ?? 0;
-		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra } });
+		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra, start: deadline - STAGE_MS } });
 		const stage = this.newStage(request.to, pending.id, start, extra);
-		const delivered = Promise.race([this.stage(stage, pending, text, start, MESSAGE_LEAD), stage.read]);
+		const delivered = Promise.race([this.stage(stage, pending, text, MESSAGE_LEAD), stage.read]);
 		const first = await this.within(delivered, RESPONSE_BUDGET_MS - (this.mono() - start));
 		if (first !== 'deadline') {
 			return { record: this.finish(pending.id, first) ?? pending, status: first.status, ...(first.reason ? { reason: first.reason } : {}) };
@@ -490,23 +501,28 @@ export class MessageService implements Messages, Disposable {
 			return this.update(record.id, { delivery: { ...record.delivery, deadline: this.deps.clock.now() + (open.deadline - start) } });
 		}
 		const extra = this.deps.input.pasteTime?.(run, text) ?? 0;
-		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: this.deps.clock.now() + STAGE_MS + extra } });
-		const batch: ResultBatch = { records: [record.id], texts: new Map([[record.id, text]]) };
+		const now = this.deps.clock.now();
+		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: now + STAGE_MS + extra, start: now } });
+		return this.deliverResults(pending, text, this.newStage(run, record.id, start, extra, { records: [record.id], texts: new Map([[record.id, text]]) }));
+	}
+
+	/** Runs the stage of a paste of Facade results, `record` the first, and records its outcome for each (RULES-1.7, D115). */
+	private deliverResults(record: MessageRecord, text: string, stage: Stage): MessageRecord {
+		const batch = stage.batch!;
 		const typed = () => batch.typed ??= batch.records.map(id => batch.texts.get(id)!).join('\n\n');
-		const stage = this.newStage(run, record.id, start, extra, batch);
-		void Promise.race([this.stage(stage, pending, typed, start), stage.read]).then(outcome => {
+		void Promise.race([this.stage(stage, record, batch.typed !== undefined ? text : typed), stage.read]).then(outcome => {
 			for (const id of batch.records) {
 				this.finish(id, outcome);
 			}
 		});
-		return pending;
+		return record;
 	}
 
 	private newStage(target: RunId, message: string, start: number, extra: number, batch?: ResultBatch): Stage {
 		let resolveRead!: (outcome: Outcome) => void;
 		const read = new Promise<Outcome>(resolve => { resolveRead = resolve; });
 		const stage: Stage = {
-			target, message, stop: new AbortController(), read, resolveRead, deadline: start + STAGE_MS + extra, extra, attempts: 0, effects: NO_EFFECTS, submitting: false, written: false, entered: false,
+			target, message, stop: new AbortController(), start, read, resolveRead, deadline: start + STAGE_MS + extra, extra, attempts: 0, effects: NO_EFFECTS, submitting: false, written: false, entered: false,
 			...batch ? { batch } : {}
 		};
 		this.stages.add(stage);
@@ -520,7 +536,8 @@ export class MessageService implements Messages, Disposable {
 	 * question holds the input its deadline moves on, to ten minutes from its start; an ended run ends it at once. A slot that went by
 	 * during an attempt is not made up for. At the deadline, input not yet started is dropped and what went in is reported.
 	 */
-	private async stage(stage: Stage, record: MessageRecord, text: string | (() => string), start: number, lead?: string): Promise<Outcome> {
+	private async stage(stage: Stage, record: MessageRecord, text: string | (() => string), lead?: string): Promise<Outcome> {
+		const { start } = stage;
 		try {
 			for (let slot = 0; ;) {
 				const due = start + slot * SLOT_MS - this.mono();
@@ -650,6 +667,10 @@ export class MessageService implements Messages, Disposable {
 		if (this.mono() >= stage.deadline) {
 			return { kind: 'expired' };
 		}
+		if (input !== 'own' && !this.pasting(stage)) {
+			// Not kept as maybe in its input, it is not pasted: an opening after a reload could not know not to paste it again (RULES-1.6)
+			return { kind: 'blocked', obstacle: 'input_unknown' };
+		}
 		stage.submitting = true;
 		try {
 			if (input === 'own') {
@@ -688,6 +709,28 @@ export class MessageService implements Messages, Disposable {
 	private usable(stage: Stage): boolean {
 		const facts = this.deps.agents.get(stage.target);
 		return !stage.stop.signal.aborted && !!facts && facts.lifecycle !== 'ended';
+	}
+
+	/**
+	 * Keeps, before its paste is issued, that the stage's text may be in its recipient's input from now on, so that no later opening of
+	 * this window pastes it again (RULES-1.6, 1.9); false where that cannot be kept.
+	 */
+	private pasting(stage: Stage): boolean {
+		for (const id of stage.batch?.records ?? [stage.message]) {
+			const current = this.live.get(id);
+			if (!current || current.delivery.pasted) {
+				continue;
+			}
+			const marked: MessageRecord = { ...current, delivery: { ...current.delivery, pasted: true } };
+			try {
+				this.deps.store.put(marked);
+			} catch (err) {
+				this.deps.log.event(`Could not keep that ${current.alias} may be in ${stage.target}'s input, so it is not pasted: ${messageOf(err)}`);
+				return false;
+			}
+			this.live.set(id, marked);
+		}
+		return true;
 	}
 
 	/** Runs `attempt` once the terminal's earlier attempts are done; waiting renews no deadline (RULES-1.10). */
@@ -758,7 +801,7 @@ export class MessageService implements Messages, Disposable {
 	 * A new record with its own ID (RULES-1.1) - the one `allocate` took for it, where given - written before any input and never over
 	 * another; throws where it cannot be written, unless `required` is false.
 	 */
-	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'replyTo' | 'about' | 'callId' | 'agent' | 'fromWindow' | 'requestId'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
+	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'replyTo' | 'about' | 'callId' | 'agent' | 'fromWindow' | 'requestId' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
 		const given = id !== undefined ? messageIdOf(id) : undefined;
 		if (id !== undefined && (given === undefined || given !== id)) {
 			throw new Error(`${JSON.stringify(id)} is not a message ID.`);
@@ -781,6 +824,7 @@ export class MessageService implements Messages, Disposable {
 			...(fields.agent !== undefined ? { agent: fields.agent } : {}),
 			// A retry with the same request ID finds it, in this window or the sender's (MCP-1.1, D110)
 			...(fields.requestId !== undefined ? { requestId: fields.requestId } : {}),
+			...(fields.label !== undefined ? { label: fields.label } : {}),
 			text: fields.text,
 			length: [...fields.text].length,
 			delivery
@@ -830,7 +874,15 @@ export class MessageService implements Messages, Disposable {
 			const written = stage.effects.outcome === 'none' ? current.delivery.effects : { ...stage.effects, outcome: 'pending' as const };
 			// A deadline moved on while the input was held is the one the record states (RULES-1.5, D106)
 			const deadline = stage.heldUntil ?? current.delivery.deadline;
-			this.save({ ...current, delivery: { ...current.delivery, attempts: stage.attempts, effects: written, ...deadline !== undefined ? { deadline } : {} } });
+			// What a later opening goes on from: the stage's start, whether its text may be in the input, as what, and its Enter (RULES-1.9)
+			const { pasted: _pasted, seen: _seen, entered: _entered, ...delivery } = current.delivery;
+			this.save({
+				...current,
+				delivery: {
+					...delivery, attempts: stage.attempts, effects: written, ...deadline !== undefined ? { deadline } : {}, start: delivery.start ?? this.deps.clock.now() - (this.mono() - stage.start),
+					...stage.written || stage.submitting ? { pasted: true } : {}, ...stage.seen !== undefined ? { seen: stage.seen } : {}, ...stage.entered ? { entered: true } : {}
+				}
+			});
 		}
 	}
 
@@ -865,7 +917,8 @@ export class MessageService implements Messages, Disposable {
 
 	/**
 	 * Every record kept, oldest first, those under way here as they are now. A pending one past its deadline that nothing here delivers
-	 * - its window reloaded or closed meanwhile - ended with its deadline, and is settled as such (RULES-1.9).
+	 * - its window reloaded or closed meanwhile - ended with its deadline: this window's own is settled as such and its sender told
+	 * (RULES-1.7, 1.9); another window's reads so here, that window settling it.
 	 */
 	private records(): readonly MessageRecord[] {
 		const now = this.deps.clock.now();
@@ -874,9 +927,86 @@ export class MessageService implements Messages, Disposable {
 			if (record.delivery.status !== 'pending' || this.live.has(record.id) || record.delivery.deadline === undefined || record.delivery.deadline > now) {
 				return record;
 			}
-			const effects: InputEffects = record.delivery.attempts ? { ...record.delivery.effects, outcome: 'unknown' } : NO_EFFECTS;
-			return this.save({ ...record, delivery: { ...record.delivery, status: 'failure', reason: 'timeout', effects } });
+			return record.workspace === this.deps.workspace ? this.abandon(record, 'timeout') : settledAt(record, 'timeout');
 		});
+	}
+
+	/**
+	 * After a reload (RULES-1.9): this window's deliveries still pending go on with what is left of their own budget, never a fresh one,
+	 * and a text that may be in its input already is never pasted again, only its own draft given Enter (RULES-1.6). One past its deadline,
+	 * or whose agent is gone, ends now, its sender told; one kept by an earlier version, which cannot tell what went in, ends at its
+	 * deadline, typing nothing.
+	 */
+	resume(): void {
+		const now = this.deps.clock.now();
+		for (const record of this.deps.store.list()) {
+			const { deadline, start } = record.delivery;
+			if (record.delivery.status !== 'pending' || this.live.has(record.id) || record.workspace !== this.deps.workspace || record.to.run === '@human' || deadline === undefined) {
+				continue;
+			}
+			const facts = this.deps.agents.get(record.to.run);
+			if (!facts || facts.lifecycle === 'ended') {
+				this.abandon(record, 'ended');
+			} else if (deadline <= now) {
+				this.abandon(record, 'timeout');
+			} else if (start === undefined) {
+				this.expireAt(record);
+			} else {
+				this.goOn(record, facts.id, now);
+			}
+		}
+	}
+
+	/** A delivery this window's earlier opening began, under way again within its own deadline (RULES-1.9). */
+	private goOn(record: MessageRecord, run: RunId, now: number): void {
+		const { delivery } = record;
+		const text = record.kind === 'result' ? formatResult(record) : formatMessage(record, record.label ?? this.deps.window.label);
+		const extra = this.deps.input.pasteTime?.(run, text) ?? 0;
+		const stage = this.newStage(run, record.id, this.mono() - (now - delivery.start!), extra, record.kind === 'result' ? { records: [record.id], texts: new Map([[record.id, text]]) } : undefined);
+		stage.deadline = this.mono() + (delivery.deadline! - now);
+		stage.attempts = delivery.attempts;
+		if (delivery.pasted) {
+			// What went in is not known here: never pasted again, its own draft alone given Enter (RULES-1.6, D104, D118)
+			stage.written = true;
+			stage.effects = uncertain(delivery);
+			stage.entered = delivery.entered === true;
+			if (delivery.seen !== undefined) {
+				stage.seen = delivery.seen;
+			}
+			if (stage.batch) {
+				stage.batch.typed = text;
+			}
+		}
+		this.live.set(record.id, record);
+		this.deps.log.event(`${record.kind === 'result' ? 'Facade result' : 'Message'} ${record.alias} to ${record.to.alias ?? record.to.run} goes on after a reload until ${new Date(delivery.deadline!).toISOString()}`);
+		if (stage.batch) {
+			this.deliverResults(record, text, stage);
+			return;
+		}
+		void Promise.race([this.stage(stage, record, text, MESSAGE_LEAD), stage.read]).then(outcome => {
+			const final = this.finish(record.id, outcome);
+			if (final && !this.disposed) {
+				this.reportOutcome(final, undefined);
+			}
+		});
+	}
+
+	/** Ends at its deadline a pending record this window cannot go on with, as `records` settles it then (RULES-1.9). */
+	private expireAt(record: MessageRecord): void {
+		const stop = new AbortController();
+		this.timers.add(stop);
+		void this.wait(Math.max(0, record.delivery.deadline! - this.deps.clock.now()), stop.signal)
+			.then(() => this.records(), () => undefined)
+			.finally(() => this.timers.delete(stop));
+	}
+
+	/** A pending record nothing delivers any more, ended - as `reason` says - with what may have gone in, and its sender told (RULES-1.7). */
+	private abandon(record: MessageRecord, reason: string): MessageRecord {
+		const final = this.save(settledAt(record, reason));
+		if (record.kind === 'message' && !this.disposed) {
+			this.reportOutcome(final, undefined);
+		}
+		return final;
 	}
 
 	/** The recipient's CLI and the version its installation says, as a failed read of its input names them. */
@@ -979,6 +1109,25 @@ function finalReason(stage: Stage): string {
 		return 'submission_unconfirmed';
 	}
 	return stage.obstacle ?? 'timeout';
+}
+
+/**
+ * What a delivery nothing goes on with may have put in its input: not known where its text may be there - kept so before its paste
+ * was issued, or recorded since; by an earlier version, after any attempt - and nothing otherwise (MCP-1.2, RULES-1.6).
+ */
+function uncertain(delivery: MessageRecord['delivery']): InputEffects {
+	const text = delivery.effects.text_written;
+	const maybe = delivery.pasted || (text !== undefined && text !== 'none') || (delivery.start === undefined && delivery.attempts > 0);
+	if (!maybe) {
+		return NO_EFFECTS;
+	}
+	return { outcome: 'unknown', text_written: text !== undefined && text !== 'none' ? text : 'unknown', enter_written: delivery.effects.enter_written === true || delivery.entered ? true : null };
+}
+
+/** A pending record ended by `reason` with what may have gone in, its delivery as it stood otherwise (RULES-1.9). */
+function settledAt(record: MessageRecord, reason: string): MessageRecord {
+	const { delivery } = record;
+	return { ...record, delivery: { status: 'failure', reason, effects: uncertain(delivery), ...delivery.deadline !== undefined ? { deadline: delivery.deadline } : {}, attempts: delivery.attempts } };
 }
 
 /**
