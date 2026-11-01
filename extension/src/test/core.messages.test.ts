@@ -394,6 +394,40 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.length], [0, 0]);
 	});
 
+	test('a run whose launch is not planned yet has an input not known yet: tried within the stage, never failed at once as unsupported (RULES-1.4, MCP-1.2)', async () => {
+		const { service, input, runs } = setUp();
+		const unplanned: CapabilityState = { state: 'unverified', reason: 'How the message input of Codex is read is not known before its launch is planned.' };
+		runs.set(B, { ...runs.get(B)!, lifecycle: 'starting' });
+		input.capabilities.set(B, unplanned);
+		input.states.set(B, ['unknown', 'usable']);
+		const start = Date.now();
+		const answer = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.deepStrictEqual([answer.status, answer.obstacle], ['accepted', 'input_unknown']);
+		// Planned meanwhile: its reader reads it, and the next slot delivers it
+		input.capabilities.delete(B);
+		runs.set(B, { ...runs.get(B)!, lifecycle: 'running' });
+		await sleep(5_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.at - start), [3_000]);
+		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.delivery.status, 'success');
+		// Planned as a CLI without a reader: failed at its next attempt, not waited out (RULES-1.5)
+		const none = setUp();
+		none.runs.set(B, { ...none.runs.get(B)!, lifecycle: 'starting' });
+		none.input.capabilities.set(B, unplanned);
+		none.input.states.set(B, ['unknown']);
+		const begun = Date.now();
+		await settled(none.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		none.input.capabilities.set(B, { state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI.' });
+		await sleep(4_000);
+		const failed = none.service.history().find(record => record.id === 'm-1')!;
+		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.attempts], ['failure', 'unsupported', 1]);
+		assert.strictEqual(none.service.inbox(A, { all: true, limit: 10 }).records[0].at - begun, 3_000);
+		// A running agent whose runtime has no reader on record - an earlier protocol's - still fails at once
+		const earlier = setUp();
+		earlier.input.capabilities.set(B, unplanned);
+		const refused = await settled(earlier.service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.deepStrictEqual([refused.status, refused.reason], ['failure', 'unsupported']);
+	});
+
 	test('a whole text whose Enter never went is no partial input at its deadline: its submission is unconfirmed, as its result says (MCP-1.2)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'partial', text_written: 'full', enter_written: false }]);

@@ -9,7 +9,7 @@ import { displayLine } from '../base/text';
 import { invalid } from './errors';
 import { REQUEST_MS } from './requests';
 import type { HumanContactPort, InboxPage, InboxQuery, InputEffects, InputPort, MessageRecord, Messages, SendRequest, SendResult } from './messagePorts';
-import type { Agents, Clock, Disposable, LogPort, RunChange, RunId } from './ports';
+import type { Agents, CapabilityState, Clock, Disposable, LogPort, RunChange, RunFacts, RunId } from './ports';
 
 /** The message records, kept in the execution environment's Facade directory for thirty days (RULES-5.3, ARCHITECTURE-3.1). */
 export interface MessageStore {
@@ -96,7 +96,9 @@ type Attempt =
 	| { readonly kind: 'blocked'; readonly obstacle: string }
 	| { readonly kind: 'waiting' }
 	| { readonly kind: 'ended' }
-	| { readonly kind: 'expired' };
+	| { readonly kind: 'expired' }
+	/** Its launch planned meanwhile, its CLI has no input reader: a permanent obstacle (RULES-1.4, 1.5). */
+	| { readonly kind: 'unsupported' };
 
 /** A delivery stage under way to one run: what it found so far, and how it is stopped. */
 interface Stage {
@@ -232,7 +234,7 @@ export class MessageService implements Messages, Disposable {
 			return this.failed(record, 'ended', NO_EFFECTS);
 		}
 		const capability = this.deps.input.capability(request.to);
-		if (capability.state !== 'supported') {
+		if (!readable(target, capability)) {
 			// A permanent obstacle: nothing is typed and no slot is waited out (MCP-1.2, RULES-1.5)
 			this.deps.log.event(`Message ${record.alias} to ${target.alias} not delivered: its ordinary input is ${capability.state} (${capability.reason})`);
 			return this.failed(record, 'unsupported', NO_EFFECTS);
@@ -454,7 +456,7 @@ export class MessageService implements Messages, Disposable {
 		const run = record.to.run as RunId;
 		const facts = this.deps.agents.get(run);
 		const capability = facts && facts.lifecycle !== 'ended' ? this.deps.input.capability(run) : undefined;
-		if (!capability || capability.state !== 'supported') {
+		if (!facts || !capability || !readable(facts, capability)) {
 			return this.finish(record.id, { status: 'failure', reason: capability ? 'unsupported' : 'ended', effects: NO_EFFECTS, attempts: 0 }) ?? record;
 		}
 		const start = this.mono();
@@ -542,6 +544,9 @@ export class MessageService implements Messages, Disposable {
 				if (attempt.kind === 'ended') {
 					return this.ended(stage);
 				}
+				if (attempt.kind === 'unsupported') {
+					return stage.settled ?? { status: 'failure', reason: 'unsupported', effects: stage.effects, attempts: stage.attempts };
+				}
 				if (attempt.kind === 'expired') {
 					break;
 				}
@@ -602,6 +607,9 @@ export class MessageService implements Messages, Disposable {
 		}
 		if (this.mono() >= stage.deadline) {
 			return { kind: 'expired' };
+		}
+		if (this.deps.input.capability(stage.target).state === 'unavailable') {
+			return { kind: 'unsupported' };
 		}
 		let input: Awaited<ReturnType<InputPort['inspect']>>;
 		try {
@@ -963,6 +971,14 @@ function finalReason(stage: Stage): string {
 		return 'submission_unconfirmed';
 	}
 	return stage.obstacle ?? 'timeout';
+}
+
+/**
+ * Whether a run's ordinary input can be tried: a supported reader, or one not known yet because the run's launch is not planned - an
+ * unknown input, waited for within the stage, as a CLI without a reader is not (RULES-1.4, MCP-1.2).
+ */
+function readable(run: Pick<RunFacts, 'lifecycle'>, capability: CapabilityState): boolean {
+	return capability.state === 'supported' || (run.lifecycle === 'starting' && capability.state === 'unverified');
 }
 
 /** The more telling of two attempts' effects: uncertain over partial over nothing, and the later of two alike. */
