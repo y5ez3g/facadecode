@@ -326,10 +326,11 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const answer = await s.call(stranger, 'send_message', { to: '@builder', text: 'Please check the build.' });
 			const result = resultOf(answer);
 			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'deliver', 2_993]]);
+			// Its answer comes within the two seconds: that window is given them less the 7 ms spent here and a quarter second for the way back (RULES-1.2)
+			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'deliver', 1_993]]);
 			assert.deepStrictEqual(network.routed[0].args, {
 				id: 'm-1', from: { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' },
-				to: runId(20), text: 'Please check the build.', callId: 'call-1', elapsedMs: 7
+				to: runId(20), text: 'Please check the build.', callId: 'call-1', elapsedMs: 257
 			});
 			assert.deepStrictEqual([result.status, result.data, result.effects], ['success', {
 				message_id: 'm-1', alias: '#m1', target: runId(20), target_reference: '@builder #a20', length: 23, window_id: 'win-2', disposition: 'submitted_to_cli'
@@ -501,6 +502,10 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 					{ status: 'failure', error: { code: 'NOT_FOUND', reason: 'not_found', message: `No agent ${to} that the sender reaches is in this window.` } });
 			}
 			await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-80', to: stranger.id, text: 'Hi', elapsedMs: 0 } }), /incomplete/);
+			// Without the time it has spent, its budget could not be held: refused as incomplete, never delivered without a deadline (RULES-1.2)
+			for (const elapsedMs of [undefined, Number.NaN, '900']) {
+				await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-81', from: reaching, to: stranger.id, text: 'Hi', elapsedMs } }), /incomplete/, String(elapsedMs));
+			}
 			assert.strictEqual(s.messages.sent.length, 1);
 		});
 

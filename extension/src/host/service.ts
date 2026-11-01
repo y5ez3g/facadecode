@@ -17,7 +17,7 @@ import { createToolServices } from '../contract/tools';
 import { AgentService } from '../core/agents';
 import { AttentionNotices } from '../core/attention';
 import type { MessageRecord } from '../core/messagePorts';
-import { MessageService } from '../core/messages';
+import { MessageService, STAGE_MS } from '../core/messages';
 import { PlanError, type LogPort, type RetainedRun, type RunId } from '../core/ports';
 import { PANEL_VIEW } from '../ui/catalog';
 import { worktreeProblemText } from '../ui/pickers/location';
@@ -238,7 +238,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		sent: new MessageFile<MessageRecord>(home, Date.now, path.join('messages', 'sent')),
 		results: {
 			report: async (other, result) => {
-				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.callId !== undefined ? { callId: result.callId } : {} }, 15_000)
+				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.callId !== undefined ? { callId: result.callId } : {} }, STAGE_MS)
 					?? Promise.resolve({ ok: false as const, reason: 'window_unavailable' as const, message: 'No network', effects: 'none' as const }));
 				return response.ok;
 			}

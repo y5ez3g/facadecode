@@ -9,7 +9,7 @@
 import { monotonic } from '../base/clock';
 import { messageOf as errorText } from '../base/errors';
 import { FacadeError } from '../core/errors';
-import { HOLD_MS } from '../core/messages';
+import { HOLD_MS, RESPONSE_BUDGET_MS, STAGE_MS } from '../core/messages';
 import type { InputPort, MessageRecord, Messages, SendResult } from '../core/messagePorts';
 import type { Agents, CapabilityState, CliChoice, CliChoices, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
 import { reaches, referenceOf, resolveAgent, ResolveOptions } from '../core/reach';
@@ -17,7 +17,7 @@ import type { StartChoices } from '../record/choices';
 import type { ServedRoute } from '../base/windowNetwork';
 import { ServedAnswer, TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import { accepted, answerOf, codedOf, Effects, errorResult, failure, Result, resultErrorOf, success } from '../schema/result';
-import { MESSAGE_LIMIT, QUERY_TOOLS, ToolName, TOOLS } from '../schema/tools';
+import { MESSAGE_LIMIT, QUERY_ROUTE_MS, QUERY_TOOLS, ToolName, TOOLS } from '../schema/tools';
 import { ArgumentError, codePoints, ToolArguments, validateArguments } from '../schema/validate';
 import { agentOf, cliOf, Data, defined, isoOf, locationOf, messageFile, messageOf, sendFailureOf, ToolWindow } from './facts';
 import { GuestCaller, isGuestCaller, NetworkPort, Reachable, reachableOf, RoutedCall, RoutedDelivery, RoutedResult } from './network';
@@ -119,20 +119,14 @@ export interface ToolServiceDeps {
 /** How long from the shim's ingress a call of a caller not known yet waits for the window's runs to be found again (RULES-1.2). */
 const CALLER_WAIT_MS = 2_000;
 
-/** How long a query waits for another window's answer before it lists that window as unavailable (MCP-1.3). */
-const ROUTE_QUERY_MS = 10_000;
-
 /** How long direct input to another window's agent may take there, its own waits included (MCP-5.2). */
 const ROUTE_INPUT_MS = 30_000;
 
-/** How long a Facade result for an agent of another window may take to reach that window (RULES-1.5). */
-const ROUTE_RESULT_MS = 15_000;
-
-/** A message's first response comes within this long of the shim's ingress (RULES-1.2). */
-const RESPONSE_MS = 2_000;
-
-/** How much longer than the first response's own budget a route to another window waits for it, for the hops back. */
-const ROUTE_SLACK_MS = 1_000;
+/**
+ * The hops back from another window, charged to a message's two seconds before that window answers it: forwarding spends the same
+ * allowance, and the answer comes within them (RULES-1.2).
+ */
+const ROUTE_TRANSIT_MS = 250;
 
 /** How a later outcome reaches the caller: what accepted texts say of it (MCP-1.3, RULES-1.7). */
 const LATER = 'recorded later as a Facade result in your inbox, and typed into your terminal where your CLI\'s message input allows';
@@ -466,7 +460,7 @@ class ToolService {
 			return;
 		}
 		const result: RoutedResult = { to: caller.id, text: report.text, callId: report.callId, agent: { run: report.agent.id, alias: report.agent.alias, name: report.agent.name } };
-		void this.deps.network?.route(caller.window, 'result', result, ROUTE_RESULT_MS).then(response => {
+		void this.deps.network?.route(caller.window, 'result', result, STAGE_MS).then(response => {
 			if (!response.ok) {
 				this.deps.log?.(`A Facade result for ${caller.alias} could not reach its window ${caller.window}: ${response.message}`);
 			}
@@ -479,7 +473,7 @@ class ToolService {
 
 	/** How long a query waits for other windows: its route deadline from the shim's ingress (MCP-1.3). */
 	private queryDeadline(call: Received): number {
-		return Math.max(0, ROUTE_QUERY_MS - this.elapsed(call));
+		return Math.max(0, QUERY_ROUTE_MS - this.elapsed(call));
 	}
 
 	/**
@@ -550,7 +544,8 @@ class ToolService {
 	 * within what is left of its two seconds, its later outcome going back to the sender's window (RULES-1.7).
 	 */
 	private async deliver(delivery: RoutedDelivery, from: string): Promise<Data> {
-		if (!delivery || typeof delivery.id !== 'string' || typeof delivery.to !== 'string' || typeof delivery.text !== 'string' || !isGuestCaller(delivery.from)) {
+		if (!delivery || typeof delivery.id !== 'string' || typeof delivery.to !== 'string' || typeof delivery.text !== 'string' || !isGuestCaller(delivery.from)
+			|| typeof delivery.elapsedMs !== 'number' || !Number.isFinite(delivery.elapsedMs)) {
 			throw new Error('The routed message was incomplete: it had no effect.');
 		}
 		const sender: GuestCaller = { ...delivery.from, window: from };
@@ -703,7 +698,7 @@ class ToolService {
 		if (args.window_id !== this.deps.window.id && this.deps.network && caller.window === undefined) {
 			// The child starts in its window, joining the caller's tree (COLLABORATION-1.1, RULES-4.3)
 			await this.knownWindow(args.window_id);
-			return this.routeCall(args.window_id, 'start_agent', args, caller, call, this.deps.timeout() * 1000 + ROUTE_QUERY_MS);
+			return this.routeCall(args.window_id, 'start_agent', args, caller, call, this.deps.timeout() * 1000 + QUERY_ROUTE_MS);
 		}
 		// Everything that can be checked before acceptance is: a failure here creates no card or terminal (MCP-2.3, RULES-5.1)
 		this.checkWindow(args.window_id);
@@ -973,7 +968,7 @@ class ToolService {
 	private async stopAgent(args: ToolArguments['stop_agent'], caller: Caller, call: Received): Promise<Outcome> {
 		const located = await this.locate(args.agent, caller);
 		if (located.there) {
-			return this.routeCall(located.there.window, 'stop_agent', { agent: located.there.id }, caller, call, this.deps.timeout() * 1000 + ROUTE_QUERY_MS);
+			return this.routeCall(located.there.window, 'stop_agent', { agent: located.there.id }, caller, call, this.deps.timeout() * 1000 + QUERY_ROUTE_MS);
 		}
 		const target = located.here;
 		const shown = `${referenceOf(target)} (${target.id})`;
@@ -1063,10 +1058,10 @@ class ToolService {
 		const shown = shownOf(to);
 		const delivery: RoutedDelivery = {
 			id, from: this.guestOf(caller), to: to.run as RunId, text, ...replyTo ? { replyTo } : {}, callId: call.callId,
-			...args.request_id !== undefined ? { requestId: args.request_id } : {}, elapsedMs: this.elapsed(call)
+			...args.request_id !== undefined ? { requestId: args.request_id } : {}, elapsedMs: this.elapsed(call) + ROUTE_TRANSIT_MS
 		};
-		// The two seconds hold across the hops; the route waits a little longer for the other window's own first response (RULES-1.2)
-		const response = await this.deps.network!.route(window, 'deliver', delivery, Math.max(0, RESPONSE_MS - this.elapsed(call)) + ROUTE_SLACK_MS);
+		// The two seconds hold across the hops: that window answers in time for its answer to come back within them (RULES-1.2)
+		const response = await this.deps.network!.route(window, 'deliver', delivery, Math.max(0, RESPONSE_BUDGET_MS - this.elapsed(call)));
 		const data = defined({
 			message_id: id, alias, target: to.run, target_reference: shown, reply_to: replyTo, length: codePoints(text), window_id: window,
 			...earlier ? { request_id: args.request_id, repeated: true } : {}
