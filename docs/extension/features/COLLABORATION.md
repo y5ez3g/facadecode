@@ -53,8 +53,8 @@ MCP validation; ordinary Unicode and newlines are preserved, never silently trun
 text so a name cannot forge a header. A body containing the delimiter remains literal body content, identified also by
 length in the operation record. A message is one paste followed by Enter, not one Enter per line. Where the recipient's CLI
 takes a paste alone as material rather than a request - Claude Code - the words `Act on this Facade message: ` are typed
-before the paste in the same write, so that the message is the person's own request: Orca saw Claude refuse a brief that came
-as a paste alone (D108). A Facade result asks for nothing and has none. No ten-message batching
+before the paste in the same write, so that the message is the person's own request. Competitive analysis identified
+Claude Code refusing a brief that came as a paste alone (D108). A Facade result asks for nothing and has none. No ten-message batching
 that changes per-send identity, no doorbell or reminder line, and no “fetch the body” notice in place of the message.
 The header's message ID is the same across retries under RULES-1.1; MCP-6.2 teaches the receiving model to deduplicate it.
 Oversized content fails before writing with the supported limit; a caller can explicitly send a file-reference message.
@@ -180,6 +180,7 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 
 ## Change log
 
+- 2026-11-01: Describe competitive-analysis findings without naming individual products; message behavior is unchanged.
 - 2026-10-31: 3.1 follows RULES-1.5's completion of an already pasted owned draft after read delivery (D119).
 - 2026-10-31: 2.1 types `Act on this Facade message: ` before a message's paste for Claude Code (D108).
 - 2026-10-31: 2.2 types what readies a CLI's tools before its first turn where that turn could not use them otherwise -

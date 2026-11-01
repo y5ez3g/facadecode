@@ -51,7 +51,7 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 
 ### One panel for every agent
 
-- **Cards**: Each card shows the agent's name, where it works and what its CLI reports. The dot is green while the agent is starting or working, yellow when it is idle, waiting for input, permission or sign-in, and red for an error or when its activity is unavailable. See [`PANEL.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/PANEL.md).
+- **Cards**: Each card shows the agent's name, where it works and what its CLI reports. The dot is green while the agent is starting or working, grey when it is idle, yellow when it needs permission, an answer or sign-in, and red for an error or when its activity is unavailable. See [`PANEL.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/PANEL.md).
 - **Card actions**: Rename Agent..., Pin or Unpin, Copy Agent Reference, Move Up, Move Down and Close Agent, from each card's context menu.
 - **A terminal for each agent**: Every agent runs in its own editor terminal. Closing a running agent's terminal asks first; Cancel keeps the agent running and opens its terminal again. See [`LIFECYCLE.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/LIFECYCLE.md).
 - **Filter**: Show only the agents in one working location or workspace folder with **Filter by Working Location...** in the panel's title bar, or with **Filter by This Location** or **Filter by This Folder** in a card's context menu. **Clear Filter** shows every agent again; the panel's badge always counts them all.

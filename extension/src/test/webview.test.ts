@@ -148,14 +148,18 @@ suite('The agent panel in Chromium', function () {
 		]);
 	});
 
-	test('J05: green breathes, yellow and red are still - unknown activity is red, never a fourth state - each in words in its hover (RULES-3.2, PANEL-1.4, UX-2.1)', async () => {
-		await evaluate(`document.documentElement.style.cssText = '--vscode-charts-green:#00ff00;--vscode-charts-yellow:#ffff00;--vscode-charts-red:#ff0000;--vscode-sideBar-background:#202020';`);
-		const seen = await evaluate(`(() => { agents = [newCard(1), newCard(2, { dot: 'idle', stateText: 'Idle' }), newCard(3, { dot: 'error', stateText: 'Activity unavailable', line: 'This CLI reports no activity' })]; redraw({ revision: 2 }); return [...document.querySelectorAll('.agent')].map(card => { const dot = card.querySelector('.dot'), style = getComputedStyle(dot); return [dot.className, dot.title, style.backgroundColor, getComputedStyle(dot, '::after').animationName, style.boxShadow.includes('inset')]; }); })()`);
+	test('J05: green work breathes; grey idle, yellow blockers and red error/unknown are still, each named in its hover (RULES-3.2, D127)', async () => {
+		await evaluate(`document.documentElement.style.cssText = '--vscode-charts-green:#00ff00;--vscode-descriptionForeground:#888888;--vscode-charts-yellow:#ffff00;--vscode-charts-red:#ff0000;--vscode-sideBar-background:#202020';`);
+		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'idle', stateText: 'Idle' }), newCard(3, { dot: 'blocked', stateText: 'Needs permission', line: 'Needs permission · Run tests?' }), newCard(4, { dot: 'error', stateText: 'Activity unavailable', line: 'Activity unavailable · This CLI reports no activity' })]`);
+		await deliver({ type: 'state', state: { revision: 2, loading: false, cards, cardCount: 4, capabilities: { remote: false } } });
+		const seen = await evaluate(`(() => { return [...document.querySelectorAll('.agent')].map(card => { const dot = card.querySelector('.dot'), style = getComputedStyle(dot); const paint = style.backgroundImage.match(/rgba?\\([^)]+\\)/)?.[0] ?? style.backgroundColor; return [dot.className, dot.title, paint, getComputedStyle(dot, '::after').animationName, style.boxShadow.includes('inset')]; }); })()`);
 		assert.deepStrictEqual(seen, [
 			['dot working', 'Working', 'rgb(0, 255, 0)', 'facade-breathe', false],
-			['dot not-working', 'Idle', 'rgb(255, 255, 0)', 'none', false],
+			['dot not-working', 'Idle', 'rgb(136, 136, 136)', 'none', false],
+			['dot blocked', 'Needs permission', 'rgb(255, 255, 0)', 'none', false],
 			['dot error', 'Activity unavailable', 'rgb(255, 0, 0)', 'none', false]
 		]);
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 
 	test('a card has no unread dot, completed check, bold name or extra badge (PANEL-1.4)', async () => {
@@ -245,25 +249,172 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(said, ['polite', 'Agent 1: Idle. Agent 2: Error: Exited with code 2', 'Agent 1: Idle. Agent 2: Error: Exited with code 2']);
 	});
 
-	test('PANEL-1.3, D72: a location keeps its own width up to 40% of its line, the name has the rest; a workspace folder\'s name is shown whole or not at all', async () => {
+	test('PANEL-1.3, D128: short names and locations lend their spare width; long folder/worktree labels keep both ends separately', async () => {
 		const seen = await evaluate(`(async () => {
 			document.body.style.width = '300px';
 			agents = [
 				newCard(1, { name: 'Refactor the authentication middleware', location: { label: 'main', folderPrefix: 'demo', full: 'demo · main · /demo' } }),
-				newCard(2, { name: 'Relay', location: { label: 'feature-login-redesign-with-a-long-name', folderPrefix: 'untitled folder 2', full: 'x' } })
+				newCard(2, { name: 'Ada', location: { label: 'feature/128-panel-layout-improvements', folderPrefix: 'api', full: 'api · feature/128-panel-layout-improvements' } }),
+				newCard(3, { name: 'Ada', location: { label: 'main', folderPrefix: 'a-very-long-workspace-folder-with-another-long-component-name', full: 'a-very-long-workspace-folder-with-another-long-component-name · main' } })
 			];
 			redraw({ revision: 3 });
 			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			const facts = [...document.querySelectorAll('.agent')].map(card => {
 				const line = card.querySelector('.line.top').getBoundingClientRect().width, place = card.querySelector('.place'), name = card.querySelector('.name');
-				const text = place.querySelector('.tree') ?? place;
-				return [place.getBoundingClientRect().width / line <= 0.401, text.scrollWidth > text.clientWidth + 1, place.classList.contains('narrow'), name.scrollWidth > name.clientWidth + 1];
+				const folder = place.querySelector('.folder').textContent, tree = place.querySelector('.tree').textContent;
+				return { over40: place.getBoundingClientRect().width / line > 0.4, nameCut: name.scrollWidth > name.clientWidth + 1, folder, tree, hover: card.title };
 			});
 			document.body.style.width = '';
 			return facts;
 		})()`);
-		// A short location whole and the long name cut; a long location cut at 40%, without its folder's name, the short name whole
-		assert.deepStrictEqual(seen, [[true, false, false, true], [true, true, true, false]]);
+		assert.deepStrictEqual([seen[0].nameCut, seen[0].folder, seen[0].tree], [true, 'demo', 'main']);
+		assert.deepStrictEqual([seen[1].over40, seen[1].nameCut, seen[1].folder], [true, false, 'api']);
+		assert.match(seen[1].tree, /^feature\/.*….*improvements$/);
+		assert.ok(seen[1].hover.includes('feature/128-panel-layout-improvements'));
+		assert.deepStrictEqual([seen[2].over40, seen[2].nameCut, seen[2].tree], [true, false, 'main']);
+		assert.match(seen[2].folder, /^a-.*….*name$/);
+	});
+
+	test('PANEL-1.3: width changes restore original location text; Unicode clusters, empty names and live location changes remain intact', async () => {
+		const seen = await evaluate(`(async () => {
+			const folder = '👩🏽‍💻Cafe\u0301-工作目录-👨‍👩‍👧‍👦';
+			const tree = 'feature/42-开发-👩🏽‍💻-Cafe\u0301-👨‍👩‍👧‍👦';
+			agents = [newCard(1, { name: '', location: { folderPrefix: folder, label: tree, full: folder + ' · ' + tree }, label: folder + ' · ' + tree })];
+			document.body.style.width = '220px'; redraw({ revision: 2 });
+			const parts = () => [...document.querySelectorAll('.folder, .tree')].map(el => el.textContent);
+			const narrow = parts();
+			const segment = text => [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].map(each => each.segment);
+			const whole = narrow.every((text, i) => segment(text).every(part => part === '…' || segment([folder, tree][i]).includes(part)));
+			document.body.style.width = '900px';
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			const wide = parts();
+			const full = [document.querySelector('.agent').title.includes(folder + ' · ' + tree), document.querySelector('.agent').getAttribute('aria-label')];
+			agents = [newCard(1, { name: 'Ada', location: { folderPrefix: 'api', label: 'main', full: 'api · main' } })]; redraw({ revision: 3 });
+			const updated = parts();
+			agents = [newCard(1, { name: 'Ada', location: { folderPrefix: 'web', label: 'main', full: 'web · main' } })]; redraw({ revision: 4 });
+			const changedFolder = parts();
+			document.body.style.width = '';
+			return { narrow, whole, wide, full, updated, changedFolder, folder, tree, errors: window.errors };
+		})()`);
+		assert.ok(seen.narrow.some((text: string) => text.includes('…')));
+		assert.strictEqual(seen.whole, true, 'ellipsis never splits an emoji, accent or other grapheme');
+		assert.deepStrictEqual(seen.wide, [seen.folder, seen.tree]);
+		assert.deepStrictEqual(seen.full, [true, `${seen.folder} · ${seen.tree}`]);
+		assert.deepStrictEqual([seen.updated, seen.changedFolder, seen.errors], [['api', 'main'], ['web', 'main'], []]);
+	});
+
+	test('PANEL-1.3: middle-ellipsized folder and worktree stay compact against their separator and the right edge', async () => {
+		const cases = [
+			{ name: '小林 👩🏽‍💻', folder: '项目文件夹', tree: 'feature/128-界面与工作区布局' },
+			{ name: 'Ada', folder: 'a-very-long-workspace-folder-name', tree: 'feature/128-panel-location-layout' },
+			{ name: 'Ada', folder: 'api', tree: 'feature/128-panel-location-layout' },
+			{ name: 'Ada', folder: 'a-very-long-workspace-folder-name', tree: 'main' },
+			{ name: '', folder: '👩🏽‍💻Café-工作目录-👨‍👩‍👧‍👦', tree: 'feature/42-开发-👩🏽‍💻-Café-👨‍👩‍👧‍👦' },
+			{ name: 'Ada', tree: 'feature/128-a-location-without-a-folder-prefix' },
+			{ name: 'Ada', folder: 'api', tree: 'main' }
+		];
+		for (const font of ['-apple-system, sans-serif', 'serif', 'monospace']) {
+			await evaluate(`document.documentElement.style.setProperty('--vscode-font-family', ${JSON.stringify(font)})`);
+			for (const width of [180, 260, 420, 720]) {
+				await call('Emulation.setDeviceMetricsOverride', { width, height: 400, deviceScaleFactor: 2, mobile: false });
+				const rows = await evaluate(`(() => {
+					agents = ${JSON.stringify(cases)}.flatMap(item => [false, true].map(pinned => ({ ...item, pinned }))).map((item, i) => newCard(i + 1, { name: item.name, pinned: item.pinned, location: { label: item.tree, ...(item.folder ? { folderPrefix: item.folder } : {}), full: [item.folder, item.tree].filter(Boolean).join(' · ') } }));
+					redraw({ revision: 3 });
+					return [...document.querySelectorAll('.agent')].map(card => {
+						const top = card.querySelector('.top'), name = card.querySelector('.name'), pin = card.querySelector('.pin'), place = card.querySelector('.place'), folder = place.querySelector('.folder'), bullet = place.querySelector('.bullet'), tree = place.querySelector('.tree');
+						const visible = el => { const range = document.createRange(); range.selectNodeContents(el); const text = range.getBoundingClientRect(), box = el.getBoundingClientRect(); return { left: Math.max(text.left, box.left), right: Math.min(text.right, box.right) }; };
+						return { text: place.textContent, pinned: !!pin, pinGap: pin ? pin.getBoundingClientRect().left - name.getBoundingClientRect().right : 4, locationGap: place.getBoundingClientRect().left - (pin ?? name).getBoundingClientRect().right, beforeDot: folder ? bullet.getBoundingClientRect().left - visible(folder).right : 0, afterDot: bullet ? visible(tree).left - visible(bullet).right : 0, rightSlack: top.getBoundingClientRect().right - visible(tree).right, full: card.title.includes(agents.find(agent => agent.runId === card.dataset.run).location.full) };
+					});
+				})()`);
+				for (const row of rows) {
+					const context = `${font}, ${width}px: ${JSON.stringify(row)}`;
+					assert.ok(Math.abs(row.pinGap - 4) <= 0.1 && row.locationGap >= 5.9, context);
+					assert.ok(row.beforeDot >= -0.1 && row.beforeDot <= 1.1, context);
+					assert.ok(row.afterDot >= -0.1 && row.afterDot <= 1.1, context);
+					assert.ok(row.rightSlack >= -0.1 && row.rightSlack <= 1.1, context);
+					assert.strictEqual(row.full, true, context);
+				}
+			}
+		}
+	});
+
+	test('PANEL-1.3: Pin and Unpin refit the same card without losing either location component', async () => {
+		const seen = await evaluate(`(() => {
+			document.body.style.width = '260px';
+			agents = [newCard(1, { name: 'Ada', location: { folderPrefix: '项目示例超长文件夹', label: 'feature/优化卡片布局与工作区显示', full: '完整工作位置' } })];
+			redraw();
+			const card = document.querySelector('.agent');
+			const read = () => { const top = card.querySelector('.top'), place = card.querySelector('.place'); return { text: place.textContent, right: place.getBoundingClientRect().right - top.getBoundingClientRect().right, pin: !!card.querySelector('.pin'), same: document.querySelector('.agent') === card }; };
+			const before = read();
+			agents[0] = { ...agents[0], pinned: true }; redraw({ revision: 2 });
+			const pinned = read();
+			agents[0] = { ...agents[0], pinned: false }; redraw({ revision: 3 });
+			return [before, pinned, read()];
+		})()`);
+		assert.deepStrictEqual(seen.map((row: { pin: boolean }) => row.pin), [false, true, false]);
+		assert.ok(seen.every((row: { text: string; right: number; same: boolean }) => row.same && row.text.includes(' · ') && Math.abs(row.right) <= 1), JSON.stringify(seen));
+		assert.deepStrictEqual(seen[2], seen[0], 'Unpin returns all of the icon space to the original labels');
+	});
+
+	test('U13: location structure and first-line bounds survive narrow widths, theme changes and zoom scales', async function () {
+		this.timeout(60_000);
+		// Bundled VS Code theme values and their registered defaults. Scaling the CSS viewport and output together emulates editor zoom.
+		const themes = [
+			{ name: 'dark-modern', kind: 'vscode-dark', background: '#181818', foreground: '#cccccc', secondary: '#9d9d9d', green: '#89d185', yellow: '#cca700', red: '#f14c4c' },
+			{ name: 'light-modern', kind: 'vscode-light', background: '#f8f8f8', foreground: '#3b3b3b', secondary: '#3b3b3b', green: '#388a34', yellow: '#bf8803', red: '#e51400' },
+			{ name: 'hc-dark', kind: 'vscode-high-contrast', background: '#000000', foreground: '#ffffff', secondary: '#ffffffb3', green: '#89d185', yellow: '#ffd370', red: '#f48771' },
+			{ name: 'hc-light', kind: 'vscode-high-contrast-light', background: '#ffffff', foreground: '#292929', secondary: '#292929b3', green: '#374e06', yellow: '#895503', red: '#b5200d' },
+			{ name: 'solarized-light', kind: 'vscode-light', background: '#eee8d5', foreground: '#616161', secondary: '#717171', green: '#388a34', yellow: '#bf8803', red: '#e51400' }
+		];
+		const capture = process.env.FACADE_PANEL_CAPTURE;
+		if (capture) { fs.mkdirSync(capture, { recursive: true }); }
+		const root = path.resolve(__dirname, '../../..');
+		const logo = `data:image/png;base64,${fs.readFileSync(path.join(root, 'media/agents/avatar-claude.png')).toString('base64')}`;
+		for (const theme of themes) {
+			await evaluate(`(() => {
+				document.body.className = ${JSON.stringify(theme.kind)};
+				const vars = ${JSON.stringify({ '--vscode-font-family': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif', '--vscode-sideBar-background': theme.background, '--vscode-foreground': theme.foreground, '--vscode-descriptionForeground': theme.secondary, '--vscode-charts-green': theme.green, '--vscode-charts-yellow': theme.yellow, '--vscode-charts-red': theme.red })};
+				for (const [key, value] of Object.entries(vars)) document.documentElement.style.setProperty(key, value);
+				document.body.style.backgroundColor = ${JSON.stringify(theme.background)};
+				const longLocation = { folderPrefix: 'facadecode-extension-workspace', label: 'feature/128-panel-location-layout', full: 'facadecode-extension-workspace · feature/128-panel-location-layout' };
+				agents = [
+					newCard(1, { name: 'Ada', location: { folderPrefix: 'api', label: longLocation.label, full: 'api · ' + longLocation.label }, line: '✳ Improving the panel layout' }),
+					newCard(2, { name: 'Moss', dot: 'idle', stateText: 'Idle', location: { folderPrefix: longLocation.folderPrefix, label: 'main', full: longLocation.folderPrefix + ' · main' }, line: 'Ready for input' }),
+					newCard(3, { name: 'Luna', dot: 'blocked', stateText: 'Needs permission', location: { folderPrefix: 'api', label: 'main', full: 'api · main' }, line: 'Needs permission · Run tests?' }),
+					newCard(4, { name: 'Nova', dot: 'error', stateText: 'Error: Connection lost', location: { folderPrefix: 'web', label: 'main', full: 'web · main' }, line: 'Error: Connection lost' }),
+					newCard(5, { name: 'Authentication middleware helper', pinned: true, location: longLocation, line: 'OC | Update the login flow' }),
+					newCard(6, { name: '小林 👩🏽‍💻', pinned: true, location: { folderPrefix: '项目文件夹', label: 'feature/128-界面与工作区布局', full: '项目文件夹 · feature/128-界面与工作区布局' }, line: '正在调整工作区显示' })
+				]; redraw({ revision: 3 });
+				for (const img of document.querySelectorAll('.face img')) img.src = ${JSON.stringify(logo)};
+			})()`);
+			for (const width of [180, 260, 420, 720]) {
+				for (const zoom of [-1, 0, 2]) {
+					const factor = 1.2 ** zoom;
+					await call('Emulation.setDeviceMetricsOverride', { width: Math.round(width / factor), height: Math.round(340 / factor), deviceScaleFactor: factor * 2, mobile: false });
+					await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+					const result = await evaluate(`(() => {
+						const rows = [...document.querySelectorAll('.agent')].map(card => {
+							const top = card.querySelector('.top'), name = card.querySelector('.name'), place = card.querySelector('.place');
+							const n = name.getBoundingClientRect(), p = place.getBoundingClientRect(), t = top.getBoundingClientRect();
+							return { gap: p.left - n.right, over: p.right - t.right, folder: place.querySelector('.folder').textContent, separator: place.querySelector('.bullet').textContent, tree: place.querySelector('.tree').textContent, hidden: getComputedStyle(place.querySelector('.folder')).display === 'none' };
+						});
+						return { rows, overflow: document.documentElement.scrollWidth > window.innerWidth, errors: window.errors, colours: [...document.querySelectorAll('.dot')].slice(0, 4).map(dot => getComputedStyle(dot).backgroundColor) };
+					})()`);
+					const context = `${theme.name}, ${width}px, zoom ${zoom}: ${JSON.stringify(result)}`;
+					assert.ok(result.rows.every((row: { gap: number; over: number; folder: string; separator: string; tree: string; hidden: boolean }) => row.gap >= 5.5 && row.over <= 1 && row.folder && row.tree && row.separator === ' · ' && !row.hidden), context);
+					assert.strictEqual(result.overflow, false, context);
+					assert.deepStrictEqual(result.errors, [], context);
+					assert.strictEqual(new Set(result.colours).size, 4, context);
+					if (capture && zoom === 0 && (width === 260 || width === 420)) {
+						const shot = await call('Page.captureScreenshot', { format: 'png' });
+						fs.writeFileSync(path.join(capture, `${theme.name}-${width}.png`), Buffer.from(shot.result.data, 'base64'));
+					}
+				}
+			}
+		}
+		if (capture) {
+			fs.writeFileSync(path.join(capture, 'environment.json'), JSON.stringify({ browser: (await call('Browser.getVersion')).result, isolatedProfile: profile, widths: [180, 260, 420, 720], emulatedZoom: [-1, 0, 2], themes: themes.map(theme => theme.name) }, null, 2));
+		}
 	});
 
 	test('PANEL-1.4, 1.5: under the pointer a card is the card itself or its dot, so crossing it never clears and sets the same tooltip again (electron/electron#49843)', async () => {

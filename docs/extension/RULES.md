@@ -88,8 +88,8 @@ protection.
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
 or environments consume the same budget. No extra attempts on input-change events, indefinite retries, or bursts to catch
-missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for: Orca holds its
-notices while a person types, and so does Facade, never submitting the person's text with the message (D106). At the
+missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for. Competitive
+analysis informed this behavior: Facade never submits the person's text with the message (D106). At the
 deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage
 whose input was never held ends at fifteen seconds; once held, its deadline is ten minutes from its start, whatever the
 input shows after. A long paste adds the time it takes, at CLIS-2.1's paste rates, to each of its stage's deadlines, so
@@ -106,9 +106,9 @@ extend a deadline.
 
 **Once a message's text went into the input whole, later attempts never type it again; they press Enter only over the message's own draft.**
 
-A submission the CLI takes slowly is not lost: Orca found that typing it again delivers it twice, and counts a written
-prompt as delivered (D104). A later attempt of the same delivery reads the input: the message's own draft alone - its
-text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
+A submission the CLI takes slowly is not lost: competitive analysis identified duplicate delivery when a prompt is
+typed again before the CLI has processed it (D104). A later attempt of the same delivery reads the input: the message's
+own draft alone - its text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
 this delivery confirms the submission; anything else is waited for under 1.4 and 1.5. A paste that never showed in the
 input is not typed again either: a CLI busy with its turn draws it late, and its own draft then gets Enter. A paste whose
 answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. Once a paste
@@ -130,7 +130,7 @@ A returned immediate final result needs no second notification. An accepted asyn
 labeled Facade result with the original message ID, target and outcome - delivered, including delivery through
 read_messages, or not delivered - using the finite result budget if needed. The result is not authored by B and
 requests no response. Results that come for one terminal while none of them is typed yet go in one paste, one turn of its
-model for them all, as T3 Code wakes a parent once for the tasks that finished together; a result read meanwhile is left out
+model for them all, following competitive analysis of batching completed-task results; a result read meanwhile is left out
 of it (D115). Failure to return it never resends the original message. A message whose result already said
 it was not delivered and that its recipient reads later becomes delivered without a second result.
 If A is gone or result delivery fails, finish the handoff; do not generate another error for B or a human popup.
@@ -155,8 +155,8 @@ A retained red card is not permission to duplicate an agent's operation error as
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
 to contact a person. One fact does go to an agent: an agent another agent of the same window started, whose CLI has waited
 twenty seconds on its own permission, question or sign-in, is reported to that creator once each time it starts waiting, as
-a Facade result naming who can answer - the person's permission and sign-in are theirs (D109). Orca tells its coordinator of
-a worker stopped at a prompt; without it, a child waiting on a question no one sees stalls its creator's work. A person is
+a Facade result naming who can answer - the person's permission and sign-in are theirs (D109). Competitive analysis
+highlighted how a child waiting on an unseen question can stall its creator's work. A person is
 never told by it. The notice reports the blocker without asking its creator to contact the person, forward the notice or
 escalate it. Whether an agent contacts the person follows the person's task instructions, not this automatic notice.
 Permission and sign-in remain the person's to authorize or perform; reporting the blocker grants no authority to answer it.
@@ -257,12 +257,13 @@ immediately. A stale observation is labeled as such rather than treated as proof
 
 ### 3.2 The dot says only what is known
 
-**Working is green, not working is yellow, and an error or unavailable reliable status is red.**
+**Starting or working is green, idle is grey, a native blocker is yellow, and an error or unavailable reliable status is red.**
 
 An unresolved error takes precedence. Without such an error, observed work/startup is green - startup lasting until the
-CLI first shows its activity, within CLIS-2.3's bound - and observed not-working is yellow. Native permission/login questions are yellow unless a separate error exists. Unknown activity is an error:
-use red and explain the unavailable status in the second line; there is no neutral/outline fourth state.
-A quiet screen does not prove idle. A turn ending becomes yellow without a notification. Recovery clears only the
+CLI first shows its activity, within CLIS-2.3's bound. Observed not-working with no blocker is grey; native permission,
+answer and sign-in blockers are yellow. Unknown activity remains red, including beside a known blocker, and the second
+line explains the unavailable status. Grey requires reliable idle evidence; it never stands for an unknown state (D127).
+A quiet screen does not prove idle. A turn ending becomes grey without a notification or a task-completion claim. Recovery clears only the
 corresponding error. Reduced motion removes breathing, never the accessible state description.
 
 ### 3.3 Exit classification is independent of who caused it
@@ -391,7 +392,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 | --- | --- |
 | 1.1–1.10 | One recipient; response/attempt budgets; delivery by terminal, native prompt or read_messages; one delivery state; stable duplicate IDs; drafts and unrecognized input boxes untouched; no human fallback; closure |
 | 2.1–2.4 | Client network across local and remote windows, unique run IDs, duplicate names, `#human` and `@human`, tree survival, remote paths, folder/worktree removal |
-| 3.1–3.4 | Unknown red, idle yellow, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
+| 3.1–3.4 | Work green, idle grey, native blockers yellow, errors/unknown red, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
 
@@ -399,6 +400,8 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
+- 2026-11-01: Describe competitive-analysis findings without naming individual products; behavior is unchanged.
+- 2026-11-01: 3.2 separates reliable idle from native blockers: grey idle, yellow permission/answer/sign-in, with green work and red error/unknown retained (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: The owner's clarification of 1.8: automatic blocker notices never direct an agent to contact the person.

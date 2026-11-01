@@ -145,7 +145,6 @@ export const museAdapter: CliAdapter = {
 	screenStatus: 'muse',
 	// Its input, recorded on macOS with Muse Code 1.4.14 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'muse-frame', evidence: 'its input frame between two rules, its upper one labeled where it offers voice input: empty, a typed, pasted, multi-line, history or slash-command draft, and gone behind its trust question' },
-	title: { names: ['Muse Code', 'Muse', 'muse'] },
 	sandbox: yolo => yolo ? { state: 'off', by: ['--disable-sandbox'] } : { state: 'native' },
 	approvals: yolo => yolo ? { state: 'bypassed', by: ['--disable-approval'] } : { state: 'native' },
 	interruptExit: sigintExit

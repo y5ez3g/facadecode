@@ -61,22 +61,22 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			received.push([reason, actual]); return 'Lokalisierter Fehler mit erhaltenem Worktree';
 		} };
 		const shown = statusOf(facts, words);
-		assert.strictEqual(shown.line, 'Lokalisierter Fehler mit erhaltenem Worktree');
+		assert.strictEqual(shown.line, 'Error: Lokalisierter Fehler mit erhaltenem Worktree');
 		assert.deepStrictEqual(received, [['spawn refused', effects]]);
 	});
 
 	test('J05: an unresolved error is red with its reason first, whatever else is known; unknown activity is red too, its reason on the second line', () => {
 		const cases: [Partial<RunFacts>, string, string, string][] = [
-			[{ lifecycle: 'ended', end: { kind: 'failed', at: 3 }, error: { reason: 'claude was not found', source: 'launch', at: 3 }, title: 'T', blocker: { kind: 'question' } }, 'error', 'Error: claude was not found', 'claude was not found'],
-			[{ lifecycle: 'ended', end: { kind: 'abnormal', code: 2, at: 3 }, error: { reason: 'Exited with code 2', source: 'exit', at: 3 } }, 'error', 'Error: Beendet mit Code 2', 'Beendet mit Code 2'],
-			[{ activity: 'working', error: { reason: 'Rate limited', source: 'cli', at: 3 }, title: 'Fix login' }, 'error', 'Error: Rate limited', 'Rate limited'],
-			[{ lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false, error: { reason: 'Spawn failed', source: 'launch', at: 3 } }, 'error', 'Error: Spawn failed', 'Spawn failed'],
+			[{ lifecycle: 'ended', end: { kind: 'failed', at: 3 }, error: { reason: 'claude was not found', source: 'launch', at: 3 }, title: 'T', blocker: { kind: 'question' } }, 'error', 'Error: claude was not found', 'Error: claude was not found'],
+			[{ lifecycle: 'ended', end: { kind: 'abnormal', code: 2, at: 3 }, error: { reason: 'Exited with code 2', source: 'exit', at: 3 } }, 'error', 'Error: Beendet mit Code 2', 'Error: Beendet mit Code 2'],
+			[{ activity: 'working', error: { reason: 'Rate limited', source: 'cli', at: 3 }, title: 'Fix login' }, 'error', 'Error: Rate limited', 'Error: Rate limited'],
+			[{ lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false, error: { reason: 'Spawn failed', source: 'launch', at: 3 } }, 'error', 'Error: Spawn failed', 'Error: Spawn failed'],
 			[{ activity: 'unknown', reporting: false }, 'error', 'Activity unavailable', 'Activity unavailable'],
-			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity', title: 'Fix login' }, 'error', 'Activity unavailable', 'This CLI reports no activity'],
+			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity', title: 'Fix login' }, 'error', 'Activity unavailable', 'Activity unavailable · This CLI reports no activity'],
 			[{ activity: 'working', reporting: false, title: 'Fix login' }, 'error', 'Activity unavailable', 'Activity unavailable']
 		];
 		for (const [facts, dot, stateText, line] of cases) {
-			assert.deepStrictEqual(statusOf(run(facts), WORDS), { dot, stateText, line, ...(line !== stateText && dot === 'error' && stateText === 'Activity unavailable' ? { reason: line } : {}) }, JSON.stringify(facts));
+			assert.deepStrictEqual(statusOf(run(facts), WORDS), { dot, stateText, line, ...(line !== stateText && dot === 'error' && stateText === 'Activity unavailable' ? { reason: facts.activityReason } : {}) }, JSON.stringify(facts));
 		}
 	});
 
@@ -89,7 +89,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			statusOf(run({ lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false, title: 'T' }), WORDS),
 			statusOf(run({ lifecycle: 'starting', phase: 'creating_worktree', activity: 'unknown', reporting: false }), WORDS).line
 		], [
-			{ dot: 'idle', stateText: 'Idle', line: 'Allow Bash(npm test)?', reason: 'Allow Bash(npm test)?' },
+			{ dot: 'blocked', stateText: 'Needs permission', line: 'Needs permission · Allow Bash(npm test)?', reason: 'Allow Bash(npm test)?' },
 			'Needs permission',
 			'Sign-in required',
 			'Waiting for an answer',
@@ -116,14 +116,16 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 	test('a known native blocker leads the second line over unavailable activity, which keeps the dot red and its explanation (PANEL-1.4, RULES-3.2)', () => {
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, blocker: { kind: 'auth' } }), WORDS),
+			statusOf(run({ activity: 'unknown', reporting: true, blocker: { kind: 'question' } }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: false, activityReason: 'No activity report since 10:02', blocker: { kind: 'permission', text: 'Allow Bash?' } }), WORDS).line
 		], [
 			{ dot: 'error', stateText: 'Activity unavailable', line: 'Sign-in required · Activity unavailable', reason: 'Sign-in required' },
-			'Allow Bash? · No activity report since 10:02'
+			{ dot: 'error', stateText: 'Activity unavailable', line: 'Waiting for an answer · Activity unavailable', reason: 'Waiting for an answer' },
+			'Needs permission · Allow Bash? · No activity report since 10:02'
 		]);
 	});
 
-	test('reliable activity is green or yellow over the CLI title, else Working or Ready for input - never a completion claim (PANEL-1.4)', () => {
+	test('reliable activity is green or grey over the CLI title, else Working or Ready for input - never a completion claim (PANEL-1.4)', () => {
 		const lines = [
 			statusOf(run({ activity: 'working', title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'working' }), WORDS),
@@ -137,6 +139,10 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			{ dot: 'idle', stateText: 'Idle', line: 'Ready for input' }
 		]);
 		assert.ok(lines.every(each => !/done/i.test(JSON.stringify(each))));
+		assert.deepStrictEqual([
+			statusOf(run({ title: undefined, promptLine: 'Implement the parser' }), WORDS).line,
+			statusOf(run({ activity: 'not_working', title: undefined, promptLine: 'Implement the parser' }), WORDS).line
+		], ['Implement the parser', 'Implement the parser'], 'the creation prompt is direct too, with no normal-state prefix');
 	});
 
 	test('U06: the hover names the agent with its short run ID and CLI, then the full title, the state and an unsaid reason; the label says name, short ID, state, location, CLI and second line', () => {
@@ -148,7 +154,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			'Ada, #a1, Working, shop · main, Claude Code, Fix the login flow',
 			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'shop · main\n/app' }, menu
 		]);
-		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Ada · #a1 · Claude Code', 'Fix the login flow', 'Idle', 'Waiting for an answer'], 'Ada, #a1, Idle, shop · main, Claude Code, Waiting for an answer']);
+		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Ada · #a1 · Claude Code', 'Fix the login flow', 'Waiting for an answer'], 'Ada, #a1, Waiting for an answer, shop · main, Claude Code']);
 		// The second line saying no more than the state is not said twice
 		assert.deepStrictEqual([unknown.tooltip, unknown.label, unknown.dot], [['Ada · #a1 · Claude Code', 'Activity unavailable'], 'Ada, #a1, Activity unavailable, shop · main, Claude Code', 'error']);
 		// An empty name is left out of both, never said as an empty part; the card carries its #aN for what the page says of it
@@ -167,7 +173,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			ended({ kind: 'abnormal', signal: 'SIGKILL', at: 3 }, 'Ended by signal SIGKILL'),
 			ended({ kind: 'abnormal', at: 3 }, 'Exited with code unknown'),
 			ended({ kind: 'failed', at: 3 }, 'claude was not found', 'launch')
-		], ['Beendet mit Code 137', 'Durch Signal SIGKILL beendet', 'Getrennt; Exit-Ursache unbekannt', 'claude was not found']);
+		], ['Error: Beendet mit Code 137', 'Error: Durch Signal SIGKILL beendet', 'Error: Getrennt; Exit-Ursache unbekannt', 'Error: claude was not found']);
 	});
 
 	test('PANEL-1.5: the hover names the window with the agent\'s qualified location, where the window has a name', () => {

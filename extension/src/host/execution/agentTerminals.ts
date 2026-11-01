@@ -48,7 +48,6 @@ interface TerminalOptions {
 const TOGETHER_MS = 250;
 /** A terminal created by Facade may be correlated with an opening tab for this long. */
 const OPENING_MS = 2_000;
-const SEPARATOR_SETTING = 'terminal.integrated.tabs.separator';
 
 /** Owns native terminal resources, tab identity, names and focus; it never starts or ends a CLI process. */
 export class AgentTerminals implements vscode.Disposable {
@@ -89,12 +88,6 @@ export class AgentTerminals implements vscode.Disposable {
 				if (terminal.exitStatus?.reason !== vscode.TerminalExitReason.Shutdown) {
 					this.options.closed(pair.run);
 				}
-			}),
-			vscode.workspace.onDidChangeConfiguration(event => {
-				if (event.affectsConfiguration(SEPARATOR_SETTING)) {
-					const separator = this.separator();
-					this.entries.forEach(pair => pair.pty.setSeparator(separator));
-				}
 			})
 		);
 	}
@@ -126,7 +119,7 @@ export class AgentTerminals implements vscode.Disposable {
 
 	/** Register the pseudoterminal first; the coordinator opens the native tab after registering its run. */
 	create(facts: Pick<PairFacts, 'run' | 'name' | 'cli'>, reveal: boolean): AgentTerminal {
-		const pty = new AgentPty(facts.name, this.separator(), line => this.options.log(line));
+		const pty = new AgentPty(facts.name, line => this.options.log(line));
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
 		const pair: TerminalEntry = {
 			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(),
@@ -208,7 +201,7 @@ export class AgentTerminals implements vscode.Disposable {
 		await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...owner, kind: 'retire', runs });
 	}
 
-	/** Creates the native tab with its known title; later pseudoterminal name events apply once the terminal opens. */
+	/** Creates the native tab with the agent's name; later rename events apply once the terminal opens. */
 	private createTerminal(pair: TerminalEntry, reveal: boolean): void {
 		const { cli, pty } = pair;
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
@@ -450,11 +443,6 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 		}
 		return undefined;
-	}
-
-	private separator(): string {
-		const value = vscode.workspace.getConfiguration().get<unknown>(SEPARATOR_SETTING);
-		return typeof value === 'string' ? value : ' - ';
 	}
 
 }

@@ -11,6 +11,7 @@
 
 import { act, Browsing, Check, contrastOf, el, face, isBoolean, isNumber, isObject, isShaped, isString, isStrings, lookOf, button, page, post, relativeTime, saveBrowsing, savedBrowsing, strings } from './dom';
 import { Card, PanelState, Scrolling } from './protocol';
+import { fitCardTop } from './cardLayout';
 import { cancelSmoothScroll, setScrolling, takeWheel } from './wheel';
 import { installScrollbar } from './scrollbar';
 import { installViewport, pageDimensions } from './viewport';
@@ -36,7 +37,7 @@ let state: PanelState = { revision: 0, loading: true, cards: [], cardCount: 0, c
 /** Where the person was when this view last hid: restored on the first list drawn, without taking input focus (PANEL-3.1). */
 let restoring = savedBrowsing();
 
-const DOTS: readonly unknown[] = ['working', 'idle', 'error'];
+const DOTS: readonly unknown[] = ['working', 'idle', 'blocked', 'error'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
 const AVATAR_COLORS: readonly unknown[] = ['blue', 'orange', 'purple'];
 
@@ -233,8 +234,9 @@ function checkAllInitials(): void {
 }
 
 // The theme changed - VS Code sets its colours on the page's root and its kind on the body: the letters are tested again
-new MutationObserver(checkAllInitials).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
-new MutationObserver(checkAllInitials).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+const themeChanged = () => { checkAllInitials(); fitPlaces(); };
+new MutationObserver(themeChanged).observe(document.documentElement, { attributes: true, attributeFilter: ['style', 'class'] });
+new MutationObserver(themeChanged).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
 /** The saved scroll position on the cards drawn from the host's state, kept within the list. */
 function restoreBrowsing(saved: Browsing): void {
@@ -470,10 +472,6 @@ function update(entry: Drawn, card: Card): void {
 	element.dataset.vscodeContext = contextOf(card);
 }
 
-/**
- * Where a card's agent works, at its first line's end: its location, after its workspace folder's name in a multi-folder window - the
- * folder's name giving way first, the location's last (PANEL-1.3).
- */
 const PIN_PATH = "M10.0589 2.44511C9.34701 1.73063 8.14697 1.90829 7.67261 2.79839L5.6526 6.58878L2.8419 7.52568C2.6775 7.58048 2.5532 7.71649 2.51339 7.88514C2.47357 8.0538 2.52392 8.23104 2.64646 8.35357L4.79291 10.5L2.14645 13.1465L2 14L2.85356 13.8536L5.50002 11.2071L7.64646 13.3536C7.76899 13.4761 7.94623 13.5265 8.11489 13.4866C8.28354 13.4468 8.41955 13.3225 8.47435 13.1581L9.41143 10.3469L13.1897 8.32423C14.0759 7.84982 14.2538 6.6551 13.5443 5.94305L10.0589 2.44511ZM8.55511 3.2687C8.71323 2.972 9.11324 2.91278 9.35055 3.15094L12.836 6.64889C13.0725 6.88624 13.0131 7.28448 12.7178 7.44262L8.76403 9.55921C8.65137 9.61952 8.56608 9.72068 8.52567 9.84191L7.7815 12.0744L3.92562 8.21853L6.15812 7.47436C6.27966 7.43385 6.38101 7.34823 6.44126 7.23518L8.55511 3.2687Z";
 
 function pin(): HTMLElement {
@@ -489,29 +487,25 @@ function pin(): HTMLElement {
 	return element;
 }
 
+/** Separate folder/worktree labels keep their original values in the card's state (PANEL-1.3, D128). */
 function placeOf(location: Card['location']): HTMLElement {
-	if (!location.folderPrefix) {
-		return el('span', 'place', location.label);
+	const element = el('span', location.folderPrefix ? 'place within' : 'place');
+	if (location.folderPrefix) {
+		element.append(el('span', 'folder', location.folderPrefix), el('span', 'bullet', ' · '));
 	}
-	const element = el('span', 'place within');
-	element.append(el('span', 'folder', location.folderPrefix), el('span', 'bullet', ' · '), el('span', 'tree', location.label));
+	element.append(el('span', 'tree', location.label));
 	return element;
 }
 
-/**
- * Each card's workspace-folder name shown whole or not at all (PANEL-1.3, D72): where its place - its own width, at most 40% of the line
- * - has no room for the whole name, the name and its separator go rather than being cut to a letter. Again as the view's width changes.
- */
+/** Short labels stay whole; long names end-ellipsize, long location components middle-ellipsize (PANEL-1.3, D128). */
 function fitPlaces(): void {
-	for (const place of list.querySelectorAll<HTMLElement>('.place.within')) {
-		place.classList.remove('narrow');
-		const folder = place.querySelector<HTMLElement>('.folder');
-		if (folder && folder.scrollWidth > folder.clientWidth) {
-			place.classList.add('narrow');
-		}
+	for (const entry of drawn?.values() ?? []) {
+		fitCardTop(entry.top, entry.name, entry.card.location);
 	}
 }
 new ResizeObserver(fitPlaces).observe(list);
+void document.fonts.ready.then(fitPlaces);
+document.fonts.addEventListener('loadingdone', fitPlaces);
 
 /**
  * A card's hover (PANEL-1.5): the extension's lines, how long ago its CLI reported the work it is doing, how long ago it started,
