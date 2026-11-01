@@ -9,6 +9,7 @@
 // treats as unavailable input - nothing is typed into it.
 
 import type { IBufferCell, Terminal } from '@xterm/headless';
+import { drawnCells } from './screen';
 
 /** What a reading found: a usable empty input, a draft in it, a native menu or question in its place, or nothing it can vouch for. */
 export type InputState = 'usable' | 'draft' | 'interaction' | 'unknown';
@@ -35,9 +36,11 @@ export interface Hidden {
 const MORE_ABOVE = /^↑ (\d+) more lines?$/u;
 const MORE_BELOW = /^↓ (\d+) more lines?$/u;
 
-/** One cell as drawn: its characters, and whether they are dim or in inverse video. */
+/** One cell as drawn: its characters, the column it starts at, and whether they are dim or in inverse video. */
 export interface InputCell {
 	readonly chars: string;
+	/** Its column, which a wide character before it in its row makes more than its place there. */
+	readonly x: number;
 	readonly dim: boolean;
 	readonly inverse: boolean;
 }
@@ -45,7 +48,7 @@ export interface InputCell {
 /** The rows the terminal shows, top to bottom, cell by cell - the second half of a wide character left out - and its cursor. */
 export interface InputScreen {
 	readonly rows: readonly (readonly InputCell[])[];
-	/** The cursor's column and its row on the screen. */
+	/** The cursor's column - a cell's `x`, not its place in its row - and its row on the screen. */
 	readonly cursor: { readonly x: number; readonly y: number };
 	/** Whether the program is between the start and the end of a synchronized update (`CSI ? 2026 h`): what it draws is not whole yet. */
 	readonly drawing?: boolean;
@@ -57,19 +60,9 @@ type Row = readonly InputCell[];
 export function inputScreenOf(terminal: Terminal): InputScreen {
 	const buffer = terminal.buffer.active;
 	const rows: InputCell[][] = [];
-	let cell: IBufferCell | undefined;
+	const cell: IBufferCell | undefined = buffer.getNullCell();
 	for (let y = 0; y < terminal.rows; y++) {
-		const line = buffer.getLine(buffer.baseY + y);
-		const row: InputCell[] = [];
-		for (let x = 0; line && x < terminal.cols; x++) {
-			cell = line.getCell(x, cell);
-			if (!cell || cell.getWidth() === 0) {
-				// The second half of a wide character: drawn by the cell before it
-				continue;
-			}
-			row.push({ chars: cell.getChars() || ' ', dim: cell.isDim() !== 0, inverse: cell.isInverse() !== 0 });
-		}
-		rows.push(row);
+		rows.push(drawnCells(buffer.getLine(buffer.baseY + y), cell, terminal.cols).map(drawn => ({ ...drawn, chars: drawn.chars || ' ' })));
 	}
 	return { rows, cursor: { x: buffer.cursorX, y: buffer.cursorY }, drawing: terminal.modes.synchronizedOutputMode };
 }
@@ -78,6 +71,8 @@ export function inputScreenOf(terminal: Terminal): InputScreen {
 const NBSP = '\u00a0';
 
 const charAt = (row: Row | undefined, x: number) => row?.[x]?.chars ?? ' ';
+/** The cell at column `x`, found by its column: a wide character before it in the row puts it at a lower place there. */
+const cellAt = (row: Row | undefined, x: number) => row?.find(cell => cell.x === x);
 const textOf = (row: Row | undefined) => (row ?? []).map(cell => cell.chars).join('');
 /** Whether a cell shows something: a character, not a space of any kind. */
 const shows = (cell: InputCell) => cell.chars.trim() !== '';
@@ -330,7 +325,7 @@ function readPiEditor(screen: InputScreen): InputReading {
 	}
 	const top = upper + 1;
 	const where = `the editor at ${height > 1 ? `rows ${top + 1}-${lower}` : `row ${lower}`}`;
-	if (cursor.y < top || cursor.y >= lower || !rows[cursor.y][cursor.x]?.inverse) {
+	if (cursor.y < top || cursor.y >= lower || !cellAt(rows[cursor.y], cursor.x)?.inverse) {
 		return { state: 'unknown', evidence: `${where} does not have its own cursor where the cursor is, at row ${cursor.y + 1}` };
 	}
 	const input = rows.slice(top, lower);

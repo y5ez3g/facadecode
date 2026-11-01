@@ -37,6 +37,32 @@ interface IScreenCell {
 	readonly mark: Mark;
 }
 
+/** A cell as its row draws it: its characters - empty where nothing was drawn there - the column it starts at, and its marks. */
+export interface DrawnCell {
+	readonly chars: string;
+	/** Its column: a wide character takes two, the second drawn by the first and no cell of its own. */
+	readonly x: number;
+	readonly dim: boolean;
+	readonly inverse: boolean;
+}
+
+/**
+ * The cells of `line` up to `cols`, left to right, each with the column it starts at: every reader of a terminal's rows walks them so,
+ * and finds a column by a cell's `x`, never by its place in the row, which a wide character before it moves (CLIS-2.1).
+ */
+export function drawnCells(line: IBufferLine | undefined, cell: IBufferCell | undefined, cols = line?.length ?? 0): DrawnCell[] {
+	const cells: DrawnCell[] = [];
+	for (let x = 0; line && x < cols; x++) {
+		const read = line.getCell(x, cell);
+		// The second half of a wide character, drawn by the first
+		if (!read || read.getWidth() === 0) {
+			continue;
+		}
+		cells.push({ chars: read.getChars(), x, dim: read.isDim() !== 0, inverse: read.isInverse() !== 0 });
+	}
+	return cells;
+}
+
 /**
  * The bottom `count` lines of `raw`'s active buffer - or of the one asked for - as the terminal draws them:
  * the rows a line wraps over joined into one line, blank lines between kept, the spaces a line ends in cut,
@@ -100,18 +126,11 @@ function isBlankRow(line: IBufferLine | undefined, cell: IBufferCell): boolean {
 function renderLine(buffer: IBuffer, start: number, end: number, cell: IBufferCell): { readonly marked: string; readonly plain: string } {
 	const cells: IScreenCell[] = [];
 	for (let y = start; y <= end; y++) {
-		const line = buffer.getLine(y);
 		const row: IScreenCell[] = [];
 		let empty = 0;
-		for (let x = 0; line && x < line.length; x++) {
-			const read = line.getCell(x, cell);
-			// The second half of a wide character, drawn by the first
-			if (!read || read.getWidth() === 0) {
-				continue;
-			}
-			const chars = read.getChars();
-			empty = chars ? 0 : empty + 1;
-			row.push({ chars: chars || ' ', mark: (read.isInverse() ? Mark.Inverse : Mark.None) | (read.isDim() ? Mark.Dim : Mark.None) });
+		for (const drawn of drawnCells(buffer.getLine(y), cell)) {
+			empty = drawn.chars ? 0 : empty + 1;
+			row.push({ chars: drawn.chars || ' ', mark: (drawn.inverse ? Mark.Inverse : Mark.None) | (drawn.dim ? Mark.Dim : Mark.None) });
 		}
 		// A row the line wraps on from ends where its text does: a wide character that did not fit leaves an
 		// empty cell at its end, which is no space in the line
