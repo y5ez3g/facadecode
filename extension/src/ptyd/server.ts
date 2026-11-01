@@ -8,7 +8,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { performance } from 'perf_hooks';
-import { messageOf } from '../base/errors';
+import { codeOf, messageOf } from '../base/errors';
 import { lineReader } from '../base/lines';
 import { isAgentKey } from './keys';
 import { CallEvent, CallRefusal, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
@@ -211,6 +211,8 @@ export class PtydServer {
 	private readonly claims = new Map<Run, Connection>();
 	private readonly connections = new Set<Connection>();
 	private server: net.Server | undefined;
+	/** The socket this ptyd made at its path, on Unix: the one it may remove as it closes, never one another ptyd made there later. */
+	private made: Identity | undefined;
 	private idleTimer: ReturnType<typeof setTimeout> | undefined;
 	private readonly owners: OwnerClaims<Connection>;
 	private closing = false;
@@ -235,13 +237,14 @@ export class PtydServer {
 	}
 
 	/**
-	 * Listens on the socket; resolves false where another ptyd answers there already - it serves the windows, and this one goes.
-	 * A socket file nobody answers on is a ptyd that died, and is taken over.
+	 * Listens on the socket; resolves false where another ptyd answers there already - it serves the windows, and this one goes - or
+	 * may: one too busy to answer at once still holds its runs, and only a socket proven gone, refused or absent, is taken over: a
+	 * ptyd that died.
 	 */
 	async listen(): Promise<boolean> {
 		ensurePtydSocket(this.socketPath);
 		// Two windows opening at once may each start a ptyd: the one that takes the lock listens, and the other goes
-		if (await answers(this.socketPath) || !takeLock(this.lockPath)) {
+		if (await probe(this.socketPath) !== 'gone' || !takeLock(this.lockPath)) {
 			return false;
 		}
 		if (process.platform !== 'win32') {
@@ -257,6 +260,7 @@ export class PtydServer {
 		});
 		if (process.platform !== 'win32') {
 			fs.chmodSync(this.socketPath, 0o600);
+			this.made = identityOf(this.socketPath);
 		}
 		this.scheduleIdleExit();
 		return true;
@@ -282,7 +286,13 @@ export class PtydServer {
 		for (const connection of this.connections) {
 			connection.socket.destroy();
 		}
-		this.server?.close();
+		// Closing a Unix socket's server removes whatever is at its path by then: a socket another ptyd made there, once this one's
+		// was taken for gone, is never removed - the server is let go of with the process instead
+		if (process.platform === 'win32' || (this.made && sameIdentity(identityOf(this.socketPath), this.made))) {
+			this.server?.close();
+		} else {
+			this.server?.unref();
+		}
 	}
 
 	private connected(socket: net.Socket): void {
@@ -786,16 +796,41 @@ function isAlive(pid: number): boolean {
 	}
 }
 
-/** Whether something answers on the socket at `socketPath`. */
-function answers(socketPath: string): Promise<boolean> {
+/**
+ * What answers on the socket at `socketPath`: a connection proves a ptyd there, `alive`; a refusal or no socket at all proves none,
+ * `gone`; a timeout or any other error proves nothing - a ptyd too busy to answer at once, say - and is `unknown`, never `gone`.
+ */
+export function probe(socketPath: string, ms = 1_000): Promise<'alive' | 'gone' | 'unknown'> {
 	return new Promise(resolve => {
 		const socket = net.connect(socketPath);
-		const done = (alive: boolean) => {
+		const done = (found: 'alive' | 'gone' | 'unknown') => {
+			clearTimeout(timer);
 			socket.destroy();
-			resolve(alive);
+			resolve(found);
 		};
-		socket.once('connect', () => done(true));
-		socket.once('error', () => done(false));
-		setTimeout(() => done(false), 1_000).unref();
+		socket.once('connect', () => done('alive'));
+		socket.once('error', err => done(['ECONNREFUSED', 'ENOENT'].includes(codeOf(err) ?? '') ? 'gone' : 'unknown'));
+		const timer = setTimeout(() => done('unknown'), ms);
+		timer.unref?.();
 	});
+}
+
+/** A file's identity: its device, inode and change time, which a socket made later at the same path does not share. */
+interface Identity {
+	readonly dev: number;
+	readonly ino: number;
+	readonly ctimeMs: number;
+}
+
+function identityOf(file: string): Identity | undefined {
+	try {
+		const { dev, ino, ctimeMs } = fs.statSync(file);
+		return { dev, ino, ctimeMs };
+	} catch {
+		return undefined;
+	}
+}
+
+function sameIdentity(found: Identity | undefined, made: Identity): boolean {
+	return !!found && found.dev === made.dev && found.ino === made.ino && found.ctimeMs === made.ctimeMs;
 }
