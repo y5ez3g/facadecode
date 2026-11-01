@@ -154,9 +154,13 @@ async function main(): Promise<void> {
 	 */
 	const conversion = async (cli: typeof BUILT_INS[number], reopening = false, expiry = false) => {
 		const suffix = `${cli.id}${expiry ? '-expiry' : reopening ? '-reopen' : ''}`;
+		// VS Code puts its main IPC socket below user data on macOS. Its already long canonical TMPDIR leaves no room for
+		// names such as u-conversion-opencode or u-conversion-claude-reopen (the Unix socket limit is 103 characters).
+		const profile = `${BUILT_INS.indexOf(cli)}${expiry ? 'e' : reopening ? 'r' : 'c'}`;
 		const solo = path.join(root, `solo-${suffix}`);
 		const second = path.join(root, `second-${suffix}`);
-		const user = path.join(root, `u-conversion-${suffix}`);
+		const user = path.join(root, `u-${profile}`);
+		const extensions = path.join(root, `x-${profile}`), shared = path.join(root, `s-${profile}`);
 		const facade = path.join(home, `conversion-${suffix}`);
 		const out = path.join(root, `conversion-${suffix}.jsonl`);
 		const driver = path.join(root, `driver-${suffix}`);
@@ -171,11 +175,19 @@ async function main(): Promise<void> {
 		}
 		// The flags runTests gives the other parts too: Electron's sandbox cannot start where unprivileged user namespaces are
 		// restricted, as on Ubuntu 24.04 and later
-		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, `x-conversion-${suffix}`), '--shared-data-dir', path.join(root, `s-conversion-${suffix}`),
+		let editorOutput = '';
+		const capture = (child: ReturnType<typeof spawn>) => {
+			const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
+			child.stdout?.on('data', append);
+			child.stderr?.on('data', append);
+			child.on('error', append);
+		};
+		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
-			stdio: 'ignore',
+			stdio: ['ignore', 'pipe', 'pipe'],
 			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', CLAUDE_CONFIG_DIR: claudeConfig }
 		});
+		capture(editor);
 		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
 		const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 		try {
@@ -197,10 +209,11 @@ async function main(): Promise<void> {
 					if (alive(Number(before.pid)) || Date.now() - closedAt < 280_000) { throw new Error('The closed window did not keep and then end its process at the five-minute grace period.'); }
 					console.log(`  ✔ ${cli.id}: the closed window's process ended after ${Date.now() - closedAt} ms, using the production grace period`);
 				}
-				editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, `x-conversion-${suffix}`), '--shared-data-dir', path.join(root, `s-conversion-${suffix}`),
+				editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 					`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
-					stdio: 'ignore', env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_REOPEN: '1', CLAUDE_CONFIG_DIR: claudeConfig }
+					stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_REOPEN: '1', CLAUDE_CONFIG_DIR: claudeConfig }
 				});
+				capture(editor);
 				const reopenBy = Date.now() + 45_000;
 				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
 				const after = lines().find(line => line.phase === 'reopened');
@@ -220,6 +233,9 @@ async function main(): Promise<void> {
 				throw new Error('Pin/Unpin did not survive reload, or the folder agent was not the same pinned run, live process and one terminal in the workspace it became.');
 			}
 			console.log('    ✔ Pin and Unpin survive reload; the same pinned run, live process and one terminal survive conversion');
+		} catch (error) {
+			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
+			throw error;
 		} finally {
 			editor.kill('SIGTERM');
 			endMatching(user);

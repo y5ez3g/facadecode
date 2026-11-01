@@ -104,6 +104,13 @@ The minimum official VS Code 1.105.0 passes all six built-ins' Resume/Pin/Unpin 
 replace every public Tab object through its tab-group event; stale bindings now expire and rebind only from the exact
 active Terminal/Tab correlation, including terminals with duplicate names. No name or position matching is used.
 
+The complete serial Linux suite also passes at `b0a7df41` (`/tmp/fc74-final-serial.log`, `/tmp/fdit-E7MjCO`),
+including expiry at 299,830 ms and exact restoration. The diagnostic readiness assertion added at `4c1cb8af` passes
+separately for all six CLIs (`/tmp/fc74-final-diagnostics.log`, `/tmp/fdit-Oh42rh`). A clean installation of both
+production VSIX packages activates both components and exposes Resume/Pin/Unpin without any test commands
+(`/tmp/fc74-installed-package.log`, `/tmp/fc74-installed-kb3UYJ`). The Linux workspace VSIX SHA-256 is
+`92afee1c30c924655a80ba0990f8c4ebf8e638e015f46b36ed2708e4f1409a9e`.
+
 The three-platform workflow runs compilation, units, translations, audit, packaging and the complete isolated editor
 suite on Linux x64, Windows x64 and macOS arm64. Its current result is attached to
 [PR 41](https://github.com/y5ez3g/facadecode/pull/41/checks); do not infer a platform pass from a queued or incomplete check.
