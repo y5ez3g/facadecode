@@ -128,7 +128,7 @@ suite('Window registry: the open windows of this computer and its alias counters
 		const file = path.join(home.dir, 'client-message-numbers.json');
 		for (const corrupt of ['not json', '{"last":-1}', '{"last":"7"}', '{"last":1.5}', '[]']) {
 			fs.writeFileSync(file, corrupt);
-			assert.throws(() => allocateNumbers(home.dir, 'message', 1), /does not hold a number; Facade gives no alias it may have given before/, corrupt);
+			assert.throws(() => allocateNumbers(home.dir, 'message', 1), /does not hold a number; Facade gives no message number it may have given before/, corrupt);
 		}
 		// Left as it was: the next take after a repair goes on from the repaired value
 		fs.writeFileSync(file, '{"last":41}');

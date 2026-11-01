@@ -4,11 +4,12 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { codeOf, messageOf } from '../base/errors';
+import { codeOf } from '../base/errors';
 import { replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
 import { withFileLock } from '../base/lock';
 import { Allocation, DirectoryAgent, isDirectoryAgent, WINDOW_NETWORK_PROTOCOL } from '../base/windowNetwork';
+import { takeNumbers } from './counter';
 
 /** One open window as its window component registers it on this computer (ARCHITECTURE-2.1, 3.1). */
 export interface RegisteredWindow {
@@ -161,33 +162,5 @@ export function allocateNumbers(home: string, kind: 'agent' | 'message', count: 
 	if (!Number.isSafeInteger(count) || count < 1 || count > 1000) {
 		throw new Error('Numbers are taken from 1 to 1000 at a time.');
 	}
-	fs.mkdirSync(home, { recursive: true });
-	const file = path.join(home, `client-${kind}-numbers.json`);
-	return withFileLock(file, () => {
-		let last = 0;
-		let text: string | undefined;
-		try {
-			text = fs.readFileSync(file, 'utf8');
-		} catch (err) {
-			if (codeOf(err) !== 'ENOENT') {
-				throw new Error(`The ${kind} number counter ${file} cannot be read: ${messageOf(err)}`);
-			}
-		}
-		if (text !== undefined) {
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(text);
-			} catch {
-				parsed = undefined;
-			}
-			const value = isJsonObject(parsed) ? parsed.last : undefined;
-			if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
-				throw new Error(`The ${kind} number counter ${file} does not hold a number; Facade gives no alias it may have given before.`);
-			}
-			last = value;
-		}
-		const first = Math.max(last, Math.max(0, Math.floor(floor))) + 1;
-		replaceFile(file, `${JSON.stringify({ last: first + count - 1 })}\n`);
-		return { first, count };
-	});
+	return { first: takeNumbers(path.join(home, `client-${kind}-numbers.json`), count, `${kind} number`, () => floor), count };
 }

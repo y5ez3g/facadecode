@@ -4,9 +4,9 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { codeOf, messageOf } from '../base/errors';
+import { codeOf } from '../base/errors';
 import { FileChangedError, replaceFile } from '../base/files';
-import { withFileLock } from '../base/lock';
+import { takeNumbers } from './counter';
 import { facadeHome } from './paths';
 import { pruneResults } from './results';
 
@@ -158,41 +158,13 @@ export class MessageCounter {
 	private readonly records: string;
 
 	constructor(home: string = facadeHome()) {
-		fs.mkdirSync(home, { recursive: true });
 		this.file = path.join(home, 'message-aliases.json');
 		this.records = path.join(home, 'messages');
 	}
 
 	next(): number {
-		return withFileLock(this.file, () => {
-			// Both read under the lock: what another window took or wrote just now counts
-			const next = Math.max(this.last(), this.floor()) + 1;
-			replaceFile(this.file, `${JSON.stringify({ last: next })}\n`);
-			return next;
-		});
-	}
-
-	/** The number given last: none before the first. */
-	private last(): number {
-		let text: string;
-		try {
-			text = fs.readFileSync(this.file, 'utf8');
-		} catch (err) {
-			if (codeOf(err) === 'ENOENT') {
-				return 0;
-			}
-			throw new Error(`The message counter ${this.file} cannot be read: ${messageOf(err)}`);
-		}
-		let last: unknown;
-		try {
-			last = (JSON.parse(text) as { last?: unknown } | null)?.last;
-		} catch {
-			last = undefined;
-		}
-		if (typeof last !== 'number' || !Number.isSafeInteger(last) || last < 0) {
-			throw new Error(`The message counter ${this.file} does not hold a message number; Facade gives no message an ID it may have given before.`);
-		}
-		return last;
+		// The records read under the counter's lock: what another window wrote just now counts
+		return takeNumbers(this.file, 1, 'message number', () => this.floor());
 	}
 
 	/** The highest number of a record kept. */
