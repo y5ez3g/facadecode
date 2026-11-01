@@ -10,7 +10,8 @@ import { codeOf, messageOf } from '../base/errors';
 /** A temporary folder, real path, removed by the returned function. */
 export function tempDir(prefix: string): { dir: string; remove(): void } {
 	const dir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
-	return { dir, remove: () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }) };
+	// A Git process a test started may hold its folder a moment after it answered, longer on a busy Windows machine
+	return { dir, remove: () => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 15, retryDelay: 200 }) };
 }
 
 /**
