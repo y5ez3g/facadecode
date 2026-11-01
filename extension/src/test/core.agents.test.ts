@@ -572,6 +572,32 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual(world.execution.terminated, [id]);
 	});
 
+	test('a removed location\'s agents close and its Pins go, one by one, where the Pin store refuses a write - which is said (RULES-2.4, 4.2)', async () => {
+		const world = continuitySetup();
+		const [first, second] = ['A', 'B'].map(name => world.agents.launch({ name, location: 'loc-1', cli: 'claude', origin: 'human' }));
+		await settle();
+		world.agents.pin(first);
+		world.agents.pin(second);
+		const store = (world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore;
+		store.remove = () => { throw new Error('disk full'); };
+		world.removals.fire({ ids: ['loc-1'], cause: 'folder' });
+		await settle();
+		assert.deepStrictEqual([world.agents.list(), world.execution.terminated.sort()], [[], [first, second].sort()]);
+		assert.ok(world.log.some(line => /Could not unpin "A", whose working location was removed: disk full/.test(line)));
+	});
+
+	test('a tab closed by the person whose close fails - its Unpin could not be saved - keeps the agent, opens its terminal again and tells the person (LIFECYCLE-3.1, RULES-1.8)', async () => {
+		const world = continuitySetup();
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.agents.pin(id);
+		(world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.remove = () => { throw new Error('disk full'); };
+		world.execution.tabCloses.fire(id);
+		await settle();
+		assert.deepStrictEqual([world.agents.get(id)?.pin !== undefined, world.execution.reopened, world.failures.map(failure => [failure.kind, failure.reason])], [true, [id], [['pin', 'disk full']]]);
+		assert.ok(world.log.some(line => /Could not close #a1 as its tab was closed: disk full/.test(line)));
+	});
+
 	test('a natively closed tab is an explicit close (LIFECYCLE-3.1)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });

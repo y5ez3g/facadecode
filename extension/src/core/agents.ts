@@ -318,14 +318,17 @@ export class AgentService implements Agents, Disposable {
 	 * folder restarts them - is reported before this service hears it, and unpins as one heard does (RULES-2.4, 4.2).
 	 */
 	private unpinRemoved(): void {
-		for (const pin of this.pins()) {
-			if (this.deps.locations.removalOf(pin.location)) {
-				try {
-					this.pinStore.remove(pin.id);
-					this.deps.log.event(`Unpinned ${JSON.stringify(pin.name)}: its working location was removed`);
-				} catch (err) {
-					this.deps.log.event(`Could not unpin ${JSON.stringify(pin.name)}, whose working location was removed: ${messageOf(err)}`);
-				}
+		this.unpinGone(this.pins().filter(pin => this.deps.locations.removalOf(pin.location)));
+	}
+
+	/** Unpins `pins`, whose location was removed, each on its own: one the store cannot remove now is said, and holds up no other. */
+	private unpinGone(pins: readonly Pin[]): void {
+		for (const pin of pins) {
+			try {
+				this.pinStore.remove(pin.id);
+				this.deps.log.event(`Unpinned ${JSON.stringify(pin.name)}: its working location was removed`);
+			} catch (err) {
+				this.deps.log.event(`Could not unpin ${JSON.stringify(pin.name)}, whose working location was removed: ${messageOf(err)}`);
 			}
 		}
 	}
@@ -618,6 +621,12 @@ export class AgentService implements Agents, Disposable {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
 		this.unpinned(run);
+		return this.closeRun(run);
+	}
+
+	/** Removes `run`'s pair at once and ends its process in the background (LIFECYCLE-3.1), its Pin already seen to. */
+	private async closeRun(run: Run): Promise<CleanupResult | 'already_ended' | 'not_started'> {
+		const id = run.facts.id;
 		run.closing = true;
 		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
@@ -690,7 +699,15 @@ export class AgentService implements Agents, Disposable {
 			return;
 		}
 		if (this.runs.get(id) === run) {
-			await this.close(id).catch(() => undefined);
+			await this.close(id).catch(err => {
+				const reason = messageOf(err);
+				this.deps.log.event(`Could not close ${run.facts.alias} as its tab was closed: ${reason}`);
+				if (this.runs.get(id) === run) {
+					// Kept, as its Unpin could not be saved: its terminal opens again, and the person who closed it is told (RULES-1.8)
+					this.deps.execution.reopen?.(id);
+					this.deps.human.failed({ kind: 'pin', name: labelOf(run.facts), reason }, { show: id });
+				}
+			});
 		}
 	}
 
@@ -1021,12 +1038,12 @@ export class AgentService implements Agents, Disposable {
 
 	private locationsRemoved(removal: LocationRemoval): void {
 		const removed = new Set(removal.ids);
-		for (const pin of this.pins()) { if (removed.has(pin.location)) { this.pinStore.remove(pin.id); } }
-		for (const run of [...this.runs.values()]) {
-			if (removed.has(run.facts.location)) {
-				this.deps.log.event(`Closing ${run.facts.alias}: its working location was ${removal.cause === 'folder' ? 'removed from the workspace' : 'deleted'}`);
-				void this.close(run.facts.id).catch(() => undefined);
-			}
+		const closing = [...this.runs.values()].filter(run => removed.has(run.facts.location));
+		this.unpinGone(this.pins().filter(pin => removed.has(pin.location) || closing.some(run => run.facts.pin === pin.id)));
+		for (const run of closing) {
+			this.deps.log.event(`Closing ${run.facts.alias}: its working location was ${removal.cause === 'folder' ? 'removed from the workspace' : 'deleted'}`);
+			// Whatever became of its Pin, said above: its process may be writing in a folder that is gone (RULES-2.4)
+			void this.closeRun(run).catch(err => this.deps.log.event(`Could not close ${run.facts.alias}: ${messageOf(err)}`));
 		}
 	}
 
