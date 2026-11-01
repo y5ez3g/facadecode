@@ -4,7 +4,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { recordedSession, sessionFileOf, sessionFilesIn } from '../../clis/identity';
+import { recordedSession, sessionDirOf, sessionFileOf, sessionFilesIn } from '../../clis/identity';
 import { MuseIdentity } from '../../clis/museIdentity';
 
 /** How often the hook files of the runs watched are read. */
@@ -27,7 +27,7 @@ export class SessionIdentity {
 
 	track(run: string): void {
 		this.runs.set(run, undefined);
-		const native = path.join(sessionFileOf(this.home, run).replace(/\.json$/, '.d'), 'muse.json');
+		const native = path.join(sessionDirOf(sessionFileOf(this.home, run)), 'muse.json');
 		if (fs.existsSync(native)) { this.muse.set(run, new MuseIdentity(native)); }
 		if (!this.poller) {
 			this.poller = setInterval(() => { for (const each of this.runs.keys()) { this.read(each); } }, READ_MS);
