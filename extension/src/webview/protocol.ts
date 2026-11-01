@@ -35,9 +35,9 @@ export interface Card {
 	 * then gives its folder and the window, each on a line of its own (PANEL-1.5, D74).
 	 */
 	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly full: string };
-	/** Green, yellow or red (RULES-3.2): unknown activity is `error`. */
-	readonly dot: 'working' | 'idle' | 'error';
-	/** The dot in words: `Starting`, `Working`, `Not working`, `Error: {reason}` or `Activity unavailable`. */
+	/** Green work, grey idle, yellow native blocker or red error/unknown (RULES-3.2, D127). */
+	readonly dot: 'working' | 'idle' | 'blocked' | 'error';
+	/** The dot in words: startup/work, idle, the native blocker's kind, error or unavailable activity. */
 	readonly stateText: string;
 	/** The second line (PANEL-1.4). */
 	readonly line: string;

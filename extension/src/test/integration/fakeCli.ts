@@ -128,6 +128,8 @@ interface Quirks {
 	readonly slowMs?: number;
 	/** A screen no input reader recognizes, in place of its input. */
 	readonly garble?: boolean;
+	/** A terminal title emitted when this fixture changes, independent of its activity report. */
+	readonly title?: string;
 }
 const QUIRKS = `${record}.quirks.${agent}`;
 function quirks(): Quirks {
@@ -316,6 +318,10 @@ function start(): void {
 		const now = fs.existsSync(QUIRKS) ? fs.readFileSync(QUIRKS, 'utf8') : '';
 		if (now !== quirked) {
 			quirked = now;
+			const title = quirks().title;
+			if (title !== undefined) {
+				process.stdout.write(`${ESC}]0;${title}${ST}`);
+			}
 			draw();
 		}
 	}, 200).unref();

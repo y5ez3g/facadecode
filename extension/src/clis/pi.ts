@@ -170,10 +170,8 @@ export const piAdapter: CliAdapter = {
 	initialPrompt: { state: 'unverified', reason: 'the prompt as its message argument after --, which starts the interactive session with it' },
 	promptProblem: prompt => prompt.startsWith('@') ? 'Pi reads an argument that starts with @ as a file to attach' : undefined,
 	launchTarget: piInstallerTarget,
-	// `π - {folder}`, or `π - {session name} - {folder}` once the session is named
 	// Its input, recorded on macOS with Pi 1.4.0 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'pi-frame', evidence: 'its editor between two rules above its footer, its own cursor drawn there: empty, a typed, pasted, multi-line, long-paste, history or slash-command draft, while working, and gone behind its trust question and model picker' },
-	title: { names: ['π', 'Pi', 'pi'] },
 	// No approvals and no sandbox: YOLO has nothing to map (D79)
 	sandbox: () => ({ state: 'none' }),
 	approvals: () => ({ state: 'none' }),

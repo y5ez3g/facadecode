@@ -22,7 +22,8 @@ card loading. Title actions in order: Filter by Working Location (`filter`, fill
 (Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
 The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Message History... and Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log are Command Palette entries, not view-menu items (D83). Facade commands
+Configure Agents... in a separate group. Message History..., Go to Agent..., Show Agent Launch and Show Agents Log
+are Command Palette entries, not view-menu items (D83, D129). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
 
@@ -67,9 +68,20 @@ Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `a
 circle; deterministic theme colors from UX-2.1. Location is alias/branch/folder, prefixed by workspace folder in a
 multi-folder window unless it is named that folder's name already, as a plain folder is (D66). A related worktree can be
 outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
-temporarily disconnected location is retained. The location keeps its own width, as a chat list keeps a message's time,
-up to 40% of the line, and is cut beyond that; the name has the rest. A workspace-folder prefix is shown whole or not at
-all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibility.
+temporarily disconnected location is retained. Reserve the Pin's measured width and spacing when present, then let
+name and location share the first line's remaining width: a short one
+stays whole and the other uses the remaining room. Only when both exceed their shares does the line divide about 60%
+to the name and 40% to location; 40% is not a location cap (D128, superseding D72). A long name ellipsizes at the end.
+Location keeps its `folder · worktree` structure: each long component ellipsizes in the middle, between whole graphemes,
+keeping its beginning and end where they fit. A short component stays whole; when both are long, the worktree receives
+about two thirds of their text space. The separator remains and the folder is never hidden just because it is long.
+These shares are width limits, not reserved empty boxes: after fitting whole graphemes, give unused folder space to
+the worktree, then any remaining space back to the folder. Render each fitted component at its measured width and
+align their compact group at the line's end. Only the separator's normal spaces separate the two visible labels;
+unused allocation must not appear before the separator or after the worktree. Any final spare width is available to
+the name, up to its natural width.
+Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font changes, rename
+and location updates. Avatar/dot do not shrink. Full values remain in hover and accessibility; the panel header is unchanged.
 
 Pinned cards show the Pin beside the name, with its restoration meaning in a tooltip. Its color follows the quieter
 text, including the selected foreground at 80% opacity; high-contrast selections use full opacity. The icon's internal
@@ -86,13 +98,15 @@ the blocker and retain the status explanation, for example `Sign-in required · 
 A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file} in this folder`,
 or `Cannot work with other agents: its Facade tools stopped` once its tools went away (D136), and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
 title. Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
-`Ready for your first message`. Never `Done, waiting for you` from a turn end. Native blockers use CLI words or
-`Needs permission`, `Sign-in required`, `Waiting for an answer`; no popup solely for them.
+`Ready for your first message`. Never `Done, waiting for you` from a turn end. Normal work/idle shows the CLI title or
+creation prompt directly, without a repeated `Working`/`Idle` prefix. Native blockers lead with `Needs permission`,
+`Sign-in required` or `Waiting for an answer`, followed by the CLI's original words when present. Errors lead with
+`Error: {reason}`; unavailable activity names that state before its explanation. No popup solely for a native blocker (D127).
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
 dot or notification rules. Working breathes every 1.8 s using opacity only (0–65% overlay of row background); reduced
-motion is static. Hover explicitly says `Starting`, `Working`, `Idle`, `Error: {reason}` or `Activity
-unavailable`; the accessible label preserves it. No unread dot, completed check, bold-name state or extra error badge.
+motion is static. Hover explicitly says `Starting`, `Working`, `Idle`, the native blocker's kind, `Error: {reason}` or
+`Activity unavailable`; the accessible label preserves it. No unread dot, completed check, bold-name state or extra error badge.
 
 ### 1.5 Hover and accessible content
 
@@ -100,7 +114,8 @@ unavailable`; the accessible label preserves it. No unread dot, completed check,
 
 Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason; for
 a working agent, how long ago its CLI reported that work, `Reported working 25 min. ago` - the CLI's last word, which a long
-silence leaves for the person to judge rather than turning it into idle or done, as Orca shows `No update in …` (D114);
+silence leaves for the person to judge rather than turning it into idle or done, following competitive analysis of
+last-update indicators (D114);
 started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
 written `~` except on Windows; window. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,
@@ -241,7 +256,7 @@ fully visible row count minus one (minimum one).
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Approved title/menu entries, the empty and filtered states and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, three dot meanings, known blocker before generic unavailable text without losing that explanation, all widths/themes/accessibility |
+| 1.1–1.5 | Approved title/menu entries, the empty and filtered states and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, four dot meanings, known blocker before generic unavailable text without losing that explanation, all widths/themes/accessibility |
 | 2.1–2.3 | Stack insertion and manual order, retained failure, exact context target, filter removal/read failure |
 | 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
 
@@ -250,6 +265,15 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 ## Change log
 
 - 2026-11-01: 1.4 says when an agent's Facade tools went away (D136).
+- 2026-11-01: Describe the competitive-analysis rationale without naming individual products; hover behavior is unchanged.
+- 2026-11-01: Removed Message History... from the view's More Actions menu at the owner's request; its Command
+  Palette entry remains (D129).
+- 2026-11-01: Combined D128 with the upstream Pin and overlay scrollbar: fit text within the space left by the Pin,
+  refitting when it is added or removed, while retaining PANEL-3.3's clipping and scrolling behavior.
+- 2026-11-01: Clarified 1.3 after the owner spotted a gap before the location separator: fitting budgets and final
+  rendered widths are distinct; unused grapheme space is shared and the visible group stays compact (D128).
+- 2026-11-01: 1.3 shares width between name and location and ellipsizes folder/worktree separately in the middle (D128);
+  1.4 distinguishes idle and blockers and gives blockers/errors an explicit leading label (D127).
 - 2026-10-31: Use an auto-hiding overlay that follows native Modern UI settings, compensates webview clipping and preserves complete card/slider corners without list top or bottom padding (D125).
 
 - 2026-10-31: Adjusted the Pin's size, name spacing and selected/high-contrast colors after the owner's visual review (D122).

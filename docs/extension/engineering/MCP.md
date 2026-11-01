@@ -31,8 +31,8 @@ plus the person's `#human`. Names can repeat; ambiguity requires an ID. A refere
 normal reach.
 
 start_agent and send_message take an optional `request_id` of the caller's own: the same one again from that caller
-within an hour answers what the first call started or sent, as it stands, and does nothing again - T3 Code's
-`clientRequestId` and Orca's `--retry-request` make a retry after a lost answer safe the same way (D110). It is kept on the
+within an hour answers what the first call started or sent, as it stands, and does nothing again. Competitive analysis
+informed this request-identity approach to retries after a lost answer (D110). It is kept on the
 run or message record - a message to another window's agent carries it there, where its record is made - and a repeated
 start answers as its start went: accepted while its process still starts, the start's failure where it could not start,
 success otherwise (D118). Concurrent calls share that operation. The recipient deduplicates a routed send before input,
@@ -216,8 +216,9 @@ Text is nonblank and at most 8,000 Unicode code points. Preserve Unicode, line b
 terminal-control encodings that would execute outside the message paste instead of silently transforming the body.
 Raw terminal control is a separate tool. Never replace the body with a pointer and call that full-content delivery. A
 text that begins with `[Earlier output truncated]` - how Antigravity marks a long argument it cut to its last 8,000
-characters, which T3 Code reads back - lost its beginning on its way: send_message, start_agent's prompt and type_text refuse
-it with invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole (D113).
+characters, a behavior identified during competitive analysis - lost its beginning on its way: send_message,
+start_agent's prompt and type_text refuse it with invalid_argument before any effect, asking for shorter parts,
+rather than pass a part on as the whole (D113).
 
 Return message_id, resolved target, status/effects, and deadline/obstacle if accepted within RULES-1.2's response budget.
 Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an accepted send returns moves on,
@@ -293,8 +294,8 @@ or permission question is added. Return actual full/partial/unknown text, Enter 
 A supplementary screen is only observation; its failure does not undo input. No automatic raw-content retry occurs
 after unknown effects. type_text's Enter goes in a write of its own after its text, once the CLI can have read the text -
 a tenth of a second, and CLIS-2.1's time for a paste of its size and for Antigravity's lines - as a CLI that reads a
-paste's end and an Enter together may drop the Enter, as Orca found Claude Code does (D113). Ordinary messages keep their
-own draft rules and are typed at most once (RULES-1.6).
+paste's end and an Enter together may drop the Enter, as identified for Claude Code during competitive analysis (D113).
+Ordinary messages keep their own draft rules and are typed at most once (RULES-1.6).
 
 ## 6 Technical design
 
@@ -322,8 +323,8 @@ so in its instructions, and a call to it fails with `configuration_invalid` and 
 The shim speaks MCP 2025-11-25 down to 2024-11-05, the client's version where it is one of these and else the newest, and
 answers a method it does not know with JSON-RPC's method-not-found, so a newer CLI is never left without tools (D111). Its
 instructions tell a CLI that lists tools by name alone until they are loaded, as Claude Code does, to load one before calling
-it, as T3 Code tells it. A test keeps the tool list, the instructions and the skill within a byte budget, which every turn of
-every agent pays for (D111).
+it, following competitive analysis. A test keeps the tool list, the instructions and the skill within a byte budget,
+which every turn of every agent pays for (D111).
 
 ### 6.2 Protocol and recovery
 
@@ -360,6 +361,7 @@ No migration guide for already-published user skills is required: this is the fi
 - 2026-11-01: From the owner-requested release review: 1.1 retries a cross-window send whose answer was lost through the
   window holding it; 1.2 reports refusals before any effect as no effect; 3.2 answers a stop during a start with its
   actual cleanup (D131, D132).
+- 2026-11-01: Describe competitive-analysis findings without naming individual products or their implementation identifiers; API behavior is unchanged.
 - 2026-10-31: Request IDs cover concurrent calls, lost route replies and removed runs; read delivery does not orphan
   a complete Facade draft (D119).
 - 2026-10-31: 1.1's repeated start answers as its start went, and a request ID travels with a message to another window

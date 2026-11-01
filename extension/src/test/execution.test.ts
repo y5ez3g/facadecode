@@ -363,7 +363,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(screenOf(terminals[0]).split('ready').length - 1, 1, 'its output once');
 	});
 
-	test('what the CLI reports reaches the core as activity, and its title the tab after the native separator; until its first report its run is still starting (CLIS-2.3, D81)', async () => {
+	test('CLI activity and title reach the core while the tab keeps only the agent name; until its first report its run is still starting (CLIS-2.3, D81, D130)', async () => {
 		const port = portOf();
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
@@ -376,9 +376,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', reporting: true, title: 'Fixing tests' });
 		// Its probe answered, it was still starting until it reported: never unknown with a reason meanwhile
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity && !report.reason), JSON.stringify(reports));
-		assert.strictEqual(terminals[0].names[terminals[0].names.length - 1], 'Ada | Fixing tests');
+		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'CLI reports never emit tab names');
+		config['terminal.integrated.tabs.separator'] = ' / ';
+		configChanged.fire({ affectsConfiguration: section => section === 'terminal.integrated.tabs.separator' });
+		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'tab separators no longer affect the name');
 		port.rename('run-3', 'Grace');
-		assert.strictEqual(terminals[0].names[terminals[0].names.length - 1], 'Grace | Fixing tests');
+		assert.strictEqual(terminals[0].names.at(-1), 'Grace');
 	});
 
 	test('a listing answered before what the run said since is no newer than that: a reconcile never puts back an older status (CLIS-2.3, UX-5.2)', async function () {
@@ -480,20 +483,20 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await port.terminate('run-43'), 'terminated');
 	});
 
-	test('a run started in a new worktree is read by the folder it runs in there: a CLI title naming that folder alone is no title (CLIS-2.3)', async function () {
+	test('a run started in a new worktree keeps its CLI-and-folder terminal title (CLIS-2.3, D126)', async function () {
 		this.timeout(15_000);
 		const port = portOf();
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
 		const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-wt-'));
 		try {
-			// Accepted in its source folder; the worktree made, it starts in the worktree's
+			// Accepted in its source folder; the worktree made, it starts in the worktree's folder.
 			port.openPair(facts('run-47', { cli: 'pi', displayName: 'Pi', command: 'pi', cwd: os.tmpdir() }), { reveal: false });
 			open(terminals[0]);
 			await port.spawn('run-47', { ...plan(`process.stdout.write('\\x1b]0;π - ${path.basename(worktree)}\\x07ready\\r\\n'); setInterval(() => {}, 1000);`), cli: 'pi', displayName: 'Pi', command: 'pi', cwd: worktree }, meta('run-47'));
 			await until('its screen', () => screenOf(terminals[0]).includes('ready'));
-			await new Promise(resolve => setTimeout(resolve, 300));
-			assert.deepStrictEqual(reports.filter(report => report.title !== undefined), []);
+			const titled = await until('its CLI-and-folder title', () => reports.find(report => report.title !== undefined));
+			assert.strictEqual(titled.title, `π - ${path.basename(worktree)}`);
 			assert.strictEqual(await port.terminate('run-47'), 'terminated');
 		} finally {
 			fs.rmSync(worktree, { recursive: true, force: true });
@@ -669,82 +672,101 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		});
 		return renames;
 	};
-	/** A new agent whose CLI titled its tab, as the editor shows it: `<name> | Fixing tests`. */
+	/** A new agent whose CLI reports a title to the panel while the editor tab keeps the agent name. */
 	const agentTitled = async (port: AgentExecution, run: RunId, name = 'Ada') => {
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
 		port.openPair(facts(run, { name }), { reveal: false });
 		const terminal = terminals[terminals.length - 1];
 		open(terminal);
 		await port.spawn(run, plan(TITLED), meta(run));
-		await until('the CLI title said', () => terminal.pending.includes(`${name} | Fixing tests`));
+		await until('the CLI title reported', () => reports.some(report => report.run === run && report.title === 'Fixing tests'));
 		await until('its screen', () => screenOf(terminal).includes('ready'));
 		shows(terminal);
-		assert.strictEqual(terminal.name, `${name} | Fixing tests`);
+		assert.strictEqual(terminal.name, name);
 		return terminal;
 	};
 
-	test('a person\'s rename of an agent\'s tab, read from its own terminal, renames the agent; its tab then has the new name and the CLI title (LIFECYCLE-2.2)', async () => {
+	test('a person\'s rename of an agent\'s tab, read from its own terminal, renames the agent; its tab then has only the new name (LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);
 		const terminal = await agentTitled(port, 'run-r');
 		titled(terminal, 'Grace Hopper');
-		assert.deepStrictEqual([renames, terminal.pending], [[{ run: 'run-r', name: 'Grace Hopper' }], ['Grace Hopper | Fixing tests']]);
+		assert.deepStrictEqual([renames, terminal.pending], [[{ run: 'run-r', name: 'Grace Hopper' }], ['Grace Hopper']]);
 		shows(terminal);
-		assert.deepStrictEqual([renames.length, terminal.name], [1, 'Grace Hopper | Fixing tests'], 'its own name shown is no rename');
+		assert.deepStrictEqual([renames.length, terminal.name], [1, 'Grace Hopper'], 'its own name shown is no rename');
 	});
 
-	test('a person renaming a tab back to the name it had - after naming it with the separator and CLI title kept - renames the agent back: a name the tab already showed is no echo (LIFECYCLE-2.2)', async () => {
+	test('a person renaming a tab back to the name it had renames the agent back: a name the tab already showed is no echo (LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);
 		const terminal = await agentTitled(port, 'run-x4');
-		titled(terminal, 'Bob | Fixing tests');
+		titled(terminal, 'Bob');
 		shows(terminal);
-		titled(terminal, 'Ada | Fixing tests');
+		titled(terminal, 'Ada');
 		assert.deepStrictEqual(renames.map(each => each.name), ['Bob', 'Ada']);
 	});
 
-	test('a person who kept the separator and CLI title renaming the tab - the ones it showed then, though the CLI retitled it since - names the agent by what is before them (LIFECYCLE-2.2)', async () => {
+	test('native renames preserve title-like suffixes in full while changing CLI titles stay in reports, with no tab-name events (LIFECYCLE-2.2, D130)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
 		const terminal = await agentTitled(port, 'run-s');
 		titled(terminal, 'Lin | Fixing tests');
 		shows(terminal);
-		// The CLI retitles its tab twice; the editor shows each name late, in order: none is a rename
+		assert.strictEqual(terminal.name, 'Lin | Fixing tests', 'the former separator and current CLI title are literal name text');
+		// The CLI changes its title twice, but the tab and the stored name stay stable.
+		const names = [...terminal.names];
 		terminal.options.pty.handleInput!('Writing docs');
-		await until('the new title said', () => terminal.pending.includes('Lin | Writing docs'));
+		await until('the new title reported', () => reports.some(report => report.title === 'Writing docs'));
 		terminal.options.pty.handleInput!('Reading');
-		await until('the next title said', () => terminal.pending.includes('Lin | Reading'));
-		shows(terminal);
-		// The person renames it from what the tab showed before the last retitle
+		await until('the next title reported', () => reports.some(report => report.title === 'Reading'));
+		assert.deepStrictEqual(terminal.names, names);
+		assert.strictEqual(terminal.name, 'Lin | Fixing tests');
 		titled(terminal, 'Kim | Writing docs');
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-s', name: 'Lin' }, { run: 'run-s', name: 'Kim' }], 'Kim | Reading']);
+		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-s', name: 'Lin | Fixing tests' }, { run: 'run-s', name: 'Kim | Writing docs' }], 'Kim | Writing docs']);
 	});
 
-	test('a tab accepts human and an empty label, preserving its CLI title (LIFECYCLE-2.1, 2.2)', async () => {
+	test('a tab accepts human, empty and Unicode labels, keeping the whole entered name without a CLI title (LIFECYCLE-2.1, 2.2)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);
 		const terminal = await agentTitled(port, 'run-i');
-		for (const typed of ['human', '   ', '@Human | Fixing tests', ' Ada ']) {
+		for (const typed of ['human', '   ', '@Human | Fixing tests', ' Ada ', '检查长名字与location协调 16 🧑🏽‍💻']) {
 			titled(terminal, typed);
 			shows(terminal);
-			assert.strictEqual(terminal.name, `${typed.replace(/ \| Fixing tests$/, '').trim()} | Fixing tests`, typed);
+			assert.strictEqual(terminal.name, typed.trim(), typed);
 		}
-		assert.deepStrictEqual(renames.map(each => each.name), ['human', '   ', '@Human', ' Ada ']);
+		assert.deepStrictEqual(renames.map(each => each.name), ['human', '   ', '@Human | Fixing tests', ' Ada ', '检查长名字与location协调 16 🧑🏽‍💻']);
+	});
+
+	test('delayed programmatic name changes never become human renames; a later human rename back to an older name still works (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const renames = renamesOf(port);
+		const terminal = await agentTitled(port, 'run-late');
+		port.rename('run-late', 'Grace');
+		port.rename('run-late', 'Lin');
+		shows(terminal);
+		assert.deepStrictEqual([renames, terminal.name], [[], 'Lin']);
+		titled(terminal, 'Grace');
+		shows(terminal);
+		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-late', name: 'Grace' }], 'Grace']);
 	});
 
 	test('the editor naming a tab by the name its terminal was created with - once it opens, and again as it is relaunched - is no rename: the tab gets its name back at once; after the agent was renamed, a person naming the tab so renames it (LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);
-		// A run shown again after a reload: its CLI title is known as its terminal opens
+		// The agent was renamed before its pseudoterminal opened; the native terminal still has its creation name.
 		port.openPair(facts('run-t'), { reveal: false });
 		const terminal = terminals[0];
 		await port.spawn('run-t', plan(TITLED), meta('run-t'));
-		await until('the CLI title known', () => terminal.names.includes('Ada | Fixing tests'));
+		port.rename('run-t', 'Grace');
 		open(terminal);
 		await until('its screen', () => screenOf(terminal).includes('ready'));
 		shows(terminal);
 		resets(terminal);
-		assert.deepStrictEqual([renames, terminal.pending], [[], ['Ada | Fixing tests']]);
+		assert.deepStrictEqual([renames, terminal.pending], [[], ['Grace']]);
 		shows(terminal);
 		// Relaunched, VS Code closes and opens the same pseudoterminal again, then names the tab by the name it was created with
 		terminal.options.pty.close();
@@ -752,12 +774,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		shows(terminal);
 		resets(terminal);
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[], 'Ada | Fixing tests']);
-		port.rename('run-t', 'Grace');
+		assert.deepStrictEqual([renames, terminal.name], [[], 'Grace']);
+		port.rename('run-t', 'Lin');
 		shows(terminal);
 		titled(terminal, 'Ada');
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-t', name: 'Ada' }], 'Ada | Fixing tests']);
+		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-t', name: 'Ada' }], 'Ada']);
 	});
 
 	test('two agents of one name and title: a person\'s rename of either tab renames that agent alone, by its own terminal (LIFECYCLE-2.2)', async () => {
@@ -766,11 +788,11 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const first = await agentTitled(port, 'run-a');
 		const second = await agentTitled(port, 'run-b');
 		assert.strictEqual(first.name, second.name);
-		titled(second, 'Grace | Fixing tests');
+		titled(second, 'Grace');
 		shows(second);
 		titled(first, 'Lin');
 		shows(first);
-		assert.deepStrictEqual([renames, first.name, second.name], [[{ run: 'run-b', name: 'Grace' }, { run: 'run-a', name: 'Lin' }], 'Lin | Fixing tests', 'Grace | Fixing tests']);
+		assert.deepStrictEqual([renames, first.name, second.name], [[{ run: 'run-b', name: 'Grace' }, { run: 'run-a', name: 'Lin' }], 'Lin', 'Grace']);
 	});
 
 	test('a terminal renamed with no tab change to say so - moved into the panel, it has no tab - is found renamed as the runs are checked (LIFECYCLE-2.2)', async () => {
@@ -971,7 +993,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const attaching = reloaded.attach(live[0], facts('run-8')).then(() => { attached = true; });
 		await until('the restored native terminal', () => terminals.length > count);
 		const terminal = terminals[terminals.length - 1];
-		assert.strictEqual(terminal.name, 'Ada | Reload title', 'a background tab has the restored title even before its pseudoterminal opens');
+		assert.strictEqual(terminal.name, 'Ada', 'a restored background tab has only the agent name even before its pseudoterminal opens');
 		assert.strictEqual(attached, false, 'restoring the next editor waits for this terminal to open');
 		open(terminal);
 		await attaching;

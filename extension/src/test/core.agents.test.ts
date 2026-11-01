@@ -557,8 +557,12 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(typeof since, 'number');
 		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Still' });
 		assert.strictEqual(world.agents.get(id)!.activitySince, since);
+		assert.strictEqual(world.agents.get(id)!.name, 'A', 'CLI titles never replace the creation name (D127)');
+		world.agents.rename(id, 'Ada');
 		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true });
 		assert.ok(world.agents.get(id)!.activitySince! >= since!);
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'A different task' });
+		assert.strictEqual(world.agents.get(id)!.name, 'Ada', 'later titles preserve an explicit rename too');
 	});
 
 	test('a run is awaiting its CLI\'s activity while its reports say so, and no longer once one does not (CLIS-2.3, D81)', async () => {

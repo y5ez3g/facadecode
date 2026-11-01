@@ -186,12 +186,12 @@ suite('Window terminal registration: actual objects across workspace host genera
 		assert.strictEqual(registry.request({ ...owner, claim: { ...owner.claim, token: 'other' }, kind: 'activate' }), false);
 	});
 
-	test('runtime serializes two same-title creates and sends no Terminal object across hosts', async () => {
+	test('runtime serializes two empty-name creates and sends no Terminal object across hosts', async () => {
 		const oldA = bind('run-a', 'same'), oldB = bind('run-b', 'same'); nextHost();
 		const runtime = manager();
 		for (const run of ['run-a', 'run-b']) {
 			const handle = runtime.create({ run, name: '', cli: 'claude' }, false);
-			handle.pty.setTitle('same'); handle.open(false); handle.open(false);
+			handle.open(false); handle.open(false);
 		}
 		await clock.tick(0);
 		// A finish ends its capture: no cancel round trip follows it

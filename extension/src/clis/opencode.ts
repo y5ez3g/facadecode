@@ -176,11 +176,8 @@ export const openCodeAdapter: CliAdapter = {
 	mergeVariable: (name, ours, theirs) => name === OPENCODE_CONFIG ? mergedOpenCodeConfig(ours, theirs) : ours,
 	initialPrompt: { state: 'unverified', reason: 'the prompt as the value of --prompt, which starts the interactive session with it' },
 	promptProblem: prompt => prompt.startsWith('-') ? 'OpenCode would read a prompt that starts with - as an option' : undefined,
-	// `OpenCode` until a session has a title, then `OC | {title}`. Its reports title a session it has not named yet with its own
-	// default, `New session - {ISO time}` - `Child session` for a subagent's - which its terminal title never shows
 	// Its input, recorded on macOS with OpenCode 2.1.4 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'opencode-frame', evidence: 'its input box, on its start screen and in a session: empty or its placeholder, a typed, pasted, long-paste, history or slash-command draft, while working, and gone behind its permission question and command palette' },
-	title: { names: ['OpenCode', 'opencode', 'OC'], placeholder: /^(?:New|Child) session - \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/ },
 	sandbox: () => ({ state: 'none' }),
 	// Its own permission configuration, whose defaults allow every tool, where YOLO is off (D79)
 	approvals: yolo => yolo ? { state: 'bypassed', by: ['--auto'] } : { state: 'native' },

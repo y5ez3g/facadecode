@@ -95,58 +95,45 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 		assert.deepStrictEqual(activityOf(undefined), { activity: 'unknown', reporting: false, unknown: 'not_reporting' });
 	});
 
-	test('the report\'s title is preferred over the terminal\'s; only adapter-known decorations go, and a title that only names the CLI, its folder or the agent is none', () => {
-		const context = { cwd: '/work/shop-app', name: 'Ada' };
+	test('the report\'s nonempty title is preferred over the terminal\'s; invisible formatting is removed without stripping visible symbols (CLIS-2.3)', () => {
 		assert.deepStrictEqual([
-			cliTitle('claude', 'Claude Code', { reported: 'Fixing the tests', terminal: '✳ Something else' }, context),
-			cliTitle('claude', 'Claude Code', { terminal: '⠐ Refactoring parser' }, context),
-			cliTitle('claude', 'Claude Code', { terminal: '✳ Claude Code' }, context),
-			cliTitle('claude', 'Claude Code', { terminal: 'claude - shop-app' }, context),
-			cliTitle('claude', 'Claude Code', { terminal: 'shop-app' }, context),
-			cliTitle('claude', 'Claude Code', { terminal: 'Ada' }, context),
-			// Punctuation the person typed is the title's own text, and so is a mark of a CLI without an adapter that knows it
-			cliTitle('claude', 'Claude Code', { terminal: '✳ ★ Release v2 — notes!' }, context),
-			cliTitle('other', 'Other', { terminal: '✳ ★ Release v2 — notes!' }, context),
-			cliTitle('other', 'Other', { terminal: 'Other' }, context),
-			cliTitle('claude', 'Claude Code', { terminal: '  \u202eevil\u200b  ' }, context),
-			cliTitle('claude', 'Claude Code', {}, context)
-		], ['Fixing the tests', 'Refactoring parser', undefined, undefined, undefined, undefined, '★ Release v2 — notes!', '✳ ★ Release v2 — notes!', undefined, 'evil', undefined]);
+			cliTitle({ reported: 'Fixing the tests', terminal: '✳ Something else' }),
+			cliTitle({ reported: '', terminal: '⠐ Refactoring parser' }),
+			cliTitle({ reported: ' \u202e\u200b\t ', terminal: '✳ ★ Release v2 — notes!' }),
+			cliTitle({ reported: '  \u202eevil\u200b  ' }),
+			cliTitle({ terminal: '  \u202eevil\u200b  ' }),
+			cliTitle({ reported: '\u200b', terminal: ' \t ' }),
+			cliTitle({})
+		], ['Fixing the tests', '⠐ Refactoring parser', '✳ ★ Release v2 — notes!', 'evil', 'evil', undefined, undefined]);
 	});
 
-	test('Antigravity, Muse Code, OpenCode and Pi: a title that only names the CLI, its folder or the agent - alone or joined - is none; a title of work is kept whole, the report\'s first', () => {
-		const context = { cwd: '/work/shop-app', name: 'Ada' };
-		assert.deepStrictEqual([
-			cliTitle('pi', 'Pi', { terminal: 'π - shop-app' }, context),
-			cliTitle('pi', 'Pi', { terminal: 'π - Fix login - shop-app' }, context),
-			cliTitle('pi', 'Pi', { terminal: 'pi' }, context),
-			cliTitle('opencode', 'OpenCode', { terminal: 'OpenCode' }, context),
-			cliTitle('opencode', 'OpenCode', { terminal: 'OC | shop-app' }, context),
-			cliTitle('opencode', 'OpenCode', { terminal: 'OC | Fix the login bug' }, context),
-			cliTitle('opencode', 'OpenCode', { reported: 'Fix the login bug', terminal: 'OC | Fix the login bug' }, context),
-			cliTitle('muse', 'Muse Code', { terminal: 'Muse Code' }, context),
-			cliTitle('muse', 'Muse Code', { terminal: 'muse - shop-app' }, context),
-			cliTitle('muse', 'Muse Code', { terminal: 'Refactoring the parser' }, context),
-			cliTitle('agy', 'Antigravity', { terminal: 'agy' }, context),
-			cliTitle('agy', 'Antigravity', { terminal: 'Antigravity · shop-app' }, context),
-			cliTitle('agy', 'Antigravity', { terminal: 'Ada' }, context)
-		], [undefined, 'π - Fix login - shop-app', undefined, undefined, undefined, 'OC | Fix the login bug', 'Fix the login bug', undefined, undefined, 'Refactoring the parser', undefined, undefined, undefined]);
+	test('every CLI keeps visible decorations and titles naming the CLI, folder or agent, alone or joined (CLIS-2.3, D126)', () => {
+		for (const title of [
+			'⠐ Refactoring parser', '✳ Claude Code', '✳ ★ Release v2 — notes!', 'claude - shop-app',
+			'Codex', 'codex - shop-app', 'π - shop-app', 'π - Fix login - shop-app', 'pi',
+			'OpenCode', 'OC | shop-app', 'OC | Fix the login bug',
+			'Muse Code', 'muse - shop-app', 'Refactoring the parser',
+			'agy', 'Antigravity · shop-app', 'shop-app', 'Ada', 'Other'
+		]) {
+			assert.strictEqual(cliTitle({ terminal: title }), title);
+			assert.strictEqual(cliTitle({ reported: title, terminal: 'Another title' }), title);
+		}
 	});
 
-	test('the placeholder OpenCode reports for a session it has not named yet is no title: its terminal\'s is read instead; a title a person gave is kept, and only its adapter knows it (CLIS-2.3)', () => {
-		const context = { cwd: '/work/shop-app', name: 'Ada' };
+	test('OpenCode\'s default session titles keep report precedence, just as a named session does (CLIS-2.3, D126)', () => {
 		const placeholder = 'New session - 2026-10-31T03:29:22.759Z';
 		assert.deepStrictEqual([
-			cliTitle('opencode', 'OpenCode', { reported: placeholder, terminal: 'OpenCode' }, context),
-			cliTitle('opencode', 'OpenCode', { reported: placeholder, terminal: 'OC | Reply OK only' }, context),
-			cliTitle('opencode', 'OpenCode', { reported: 'Child session - 2026-10-31T03:29:22.759Z' }, context),
-			cliTitle('opencode', 'OpenCode', { reported: 'New session - plan the release' }, context),
-			cliTitle('pi', 'Pi', { reported: placeholder }, context)
-		], [undefined, 'OC | Reply OK only', undefined, 'New session - plan the release', placeholder]);
+			cliTitle({ reported: placeholder, terminal: 'OpenCode' }),
+			cliTitle({ reported: placeholder, terminal: 'OC | Reply OK only' }),
+			cliTitle({ reported: 'Child session - 2026-10-31T03:29:22.759Z' }),
+			cliTitle({ reported: 'New session - plan the release' }),
+			cliTitle({ reported: 'Fix the login bug', terminal: 'OC | Fix the login bug' })
+		], [placeholder, placeholder, 'Child session - 2026-10-31T03:29:22.759Z', 'New session - plan the release', 'Fix the login bug']);
 	});
 
 	test('titles and status words are capped at 300 code points with an ellipsis, never splitting a character', () => {
 		const long = `${'a'.repeat(298)}🌍🌍tail`;
-		const title = cliTitle('claude', 'Claude Code', { terminal: long }, { cwd: '/w', name: 'n' })!;
+		const title = cliTitle({ terminal: long })!;
 		assert.strictEqual([...title].length, MOST_SHOWN);
 		assert.strictEqual(title, `${'a'.repeat(298)}🌍…`);
 		assert.deepStrictEqual([truncateCodePoints('ab🌍cd', 4), truncateCodePoints('ab🌍', 3), truncateCodePoints('abc', 0)], ['ab🌍…', 'ab🌍', '']);

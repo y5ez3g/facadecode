@@ -235,9 +235,10 @@ progress-only updates keep its start time.
 
 Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes, reject controls and malformed reports; sanitize
 invisible formatting, trim and cap displayed title/status at 300 Unicode code points with ellipsis. Prefer a report's
-title over OSC 0/2, except the placeholder an adapter knows its CLI reports before it has a title - OpenCode's own
-`New session - {ISO time}`, which its terminal title never shows - which gives way to OSC 0/2. Strip only adapter-known status decorations and exact generic CLI/folder/name titles, not arbitrary
-user punctuation. Never rewrite useful original CLI text. Terminal emoji width follows tested Unicode cell tables;
+nonempty title over OSC 0/2. Preserve the CLI's visible title, including status symbols, decorations, CLI/folder/agent
+names and default session titles, even when the card already provides the same information (D126). There is no
+adapter-specific title filtering or rewriting; the owner deferred content cleanup to retain the original CLI display.
+Terminal emoji width follows tested Unicode cell tables;
 wide-character/wrapped-line reading and bracketed paste modes are verified per terminal backend.
 
 ### 2.4 Exact conversations and vendor extensions
@@ -483,6 +484,9 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
   inherited run markers, and only programs a launch can start on Windows; 1.4 and 3.1 recognize every spelling of an option;
   2.1 gives Codex on Windows its per-character paste time; 2.4 starts without session tracking where settings cannot be
   read (D132, D134).
+- 2026-11-01: Describe competitive-analysis evidence without naming individual products; CLI behavior is unchanged.
+- 2026-11-01: 2.3 restores every CLI's visible title, including status symbols, generic names and default session
+  titles, at the owner's request to defer title cleanup (D126); report precedence and safe display bounds remain.
 - 2026-10-31: D123 completes the six built-in history/identity adapters, preserves user integration settings, and records native Linux evidence and platform limits. Antigravity multi-folder metadata retains its cwd ambiguity.
 
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.

@@ -152,7 +152,6 @@ export const antigravityAdapter: CliAdapter = {
 	},
 	// Its input, recorded on macOS with Antigravity 1.4.12 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'agy-frame', evidence: 'its input frame between two rules, its own earlier messages above it: empty, a typed, pasted, multi-line, long-paste, history or slash-command draft, while working, and gone behind its trust and permission questions' },
-	title: { names: ['Antigravity', 'agy'] },
 	sandbox: () => ({ state: 'none' }),
 	approvals: yolo => yolo ? { state: 'bypassed', by: ['--mode', 'accept-edits', '--dangerously-skip-permissions'] } : { state: 'native' },
 	interruptExit: sigintExit

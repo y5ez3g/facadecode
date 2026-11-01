@@ -75,19 +75,22 @@ export interface CardStatus {
 
 /**
  * What is known of a run, in RULES-3.2's precedence and PANEL-1.4's second-line priority: an unresolved error is red with its
- * reason; a native blocker is yellow in the CLI's words, leading the second line, red beside unknown activity; startup - until
- * its CLI first shows its activity (CLIS-2.3, D81) - is green with its stage; reliable activity is green or yellow over the CLI
- * title or a fallback; without reliable activity the dot is red and the second line says why. Never a completion claim.
+ * reason; a native blocker is yellow with its kind and the CLI's words, red beside unknown activity; startup - until its CLI
+ * first shows its activity (CLIS-2.3, D81) - is green with its stage. Work is green and reliable idle grey, showing the CLI title
+ * or a fallback; without reliable activity the dot is red and the second line says why. Never a completion claim.
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	if (facts.error || facts.lifecycle === 'ended') {
 		const reason = errorReasonOf(facts, words);
-		return { dot: 'error', stateText: words.error(reason), line: reason };
+		const text = words.error(reason);
+		return { dot: 'error', stateText: text, line: text };
 	}
 	if (facts.blocker) {
-		const said = facts.blocker.text?.trim() || (facts.blocker.kind === 'permission' ? words.needsPermission : facts.blocker.kind === 'auth' ? words.needsSignIn : words.hasQuestion);
-		if (facts.reporting || facts.lifecycle === 'starting') {
-			return { dot: 'idle', stateText: words.notWorking, line: said, reason: said };
+		const kind = facts.blocker.kind === 'permission' ? words.needsPermission : facts.blocker.kind === 'auth' ? words.needsSignIn : words.hasQuestion;
+		const detail = facts.blocker.text?.trim();
+		const said = detail && detail !== kind ? `${kind} · ${detail}` : kind;
+		if ((facts.reporting && facts.activity !== 'unknown') || facts.lifecycle === 'starting' || facts.awaitingActivity) {
+			return { dot: 'blocked', stateText: kind, line: said, ...detail && detail !== kind ? { reason: detail } : {} };
 		}
 		// Unknown activity stays red; the blocker leads and the status explanation is kept (PANEL-1.4)
 		const unknown = facts.activityReason?.trim() || words.activityUnavailable;
@@ -107,7 +110,7 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 		return { dot: 'idle', stateText: words.notWorking, line: tools ?? (described || words.readyForInput) };
 	}
 	const reason = facts.activityReason?.trim() || words.activityUnavailable;
-	return { dot: 'error', stateText: words.activityUnavailable, line: reason, ...(reason !== words.activityUnavailable ? { reason } : {}) };
+	return { dot: 'error', stateText: words.activityUnavailable, line: reason === words.activityUnavailable ? reason : `${words.activityUnavailable} · ${reason}`, ...(reason !== words.activityUnavailable ? { reason } : {}) };
 }
 
 /** Why a run is in error: an abnormal exit in the person's words, from how it ended (RULES-3.3); any other reason as it was given. */

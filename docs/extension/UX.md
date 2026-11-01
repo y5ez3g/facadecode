@@ -69,7 +69,7 @@ part failed.
 | Hover | `list.hoverBackground` |
 | Selection | `list.activeSelectionBackground`, `list.activeSelectionForeground` even after panel loses focus |
 | Keyboard focus | 1 px `list.focusOutline` inside row |
-| Work / idle / error | `charts.green` / `charts.yellow` / `charts.red` |
+| Work / idle / blocker / error | `charts.green` / `descriptionForeground` / `charts.yellow` / `charts.red` |
 | Status meaning and unknown evidence | RULES-3.2; second-line wording is PANEL-1.4 |
 | Controls | `button.*`, `input.*`, `inputValidation.*`, `scrollbarSlider.*` |
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
@@ -142,7 +142,7 @@ run and are validated against current state, without falling back to the selecti
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `copyAgentReference` | Copy Agent Reference | Known owned record; card/Go to Agent | LIFECYCLE-2.1 |
 | `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
-| `messageHistory` | Message History... | Always; this window's records; panel `…` menu | COLLABORATION-3.2 |
+| `messageHistory` | Message History... | Always; this window's records; Command Palette | COLLABORATION-3.2 |
 | `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
 | `clearFilter` | Clear Filter | Active filter; card/empty state | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
@@ -203,7 +203,6 @@ window components' network has no settings; it shares the same OS-user desktop b
 
 | Editor setting | Owner/use |
 | --- | --- |
-| `terminal.integrated.tabs.separator` | LIFECYCLE tab title |
 | `terminal.integrated.confirmOnKill` | LIFECYCLE-3.1 close confirmation: `editor`/`always` ask, `never`/`panel` do not |
 | `terminal.integrated.env.osx/linux/windows`, configured default-profile env | CLIS-1.2 owns the shared discovery/launch environment; shell startup scripts are not evaluated |
 | Default terminal profile and shell | Ordinary Open Terminal Here terminals |
@@ -261,6 +260,8 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 
 ## Change log
 
+- 2026-11-01: Removed the tab-separator dependency after LIFECYCLE-2.2 changed editor tabs to icon plus name (D130).
+- 2026-11-01: 2.1 gives reliable idle its own neutral theme colour and reserves yellow for native blockers (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 3.1 adds Copy Diagnostics (D116).

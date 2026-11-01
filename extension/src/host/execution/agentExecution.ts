@@ -474,8 +474,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	async attach(live: LiveRun, facts: PairFacts): Promise<void> {
 		if (live.meta.exactResume) { this.identity.track(live.run); this.identity.process(live.run, live.pid); }
-		// VS Code opens a background pseudoterminal lazily, ignoring name events until then. Its initial tab name must include
-		// the restored CLI title, so create the native terminal after the attach snapshot has supplied it (LIFECYCLE-2.2).
+		// Restore the run's screen before opening its background terminal; input waits until the process is claimed again.
 		const pair = this.pairs.get(live.run) ?? this.create(facts, false, true);
 		pair.cli = live.meta.cli;
 		// Through the ptyd that holds it: this window's own, or one of an earlier protocol that still does (ARCHITECTURE-2.4)
@@ -825,11 +824,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			: vscode.l10n.t("[Agent process exited with code {0}]", exit.exitCode);
 	}
 
-	/** Tells the core what `pair`'s CLI reports now, and its tab its title: each change once (CLIS-2.3). */
+	/** Tells the core what `pair`'s CLI reports now, including its title for the panel: each change once (CLIS-2.3). */
 	private tell(pair: Pair): void {
 		const facts = activityOf(pair.status);
 		const title = this.titleOf(pair);
-		pair.terminal.pty.setTitle(title);
 		// What it showed before its connection was lost is no news: claimed again, it is told what it shows then
 		if (!pair.process || pair.exited || pair.lost) {
 			return;
@@ -886,9 +884,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		return performance.now() + Math.max(0, Math.min(bound, startedAt + bound - Date.now()));
 	}
 
-	/** The title `pair`'s CLI gives its tab now (CLIS-2.3). */
+	/** The CLI title reported to the panel (CLIS-2.3). */
 	private titleOf(pair: Pair): string | undefined {
-		return cliTitle(pair.cli, pair.facts.displayName, { reported: pair.status?.title, terminal: pair.terminalTitle }, { cwd: pair.facts.cwd, name: pair.facts.name });
+		return cliTitle({ reported: pair.status?.title, terminal: pair.terminalTitle });
 	}
 
 	/** Ends `run`'s process in the background, once, and forgets it: the actual result for whoever asks (LIFECYCLE-3.1, 4.2). */

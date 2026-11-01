@@ -157,7 +157,6 @@ export const codexAdapter: CliAdapter = {
 	// Its input above its footer, recorded signed in on macOS with 0.165.0 (VERIFICATION G3): read by its layout, whatever the version
 	input: { adapter: 'codex-prompt', evidence: 'its input above its footer: empty, a typed, pasted, multi-line, history or slash-command draft, and gone behind its trust question' },
 	initialPrompt: { state: 'unverified', reason: 'the prompt as its positional argument after --, which starts the interactive session with it' },
-	title: { names: ['Codex', 'codex'] },
 	sandbox: yolo => yolo ? { state: 'off', by: ['--dangerously-bypass-approvals-and-sandbox'] } : { state: 'on', by: ['--sandbox', 'workspace-write'] },
 	approvals: yolo => yolo ? { state: 'bypassed', by: ['--dangerously-bypass-approvals-and-sandbox'] } : { state: 'native' },
 	interruptExit: sigintExit

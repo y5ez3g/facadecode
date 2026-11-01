@@ -88,8 +88,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				// The More Actions menu (PANEL-1.1, D58): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
 				{ command: 'facade.newWorktree', when: 'view == facade.agents && workspaceFolderCount != 0', group: '1_locations@2' },
-				{ command: 'facade.messageHistory', when: 'view == facade.agents', group: '9_configure@1' },
-				{ command: 'facade.configureAgents', when: 'view == facade.agents', group: '9_configure@2' }
+				{ command: 'facade.configureAgents', when: 'view == facade.agents', group: '9_configure@1' }
 			],
 			'webview/context': [
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
@@ -115,15 +114,15 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		});
 	});
 
-	test('PANEL-1.1, D58: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Message History..., Configure Agents... - in that order, as the editor sorts groups and their order', () => {
+	test('PANEL-1.1, D58, D129: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Configure Agents... - in that order, as the editor sorts groups and their order', () => {
 		type Entry = { command: string; group: string };
 		const more = (contributes.menus['view/title'] as Entry[]).filter(each => !each.group.startsWith('navigation'));
 		const placed = more.map(each => ({ command: each.command, group: each.group.split('@')[0], order: Number(each.group.split('@')[1]) }))
 			.sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order);
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
-		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.messageHistory', 'facade.configureAgents']);
-		// Go to Agent, Show Agent Launch and Show Agents Log are in the Command Palette alone (D83); Configure Agents is in it too
-		const palette = ['facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
+		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.configureAgents']);
+		// These commands are in the Command Palette alone (D83, D129); Configure Agents is in it too.
+		const palette = ['facade.messageHistory', 'facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.configureAgents'].includes(each.command)));
 	});
