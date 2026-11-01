@@ -42,12 +42,14 @@ export interface CatalogEntry {
 }
 
 /**
- * The options a built-in's adapter sets itself - its run settings and its YOLO mapping, either way (CLIS-1.3, 3.2): a launch argument
- * repeating one would put the person's value in Facade's place, so it is refused (CLIS-3.1). Its folder's trust is not among them.
+ * The options a built-in's adapter sets itself - its run settings and its YOLO mapping, either way (CLIS-1.3, 3.2) - in every spelling
+ * its CLI takes: a launch argument repeating one would put the person's value in Facade's place, so it is refused (CLIS-3.1). Its
+ * folder's trust is not among them.
  */
 export function ownedOptions(adapter: CliAdapter): readonly string[] {
 	// A generic configuration flag carries unrelated user settings too; never reserve all of Codex's or Muse's -c.
-	return [...adapter.groups.quiet ?? [], ...adapter.groups.yoloOn ?? [], ...adapter.groups.yoloOff ?? [], ...adapter.groups.resume ?? [], ...adapter.groups.session ?? [], ...adapter.identityOptions ?? []].filter(token => token.startsWith('-') && (token !== '-c' || (adapter.id !== 'codex' && adapter.id !== 'muse')));
+	const owned = [...adapter.groups.quiet ?? [], ...adapter.groups.yoloOn ?? [], ...adapter.groups.yoloOff ?? [], ...adapter.groups.resume ?? [], ...adapter.groups.session ?? [], ...adapter.identityOptions ?? []].filter(token => token.startsWith('-') && (token !== '-c' || (adapter.id !== 'codex' && adapter.id !== 'muse')));
+	return [...owned, ...owned.flatMap(option => adapter.aliases?.[option] ?? [])];
 }
 
 /** How the catalog reads the settings: by their full names, as the destination environment's editor has them. */

@@ -139,6 +139,19 @@ suite('CLIs: the catalog and its settings (CLIS-1.1, 1.2, 3.1)', () => {
 			owned('pi', ['--approve', '--model', 'x']).extra
 		], [['--sandbox'], ['--mode'], ['--disable-sandbox'], ['--auto'], ['-c', 'model_reasoning_effort=high'], ['--approve', '--model', 'x']]);
 	});
+
+	test('an option the adapter sets is refused in every spelling its CLI takes - a short form, an alias - which would undo the run\'s YOLO mapping (CLIS-3.1, RULES-4.3)', () => {
+		const owned = (cli: string, args: readonly string[]) => catalogOf(settings({ [`facade.${cli}.launch`]: { arguments: args } })).entries.find(entry => entry.adapter.setting === `facade.${cli}`)!;
+		assert.deepStrictEqual([
+			owned('codex', ['--yolo']).problems.map(problem => problem.said.values[2]),
+			owned('codex', ['-s', 'danger-full-access']).problems.map(problem => problem.said.values[2]),
+			owned('codex', ['-s=read-only']).problems.map(problem => problem.said.values[2]),
+			owned('opencode', ['--yolo']).problems.map(problem => problem.said.values[2]),
+			owned('opencode', ['--dangerously-skip-permissions']).problems.map(problem => problem.said.values[2]),
+			// A model is the person's default: an explicit choice replaces it, in any spelling, at a start that makes one
+			owned('codex', ['-m', 'gpt-5']).extra
+		], [['--yolo'], ['-s'], ['-s'], ['--yolo'], ['--dangerously-skip-permissions'], ['-m', 'gpt-5']]);
+	});
 });
 
 suite('CLIs: finding a program as its terminal would (CLIS-1.2)', () => {

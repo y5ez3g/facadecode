@@ -185,6 +185,11 @@ export interface CliAdapter {
 	/** The command PATH is searched for where its `path` setting is empty; a custom CLI's configured path. */
 	readonly command: string;
 	readonly groups: Groups;
+	/**
+	 * Other spellings its CLI takes for an option of its groups - a short form, an alias - by that option: an argument spelled so is the
+	 * same option, refused where Facade sets it and replaced where an explicit choice sets it (CLIS-1.4, 3.1).
+	 */
+	readonly aliases?: { readonly [option: string]: readonly string[] };
 	/** Whether an explicit model and effort can be passed (CLIS-1.4); a CLI that cannot take one is refused it, never ignoring it. */
 	readonly takes: { readonly model: boolean; readonly effort: boolean };
 	/** The values its groups' `${name}`s take for a launch. */

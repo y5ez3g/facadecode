@@ -161,6 +161,8 @@ export const openCodeAdapter: CliAdapter = {
 	setting: 'facade.opencode',
 	command: 'opencode',
 	identityOptions: ['--session', '-s', '--continue', '-c', '--fork'],
+	// The same switch as its --auto: one configured so would answer every permission question with YOLO off (CLIS-3.1)
+	aliases: { '--auto': ['--yolo', '--dangerously-skip-permissions'] },
 	groups: {
 		resume: ['--session', '${sessionId}'],
 		connect: ['--standalone'],

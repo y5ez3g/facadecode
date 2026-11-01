@@ -118,6 +118,8 @@ export const codexAdapter: CliAdapter = {
 	displayName: 'Codex',
 	setting: 'facade.codex',
 	command: 'codex',
+	// Its short options and its `--yolo`, the same options as these: one configured so would undo the run's YOLO mapping (CLIS-3.1)
+	aliases: { '--model': ['-m'], '--sandbox': ['-s'], '--dangerously-bypass-approvals-and-sandbox': ['--yolo'] },
 	groups: {
 		resume: ['resume', '${sessionId}'],
 		connect: [
