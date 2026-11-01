@@ -8,7 +8,7 @@ import * as fs from 'fs';
 import { isJsonObject } from '../base/json';
 import { executableAt, homeOf, launchTarget, LaunchTarget } from './executable';
 import { variableOf } from './environment';
-import type { SessionIntegration, SessionIntegrationInput } from './identity';
+import { sessionDirOf, type SessionIntegration, type SessionIntegrationInput } from './identity';
 import { museDataDir } from './history/muse';
 import { RUN_VARIABLE, Environment } from './environment';
 import { SERVER_NAME, serverEntry, sharedServer, ToolsIntegration } from './tools';
@@ -66,7 +66,7 @@ export function museSession({ file, hook, env, extra, throughCmd, platform }: Se
 		merged[event] = [...(groups ?? []), { hooks: [{ type: 'command', command: hook, timeout: 5 }] }];
 	}
 	return { extra: remaining, args: ['-c', `hooks=${JSON.stringify(merged)}`],
-		files: [{ file: path.join(file.replace(/\.json$/, '.d'), 'muse.json'), content: JSON.stringify({ data: museDataDir(env, platform) }) }] };
+		files: [{ file: path.join(sessionDirOf(file), 'muse.json'), content: JSON.stringify({ data: museDataDir(env, platform) }) }] };
 }
 
 /** The project's MCP file Muse Code reads in a trusted folder, and where it reads skills there (CLIS-2.2). */

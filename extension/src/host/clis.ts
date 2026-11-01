@@ -8,7 +8,7 @@
 // fails, the CLI starts without them (CLIS-2.2). A start of a CLI that keeps its trust in a file of its own has its folder trusted
 // there first; where it cannot be, the start goes ahead and the CLI asks in its terminal (CLIS-3.3, D62).
 
-import { SESSION_HOOK_SCRIPT, sessionFileOf, sessionHookCommand } from '../clis/identity';
+import { SESSION_HOOK_SCRIPT, sessionDirOf, sessionFileOf, sessionHookCommand } from '../clis/identity';
 import * as fs from 'fs';
 import * as path from 'path';
 import type { StoreEnvironments } from '../clis/history';
@@ -172,7 +172,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 			const catalog = catalogOf(this.read);
 			const destination = this.destination(request.location);
 			const file = sessionFileOf(this.home, request.run);
-			const script = path.join(file.replace(/\.json$/, '.d'), 'hook.cjs');
+			const script = path.join(sessionDirOf(file), 'hook.cjs');
 			const resumable = { ...input, resume: request.resume, sessionFile: file, sessionHook: sessionHookCommand(process.execPath, destination.platform, request.cli, file, script) };
 			let planned = planLaunch(catalog, { ...resumable, ...request.tools ? { tools: this.toolsOf(request.run, request.tools) } : {} }, destination);
 			const failure = planned.injection && this.inject(request.run, input.cwd, planned);

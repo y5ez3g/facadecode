@@ -7,7 +7,7 @@ import * as path from 'path';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, variableOf } from './environment';
 import { LaunchTarget, nodeOnPath } from './executable';
-import type { SessionIntegrationInput } from './identity';
+import { sessionDirOf, type SessionIntegrationInput } from './identity';
 
 /** Pi emits this for startup, reload, new, resume and fork. No global extension or dependency is installed. */
 export const PI_SESSION_EXTENSION = `import fs from 'node:fs';
@@ -42,7 +42,7 @@ export default function (pi) {
 `;
 
 function piSession({ file }: SessionIntegrationInput) {
-	const extension = path.join(file.replace(/\.json$/, '.d'), 'pi.mjs');
+	const extension = path.join(sessionDirOf(file), 'pi.mjs');
 	return { args: ['--extension', extension], files: [{ file: extension, content: PI_SESSION_EXTENSION }] };
 }
 import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';

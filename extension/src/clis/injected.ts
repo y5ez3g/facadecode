@@ -18,6 +18,7 @@ import { readJsonFile, replaceFile } from '../base/files';
 import { canonicalJson, isJsonObject } from '../base/json';
 import { addMembers, applyJsonEdits, JsonEdit, JsonMember, JsonObjectNode, jsonStyleOf, memberOf, nodeValue, replaceValue } from '../base/jsonc';
 import { withFileLock } from '../base/lock';
+import { isSessionFileName } from './identity';
 import { Injection, ProjectWrite, runDirOf } from './tools';
 
 /** The record's file in the Facade directory `home`: what Facade put into project folders and the runs that use it. */
@@ -424,11 +425,14 @@ export function markPlanned(home: string, run: string): void {
 	});
 }
 
-/** The runs of the Facade directory `home` with a folder of their own files, by run ID. */
+/**
+ * The runs of the Facade directory `home` with a folder of their own files, by run ID. A run's session folder beside them is no
+ * run's: it holds the hook a live run's CLI still calls, and goes with that run's process (CLIS-2.4).
+ */
 function runFoldersIn(home: string): string[] {
 	const runs = path.dirname(runFolderOf(home, 'run'));
 	try {
-		return fs.readdirSync(runs, { withFileTypes: true }).filter(entry => entry.isDirectory()).map(entry => entry.name);
+		return fs.readdirSync(runs, { withFileTypes: true }).filter(entry => entry.isDirectory() && !isSessionFileName(entry.name)).map(entry => entry.name);
 	} catch {
 		return [];
 	}

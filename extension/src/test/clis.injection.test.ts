@@ -15,6 +15,7 @@ import { museAdapter } from '../clis/muse';
 import { openCodeAdapter } from '../clis/opencode';
 import { piAdapter } from '../clis/pi';
 import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconcileRuns, releaseProject, releaseRun } from '../clis/injected';
+import { sessionDirOf, sessionFileOf } from '../clis/identity';
 import { DestinationEnvironment, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
 import { INPUT_ADAPTERS } from '../ptyd/composer';
 import { McpServer, ProjectWrite, runDirOf, ToolsInput } from '../clis/tools';
@@ -492,6 +493,19 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.strictEqual(fs.existsSync(path.dirname(runDirOf(home, 'run-d'))), false);
 	});
 
+	test('reconcile leaves a run\'s session folder beside the run folders: a live run\'s CLI still calls the hook it holds (CLIS-2.4)', () => {
+		const home = path.dirname(record);
+		const session = sessionDirOf(sessionFileOf(home, 'run-live'));
+		fs.mkdirSync(runDirOf(home, 'run-live'), { recursive: true });
+		fs.mkdirSync(session, { recursive: true });
+		fs.writeFileSync(path.join(session, 'hook.cjs'), '// hook');
+		assert.deepStrictEqual(reconcileRuns(home, ['run-live']), []);
+		assert.deepStrictEqual([fs.existsSync(path.join(session, 'hook.cjs')), fs.existsSync(runDirOf(home, 'run-live'))], [true, true]);
+		// Its process gone, its run folder goes; the session folder goes with the run's own ending, which reads its last record first
+		assert.deepStrictEqual(reconcileRuns(home, []), []);
+		assert.deepStrictEqual([fs.existsSync(path.join(session, 'hook.cjs')), fs.existsSync(path.dirname(runDirOf(home, 'run-live')))], [true, false]);
+	});
+
 	test('a record that cannot be read is never replaced: a project write is refused with why, and release and reconcile leave it', () => {
 		const home = path.dirname(record);
 		acquireProject(record, 'run-a', cwd, [skill()]);
@@ -596,6 +610,17 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		assert.deepStrictEqual([fs.existsSync(path.join(runDirOf(home, 'run-1'), 'mcp.json')), textOf(path.join(location.path, '.agents', 'skills', 'facade', 'SKILL.md'))], [true, FACADE_SKILL]);
 		reconcileRuns(home, ['run-2'], Date.now() + PLANNED_ALIVE_MS + 1_000);
 		assert.deepStrictEqual([fs.existsSync(runDirOf(home, 'run-1')), fs.existsSync(path.join(location.path, '.agents', 'skills', 'facade', 'SKILL.md'))], [false, true]);
+	});
+
+	test('a window opening while runs live - its reconcile - keeps their session hooks: their conversations go on being recorded (CLIS-2.4)', async () => {
+		const planner = clis();
+		const claude = await planner.plan(request('claude', 'run-1'));
+		const hook = path.join(sessionDirOf(sessionFileOf(home, 'run-1')), 'hook.cjs');
+		assert.deepStrictEqual([claude.exactResume, fs.existsSync(hook)], [true, true]);
+		await clis().reconcile(['run-1']);
+		assert.ok(fs.existsSync(hook), 'the live run\'s CLI still calls it');
+		reconcileRuns(home, ['run-1'], Date.now() + PLANNED_ALIVE_MS + 1_000);
+		assert.ok(fs.existsSync(hook), 'long after its plan too');
 	});
 
 	test('describe states, for a start here, the choices each CLI takes, its native prompt mapping, its input reader and nothing it does not stand behind; it writes nothing', () => {

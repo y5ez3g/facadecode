@@ -10,7 +10,7 @@ import * as fs from 'fs';
 import { parse, ParseError } from 'jsonc-parser';
 import { homeOf } from './executable';
 import { variableOf } from './environment';
-import type { SessionIntegrationInput } from './identity';
+import { sessionDirOf, type SessionIntegrationInput } from './identity';
 
 /** Reads the selected TUI route, not shared server activity or subagent reports. No dependency on Solid internals. */
 export const OPENCODE_SESSION_PLUGIN = `import fs from 'node:fs';
@@ -63,7 +63,7 @@ export function openCodeSession({ file, env, platform }: SessionIntegrationInput
 	}
 	const plugins = overlay.plugins ?? config.plugins ?? legacyPlugins;
 	if (!Array.isArray(plugins)) { throw new Error(`OpenCode plugins in ${configFile} must be an array.`); }
-	const directory = file.replace(/\.json$/, '.d');
+	const directory = sessionDirOf(file);
 	return {
 		env: { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugins: [...plugins, directory] }) },
 		files: [

@@ -50,8 +50,21 @@ export function sessionFileOf(home: string, run: string): string {
 	return path.join(home, 'runs', `${run}.session.json`);
 }
 
+/** The folder beside a run's session file `file` that holds what its session integration runs: its hook, plugin or extension. */
+export function sessionDirOf(file: string): string {
+	return file.replace(/\.json$/, '.d');
+}
+
 /** A session file's name, or the name of the hook's copy being written in its place: its run, by its ID. */
 const SESSION_FILE_NAME = /^(?<run>.+)\.session\.(?:json(?:\.\d+\.tmp)?|d)$/;
+
+/**
+ * Whether `name`, in the folder of the runs' files, is a run's session file or folder rather than a run's own folder: it goes with its
+ * run's process, never with a reconcile of the runs' tool files (CLIS-2.2, 2.4).
+ */
+export function isSessionFileName(name: string): boolean {
+	return SESSION_FILE_NAME.test(name);
+}
 
 /** The session files in the Facade directory `home` - the hook's unfinished copies too - by the run they are of (RULES-5.3). */
 export function sessionFilesIn(home: string): readonly { readonly run: string; readonly file: string }[] {
