@@ -458,9 +458,8 @@ export class PtydServer {
 				try {
 					await run.started();
 				} catch (err) {
-					// A program that never started is no run: the spawn fails, as it did when node-pty threw at once
-					this.runs.delete(run.id);
-					run.dispose();
+					// A program that never started is no run: the spawn fails, as it did when node-pty threw at once, and its claim goes too
+					this.drop(run);
 					throw err;
 				}
 				this.log(`Started run ${run.id} (${spawn.file}) in ${spawn.cwd}, pid ${run.info(false).pid}.`);
@@ -548,8 +547,7 @@ export class PtydServer {
 				if (run) {
 					this.owners.assert(run.params.owner, connection);
 					// An accepted close precedes any later takeover. Its successor must not reattach a process already closing.
-					run.removed = true;
-					this.refuseWaiting(run.id);
+					this.remove(run);
 				}
 				// One ptyd no longer has ended and was forgotten: there is nothing left of it to end
 				return run ? run.terminate(Math.max(0, graceMs)) : 'already_exited';
@@ -558,12 +556,7 @@ export class PtydServer {
 				const run = this.runs.get((params as Requests['forget']['params']).run);
 				if (run) {
 					this.owners.assert(run.params.owner, connection);
-					run.removed = true;
-					// No window will claim it again: what its shim waits for is refused now, not after the claim wait (MCP-1.2)
-					this.refuseWaiting(run.id);
-					if (run.hasExited) {
-						this.drop(run);
-					}
+					this.remove(run);
 				}
 				return undefined;
 			}
@@ -580,15 +573,25 @@ export class PtydServer {
 	private endOwner(owner: string, graceMs: number, reason: string): number {
 		const ending = [...this.runs.values()].filter(run => run.params.owner === owner);
 		for (const run of ending) {
-			run.removed = true;
 			this.log(`Ending run ${run.id}: ${reason}.`);
-			if (run.hasExited) {
-				this.drop(run);
-			} else {
+			this.remove(run);
+			if (!run.hasExited) {
 				void run.terminate(Math.max(0, graceMs));
 			}
 		}
 		return ending.length;
+	}
+
+	/**
+	 * No window shows `run` again: what its shim waits for is refused now, not after the claim wait (MCP-1.2), and it is let go of at
+	 * once where it ended, else as it ends - however it came to be removed.
+	 */
+	private remove(run: Run): void {
+		run.removed = true;
+		this.refuseWaiting(run.id);
+		if (run.hasExited) {
+			this.drop(run);
+		}
 	}
 
 	/** Lets go of a run no window shows again: ended, and removed. Its calls waiting for a window are refused. */

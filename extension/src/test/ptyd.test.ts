@@ -445,6 +445,34 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		assert.deepStrictEqual([listed.run, listed.exited, alive(lone.pid)], ['r5', undefined, true]);
 	});
 
+	test('a run that ended and is then terminated is let go of at once: no window, nor any listing, finds it again (LIFECYCLE-4.2)', async () => {
+		const client = await connect();
+		const events = eventsOf(client, 'ended');
+		await spawn(client, 'ended', finish(`'done\\n'`, 0));
+		await until('its end', () => events.find(event => event.event === 'exit'));
+		assert.strictEqual(await client.request('terminate', { run: 'ended', graceMs: 100 }), 'already_exited');
+		// Its window may go before it forgets the run: ptyd holds it no longer either way
+		assert.deepStrictEqual((await client.request('list', {})).map(run => run.run), []);
+		await assert.rejects(client.request('read', { run: 'ended', lines: 5 }), /No run ended/);
+	});
+
+	test('a run whose program never started is no run: its claim goes with it (ARCHITECTURE-2.3)', async () => {
+		// A console that ends before its program has a PID, as Windows reports a program it could not start
+		const pty = { pid: 0, onData() {}, onExit(listener: (event: { exitCode: number }) => void) { setTimeout(() => listener({ exitCode: 193 }), 20); }, kill() {}, write() {}, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const failing = new Server(pipe('failing'));
+		assert.strictEqual(await failing.listen(), true);
+		try {
+			const client = await PtydClient.connect(pipe('failing'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			clients.push(client);
+			await client.request('claim', { owner: 'w1', generation: 1, token: 'failing' });
+			await assert.rejects(spawn(client, 'never', IDLE), /Cannot create process \(error code: 193\)/);
+			assert.deepStrictEqual([(failing as unknown as { claims: Map<unknown, unknown> }).claims.size, await client.request('list', {})], [0, []]);
+		} finally {
+			failing.close();
+		}
+	});
+
 	test('endWindow requires current ownership and ends only that workspace', async () => {
 		const mine = await connect();
 		await spawn(mine, 'm1', IDLE);

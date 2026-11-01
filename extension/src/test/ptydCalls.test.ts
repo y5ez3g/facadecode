@@ -12,6 +12,7 @@ import { lineReader } from '../base/lines';
 import { CallEvent, InputReading, PTYD_PROTOCOL, Response, RunEvent, ScreenRead } from '../ptyd/protocol';
 import { CLAIM_WAIT_MS, MOST_RUN_CALLS, PtydServer } from '../ptyd/server';
 import { IDLE, program, ptydPlace } from './ptydPlace';
+import { withModules } from './withModules';
 
 /** A shim's side of ptyd's socket, as bare JSON lines: each request answered with the whole response, error facts and all. */
 interface FakeShim {
@@ -266,6 +267,42 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		await until('the second call', () => calls.length === 2);
 		await window.request('answer', { id: calls[1].id, answer: answerOf('in time') });
 		assert.deepStrictEqual((await answering).result, answerOf('in time'));
+	});
+
+	test('a window that ends refuses its runs\' calls waiting for a window at once, not_found, before their processes end (MCP-1.2, RULES-4.1)', async () => {
+		// A console whose program outlives its end's grace: its calls cannot wait for its exit to be refused
+		const pty = { pid: 1, onData() {}, onExit() {}, kill() {}, write() {}, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const place = ptydPlace('fc-ending-');
+		const ending = new Server(place.socket);
+		assert.strictEqual(await ending.listen(), true);
+		try {
+			const window = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+			clients.push(window);
+			await window.request('claim', { owner: 'w1', generation: 1, token: 'closing' });
+			await window.request('spawn', { run: 'r21', owner: 'w1', ...program(IDLE), cwd: os.tmpdir(), cols: 80, rows: 24, meta: {} });
+			window.dispose();
+			const shim = net.connect(place.socket);
+			sockets.push(shim);
+			await new Promise(resolve => shim.once('connect', resolve));
+			const answers: Response[] = [];
+			shim.on('data', lineReader(line => answers.push(JSON.parse(line)), err => { throw err; }));
+			shim.write(`${JSON.stringify({ id: 1, method: 'hello', params: { protocol: PTYD_PROTOCOL, role: 'shim', run: 'r21' } })}\n`);
+			shim.write(`${JSON.stringify({ id: 2, method: 'call', params: { caller: 'r21', tool: 'list_agents', arguments: {}, callId: '1', elapsedMs: 0 } })}\n`);
+			await new Promise(resolve => setTimeout(resolve, 100));
+			// The workspace's next activation finds the window truly closed: its runs end, and none will be claimed again
+			const reopened = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+			clients.push(reopened);
+			await reopened.request('claim', { owner: 'w1', generation: 2, token: 'reopened' });
+			const began = Date.now();
+			assert.strictEqual(await reopened.request('endWindow', { owner: 'w1', graceMs: 60_000 }), 1);
+			const refused = await until('the waiting call refused', () => answers.find(answer => answer.id === 2) as (Response & { readonly reason?: string; readonly effects?: string }) | undefined);
+			assert.deepStrictEqual([refused.reason, refused.effects], ['not_found', 'none']);
+			assert.ok(Date.now() - began < CLAIM_WAIT_MS / 2, String(Date.now() - began));
+		} finally {
+			ending.close();
+			fs.rmSync(place.dir, { recursive: true, force: true });
+		}
 	});
 
 	test('a call of a run ptyd does not hold, or one forgotten, is refused not_found with no effect', async () => {
