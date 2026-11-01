@@ -126,30 +126,37 @@ export class Flow {
 			input.buttons = [...options.back ? [vscode.QuickInputButtons.Back] : [], ...actions.map(action => action.button)];
 		};
 		let timer: ReturnType<typeof setTimeout> | undefined;
-		const runCheck = async (value: string) => {
-			if (!active) {
-				return;
-			}
-			const mine = ++asked;
-			setActions([]);
-			input.busy = true;
-			let found: TextCheckResult;
-			try {
-				found = await options.check!(value);
-			} catch (err) {
-				found = { problem: messageOf(err) };
-			}
-			if (!active || mine !== asked || input.value !== value) {
-				return;
-			}
-			input.busy = false;
-			checked = { value, ok: !found.problem };
-			input.validationMessage = plainOf(found.problem);
-			input.prompt = plainOf(found.prompt ?? options.prompt);
-			setActions(found.problem ? [] : found.actions ?? []);
+		/** The slower check under way and the text it is of: an Enter on that text waits for it rather than asking again. */
+		let pending: { readonly value: string; readonly done: Promise<void> } | undefined;
+		const runCheck = (value: string): Promise<void> => {
+			const done = (async () => {
+				if (!active) {
+					return;
+				}
+				const mine = ++asked;
+				setActions([]);
+				input.busy = true;
+				let found: TextCheckResult;
+				try {
+					found = await options.check!(value);
+				} catch (err) {
+					found = { problem: messageOf(err) };
+				}
+				if (!active || mine !== asked || input.value !== value) {
+					return;
+				}
+				input.busy = false;
+				checked = { value, ok: !found.problem };
+				input.validationMessage = plainOf(found.problem);
+				input.prompt = plainOf(found.prompt ?? options.prompt);
+				setActions(found.problem ? [] : found.actions ?? []);
+			})();
+			pending = { value, done };
+			return done;
 		};
 		const changed = (value: string) => {
 			checked = undefined;
+			pending = undefined;
 			asked++;
 			setActions([]);
 			clearTimeout(timer);
@@ -175,7 +182,7 @@ export class Flow {
 					if (checked?.value !== value) {
 						clearTimeout(timer);
 						if (options.validate?.(value) === undefined && options.check) {
-							await runCheck(value);
+							await (pending?.value === value ? pending.done : runCheck(value));
 						} else {
 							changed(value);
 						}

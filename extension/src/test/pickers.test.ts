@@ -235,6 +235,24 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.deepStrictEqual([opened, prefixAgain, entered], [['feat/', 'Starts from main', undefined, []], ['Enter a branch name.', []], [true, 'Enter a branch name.']]);
 	});
 
+	test('UX-1.1: an Enter while the check of the same text is under way waits for that check, never asking Git again', async () => {
+		const { Flow } = load<typeof import('../ui/pickers/stepping')>(require.resolve('../ui/pickers/stepping'));
+		const asked: string[] = [];
+		let answer!: () => void;
+		const result = new Flow().text({ title: 'New Worktree', value: '', check: value => {
+			asked.push(value);
+			return new Promise(resolve => { answer = () => resolve({ prompt: `/repo.worktrees/${value}` }); });
+		} });
+		const input = ui.current!;
+		input.type('feat/x');
+		await new Promise(resolve => setTimeout(resolve, 200));
+		input.accept();
+		await settle();
+		answer();
+		assert.strictEqual(await result, 'feat/x');
+		assert.deepStrictEqual(asked, ['feat/x']);
+	});
+
 	test('UX-2.4: how long ago is said by one formatter for each language, however many rows a picker says it for', () => {
 		const original = Intl.RelativeTimeFormat;
 		let made = 0;
