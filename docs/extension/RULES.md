@@ -175,9 +175,10 @@ recovery solely to guarantee this edge case, and do not cancel B's independent w
 
 Reload or temporary disconnect is not closure. Reuse an existing in-flight operation only while its original run and
 deadline still apply; an expired operation does not get a fresh budget. A delivery under way when its window reloads
-goes on once the window has its agents again, within its original deadline: a text that may already be in the input is
-never pasted again, and only its own draft gets Enter (1.6). One that cannot go on - its deadline passed or its
-recipient gone - ends, and its sender is told (1.7, D127). A newly started agent receives only messages
+goes on once the window shows its recipient again, within its original deadline: a text that may already be in the
+input is never pasted again, and only its own draft gets Enter (1.6). One whose recipient is not shown yet waits for a
+later restoration within that deadline; one whose recipient ended, or whose deadline passed, ends, and its sender is
+told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries (D127, D133). A newly started agent receives only messages
 addressed to its new run. Closing every window naturally ends the remaining volatile delivery work.
 No notification or message is scheduled for replay on the next opening.
 

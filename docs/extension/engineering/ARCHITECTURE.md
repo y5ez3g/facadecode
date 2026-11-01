@@ -49,8 +49,9 @@ socket, or a named pipe on Windows - and records its window, with routing ID, la
 in the client registry under the client Facade directory (3.1). It removes its entry when its window goes; an entry
 whose socket no longer answers is ignored and removed. Each start of a window component listens on a socket of its own,
 registers only once it listens, retries a failed listen, and on shutdown removes only the entry it wrote, never a
-successor's. An entry records its process's start, so that one whose process id another process now has, or whose socket
-is absent when connected to, is removed if unchanged. A starting component asks its workspace component to publish its
+successor's. An entry records its process's start: one whose start the system reads otherwise - its process id another
+process's now - is removed, if unchanged, once its socket proves nothing listens there, as a clock step or a start read
+to the second proves nothing alone; one whose socket is absent when routed to is removed too (D128, D133). A starting component asks its workspace component to publish its
 agents again; the publish answer says whether other windows can reach the window, and the agents log says when they
 cannot (D128). A window component reaches another window by connecting to the
 socket the registry names; the receiving component hands the request to its own workspace component and returns the
