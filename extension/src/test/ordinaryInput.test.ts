@@ -8,6 +8,7 @@ import type { CapabilityState, RunFacts, RunId } from '../core/ports';
 import { PtydLost, PtydNotSent } from '../host/execution/ptydClient';
 import { OrdinaryInput } from '../host/input';
 import { isOwnDraft, isSameDraft } from '../ptyd/drafts';
+import { codedOf } from '../schema/result';
 import type { InputEffect, InputReading, InputState } from '../ptyd/protocol';
 
 const RUN = 'run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
@@ -193,6 +194,26 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 			wait: async () => undefined
 		});
 		assert.deepStrictEqual(await unsent.typeDirect(RUN, 'yes', true), { outcome: 'partial', pasted: true, entered: false });
+	});
+
+	test('direct text and keys ptyd was never given - unreachable, or a runtime that takes no MCP input - are refused with no effect, a lost answer staying unknown (MCP-1.2, D120)', async () => {
+		const refusing = (err: Error) => new OrdinaryInput({
+			get: () => ({ id: RUN, alias: '#a2', displayName: 'Claude Code', lifecycle: 'running', inputAdapter: 'claude-frame', inputCapability: SUPPORTED } as RunFacts),
+			inspectInput: async () => undefined,
+			typeText: async () => { throw err; },
+			pressKeys: async () => { throw err; },
+			wait: async () => undefined
+		});
+		const unsent = refusing(new PtydNotSent('This agent\'s runtime uses protocol 8, which does not support MCP screen or input requests: no request was sent.'));
+		for (const direct of [() => unsent.typeDirect(RUN, 'yes', true), () => unsent.typeDirect(RUN, 'yes', false), () => unsent.typeDirect(RUN, '', true), () => unsent.pressDirect(RUN, ['Enter'])]) {
+			await assert.rejects(direct(), (err: unknown) => {
+				assert.deepStrictEqual(codedOf(err), { code: 'UNAVAILABLE', reason: 'unavailable', message: 'This agent\'s runtime uses protocol 8, which does not support MCP screen or input requests: no request was sent.' });
+				return true;
+			});
+		}
+		const lost = refusing(new PtydLost('lost'));
+		await assert.rejects(lost.typeDirect(RUN, 'yes', true), (err: unknown) => err instanceof PtydLost && codedOf(err) === undefined);
+		await assert.rejects(lost.pressDirect(RUN, ['Enter']), (err: unknown) => err instanceof PtydLost);
 	});
 
 	test('the message goes in as one paste without Enter, Enter once the CLI shows it as a draft, and is confirmed once its input is empty again', async () => {

@@ -5,6 +5,7 @@
 import { timeout } from '../base/async';
 import { monotonic } from '../base/clock';
 import { messageOf } from '../base/errors';
+import { FacadeError } from '../core/errors';
 import type { InputEffects, InputPort, Submission } from '../core/messagePorts';
 import type { CapabilityState, LaunchPlan, RunFacts, RunId } from '../core/ports';
 import { PtydNotSent } from './execution/ptydClient';
@@ -345,9 +346,9 @@ export class OrdinaryInput implements InputPort {
 	 */
 	async typeDirect(run: RunId, text: string, enter: boolean): Promise<InputEffect> {
 		if (!enter || !text) {
-			return this.deps.typeText(run, text, enter);
+			return this.deps.typeText(run, text, enter).catch(refusedUnsent);
 		}
-		const typed = await this.deps.typeText(run, text, false);
+		const typed = await this.deps.typeText(run, text, false).catch(refusedUnsent);
 		if (typed.outcome !== 'applied') {
 			return typed;
 		}
@@ -363,6 +364,11 @@ export class OrdinaryInput implements InputPort {
 			throw err;
 		}
 		return entered.outcome === 'applied' ? { outcome: 'applied', pasted: true, entered: true } : { outcome: 'partial', ...entered.reason ? { reason: entered.reason } : {}, pasted: true, entered: false };
+	}
+
+	/** press_keys' keys (MCP-5.2): refused with no effect where ptyd was never given them. */
+	pressDirect(run: RunId, keys: readonly string[]): Promise<InputEffect> {
+		return this.deps.pressKeys(run, keys).catch(refusedUnsent);
 	}
 
 	/** The time this platform's terminal takes to take in a paste of `text`, in whole tenths of a second (D105). */
@@ -421,4 +427,12 @@ export class OrdinaryInput implements InputPort {
 	private log(run: RunId, text: string): void {
 		this.deps.log?.(`Message input of ${this.deps.get(run)?.alias ?? run}: ${text}`);
 	}
+}
+
+/**
+ * Direct input that ptyd was never given - it cannot be reached, or the run's runtime takes no MCP input (D120) - went nowhere: a
+ * refusal with no effect, never input of unknown effect (MCP-1.2).
+ */
+function refusedUnsent(err: unknown): never {
+	throw err instanceof PtydNotSent ? new FacadeError('UNAVAILABLE', 'unavailable', messageOf(err)) : err;
 }

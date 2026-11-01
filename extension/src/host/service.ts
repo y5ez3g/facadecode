@@ -227,7 +227,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const terminal = {
 		readScreen: (run: RunId, lines: number) => execution.readScreen(run, lines),
 		typeText: (run: RunId, text: string, enter: boolean) => input.inTurn(run, () => input.typeDirect(run, text, enter)),
-		pressKeys: (run: RunId, keys: readonly string[]) => input.inTurn(run, () => execution.pressKeys(run, keys))
+		pressKeys: (run: RunId, keys: readonly string[]) => input.inTurn(run, () => input.pressDirect(run, keys))
 	};
 	const messages = new MessageService({
 		agents,
