@@ -33,7 +33,7 @@ const nativeManifest = JSON.parse(fs.readFileSync(path.join(nativeRoot, 'package
 manifest.dependencies = { 'node-pty': nativeManifest.version };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(manifest, undefined, '\t')}\n`);
 const windowManifest = JSON.parse(fs.readFileSync(path.join(root, 'window', 'package.json'), 'utf8'));
-// Installed with it through its extension pack, never as a dependency that blocks activation in a remote window (ARCHITECTURE-4.3, D88)
+// Installed with it through its extension pack, never as a dependency that blocks activation in a remote window (ARCHITECTURE-4.3, D94)
 if (windowManifest.version !== manifest.version || !manifest.extensionPack?.includes(`${windowManifest.publisher}.${windowManifest.name}`) || manifest.extensionDependencies?.length) {
 	throw new Error('The workspace extension must install its matching window component through its extension pack.');
 }

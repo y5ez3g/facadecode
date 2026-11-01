@@ -3,13 +3,14 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { Agents, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationPort, LogPort, WorktreePort } from '../../core/ports';
+import type { Agents, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { AGENT_SETTINGS, COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
-import { PanelModel } from '../model';
+import { locationOfFilter, PanelModel } from '../model';
 import { PanelView } from '../panel';
 import { withWorktreeEffects } from '../presentation';
+import { pickFilter } from '../pickers/filter';
 import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
 import { newAgent } from '../pickers/newAgent';
@@ -62,6 +63,8 @@ function cardWords(): CardWords {
 		exitedWithCode: code => vscode.l10n.t("Exited with code {0}", code),
 		// {0} is the signal that ended the agent's CLI, such as SIGKILL
 		endedBySignal: signal => vscode.l10n.t("Terminated by signal {0}", signal),
+		// A run its supervisor no longer had: it ended, how is not known
+		exitUnknown: vscode.l10n.t("Disconnected; exit cause unknown"),
 		// {0} is the name of the editor window the agent is in
 		window: label => vscode.l10n.t("Window: {0}", label),
 		toolsUnavailable: (problem, file) => problem === 'cmd'
@@ -74,7 +77,8 @@ function cardWords(): CardWords {
 					? vscode.l10n.t("Cannot work with other agents: Facade could not read your {0} setting", file)
 					: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
 		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
-		startedBy: creator => vscode.l10n.t("Started by {0}", creator)
+		startedBy: creator => vscode.l10n.t("Started by {0}", creator),
+		locale: vscode.env.language
 	};
 }
 
@@ -97,7 +101,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	});
 	const agent = new AgentActions({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError });
 	const flows = {
-		newAgent: () => newAgent({ agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history, select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media, ...(deps.remote ? { remote: deps.remote } : {}) }),
+		newAgent: (startAt?: LocationId) => newAgent({ agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history, select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media, ...(deps.remote ? { remote: deps.remote } : {}) }, startAt),
 		goToAgent: () => goToAgent({ model, agents: deps.agents, words, media, reveal: run => agent.reveal(run), copyReference: run => agent.copyReference(run), close: run => agent.close(run) })
 	};
 	/** What the page's actions do, their targets revalidated by run ID (PANEL-3.1). */
@@ -106,10 +110,22 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			case 'open':
 				return target === undefined || !deps.agents.get(target) ? 'gone' : await agent.reveal(target) ? undefined : 'failed';
 			case 'new':
-				await flows.newAgent();
+				// From the filtered empty panel, at the filtered location; from the other empty panel, where New Agent would (PANEL-1.2, LIFECYCLE-1.2)
+				await flows.newAgent(locationOfFilter(model.currentFilter(), deps.locations.snapshot().locations));
+				return undefined;
+			case 'clearFilter':
+				model.setFilter(undefined);
 				return undefined;
 			case 'openFolder':
 				await vscode.commands.executeCommand('vscode.openFolder');
+				return undefined;
+			case 'rename':
+				if (target === undefined || !deps.agents.get(target)) {
+					return 'gone';
+				}
+				await agent.rename(target);
+				// Back on the card F2 was pressed on, as a VS Code list has it: the editor gives a closed input box's focus to the editor
+				void vscode.commands.executeCommand(`${PANEL_VIEW}.focus`);
 				return undefined;
 		}
 	};
@@ -120,6 +136,9 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
 		deps.execution.onDidActivate(run => model.activated(run)),
 		vscode.commands.registerCommand(COMMANDS.newAgent, () => flows.newAgent()),
+		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, deps.locations, deps.log)),
+		// The same, its title button filled while a filter is on (UX-3.2)
+		vscode.commands.registerCommand(COMMANDS.filterOn, () => pickFilter(model, deps.locations, deps.log)),
 		...registerAgentCommands({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError }, agent, flows),
 		// Configure Agents...: the editor's Settings showing this extension's settings alone (CLIS-1.1)
 		vscode.commands.registerCommand(COMMANDS.configureAgents, () => vscode.commands.executeCommand('workbench.action.openSettings', AGENT_SETTINGS)),

@@ -97,9 +97,19 @@ export interface CliChoice {
 	readonly notInstalled?: boolean;
 }
 
+/**
+ * What New Agent offers for a location (CLIS-1.1, 3.4): its CLIs, and the configuration errors no CLI stands for - `facade.custom`
+ * wrong as a whole, or a key that cannot be a custom CLI's ID - said apart, with the way to the settings.
+ */
+export interface CliChoices {
+	readonly clis: readonly CliChoice[];
+	/** Each by the setting it is in, its English for agents and logs, and the same for the person's language (UX-2.4). */
+	readonly problems: readonly { readonly setting: string; readonly problem: string; readonly said?: FacadeReason }[];
+}
+
 export interface CliCatalogPort {
-	/** Built-ins in CLIS-1.1 order, for `location`'s environment. */
-	list(location: Location): Promise<readonly CliChoice[]>;
+	/** Built-ins in CLIS-1.1 order, then custom CLIs, for `location`'s environment; and what no CLI stands for. */
+	list(location: Location): Promise<CliChoices>;
 }
 
 /** What the core asks the planner to start. */
@@ -311,7 +321,7 @@ export interface RunMeta {
 	readonly creator?: RunId;
 	readonly creatorLabel?: string;
 	readonly origin?: 'human' | 'agent';
-	/** The creator's request ID for its start, where it gave one (MCP-1.1, D104). */
+	/** The creator's request ID for its start, where it gave one (MCP-1.1, D110). */
 	readonly requestId?: string;
 	readonly model?: string;
 	readonly effort?: string;
@@ -362,10 +372,11 @@ export interface WorktreePort {
 	create(plan: WorktreePlan, stillWanted: () => boolean): Promise<Location>;
 	/**
 	 * Deletes a linked worktree that no workspace folder is in (WORKTREES-3.2, D73): refused with nothing touched where Git lists a
-	 * change that is not committed or an untracked file; otherwise `closeAgents` - the agents launched there closed, their processes
-	 * ended - then `git worktree remove` without `--force`. Its branch is kept.
+	 * change that is not committed or an untracked file, or another worktree is inside it; otherwise `closeAgents` - the agents
+	 * launched there closed, true once all their processes are known to have ended - then a second check and `git worktree remove`
+	 * without `--force`. Its branch is kept.
 	 */
-	remove(id: LocationId, closeAgents: () => Promise<void>): Promise<void>;
+	remove(id: LocationId, closeAgents: () => Promise<boolean>): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
@@ -422,7 +433,7 @@ export interface RunFacts {
 	/** The creator's reference as its window named it at the start, `@name #aN`: what the card's hover says started it (PANEL-1.5). */
 	readonly creatorLabel?: string;
 	readonly origin: 'human' | 'agent';
-	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1, D104). */
+	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1, D110). */
 	readonly requestId?: string;
 	/** The model and effort this start asked for, where it asked (CLIS-1.4). */
 	readonly model?: string;
@@ -523,7 +534,7 @@ export interface LaunchRequest {
 	 */
 	readonly origin: 'human' | 'agent';
 	readonly creator?: { readonly run: RunId; readonly root: RunId; readonly label?: string };
-	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D104). */
+	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D110). */
 	readonly requestId?: string;
 	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
 	readonly prompt?: string;

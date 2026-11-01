@@ -15,6 +15,13 @@
  */
 export const PTYD_PROTOCOL = 9;
 
+/**
+ * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
+ * through those ptyds, and starts none there (ARCHITECTURE-2.4). None is ever dropped. 8, of 0.0.1, is 9 without `spawn`'s
+ * `screenStatus`, which this window sends to no earlier ptyd.
+ */
+export const EARLIER_PROTOCOLS: readonly number[] = [8];
+
 import type { OwnerClaim } from '../base/ownership';
 import { isJsonObject } from '../base/json';
 import type { InputReading } from './composer';
@@ -174,7 +181,7 @@ export interface Requests {
 	/** Pastes text - bracketed where the program turned that mode on - then Enter if asked: in turn with other automated input. */
 	/**
 	 * Pastes `text`, then Enter where asked. `lead`, where given, is typed before the paste in the same write: words of the person's
-	 * own ahead of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1, D102). A
+	 * own ahead of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1, D108). A
 	 * ptyd from before it takes no lead and pastes the text alone.
 	 */
 	type: { params: { readonly run: string; readonly text: string; readonly enter: boolean; readonly lead?: string }; result: InputEffect };

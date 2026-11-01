@@ -360,7 +360,7 @@ export function setUp(): Setup {
 			snapshot: () => ({ locations: setup.locations, folders: LOCATION.folders, pending: false }),
 			resolve: id => setup.locations.find(each => each.id === id)
 		},
-		clis: { list: async () => CLIS, describe: () => ({ launches: FACTS }) },
+		clis: { list: async () => ({ clis: CLIS, problems: [] }), describe: () => ({ launches: FACTS }) },
 		messages,
 		terminal,
 		home: temp.dir,

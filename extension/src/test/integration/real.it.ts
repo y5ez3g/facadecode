@@ -2,11 +2,11 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Real agents of one built-in working together through Facade (VERIFICATION G3, J12, M02, D84). It runs only where FACADE_IT_REAL
+// Real agents of one built-in working together through Facade (VERIFICATION G3, J12, M02, D90). It runs only where FACADE_IT_REAL
 // names the CLI - `FACADE_IT_ONLY=real` - as each run signs in and uses an account's usage. YOLO is off: the agent the person starts
 // uses Facade's tools with no approval, starts a second agent of the same CLI with a first task and messages it, and the second
 // answers through Facade's tools. Every message is pasted whole into its recipient's input box and seen submitted (RULES-1.4,
-// COLLABORATION-2.1). What the models did is checked too (D111): each message sent once, one agent started, and no tool called
+// COLLABORATION-2.1). What the models did is checked too (D117): each message sent once, one agent started, and no tool called
 // over and over while an answer is awaited, as the tools' instructions ask - the answer comes as a paste.
 
 import * as assert from 'assert';
@@ -61,7 +61,7 @@ function toolCalls(): { readonly at: number; readonly tool: string; readonly by:
 	}));
 }
 
-/** How often an agent may call a tool that only looks, in the whole journey: more is polling for what a paste brings (D111). */
+/** How often an agent may call a tool that only looks, in the whole journey: more is polling for what a paste brings (D117). */
 const LOOKS = { read_messages: 2, list_agents: 3, read_screen: 2 } as const;
 
 /** How long its CLI takes to show its input, with what its start types before the first turn (COLLABORATION-2.2). */
@@ -74,7 +74,7 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 	+ '3) Call send_message to Echo\'s agent_id with the text PING. '
 	+ '4) End your turn. When a Facade message with PONG reaches you, answer DONE and nothing else.';
 
-(REAL ? suite : suite.skip)(`Journey: real ${REAL ?? 'CLI'} agents work together through Facade (G3, J12, M02, D84)`, () => {
+(REAL ? suite : suite.skip)(`Journey: real ${REAL ?? 'CLI'} agents work together through Facade (G3, J12, M02, D90)`, () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined, 30_000);
@@ -123,7 +123,7 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 		const pong = await until('its PONG back', () => delivered(second.runId, first.runId, 'PONG'), 240_000);
 		assert.deepStrictEqual([pong.delivery.via, pong.delivery.effects.text_written, pong.delivery.effects.enter_written], ['terminal', 'full', true], JSON.stringify(pong));
 
-		// What the models did (D111): the first answers its PONG, and neither sends a message twice, starts another agent, or polls
+		// What the models did (D117): the first answers its PONG, and neither sends a message twice, starts another agent, or polls
 		await new Promise(resolve => setTimeout(resolve, 30_000));
 		const sent = (from: string) => messages().filter(each => each.kind === 'message' && each.from.run === from && each.id !== task.id).map(each => each.text);
 		assert.deepStrictEqual([sent(first.runId).length, sent(second.runId).length], [1, 1], `each sends its message once: ${JSON.stringify([sent(first.runId), sent(second.runId)])}`);

@@ -45,7 +45,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.agents.launched, []);
 		});
 
-		test('each call is logged by its tool, caller and outcome, never its arguments (ARCHITECTURE-3.3, D111)', async () => {
+		test('each call is logged by its tool, caller and outcome, never its arguments (ARCHITECTURE-3.3, D117)', async () => {
 			const { lead } = team(s);
 			await s.call(lead, 'list_agents', {});
 			await s.call(lead, 'send_message', { to: '#a77', text: 'the secret words' });
@@ -162,6 +162,16 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			}
 		});
 
+		test('a malformed custom catalog reports its configuration error while keeping valid built-ins available', async () => {
+			const { lead } = team(s);
+			const list = s.deps.clis.list;
+			const problems = [{ setting: 'facade.custom', problem: 'facade.custom must be an object; received array' }];
+			s.deps.clis.list = async location => ({ ...await list(location), problems });
+			const result = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1' }));
+			assert.deepStrictEqual(result.data.problems, problems);
+			assert.ok(result.data.clis.some((each: { cli: string; available: boolean }) => each.cli === 'claude' && each.available));
+		});
+
 		test('a CLI that takes no effort says so; one without adapter facts is unverified, never assumed', async () => {
 			const { lead } = team(s);
 			const codex = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'codex' }));
@@ -172,7 +182,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([qwen.data.capabilities.activity.state, qwen.data.capabilities.initial_prompt.state, qwen.data.model.takes], ['unverified', 'unverified', undefined]);
 		});
 
-		test('message input is what the CLI\'s reader states, whatever its version (D83): supported with its reader; without one, unavailable and messages fail with unsupported', async () => {
+		test('message input is what the CLI\'s reader states, whatever its version (D89): supported with its reader; without one, unavailable and messages fail with unsupported', async () => {
 			const { lead } = team(s);
 			const read = { state: 'supported' as const, reason: 'claude-frame reads Claude Code\'s input by its layout.' };
 			s.deps.clis = {
@@ -229,7 +239,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.choices.list('local', 'claude'), { model: ['opus'], effort: ['high'] });
 		});
 
-		test('a request ID given again by the same caller answers the agent its first start started, starting nothing; another caller\'s is its own (D104)', async () => {
+		test('a request ID given again by the same caller answers the agent its first start started, starting nothing; another caller\'s is its own (D110)', async () => {
 			const { lead, worker } = team(s);
 			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-1' }));
 			// Started a minute before the window's clock: within the hour a request ID answers for
@@ -248,7 +258,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.strictEqual(s.agents.launched.length, 4);
 		});
 
-		test('a request ID given again answers as its start went: still starting is accepted, a start that failed is its failure, nothing started again (D104, D112)', async () => {
+		test('a request ID given again answers as its start went: still starting is accepted, a start that failed is its failure, nothing started again (D110, D118)', async () => {
 			const { worker } = team(s);
 			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' }));
 			const started = s.agents.runs.get(first.data.agent_id)!;
@@ -582,7 +592,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', text_written: 'full', enter_written: true });
 		});
 
-		test('a request ID given again by the same sender answers the message it sent, as its delivery stands, sending nothing again (D104)', async () => {
+		test('a request ID given again by the same sender answers the message it sent, as its delivery stands, sending nothing again (D110)', async () => {
 			const { lead } = team(s);
 			const first = resultOf(await s.call(lead, 'send_message', { to: '@worker', text: 'Please review.', request_id: 'ask-1' }));
 			// Sent a minute before the window's clock
@@ -627,7 +637,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.match(failed.error!.message, /Facade cannot type messages into the recipient's CLI; type_text still reaches its terminal/);
 		});
 
-		test('#human is the person in the caller\'s window; so is @human while no agent in reach is named human (RULES-2.3, O22, D85)', async () => {
+		test('#human is the person in the caller\'s window; so is @human while no agent in reach is named human (RULES-2.3, O22, D91)', async () => {
 			const { lead, worker } = team(s);
 			for (const to of ['#human', '@human', 'human']) {
 				const result = resultOf(await s.call(worker, 'send_message', { to, text: 'Done.' }));

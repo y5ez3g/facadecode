@@ -153,11 +153,13 @@ The local window component keeps a random handover identity in its own directory
 It neither parses the URI nor reads editor storage internals. On the verified desktop editor, that directory remains the
 same for this native window across these transitions and differs for a separate window, including one opening a copied
 workspace. This lifecycle is a platform evidence requirement, not a guarantee inferred from the API's name. Removal or
-replacement of that directory cannot justify a folder-based search for another window's identity.
+replacement of that directory cannot justify a folder-based search for another window's identity. A record gone is
+replaced by a new identity unnoticed; a damaged one is not replaced: Facade does not start in that window and says to close
+it and open its folder again, or restart the editor - not to reload, which reads the same record (D86).
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
 component rejects a request from a different session. Its answer names the component's own version too, which a remote
-extension host cannot see otherwise, for Copy Diagnostics (3.3, D110). Each activation records its key and folders under that identity in
+extension host cannot see otherwise, for Copy Diagnostics (3.3, D116). Each activation records its key and folders under that identity in
 the execution Facade directory. The same window that retains its original first folder takes that key and the current
 window's saved state - order, locations and choices - even if the destination workspace has stale state. Another window
 does not inherit it merely by opening the same folders or copying a workspace file. The execution environment keeps one atomic exact-workspace-URI ledger, including each owner's current URI. Resolution
@@ -243,7 +245,7 @@ temporary disconnection; RULES-4.1's five minutes after the owning extension hos
 Keep current process/message records and sequence information needed for reconnect, actual results and history.
 Request-bearing run metadata is persisted before startup effects and retained for MCP-1.1's one-hour period after its
 pair is removed. Such request-only records are validated on reading, never restore a card or process, and expire
-without removing a failed launch that the person has not closed (D113).
+without removing a failed launch that the person has not closed (D119).
 There is no caller request-key ledger, durable human-notification claim protocol or authenticated cleanup authority.
 Atomic updates and a single writer for each record are ordinary implementation tools, not new API promises.
 Closing a run does not replay its mail on a later run. Changing protocol does not convert old pending messages into
@@ -256,12 +258,12 @@ input limit. Real disk/memory/storage exhaustion fails the requesting operation;
 or a lifetime operation-count quota that disables an otherwise usable session.
 
 Existing processes are not killed just because an extension/protocol is updated. Compatible reconnect preserves their
-actual identity; incompatible tools report unavailable. New starts use current settings/protocol. This includes the
-first update from the released 0.0.1 preview: agents its supervisor holds stay visible and usable in their window after
-the update, each in an editor terminal of its own without a card and without Facade tools, until they end or their
-terminal is closed with RULES-4.1's confirmation, and the update alone never starts RULES-4.1's five-minute cleanup for
-them; one notification says so in plain words (D92). Upgrade/reload behavior and window-component replacement must be verified with in-flight
-work under the applicable delivery rules.
+actual identity; incompatible tools report unavailable. A build speaks every earlier protocol a released build used, and drops none: a window joins each such
+ptyd that holds runs of its workspace - never starting one - claims them there, and shows and operates them through it as
+its own: cards, terminals, input, resizing, closing and ends (RULES-4.1, D86). A run whose earlier-protocol ptyd is gone
+ended with it, how is not known. A request a later protocol added goes to no earlier ptyd. Once none of the window's runs
+is left in such a ptyd the window lets it go, to exit once idle. New starts use current settings/protocol, in the window's
+own ptyd. Upgrade/reload behavior must be verified with in-flight work.
 
 ## 3 Data and safety
 
@@ -273,7 +275,7 @@ work under the applicable delivery rules.
 | --- | --- |
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension/client` on the client computer | Window registry - each open window's routing ID, label, environment, socket and protocol - and the client-wide alias counter |
 | Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, per-run launch files, the injection record (CLIS-2.2), message records, previously successful model/effort choices and location metadata |
-| Editor workspace storage | Human CLI/location choices, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Editor workspace storage | Human CLI/location choices, filter, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
@@ -298,13 +300,15 @@ prompts.
 
 ### 3.3 Diagnostics
 
-**The agents log records operation and lifecycle facts without secrets or task-policy judgments.**
+**Show Agents Log presents operation and lifecycle facts without secrets or task-policy judgments.**
 
-Use a log with UTC time, safe name/reference, operation ID, phase, effects, route status and actual failure. Redact CLI
+Use a read-only editor log with UTC time, safe name/reference, operation ID, phase, effects, route status and actual failure. Redact CLI
 credentials and sensitive environment values. Full message text belongs to deliberate message history, not routine
 transport logs. Correlation IDs connect UI/MCP/supervisor observations. Retain 30-day diagnostics subject to the
 capacity policy; no telemetry service is introduced by this refactor. Each tool call is logged with its tool, its caller's
-alias, its status and error code and how long it took, never its arguments (D111).
+alias, its status and error code and how long it took, never its arguments (D117).
+
+An empty agents log opens with `No agent events yet`, with no information toast.
 
 Copy Diagnostics puts on the clipboard, in English as the log is, what a report of a problem needs, and sends nothing
 anywhere: the extension's, its window component's and the editor's versions, the platform and the remote kind; each
@@ -312,7 +316,7 @@ built-in CLI for the window's first location - its version as its installation s
 cannot start; this window's agents - CLI and version, lifecycle, activity and since when, tools, and what their input
 reader reads now - with each live one's last twelve screen rows; and the agents log's last two hundred lines. The home
 folder is written `~`. Its notification says that screens can show code and keys, and to look the text over before
-sharing it (D110).
+sharing it (D116).
 
 ## 4 Repository and delivery
 
@@ -346,7 +350,7 @@ windows, local to SSH and SSH to local, each with Remote-SSH and the editor's se
 an account's usage - with `FACADE_IT_REAL` naming the built-in, `FACADE_IT_REAL_PATH` its executable, `FACADE_IT_REAL_ENV`
 the variables its terminals get and `FACADE_IT_REAL_PASS` those taken from the environment, never written to a file. It
 checks what the models did as well as what Facade delivered: each message sent once, one agent started, and no agent calling
-read_messages, list_agents or read_screen more than two, three and two times, as an answer comes as a paste (D111). Document changes to these commands before using a different build layout. Lock dependency versions, preserve licenses/notices, and keep generated/runtime files ignored.
+read_messages, list_agents or read_screen more than two, three and two times, as an answer comes as a paste (D117). Document changes to these commands before using a different build layout. Lock dependency versions, preserve licenses/notices, and keep generated/runtime files ignored.
 Do not repurpose HOME/CODEX_HOME as script scratch variables.
 
 The integration fixture build is staged separately in `build/extension-it/`; `npm run test:integration` assembles it from
@@ -360,15 +364,13 @@ never rewritten by staging. This keeps repository setup instructions out of the 
 
 ### 4.2 No compatibility migration
 
-**Facade Code keeps the settings and command IDs of its 0.0.1 preview and migrates nothing from earlier development builds.**
+**Earlier development settings, command IDs and stored state are not migrated; released runtime protocols remain supported under 2.4.**
 
-Version 0.0.1 is the only published build. This step adds settings and commands and renames or removes none of its
-ones; a record written by 0.0.1 is read where its format is unchanged and otherwise ignored with one line in the agents
-log, never translated. Earlier development settings and stored workspace state are not read into the current catalog,
-and earlier command IDs get no aliases; this includes the Facade Dots development builds' `facadeDots.*` and
-`facade.agents.*` settings and their `~/.facade-dots` directory. Old MCP tools/arguments from those builds fail
-explicitly; they are not translated into a different action, do not widen tree reach and do not replay old mail. Records stored by earlier development builds, such as card order and known
-locations, are ignored with one line in the agents log. They are never translated or replayed. Discoverable worktrees
+Earlier development settings and stored workspace state are not read into the current catalog, and earlier command
+IDs get no aliases; this includes the Facade Dots development builds' `facadeDots.*` and `facade.agents.*` settings
+and their `~/.facade-dots` directory. Old MCP tools/arguments from those builds fail explicitly; they do not widen tree reach or replay old mail.
+Records stored by earlier development builds, such as filters, card order and
+known locations, are ignored with one line in the agents log. They are never translated or replayed. Discoverable worktrees
 remain available because Git discovers them. Never delete vendor history, user work or an earlier Facade data
 directory. No migration-news popup is required.
 Retired launch-group/trust/settings-template fields report a configuration error under CLIS-3 instead of keeping a
@@ -473,18 +475,29 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 ## Change log
 
 - 2026-10-31: 2.4 retains request-bearing metadata without restoring closed pairs; 5.3 enforces temporary CLI state in
-  integration and input-capture probes (D113).
-- 2026-10-31: 2.2's identity answer names the window component's version, for 3.3's Copy Diagnostics in a remote window (D110).
-- 2026-10-31: 3.3 logs each tool call; 4.1's real run checks what the models did (D111).
-- 2026-10-31: 3.3 adds Copy Diagnostics (D110).
+  integration and input-capture probes (D119).
+- 2026-10-31: 2.2's identity answer names the window component's version, for 3.3's Copy Diagnostics in a remote window (D116).
+- 2026-10-31: 3.3 logs each tool call; 4.1's real run checks what the models did (D117).
+- 2026-10-31: 3.3 adds Copy Diagnostics (D116).
 - 2026-10-31: 4.1's real run takes any built-in, its configuration given to its terminals.
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 makes the window component the client component, using local
-  sockets and a client registry without a broker process (D87); 1.3 adds the `schema`, `contract`, `transport` and
+  sockets and a client registry without a broker process (D93); 1.3 adds the `schema`, `contract`, `transport` and
   `client` layers; 2.1 carries the Facade Dots routing rule; 2.3 adds shim call routing and input deadlines; 2.4 keeps
   agents of the 0.0.1 preview running across the first update; 3.1-3.3 add the client registry, message records and
   route logging; 4.1 ignores `.agents/` (Dots D50); 4.2 keeps the preview's settings and command IDs and refuses old
   MCP calls (Dots D37); 4.3 installs the window component through `extensionPack` with a bounded wait and a plain
-  explanation (D88).
+  explanation (D94).
+- 2026-10-31: 4.2 distinguishes unreleased development data from released runtime protocols, removing the stale
+  claim that the extension has never been released.
+
+- 2026-10-31: 2.4: a build speaks every earlier released protocol and shows and operates the runs such a ptyd holds through
+  it (D86), where a window only held them unseen before.
+- 2026-10-31: 2.2 says what a damaged window identity record does: Facade does not start there and says what helps.
+- 2026-10-31: 2.4 says how runs held by an earlier protocol's ptyd survive an update: the night verification found they
+  ended five minutes after the reload, as no window claimed them there.
+- 2026-10-30: 3.3 opens the agents log as Show Agents Log, a read-only document.
+
+- 2026-10-30: Workspace storage keeps the panel's filter (PANEL-2.3); a filter stored by an earlier build is ignored.
 
 - 2026-10-30: 2.2 and 2.3 describe the owner's five-minute policy (D75) as ptyd applies it, and 2.2 bounds the wait
   for each restored terminal to open.

@@ -10,7 +10,7 @@ import { isJsonObject } from '../../base/json';
 import { isDeletableWorktree } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
 import type { Agents, Catalog, HumanPort, Location, LocationId, LocationPort, LogPort, WorkspaceFolderInfo, WorktreePlan, WorktreePort } from '../../core/ports';
-import { folderPrefixOf } from '../cardView';
+import { plainText } from '../presentation';
 import { BACK, Flow, StepAction } from './stepping';
 
 /**
@@ -66,6 +66,10 @@ function wordsOf(problem: WorktreeProblem): string {
 		case 'worktree_changed': return vscode.l10n.t("Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.", problem.name);
 		// {0} is the worktree's name
 		case 'worktree_locked': return vscode.l10n.t("Cannot delete worktree \"{0}\": worktree is locked. Unlock it with Git, then try again.", problem.name);
+		// {0} is the worktree's name, {1} the name of the worktree inside it
+		case 'worktree_nested': return vscode.l10n.t("Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.", problem.name, problem.nested);
+		// {0} is the worktree's name
+		case 'agents_not_ended': return vscode.l10n.t("Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.", problem.name);
 		// {0} is the worktree's name, {1} what Git said
 		case 'deletion_failed': return deletionFailed(problem.name, problem.detail);
 	}
@@ -74,12 +78,6 @@ function wordsOf(problem: WorktreeProblem): string {
 /** Why a worktree could not be deleted, in Git's own words (WORKTREES-3.2). */
 function deletionFailed(name: string, detail: string): string {
 	return vscode.l10n.t("Could not delete worktree \"{0}\": {1}", name, detail);
-}
-
-/** A location as the person reads it alone (PANEL-1.3): its label, after its workspace folder's name in a multi-folder window. */
-export function locationLabel(location: Location, catalog: Catalog): string {
-	const prefix = folderPrefixOf(location, catalog);
-	return prefix ? `${prefix} · ${location.label}` : location.label;
 }
 
 /** The checkout a new worktree starts from, even when the selected location is its subfolder (WORKTREES-2.1). */
@@ -129,7 +127,7 @@ function hostOf(encoded: string): string {
 }
 
 /** A location's icon: a plain folder, a repository's main checkout, or another worktree. */
-function iconOf(location: Location): vscode.ThemeIcon {
+export function locationIcon(location: Location): vscode.ThemeIcon {
 	return new vscode.ThemeIcon(location.kind === 'folder' ? 'folder' : location.isMain ? 'repo' : 'worktree');
 }
 
@@ -137,21 +135,27 @@ type LocationItem = vscode.QuickPickItem & { readonly location?: Location };
 type FolderItem = vscode.QuickPickItem & { readonly folder?: WorkspaceFolderInfo; readonly add?: true };
 
 /** The locations of a workspace folder, in the catalog's order (WORKTREES-1.2): every one associated with it. */
-function locationsIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location[] {
+export function locationsIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location[] {
 	return catalog.locations.filter(location => location.folders.some(each => each.uri === folder.uri));
 }
 
 /** A workspace folder's icon: that of the location it opened - a plain folder, a repository's main checkout or another worktree. */
-function folderIconOf(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.ThemeIcon {
-	const opened = locationsIn(catalog, folder).find(location => location.opened);
-	return opened ? iconOf(opened) : new vscode.ThemeIcon('folder');
+export function folderIconOf(catalog: Catalog, folder: WorkspaceFolderInfo): vscode.ThemeIcon {
+	const opened = locationsIn(catalog, folder).find(location => location.opened && location.uri === folder.uri);
+	return opened ? locationIcon(opened) : new vscode.ThemeIcon('folder');
 }
 
-/** Main checkout first, then this folder's opened location; the catalog's order and launch defaults stay intact (WORKTREES-1.2). */
-function locationItems(locations: readonly Location[], folder: WorkspaceFolderInfo): LocationItem[] {
+/**
+ * `locations` of `folder` in the order its steps list them: the main checkout first, then the folder's opened location; the
+ * catalog's order and launch defaults stay intact (WORKTREES-1.2).
+ */
+export function inStepOrder(locations: readonly Location[], folder: WorkspaceFolderInfo): Location[] {
 	const rank = (location: Location) => location.isMain ? 0 : location.uri === folder.uri ? 1 : 2;
-	return [...locations].sort((a, b) => rank(a) - rank(b))
-		.map(location => ({ label: location.label, description: homeRelative(location.path), iconPath: iconOf(location), location }));
+	return [...locations].sort((a, b) => rank(a) - rank(b));
+}
+
+function locationItems(locations: readonly Location[], folder: WorkspaceFolderInfo): LocationItem[] {
+	return inStepOrder(locations, folder).map(location => ({ label: plainText(location.label), description: plainText(homeRelative(location.path)), iconPath: locationIcon(location), location }));
 }
 
 /**
@@ -203,7 +207,7 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
 		const items: FolderItem[] = [
 			// Its name, then the folder that holds it, as VS Code lists recent folders: the home folder as ~. Removing one is offered
 			// where another stays (D73)
-			...catalog.folders.map((each): FolderItem => ({ label: each.name, description: homeRelative(path.dirname(each.path)), iconPath: folderIconOf(catalog, each), folder: each, buttons: [remove] })),
+			...catalog.folders.map((each): FolderItem => ({ label: plainText(each.name), description: plainText(homeRelative(path.dirname(each.path))), iconPath: folderIconOf(catalog, each), folder: each, buttons: [remove] })),
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
 			{ label: vscode.l10n.t("Add Folder to Workspace..."), iconPath: new vscode.ThemeIcon('add'), add: true }
 		];
@@ -243,6 +247,8 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 	/** The checkout a new worktree would be made of in the folder chosen, and what the branch step proposed last. */
 	let source: Location | undefined;
 	let branch = current.worktree?.branch;
+	/** Whether New Worktree is the choice the location step shows: the destination's, or the person's before Back (UX-1.1). */
+	let wantsWorktree = !!current.worktree;
 	/** The worktree being deleted: not offered meanwhile, and the step busy until it is gone (WORKTREES-3.2). */
 	let deleting: { readonly id: LocationId; readonly done: Promise<void> } | undefined;
 	for (; ;) {
@@ -263,7 +269,8 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 			continue;
 		}
 		if (step === 'branch' && source) {
-			const plan = await askWorktreeRef(flow, worktrees, source, { title, kind: 'branch', value: branch, back: true });
+			// Back keeps the branch typed, to be there again, and New Worktree chosen on the step it returns to (UX-1.1)
+			const plan = await askWorktreeRef(flow, worktrees, source, { title, kind: 'branch', value: branch, back: true, typed: value => { branch = value; } });
 			if (plan === undefined) {
 				return undefined;
 			}
@@ -290,9 +297,9 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 		const worktreeItems = (): StepItem[] => !from || !availability ? [] : [
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
 			availability.available
-				? { label: vscode.l10n.t("New Worktree..."), description: vscode.l10n.t("from {0}", worktreeSourceLabel(from)), iconPath: new vscode.ThemeIcon('add'), newWorktree: 'available' }
+				? { label: vscode.l10n.t("New Worktree..."), description: vscode.l10n.t("from {0}", plainText(worktreeSourceLabel(from))), iconPath: new vscode.ThemeIcon('add'), newWorktree: 'available' }
 				// Git is there but a prerequisite is not: why, where it would be offered - nothing at all for a plain folder (PANEL-1.2)
-				: { label: vscode.l10n.t("New Worktree..."), detail: availability.reason, iconPath: new vscode.ThemeIcon('add'), newWorktree: 'unavailable' }
+				: { label: vscode.l10n.t("New Worktree..."), detail: plainText(availability.reason), iconPath: new vscode.ThemeIcon('add'), newWorktree: 'unavailable' }
 		];
 		// A linked worktree can be deleted here, one at a time (D73)
 		const remove: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Delete Worktree") };
@@ -306,7 +313,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 			title,
 			placeholder: from ? vscode.l10n.t("Select a branch or worktree") : vscode.l10n.t("Select a working location"),
 			items,
-			active: items.find(item => current.worktree ? item.newWorktree === 'available' : item.location?.id === current.location.id),
+			active: items.find(item => wantsWorktree ? item.newWorktree === 'available' : item.location?.id === current.location.id),
 			back: true,
 			busy: locations.snapshot().pending || checked !== undefined || deleting !== undefined,
 			accepts: item => item.newWorktree !== 'unavailable',
@@ -321,7 +328,11 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 					const catalog = locations.snapshot();
 					const active = picker.activeItems[0];
 					picker.items = itemsOf(catalog);
-					picker.activeItems = picker.items.filter(item => active?.newWorktree ? item.newWorktree === active.newWorktree : item.location?.id === active?.location?.id);
+					// The choice where it was; none yet - New Worktree offered only now - the step's own, never a line or two rows
+					const kept = (item: StepItem) => active
+						? active.newWorktree ? item.newWorktree === active.newWorktree : item.location !== undefined && item.location.id === active.location?.id
+						: wantsWorktree ? item.newWorktree === 'available' : item.location?.id === current.location.id;
+					picker.activeItems = picker.items.filter(kept).slice(0, 1);
 					picker.busy = catalog.pending || (checked !== undefined && availability === undefined) || deleting !== undefined;
 				};
 				void checked?.then(refresh);
@@ -354,6 +365,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 			continue;
 		}
 		if (picked.item.newWorktree === 'available') {
+			wantsWorktree = true;
 			step = 'branch';
 			continue;
 		}
@@ -460,10 +472,18 @@ function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolea
  * processes ended, before Git removes it. Why it was not deleted goes to the person. Never rejects.
  */
 async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<void> {
+	// True only once every agent's process is known to have ended: Git removes nothing a process may still be writing in
 	const closeAgents = async () => {
-		await Promise.all(deps.agents.list().filter(run => run.location === worktree.id).map(run => deps.agents.close(run.id).then(
-			result => deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`),
-			err => deps.log.event(`Could not close ${run.alias} to delete its worktree: ${messageOf(err)}`))));
+		const results = await Promise.all(deps.agents.list().filter(run => run.location === worktree.id).map(run => deps.agents.close(run.id).then(
+			result => {
+				deps.log.event(`Closed ${run.alias} to delete its worktree: ${result}`);
+				return result === 'terminated' || result === 'already_exited' || result === 'already_ended' || result === 'not_started';
+			},
+			err => {
+				deps.log.event(`Could not close ${run.alias} to delete its worktree: ${messageOf(err)}`);
+				return false;
+			})));
+		return results.every(Boolean);
 	};
 	try {
 		await deps.worktrees.remove(worktree.id, closeAgents);
@@ -475,6 +495,8 @@ async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<v
 type WorktreeRefInput = {
 	readonly title: string;
 	readonly back: boolean;
+	/** Told each text as it is typed: what Back keeps for the step's return (UX-1.1). */
+	readonly typed?: (value: string) => void;
 } & ({ readonly kind: 'branch'; readonly value?: string; readonly base?: string }
 	| { readonly kind: 'base'; readonly value: string; readonly branch: string });
 
@@ -522,7 +544,10 @@ export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source
 		placeholder: asked.kind === 'branch' ? vscode.l10n.t("Branch name") : vscode.l10n.t("Commit, branch, or tag (e.g. HEAD)"),
 		prompt: asked.kind === 'branch' ? vscode.l10n.t("Starts from {0}", asked.base ?? worktreeSourceLabel(source)) : vscode.l10n.t("Base ref for {0}", asked.branch),
 		back: asked.back,
-		validate: value => value.trim() ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' }),
+		validate: value => {
+			asked.typed?.(value);
+			return value.trim() ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' });
+		},
 		check: async value => {
 			try {
 				const text = value.trim();

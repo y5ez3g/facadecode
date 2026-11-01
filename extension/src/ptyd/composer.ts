@@ -22,7 +22,7 @@ export interface InputReading {
 	 * there (RULES-1.6, CLIS-2.1). It is compared, never logged.
 	 */
 	readonly draft?: string;
-	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (D112). */
+	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (D118). */
 	readonly hidden?: Hidden;
 }
 

@@ -394,7 +394,7 @@ suite('ptyd: a run\'s terminal read and written for its owner (MCP-5, CLIS-2.1, 
 		const reading: InputReading = await owner.request('inspect', { run: 't1', adapter: 'claude-frame' });
 		assert.strictEqual(reading.state, 'unknown');
 		assert.strictEqual((await owner.request('inspect', { run: 't1', adapter: 'no-such-reader' })).state, 'unknown');
-		// A lead is typed ahead of the paste, in the same write; one with a control in it is refused before anything goes in (D102)
+		// A lead is typed ahead of the paste, in the same write; one with a control in it is refused before anything goes in (D108)
 		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'the message', enter: true, lead: 'Act on this: ' }), { outcome: 'applied', pasted: true, entered: true });
 		await screenUntil(owner, 't1', each => each.text.some(line => line.includes('Act on this: the message')));
 		await assert.rejects(owner.request('type', { run: 't1', text: 'x', enter: false, lead: 'go\r' }), /without control characters/);

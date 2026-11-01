@@ -2,13 +2,13 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The local window component, as the workspace extension waits for it (ARCHITECTURE-4.3, D88). The editor installs it through the
+// The local window component, as the workspace extension waits for it (ARCHITECTURE-4.3, D94). The editor installs it through the
 // extension pack and may activate it after this extension - in a remote window it installs it locally only after the remote one -
 // so activation waits a bounded time for its command. Without it Facade cannot tell this window from another, and says so plainly.
 
 import * as crypto from 'crypto';
 import * as vscode from 'vscode';
-import { isWindowIdentity, WINDOW_IDENTITY_COMMAND, type WindowIdentity } from '../base/windowIdentity';
+import { isDamagedWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, type DamagedWindowIdentity, type WindowIdentity } from '../base/windowIdentity';
 import { PANEL_VIEW } from '../ui/catalog';
 
 /** The window component's extension ID. */
@@ -24,7 +24,7 @@ const RETRY_MS = 500;
  * This window's identity from its local component, as soon as it answers: at once, or once the editor installs or activates it,
  * within {@link COMPONENT_WAIT_MS}. None where it never answers, or answers for another window.
  */
-export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_WAIT_MS): Promise<WindowIdentity | undefined> {
+export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_WAIT_MS): Promise<WindowIdentity | DamagedWindowIdentity | undefined> {
 	const deadline = Date.now() + waitMs;
 	for (;;) {
 		let identity: unknown;
@@ -36,19 +36,30 @@ export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_
 			// Not registered yet: the component is not installed, enabled or activated
 		}
 		if (answered) {
-			return isWindowIdentity(identity, session) ? identity : undefined;
+			return isWindowIdentity(identity, session) || isDamagedWindowIdentity(identity, session) ? identity : undefined;
 		}
 		const left = deadline - Date.now();
 		if (left <= 0) {
 			return undefined;
 		}
 		await new Promise<void>(resolve => {
-			const timer = setTimeout(done, Math.min(RETRY_MS, left));
-			const changed = vscode.extensions.onDidChange(done);
+			let timer: ReturnType<typeof setTimeout> | undefined;
+			let changed: vscode.Disposable | undefined;
+			let finished = false;
 			function done() {
+				if (finished) {
+					return;
+				}
+				finished = true;
 				clearTimeout(timer);
-				changed.dispose();
+				changed?.dispose();
 				resolve();
+			}
+			changed = vscode.extensions.onDidChange(done);
+			if (finished) {
+				changed.dispose();
+			} else {
+				timer = setTimeout(done, Math.min(RETRY_MS, left));
 			}
 		});
 	}

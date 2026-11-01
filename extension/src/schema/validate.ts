@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // A tool call's arguments checked against its tool's schema before any effect (MCP-1.1): a JSON object of known keys and exact
-// types - nothing coerced but a list given as one string or written as JSON text, as some CLIs send one (D96), and no default
+// types - nothing coerced but a list given as one string or written as JSON text, as some CLIs send one (D102), and no default
 // but the schema's own - with every missing required field reported together, then the checks particular to each tool
 // (MCP-4.1, 4.2, 5.2).
 
@@ -123,7 +123,7 @@ function objectOf(schema: ArgumentSchema | Schema, given: { readonly [key: strin
 /** `given` checked against `schema`; undefined, with its problems collected, where it does not fit. */
 function valueOf(schema: Schema, given: unknown, field: string, problems: Collector): unknown {
 	if (schema.type === 'array' && typeof given === 'string') {
-		// One item alone, or the list as JSON text, as some CLIs send a list (D96)
+		// One item alone, or the list as JSON text, as some CLIs send a list (D102)
 		return valueOf(schema, encodedArray(given) ? JSON.parse(given) : [given], field, problems);
 	}
 	if (!typeFits(schema.type, given)) {
@@ -219,7 +219,7 @@ function controlIn(text: string): string | undefined {
 	return `U+${code.toString(16).toUpperCase().padStart(4, '0')}${code === 0x1b ? ' (Escape)' : ''} at code point ${codePoints(text.slice(0, match.index)) + 1}`;
 }
 
-/** A string that is a JSON array written out: the list itself, as some CLIs send a list argument (MCP-1.1, D96). */
+/** A string that is a JSON array written out: the list itself, as some CLIs send a list argument (MCP-1.1, D102). */
 function encodedArray(text: string): boolean {
 	if (!/^\s*\[/.test(text)) {
 		return false;
@@ -231,10 +231,10 @@ function encodedArray(text: string): boolean {
 	}
 }
 
-/** How Antigravity marks a long text argument it cut to its last 8,000 characters before it reached Facade (D107). */
+/** How Antigravity marks a long text argument it cut to its last 8,000 characters before it reached Facade (D113). */
 const CUT_MARK = '[Earlier output truncated]';
 
-/** A text whose beginning the caller's CLI cut off on the way: never passed on as though whole (MCP-4.1, D107). */
+/** A text whose beginning the caller's CLI cut off on the way: never passed on as though whole (MCP-4.1, D113). */
 function checkWhole(field: string, text: string, problems: Collector): void {
 	if (text.startsWith(CUT_MARK)) {
 		problems.invalid.push({ field, problem: `\`${field}\` begins with ${JSON.stringify(CUT_MARK)}: your CLI cut its beginning off before Facade received it. Send it in shorter parts.` });

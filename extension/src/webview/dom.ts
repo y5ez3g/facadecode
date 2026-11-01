@@ -28,16 +28,18 @@ export function post(message: { readonly type: string } & Record<string, unknown
 /** Where the person was on this view's page, its scroll: kept by the webview as the view hides and shows again, never by the extension. */
 export interface Browsing {
 	readonly scrollTop: number;
+	/** The run of the card the keyboard was on: the list's Tab stop again where that card still is (PANEL-3.1). */
+	readonly target?: string;
 }
 
 /** The browsing position the page saved before the view was hidden, if any and well formed (PANEL-3.1); nothing else it saved. */
 export function savedBrowsing(): Browsing | undefined {
 	try {
-		const saved = vscode.getState() as { scrollTop?: unknown } | undefined;
+		const saved = vscode.getState() as { scrollTop?: unknown; target?: unknown } | undefined;
 		if (!saved || typeof saved.scrollTop !== 'number' || !Number.isFinite(saved.scrollTop)) {
 			return undefined;
 		}
-		return { scrollTop: Math.max(0, saved.scrollTop) };
+		return { scrollTop: Math.max(0, saved.scrollTop), ...(typeof saved.target === 'string' ? { target: saved.target } : {}) };
 	} catch {
 		return undefined;
 	}
@@ -90,8 +92,8 @@ export function el<K extends keyof HTMLElementTagNameMap>(tag: K, className = ''
 }
 
 /** A button of words, as VS Code's views have them where they have nothing to show. */
-export function button(text: string, run: () => void): HTMLButtonElement {
-	const element = el('button', 'button primary', text);
+export function button(text: string, run: () => void, secondary = false): HTMLButtonElement {
+	const element = el('button', secondary ? 'button secondary' : 'button primary', text);
 	element.type = 'button';
 	element.addEventListener('click', event => {
 		event.stopPropagation();
@@ -102,23 +104,53 @@ export function button(text: string, run: () => void): HTMLButtonElement {
 
 /** What a card's face is drawn of: a card drawn again with the same keeps its face node, whose image would flash loading again. */
 export function lookOf(avatar: Card['avatar']): string {
-	return avatar ? `file:${avatar.file}` : '';
+	return !avatar ? '' : 'file' in avatar ? `file:${avatar.file}` : `initial:${avatar.color}:${avatar.initial}`;
 }
 
 /**
- * A card's face (PANEL-1.3): its CLI maker's avatar, cut round; an empty circle for a CLI with none. Decorative: the card's label
- * says everything it shows.
+ * A card's face (PANEL-1.3): its CLI maker's avatar, cut round; for a custom CLI, the initial and theme colour the extension chose
+ * (UX-2.1); an empty circle for a CLI with neither. Decorative: the card's label says everything it shows.
  */
 export function face(avatar: Card['avatar']): HTMLElement {
 	const element = el('span', 'face');
 	element.setAttribute('aria-hidden', 'true');
-	if (avatar) {
+	if (avatar && 'file' in avatar) {
 		const img = el('img');
 		img.src = `${logos}/${avatar.file}`;
 		img.alt = '';
 		element.append(img);
+	} else if (avatar) {
+		element.classList.add('initial', `on-${avatar.color}`);
+		element.textContent = avatar.initial;
 	}
 	return element;
+}
+
+/**
+ * The red, green and blue of a colour as the page computed it, each 0 to 1; none for one it gives otherwise, or for one that is not
+ * opaque, whose look depends on what is under it.
+ */
+function channelsOf(color: string): readonly [number, number, number] | undefined {
+	const rgb = /^rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)$/.exec(color);
+	if (rgb) {
+		return rgb[4] !== undefined && Number(rgb[4]) < 1 ? undefined : [Number(rgb[1]) / 255, Number(rgb[2]) / 255, Number(rgb[3]) / 255];
+	}
+	const srgb = /^color\(srgb ([\d.e-]+) ([\d.e-]+) ([\d.e-]+)(?: \/ ([\d.e-]+))?\)$/.exec(color);
+	return srgb && !(srgb[4] !== undefined && Number(srgb[4]) < 1) ? [Number(srgb[1]), Number(srgb[2]), Number(srgb[3])] : undefined;
+}
+
+/** How far apart two computed colours are, as WCAG measures text on its background: 1 to 21; none where either cannot be read. */
+export function contrastOf(text: string, background: string): number | undefined {
+	const luminance = (channels: readonly [number, number, number]) => {
+		const [r, g, b] = channels.map(value => value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4));
+		return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+	};
+	const [a, b] = [channelsOf(text), channelsOf(background)];
+	if (!a || !b) {
+		return undefined;
+	}
+	const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+	return (light + 0.05) / (dark + 0.05);
 }
 
 /** How long ago `time` was, as the browser says it in the window's language: now, 5 min. ago, yesterday, 3 days ago (UX-2.4). */

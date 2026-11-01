@@ -131,5 +131,8 @@ export const piAdapter: CliAdapter = {
 	// Its input, recorded on macOS with Pi 1.4.0 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'pi-frame', evidence: 'its editor between two rules above its footer, its own cursor drawn there: empty, a typed, pasted, multi-line, long-paste, history or slash-command draft, while working, and gone behind its trust question and model picker' },
 	title: { names: ['π', 'Pi', 'pi'] },
+	// No approvals and no sandbox: YOLO has nothing to map (D79)
+	sandbox: () => ({ state: 'none' }),
+	approvals: () => ({ state: 'none' }),
 	interruptExit: sigintExit
 };

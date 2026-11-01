@@ -64,6 +64,34 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	const plan = (input: Partial<PlanInput> & { readonly cli: string }, where = destination) =>
 		planLaunch(catalogOf(() => undefined), { alias: '#a1', cwd, yolo: true, ...input }, where);
 
+	test('an explicit MCP model and effort replace configured defaults while other options stay before the initial prompt', () => {
+		const catalog = catalogOf(name => name === 'facade.claude.launch' ? { arguments: ['--model', 'configured', '--effort=low', '--verbose'] } : undefined);
+		const planned = planLaunch(catalog, { cli: 'claude', alias: '#a1', cwd, yolo: true, tools, model: 'requested', effort: 'high', prompt: 'Fix it' }, destination);
+		assert.strictEqual(planned.args.filter(arg => arg === '--model').length, 1);
+		assert.strictEqual(planned.args[planned.args.indexOf('--model') + 1], 'requested');
+		assert.strictEqual(planned.args[planned.args.indexOf('--effort') + 1], 'high');
+		assert.ok(!planned.args.includes('configured') && !planned.args.includes('--effort=low'));
+		assert.deepStrictEqual(planned.args.slice(-3), ['--verbose', '--', 'Fix it']);
+		const defaults = planLaunch(catalog, { cli: 'claude', alias: '#a1', cwd, yolo: true }, destination);
+		assert.deepStrictEqual(defaults.args.slice(-4), ['--model', 'configured', '--effort=low', '--verbose']);
+	});
+
+	test('a requested Codex effort replaces only its configured key, preserving unrelated -c settings and MCP injection', () => {
+		const catalog = catalogOf(name => name === 'facade.codex.launch' ? { arguments: ['-c', 'model_reasoning_effort="low"', '-c', 'unrelated=true'] } : undefined);
+		const planned = planLaunch(catalog, { cli: 'codex', alias: '#a1', cwd, yolo: true, tools, effort: 'high' }, destination);
+		assert.deepStrictEqual(planned.args.filter(arg => arg.startsWith('model_reasoning_effort=')), ['model_reasoning_effort="high"']);
+		assert.deepStrictEqual(planned.args.slice(-2), ['-c', 'unrelated=true']);
+		assert.strictEqual(planned.tools.state, 'injected');
+	});
+
+	test('a custom CLI keeps its configured start without invented MCP injection or message input support', () => {
+		const catalog = catalogOf(name => name === 'facade.custom' ? { custom: { path: path.join(temp.dir, 'bin', 'claude'), launch: { start: ['literal'], resume: ['resume', '${sessionId}'] } } } : undefined);
+		const planned = planLaunch(catalog, { cli: 'custom', alias: '#a1', cwd, yolo: true, tools }, destination);
+		assert.deepStrictEqual(planned.args, ['literal']);
+		assert.deepStrictEqual([planned.tools.state, planned.injection, planned.input.capability.state, planned.trust.kind], ['not_injected', undefined, 'unavailable', 'unknown']);
+		assert.strictEqual(fs.existsSync(tools.runDir), false);
+	});
+
 	test('Claude Code: the server in a per-run --mcp-config file, its tools allowed by --allowedTools mcp__facade, the skill in a per-run --plugin-dir plugin; nothing in the project', () => {
 		const planned = plan({ cli: 'claude', tools });
 		const config = path.join(tools.runDir, 'mcp.json');
@@ -80,7 +108,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([planned.injection!.project, planned.injection!.env, planned.env.FACADE_RUN], [[], {}, undefined]);
 	});
 
-	test('with YOLO off, Facade\'s own tools still never ask for approval, while the CLI keeps its own approvals and sandbox (CLIS-1.3, D84)', () => {
+	test('with YOLO off, Facade\'s own tools still never ask for approval, while the CLI keeps its own approvals and sandbox (CLIS-1.3, D90)', () => {
 		const claude = plan({ cli: 'claude', yolo: false, tools });
 		assert.ok(claude.args.includes('--allowedTools') && claude.args[claude.args.indexOf('--allowedTools') + 1] === 'mcp__facade', claude.args.join(' '));
 		assert.ok(!claude.args.includes('--dangerously-skip-permissions'));
@@ -101,7 +129,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
 			'-c', 'mcp_servers.facade.tool_timeout_sec=3600',
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
-			// Its first turn waits for a server that starts slowly, as T3 Code found it must (D95)
+			// Its first turn waits for a server that starts slowly, as T3 Code found it must (D101)
 			'-c', 'mcp_optional_startup_grace_ms=10000',
 			'-c', 'check_for_update_on_startup=false',
 			'--no-daemon'
@@ -163,14 +191,14 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows, through cmd.exe, the project\'s .mcp.json entry instead, its references empty where unset', () => {
 		const planned = plan({ cli: 'muse', tools, prompt: 'Fix the build' });
 		const references = { ELECTRON_RUN_AS_NODE: '${FACADE_ELECTRON_RUN_AS_NODE}', FACADE_RUN: '${FACADE_RUN}', FACADE_PTYD: '${FACADE_PTYD}', FACADE_AGENT: '${FACADE_AGENT}' };
-		// Optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (D101)
+		// Optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (D107)
 		assert.deepStrictEqual(planned.args, ['-c', `mcpServers.facade=${JSON.stringify({ command: SERVER.command, args: SERVER.args, env: references, mode: 'optional' })}`, '--disable-approval', '--disable-sandbox', '--trust-workspace', '--', 'Fix the build']);
 		assert.deepStrictEqual(planned.injection!.project, [{ kind: 'file', path: path.join('.agents', 'skills', 'facade', 'SKILL.md'), content: FACADE_SKILL }]);
 		// Each reference names a variable the CLI's environment carries; the runtime's under a name no other program reads
 		assert.deepStrictEqual([planned.env.FACADE_ELECTRON_RUN_AS_NODE, planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.FACADE_AGENT, planned.env.ELECTRON_RUN_AS_NODE], ['1', 'run-1', '/tmp/ptyd.sock', '#a1', undefined]);
 		assert.deepStrictEqual(planned.prompt?.path, 'native');
 		// On Windows its launcher goes through cmd.exe, which cannot carry the entry: it is a shared project entry there
-		const windows = museAdapter.tools.inject({ ...tools, platform: 'win32' });
+		const windows = museAdapter.tools!.inject({ ...tools, platform: 'win32' });
 		assert.deepStrictEqual([windows.args, windows.project[0]], [undefined, { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' }, mode: 'optional' } }]);
 		assert.deepStrictEqual(windows.env, { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' });
 	});
@@ -211,7 +239,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 
 	test('Pi\'s prompt is its message after --, except one it would read as a file to attach', () => {
 		assert.deepStrictEqual(plan({ cli: 'pi', prompt: 'Fix it' }).args.slice(-3), ['--approve', '--', 'Fix it']);
-		// Muse Code 1.4.14 refuses to start on a prompt that is one of its commands' names, even after -- (D101)
+		// Muse Code 1.4.14 refuses to start on a prompt that is one of its commands' names, even after -- (D107)
 		for (const [prompt, path] of [['login', 'post_start'], ['session-message', 'post_start'], ['Login', 'native'], ['fix the login flow', 'native']] as const) {
 			assert.strictEqual(plan({ cli: 'muse', prompt }).prompt?.path, path, prompt);
 		}
@@ -254,7 +282,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([neither.model, neither.effort], [undefined, undefined]);
 	});
 
-	test('the message input is read by each CLI\'s reader whatever its version; there is no version list (CLIS-2.1, D83)', () => {
+	test('the message input is read by each CLI\'s reader whatever its version; there is no version list (CLIS-2.1, D89)', () => {
 		assert.deepStrictEqual(inputOf(claudeAdapter), { adapter: 'claude-frame', capability: { state: 'supported', reason: inputOf(claudeAdapter).capability.reason } });
 		assert.deepStrictEqual(inputOf(codexAdapter).adapter, 'codex-prompt');
 		// Every built-in has a reader ptyd has, recorded on its screens
@@ -301,7 +329,7 @@ suite('CLIs: through cmd.exe, the tools never stop a CLI that can start (MCP-6.1
 			...claudeAdapter, id: 'toy', displayName: 'Toy', setting: 'facade.toy', command: 'toy', trustTarget: undefined,
 			groups: { connect: ['--mcp', '${mcpConfig}', '--config', '{"x": 1}'], yoloOn: ['--yolo'] }, values: () => ({})
 		};
-		const catalog: Catalog = { entries: [{ adapter: toy, path: '', problems: [] }] };
+		const catalog: Catalog = { entries: [{ adapter: toy, path: '', problems: [], enabled: true, extra: [], extraSetting: 'facade.toy.launch.arguments', environment: {} }], problems: [] };
 		const planned = planLaunch(catalog, { cli: 'toy', alias: '#a1', cwd, yolo: true, tools: tools() }, windows);
 		assert.deepStrictEqual([planned.args, planned.injection, planned.tools.state], [['--yolo'], undefined, 'unavailable']);
 		assert.match(planned.tools.reason!, /runs through cmd\.exe, which cannot be given the Facade tools' arguments safely; set facade\.toy\.path/);
@@ -585,7 +613,7 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 		}
 	});
 
-	test('what every turn of every agent pays for stays within its budget: the tool list, the instructions and the skill (MCP-6.1, D105)', () => {
+	test('what every turn of every agent pays for stays within its budget: the tool list, the instructions and the skill (MCP-6.1, D111)', () => {
 		// As T3 Code's AgentContextBudget test does: text that grows must be made to fit, or the budget raised on purpose
 		const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 		assert.ok(bytes(JSON.stringify(TOOLS)) <= 7_000, `the tool list is ${bytes(JSON.stringify(TOOLS))} bytes`);

@@ -4,7 +4,7 @@
 
 // Records how a built-in CLI draws its input box as text is typed and pasted into it - never submitted, so its model is asked
 // nothing - and checks Facade's input readers against each screen (CLIS-2.1, VERIFICATION G3): the state the reader reads, and
-// whether a pasted message reads as its own draft, with its lead where its CLI takes one (RULES-1.6, D102). Run it once a CLI
+// whether a pasted message reads as its own draft, with its lead where its CLI takes one (RULES-1.6, D108). Run it once a CLI
 // updates: a failed check is a reader or a placeholder to update, and the screens it saved are the new recorded cases.
 //
 //   npm run compile

@@ -58,7 +58,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 				snapshot: () => ({ locations: [LOCATION], folders: LOCATION.folders, pending: false }), resolve: id => id === LOCATION.id ? LOCATION : undefined,
 				refresh: async () => undefined, onDidChange: changes.event, onDidRemove: changes.event, removalOf: () => undefined
 			},
-			clis: { list: async () => [] },
+			clis: { list: async () => ({ clis: [], problems: [] }) },
 			history: { last: () => ({}), remember: () => undefined },
 			execution: { reveal: async id => { did.push(`reveal ${id}`); return true; }, onDidActivate: activate.event },
 			workspaceState: { get: () => undefined, update: async () => undefined, keys: () => [] } as never,

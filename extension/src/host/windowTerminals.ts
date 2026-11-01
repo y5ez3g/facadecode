@@ -129,11 +129,11 @@ export class WindowTerminals implements vscode.Disposable {
 		const candidates = this.snapshot.filter(eligible);
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		try {
-			const found = await Promise.race([
-				Promise.all(candidates.map(async terminal => ({ terminal, name: terminal.name, pid: await terminal.processId }))),
-				new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), TERMINAL_REGISTRATION_MS); })
-			]);
-			if (!found || !current()) { return false; }
+			const deadline = new Promise<undefined>(resolve => { timer = setTimeout(() => resolve(undefined), TERMINAL_REGISTRATION_MS); });
+			// Each terminal's own answer by the deadline: one that never answers, or fails to, leaves its own group alone, not all
+			const found = await Promise.all(candidates.map(async terminal => ({ terminal, name: terminal.name,
+				pid: await Promise.race([Promise.resolve(terminal.processId).catch(() => undefined), deadline]) })));
+			if (!current()) { return false; }
 			let retired = false;
 			for (const [title, group] of groups) {
 				if (!group.every(run => runs.has(run) && owner.runs.has(run))) { continue; }

@@ -40,7 +40,7 @@ export interface WindowIdentity {
 	readonly session: string;
 	/** The window's remote authority, `ssh-remote+host`, which only the local component sees; none in a local window. */
 	readonly remote?: string;
-	/** The component's own version, which a remote extension host cannot see, for Copy Diagnostics (ARCHITECTURE-3.3, D110). */
+	/** The component's own version, which a remote extension host cannot see, for Copy Diagnostics (ARCHITECTURE-3.3, D116). */
 	readonly component?: string;
 }
 
@@ -53,4 +53,18 @@ export function isWindowIdentity(value: unknown, session: string): value is Wind
 	return isJsonObject(value) && value.version === 1 && value.session === session && isWindowToken(value.token)
 		&& (value.remote === undefined || (typeof value.remote === 'string' && !!value.remote))
 		&& (value.component === undefined || (typeof value.component === 'string' && !!value.component));
+}
+
+/**
+ * The local component's reply where this window's identity record is damaged: it invents no other identity (ARCHITECTURE-2.2), so
+ * this window cannot tell its agents. Reloading reads the same record; another window, or another editor session, has its own.
+ */
+export interface DamagedWindowIdentity {
+	readonly version: 1;
+	readonly session: string;
+	readonly damaged: true;
+}
+
+export function isDamagedWindowIdentity(value: unknown, session: string): value is DamagedWindowIdentity {
+	return isJsonObject(value) && value.version === 1 && value.session === session && value.damaged === true;
 }

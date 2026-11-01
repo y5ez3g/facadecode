@@ -220,7 +220,8 @@ export class PtydServer {
 	private readonly attaching = new Set<Run>();
 	private nextCall = 1;
 
-	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock) {
+	/** `speaks` is the protocol it answers hello with: its own, or for a test the earlier one it stands for. */
+	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock, private readonly speaks = PTYD_PROTOCOL) {
 		this.owners = new OwnerClaims((owner, previous) => {
 			for (const run of this.claimedBy(previous).filter(run => run.params.owner === owner)) {
 				this.claims.delete(run);
@@ -398,12 +399,12 @@ export class PtydServer {
 			case 'hello': {
 				const { protocol, role, run } = params as Requests['hello']['params'];
 				if (role === 'shim') {
-					if (protocol !== PTYD_PROTOCOL) {
-						throw new CallRefused('protocol_incompatible', 'none', `This agent's Facade MCP server speaks protocol ${protocol}, and its agent runtime (ptyd) protocol ${PTYD_PROTOCOL}: no tool call can be carried.`, true);
+					if (protocol !== this.speaks) {
+						throw new CallRefused('protocol_incompatible', 'none', `This agent's Facade MCP server speaks protocol ${protocol}, and its agent runtime (ptyd) protocol ${this.speaks}: no tool call can be carried.`, true);
 					}
 					this.shimConnected(connection, typeof run === 'string' ? run : '');
 				}
-				return { protocol: PTYD_PROTOCOL, pid: process.pid };
+				return { protocol: this.speaks, pid: process.pid };
 			}
 			case 'call':
 				this.call(params as Requests['call']['params'], connection, receivedAt, request.id);

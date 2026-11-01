@@ -193,7 +193,8 @@ An unconfirmed remote cleanup is not silently described as proven process exit.
 **Plain folders, optional Git and multi-folder/remote use follow the same agent flows.**
 
 Git discovery never blocks ordinary agent use. Worktree creation is available where Git/repository prerequisites exist,
-with no enable/disable setting and no initialization wizard. Every created agent enters the normal panel data.
+with no enable/disable setting and no initialization wizard. Panel filters affect display only: every created agent
+enters the normal panel data, and a filtered-out creation does not clear the person's filter.
 Creation trees do not group the list or imply a team workflow.
 
 ## Checks
@@ -210,9 +211,10 @@ Evidence is recorded in [Verification](engineering/VERIFICATION.md); these scena
 
 ## Change log
 
+- 2026-10-30: 4.3 says a panel filter affects display only (PANEL-2.3).
 - 2026-10-30: Step 2 of the Facade Code extension: group 3 and 4.1 carry the Facade Dots collaboration journeys across
   this computer's windows, without Resume, Pin or filters; 3.4–3.6 follow the owner's decisions of that day: a read
-  message is delivered (D82), every CLI version is attempted (D83) and the person is `#human` (D85).
+  message is delivered (D88), every CLI version is attempted (D89) and the person is `#human` (D91).
 
 - 2026-10-30: 2.4 says when a closed window's agents end under the owner's five-minute policy (D75).
 

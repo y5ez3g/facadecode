@@ -112,7 +112,7 @@ states its limits honestly, including unsupported CLI capabilities. None imposes
 
 **Facade Code is free, MIT open source, for desktop VS Code and compatible editors on macOS, Windows and Linux.**
 
-- Built-in CLIs run interactively. Facade does not supply a separate application or hosted agent.
+- Built-in and configured custom CLIs run interactively. Facade does not supply a separate application or hosted agent.
 - The product name is Facade Code; Facade is the short form. User interfaces follow VS Code's language; agent APIs use English.
 - The supported desktop editor must supply the required extension APIs. Browser-only editors and virtual filesystems
   without an executable workspace environment are outside this release.
@@ -164,8 +164,9 @@ capabilities are named; technical limitations do not quietly redefine the produc
 
 ## Change log
 
+- 2026-10-31: Configured custom CLIs run interactively beside the built-ins (CLIS-3.4).
 - 2026-10-30: Step 2 of the Facade Code extension: agents start, message and operate one another across this computer's
-  windows (1.1, 2.1, 3.1, 5.1, 5.6), with the Facade Dots wording; 4.2 adds the owner's plain-language rule (D90); 5.7
+  windows (1.1, 2.1, 3.1, 5.1, 5.6), with the Facade Dots wording; 4.2 adds the owner's plain-language rule (D96); 5.7
   requires local and two remote environments communicating and stopping agents.
 
 - 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots specification: the rules step 1

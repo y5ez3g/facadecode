@@ -17,6 +17,9 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let progress: number;
 	let logged: string[];
 	let state: PanelState;
+	/** The editor's settings as the panel reads them, and their changes. */
+	let settings: Record<string, unknown>;
+	let configChanged: TestEmitter<{ affectsConfiguration(section: string): boolean }>;
 	let front: SelectedAgent | undefined;
 	let changed: TestEmitter<PanelState>;
 	let said: TestEmitter<unknown>;
@@ -49,8 +52,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			commands: { executeCommand: async (command: string, key: string, value: unknown) => { if (command === 'setContext') { contexts[key] = value; } } },
 			window: { withProgress: async () => void progress++ },
 			workspace: {
-				onDidChangeConfiguration: () => none,
-				getConfiguration: () => ({ get: () => undefined })
+				onDidChangeConfiguration: configChanged.event,
+				getConfiguration: () => ({ get: (key: string) => settings[key] })
 			}
 		};
 		(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
@@ -85,6 +88,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 
 	setup(() => {
 		posted = []; acts = []; contexts = {}; progress = 0; logged = [];
+		settings = {};
+		configChanged = new TestEmitter();
 		state = stateOf(1);
 		front = undefined;
 		changed = new TestEmitter();
@@ -107,15 +112,30 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.deepStrictEqual([before, states().map(each => [each.page, each.state.revision])], [0, [[page(1), 2], [page(1), 3]]]);
 	});
 
+	test('the page that said it is ready is told the list settings its wheel follows - VS Code\'s defaults where one is not a number - and told again as they or the window\'s zoom change, nothing else (PANEL-3.1, 3.3)', async () => {
+		const scrolls = () => posted.filter(message => message.type === 'scrolling').map(message => [message.page, message.scrolling]);
+		settings = { 'workbench.list.mouseWheelScrollSensitivity': 'much' };
+		await say({ type: 'ready', page: page(1) });
+		settings = { 'workbench.list.mouseWheelScrollSensitivity': 2, 'workbench.list.fastScrollSensitivity': 3, 'workbench.list.smoothScrolling': true, 'window.zoomLevel': 1 };
+		configChanged.fire({ affectsConfiguration: section => section === 'editor.fontSize' });
+		configChanged.fire({ affectsConfiguration: section => section === 'workbench.list' });
+		configChanged.fire({ affectsConfiguration: section => section === 'window.zoomLevel' });
+		assert.deepStrictEqual(scrolls(), [
+			[page(1), { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1 }],
+			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2 }],
+			[page(1), { sensitivity: 2, fastSensitivity: 3, smooth: true, zoomFactor: 1.2 }]
+		]);
+	});
+
 	test('a message of an unknown type, without a field its type has, with a field of the wrong type or any other field is refused and logged, and nothing is done (PANEL-3.2)', async () => {
 		await say({ type: 'ready', page: page(1) });
 		const refused = [
 			{ type: 'navigate', page: page(1), url: 'command:workbench.action.reloadWindow' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'open' },
-			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'rename', target: '1' },
+			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'rename' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'new', target: '1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'resume' },
-			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'clearFilter' },
+			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'clearFilter', target: '1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'deleteWorktree' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'open', revision: 1, target: '1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'open', target: '1', args: { agent: '2' } },
@@ -136,12 +156,12 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	test('what the person did on the page goes to the panel\'s actions with its card\'s run, and its outcome back to that page under its action ID (PANEL-1.2, 3.1)', async () => {
 		await say({ type: 'ready', page: page(1) });
 		answer = async () => acts.length === 1 ? 'gone' : undefined;
-		for (const [what, target] of [['open', 'run-2'], ['new'], ['openFolder']]) {
+		for (const [what, target] of [['open', 'run-2'], ['new'], ['clearFilter'], ['openFolder'], ['rename', 'run-3']]) {
 			await say({ type: 'act', page: page(1), action: `${page(1)}-${what}`, what, ...target ? { target } : {} });
 		}
-		assert.deepStrictEqual(acts, [['open', 'run-2'], ['new', undefined], ['openFolder', undefined]]);
+		assert.deepStrictEqual(acts, [['open', 'run-2'], ['new', undefined], ['clearFilter', undefined], ['openFolder', undefined], ['rename', 'run-3']]);
 		assert.deepStrictEqual(posted.filter(message => message.type === 'outcome').map(({ action, ok, reason }) => [action, ok, reason]), [
-			[`${page(1)}-open`, false, 'gone'], [`${page(1)}-new`, true, undefined], [`${page(1)}-openFolder`, true, undefined]
+			[`${page(1)}-open`, false, 'gone'], [`${page(1)}-new`, true, undefined], [`${page(1)}-clearFilter`, true, undefined], [`${page(1)}-openFolder`, true, undefined], [`${page(1)}-rename`, true, undefined]
 		]);
 	});
 
@@ -174,10 +194,10 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.deepStrictEqual([late, posted.filter(message => message.type === 'outcome')], [[], [{ type: 'outcome', page: page(2), action: `${page(2)}-1`, ok: false, reason: 'failed' }]]);
 	});
 
-	test('PANEL-1.1, UX-3.2: the badge counts every card - none at zero - the view has no description, and the context keys come from the same state', async () => {
+	test('PANEL-1.1, 2.3, UX-3.2: the badge counts every card - none at zero - the description names the filter, and the context keys come from the same state', async () => {
 		const badges = [view.badge];
 		front = { run: 'run-1', ended: true };
-		await update(stateOf(2, { cardCount: 1, capabilities: { remote: true } }));
+		await update(stateOf(2, { cardCount: 1, filter: { kind: 'location', id: 'loc-1', label: 'shop · main' }, capabilities: { remote: true } }));
 		badges.push(view.badge);
 		const selected = [view.description, { ...contexts }];
 		front = undefined;
@@ -185,9 +205,9 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		badges.push(view.badge);
 		assert.deepStrictEqual([badges, selected, view.description, contexts], [
 			[{ value: 2, tooltip: '2 agents' }, { value: 1, tooltip: '1 agent' }, undefined],
-			[undefined, { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true }],
+			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.filtered': true }],
 			undefined,
-			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false }
+			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.filtered': false }
 		]);
 	});
 

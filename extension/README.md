@@ -31,7 +31,7 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 
 **Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your computer for local folders, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): agents also start with 1.x (`opencode-ai`), but their status dot stays red because 1.x does not report its activity. Git is required if you use worktrees.
 
-**Agents run without approval prompts by default.** With `facade.yolo` on, the default, agents can run commands and change files without asking first. Turn it off to use each CLI's normal approvals and supported sandbox; the change applies to agents you start afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. **Configure Agents...** in the panel's `...` menu opens the settings. Facade also trusts the folder an agent starts in, as you would by accepting the CLI's own trust question. With `facade.yolo` on, agents can also stop, message and type into every agent in your Facade windows.
+**Agents run without approval prompts by default.** With `facade.yolo` on, the default, agents can run commands and change files without asking first. Turn it off to use each CLI's normal approvals and supported sandbox; the change applies to agents you start afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. **Configure Agents...** in the panel's `...` menu opens the settings. Facade also trusts the folder an agent starts in, as you would by accepting the CLI's own trust question. With `facade.yolo` on, agents can also stop, message and type into every agent in your Facade windows. A custom CLI is the exception to the launch mapping and folder trust: `facade.yolo` does not change how it starts, and Facade gives it no folder trust.
 
 ## Quick Start
 
@@ -54,8 +54,9 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 - **Cards**: Each card shows the agent's name, where it works and what its CLI reports. The dot is green while the agent is starting or working, yellow when it is idle, waiting for input, permission or sign-in, and red for an error or when its activity is unavailable. See [`PANEL.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/PANEL.md).
 - **Card actions**: Rename Agent..., Copy Agent Reference, Move Up, Move Down and Close Agent, from each card's context menu.
 - **A terminal for each agent**: Every agent runs in its own editor terminal. Closing a running agent's terminal asks first; Cancel keeps the agent running and opens its terminal again. See [`LIFECYCLE.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/LIFECYCLE.md).
-- **Filter, Pin and Resume** *(Under development)*: Filter the cards, pin an agent so its conversation returns when you reopen the window, and resume a saved conversation in its original CLI and folder.
-- **Show Agent Launch and Show Agents Log** *(Under development)*: See how an agent was started, and Facade's own log.
+- **Filter**: Show only the agents in one working location or workspace folder with **Filter by Working Location...** in the panel's title bar, or with **Filter by This Location** or **Filter by This Folder** in a card's context menu. **Clear Filter** shows every agent again; the panel's badge always counts them all.
+- **Pin and Resume** *(Under development)*: Pin an agent so its conversation returns when you reopen the window, and resume a saved conversation in its original CLI and folder.
+- **Show Agent Launch and Show Agents Log**: In the Command Palette. **Show Agent Launch** shows how each CLI would start in a working location - its program, environment, arguments, YOLO, sandbox, approvals and folder trust - without starting it, with secrets hidden. **Show Agents Log** opens Facade's own log.
 
 ### Folders and worktrees
 
@@ -68,6 +69,11 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 - **Reloads and workspace changes**: Agents keep running when the window reloads, when the extension host restarts, when a folder window becomes a multi-root workspace, and after **Save Workspace As...**.
 - **Remote - SSH**: Agents run on the remote host, with the CLIs and accounts there. Facade names the environment as VS Code does, for example `SSH: my-server`.
 - **Exits**: An agent whose CLI exits normally leaves the panel; one that exits abnormally keeps a red card until you close it.
+
+### More CLIs
+
+- **Custom CLIs**: Add any interactive CLI in `facade.custom`: its program, the arguments for a new conversation, and the arguments that resume one by its session ID. The resume arguments are required, although Resume itself is still under development. **New Agent** offers it after the built-in CLIs, and its cards show the first letter of its ID in place of a logo. Facade passes its arguments exactly as written: `facade.yolo` does not change them, and Facade adds no sandbox or folder trust. See [`CLIS.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/engineering/CLIS.md).
+- **Qwen Code** *(Under development)*: Qwen Code as a built-in CLI.
 
 ### A team that works together
 
@@ -83,11 +89,6 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 - **Antigravity's first turn**: Antigravity loads Facade's tools only once it is in use. Facade opens and closes its MCP list right after it starts, so that its first task can already use them.
 - **Trusting the folder**: So that an agent starts without its CLI's trust question, Facade trusts the folder it starts in, as you would by answering that question: for that start alone with Codex, Muse Code and Pi, and in the CLI's own settings with Claude Code and Antigravity. It never trusts your home folder, a folder above it or a drive's root for Claude Code, which would trust every folder below; Claude Code asks there as usual.
 - **Copy Diagnostics**: To report a problem, run **Facade Code: Copy Diagnostics** from the Command Palette. It copies the versions, your agents with the last lines of their terminals, and Facade's log. Nothing is sent anywhere; read it before you share it, since terminals can show code or keys.
-
-### More CLIs *(Under development)*
-
-- **Qwen Code and your own CLIs**: Qwen Code as a built-in CLI, and CLIs you add yourself.
-- **Per-CLI settings**: Turn a CLI off, and set its launch arguments and environment.
 
 ### Languages
 
@@ -128,8 +129,19 @@ Facade runs the infrastructure, the CLIs do the work, and you decide the goals a
 | `facade.muse.path` | Empty | Path to Muse Code. Leave empty to use `muse` from the terminal environment's PATH. |
 | `facade.opencode.path` | Empty | Path to OpenCode. Leave empty to use `opencode` from the terminal environment's PATH. |
 | `facade.pi.path` | Empty | Path to Pi. Leave empty to use `pi` from the terminal environment's PATH. |
+| `facade.<cli>.enabled` | On | Controls whether the CLI is offered for new agents. Turning it off does not stop agents that are running. |
+| `facade.<cli>.launch` | `{}` | Advanced: additional command-line `arguments` and `environment` variables for the CLI. **Show Agent Launch** shows what each agent starts with. |
+| `facade.custom` | `{}` | Your own CLIs, by ID, each with a `path` and a `launch`: `start` for a new conversation, `resume` for a saved one (required; it must contain `${sessionId}`), and `environment`. An ID cannot be a built-in one: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi`. |
 
-These are machine settings: for a remote window, set them in the remote host's settings.
+`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. These are machine settings: for a remote window, set them in the remote host's settings.
+
+For example, a CLI started as `my-cli --fast` and resumed as `my-cli resume <session ID>`:
+
+```json
+"facade.custom": {
+  "my-cli": { "path": "my-cli", "launch": { "start": ["--fast"], "resume": ["resume", "${sessionId}"] } }
+}
+```
 
 ## Status and Known Limitations
 
@@ -140,6 +152,7 @@ These are machine settings: for a remote window, set them in the remote host's s
 - **Updating from 0.0.1**: Agents started before the update keep running. They open in their own terminals, without cards, and cannot use the new features.
 - **Remote - SSH reconnects**: If VS Code stops reconnecting to an SSH host and asks you to reload the window, reload it once the network is back. The agents keep running on the host, and the reloaded window shows them again.
 - **Closing a window**: Facade ends a window's agents five minutes after that window's extension host disconnects and nothing reconnects, for example after you close the window.
+- **Custom CLIs**: Facade knows a custom CLI's activity only if the CLI reports it in its terminal with OSC 7501 sequences, as the built-in CLIs do. Otherwise the agent still starts and works, but its dot turns red with *Activity unavailable* 20 seconds after it starts.
 
 ## Building from Source
 

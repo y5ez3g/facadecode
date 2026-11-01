@@ -53,6 +53,8 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.deepStrictEqual(targetOf('claude', cwd, env), { file: path.join(home, '.claude.json'), keys: ['projects', cwd, 'hasTrustDialogAccepted'], entry: { value: true }, folder: cwd });
 		const config = path.join(temp.dir, 'claude-config');
 		assert.strictEqual(targetOf('claude', cwd, { ...env, CLAUDE_CONFIG_DIR: config }).file, path.join(config, '.claude.json'));
+		// A relative one is from the folder Claude Code starts in, as it reads it there - not the editor's own folder
+		assert.strictEqual(targetOf('claude', cwd, { ...env, CLAUDE_CONFIG_DIR: 'local-claude' }).file, path.join(cwd, 'local-claude', '.claude.json'));
 		assert.strictEqual(claudeConfigFile({ ...env, CLAUDE_CODE_CUSTOM_OAUTH_URL: 'https://login.example' }, 'darwin'), path.join(home, '.claude-custom-oauth.json'));
 		assert.strictEqual(claudeConfigFile({ USERPROFILE: home }, 'win32'), path.join(home, '.claude.json'));
 		// An older version's file counts where it holds something, or where it is empty, may be written and the current one is not there
@@ -66,7 +68,7 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.strictEqual(claudeConfigFile(env, 'darwin'), path.join(home, '.claude.json'));
 	});
 
-	test('Claude Code\'s trust is never written for the home folder, a folder above it or a filesystem root: it would trust every project there (D97)', () => {
+	test('Claude Code\'s trust is never written for the home folder, a folder above it or a filesystem root: it would trust every project there (D103)', () => {
 		fs.writeFileSync(path.join(home, '.claude.json'), '{}');
 		// Real paths of this computer, as Claude Code names its project folders; the home folder named through a link is the same folder
 		const real = canonicalFolder(home);
@@ -139,7 +141,7 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		fs.chmodSync(file, 0o640);
 		assert.strictEqual(writeTrust('Claude Code', target), `Trusted ${cwd} for Claude Code: merged ${JSON.stringify({ projects: { [cwd]: { hasTrustDialogAccepted: true } } })} into ${file}.`);
 		assert.deepStrictEqual([JSON.parse(fs.readFileSync(file, 'utf8')), process.platform === 'win32' || (fs.statSync(file).mode & 0o777) === 0o640], [{ projects: { [cwd]: { hasTrustDialogAccepted: true } } }, true]);
-		// One that is not there is not made (D97)
+		// One that is not there is not made (D103)
 		fs.rmSync(file);
 		assert.deepStrictEqual([mergeTrust(target), fs.readdirSync(home)], [{ kind: 'missing' }, []]);
 	});
@@ -216,7 +218,7 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 	test('a list entry: the folder added at the end of the list at its keys as the file is written - made where there is none, a null taken for nothing - and nothing written where it is there', () => {
 		const file = path.join(home, 'settings.json');
 		const target: TrustTarget = { file, keys: ['trustedWorkspaces'], entry: { item: cwd }, folder: cwd };
-		// A file the CLI has not made is not made for it, nor a lock beside it: the CLI asks (D97)
+		// A file the CLI has not made is not made for it, nor a lock beside it: the CLI asks (D103)
 		assert.deepStrictEqual([mergeTrust(target), fs.readdirSync(home)], [{ kind: 'missing' }, []]);
 		assert.strictEqual(writeTrust('Antigravity', target), `Did not trust ${cwd} for Antigravity: ${file} does not exist, and Facade makes no file of Antigravity's; Antigravity asks in its terminal.`);
 		fs.writeFileSync(file, '{}\n');
@@ -312,7 +314,7 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		destination.host.CODEX_HOME = home;
 		const log: string[] = [];
 		const planner = clis(log);
-		assert.deepStrictEqual((await planner.list(location)).map(cli => [cli.id, cli.available]), [['claude', true], ['codex', true], ['agy', false], ['muse', false], ['opencode', false], ['pi', false]]);
+		assert.deepStrictEqual((await planner.list(location)).clis.map(cli => [cli.id, cli.available]), [['claude', true], ['codex', true], ['agy', false], ['muse', false], ['opencode', false], ['pi', false]]);
 		const planned = await planner.plan(request('codex', 'codex-1'));
 		assert.strictEqual(planned.cli, 'codex');
 		assert.strictEqual(planned.env.CODEX_HOME, home);
@@ -332,7 +334,7 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3, 
 		// Again: there already, nothing written or said
 		await planner.plan(request('claude', 'run-2'));
 		assert.strictEqual(log.length, 1);
-		// Where the folder's terminal environment puts Claude Code's configuration - which it has not made yet: none is made (D97)
+		// Where the folder's terminal environment puts Claude Code's configuration - which it has not made yet: none is made (D103)
 		const config = path.join(temp.dir, 'claude-config');
 		destination = { ...destination, terminal: { CLAUDE_CONFIG_DIR: config } };
 		await planner.plan(request('claude', 'run-3'));

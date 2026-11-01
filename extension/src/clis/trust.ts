@@ -5,8 +5,8 @@
 // The trust a CLI keeps in a file of its own (CLIS-3.3, D62): the folder a run starts in is trusted as the person trusts it by
 // accepting the CLI's question - the CLI's own entry merged into the CLI's own file as the CLI writes it, under the lock the CLI
 // takes, every other byte of the file kept - and nothing else of the file is touched. An entry already there writes nothing. A file
-// that cannot be read, or not as the CLI writes it, is left as it is, and one the CLI has not made is not made for it (D97): the
-// CLI then asks in its terminal. So it does for a folder whose trust would cover far more than it (D97). The entry stays, as the
+// that cannot be read, or not as the CLI writes it, is left as it is, and one the CLI has not made is not made for it (D103): the
+// CLI then asks in its terminal. So it does for a folder whose trust would cover far more than it (D103). The entry stays, as the
 // person's own answer would: it is theirs to take out.
 
 import * as fs from 'fs';
@@ -26,7 +26,7 @@ export interface TrustTarget {
 	readonly entry: { readonly value: boolean } | { readonly item: string };
 	/** The folder trusted, as the CLI names it. */
 	readonly folder: string;
-	/** Why no trust is written for this folder: the CLI's trust would cover far more than it (D97). */
+	/** Why no trust is written for this folder: the CLI's trust would cover far more than it (D103). */
 	readonly withheld?: string;
 }
 
@@ -59,8 +59,8 @@ export function trustEntryJson(target: TrustTarget): JsonObject {
 /**
  * Merges `target`'s entry into its file (CLIS-3.3, D62) under `lock` - the CLI's own, `<file>.lock`, which `withFileLock` waits for
  * as Claude Code takes it - so that what the CLI writes meanwhile is read again and kept. A file that is not there is not made,
- * nor is the lock taken beside it (D97); one that cannot be read, is no JSON object or has something of another kind where the
- * entry goes is left as it is. A withheld folder is not trusted (D97). Throws where the lock or the write fails.
+ * nor is the lock taken beside it (D103); one that cannot be read, is no JSON object or has something of another kind where the
+ * entry goes is left as it is. A withheld folder is not trusted (D103). Throws where the lock or the write fails.
  */
 export function mergeTrust(target: TrustTarget, lock: FileLock = withFileLock): TrustOutcome {
 	if (target.withheld !== undefined) {

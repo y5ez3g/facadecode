@@ -21,7 +21,7 @@ const RUNTIME_REFERENCE = 'FACADE_ELECTRON_RUN_AS_NODE';
  * through cmd.exe, which cannot carry an entry's JSON: there the entry is the `facade` entry of the project's `.mcp.json`, merged
  * into the person's file and shared by the folder's runs, its variables `${NAME:-}` references - empty in a session the person
  * starts there by hand, whose server then serves nothing, where an unset reference would turn off every server of theirs. Either
- * entry is optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (D101).
+ * entry is optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (D107).
  */
 const museTools: ToolsIntegration = {
 	capability: { state: 'unverified', reason: 'the server by -c mcpServers.facade for the run alone - on Windows a facade entry merged into the project\'s .mcp.json, shared by the folder\'s runs - with references to the run\'s variables in the CLI\'s environment, and the skill in the project\'s .agents/skills/facade' },
@@ -74,11 +74,13 @@ export const museAdapter: CliAdapter = {
 	}),
 	tools: museTools,
 	initialPrompt: { state: 'unverified', reason: 'the prompt as its positional argument after --, which starts the interactive session with it' },
-	// 1.4.14 reads a prompt that is one of its commands' names as that command, even after --, and refuses to start (D101)
+	// 1.4.14 reads a prompt that is one of its commands' names as that command, even after --, and refuses to start (D107)
 	promptProblem: prompt => /^[a-z][a-z0-9-]*$/.test(prompt) ? 'Muse Code reads a prompt of one lowercase word as one of its commands, even after --' : undefined,
 	screenStatus: 'muse',
 	// Its input, recorded on macOS with Muse Code 1.4.14 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'muse-frame', evidence: 'its input frame between two rules, its upper one labeled where it offers voice input: empty, a typed, pasted, multi-line, history or slash-command draft, and gone behind its trust question' },
 	title: { names: ['Muse Code', 'Muse', 'muse'] },
+	sandbox: yolo => yolo ? { state: 'off', by: ['--disable-sandbox'] } : { state: 'native' },
+	approvals: yolo => yolo ? { state: 'bypassed', by: ['--disable-approval'] } : { state: 'native' },
 	interruptExit: sigintExit
 };

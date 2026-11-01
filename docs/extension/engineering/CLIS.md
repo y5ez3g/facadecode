@@ -15,7 +15,7 @@ dated observations; an old probe is not current-platform certification.
 
 ### 1.1 CLI catalog
 
-**Built-ins are discovered in the destination execution environment.**
+**Built-ins and configured custom CLIs are discovered in the destination execution environment.**
 
 | Display name | API ID | Executable | Setting segment |
 | --- | --- | --- | --- |
@@ -26,9 +26,10 @@ dated observations; an old probe is not current-platform certification.
 | OpenCode | `opencode` | `opencode` | `opencode` |
 | Pi | `pi` | `pi` | `pi` |
 
-Use this order. Step 1 offers every installed built-in; `.enabled` joins with its later step. Recompute on relevant
-settings/PATH changes, picker/discovery request, and immediately before launch. Discovery inspects files/configuration
-without invoking a model, logging in, installing/updating a CLI, or modifying settings.
+Use this order, then custom entries in configuration order. `.enabled:false` hides a built-in from new starts, never
+stops its runs. Recompute on relevant settings/PATH changes, picker/discovery request, and immediately before launch.
+Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or modifying
+settings.
 
 ### 1.2 Executable and environment
 
@@ -53,7 +54,10 @@ launchers: start what a verified launcher runs, using an argument array - npm's 
 that script with Node, its shim for a native program runs that program, and a CLI's own installer launcher runs what
 its adapter verified (the `pi.cmd` Pi's own installer writes: its `pi-launcher.js` with Node); otherwise a dedicated, tested cmd.exe
 quoting adapter passes every argument safely. Reject unsupported quoting/control characters before execution, never build an
-unescaped shell string. PATH discovery and effective launch must agree. Checks requiring a new worktree's actual cwd
+unescaped shell string. cmd.exe starts in no UNC folder - a network share's, a WSL distribution's `\\wsl$` one - but in
+the Windows directory, so a launch through it from such a folder is refused before execution. On Windows, which cannot
+run a script itself, a `.js`, `.cjs` or `.mjs` program - the Node entry point those refusals advise - runs with the Node
+on the launch's PATH; with none there it is refused. PATH discovery and effective launch must agree. Checks requiring a new worktree's actual cwd
 follow the validation stages in 4.2.
 
 ### 1.3 Permissions and native CLI interaction
@@ -89,8 +93,9 @@ Startup discovery includes previously successful model/effort values for that CL
 catalog, labeled complete/partial/unknown with its source. Past success is a useful choice, not a promise of current
 availability or an exhaustive allowlist. Do not invent model IDs or require not_applicable placeholder objects.
 An explicit model or effort in a `start_agent` call is passed through the CLI's own option for this launch only. An
-omitted field adds no override: the CLI's native default or saved session state applies. When `.launch` arguments join
-in a later step, the call's explicit choice takes precedence over the same choice there. Versioned adapters map these
+omitted field adds no override: the CLI's native default or saved session state applies. The call's explicit choice
+takes precedence over the matching mapped option in `.launch.arguments`; remove that configured option and its value
+before adding the explicit choice, preserving other literal arguments and unrelated configuration keys. Versioned adapters map these
 choices to their CLI argument/configuration mechanism and report requested versus observed values separately. An
 ignored override is not verified success. Do not track every in-CLI change to reconstruct session settings. Previously
 observed choices remain discovery/display facts, not restore inputs. Claude Code, Antigravity and Pi take `--model` and
@@ -119,15 +124,15 @@ the reader does not recognize is unknown: nothing is typed, and the message fail
 naming the CLI and the version Facade found. The version is recorded as a diagnostic, never as a gate. A CLI without an
 input reader fails ordinary messages at once with `unsupported`. Readers are tested against recorded screens of real
 CLI versions; a changed layout becomes a new recorded case, and a reader never guesses an empty input from a layout it
-does not recognize (D83). `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed, and
+does not recognize (D89). `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed, and
 pasted text, messages, Chinese and emoji, a hundred-line message, and Claude Code's lead - without submitting anything, and
 checks each reader and its own-draft recognition against what it drew; it is run once a CLI updates, and the screens it
-saves, each paste's text kept with its screen, become recorded cases (D106). In a terminal 24 rows high, as an editor's
+saves, each paste's text kept with its screen, become recorded cases (D112). In a terminal 24 rows high, as an editor's
 panel may be, Antigravity and Pi scroll a draft taller than their input box, Antigravity marking it with `↑ 1 more lines`
 first in the box and Pi in its upper rule, `─── ↑ 2 more ───`: their readers say how many rows are out of sight above and
 below, apart from the draft, and a draft whose end in sight is the message's end, nothing being out of sight below, is the
 message's own. Pi draws a paste of ten lines or fewer and more than 1,000 characters as `[paste #1 1284 chars]`, counting
-a tab as four (D112). Codex 0.166.0 draws a status at the right
+a tab as four (D118). Codex 0.166.0 draws a status at the right
 end of its hints row, `⚠ 1 warning · f2 to view`, alone there while a draft hides the hints, when `-c` overrides run it
 outside its background server: Facade starts it with `--no-daemon`, and its reader takes that row either way.
 
@@ -136,10 +141,10 @@ placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N l
 first, Antigravity's `[Pasted text #1 +N lines]` and Pi's `[paste #1 +N lines]` counting every line, Codex's and Muse
 Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lines on. That text is compared, never
 logged. A message's lead, where its CLI takes one (COLLABORATION-2.1), is typed ahead of the paste in the same write, and
-the draft is the message's own with it, or without it where an older ptyd typed none (D102). Use complete paste plus Enter
+the draft is the message's own with it, or without it where an older ptyd typed none (D108). Use complete paste plus Enter
 for ordinary messages: Enter only once the input holds the message's own draft and
 the CLI has had the time a paste of that size takes - its bytes at 4 KB a millisecond, ConPTY's 64 bytes on Windows, and
-45 ms a line more for Antigravity, which takes seconds to expand a long paste, as Orca measured (D99) - and delivery
+45 ms a line more for Antigravity, which takes seconds to expand a long paste, as Orca measured (D105) - and delivery
 confirmed once the input box is empty again. State actual full/partial/unknown effects. A later attempt never types the
 text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require a reconciliation API.
 An unknown version still starts its terminal, and its activity can still be verified per run under 2.3. Unproved
@@ -150,7 +155,7 @@ capabilities on its stated platform.
 
 **Use per-run launch files first; write project files only where the CLI requires them and preserve user content.**
 
-Each built-in receives the `facade` server, the skill and an approval of Facade's own tools as its CLI takes them (D94):
+Each built-in receives the `facade` server, the skill and an approval of Facade's own tools as its CLI takes them (D100):
 
 | CLI | Server | Skill | Facade's tools without asking |
 | --- | --- | --- | --- |
@@ -162,7 +167,7 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
 
 These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
-RULES-4.3 chose (D84). An entry shared by a folder's runs holds no run's identity: the run's variables reach the server
+RULES-4.3 chose (D90). An entry shared by a folder's runs holds no run's identity: the run's variables reach the server
 through the CLI's environment. Muse Code's own entry names its variables only by references to that environment; its
 arguments pass through cmd.exe on Windows, which cannot carry a server's JSON, so there its entry is a project file, its
 references `${NAME:-}`, empty in a session the person starts there by hand, whose server then offers no tools - an unset
@@ -175,9 +180,9 @@ with its first turn, which is planned before they connect, or with its MCP panel
 panel before the first turn (COLLABORATION-2.2), and the server marks its tools for Antigravity to give the model
 directly. The server is never declared required, so a CLI whose Facade server fails still starts and stays usable: Muse
 Code requires a server unless its entry says `"mode": "optional"`, and fails a whole run over a required one that does not
-start, so its entry says so (D101). Codex
+start, so its entry says so (D107). Codex
 waits up to 10 s for its optional servers before its first model request, so a server that starts slowly still serves the
-first turn (D95). The server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
+first turn (D101). The server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
 orchestration is off, inject no Facade server, skill or approval into that new process.
 
 Before a project write, snapshot exact original bytes/existence, lock the path across runs, merge only owned content,
@@ -227,9 +232,6 @@ wide-character/wrapped-line reading and bracketed paste modes are verified per t
 
 **Expose executable paths, literal arguments and environment values; keep vendor integration inside adapters.**
 
-Step 1 has `.path` alone; the `.launch` schema below joins with its later step, and until then a launch uses its
-adapter's invocation and 1.2's environment.
-
 Built-in `.path` follows 1.2; `.launch` defaults to `{}` and accepts only:
 
 | Field | Shape / default |
@@ -239,8 +241,12 @@ Built-in `.path` follows 1.2; `.launch` defaults to `{}` and accepts only:
 
 Arrays are replaced as a whole, not merged by named groups. There is no public argument-group/template engine,
 deep-merged native settings object, generic trust-file merge, unattended overlay, taskDelay or enterDelay setting.
-Invalid or retired fields report their setting path; do not silently translate ambiguous old configuration. Preserve the
-user's values so they can correct them. Running processes keep their actual plan.
+Custom start/Resume argument templates are the limited exception defined in 3.4. Invalid or retired fields report their
+setting path; do not silently translate ambiguous old configuration. Preserve the user's values so they can correct
+them. An argument that repeats an option the adapter sets itself - its run settings or its YOLO mapping in either mode -
+is a configuration error naming its place in `arguments`: the CLI would take the person's value in place of Facade's
+(RULES-4.3). A problem names a received value by its JSON type, never the value, which may be a secret. Running
+processes keep their actual plan.
 
 ### 3.2 Adapter-owned invocation
 
@@ -257,14 +263,14 @@ delays are internal adapter details only where required by its protocol.
 Each adapter declares its maintained native interactive prompt-argument mapping, if it has one; COLLABORATION-2.2 owns
 native/post-start prompt selection and its deadline start. Claude Code, Codex, Muse Code and Pi take the prompt as a
 positional argument after the end of options - Pi's unless it starts with `@`, which it reads as a file to attach, and Muse
-Code's unless it is one lowercase word, which it reads as one of its commands even there and refuses to start (D101) - and
+Code's unless it is one lowercase word, which it reads as one of its commands even there and refuses to start (D107) - and
 OpenCode as the value of `--prompt` unless it starts with `-`; this mapping is used while unverified and reports that
 state (Dots D49). Antigravity's first task goes after what its start types before the first turn (COLLABORATION-2.2),
 as its first message. Do not wait for MCP or activity idle beyond that, send a confirmed prompt twice or synthesize a
 prompt to make MCP appear connected.
 
 A CLI whose startup update prompt would hold back the first task it is given starts without that prompt in Facade's
-launches: Codex with `-c check_for_update_on_startup=false` (D95). The other built-ins update in the background or only
+launches: Codex with `-c check_for_update_on_startup=false` (D101). The other built-ins update in the background or only
 note a new version, and keep that behavior.
 
 ### 3.3 Native configuration and trust
@@ -281,13 +287,59 @@ in its global configuration; Antigravity `trustedWorkspaces` with the folder, sp
 working directory, in `~/.gemini/antigravity-cli/settings.json`). OpenCode asks no trust question and is given none.
 A file that cannot be read, or that does not exist, is left as it is and the CLI asks in its terminal. Claude Code's trust
 covers every folder below a trusted one, so it is never written for the home folder, a folder above it or a filesystem
-root; that CLI asks in its terminal there too (D97). Native login and permission interactions remain in the terminal.
+root; that CLI asks in its terminal there too (D103). Native login and permission interactions remain in the terminal.
 
 Keep administrator settings and user deny policies effective according to verified native precedence. If effective
 native settings are unknown, report that fact instead of claiming trust or sandbox evidence. Test isolation remains
 ARCHITECTURE-5's separate concern.
 
+### 3.4 Custom CLIs
+
+**A custom CLI definition requires an explicit exact-session Resume command before it can be used.**
+
+Under `facade.custom`, map a unique custom CLI key to `{path, launch}`. Do not shadow built-in IDs;
+CLI registry keys are distinct from agent display names. A key names its CLI wherever CLIs are listed, so it has a
+visible character and no control character; a key that cannot be an ID is a configuration error that defines no CLI.
+`path` is a required nonempty string resolved under 1.2. Custom `launch` accepts:
+
+| Field | Shape / meaning |
+| --- | --- |
+| start | `string[]`, default `[]`; arguments for a new interactive conversation |
+| resume | Required nonempty `string[]`; exact-session arguments containing `${sessionId}` |
+| environment | Map of string/null values, default `{}`; follows 1.2 |
+
+Both commands use `path` as the executable in the selected working location; Resume uses the conversation's original
+cwd and replaces the start arguments.
+Substitute the exact session ID once as literal argument data; `${sessionId}` is the only custom argument placeholder.
+Do not invoke a shell or expand integration/configuration variables. A wrapper executable can handle a CLI with a
+different command structure. For example, `{"path":"my-cli","launch":{"start":[],"resume":["resume","${sessionId}"]}}`.
+Missing/empty Resume or a command without the exact-session placeholder is a configuration error, not an accepted
+interactive-only definition. No YOLO mapping and no implicit model, effort, prompt or resume flags are invented:
+`facade.yolo` leaves a custom launch as configured, and Show Agent Launch says so, reporting its sandbox and approvals
+as unknown to Facade and that Facade gives it no trust (3.3).
+
+Capabilities such as activity reporting are what the shipped adapter proves under 2.1 and 2.3, not configured by the
+user. There is no `capabilities` field in a custom definition. An interactive CLI without runtime capability proofs
+can still start and accept direct terminal control after its definition passes validation; unproved capabilities
+remain unavailable. A Resume command is necessary but does not prove session discovery/identity or successful
+restoration; the definition requirement never becomes a claim that an untested integration works.
+
 ## 4 Inspection and design
+
+### 4.1 Show Agent Launch
+
+**Show Agent Launch displays the current effective configuration and actual known choices without running a CLI.**
+
+Show executable/environment source, cwd, literal argument order, resulting YOLO, native sandbox/approval facts, how
+the folder is trusted and configuration errors. Use one launch configuration and RULES-4.3's YOLO source. A chosen
+inspection location is not an API launch default. Redact account secrets and sensitive environment values; do not
+invent invalid-plan defaults. Where CLIS-3.3 withholds trust for a broad folder, say no trust is given instead of
+claiming an entry will be written. The document does not certify observed behavior of a process never started.
+
+Its location is the one a `{ location_id }` names, the window's only one, or the person's choice in native steps by
+folder that offer locations alone (D84): in a window of several folders, the folders, as Change Working Location lists
+them (LIFECYCLE-1.3) - one with a single location choosing it, one with more opening its own step of them; in a window
+of one folder, its locations. Locations come main checkout first (WORKTREES-1.2), and no separator divides them.
 
 ### 4.2 Adapter ownership and files
 
@@ -339,29 +391,41 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 | --- | --- |
 | 1.1–1.4 | Each built-in's destination discovery, unknown-version launch, matching profile/PATH/env/quoting, Windows launcher recognition, native permission mapping, explicit per-call model/effort and native defaults |
 | 2.1–2.3 | Adapter evidence, layout-based input readers on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, pre-approved Facade tools, optional server, owned-file cleanup, startup until the first activity or its bound - a reload too - then red unknown, title sanitizing for each built-in's titles, Muse Code's screen reader on its fixtures and its reports' precedence |
-| 3.1–3.3 | Minimal argument/env schema, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
-| 4.2 | Staged cwd validation; version invalidation |
+| 3.1–3.4 | `.enabled` affects new starts only, custom CLIs require Resume without capability declarations, minimal argument/env schema, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
+| 4.1–4.2 | Show Agent Launch describes and redacts the configured launch; staged cwd validation; version invalidation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes, no claims inferred from historical tables |
 
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
 
-- 2026-10-31: 2.1 reads Antigravity's and Pi's scrolled drafts and Pi's `[paste #N C chars]` (D112).
+- 2026-10-31: 2.1 reads Antigravity's and Pi's scrolled drafts and Pi's `[paste #N C chars]` (D118).
 - 2026-10-31: 2.1 records input boxes with `scripts/capture-inputs.mjs`, and reads Codex 0.166.0's status at the end of its
-  hints row; Codex always runs embedded (D106).
-- 2026-10-31: 2.2 makes Muse Code's Facade server optional, and 3.2 gives it a one-word first task after startup (D101).
+  hints row; Codex always runs embedded (D112).
+- 2026-10-31: 2.2 makes Muse Code's Facade server optional, and 3.2 gives it a one-word first task after startup (D107).
 - 2026-10-31: 2.1's readers report a draft's text or its CLI's paste placeholder, so that a delivery knows its own;
-  Enter waits for a paste of its size and is pressed again only over that draft (D98, D99).
+  Enter waits for a paste of its size and is pressed again only over that draft (D104, D105).
 - 2026-10-31: 2.2 has Codex wait for its optional MCP servers before its first turn and 3.2 starts it without its
-  update prompt (D95); 3.3 writes no trust for a home folder, a folder above it or a root, nor into a missing file (D97).
-- 2026-10-31: Antigravity, Muse Code, OpenCode and Pi are given the Facade tools (D91, D94): 1.4 says each built-in's
+  update prompt (D101); 3.3 writes no trust for a home folder, a folder above it or a root, nor into a missing file (D103).
+- 2026-10-31: Antigravity, Muse Code, OpenCode and Pi are given the Facade tools (D97, D100): 1.4 says each built-in's
   model and effort options, 2.1 their input readers - a box, a placeholder known by its words, a CLI's own drawn cursor -
   and 2.2 how each receives the server, the skill and the approval of Facade's own tools.
 - 2026-10-30: Step 2 of the Facade Code extension: 1.3 and 2.2 pre-approve Facade's own tools in both YOLO modes and
-  never require the server (D84); 1.4 carries model/effort for `start_agent` (D91); 2.1 adds input readers that recognize
-  the input box by layout and attempt every version instead of Facade Dots' version list (D83); 2.2 and 3.2 add the
+  never require the server (D90); 1.4 carries model/effort for `start_agent` (D97); 2.1 adds input readers that recognize
+  the input box by layout and attempt every version instead of Facade Dots' version list (D89); 2.2 and 3.2 add the
   Claude Code and Codex Facade files and the native prompt mapping; 5.1 records which layouts still need recording.
+- 2026-10-31: 1.2 refuses a launch through cmd.exe from a UNC folder, where cmd.exe ran the CLI in the Windows directory
+  with the run's permissions - Muse Code's launcher always goes through it - and runs a Node entry point with Node on
+  Windows, where the program the refusals advise failed to start. Both found by the night verification.
+- 2026-10-31: 4.1 chooses its location in native steps by folder, as Change Working Location does (D84).
+
+- 2026-10-31: 1.1 lists configured custom CLIs after the built-ins; 3.1 names 3.4's templates as its exception; 3.4
+  Custom CLIs, carried from the Facade Dots specification under `facade.custom`, with the capabilities of later steps
+  left out; a key needs a visible character and no control character.
+
+- 2026-10-30: 1.1 adds `.enabled`, 3.1 the `.launch` arguments and environment, and 4.1 Show Agent Launch, carried
+  from the Facade Dots specification without the parts of later steps (model and effort, MCP, sessions and input). 3.1
+  refuses an argument repeating an option the adapter sets, and names a received value by its type alone.
 
 - 2026-10-30: At the owner's request, Antigravity, Muse Code, OpenCode and Pi join the built-in catalog at the level of
   Claude Code and Codex (D77): 1.1's catalog, 1.2's Windows launchers - recognized only as their installers write them, and

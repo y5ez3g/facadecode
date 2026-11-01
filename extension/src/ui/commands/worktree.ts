@@ -4,11 +4,12 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { isJsonObject } from '../../base/json';
 import { invalid } from '../../core/errors';
 import { worktreeCreationEffects } from '../../core/locations/problems';
 import { Agents, Catalog, HumanPort, Location, LocationPort, LogPort, WorkspaceFolderInfo, WorktreeError, WorktreePlan, WorktreePort } from '../../core/ports';
 import { COMMANDS, PANEL_VIEW } from '../catalog';
-import { worktreeFailureText } from '../presentation';
+import { plainText, worktreeFailureText } from '../presentation';
 import { askWorktreeRef, chooseFolder, copyPathAction, worktreeBaseLabel, worktreeProblemText } from '../pickers/location';
 import { BACK, Flow } from '../pickers/stepping';
 
@@ -40,8 +41,8 @@ export interface NewWorktreeResult {
 export function registerWorktreeCommands(deps: WorktreeCommandDeps): vscode.Disposable[] {
 	return [
 		vscode.commands.registerCommand(NEW_WORKTREE_COMMAND, async (arg?: unknown): Promise<NewWorktreeResult | undefined> => {
-			// The view's own menu gives `null`: no request, the person chooses
-			if (arg !== undefined && arg !== null) {
+			// No request where the editor's own menu runs it: the person chooses
+			if (!fromEditorMenu(arg)) {
 				const request = requestOf(arg);
 				return createAs(deps, request.branch, () => deps.worktrees.plan(request.location_id, request.branch, request.base_ref));
 			}
@@ -49,6 +50,14 @@ export function registerWorktreeCommands(deps: WorktreeCommandDeps): vscode.Disp
 			return plan ? createAs(deps, plan.branch, async () => plan) : undefined;
 		})
 	];
+}
+
+/**
+ * Whether `arg` is all the editor gives a command its own menu runs (WORKTREES-4.3): nothing, `null`, or, for an item clicked
+ * with the mouse, `{ preserveFocus }` - VS Code's context for an item with none of its own.
+ */
+function fromEditorMenu(arg: unknown): boolean {
+	return arg === undefined || arg === null || (isJsonObject(arg) && Object.keys(arg).length === 1 && typeof arg.preserveFocus === 'boolean');
 }
 
 /** The command's arguments, exactly (WORKTREES-4.3): anything else fails without a guess. */
@@ -137,7 +146,8 @@ async function choosePlan(deps: WorktreeCommandDeps): Promise<WorktreePlan | und
 		} else if (step === 'branch') {
 			// Back to the folder step where there is one
 			const several = deps.locations.snapshot().folders.length > 1;
-			const answer = await askWorktreeRef(flow, deps.worktrees, source!, { title, kind: 'branch', value: branch, base, back: several });
+			// Back keeps the branch typed, to be there again (UX-1.1)
+			const answer = await askWorktreeRef(flow, deps.worktrees, source!, { title, kind: 'branch', value: branch, base, back: several, typed: value => { branch = value; } });
 			if (answer === undefined) {
 				return undefined;
 			}
@@ -182,8 +192,8 @@ async function confirm(flow: Flow, title: string, plan: WorktreePlan, source: Lo
 	const base = worktreeBaseLabel(plan, source, explicitBase);
 	const items: ConfirmItem[] = [
 		// {0} the branch, {1} its base, {2} the base's commit
-		{ label: vscode.l10n.t("Create Worktree"), description: plan.destination, detail: vscode.l10n.t("Branch {0} · Base: {1} ({2})", plan.branch, base, plan.baseCommit.slice(0, 12)), iconPath: new vscode.ThemeIcon('add'), does: 'create' },
-		{ label: vscode.l10n.t("Change Base..."), description: base, detail: vscode.l10n.t("Commit, branch, or tag to start from"), iconPath: new vscode.ThemeIcon('git-commit'), does: 'base' }
+		{ label: vscode.l10n.t("Create Worktree"), description: plainText(plan.destination), detail: plainText(vscode.l10n.t("Branch {0} · Base: {1} ({2})", plan.branch, base, plan.baseCommit.slice(0, 12))), iconPath: new vscode.ThemeIcon('add'), does: 'create' },
+		{ label: vscode.l10n.t("Change Base..."), description: plainText(base), detail: vscode.l10n.t("Commit, branch, or tag to start from"), iconPath: new vscode.ThemeIcon('git-commit'), does: 'base' }
 	];
 	const picked = await flow.pick({ title, placeholder: vscode.l10n.t("Confirm worktree details or change base"), items, active: items[0], back: true, actions: [copyPathAction(plan.destination)] });
 	return picked === undefined || picked === BACK ? picked : picked.item.does;

@@ -25,22 +25,22 @@ Do not expose get_operation, cancel_message, rename, independent worktree creati
 Arguments are JSON objects with known keys and correct types; do not coerce missing choices into defaults except where
 explicitly allowed below. Every advertised argument has a JSON Schema `type` and no `oneOf`, so that every model provider
 takes the tool list; a list argument also takes a single string, or the list written as JSON text, as some CLIs send
-it (D96). Return missing required arguments together.
+it (D102). Return missing required arguments together.
 IDs are nonempty strings; references accept exact IDs and RULES-2.3's `#aN`, `@name`, or display-name-plus-ID form,
 plus the person's `#human`. Names can repeat; ambiguity requires an ID. A reference resolves once within the caller's
 normal reach.
 
 start_agent and send_message take an optional `request_id` of the caller's own: the same one again from that caller
 within an hour answers what the first call started or sent, as it stands, and does nothing again - T3 Code's
-`clientRequestId` and Orca's `--retry-request` make a retry after a lost answer safe the same way (D104). It is kept on the
+`clientRequestId` and Orca's `--retry-request` make a retry after a lost answer safe the same way (D110). It is kept on the
 run or message record - a message to another window's agent carries it there, where its record is made - and a repeated
 start answers as its start went: accepted while its process still starts, the start's failure where it could not start,
-success otherwise (D112). Concurrent calls share that operation. The recipient deduplicates a routed send before input,
+success otherwise (D118). Concurrent calls share that operation. The recipient deduplicates a routed send before input,
 so a lost route reply cannot make a retry send again. Request-bearing run metadata remains available for the original
 one-hour request period even after its card closes or its process exits; it does not restore a closed card or process.
 An interrupted start whose outcome was not recorded reports unknown effects instead of starting again. Removing a
 card does not prove process termination: a repeated request reports that process state as unknown where no exit was
-recorded (D113).
+recorded (D119).
 No other tool takes one, and none takes a selectable YOLO/permission profile or input_policy. A new
 invocation without one is a new request; a repeated start may create another agent. Facade may number internal work.
 The normal shim supplies its run ID from launch context; it is an address, not a credential. Protocol framing may
@@ -108,7 +108,8 @@ describe a continuing call; it does not produce progress popups.
 Arguments, optional: `window_id:string`, `location_id:string`, `cli:string`.
 Without window_id, list every open Facade window on this client computer: window IDs/labels, environments when
 present, location summaries and availability. With window_id, list the shared WORKTREES-1.2 location catalog. With
-location_id, list its installed CLIs. With cli, include model/effort choices and actual operation capabilities. A
+location_id, list its installed CLIs and any catalog configuration problems, each naming its setting. A malformed
+custom catalog must not silently appear empty; valid built-ins remain available. With cli, include model/effort choices and actual operation capabilities. A
 subordinate selection must identify its parent; do not silently choose a window/location. A window without a folder
 has zero locations and cannot start an agent. Known absence differs from an unreachable runtime; include complete and
 unavailable_windows where applicable.
@@ -208,7 +209,7 @@ terminal-control encodings that would execute outside the message paste instead 
 Raw terminal control is a separate tool. Never replace the body with a pointer and call that full-content delivery. A
 text that begins with `[Earlier output truncated]` - how Antigravity marks a long argument it cut to its last 8,000
 characters, which T3 Code reads back - lost its beginning on its way: send_message, start_agent's prompt and type_text refuse
-it with invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole (D107).
+it with invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole (D113).
 
 Return message_id, resolved target, status/effects, and deadline/obstacle if accepted within RULES-1.2's response budget.
 Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an accepted send returns moves on,
@@ -284,7 +285,7 @@ or permission question is added. Return actual full/partial/unknown text, Enter 
 A supplementary screen is only observation; its failure does not undo input. No automatic raw-content retry occurs
 after unknown effects. type_text's Enter goes in a write of its own after its text, once the CLI can have read the text -
 a tenth of a second, and CLIS-2.1's time for a paste of its size and for Antigravity's lines - as a CLI that reads a
-paste's end and an Enter together may drop the Enter, as Orca found Claude Code does (D107). Ordinary messages keep their
+paste's end and an Enter together may drop the Enter, as Orca found Claude Code does (D113). Ordinary messages keep their
 own draft rules and are typed at most once (RULES-1.6).
 
 ## 6 Technical design
@@ -300,7 +301,7 @@ authenticated enrollment, source-binding proofs or scoped delegation. A delibera
 protection provided. Basic schema/routing validation remains.
 
 Calls to Facade's own tools never ask for the CLI's approval, with YOLO on or off: CLIS-2.2 pre-approves the `facade`
-server for each CLI that has a rule for one server's tools - Muse Code has none, and its own approvals apply (D94). The
+server for each CLI that has a rule for one server's tools - Muse Code has none, and its own approvals apply (D100). The
 CLI's own commands and edits keep the approval mode that RULES-4.3 chose for the run. The server is never marked
 required, so a failure to start or connect it leaves a usable CLI with tools_state unavailable. The MCP switch affects
 future injection, not existing connected runs. Version/integration failure leaves a usable CLI.
@@ -311,10 +312,10 @@ the person started in a folder whose shared entry is a running agent's - speaks 
 so in its instructions, and a call to it fails with `configuration_invalid` and no effect.
 
 The shim speaks MCP 2025-11-25 down to 2024-11-05, the client's version where it is one of these and else the newest, and
-answers a method it does not know with JSON-RPC's method-not-found, so a newer CLI is never left without tools (D105). Its
+answers a method it does not know with JSON-RPC's method-not-found, so a newer CLI is never left without tools (D111). Its
 instructions tell a CLI that lists tools by name alone until they are loaded, as Claude Code does, to load one before calling
 it, as T3 Code tells it. A test keeps the tool list, the instructions and the skill within a byte budget, which every turn of
-every agent pays for (D105).
+every agent pays for (D111).
 
 ### 6.2 Protocol and recovery
 
@@ -349,22 +350,22 @@ No migration guide for already-published user skills is required: this is the fi
 ## Change log
 
 - 2026-10-31: Request IDs cover concurrent calls, lost route replies and removed runs; read delivery does not orphan
-  a complete Facade draft (D113).
+  a complete Facade draft (D119).
 - 2026-10-31: 1.1's repeated start answers as its start went, and a request ID travels with a message to another window
-  (D112).
+  (D118).
 - 2026-10-31: 4.1 refuses a text that arrives with Antigravity's mark of a cut beginning; 5.2's Enter goes a moment after its
-  text (D107).
+  text (D113).
 - 2026-10-31: 6.1 speaks MCP 2025-11-25, tells a CLI that defers tools to load them, and keeps what every turn pays for
-  within a tested byte budget (D105).
-- 2026-10-31: 1.1, 2.2 and 4.1 take an optional `request_id` on start_agent and send_message (D104).
+  within a tested byte budget (D111).
+- 2026-10-31: 1.1, 2.2 and 4.1 take an optional `request_id` on start_agent and send_message (D110).
 - 2026-10-31: 4.1's accepted deadline moves on while the recipient's input is held, and a message is typed at most once
-  (D98, D100).
+  (D104, D106).
 - 2026-10-31: 1.1 advertises every argument with a type and no `oneOf`, and takes a list given as one string or as
-  JSON text; 4.2's `ids` and 5.2's `keys` are lists (D96).
+  JSON text; 4.2's `ids` and 5.2's `keys` are lists (D102).
 - 2026-10-31: 6.1 marks the tools for Antigravity to give the model directly, lists none for a session the person started
-  in a folder whose shared entry is a running agent's, and names Muse Code's own approvals (D94).
+  in a folder whose shared entry is a running agent's, and names Muse Code's own approvals (D100).
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots contract with the owner's 2026-10-30
-  decisions: one delivery state in which read_messages delivers (D82), no CLI-version gate on message input, with
-  `unsupported` and `input_unknown` replacing capability_unverified (D83), Facade's tools pre-approved in both YOLO modes
-  and never required (D84), `#human` for the person (D85), the client network across this computer's windows (D87) and
-  the `facade.collaboration.waitSeconds` setting (D89). Resume, Pin and custom CLIs are later steps.
+  decisions: one delivery state in which read_messages delivers (D88), no CLI-version gate on message input, with
+  `unsupported` and `input_unknown` replacing capability_unverified (D89), Facade's tools pre-approved in both YOLO modes
+  and never required (D90), `#human` for the person (D91), the client network across this computer's windows (D93) and
+  the `facade.collaboration.waitSeconds` setting (D95). Resume, Pin and custom CLIs are later steps.

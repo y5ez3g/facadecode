@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // An agent another agent started, waiting on its CLI's own question - a permission, a question or a sign-in - is reported to that
-// creator once it has waited twenty seconds, once for each time it starts waiting (RULES-1.8, D103): Orca tells its coordinator of a
+// creator once it has waited twenty seconds, once for each time it starts waiting (RULES-1.8, D109): Orca tells its coordinator of a
 // worker stopped at a prompt, and T3 Code routes a child's question to its parent. The creator is an agent; a person is never told.
 
 import { messageOf } from '../base/errors';
@@ -41,7 +41,7 @@ export function attentionText(run: Pick<RunFacts, 'name' | 'alias'>, waiting: Wa
 }
 
 /**
- * Watches the runs of this window that an agent of this window started (RULES-1.8, D103): one whose CLI reports its own question for
+ * Watches the runs of this window that an agent of this window started (RULES-1.8, D109): one whose CLI reports its own question for
  * twenty seconds has its creator told once; the count starts again once it stops waiting. A creator gone, or of another window, is
  * told nothing.
  */

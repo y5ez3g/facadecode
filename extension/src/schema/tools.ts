@@ -4,7 +4,7 @@
 
 // The nine tools of the Facade MCP server (MCP-1.1), in their order: the one source of their names, descriptions and argument
 // shapes, which the shim lists and the window validates against (MCP-6.2). Every shape has a type and none a `oneOf`, so that
-// every model provider takes the list (D96).
+// every model provider takes the list (D102).
 
 /** A JSON Schema of a tool's arguments, as MCP lists it. */
 export interface ArgumentSchema {
@@ -26,7 +26,7 @@ const ID = { type: 'string', minLength: 1 } as const;
 const AGENT = { ...ID, description: 'The agent: its ID, `#aN`, unique `@name`, or name with its ID.' } as const;
 const CURSOR = { ...ID, description: 'The next_cursor of the previous page.' } as const;
 const LIMIT = { type: 'integer', minimum: 1, maximum: 200, default: 100 } as const;
-/** A caller's own ID for one start or one send: the same one again within an hour answers the first call, doing nothing again (D104). */
+/** A caller's own ID for one start or one send: the same one again within an hour answers the first call, doing nothing again (D110). */
 const REQUEST = { type: 'string', minLength: 1, maxLength: 200, description: 'Optional: your own ID for this call. The same request_id again within an hour answers what the first call did instead of doing it again; a new one does it anew.' } as const;
 
 /** The most Unicode code points of a message body, and of a result returned inline rather than in a file (MCP-4.1, 4.2, 5.1). */

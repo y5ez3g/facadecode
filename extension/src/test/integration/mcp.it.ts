@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -129,7 +130,7 @@ function assertTools(alias: string): void {
 			const server = JSON.parse(fs.readFileSync(after(args, '--mcp-config'), 'utf8')).mcpServers.facade;
 			assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_PTYD', 'FACADE_RUN']);
 			assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
-			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (D84)');
+			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (D90)');
 			break;
 		}
 		case 'codex':
@@ -188,7 +189,8 @@ function block(id: string, from: string, window: string, text: string): RegExp {
 
 const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
-(!PEER ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J12, M02, M03, M07, M15, M17)`, () => {
+// A custom CLI starts exactly as configured and has no MCP injection; its launch is checked by journey.it.ts.
+(!PEER && BUILT_IN_ADAPTERS.some(adapter => adapter.id === CLI) ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J12, M02, M03, M07, M15, M17)`, () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
@@ -251,7 +253,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.deepStrictEqual([ran.content('press_keys')?.status, ran.content('press_keys')?.effects.keys_sent], ['success', 1], JSON.stringify(ran.content('press_keys')));
 		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
 
-		// What Copy Diagnostics copies, with both agents running (ARCHITECTURE-3.3, D110, D111): the versions, each agent with what its
+		// What Copy Diagnostics copies, with both agents running (ARCHITECTURE-3.3, D116, D117): the versions, each agent with what its
 		// input reads and its last rows, and the log with each tool call, the home folder written ~
 		const diagnostics = await vscode.commands.executeCommand<string>('facade.diagnostics');
 		const version = vscode.extensions.getExtension('facade.facadecode')!.packageJSON.version as string;
@@ -303,7 +305,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const waiting = first.content('send_message', 1);
 		assert.strictEqual(waiting?.status, 'accepted', JSON.stringify(waiting));
 		assert.deepStrictEqual([waiting.data.obstacle, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'pending', 'none']);
-		// Held by the draft: its deadline ten minutes on, not fifteen seconds (D100)
+		// Held by the draft: its deadline ten minutes on, not fifteen seconds (D106)
 		assert.ok(Date.parse(waiting.data.deadline) - Date.now() > 500_000, waiting.data.deadline);
 		const second = waiting.data.alias as string;
 
@@ -334,7 +336,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.ok(result.includes('was not delivered') && result.includes('(input_unknown)') && result.includes('This is a Facade result, not a reply from the recipient.'), result);
 		fs.rmSync(`${RECORD}.quirks.${childAlias}`);
 
-		// The recipient reads what never reached it: delivered by that read, and only once (COLLABORATION-3.1, D82)
+		// The recipient reads what never reached it: delivered by that read, and only once (COLLABORATION-3.1, D88)
 		const read = await script(childAlias, [
 			{ tool: 'read_messages', arguments: {} },
 			{ tool: 'read_messages', arguments: {}, until: 'Nothing is waiting', wait: 5_000 },
@@ -350,7 +352,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	});
 
-	test('a submission its CLI takes slowly, or whose Enter it misses, is pasted once: Enter again over its own draft, never the text (RULES-1.6, D98)', async function () {
+	test('a submission its CLI takes slowly, or whose Enter it misses, is pasted once: Enter again over its own draft, never the text (RULES-1.6, D104)', async function () {
 		this.timeout(120_000);
 		const { card, alias } = await personAgent();
 		const first = await script(alias, [

@@ -108,7 +108,7 @@ function setUp(facts: Partial<RunFacts> = {}, platform: NodeJS.Platform = 'darwi
 
 suite('Ordinary message input: a whole paste, Enter once it shows, confirmed once the input empties (CLIS-2.1, RULES-1.3, 1.4, 1.10)', () => {
 
-	test('its capability is what the run\'s launch found - supported whenever its CLI has an input reader, whatever the version (D83); the launch\'s own reason otherwise', () => {
+	test('its capability is what the run\'s launch found - supported whenever its CLI has an input reader, whatever the version (D89); the launch\'s own reason otherwise', () => {
 		const unreadable: CapabilityState = { state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI, so messages to it fail; direct terminal input still works' };
 		assert.deepStrictEqual(setUp().input.capability(RUN), SUPPORTED);
 		assert.deepStrictEqual(setUp({ version: '2.1.999' }).input.capability(RUN), SUPPORTED, 'a version never recorded is read by its layout all the same');
@@ -131,7 +131,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.deepStrictEqual(unverified.terminal.calls, []);
 	});
 
-	test('a screen its reader does not recognize - a changed layout - is unknown, and nothing is pasted into it (D83, RULES-1.4)', async () => {
+	test('a screen its reader does not recognize - a changed layout - is unknown, and nothing is pasted into it (D89, RULES-1.4)', async () => {
 		const { input, terminal } = setUp();
 		terminal.reading = 'unknown';
 		assert.strictEqual(await input.inspect(RUN), 'unknown');
@@ -147,7 +147,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.strictEqual(await failing.inspect(RUN), 'unknown');
 	});
 
-	test('type_text: its text, then its Enter in a write of its own a moment later - a tenth of a second, more for a long paste, on Windows and for Antigravity\'s lines (MCP-5.2, D107)', async () => {
+	test('type_text: its text, then its Enter in a write of its own a moment later - a tenth of a second, more for a long paste, on Windows and for Antigravity\'s lines (MCP-5.2, D113)', async () => {
 		const { input, terminal, waits } = setUp();
 		assert.deepStrictEqual(await input.typeDirect(RUN, 'yes', true), { outcome: 'applied', pasted: true, entered: true });
 		assert.deepStrictEqual(terminal.calls, ['type "yes"', 'type "" and Enter']);
@@ -307,7 +307,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		}
 	});
 
-	test('Pi counts a wide paste\'s characters as it draws them - its tabs four spaces - and a draft scrolled in its box is its own by the end in sight, rows out of sight above alone (D112)', () => {
+	test('Pi counts a wide paste\'s characters as it draws them - its tabs four spaces - and a draft scrolled in its box is its own by the end in sight, rows out of sight above alone (D118)', () => {
 		const wide = `[Facade message #m6 | from @lead #a1 | window Design]\n${'Review the login flow. '.repeat(50)}\n[/Facade message #m6]`;
 		const chars = wide.length;
 		assert.ok(chars > 1_000);
@@ -335,7 +335,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		}
 	});
 
-	test('once its paste showed as a placeholder, only that same placeholder is its own: a person\'s later paste of its size is not (D112)', async () => {
+	test('once its paste showed as a placeholder, only that same placeholder is its own: a person\'s later paste of its size is not (D118)', async () => {
 		const long = Array.from({ length: 33 }, (_, line) => `line ${line + 1}`).join('\n');
 		assert.ok(isSameDraft('[Pasted text #1 +32 lines]', '[Pasted text #1 +32 lines]', long));
 		assert.ok(!isSameDraft('[Pasted text #2 +32 lines]', '[Pasted text #1 +32 lines]', long));
@@ -350,7 +350,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.ok(!terminal.calls.includes('keys Enter'));
 	});
 
-	test('nothing goes in once its stop came while it read: no paste after the read before it, no Enter after the read that showed its draft (RULES-1.5, 1.7, D112)', async () => {
+	test('nothing goes in once its stop came while it read: no paste after the read before it, no Enter after the read that showed its draft (RULES-1.5, 1.7, D118)', async () => {
 		const settle = () => new Promise(resolve => setImmediate(resolve));
 		// Stopped while it read before its paste
 		const before = setUp();
@@ -393,7 +393,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.ok(!later.terminal.calls.includes('keys Enter'));
 	});
 
-	test('a paste\'s time beyond the usual: twice its size\'s on this platform, and Antigravity\'s lines (D99, D112)', () => {
+	test('a paste\'s time beyond the usual: twice its size\'s on this platform, and Antigravity\'s lines (D105, D118)', () => {
 		assert.strictEqual(setUp().input.pasteTime(RUN, 'x'.repeat(8_000)), 0);
 		assert.strictEqual(setUp({}, 'win32').input.pasteTime(RUN, 'x'.repeat(8_000)), 2 * 100);
 		assert.strictEqual(setUp({ inputAdapter: 'agy-frame' }).input.pasteTime(RUN, 'a\nb\nc'), 3 * 45);
@@ -426,7 +426,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.deepStrictEqual(other.terminal.calls, ['read by claude-frame']);
 	});
 
-	test('a message\'s lead is typed ahead of its paste only where the CLI takes a paste alone as material - Claude Code - and its draft is its own with that lead, or without it from an older ptyd (D102)', async () => {
+	test('a message\'s lead is typed ahead of its paste only where the CLI takes a paste alone as material - Claude Code - and its draft is its own with that lead, or without it from an older ptyd (D108)', async () => {
 		const lead = 'Act on this Facade message: ';
 		const text = Array.from({ length: 3 }, (_, line) => `line ${line + 1}`).join('\n');
 		const claude = setUp();
@@ -446,7 +446,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.ok(!isOwnDraft(lead, text, 'claude-frame', lead));
 	});
 
-	test('Enter waits for the time a paste of its size takes: its bytes at ConPTY\'s 64 a millisecond on Windows, and 45 ms a line more for Antigravity (D99)', async () => {
+	test('Enter waits for the time a paste of its size takes: its bytes at ConPTY\'s 64 a millisecond on Windows, and 45 ms a line more for Antigravity (D105)', async () => {
 		const text = `${'x'.repeat(19_999)}\n${'y'.repeat(30)}`;
 		// Windows: a paste that never shows is waited for 2 s and the 300 ms its 20 KB take
 		const windows = setUp({}, 'win32');

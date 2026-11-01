@@ -20,14 +20,14 @@ const POLL_MS = 100;
 const DRAFT_MS = 2_000;
 /** How long the input has to empty after Enter for the CLI to have taken the message (RULES-1.3), beyond that time too. */
 const TAKEN_MS = 3_000;
-/** How many bytes of a paste a terminal takes in a millisecond, as Orca measured: Windows' ConPTY 64, elsewhere 4 KB (D99). */
+/** How many bytes of a paste a terminal takes in a millisecond, as Orca measured: Windows' ConPTY 64, elsewhere 4 KB (D105). */
 const PASTE_BYTES_PER_MS: { readonly win32: number; readonly other: number } = { win32: 64, other: 4096 };
-/** How long more a CLI's input needs for each line of a paste before Enter: Antigravity expands a long paste over seconds (D99). */
+/** How long more a CLI's input needs for each line of a paste before Enter: Antigravity expands a long paste over seconds (D105). */
 const LINE_SETTLE_MS: { readonly [adapter: string]: number } = { 'agy-frame': 45 };
-/** How long type_text's Enter waits after its text at least, so that its CLI reads them apart (MCP-5.2, D107). */
+/** How long type_text's Enter waits after its text at least, so that its CLI reads them apart (MCP-5.2, D113). */
 const DIRECT_ENTER_MS = 100;
 
-/** The input readers of CLIs whose model takes a paste alone as material, not a request: a message's lead is typed before it (D102). */
+/** The input readers of CLIs whose model takes a paste alone as material, not a request: a message's lead is typed before it (D108). */
 const TAKES_LEAD: ReadonlySet<string> = new Set(['claude-frame']);
 
 /** How long a start waits for its CLI's input to read empty before it gives up what it types before the first turn. */
@@ -65,7 +65,7 @@ export interface OrdinaryInputDeps {
 	readonly monotonic?: () => number;
 	/** Waits `ms`, rejecting as soon as `signal` aborts. */
 	readonly wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
-	/** The platform the run's terminal is on: how fast it takes a paste (D99). */
+	/** The platform the run's terminal is on: how fast it takes a paste (D105). */
 	readonly platform?: NodeJS.Platform;
 }
 
@@ -137,7 +137,7 @@ export class OrdinaryInput implements InputPort {
 		});
 	}
 
-	/** How much longer than usual a paste of `text` takes to show and be taken in `run`'s CLI: twice its size's time, and its lines (D99, D112). */
+	/** How much longer than usual a paste of `text` takes to show and be taken in `run`'s CLI: twice its size's time, and its lines (D105, D118). */
 	pasteTime(run: RunId, text: string): number {
 		const adapter = this.adapterOf(run);
 		return 2 * this.pasteMs(text) + (adapter ? (LINE_SETTLE_MS[adapter] ?? 0) * text.split(/\r\n|\r|\n/u).length : 0);
@@ -262,7 +262,7 @@ export class OrdinaryInput implements InputPort {
 		if ((await this.read(run, adapter)).state !== 'usable' || signal?.aborted || canPaste?.() === false) {
 			return { effects: NOTHING, shown: false };
 		}
-		// Typed ahead of the paste only where its CLI takes a paste alone as material (D102)
+		// Typed ahead of the paste only where its CLI takes a paste alone as material (D108)
 		const typed = lead !== undefined && TAKES_LEAD.has(adapter) ? lead : undefined;
 		let pasted: InputEffect;
 		try {
@@ -294,7 +294,7 @@ export class OrdinaryInput implements InputPort {
 	}
 
 	/**
-	 * Enter over the message's own draft, once its CLI has had what more it needs for a paste of its size (D99), then the input waited
+	 * Enter over the message's own draft, once its CLI has had what more it needs for a paste of its size (D105), then the input waited
 	 * on to empty: a confirmed submission, else what went in.
 	 */
 	private async enterNow(run: RunId, adapter: string, text: string, signal: AbortSignal | undefined): Promise<InputEffects> {
@@ -330,7 +330,7 @@ export class OrdinaryInput implements InputPort {
 
 	/**
 	 * type_text's text, then its Enter where asked (MCP-5.2): no draft protection, but its Enter in a write of its own once its CLI can
-	 * have read the text - a tenth of a second at least, and the time a paste of its size takes (D99, D107) - as a CLI that reads a
+	 * have read the text - a tenth of a second at least, and the time a paste of its size takes (D105, D113) - as a CLI that reads a
 	 * paste's end and an Enter together may drop the Enter, as Claude Code does.
 	 */
 	async typeDirect(run: RunId, text: string, enter: boolean): Promise<InputEffect> {
@@ -355,7 +355,7 @@ export class OrdinaryInput implements InputPort {
 		return entered.outcome === 'applied' ? { outcome: 'applied', pasted: true, entered: true } : { outcome: 'partial', ...entered.reason ? { reason: entered.reason } : {}, pasted: true, entered: false };
 	}
 
-	/** The time this platform's terminal takes to take in a paste of `text`, in whole tenths of a second (D99). */
+	/** The time this platform's terminal takes to take in a paste of `text`, in whole tenths of a second (D105). */
 	private pasteMs(text: string): number {
 		const rate = this.platform === 'win32' ? PASTE_BYTES_PER_MS.win32 : PASTE_BYTES_PER_MS.other;
 		return Math.floor(Buffer.byteLength(text, 'utf8') / rate / 100) * 100;

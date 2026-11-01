@@ -1,12 +1,12 @@
 # Panel
 
 Layer 3. The panel displays this window's agents. [Rules](../RULES.md) owns meanings; [UX](../UX.md) owns common
-interaction and tokens. This document owns the card, list and webview contract. Runtime evidence is pending.
+interaction and tokens. This document owns the card, list, filter and webview contract. Runtime evidence is pending.
 
 | Group | Decides | Implementation evidence |
 | --- | --- | --- |
 | 1 View and card | Loading, empty state, badge, content and geometry | Pending |
-| 2 List and actions | Order, selection and menu | Pending |
+| 2 List and actions | Order, selection, menu and filtering | Pending |
 | 3 Technical design | State transport, rendering, resources and scrolling | Pending |
 
 ## 1 View and card
@@ -18,24 +18,29 @@ interaction and tokens. This document owns the card, list and webview contract. 
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
-card loading. Title actions in order: New Agent (`new-session`). The view's native `Views and More Actions...` (`…`) menu holds
+card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), New Agent
+(Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
+The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Message History... and Configure Agents... in a separate group. Go to Agent... is a Command Palette entry, not a
-view-menu item. Facade commands
+Message History... and Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log are Command Palette entries, not view-menu items (D83). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
-records. Tooltip `1 agent` / `{n} agents`; omit zero.
+records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
 
-### 1.2 Empty states
+### 1.2 Empty and filtered states
 
 **The empty state explains the current condition and offers the next relevant action.**
 
 No folder: `Open a folder to launch agents.` with Open Folder. No agents:
-`Launch an agent in this workspace.` with New Agent (primary). Empty-state buttons have no ellipsis, as VS Code's
+`Launch an agent in this workspace.` with New Agent (primary). No matching cards with a filter:
+`No agents found in "{location}".`, then `{n} other agents are in this workspace.` (`1 other agent is in this
+workspace.`; omitted when no other card exists), Clear Filter (primary) and New Agent (secondary), which starts at the
+filtered location (LIFECYCLE-1.2). Empty-state buttons have no ellipsis, as VS Code's
 welcome buttons do. Open Folder from this button or New Agent invokes the editor's `vscode.openFolder` command,
 matching the built-in Git view's entry. The editor owns folder selection, window opening and the resulting view;
 Facade does not record a return marker or automatically switch the sidebar back after activation. The person can
-return through Facade Code's activity-bar icon. Do not display worktree tutorials when Git is absent. Paragraphs wrap;
-buttons are native-themed and keyboard accessible. There is no composer field.
+return through Facade Code's activity-bar icon. Do not display worktree tutorials when Git is absent or make an empty
+filter look like all agents ended. Paragraphs wrap; buttons are native-themed and keyboard accessible. There is no
+composer field.
 
 Invoking New Agent with no folder opens a native Quick Pick titled `New Agent`, with placeholder
 `Open a folder to continue` and one item: `Open Folder...`, detail
@@ -57,9 +62,10 @@ automatically launch an agent. This prerequisite step does not ask the person to
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
 
 Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`,
-`avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Location is alias/branch/folder, prefixed by workspace folder in
-a multi-folder window unless it is named that folder's name already, as a plain folder is (D66). A related worktree can
-be outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
+`avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Custom avatars are an uppercased first grapheme in a
+circle; deterministic theme colors from UX-2.1. Location is alias/branch/folder, prefixed by workspace folder in a
+multi-folder window unless it is named that folder's name already, as a plain folder is (D66). A related worktree can be
+outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
 temporarily disconnected location is retained. The location keeps its own width, as a chat list keeps a message's time,
 up to 40% of the line, and is cut beyond that; the name has the rest. A workspace-folder prefix is shown whole or not at
 all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibility.
@@ -89,7 +95,7 @@ unavailable`; the accessible label preserves it. No unread dot, completed check,
 
 Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason; for
 a working agent, how long ago its CLI reported that work, `Reported working 25 min. ago` - the CLI's last word, which a long
-silence leaves for the person to judge rather than turning it into idle or done, as Orca shows `No update in …` (D108);
+silence leaves for the person to judge rather than turning it into idle or done, as Orca shows `No update in …` (D114);
 started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
 written `~` except on Windows; window. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,
@@ -111,11 +117,30 @@ failed launch remains selected. Keyboard focus and selection are independent.
 
 **A card uses a flat native context menu with only actions meaningful to its current record.**
 
-Groups: Rename / Copy Agent Reference; Move Up/Down; Close Agent for starting, live and retained-ended
-records. Enable actions by actual availability; name editing need not wait for CLI readiness. There is no worktree
-deletion or bulk selection action. LIFECYCLE-3.1 owns the shared close action. No menu outside a card, not even the
-webview's default Cut/Copy/Paste. Context targets its stable run ID, revalidated against current host state under 3.1,
-never the selected row by fallback. Palette targeting follows UX-3.1.
+Groups: Rename / Copy Agent Reference; Move Up/Down; Filter by This Location / Filter by This Folder / Clear Filter;
+Close Agent for starting, live and retained-ended records. Enable actions by actual availability; name editing need
+not wait for CLI readiness. There is no worktree deletion or bulk selection action. LIFECYCLE-3.1 owns the shared close
+action. No menu outside a card, not even the webview's default Cut/Copy/Paste. Context targets its stable run ID,
+revalidated against current host state under 3.1, never the selected row by fallback. Palette targeting follows UX-3.1.
+
+### 2.3 Filters
+
+**A filter affects this window's card visibility only, not access or launch defaults.**
+
+Filter by Working Location opens native Quick Pick steps by folder (D82). In each step one separator follows the first
+item, then come the folders or locations that have cards (including starting and retained failures) or hold the
+current filter, each with its count. In a window of several folders the first step lists All Locations, then the
+folders. A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
+(WORKTREES-1.2) - where two or more of its locations are listed, or where the filtered location is one of several it
+has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its
+first item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog no longer
+lists stays choosable, last in the first step. The current filter, or in the first step its folder, is initially
+highlighted. Back returns to the first step; Escape leaves the filter unchanged. The view description names the
+filter; the icon fills.
+Persist environment-qualified location/folder association in workspace state. Clear on Clear Filter, the first
+step's first item or confirmed location removal, never on a failed Git read. A launch does not change the filter;
+every new agent enters the normal list data and is displayed only when it matches. Per-card filters appear only when
+they would change the visible set. Ordinary folders use “location,” not an implication that Git/worktrees are required.
 
 ## 3 Technical design
 
@@ -123,8 +148,8 @@ never the selected row by fallback. Palette targeting follows UX-3.1.
 
 **The model sends one coherent state per microtask and applies it only to the current page generation.**
 
-State contains revision, loading, agents in order, card count, location metadata and capabilities. Agent run IDs remain
-stable through launch. Badge and context keys come from the same state. Reported text/activity updates are coalesced to
+State contains revision, loading, agents in order, filter, card count, location metadata and capabilities. Agent run
+IDs remain stable through launch. Badge, description and context keys come from the same state. Reported text/activity updates are coalesced to
 at most once per 300 ms; real lifecycle/errors are sent without waiting for that coalescer. `ready` triggers a full
 state and scroll settings. Webview-to-host actions carry the page generation and, for a targeted action, the stable run
 ID. Ignore actions from a replaced page generation; the host validates current-page actions against current state and
@@ -133,7 +158,7 @@ implementation detail when needed to match a reply; no expected revision is requ
 never ship.
 
 Update `src/ui/model.ts`, `src/ui/panel.ts`, `src/webview/panel.ts` together. Webview sends `ready`,
-validated `act` (`open`, `new`, `openFolder`, `rename`), and diagnostic `error`; host sends `state`, `scrolling`, and
+validated `act` (`open`, `new`, `clearFilter`, `openFolder`, `rename`), and diagnostic `error`; host sends `state`, `scrolling`, and
 matching action outcomes. These acts serve the empty-state buttons in 1.2 and F2 under UX-2.3; `rename` asks the host to
 open the native Input Box, and the host validates the target. Context menu commands run in the host through validated
 targets. Page-held state is navigation/typeahead/scroll, not business rules. Use the webview's saved page state to
@@ -151,40 +176,56 @@ CSP:
 Nonce is 16 random bytes per page. Escape `<` in embedded localization JSON, use textContent for CLI/user strings,
 validate incoming actions and reject unknown keys/types. Local resource roots are only bundled media/webview output. No
 external image fetches, remote scripts, injected HTML, command links from messages or secrets in state. Cards, focus, open context framing and avatar
-nodes survive ordinary text changes; initial draw does not animate.
+nodes survive ordinary text changes; initial draw/filter changes do not animate.
 
 ### 3.3 Scrolling
 
-**Scrolling follows VS Code's list settings and remains usable by wheel, trackpad, scrollbar and keyboard.**
+**A wheel scrolls the list as VS Code's own lists scroll; the scrollbar is the page's, in VS Code's colors.**
 
-Respect `mouseWheelScrollSensitivity` (default 1), `fastScrollSensitivity` (default 5 with Alt), `smoothScrolling`,
-`scrollByPage`, and zoom. Wheel baseline 50 px per line; normalize Chromium wheel delta/120, else line delta, else
-pixel delta/40; round away from zero to whole pixels. Predominantly horizontal movement does not scroll vertically;
-Ctrl-wheel is left to the editor. No overscroll/page scroll at list ends. Trackpad movement tracks fingers; mouse-wheel
-smoothing is 125 ms cubic ease-out only when enabled, canceled by keyboard/drag. Wheel/trackpad classification is an
-implementation adapter verified against current VS Code behavior, not guessed from one event.
+The wheel follows VS Code's list code, ported, not imitated: `workbench.list.mouseWheelScrollSensitivity` (default 1),
+`fastScrollSensitivity` (default 5, with Alt), `smoothScrolling` and the window's zoom. Wheel baseline 50 px per line;
+normalize Chromium wheel delta/120, else line delta, else pixel delta/40; round away from zero to whole pixels.
+Predominantly horizontal movement does not scroll vertically, and off macOS Shift turns vertical movement horizontal, as
+in VS Code's lists. Ctrl-wheel is left to the editor; the list takes every other wheel, so nothing scrolls past its ends.
+Mouse-wheel smoothing is 125 ms cubic ease-out, only when enabled and only for what VS Code's classifier takes for a
+physical mouse wheel; the keyboard or any other scroll ends it where it is, and reduced motion removes it. The classifier
+undoes the zoom `window.zoomLevel` says, the only one a page is told: a window zoomed alone (`window.zoomPerWindow`) can
+have a mouse wheel's scroll taken for a touchpad's, and not glide.
 
-Overlay scrollbar: 8 px at right, 4 px top/bottom inset, minimum thumb 20 px, 4 px corners, theme scrollbarSlider colors.
-Show on hover/scroll, fade in 100 ms; after 500 ms without activity fade out 800 ms. No bar when content fits. Click
-centers and begins drag unless scrollByPage is enabled, when it moves a viewport toward the click. Reduced motion
-removes fades/glides. Keyboard Page Up/Down moves fully visible row count minus one (minimum one).
+The scrollbar is the page's own (D87): 10 px in the theme's scrollbarSlider colors over no track, its dragging and track
+clicks the browser's, so `scrollByPage` does not apply. Keyboard Page Up/Down moves fully visible row count minus one
+(minimum one).
 
 ## Checks
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Approved title/menu entries, both empty states and the no-folder New Agent prerequisite, slow/no Git, three dot meanings, known blocker before generic unavailable text without losing that explanation, all widths/themes/accessibility |
-| 2.1–2.2 | Stack insertion and manual order, retained failure, exact context target |
+| 1.1–1.5 | Approved title/menu entries, the empty and filtered states and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, three dot meanings, known blocker before generic unavailable text without losing that explanation, all widths/themes/accessibility |
+| 2.1–2.3 | Stack insertion and manual order, retained failure, exact context target, filter removal/read failure |
 | 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
 
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
 
-- 2026-10-31: 1.5's hover says how long ago a working agent's CLI reported its work (D108).
+- 2026-10-31: 1.5's hover says how long ago a working agent's CLI reported its work (D114).
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 adds Message History... to the view menu; 1.4 adds an
   unavailable-tools explanation and a creation prompt's first line; 1.5 names an agent's creator; 2.1 places agent-started
   cards like any other without tree grouping; 3.2 renders no command links from messages.
+- 2026-10-31: 3.3's wheel is VS Code's list code, ported, and its scrollbar the page's own (D87).
+- 2026-10-31: 1.1's New Agent shows Facade's own copy of `new-session`, which VS Code before 1.111 does not have (D85).
+- 2026-10-31: 2.3's Filter by Working Location steps by folder; All Locations and All Worktrees replace All
+  Agents (D82).
+
+- 2026-10-31: 1.3 draws a custom CLI's avatar as its initial on a theme color (UX-2.1).
+
+- 2026-10-31: 1.1 names Show Agent Launch and Show Agents Log as Command Palette entries, not view-menu items (D83).
+
+- 2026-10-30: Display filters, carried from the Facade Dots specification: 1.1 adds Filter by Working Location before
+  New Agent and counts every card whatever is shown; 1.2 adds the filtered empty state; 2.2 the card's filters; 2.3
+  Filters; 3.1 carries the filter in the state and the `clearFilter` act; 3.2 keeps a filter change still. New Agent
+  Here stays retired.
+
 - 2026-10-30: 1.3 adds the Antigravity, Muse Code, OpenCode and Pi avatars (D77); 1.4's startup stage lasts until the
   CLI first shows its activity (D81).
 

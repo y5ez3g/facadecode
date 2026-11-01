@@ -23,14 +23,14 @@ export interface DiagnosedAgent {
 	readonly screen?: readonly string[];
 }
 
-/** What Copy Diagnostics copies, gathered (ARCHITECTURE-3.3, D110). */
+/** What Copy Diagnostics copies, gathered (ARCHITECTURE-3.3, D116). */
 export interface Diagnostics {
 	readonly at: number;
 	/** The extension's, its window component's and the editor's versions, the platform and the remote kind, each as one part. */
 	readonly about: readonly string[];
 	readonly collaboration: boolean;
-	/** The built-ins for the window's first location, named by its path; none where no folder is open. */
-	readonly clis?: { readonly where: string; readonly each: readonly DiagnosedCli[] };
+	/** The CLI catalog for the window's first location, with its configuration problems; none where no folder is open. */
+	readonly clis?: { readonly where: string; readonly each: readonly DiagnosedCli[]; readonly problems?: readonly { readonly setting: string; readonly problem: string }[] };
 	readonly agents: readonly DiagnosedAgent[];
 	/** The agents log's last lines, oldest first. */
 	readonly log: readonly string[];
@@ -72,7 +72,7 @@ function agentLines({ facts, input, screen }: DiagnosedAgent): string[] {
 }
 
 /**
- * The text Copy Diagnostics puts on the clipboard (ARCHITECTURE-3.3, D110): in English, as the agents log is, with the home folder
+ * The text Copy Diagnostics puts on the clipboard (ARCHITECTURE-3.3, D116): in English, as the agents log is, with the home folder
  * written `~`. Nothing in it is sent anywhere.
  */
 export function diagnosticsText(diagnostics: Diagnostics): string {
@@ -81,7 +81,7 @@ export function diagnosticsText(diagnostics: Diagnostics): string {
 		diagnostics.about.join('; '),
 		`Collaboration through Facade's tools: ${diagnostics.collaboration ? 'on' : 'off'}`,
 		'',
-		...diagnostics.clis ? [`CLIs for ${diagnostics.clis.where}`, ...diagnostics.clis.each.map(cliLine)] : ['CLIs: no folder is open, and CLIs are found for one'],
+		...diagnostics.clis ? [`CLIs for ${diagnostics.clis.where}`, ...diagnostics.clis.each.map(cliLine), ...diagnostics.clis.problems?.map(({ setting, problem }) => `- Configuration error (${setting}): ${problem}`) ?? []] : ['CLIs: no folder is open, and CLIs are found for one'],
 		'',
 		`Agents in this window: ${diagnostics.agents.length}`,
 		...diagnostics.agents.flatMap(agentLines),

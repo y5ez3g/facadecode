@@ -48,7 +48,7 @@ function fakeEditor() {
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-suite('The window component as the workspace extension waits for it (ARCHITECTURE-4.3, D88, VERIFICATION E06)', () => {
+suite('The window component as the workspace extension waits for it (ARCHITECTURE-4.3, D94, VERIFICATION E06)', () => {
 
 	test('a component that answers for this window is its identity at once; one that answers for another window is none', async () => {
 		const editor = fakeEditor();

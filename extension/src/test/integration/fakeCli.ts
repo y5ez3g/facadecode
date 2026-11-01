@@ -41,7 +41,7 @@ const NBSP = ' ';
 const PLACEHOLDER = 'Try a task';
 const lines: string[] = ['fake agent ready'];
 let draft = '';
-/** Where the paste in its draft starts: what was typed before it stays as typed, as a lead does (D102). */
+/** Where the paste in its draft starts: what was typed before it stays as typed, as a lead does (D108). */
 let pastedFrom: number | undefined;
 
 // A native prompt: after `--`, or OpenCode's `--prompt`

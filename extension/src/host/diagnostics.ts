@@ -74,16 +74,18 @@ async function agentOf(deps: DiagnosticsDeps, facts: RunFacts): Promise<Diagnose
 	return { facts, input, screen: typeof screen === 'string' ? [screen] : screen.text };
 }
 
-/** Everything Copy Diagnostics copies, gathered now (ARCHITECTURE-3.3, D110). */
+/** Everything Copy Diagnostics copies, gathered now (ARCHITECTURE-3.3, D116). */
 export async function diagnosticsOf(deps: DiagnosticsDeps): Promise<string> {
 	const component: unknown = deps.component ?? vscode.extensions.getExtension(WINDOW_COMPONENT)?.packageJSON?.version;
 	const location = deps.locations.snapshot().locations[0];
 	let clis: Diagnostics['clis'];
 	if (location) {
 		const launches = deps.clis.describe(location, false).launches;
+		const choices = await deps.clis.list(location);
 		clis = {
 			where: location.path,
-			each: (await deps.clis.list(location)).map(choice => {
+			problems: choices.problems.map(({ setting, problem }) => ({ setting, problem })),
+			each: choices.clis.map(choice => {
 				const known = launches.find(each => each.cli === choice.id);
 				return { choice, ...known?.version ? { version: known.version.version } : {}, ...known?.input?.adapter ? { input: known.input.adapter } : {} };
 			})

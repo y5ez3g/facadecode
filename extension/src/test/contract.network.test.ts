@@ -310,7 +310,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: `@worker ${worker.alias}`, text: 'Hello' })).status, 'success');
 		});
 
-		test('its request ID goes with it to the window it is delivered in, and the copy kept here keeps it too (D104, D112)', async () => {
+		test('its request ID goes with it to the window it is delivered in, and the copy kept here keeps it too (D110, D118)', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
 			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, runId(20), DELIVERED), requestId: route.args.requestId } } });
@@ -443,7 +443,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_draft' });
 			const answered = await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-77', from: reaching, to: stranger.id, text: 'Hi there', replyTo: 'm-70', callId: 'c-1', requestId: 'ask-9', elapsedMs: 900 } }) as { status: string; obstacle: string; record: MessageRecord };
 			assert.deepStrictEqual([answered.status, answered.obstacle, answered.record.id], ['accepted', 'input_draft', 'm-77']);
-			// Its request ID kept with it here, where its record is made, for the sender's retry to find (D104, D112)
+			// Its request ID kept with it here, where its record is made, for the sender's retry to find (D110, D118)
 			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-77', from: runId(30), sender: { party: { run: runId(30), alias: '#a30', name: 'guest 30' }, window: 'win-2', label: 'Backend' }, to: stranger.id, text: 'Hi there', replyTo: 'm-70', elapsedMs: 900, callId: 'c-1', requestId: 'ask-9' }]);
 			// Out of a non-YOLO guest's tree: not found, nothing sent
 			await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-78', from: guestOf(31), to: lead.id, text: 'Hi', elapsedMs: 0 } }), /No agent .* that the sender reaches is in this window/);

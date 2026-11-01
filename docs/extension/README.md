@@ -15,7 +15,7 @@ rule bodies and [Decisions](DECISIONS.md); historical task records and review fi
 | 3 Common interaction | [UX](UX.md) | Native surfaces, fixed presentation, accessibility, commands/settings and languages |
 | 3 Features | [LIFECYCLE](features/LIFECYCLE.md) | Display names, editor terminals, local finding and immediate close |
 | 3 Features | [WORKTREES](features/WORKTREES.md) | Folder/worktree discovery, native creation and observing external removal |
-| 3 Features | [PANEL](features/PANEL.md) | Cards, count, stack order and webview |
+| 3 Features | [PANEL](features/PANEL.md) | Cards, count, stack order, local filters and webview |
 | 3 Features | [COLLABORATION](features/COLLABORATION.md) | Cross-window agent operations, messages, human contact and Message History |
 | 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, window components, processes, data, packaging and working safeguards |
 | 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, input readers, Facade tool files, capability evidence and trust |
@@ -44,13 +44,12 @@ The Facade Code extension is committed in additive steps, and each commit carrie
 This is the subset for the owner-tested steps so far. Step 1 shipped Claude Code and Codex with the whole user interface
 that serves them, as the 0.0.1 preview; Antigravity, Muse Code, OpenCode and Pi join them at the same level (D77). Step 2
 adds agents that work together, with every built-in CLI: the nine MCP tools, messages and their results, contact with the
-person, Message History, and control of agents in every Facade window on this computer, local and remote alike. Every
-rule keeps its final number, so the numbering has gaps that later steps fill (Resume, Pin, filters, custom CLIs and
-launch settings); their rules, decisions and checks are not part of these steps.
+person, Message History, and control of agents in every Facade window on this computer, local and remote alike. The integrated steps also include panel display filters, built-in launch settings, Show Agent Launch, Show Agents Log
+and custom CLIs. Every rule keeps its final number; Resume and Pin remain later steps.
 
 ## 3 Coverage and evidence limits
 
-The set contains **12 normative documents and 175 numbered rules**. The [audit report](audit/REPORT.md) records
+The set contains **12 normative documents and 179 numbered rules**. The [audit report](audit/REPORT.md) records
 structural and reference checks; the migration ledger joins in the last step. These do not constitute a runtime pass.
 
 Required product evidence includes native/compatible-editor installation, routing between local and remote windows,
@@ -71,6 +70,14 @@ Resolve routine engineering details within scope; raise concrete rule/scenario/e
 the owner to repeatedly approve speculative edge cases. Verification states remain separate for spec, code and product.
 
 ## Change log
+
+- 2026-10-31: Integrate the MCP feature and current main: 12 normative documents, 179 rules, with all local links and numbered references checked.
+
+- 2026-10-31: The step summary includes custom CLIs; CLIS-3.4 makes 128 rules.
+
+- 2026-10-30: The step summary includes the agent settings and diagnostics; CLIS-4.1 makes 127 rules.
+
+- 2026-10-30: The step summary includes the panel's display filters; PANEL-2.3 makes 126 rules.
 
 - 2026-10-30: Step 2 of the Facade Code extension: added COLLABORATION and MCP; 12 documents and 175 rules.
 - 2026-10-30: The step summary includes the step adding Antigravity, Muse Code, OpenCode and Pi (D77).

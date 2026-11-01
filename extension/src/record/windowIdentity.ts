@@ -11,15 +11,19 @@ import { withFileLock } from '../base/lock';
 import { isOwnerClaim, type OwnerClaim } from '../base/ownership';
 import { isWindowToken } from '../base/windowIdentity';
 
+/** A window's handover record that is there but holds no identity: no reload reads another (ARCHITECTURE-2.2). */
+export class DamagedWindowRecord extends Error { }
+
 /**
  * One local window's handover record in the directory the editor supplies. Its native-window lifetime is verified in the
- * integration matrix (ARCHITECTURE-2.2), not derived by parsing the directory or matching workspace folders.
+ * integration matrix (ARCHITECTURE-2.2), not derived by parsing the directory or matching workspace folders. Throws
+ * DamagedWindowRecord for a record that holds no identity, and what failed for one that could not be read or written.
  */
 export function windowToken(directory: string): string {
 	const file = path.join(directory, 'handover.json');
-	let stored: unknown;
+	let text: string;
 	try {
-		stored = JSON.parse(fs.readFileSync(file, 'utf8')) as unknown;
+		text = fs.readFileSync(file, 'utf8');
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
 			throw error;
@@ -29,8 +33,14 @@ export function windowToken(directory: string): string {
 		replaceFile(file, `${JSON.stringify({ version: 1, token })}\n`);
 		return token;
 	}
+	let stored: unknown;
+	try {
+		stored = JSON.parse(text) as unknown;
+	} catch (error) {
+		throw new DamagedWindowRecord(`Invalid local window handover record: ${(error as Error).message}`);
+	}
 	if (!isJsonObject(stored) || stored.version !== 1 || !isWindowToken(stored.token)) {
-		throw new Error('Invalid local window handover record.');
+		throw new DamagedWindowRecord('Invalid local window handover record.');
 	}
 	return stored.token;
 }

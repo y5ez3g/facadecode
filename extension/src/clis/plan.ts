@@ -7,11 +7,12 @@
 // started; every prerequisite that can be checked is checked here, and a failure carries its actual reason.
 
 import { Capability, CliAdapter, expanded, invocation, WarmUp } from './adapter';
-import { Catalog, CatalogEntry, entryOf } from './catalog';
+import { BUILT_IN_ADAPTERS, Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
 import { composeEnvironment, Environment, EnvironmentMap, runEnvironment, setVariable, variableOf } from './environment';
-import { FoundExecutable, launchTarget, resolveExecutable, unsafeForCmd } from './executable';
+import { FoundExecutable, LaunchTarget, isNodeScript, unsafeCharacterForCmd, launchTarget, resolveExecutable, unsafeForCmd } from './executable';
 import type { Injection, ToolsInput } from './tools';
+import { CUSTOM_SETTING } from './custom';
 import type { TrustTarget } from './trust';
 import { installedVersionOf } from './version';
 
@@ -23,6 +24,8 @@ export interface DestinationEnvironment {
 	readonly terminal?: EnvironmentMap;
 	/** The default terminal profile's `env` map, where the profile has one. */
 	readonly profile?: EnvironmentMap;
+	/** That profile's name, as Show Agent Launch names its layer (CLIS-4.1). */
+	readonly profileName?: string;
 	readonly platform: NodeJS.Platform;
 }
 
@@ -42,11 +45,15 @@ export interface PlanInput {
 	readonly tools?: ToolsInput;
 }
 
-/** How a launch trusts its folder (CLIS-3.3, D62): a native file entry, or an override already in its arguments. */
+/**
+ * How a launch trusts its folder (CLIS-3.3, D62): a native file entry, or an override already in its arguments - these, none for a
+ * CLI that asks no trust question; for a custom CLI, nothing Facade knows of: it starts as configured, and asks in its terminal
+ * where it asks (CLIS-3.4).
+ */
 export type LaunchTrust = {
 	readonly kind: 'file';
 	readonly target: TrustTarget;
-} | { readonly kind: 'arguments' };
+} | { readonly kind: 'arguments'; readonly args: readonly string[] } | { readonly kind: 'unknown' };
 
 /** A launch as planned: the same facts as the core's LaunchPlan, kept as plain data here. */
 export interface PlannedLaunch {
@@ -131,7 +138,7 @@ export function inputOf(adapter: CliAdapter): { readonly adapter?: string; reado
 
 /** The environment `entry`'s CLI is found and started with in `cwd`'s destination, before its run's own variables (CLIS-1.2). */
 export function environmentOf(entry: CatalogEntry, destination: DestinationEnvironment): { [name: string]: string } {
-	const env = composeEnvironment({ host: destination.host, terminal: destination.terminal, profile: destination.profile }, destination.platform);
+	const env = composeEnvironment({ host: destination.host, terminal: destination.terminal, profile: destination.profile, launch: entry.environment }, destination.platform);
 	entry.adapter.adjustEnvironment?.(env, destination.platform);
 	return env;
 }
@@ -139,6 +146,11 @@ export function environmentOf(entry: CatalogEntry, destination: DestinationEnvir
 /** Where `entry`'s program is for a launch in `cwd`, found with the launch's own environment (CLIS-1.2). */
 export function executableOf(entry: CatalogEntry, env: Environment, cwd: string, platform: NodeJS.Platform): FoundExecutable {
 	return resolveExecutable(entry.path, entry.adapter.command, entry.adapter.setting, env, cwd, platform);
+}
+
+/** How `entry`'s program `file` starts for a launch in `cwd`: as its adapter's verified launcher has it, else as a program (CLIS-1.2). */
+export function targetOf(entry: CatalogEntry, file: string, env: Environment, platform: NodeJS.Platform, cwd: string): LaunchTarget {
+	return entry.adapter.launchTarget?.(file, platform, env, cwd) ?? launchTarget(file, platform, env, cwd);
 }
 
 /** A discovered CLI for a destination folder: whether a new run can start, else why not (CLIS-1.1). */
@@ -153,13 +165,13 @@ export interface Discovered {
 }
 
 /**
- * The catalog for a destination folder, as new starts are offered it (CLIS-1.1): the built-ins in their order, each found with its own
- * launch environment.
+ * The catalog for a destination folder, as new starts are offered it (CLIS-1.1): the enabled built-ins in their order, then the
+ * custom CLIs, each found with its own launch environment. A configuration problem is said in the person's language by its first (UX-2.4).
  */
 export function discover(catalog: Catalog, destination: DestinationEnvironment, cwd: string): readonly Discovered[] {
-	return catalog.entries.map(entry => {
+	return catalog.entries.filter(entry => entry.enabled).map(entry => {
 		if (entry.problems.length) {
-			return { entry, available: false, problem: entry.problems.join('; '), ...entry.said ? { said: entry.said } : {} };
+			return { entry, available: false, problem: entry.problems.map(each => each.text).join('; '), said: entry.problems[0].said };
 		}
 		const found = executableOf(entry, environmentOf(entry, destination), cwd, destination.platform);
 		if (found.problem !== undefined) {
@@ -167,6 +179,51 @@ export function discover(catalog: Catalog, destination: DestinationEnvironment, 
 		}
 		return { entry, available: true };
 	});
+}
+
+/** How a launch of `entry` trusts its folder `cwd` (CLIS-3.3, 3.4), found where the run will look for it: with the environment `env` it starts with. */
+function trustOf(entry: CatalogEntry, cwd: string, env: Environment, platform: NodeJS.Platform, values: { readonly [name: string]: string }): LaunchTrust {
+	const { adapter } = entry;
+	if (entry.custom) {
+		return { kind: 'unknown' };
+	}
+	return adapter.trustTarget ? { kind: 'file', target: adapter.trustTarget(cwd, env, platform) } : { kind: 'arguments', args: expanded(adapter.groups.trust ?? [], values) };
+}
+
+/** Remove configured defaults replaced by explicit model/effort choices, keeping original indices for configuration errors. */
+function configuredArguments(args: readonly string[], overrides: readonly string[]): { readonly index: number; readonly value: string }[] {
+	const options = new Set<string>();
+	const settings = new Set<string>();
+	for (let index = 0; index < overrides.length; index++) {
+		const option = overrides[index];
+		if (option === '-c') {
+			settings.add(overrides[++index].split('=', 1)[0].trim());
+		} else if (option.startsWith('-')) {
+			options.add(option.split('=', 1)[0]);
+		}
+	}
+	const kept: { index: number; value: string }[] = [];
+	for (let index = 0; index < args.length; index++) {
+		const value = args[index];
+		const option = value.split('=', 1)[0];
+		if (options.has(option)) {
+			if (value === option && index + 1 < args.length) {
+				index++;
+			}
+			continue;
+		}
+		if (option === '-c') {
+			const setting = (value === '-c' ? args[index + 1] : value.slice(3))?.split('=', 1)[0].trim();
+			if (setting !== undefined && settings.has(setting)) {
+				if (value === '-c') {
+					index++;
+				}
+				continue;
+			}
+		}
+		kept.push({ index, value });
+	}
+	return kept;
 }
 
 /**
@@ -178,12 +235,20 @@ export function discover(catalog: Catalog, destination: DestinationEnvironment, 
 export function planLaunch(catalog: Catalog, input: PlanInput, destination: DestinationEnvironment): PlannedLaunch {
 	const entry = entryOf(catalog, input.cli);
 	if (!entry) {
-		const ids = catalog.entries.map(each => each.adapter.id);
-		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.length > 1 ? `${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}` : ids.join('')}`, 'not_found');
+		// Where custom CLIs are configured with errors, those may be why: both are said (CLIS-3.4)
+		const ids = BUILT_IN_ADAPTERS.map(each => each.id);
+		const custom = catalog.problems.length
+			? `; custom CLIs are configured in ${CUSTOM_SETTING}, which has errors: ${catalog.problems.map(each => each.text).join('; ')}`
+			: `, and custom CLIs are configured in ${CUSTOM_SETTING}`;
+		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}${custom}`, 'not_found');
 	}
 	const { adapter } = entry;
+	// A turned-off CLI is not newly started; its runs go on (CLIS-1.1, RULES-4.4)
+	if (!entry.enabled) {
+		throw new CliPlanError(`${adapter.displayName} is turned off by ${adapter.setting}.enabled`, 'unavailable', { kind: 'cli_disabled', values: [adapter.displayName, adapter.setting] });
+	}
 	if (entry.problems.length) {
-		throw new CliPlanError(entry.problems.join('; '), 'configuration_invalid', entry.said);
+		throw new CliPlanError(entry.problems.map(each => each.text).join('; '), 'configuration_invalid', entry.problems[0].said);
 	}
 	const { platform } = destination;
 	const env = environmentOf(entry, destination);
@@ -191,7 +256,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	if (found.problem !== undefined) {
 		throw new CliPlanError(found.problem, 'not_found', found.said);
 	}
-	const target = adapter.launchTarget?.(found.executable, platform, env, input.cwd) ?? launchTarget(found.executable, platform, env, input.cwd);
+	const target = targetOf(entry, found.executable, env, platform, input.cwd);
 	const takes = takesThrough(adapter, target.throughCmd, input.cwd, platform);
 	for (const asked of ['model', 'effort'] as const) {
 		if (input[asked] !== undefined && !takes[asked]) {
@@ -200,14 +265,20 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	}
 	const prompt = input.prompt === undefined ? undefined : promptOf(adapter, input.prompt, target.throughCmd);
 	const native = prompt?.path === 'native';
-	const argsWith = (injection: Injection | undefined) => [...target.args, ...injection?.args ?? [], ...invocation(adapter.groups, {
+	const values = adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, model: input.model, effort: input.effort, env });
+	// Explicit MCP choices replace only their matching configured options (CLIS-1.4), without duplicate native flags.
+	const extra = configuredArguments(entry.extra, [
+		...input.model !== undefined ? adapter.groups.model ?? [] : [],
+		...input.effort !== undefined ? adapter.groups.effort ?? [] : []
+	]);
+	const argsWith = (injection: Injection | undefined) => [...target.args, ...injection?.args ?? [], ...invocation(adapter.groups, extra.map(each => each.value), {
 		yolo: input.yolo, connect: injection !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: native
 	}, {
-		...adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, model: input.model, effort: input.effort, env }),
+		...values,
 		...injection?.values,
 		...native ? { prompt: input.prompt! } : {}
 	})];
-	let injection = input.tools ? adapter.tools.inject({ ...input.tools, platform }) : undefined;
+	let injection = input.tools ? adapter.tools?.inject({ ...input.tools, platform }) : undefined;
 	let tools: PlannedLaunch['tools'] = injection ? { state: 'injected' } : { state: 'not_injected' };
 	// The tools' variables on the person's own, where a CLI's variable must keep theirs: one that cannot be read keeps theirs whole,
 	// and the CLI starts without the tools rather than without the person's configuration (CLIS-2.2)
@@ -228,16 +299,35 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		tools = { state: 'unavailable', problem: 'cmd', reason: `${found.executable} runs through cmd.exe, which cannot be given the Facade tools' arguments safely; set ${adapter.setting}.path to the CLI's own program or Node entry point` };
 		args = argsWith(undefined);
 	}
+	if (isNodeScript(target.executable, platform)) {
+		// A Node entry point - what a refusal below advises - that no Node on the PATH can run: Windows cannot run it itself
+		throw new CliPlanError(`${target.executable} is a Node script, and Node is not on the PATH to run it`, 'not_found',
+			{ kind: 'node_missing', values: [target.executable] });
+	}
 	if (target.throughCmd) {
+		// cmd.exe starts in no UNC folder - a network share's, a WSL distribution's \\wsl$ one - but in the Windows directory,
+		// where the CLI would run with the run's permissions: refused before anything starts
+		if (/^[\\/]{2}/.test(input.cwd)) {
+			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot run in the UNC folder ${input.cwd}; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unc_folder', values: [found.executable, input.cwd, adapter.setting] });
+		}
 		// The program's own path reaches cmd.exe too, quoted only where it holds a space
 		if (unsafeForCmd(target.executable)) {
 			throw new CliPlanError(`${target.executable} runs through cmd.exe, which cannot be given its path safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
 				{ kind: 'cmd_unsafe_path', values: [target.executable, adapter.setting] });
 		}
-		const unsafe = args.find(unsafeForCmd);
-		if (unsafe !== undefined) {
-			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(unsafe)} safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
-				{ kind: 'cmd_unsafe', values: [found.executable, shown(unsafe), adapter.setting] });
+		const unsafe = args.findIndex(unsafeForCmd);
+		// A configured argument is named by its place in the setting and its character, never quoted: it may be a secret (CLIS-4.1)
+		const configured = extra.find(each => unsafeForCmd(each.value))?.index ?? -1;
+		if (configured >= 0) {
+			const setting = entry.extraSetting;
+			const character = unsafeCharacterForCmd(args[unsafe])!;
+			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given ${setting}[${configured}] safely, as that argument contains ${character}; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unsafe_setting', values: [found.executable, setting, String(configured), character, adapter.setting] });
+		}
+		if (unsafe >= 0) {
+			throw new CliPlanError(`${found.executable} runs through cmd.exe, which cannot be given the argument ${shown(args[unsafe])} safely; set ${adapter.setting}.path to the CLI's own program or Node entry point`, 'unsupported',
+				{ kind: 'cmd_unsafe', values: [found.executable, shown(args[unsafe]), adapter.setting] });
 		}
 	}
 	const started = { ...env };
@@ -257,7 +347,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		env: runEnv,
 		cwd: input.cwd,
 		// Its trust found where the run will look for it: with the environment it starts with (CLIS-1.2, 3.3)
-		trust: adapter.trustTarget ? { kind: 'file', target: adapter.trustTarget(input.cwd, runEnv, platform) } : { kind: 'arguments' },
+		trust: trustOf(entry, input.cwd, runEnv, platform, values),
 		...version !== undefined ? { version } : {},
 		...input.model !== undefined ? { model: input.model } : {},
 		...input.effort !== undefined ? { effort: input.effort } : {},

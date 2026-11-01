@@ -8,7 +8,7 @@ import * as path from 'path';
 import { clauseOf, messageOf } from '../../base/errors';
 import { folderKeyOf } from '../../base/files';
 import { withLongFileLock } from '../../base/lock';
-import { isDeletableWorktree } from '../../core/locations/catalog';
+import { isDeletableWorktree, isWithin } from '../../core/locations/catalog';
 import { plannedDestination, whyNotFolderName } from '../../core/locations/destination';
 import { WorktreeProblem, WorktreeProblemError } from '../../core/locations/problems';
 import { Catalog, Location, LocationId, LogPort, WorkspaceFolderInfo, WorktreeError, WorktreePlan, WorktreePort } from '../../core/ports';
@@ -51,6 +51,8 @@ export interface CreationLocations {
 	resolve(id: LocationId): Location | undefined;
 	refresh(): Promise<void>;
 	locationAt(directory: string): Location | undefined;
+	/** Takes the location out of the catalog and of `resolve` while it is deleted: no launch goes there meanwhile. Undone by the result. */
+	markDeleting?(id: LocationId): () => void;
 }
 
 export interface WorktreeServiceDeps {
@@ -177,7 +179,12 @@ export class WorktreeService implements WorktreePort {
 	 * processes ended, and `git worktree remove` runs without `--force`: Git's own refusal is reported as Git said it. The branch is
 	 * kept. The catalog is read again, which confirms the deletion (WORKTREES-1.3).
 	 */
-	async remove(id: LocationId, closeAgents: () => Promise<void>): Promise<void> {
+	/**
+	 * Deletes the linked worktree `id` (WORKTREES-3.2): refused with nothing touched where it is not deletable, locked, holds another
+	 * worktree or has changes; else out of the catalog while `closeAgents` closes its agents - true once every process is known to
+	 * have ended - then checked again, and removed by Git without `--force`.
+	 */
+	async remove(id: LocationId, closeAgents: () => Promise<boolean>): Promise<void> {
 		const location = this.deps.locations.resolve(id);
 		const folder = location?.folders[0];
 		if (!location || !folder) {
@@ -201,20 +208,37 @@ export class WorktreeService implements WorktreePort {
 		if (worktree.locked) {
 			throw problemError({ kind: 'worktree_locked', name: location.label });
 		}
+		// Git removes the whole folder: another worktree inside it would go too, with what it has not committed
+		const nested = listed.find(each => folderKeyOf(each.path) !== key && isWithin(folderKeyOf(each.path), key));
+		if (nested) {
+			throw problemError({ kind: 'worktree_nested', name: location.label, nested: path.basename(nested.path) });
+		}
 		if (await this.gitRead({ location }, () => this.deps.git.hasChanges(git, location.path))) {
 			throw problemError({ kind: 'worktree_changed', name: location.label });
 		}
-		await closeAgents();
+		const release = this.deps.locations.markDeleting?.(id) ?? (() => undefined);
 		try {
-			await this.deps.git.removeWorktree(git, checkout.commonDir, worktree.path);
-		} catch (err) {
-			throw err instanceof GitError && err.missing ? problemError({ kind: 'git_missing' }) : problemError({ kind: 'deletion_failed', name: location.label, detail: messageOf(err) });
-		}
-		this.deps.log.event(`Deleted the worktree at ${worktree.path}${worktree.branch !== undefined ? `; its branch ${worktree.branch} is kept` : ''}`);
-		try {
-			await this.deps.locations.refresh();
-		} catch (err) {
-			this.deps.log.event(`Could not read every working location after deleting ${worktree.path}: ${messageOf(err)}`);
+			if (!await closeAgents()) {
+				throw problemError({ kind: 'agents_not_ended', name: location.label });
+			}
+			// What its agents wrote as they ended is checked too: Git's own check may not see an untracked file
+			if (await this.gitRead({ location }, () => this.deps.git.hasChanges(git, location.path))) {
+				throw problemError({ kind: 'worktree_changed', name: location.label });
+			}
+			try {
+				await this.deps.git.removeWorktree(git, checkout.commonDir, worktree.path);
+			} catch (err) {
+				throw err instanceof GitError && err.missing ? problemError({ kind: 'git_missing' }) : problemError({ kind: 'deletion_failed', name: location.label, detail: messageOf(err) });
+			}
+			this.deps.log.event(`Deleted the worktree at ${worktree.path}${worktree.branch !== undefined ? `; its branch ${worktree.branch} is kept` : ''}`);
+			// Read again while it is still out of the catalog: it does not come back in between
+			try {
+				await this.deps.locations.refresh();
+			} catch (err) {
+				this.deps.log.event(`Could not read every working location after deleting ${worktree.path}: ${messageOf(err)}`);
+			}
+		} finally {
+			release();
 		}
 	}
 
@@ -339,6 +363,8 @@ function englishOf(problem: WorktreeProblem): [message: string, reason: string] 
 		case 'not_deletable': return [`"${problem.name}" cannot be deleted: only a linked worktree with no workspace folder in it can be.`, 'invalid_argument'];
 		case 'worktree_changed': return [`Worktree "${problem.name}" has changes that are not committed, so it was not deleted. Commit or discard them with Git, then delete it again.`, 'worktree_changed'];
 		case 'worktree_locked': return [`Worktree "${problem.name}" is locked, so it was not deleted. Unlock it with Git, then delete it again.`, 'worktree_locked'];
+		case 'worktree_nested': return [`Worktree "${problem.name}" holds worktree "${problem.nested}", so it was not deleted. Delete or move that worktree first, then delete it again.`, 'worktree_nested'];
+		case 'agents_not_ended': return [`Worktree "${problem.name}" was not deleted: an agent's process in it could not be confirmed to have ended. Delete it again once it has.`, 'agents_not_ended'];
 		case 'deletion_failed': return [`Could not delete worktree "${problem.name}": ${clauseOf(problem.detail)}.`, 'deletion_failed'];
 	}
 }

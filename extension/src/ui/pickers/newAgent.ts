@@ -6,10 +6,11 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { FacadeError } from '../../core/errors';
 import { normalizeName, suggestName } from '../../core/names';
-import { PlanError, type Agents, type Catalog, type CliCatalogPort, type CliChoice, type HumanPort, type LaunchHistoryPort, type Location, type LocationId, type LocationPort, type LogPort, type RunId, type WorktreePort } from '../../core/ports';
+import { PlanError, type Agents, type Catalog, type CliCatalogPort, type CliChoice, type CliChoices, type HumanPort, type LaunchHistoryPort, type Location, type LocationId, type LocationPort, type LogPort, type RunId, type WorktreePort } from '../../core/ports';
+import { locationLabel } from '../cardView';
 import { COMMANDS } from '../catalog';
-import { cliIcon, configureAgentsLabel, launchFailureText, reasonText } from '../presentation';
-import { chooseLocation, Destination, environmentLabel, locationLabel, worktreeSourceLabel } from './location';
+import { cliIcon, configureAgentsLabel, launchFailureText, plainText, reasonText } from '../presentation';
+import { chooseLocation, Destination, environmentLabel, worktreeSourceLabel } from './location';
 import { BACK, Flow } from './stepping';
 
 export interface NewAgentDeps {
@@ -62,9 +63,11 @@ type Item = vscode.QuickPickItem & { readonly does?: Does; readonly cli?: CliCho
  * New Agent (LIFECYCLE-1.1-1.3): one native picker titled `New Agent` with the CLIs to choose from - the last one used first and
  * selected, never started until chosen - and, at its bottom, `Change Working Location...` showing the location and its environment and
  * `Change Name...` showing an editable suggested name. Escape anywhere ends it with nothing done. Choosing a CLI closes it and starts
- * the agent - in a new worktree where one was chosen, made only now - whose card and terminal show at once.
+ * the agent - in a new worktree where one was chosen, made only now - whose card and terminal show at once. `startAt` is where
+ * it starts instead of the remembered location - the filtered empty panel's location (LIFECYCLE-1.2) - while it is offered;
+ * the person can change it as ever.
  */
-export async function newAgent(deps: NewAgentDeps): Promise<void> {
+export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promise<void> {
 	const title = vscode.l10n.t("New Agent");
 	const flow = new Flow();
 	const catalog = deps.locations.snapshot();
@@ -73,7 +76,7 @@ export async function newAgent(deps: NewAgentDeps): Promise<void> {
 	}
 	// Opening a location catalog reads Git again where needed; plain folders are there meanwhile (WORKTREES-1.1, 1.3)
 	deps.locations.refresh().catch(err => deps.log.event(`Could not refresh the working locations: ${messageOf(err)}`));
-	const found = defaultLocation(catalog, deps.history.last().location);
+	const found = (startAt === undefined ? undefined : catalog.locations.find(each => each.id === startAt)) ?? defaultLocation(catalog, deps.history.last().location);
 	if (!found) {
 		return openFolder(flow, title);
 	}
@@ -163,28 +166,31 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	const bottom: Item[] = [
 		// A labeled line: the editor draws one without a label as all but invisible. The location said as a label is its own line.
 		...!changeable
-			? [{ label: where, kind: vscode.QuickPickItemKind.Separator }]
+			? [{ label: plainText(where), kind: vscode.QuickPickItemKind.Separator }]
 			: [{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator }, {
 				label: vscode.l10n.t("Change Working Location..."),
-				description: where,
+				description: plainText(where),
 				iconPath: new vscode.ThemeIcon('folder'),
 				alwaysShow: true,
 				does: 'location' as const
 			}],
-		{ label: vscode.l10n.t("Change Name..."), description: at.name, iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
+		{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
 	];
-	const itemsOf = (choices: readonly CliChoice[] | Error): { readonly items: Item[]; readonly active?: Item } => {
+	const itemsOf = (choices: CliChoices | Error): { readonly items: Item[]; readonly active?: Item } => {
 		if (choices instanceof Error) {
 			const item: Item = { label: vscode.l10n.t("Configure Agents..."), detail: choices.message, iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' };
 			return { items: [item, ...bottom], active: item };
 		}
-		const { available, unavailable } = orderedClis(choices, deps.history.last().cli);
+		const { available, unavailable } = orderedClis(choices.clis, deps.history.last().cli);
+		// An error no CLI stands for - `facade.custom` wrong, or a key that cannot be an ID - is said by its setting (CLIS-3.4)
+		const settings = choices.problems.map((each): Item => ({ label: each.setting, detail: reasonText(each.said, each.problem), iconPath: new vscode.ThemeIcon('gear'), buttons: [configure], does: 'configure' }));
 		const items: Item[] = [
 			...available.map((cli): Item => ({ label: cli.displayName, iconPath: cliIcon(deps.media, cli.id), does: 'start', cli })),
 			// No CLI can start here: why, and the way to the settings (LIFECYCLE-1.1, EXPERIENCE-1.4)
 			...available.length ? [] : [{ label: vscode.l10n.t("Configure Agents..."), detail: vscode.l10n.t("Install a supported CLI in this environment, or configure its path."), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' as const }],
-			...unavailable.length ? [{ label: vscode.l10n.t("Unavailable"), kind: vscode.QuickPickItemKind.Separator }] : [],
+			...unavailable.length || settings.length ? [{ label: vscode.l10n.t("Unavailable"), kind: vscode.QuickPickItemKind.Separator }] : [],
 			...unavailable.map((cli): Item => ({ label: cli.displayName, ...(cli.problem ? { detail: reasonText(cli.said, cli.problem) } : {}), iconPath: cliIcon(deps.media, cli.id), buttons: [configure], does: 'configure', cli })),
+			...settings,
 			...bottom
 		];
 		return { items, active: items.find(item => item.does === 'start' || item.does === 'configure') };
@@ -199,7 +205,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		// The CLIs of the location's environment, found as the step shows (CLIS-1.1); the step up keeps its place meanwhile
 		live: picker => {
 			let up = true;
-			const show = (choices: readonly CliChoice[] | Error) => {
+			const show = (choices: CliChoices | Error) => {
 				if (up) {
 					const { items, active } = itemsOf(choices);
 					picker.items = items;

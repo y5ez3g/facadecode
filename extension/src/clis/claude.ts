@@ -41,10 +41,12 @@ export function claudeRunSettings(yolo: boolean, platform: NodeJS.Platform): obj
 /**
  * The file Claude Code keeps its global configuration in, found as Claude Code 2.1.312 finds it in the environment `env`:
  * `.config.json` in its folder - `CLAUDE_CONFIG_DIR`, else `~/.claude` - where an older version left one that holds something, else
- * `.claude.json`, named for a custom OAuth server where one is set, in `CLAUDE_CONFIG_DIR`, else in the home folder.
+ * `.claude.json`, named for a custom OAuth server where one is set, in `CLAUDE_CONFIG_DIR`, else in the home folder. A relative
+ * `CLAUDE_CONFIG_DIR` is from the folder it starts in, `cwd`, as Claude Code reads it there.
  */
-export function claudeConfigFile(env: Environment, platform: NodeJS.Platform): string {
-	const configured = variableOf(env, 'CLAUDE_CONFIG_DIR', platform);
+export function claudeConfigFile(env: Environment, platform: NodeJS.Platform, cwd?: string): string {
+	const set = variableOf(env, 'CLAUDE_CONFIG_DIR', platform);
+	const configured = set && cwd !== undefined ? path.resolve(cwd, set) : set;
 	const home = homeOf(env, platform);
 	const file = path.join(configured || home, variableOf(env, 'CLAUDE_CODE_CUSTOM_OAUTH_URL', platform) ? '.claude-custom-oauth.json' : '.claude.json');
 	const legacy = path.join(configured || path.join(home, '.claude'), '.config.json');
@@ -117,7 +119,7 @@ export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string
 }
 
 /**
- * Why Claude Code's trust is not written for its project folder `folder` (CLIS-3.3, D97): its trust covers every folder below a
+ * Why Claude Code's trust is not written for its project folder `folder` (CLIS-3.3, D103): its trust covers every folder below a
  * trusted one, so for a filesystem root, the home folder `home` or a folder above it, it would trust every project there. None for
  * any other folder.
  */
@@ -194,11 +196,14 @@ export const claudeAdapter: CliAdapter = {
 	trustTarget: (cwd, env, platform): TrustTarget => {
 		const folder = claudeProjectKey(cwd, platform);
 		const withheld = trustWithheld(folder, homeOf(env, platform), platform);
-		return { file: claudeConfigFile(env, platform), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder, ...withheld ? { withheld } : {} };
+		return { file: claudeConfigFile(env, platform, cwd), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder, ...withheld ? { withheld } : {} };
 	},
 	// The switch would also turn off its status reports; the run's --settings clears it for the files' copy (CLIS-2.3)
 	adjustEnvironment: (env, platform) => setVariable(env, TITLE_SWITCH, null, platform),
 	// ✳ while it waits, a Braille spinner frame while it works
 	title: { decoration: /^[✳⠀-⣿]+\s*/u, names: ['Claude Code', 'claude'] },
+	// YOLO off turns its sandbox on through the run's settings, where it has one; YOLO on leaves it to its own settings
+	sandbox: (yolo, platform) => !hasSandbox(platform) ? { state: 'none' } : yolo ? { state: 'native' } : { state: 'on' },
+	approvals: yolo => yolo ? { state: 'bypassed', by: ['--dangerously-skip-permissions'] } : { state: 'native' },
 	interruptExit: sigintExit
 };

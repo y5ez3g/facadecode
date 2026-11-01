@@ -6,9 +6,24 @@ import * as crypto from 'crypto';
 import * as vscode from 'vscode';
 import { isJsonObject, JsonObject } from '../base/json';
 import type { LogPort } from '../core/ports';
-import type { Act, Outcome, PanelState, Strings } from '../webview/protocol';
+import type { Act, Outcome, PanelState, Scrolling, Strings } from '../webview/protocol';
 import { CONTEXT, PANEL_VIEW } from './catalog';
 import { PanelModel } from './model';
+import { agentCountText } from './presentation';
+
+/**
+ * What the page's wheel follows (PANEL-3.3): the list settings VS Code's own lists scroll by, its defaults where a value is not a
+ * number, and the window's zoom.
+ */
+export function scrollingOf(configuration: { get(section: string): unknown }): Scrolling {
+	const number = (value: unknown, otherwise: number) => typeof value === 'number' && Number.isFinite(value) ? value : otherwise;
+	return {
+		sensitivity: number(configuration.get('workbench.list.mouseWheelScrollSensitivity'), 1),
+		fastSensitivity: number(configuration.get('workbench.list.fastScrollSensitivity'), 5),
+		smooth: configuration.get('workbench.list.smoothScrolling') === true,
+		zoomFactor: Math.pow(1.2, number(configuration.get('window.zoomLevel'), 0))
+	};
+}
 
 /** Defined by the build: true only in the integration suite's build (UX-3.2). */
 declare const FACADE_TEST_MODE: boolean;
@@ -26,7 +41,10 @@ const isTarget: Check = value => typeof value === 'string' && value.length > 0 &
 const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
-	openFolder: { target: false }
+	clearFilter: { target: false },
+	openFolder: { target: false },
+	// F2 on a card: the host opens the Input Box and validates the name (D38)
+	rename: { target: true }
 };
 
 /**
@@ -87,7 +105,11 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 	private progressing = false;
 
 	constructor(private readonly extensionUri: vscode.Uri, private readonly model: PanelModel, private readonly actions: PanelActions, private readonly log: LogPort) {
-		this.disposables.push(model.onDidChange(state => this.publish(state)));
+		this.disposables.push(model.onDidChange(state => this.publish(state)), vscode.workspace.onDidChangeConfiguration(change => {
+			if (change.affectsConfiguration('workbench.list') || change.affectsConfiguration('window.zoomLevel')) {
+				this.postScrolling();
+			}
+		}));
 		this.sayContext(model.state());
 		this.showLoading();
 	}
@@ -170,6 +192,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		if (message.type === 'ready') {
 			this.page = message.page;
 			this.post(this.model.state());
+			this.postScrolling();
 			this.waiting.splice(0).forEach(then => then());
 			return;
 		}
@@ -201,8 +224,10 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 	private publish(state: PanelState): void {
 		this.sayContext(state);
 		if (this.view) {
-			// The badge counts every card, starting and failed ones too (PANEL-1.1)
-			this.view.badge = state.cardCount ? { value: state.cardCount, tooltip: state.cardCount === 1 ? vscode.l10n.t("1 agent") : vscode.l10n.t("{0} agents", state.cardCount) } : undefined;
+			// The badge counts every card, starting and failed ones too; a filter changes no count (PANEL-1.1)
+			this.view.badge = state.cardCount ? { value: state.cardCount, tooltip: agentCountText(state.cardCount) } : undefined;
+			// The view's description names the filter, as its filled button says one is on (PANEL-2.3)
+			this.view.description = state.filter?.label;
 		}
 		this.post(state);
 	}
@@ -213,13 +238,21 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		}
 	}
 
+	/** Says the page shown the list settings its wheel follows, as it is ready and as they change (PANEL-3.1, 3.3). */
+	private postScrolling(): void {
+		if (this.view && this.page !== undefined) {
+			void this.view.webview.postMessage({ type: 'scrolling', page: this.page, scrolling: scrollingOf(vscode.workspace.getConfiguration()) });
+		}
+	}
+
 	/** The context keys of UX-3.2, from the same state, each set only where it changed. */
 	private sayContext(state: PanelState): void {
 		const selected = this.model.selectedAgent();
 		const keys: readonly [string, boolean][] = [
 			[CONTEXT.hasAgents, state.cardCount > 0],
 			[CONTEXT.agentSelected, selected !== undefined],
-			[CONTEXT.agentSelectedEnded, selected?.ended === true]
+			[CONTEXT.agentSelectedEnded, selected?.ended === true],
+			[CONTEXT.filtered, state.filter !== undefined]
 		];
 		for (const [key, value] of keys) {
 			if (this.contextSaid.get(key) !== value) {
@@ -254,8 +287,14 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const strings: Strings = {
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
+			clearFilter: vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
 			noAgents: vscode.l10n.t("Launch an agent in this workspace."),
+			// {0} is the location or folder the filter shows
+			noAgentsIn: vscode.l10n.t("No agents found in \"{0}\"."),
+			// {0} is how many agents the filter hides, 2 or more
+			otherAgents: vscode.l10n.t("{0} other agents are in this workspace."),
+			otherAgent: vscode.l10n.t("1 other agent is in this workspace."),
 			noFolder: vscode.l10n.t("Open a folder to launch agents."),
 			openFolder: vscode.l10n.t("Open Folder"),
 			// {0} is how long ago, as the browser says it in the window's language: now, 5 min. ago, yesterday

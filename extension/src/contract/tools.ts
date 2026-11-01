@@ -10,7 +10,7 @@ import { monotonic } from '../base/clock';
 import { messageOf as errorText } from '../base/errors';
 import { FacadeError } from '../core/errors';
 import type { InputPort, MessageRecord, Messages, SendResult } from '../core/messagePorts';
-import type { Agents, CapabilityState, CliChoice, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
+import type { Agents, CapabilityState, CliChoice, CliChoices, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
 import { reaches, referenceOf, resolveAgent, ResolveOptions } from '../core/reach';
 import type { StartChoices } from '../record/choices';
 import type { ServedRoute } from '../base/windowNetwork';
@@ -71,7 +71,7 @@ export interface CliFacts {
 
 /** The CLI catalog of a location (`host/clis.ts`). */
 export interface StartCatalog {
-	list(location: Location): Promise<readonly CliChoice[]>;
+	list(location: Location): Promise<CliChoices>;
 	/** Each CLI's facts there now, launched with `yolo`. */
 	describe(location: Location, yolo: boolean): { readonly launches: readonly CliFacts[] };
 }
@@ -205,7 +205,7 @@ class ToolService {
 		} catch (err) {
 			outcome = { result: err instanceof ArgumentError ? errorResult(err, { data: err.problems }) : errorResult(err, { readOnly: QUERY_TOOLS.has(call.tool) }) };
 		}
-		// Each call by its tool, caller and outcome, never its arguments: how agents use the tools shows in the log (ARCHITECTURE-3.3, D111)
+		// Each call by its tool, caller and outcome, never its arguments: how agents use the tools shows in the log (ARCHITECTURE-3.3, D117)
 		const { status, error } = outcome.result;
 		const tool = TOOLS.some(each => each.name === call.tool) ? call.tool : 'an unknown tool';
 		this.deps.log?.(`Tool ${tool} by ${this.deps.agents.get(call.caller as RunId)?.alias ?? call.caller}: ${status}${error ? ` ${error.code} (${error.reason})` : ''} in ${Math.round(this.mono() - receivedAt)} ms`);
@@ -340,7 +340,7 @@ class ToolService {
 
 	/** The run `reference` names within the caller's reach (RULES-2.3, 4.3). */
 	/**
-	 * Whether `reference` names the person (RULES-2.3, D85): `#human` always; `@human` or `human` unless an agent the caller reaches is
+	 * Whether `reference` names the person (RULES-2.3, D91): `#human` always; `@human` or `human` unless an agent the caller reaches is
 	 * named `human`, when it is ambiguous like any repeated name and resolving it as an agent says so.
 	 */
 	private async isHuman(reference: string, caller: Caller): Promise<boolean> {
@@ -565,7 +565,7 @@ class ToolService {
 			id: delivery.id, from: sender.id, sender: { party: { run: sender.id, alias: sender.alias, name: sender.name }, window: from, ...sender.windowLabel !== undefined ? { label: sender.windowLabel } : {} },
 			to: target.id, text: delivery.text, ...delivery.replyTo !== undefined ? { replyTo: delivery.replyTo } : {},
 			elapsedMs: delivery.elapsedMs, ...delivery.callId !== undefined ? { callId: delivery.callId } : {},
-			// A request ID is the sender's words, kept as given where it is the shape a call's is (MCP-1.1, D104)
+			// A request ID is the sender's words, kept as given where it is the shape a call's is (MCP-1.1, D110)
 			...typeof delivery.requestId === 'string' && codePoints(delivery.requestId) > 0 && codePoints(delivery.requestId) <= 200 ? { requestId: delivery.requestId } : {}
 		});
 		return defined({ status: sent.status, reason: sent.reason, obstacle: sent.obstacle, record: sent.record });
@@ -659,10 +659,10 @@ class ToolService {
 			};
 		}
 		const location = this.location(args.location_id);
-		const choices = await this.deps.clis.list(location);
+		const { clis: choices, problems } = await this.deps.clis.list(location);
 		if (args.cli === undefined) {
 			return {
-				result: success({ window_id: window.id, location_id: location.id, location: locationOf(location, true), clis: choices.map(cliOf) }),
+				result: success({ window_id: window.id, location_id: location.id, location: locationOf(location, true), clis: choices.map(cliOf), problems: problems.map(({ setting, problem }) => ({ setting, problem })) }),
 				headline: `${count(choices.length, 'CLI')} at ${location.path}, ${choices.filter(each => each.available).length} of them able to start now.`
 			};
 		}
@@ -693,7 +693,7 @@ class ToolService {
 	}
 
 	private async startAgent(args: ToolArguments['start_agent'], caller: Caller, call: Received): Promise<Outcome> {
-		// A request ID the caller gave a start before: that start's agent, and no other (MCP-1.1, D104)
+		// A request ID the caller gave a start before: that start's agent, and no other (MCP-1.1, D110)
 		const earlier = args.request_id !== undefined ? this.deps.agents.requested(caller.id, args.request_id) : undefined;
 		if (earlier) {
 			return this.startedBefore(earlier, args);
@@ -706,7 +706,7 @@ class ToolService {
 		// Everything that can be checked before acceptance is: a failure here creates no card or terminal (MCP-2.3, RULES-5.1)
 		this.checkWindow(args.window_id);
 		const location = this.location(args.location_id);
-		const choices = await this.deps.clis.list(location);
+		const { clis: choices } = await this.deps.clis.list(location);
 		// CLI discovery can yield while another call accepts this request. The check immediately before acceptance closes that race.
 		const acceptedMeanwhile = args.request_id !== undefined ? this.deps.agents.requested(caller.id, args.request_id) : undefined;
 		if (acceptedMeanwhile) {
@@ -768,8 +768,8 @@ class ToolService {
 	}
 
 	/**
-	 * A start whose request ID started `facts` already: its agent as it is now, nothing started again (MCP-1.1, D104) - answered as the
-	 * start went: still starting, failed, or started (D112).
+	 * A start whose request ID started `facts` already: its agent as it is now, nothing started again (MCP-1.1, D110) - answered as the
+	 * start went: still starting, failed, or started (D118).
 	 */
 	private startedBefore(facts: RunFacts, args: ToolArguments['start_agent']): Outcome {
 		const present = this.deps.agents.get(facts.id);
@@ -995,7 +995,7 @@ class ToolService {
 	// Messages (MCP-4)
 
 	private async sendMessage(args: ToolArguments['send_message'], caller: Caller, call: Received): Promise<Outcome> {
-		// A request ID the caller gave a send before: that message as it stands, sent no second time (MCP-1.1, D104)
+		// A request ID the caller gave a send before: that message as it stands, sent no second time (MCP-1.1, D110)
 		const earlier = args.request_id !== undefined ? this.deps.messages.findRequest(caller.id, args.request_id) : undefined;
 		if (earlier) {
 			return this.sentBefore(earlier, args);
@@ -1107,7 +1107,7 @@ class ToolService {
 		}
 	}
 
-	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1, D104). */
+	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1, D110). */
 	private sentBefore(record: MessageRecord, args: ToolArguments['send_message']): Outcome {
 		const shown = record.to.run === '@human' ? '#human' : record.to.alias ? referenceOf({ name: record.to.name ?? '', alias: record.to.alias }) : record.to.run;
 		const data = defined({ message_id: record.id, alias: record.alias, target: record.to.run, target_reference: shown, reply_to: record.replyTo, length: record.length, request_id: args.request_id, repeated: true });

@@ -77,7 +77,7 @@ suite('Reach and references (RULES-2.3, 4.3)', () => {
 		assert.strictEqual(refusal(() => resolveAgent('nobody', tree, { outside })).reason, 'not_found');
 	});
 
-	test('#human is the person and never an agent; @human is the person while no agent in reach is named human (RULES-2.3, O22, D85)', () => {
+	test('#human is the person and never an agent; @human is the person while no agent in reach is named human (RULES-2.3, O22, D91)', () => {
 		const refused = refusal(() => resolveAgent('#human', all));
 		assert.deepStrictEqual([refused.code, refused.reason], ['INVALID', 'invalid_argument']);
 		assert.match(refused.message, /#human is the person/);

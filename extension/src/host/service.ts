@@ -8,19 +8,20 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { disposeAll } from '../base/lifecycle';
-import { WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
+import { isDamagedWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { createToolServices } from '../contract/tools';
 import { AgentService } from '../core/agents';
 import { AttentionNotices } from '../core/attention';
 import type { MessageRecord } from '../core/messagePorts';
 import { MessageService } from '../core/messages';
 import { PlanError, type LogPort, type RetainedRun, type RunId } from '../core/ports';
+import { PANEL_VIEW } from '../ui/catalog';
 import { worktreeProblemText } from '../ui/pickers/location';
 import { reasonText } from '../ui/presentation';
 import { registerUi } from '../ui/commands/index';
 import { registerWorktreeCommands } from '../ui/commands/worktree';
 import { AgentExecution } from './execution/agentExecution';
-import { EarlierAgents } from './execution/earlierAgents';
+import { RECONCILE_MS } from './execution/executionSession';
 import { AliasCounter } from '../record/aliases';
 import { ChoiceStore } from '../record/choices';
 import { AgentLog } from '../record/log';
@@ -32,6 +33,7 @@ import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
 import { allocateNumbers } from '../record/windowRegistry';
 import { agentAliases, AliasPool, ClientNetwork, LOCAL_POOL, networkAddress, publishAgents, REMOTE_POOL, serveRoutes } from './client';
+import { registerAgentsLog } from './agentsLog';
 import { HostClis } from './clis';
 import { WindowContact } from './contact';
 import { diagnosticsOf, DiagnosticsDeps, registerDiagnostics } from './diagnostics';
@@ -43,6 +45,7 @@ import { editorEnvironment } from './editorEnvironment';
 import { registerMessageHistory } from './messageHistory';
 import { readSetting, waitSeconds, yolo } from './settings';
 import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
+import { registerShowLaunch } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
 
@@ -50,6 +53,44 @@ declare const FACADE_TEST_MODE: boolean;
 
 /** Where the window's workspace keeps its key, for the window's reloads (ARCHITECTURE-2.2). */
 const WORKSPACE_KEY = 'facade.workspaceKey';
+/** The longest wait between attempts to list this window's runs: well within the five minutes they are kept for it (RULES-4.1). */
+const MOST_RESTORE_WAIT_MS = 30_000;
+
+/** Why this window's Facade could not start, in the person's words: shown as it is; `reloadHelps` where reloading tries again. */
+export class ActivationError extends Error {
+	constructor(message: string, readonly reloadHelps = true) {
+		super(message);
+	}
+}
+
+/**
+ * A window whose Facade could not start says why where the person looks - a notification, with the reload that tries again where
+ * one can help, and the panel in place of a progress that would never end - not only in the editor's log (UX-2.4).
+ */
+export function sayActivationFailed(context: vscode.ExtensionContext, err: unknown): void {
+	const text = err instanceof ActivationError ? err.message : vscode.l10n.t("Could not start {0}: {1}.", 'Facade Code', messageOf(err));
+	try {
+		context.subscriptions.push(vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
+			resolveWebviewView: view => {
+				view.webview.options = { enableScripts: false };
+				const escaped = text.replace(/[&<>"']/g, char => `&#${char.charCodeAt(0)};`);
+				view.webview.html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'"></head><body><p style="padding: 0 8px; overflow-wrap: anywhere">${escaped}</p></body></html>`;
+			}
+		}));
+	} catch {
+		// The panel of the part that did start shows itself
+	}
+	if (err instanceof ActivationError && !err.reloadHelps) {
+		void vscode.window.showErrorMessage(text);
+		return;
+	}
+	const reload = vscode.l10n.t("Reload Window");
+	void vscode.window.showErrorMessage(text, reload).then(choice => {
+		if (choice === reload) {
+			void vscode.commands.executeCommand('workbench.action.reloadWindow');
+		}
+	});
+}
 
 /** The workspace this window keeps its runs under: its workspace file, else its first folder (ARCHITECTURE-3.1). */
 function workspaceUri(): string {
@@ -63,8 +104,12 @@ function workspaceUri(): string {
 export async function activateFacade(context: vscode.ExtensionContext): Promise<() => Promise<void>> {
 	const home = facadeHome();
 	const session = vscode.env.sessionId;
-	// The window component comes with Facade Code's extension pack, maybe after it: waited for a bounded time (ARCHITECTURE-4.3, D88)
+	// The window component comes with Facade Code's extension pack, maybe after it: waited for a bounded time (ARCHITECTURE-4.3, D94)
 	const identity = await waitForWindowIdentity(session);
+	if (isDamagedWindowIdentity(identity, session)) {
+		// No other identity is invented (ARCHITECTURE-2.2), and a reload reads the same record: another window has its own
+		throw new ActivationError(vscode.l10n.t("This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.", vscode.env.appName), false);
+	}
 	if (!identity) {
 		const missing = showComponentMissing(context, session);
 		return async () => missing.dispose();
@@ -79,7 +124,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const claim = nextOwnerClaim(record.key, home);
 	const terminalOwner = { session, claim };
 	if (await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...terminalOwner, kind: 'activate', handedOver: record.key === handedOver }) !== true) {
-		throw new Error(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
+		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
 	}
 	const agentLog = new AgentLog(record.dir);
 	const log: LogPort = { event: text => agentLog.event(text) };
@@ -192,11 +237,24 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		workspace: record.key,
 		log
 	});
-	// An agent another agent started, waiting on its CLI's own question, is reported to that creator (RULES-1.8, D103)
+	// An agent another agent started, waiting on its CLI's own question, is reported to that creator (RULES-1.8, D109)
 	const attention = new AttentionNotices({ agents, messages, log: text => log.event(text) });
-	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1)
-	const restored = agents.restore();
+	// Reattach first: the panel shows its progress until this window's runs are known (LIFECYCLE-3.5, PANEL-1.1). A window that
+	// cannot list them yet - its ptyd not answering - keeps trying, as they end five minutes after no window claims them (RULES-4.1)
+	let restoreRetry: ReturnType<typeof setTimeout> | undefined;
+	let disposed = false;
+	const restored = (async () => {
+		for (let wait = RECONCILE_MS; await agents.restore() === undefined && !disposed; wait = Math.min(wait * 2, MOST_RESTORE_WAIT_MS)) {
+			await new Promise<void>(resolve => { restoreRetry = setTimeout(resolve, wait); });
+		}
+	})();
 	const ready = restored.then(() => execution.finishRestore()).catch(err => log.event(`Could not reconcile this window's agents: ${messageOf(err)}`));
+	// Then a ptyd listing runs of this window that it shows no pair of - one of an earlier protocol found late, or a failed reattach -
+	// restores again, one restore at a time: no started agent is left out (RULES-4.1, D86)
+	let restoring: Promise<unknown> = ready;
+	const found = execution.onDidFindRuns(() => {
+		restoring = restoring.then(() => disposed ? undefined : agents.restore()).catch(err => log.event(`Could not show this window's agents again: ${messageOf(err)}`));
+	});
 	// The nine tools, for every run of this window whose shim calls in (MCP-1.1, 6.1)
 	const services = createToolServices({
 		window: { ...window, environment },
@@ -218,14 +276,6 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		...network ? { network } : {}
 	});
 	const tools = execution.serveTools((call, receivedAt) => services.answer(call, receivedAt));
-	// Agents an earlier Facade Code started go on in their own terminals until they end (ARCHITECTURE-2.4)
-	const earlier = ready.then(() => EarlierAgents.open({
-		home, owner: record.key, claim, ptydScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'ptyd.js').fsPath,
-		log: line => log.event(line), confirmClose: agent => human.confirmClose(agent)
-	})).catch(err => {
-		log.event(`Could not look for agents an earlier Facade Code started: ${messageOf(err)}`);
-		return undefined;
-	});
 	// Project files injected for runs that are gone everywhere in this environment are released (CLIS-2.2); old results expire
 	void ready.then(() => execution.allRunIds()).then(alive => clis.reconcile(alive)).catch(err => log.event(`Could not release injected files of ended agents: ${messageOf(err)}`));
 	try {
@@ -260,6 +310,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			...(identity.remote ? { remote: identity.remote } : {})
 		}),
 		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
+		registerShowLaunch(clis, locations, log, identity.remote),
+		registerAgentsLog(agentLog.file),
 		contact,
 		...registerMessageHistory({ messages }),
 		...registerDiagnostics(diagnostics),
@@ -274,7 +326,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	];
 	context.subscriptions.push(...disposables);
 	return async () => {
-		void earlier.then(each => each?.dispose());
+		disposed = true;
+		clearTimeout(restoreRetry);
+		found.dispose();
 		tools.dispose();
 		attention.dispose();
 		messages.dispose();

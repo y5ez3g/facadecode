@@ -25,6 +25,9 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
 ];
 
+/** The custom CLI's ID: a key of `facade.custom`, never a built-in's (CLIS-3.4). */
+const CUSTOM_CLI = 'my-cli';
+
 /**
  * Takes back the trust each launch gave its folder in Claude Code's configuration `file` (CLIS-3.3, D62): the entries of the run's own
  * folders under `root`, nothing else; the file is replaced whole, as Claude Code writes it.
@@ -88,7 +91,7 @@ async function main(): Promise<void> {
 	// terminals' environment names it, as a person's terminal settings could; the editor keeps its own HOME.
 	const agentsHome = path.join(root, 'agents-home');
 	fs.mkdirSync(agentsHome);
-	// Antigravity's settings as it leaves them once it has run there: Facade merges its trust into a file the CLI made, and makes none (D97)
+	// Antigravity's settings as it leaves them once it has run there: Facade merges its trust into a file the CLI made, and makes none (D103)
 	fs.mkdirSync(path.join(agentsHome, '.gemini', 'antigravity-cli'), { recursive: true });
 	fs.writeFileSync(path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json'), '{}\n');
 
@@ -164,6 +167,8 @@ async function main(): Promise<void> {
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
 		}
+		// The flags runTests gives the other parts too: Electron's sandbox cannot start where unprivileged user namespaces are
+		// restricted, as on Ubuntu 24.04 and later
 		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-conversion'), '--shared-data-dir', path.join(root, 's-conversion'),
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
 			stdio: 'ignore',
@@ -259,6 +264,10 @@ async function main(): Promise<void> {
 				const screen = terminalEnv({ FACADE_IT_AS: cli.id, ...cli.id === 'muse' ? { FACADE_IT_SCREEN: 'muse' } : {} });
 				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, { ...missing, ...screen });
 			}
+			// A custom CLI with every built-in turned off, so that it is the one New Agent offers: started exactly as configured (CLIS-1.1, 3.4)
+			const off = Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.enabled`, false]));
+			const custom = { [CUSTOM_CLI]: { path: fake, launch: { start: ['--from-custom', 'two words'], resume: ['resume', '${sessionId}'] } } };
+			await run('custom', repo, { FACADE_IT_CLI: CUSTOM_CLI, FACADE_IT_AGENTS_HOME: agentsHome }, { ...off, 'facade.custom': custom });
 		}
 		if (!only || only === 'cross') {
 			await crossWindow();

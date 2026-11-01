@@ -63,7 +63,7 @@ function setUp() {
 	return { runs, notices, waits, elapse, timers, told, changes, logged, failing };
 }
 
-suite('Attention: a started agent waiting on its CLI\'s question is reported to its creator (RULES-1.8, D103)', () => {
+suite('Attention: a started agent waiting on its CLI\'s question is reported to its creator (RULES-1.8, D109)', () => {
 
 	test('after twenty seconds of a permission question, its creator is told once; again only once it stopped waiting and waits again', () => {
 		const { waits, elapse, timers, told } = setUp();
@@ -83,7 +83,7 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 		assert.strictEqual(told.length, 2);
 	});
 
-	test('a notice that cannot be recorded is logged, never thrown from its timer (D112)', () => {
+	test('a notice that cannot be recorded is logged, never thrown from its timer (D118)', () => {
 		const { waits, elapse, told, logged, failing } = setUp();
 		failing.error = new Error('the disk is full');
 		waits(CHILD, { kind: 'question' });

@@ -32,7 +32,12 @@ function diagnostics(more: Partial<Diagnostics> = {}): Diagnostics {
 	};
 }
 
-suite('Copy Diagnostics: what it copies (ARCHITECTURE-3.3, D110)', () => {
+suite('Copy Diagnostics: what it copies (ARCHITECTURE-3.3, D116)', () => {
+	test('catalog configuration errors remain visible even if a malformed catalog yields no custom entries', () => {
+		const text = diagnosticsText(diagnostics({ clis: { where: '/repo', each: [], problems: [{ setting: 'facade.custom', problem: 'facade.custom must be an object; received array' }] } }));
+		assert.match(text, /Configuration error \(facade.custom\): facade.custom must be an object; received array/);
+	});
+
 	test('versions, CLIs, agents with what their input reads and their last rows, and the log\'s end, the home folder written ~', () => {
 		const text = diagnosticsText(diagnostics({
 			clis: {
@@ -122,7 +127,7 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 				agents: { list: () => [ada, bo, ended] },
 				locations: { snapshot: () => ({ locations: [location], folders: [], pending: false }) },
 				clis: {
-					list: async () => [{ id: 'claude', displayName: 'Claude Code', available: true }],
+					list: async () => ({ clis: [{ id: 'claude', displayName: 'Claude Code', available: true }], problems: [] }),
 					describe: () => ({ launches: [{ cli: 'claude', takes: { model: true, effort: true }, input: { adapter: 'claude-frame', capability: { state: 'supported', reason: '' } }, version: { version: '2.1.316', source: '' } }] }),
 					collaborationEnabled: () => true
 				} as unknown as Parameters<typeof registerDiagnostics>[0]['clis'],
@@ -151,7 +156,7 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test('in a remote window the window component is named by the version it answered with, which that extension host sees no other way (D110)', async () => {
+	test('in a remote window the window component is named by the version it answered with, which that extension host sees no other way (D116)', async () => {
 		const copied: string[] = [];
 		const remoteApi = (handlers: Map<string, () => Promise<void>>) => ({
 			l10n: { t: (text: string) => text },

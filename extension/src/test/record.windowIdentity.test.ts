@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { isWindowIdentity, isWindowToken } from '../base/windowIdentity';
-import { beginWindowTerminals, retireWindowTerminals, windowToken } from '../record/windowIdentity';
+import { beginWindowTerminals, DamagedWindowRecord, retireWindowTerminals, windowToken } from '../record/windowIdentity';
 import { keepWindowKey, workspaceRecord } from '../record/workspace';
 import { tempDir } from './util';
 
@@ -35,14 +35,14 @@ suite('Record: local window handover identity', () => {
 		const file = path.join(temp.dir, 'handover.json');
 		for (const value of ['{', '{}', '{"version":2,"token":"bad"}']) {
 			fs.writeFileSync(file, value);
-			assert.throws(() => windowToken(temp.dir));
+			assert.throws(() => windowToken(temp.dir), DamagedWindowRecord);
 			assert.strictEqual(fs.readFileSync(file, 'utf8'), value);
 		}
 	});
 
 	test('missing, malformed and stale-session command replies cannot authorize handover', () => {
 		const token = windowToken(temp.dir);
-		// The component's version, where it names it (D110)
+		// The component's version, where it names it (D116)
 		assert.ok(isWindowIdentity({ version: 1, token, session: 'now', component: '0.2.0' }, 'now'));
 		assert.ok(!isWindowIdentity({ version: 1, token, session: 'now', component: '' }, 'now'));
 		assert.ok(!isWindowIdentity({ version: 1, token, session: 'now', component: 2 }, 'now'));

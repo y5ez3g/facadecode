@@ -21,7 +21,7 @@ There are no recipient arrays or aggregate sends. A caller sending to several ag
 Resolve the target once under 2.3; keep that target and message ID through internal attempts. An optional reply-to ID
 expresses a relationship, not a promise of a reply. Names and conversation IDs are not substitutes for the resolved run.
 A caller may give a send its own request ID: the same one again from that caller within an hour answers the message it
-sent, as it stands, and sends nothing again (D104). Each new send invocation without one gets a new message ID; internal
+sent, as it stands, and sends nothing again (D110). Each new send invocation without one gets a new message ID; internal
 attempts for an accepted message retain its ID. Message IDs, including their displayed aliases, are unique across the client
 network and never reassigned, including after reopening or history expiry. This uses ordinary ID allocation; a request ID is kept on its
 message record, not in a separate deduplication ledger. Report invalid content or an unavailable target before writing.
@@ -83,23 +83,23 @@ protection.
 | Initial response | At most 2 seconds from Facade ingress |
 | Attempts per stage | At stage start, then every 3 seconds |
 | Deadline per stage | 15 seconds from that stage's start |
-| Input held by another draft or a native menu or question | The deadline moves on while it holds, to at most 10 minutes from the stage's start (D100) |
+| Input held by another draft or a native menu or question | The deadline moves on while it holds, to at most 10 minutes from the stage's start (D106) |
 | Permanent obstacle | Finish immediately; do not wait out unused slots |
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
 or environments consume the same budget. No extra attempts on input-change events, indefinite retries, or bursts to catch
 missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for: Orca holds its
-notices while a person types, and so does Facade, never submitting the person's text with the message (D100). At the
+notices while a person types, and so does Facade, never submitting the person's text with the message (D106). At the
 deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage
 whose input was never held ends at fifteen seconds; once held, its deadline is ten minutes from its start, whatever the
 input shows after. A long paste adds the time it takes, at CLIS-2.1's paste rates, to each of its stage's deadlines, so
 that its Enter is never cut off by its own size; a part of a message's text in the input, which no wait makes its own, is
-not waited for (D112). An input still unavailable then means failure; delivery is not a promise to overcome a permanently
+not waited for (D118). An input still unavailable then means failure; delivery is not a promise to overcome a permanently
 unavailable target. A read through read_messages delivers the message immediately and cancels any paste that has not
 begun. If text is already being written or remains as this message's own complete draft, the existing stage may finish
 its Enter within its original budget. It never types the text again, submits an edited draft or delays the read's result.
 Result handoff starts its own budget once the original result is known; a result joins others typed in one paste only
-while a whole stage's time is still before them (1.7, D112). Window-close handling is 1.9 and does not
+while a whole stage's time is still before them (1.7, D118). Window-close handling is 1.9 and does not
 extend a deadline.
 
 ### 1.6 A message is typed at most once
@@ -107,13 +107,13 @@ extend a deadline.
 **Once a message's text went into the input whole, later attempts never type it again; they press Enter only over the message's own draft.**
 
 A submission the CLI takes slowly is not lost: Orca found that typing it again delivers it twice, and counts a written
-prompt as delivered (D98). A later attempt of the same delivery reads the input: the message's own draft alone - its
+prompt as delivered (D104). A later attempt of the same delivery reads the input: the message's own draft alone - its
 text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
 this delivery confirms the submission; anything else is waited for under 1.4 and 1.5. A paste that never showed in the
 input is not typed again either: a CLI busy with its turn draws it late, and its own draft then gets Enter. A paste whose
 answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. Once a paste
 showed as its CLI's placeholder, a later Enter goes only over that same placeholder, its paste number included, as a
-person's later paste of the same size draws another (D112). Never press Enter over a draft that is not the message's own: a
+person's later paste of the same size draws another (D118). Never press Enter over a draft that is not the message's own: a
 person's text is never submitted, nor appended to, nor erased. Report partial or uncertain effects honestly at the
 deadline: text without a confirmed submission is not delivery. A confirmed submission ends that stage. Internal effect
 records may help explain what happened; they are not caller request keys or a reconciliation API. No automatic content
@@ -131,7 +131,7 @@ labeled Facade result with the original message ID, target and outcome - deliver
 read_messages, or not delivered - using the finite result budget if needed. The result is not authored by B and
 requests no response. Results that come for one terminal while none of them is typed yet go in one paste, one turn of its
 model for them all, as T3 Code wakes a parent once for the tasks that finished together; a result read meanwhile is left out
-of it (D109). Failure to return it never resends the original message. A message whose result already said
+of it (D115). Failure to return it never resends the original message. A message whose result already said
 it was not delivered and that its recipient reads later becomes delivered without a second result.
 If A is gone or result delivery fails, finish the handoff; do not generate another error for B or a human popup.
 If B actually chooses to reply, B is that new send's caller: a closed A produces an error to B. If no agent can receive
@@ -155,7 +155,7 @@ A retained red card is not permission to duplicate an agent's operation error as
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
 to contact a person. One fact does go to an agent: an agent another agent of the same window started, whose CLI has waited
 twenty seconds on its own permission, question or sign-in, is reported to that creator once each time it starts waiting, as
-a Facade result naming who can answer - the person's permission and sign-in are theirs (D103). Orca tells its coordinator of
+a Facade result naming who can answer - the person's permission and sign-in are theirs (D109). Orca tells its coordinator of
 a worker stopped at a prompt; without it, a child waiting on a question no one sees stalls its creator's work. A person is
 never told by it. The notice reports the blocker without asking its creator to contact the person, forward the notice or
 escalate it. Whether an agent contacts the person follows the person's task instructions, not this automatic notice.
@@ -182,7 +182,7 @@ No notification or message is scheduled for replay on the next opening.
 
 An ordinary message is one full paste plus Enter, not one Enter per line. Direct text/keys use the same serialization.
 While another delivery's text may still be in that input - written, neither confirmed nor ended - no message is pasted
-into it: that input is held for it, as by a draft (D112). Waiting in that sequence does not renew deadlines. Stop is independent of pending input and prevents further queued
+into it: that input is held for it, as by a draft (D118). Waiting in that sequence does not renew deadlines. Stop is independent of pending input and prevents further queued
 input for the closed run. Use a simple bounded implementation; no agent workflow or general-purpose scheduler is added.
 
 ## 2 Identity and locations
@@ -299,6 +299,12 @@ is required. Actual termination and uncertain remote cleanup remain distinct fac
 five-minute timer is cleanup policy, not proof that a person closed the window: no other timer ends a process, and true
 close detection remains a platform proof obligation.
 
+Until a person closes it or it ends normally, every agent a window started stays shown: its card in the window's panel and
+its terminal in the editor, across a reload, an extension host restart, an update and a lost connection alike. Where Facade
+cannot reach its process or tell its state, the card is red and says why (3.2); Facade never leaves it out (D86). A window
+whose own identity record is gone or damaged cannot tell its agents from another window's (ARCHITECTURE-2.2) and is the
+exception.
+
 ### 4.3 Reach is client-wide and permissions remain explicit
 
 **YOLO reaches the client network; non-YOLO reads and writes only within the caller's whole creation tree.**
@@ -323,7 +329,7 @@ security service.
 
 **Launch settings affect subsequent starts; changing the MCP switch does not reconfigure current runs.**
 
-A disabled CLI cannot be newly started; existing processes remain (CLIS-1.1's `.enabled` joins in a later step). YOLO
+A disabled CLI cannot be newly started; existing processes remain (CLIS-1.1). YOLO
 uses 4.3's single launch-time rule. `facade.collaboration.enabled` controls injection on future starts only. It neither
 disables existing injected tools nor injects tools into a process already started without them. Re-enabling does not
 replay old messages. There is no worktree-management switch: detect Git and offer creation where supported; ordinary
@@ -369,8 +375,8 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 | 1.1–1.10 | One recipient; response/attempt budgets; delivery by terminal, native prompt or read_messages; one delivery state; stable duplicate IDs; drafts and unrecognized input boxes untouched; no human fallback; closure |
 | 2.1–2.4 | Client network across local and remote windows, unique run IDs, duplicate names, `#human` and `@human`, tree survival, remote paths, folder/worktree removal |
 | 3.1–3.4 | Unknown red, idle yellow, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
-| 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
-| 5.1–5.3 | Invalid requests, repeated starts without idempotency, simple cancellation/capacity, thirty-day message cleanup |
+| 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
+| 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
 
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
@@ -378,20 +384,23 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 - 2026-10-31: The owner's clarification of 1.8: automatic blocker notices never direct an agent to contact the person.
 - 2026-10-31: The MCP correctness review keeps read delivery immediate while an already pasted owned draft finishes;
-  5.1 follows D104's request IDs, including concurrent retries and completed runs (D113).
+  5.1 follows D110's request IDs, including concurrent retries and completed runs (D119).
 - 2026-10-31: 1.5 gives a long paste its time and a joining result its whole budget; 1.6 never retypes a paste that did not
-  show and presses Enter only over the placeholder it showed as; 1.10 never pastes with another delivery's text (D112).
-- 2026-10-31: 1.7 types the Facade results waiting for one terminal in one paste (D109).
-- 2026-10-31: 1.1 lets a caller give a send its own request ID (D104).
-- 2026-10-31: 1.8 reports a started agent's wait on its CLI's own question to its creator, an agent (D103).
-- 2026-10-31: 1.6 types a message at most once and presses Enter only over its own draft (D98); 1.4 and 1.5 wait up to
-  ten minutes for an input another draft or a native question holds (D100); 1.3 confirms a submission at a later attempt.
+  show and presses Enter only over the placeholder it showed as; 1.10 never pastes with another delivery's text (D118).
+- 2026-10-31: 1.7 types the Facade results waiting for one terminal in one paste (D115).
+- 2026-10-31: 1.1 lets a caller give a send its own request ID (D110).
+- 2026-10-31: 1.8 reports a started agent's wait on its CLI's own question to its creator, an agent (D109).
+- 2026-10-31: 1.6 types a message at most once and presses Enter only over its own draft (D104); 1.4 and 1.5 wait up to
+  ten minutes for an input another draft or a native question holds (D106); 1.3 confirms a submission at a later attempt.
 - 2026-10-30: Step 2 of the Facade Code extension: added the Facade Dots message rules 1.1–1.7 and 1.9–1.10, the client
   network (2.1), references (2.3), tool and input facts (3.1), client-wide reach (4.3), the MCP switch (4.4) and message
   retention (5.3), with the owner's decisions of that day: one delivery state, in which read_messages delivers (1.3, 1.7,
-  D82); every CLI version attempted, with unrecognized input boxes left untouched (1.4, D83); Facade's tools without
-  approval prompts (4.3, D84); `#human` for the person (2.3, D85); results for success and failure (1.7, D86). 4.1 keeps
+  D88); every CLI version attempted, with unrecognized input boxes left untouched (1.4, D89); Facade's tools without
+  approval prompts (4.3, D90); `#human` for the person (2.3, D91); results for success and failure (1.7, D92). 4.1 keeps
   the five-minute policy (D75) and adds that creators do not end their children.
+- 2026-10-31: 4.1 keeps every agent a window started shown, red where Facade cannot reach it or tell its state (D86).
+- 2026-10-30: 4.4 refers to CLIS-1.1's `.enabled`, now part of the extension.
+
 - 2026-10-30: 3.2's startup lasts until the CLI first shows its activity, within CLIS-2.3's bound (D81).
 
 - 2026-10-30: 4.1 states the owner's five-minute policy (D75) after a window's extension host disconnects, replacing the

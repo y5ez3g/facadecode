@@ -54,7 +54,7 @@ text so a name cannot forge a header. A body containing the delimiter remains li
 length in the operation record. A message is one paste followed by Enter, not one Enter per line. Where the recipient's CLI
 takes a paste alone as material rather than a request - Claude Code - the words `Act on this Facade message: ` are typed
 before the paste in the same write, so that the message is the person's own request: Orca saw Claude refuse a brief that came
-as a paste alone (D102). A Facade result asks for nothing and has none. No ten-message batching
+as a paste alone (D108). A Facade result asks for nothing and has none. No ten-message batching
 that changes per-send identity, no doorbell or reminder line, and no “fetch the body” notice in place of the message.
 The header's message ID is the same across retries under RULES-1.1; MCP-6.2 teaches the receiving model to deduplicate it.
 Oversized content fails before writing with the supported limit; a caller can explicitly send a file-reference message.
@@ -77,7 +77,7 @@ its first turn or its MCP panel - its start types what readies them before any o
 empty, `/mcp` and Enter, then Escape once its panel shows the server ready or after ten seconds. It is given up, typing
 nothing, where the input first reads anything else or the CLI is working: the person's own first turn then starts the
 tools for the turns after it. Its creation prompt goes after that, as its first message, the budget starting then
-(D94).
+(D100).
 A blocked input box consumes the normal attempts. Both paths use RULES-1.3's meaning of delivery; native acceptance
 does not require a terminal Enter effect.
 Report process startup and prompt input separately. Failed prompt submission leaves the started agent available.
@@ -180,11 +180,11 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 
 ## Change log
 
-- 2026-10-31: 3.1 follows RULES-1.5's completion of an already pasted owned draft after read delivery (D113).
-- 2026-10-31: 2.1 types `Act on this Facade message: ` before a message's paste for Claude Code (D102).
+- 2026-10-31: 3.1 follows RULES-1.5's completion of an already pasted owned draft after read delivery (D119).
+- 2026-10-31: 2.1 types `Act on this Facade message: ` before a message's paste for Claude Code (D108).
 - 2026-10-31: 2.2 types what readies a CLI's tools before its first turn where that turn could not use them otherwise -
-  Antigravity's MCP panel - and sends its creation prompt after it (D94).
+  Antigravity's MCP panel - and sends its creation prompt after it (D100).
 - 2026-10-30: Step 2 of the Facade Code extension, carried from the Facade Dots collaboration rules with the owner's
-  2026-10-30 decisions: one delivery state, in which read_messages delivers and stops a pending paste (D82); `#human`
-  for the person (D85); the recipient's window owns the delivery record and the sender's keeps a copy (D87). Resume,
+  2026-10-30 decisions: one delivery state, in which read_messages delivers and stops a pending paste (D88); `#human`
+  for the person (D91); the recipient's window owns the delivery record and the sender's keeps a copy (D93). Resume,
   Pin and panel filters are later steps.

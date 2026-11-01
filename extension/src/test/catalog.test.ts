@@ -18,32 +18,45 @@ const english = (value: string) => value.replace(/^%(.+)%$/, (_, key) => nls[key
 
 /** The catalog of UX-3.1 (public) and UX-3.2 (context only) of this build: ID, English title, icon. */
 const PUBLIC: readonly [string, string, string?][] = [
-	['facade.newAgent', 'New Agent...', '$(new-session)'],
+	// Facade's own copy of codicons' `new-session`, which VS Code before 1.111 has not (PANEL-1.1, D85)
+	['facade.newAgent', 'New Agent...', '$(facade-new-agent)'],
 	['facade.showActiveAgents', 'Go to Agent...'],
 	['facade.renameAgent', 'Rename Agent...'],
 	['facade.copyAgentReference', 'Copy Agent Reference'],
 	['facade.closeAgent', 'Close Agent'],
 	['facade.messageHistory', 'Message History...'],
+	['facade.filter', 'Filter by Working Location...', '$(filter)'],
+	['facade.clearFilter', 'Clear Filter'],
 	['facade.configureAgents', 'Configure Agents...'],
-	['facade.copyDiagnostics', 'Copy Diagnostics']
+	['facade.copyDiagnostics', 'Copy Diagnostics'],
+	['facade.showAgentLaunch', 'Show Agent Launch'],
+	['facade.showAgentsLog', 'Show Agents Log']
 ];
 const HIDDEN: readonly [string, string, string?][] = [
 	['facade.newWorktree', 'New Worktree...'],
 	['facade.moveUp', 'Move Up'],
 	['facade.moveDown', 'Move Down'],
+	['facade.filterByLocation', 'Filter by This Location'],
+	['facade.filterByFolder', 'Filter by This Folder'],
+	// Filter by Working Location as its title button shows it while a filter is on (UX-3.2)
+	['facade.filterOn', 'Filter by Working Location...', '$(filter-filled)'],
 	['facade.revealAgent', 'Show Agent']
 ];
 /**
  * Registered by the host itself rather than the panel: New Worktree, Message History beside the message records (COLLABORATION-3.2)
  * and Copy Diagnostics beside the agents log (ARCHITECTURE-3.3).
  */
-const HOST_COMMANDS = ['facade.newWorktree', 'facade.messageHistory', 'facade.copyDiagnostics'];
+const HOST_COMMANDS = ['facade.newWorktree', 'facade.messageHistory', 'facade.copyDiagnostics', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
 
-	test('one view container `facade` with the webview view `facade.agents`, activated after startup; nothing else is contributed - no colours, keybindings or languages (PANEL-1.1, UX-2.1, 2.3)', () => {
-		assert.deepStrictEqual([Object.keys(contributes), manifest.activationEvents], [['viewsContainers', 'views', 'commands', 'menus', 'configuration'], ['onStartupFinished']]);
+	test('one view container `facade` with the webview view `facade.agents`, activated after startup; New Agent\'s icon is the one icon contributed, and nothing else is - no colours, keybindings or languages (PANEL-1.1, UX-2.1, 2.3)', () => {
+		assert.deepStrictEqual([Object.keys(contributes), manifest.activationEvents], [['viewsContainers', 'views', 'commands', 'menus', 'icons', 'configuration'], ['onStartupFinished']]);
+		// Facade's own copy of codicons' `new-session`, at its codicon's code point in the font beside the manifest
+		assert.deepStrictEqual(contributes.icons, { 'facade-new-agent': { description: '%icon.newAgent%', default: { fontPath: './media/new-agent.woff', fontCharacter: '\\EC84' } } });
+		assert.ok(fs.statSync(path.join(ROOT, 'media', 'new-agent.woff')).isFile());
+		assert.strictEqual(english('%icon.newAgent%'), 'New Agent icon');
 		assert.deepStrictEqual(contributes.viewsContainers, { activitybar: [{ id: 'facade', title: '%view.container%', icon: 'media/facade.svg' }] });
 		assert.deepStrictEqual(contributes.views, { facade: [{ type: 'webview', id: 'facade.agents', name: '%view.container%' }] });
 		assert.strictEqual(english('%view.container%'), 'Facade Code');
@@ -61,10 +74,12 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		}
 	});
 
-	test('menus: New Agent in the title; the card menu in PANEL-2.2\'s groups, Close Agent for every card; the palette by availability, context-only commands hidden', () => {
+	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, Close Agent for every card; the palette by availability, context-only commands hidden', () => {
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
+				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered', group: 'navigation@1' },
+				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered', group: 'navigation@1' },
 				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@3' },
 				// The More Actions menu (PANEL-1.1, D58): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
@@ -77,12 +92,16 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.copyAgentReference', when: card, group: '1_agent@3' },
 				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
 				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' },
+				{ command: 'facade.filterByLocation', when: `${card} && webviewFilterLocation`, group: '3_location@1' },
+				{ command: 'facade.filterByFolder', when: `${card} && webviewFilterFolder`, group: '3_location@2' },
+				{ command: 'facade.clearFilter', when: `${card} && webviewFiltered`, group: '3_location@3' },
 				{ command: 'facade.closeAgent', when: card, group: '4_close@1' }
 			],
 			commandPalette: [
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.copyAgentReference', when: 'facade.agentSelected' },
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
+				{ command: 'facade.clearFilter', when: 'facade.filtered' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' }))
 			]
 		});
@@ -95,39 +114,69 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			.sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order);
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
 		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.messageHistory', 'facade.configureAgents']);
-		// Go to Agent stays in the Command Palette alone; Configure Agents is in it too
-		assert.ok(!more.some(each => each.command === 'facade.showActiveAgents'));
-		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => each.command === 'facade.showActiveAgents' || each.command === 'facade.configureAgents'));
+		// Go to Agent, Show Agent Launch and Show Agents Log are in the Command Palette alone (D83); Configure Agents is in it too
+		const palette = ['facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
+		assert.ok(!more.some(each => palette.includes(each.command)));
+		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.configureAgents'].includes(each.command)));
 	});
 
-	test('settings: Agents - YOLO, the agents\' tools switch and the start/stop timeout - then each built-in CLI in its catalog order; machine scope; each CLI has its path alone - turning it off and its launch come in later steps (UX-4.1, D43, D89, CLIS-1.2)', () => {
+	test('settings: Agents, then each built-in CLI in its catalog order with whether it is offered, its path and its launch, then Custom Agents; machine scope (UX-4.1, D43, CLIS-1.1, 1.2, 3.1, 3.4)', () => {
 		const sections = contributes.configuration.map((section: { id: string; title: string; order: number; properties: Record<string, unknown> }) => [section.id, english(section.title), section.order, Object.keys(section.properties)]);
+		const cli = (setting: string) => [`${setting}.enabled`, `${setting}.path`, `${setting}.launch`];
 		assert.deepStrictEqual(sections, [
 			['facade.agents', 'Agents', 2, ['facade.yolo', 'facade.collaboration.enabled', 'facade.collaboration.waitSeconds']],
-			['facade.claude', 'Claude Code', 3, ['facade.claude.path']],
-			['facade.codex', 'Codex', 4, ['facade.codex.path']],
-			['facade.antigravity', 'Antigravity', 5, ['facade.antigravity.path']],
-			['facade.muse', 'Muse Code', 6, ['facade.muse.path']],
-			['facade.opencode', 'OpenCode', 7, ['facade.opencode.path']],
-			['facade.pi', 'Pi', 8, ['facade.pi.path']]
+			['facade.claude', 'Claude Code', 3, cli('facade.claude')],
+			['facade.codex', 'Codex', 4, cli('facade.codex')],
+			['facade.antigravity', 'Antigravity', 5, cli('facade.antigravity')],
+			['facade.muse', 'Muse Code', 6, cli('facade.muse')],
+			['facade.opencode', 'OpenCode', 7, cli('facade.opencode')],
+			['facade.pi', 'Pi', 8, cli('facade.pi')],
+			['facade.custom', 'Custom Agents', 9, ['facade.custom']]
 		]);
 		// The sections are the catalog's, by its adapters' settings and display names
-		assert.deepStrictEqual(sections.slice(1).map((section: unknown[]) => [section[0], section[1]]), BUILT_IN_ADAPTERS.map(adapter => [adapter.setting, adapter.displayName]));
+		assert.deepStrictEqual(sections.slice(1, -1).map((section: unknown[]) => [section[0], section[1]]), BUILT_IN_ADAPTERS.map(adapter => [adapter.setting, adapter.displayName]));
 		const settings: Record<string, { type: string; default: unknown; scope: string; markdownDescription: string }> = Object.assign({}, ...contributes.configuration.map((section: { properties: object }) => section.properties));
 		assert.deepStrictEqual(Object.entries(settings).map(([key, value]) => [key, value.type, value.default, value.scope]), [
 			['facade.yolo', 'boolean', true, 'machine'],
 			['facade.collaboration.enabled', 'boolean', true, 'machine'],
 			['facade.collaboration.waitSeconds', 'integer', 120, 'machine'],
-			...BUILT_IN_ADAPTERS.map(adapter => [`${adapter.setting}.path`, 'string', '', 'machine'])
+			...BUILT_IN_ADAPTERS.flatMap(adapter => [
+				[`${adapter.setting}.enabled`, 'boolean', true, 'machine'],
+				[`${adapter.setting}.path`, 'string', '', 'machine'],
+				[`${adapter.setting}.launch`, 'object', {}, 'machine']
+			]),
+			['facade.custom', 'object', {}, 'machine']
 		]);
-		// Each path's description names its CLI and the command PATH is searched for
+		// Each description names its CLI - the path the command PATH is searched for, the launch Show Agent Launch
 		for (const adapter of BUILT_IN_ADAPTERS) {
+			assert.strictEqual(english(settings[`${adapter.setting}.enabled`].markdownDescription), `Controls whether ${adapter.displayName} is offered for new agents. Turning it off does not stop agents that are running.`);
 			assert.strictEqual(english(settings[`${adapter.setting}.path`].markdownDescription), `Path to ${adapter.displayName}. Leave empty to use "${adapter.command}" from the terminal environment's PATH.`);
+			assert.strictEqual(english(settings[`${adapter.setting}.launch`].markdownDescription), `Advanced: additional command-line arguments and environment variables for ${adapter.displayName}. **Show Agent Launch** shows what each agent starts with.`);
 		}
+		// A launch takes literal arguments and an environment map alone, as CLIS-3.1 reads it
+		const launch = settings['facade.claude.launch'] as unknown as { properties: Record<string, unknown>; additionalProperties: boolean };
+		assert.deepStrictEqual([Object.keys(launch.properties), launch.additionalProperties, launch.properties.arguments, (launch.properties.environment as { additionalProperties: unknown }).additionalProperties], [
+			['arguments', 'environment'], false, { type: 'array', items: { type: 'string' }, default: [], markdownDescription: '%config.launch.arguments%' }, { type: ['string', 'null'] }
+		]);
+		// A custom CLI is a path and a launch of start, the required exact-session resume and environment, under an ID no built-in has (CLIS-3.4)
+		const custom = settings['facade.custom'] as unknown as {
+			propertyNames: { pattern: string; not: { enum: string[] } };
+			additionalProperties: { required: string[]; additionalProperties: boolean; properties: { path: unknown; launch: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } } };
+		};
+		const definition = custom.additionalProperties;
+		assert.deepStrictEqual([
+			custom.propertyNames.pattern, custom.propertyNames.not.enum, definition.required, definition.additionalProperties, definition.properties.path,
+			definition.properties.launch.required, definition.properties.launch.additionalProperties, Object.keys(definition.properties.launch.properties), definition.properties.launch.properties.resume
+		], [
+			'\\S', BUILT_IN_ADAPTERS.map(adapter => adapter.id), ['path', 'launch'], false, { type: 'string', pattern: '\\S', markdownDescription: '%config.custom.path%' },
+			['resume'], false, ['start', 'resume', 'environment'],
+			{ type: 'array', items: { type: 'string' }, minItems: 1, contains: { type: 'string', pattern: '\\$\\{sessionId\\}' }, markdownDescription: '%config.custom.launch.resume%' }
+		]);
+		assert.ok(english(settings['facade.custom'].markdownDescription).endsWith(`An ID cannot be a built-in one: ${BUILT_IN_ADAPTERS.map(adapter => `\`${adapter.id}\``).slice(0, -1).join(', ')} or \`pi\`.`));
 		// Every description resolves; no retired setting survives
 		const keys = [...JSON.stringify(contributes).matchAll(/"%([\w.]+)%"/g)].map(match => match[1]);
 		assert.deepStrictEqual(keys.filter(key => nls[key] === undefined), []);
-		for (const retired of ['agentLocation', 'worktrees"', 'taskDelay', 'unattended', 'enterDelay', 'trust', 'facade.claude.enabled', 'facade.claude.launch', 'facade.agents.timeout', 'facade.agents.yolo']) {
+		for (const retired of ['agentLocation', 'worktrees"', 'taskDelay', 'unattended', 'enterDelay', 'trust', 'facade.agents.']) {
 			assert.ok(!JSON.stringify(contributes.configuration).includes(retired), retired);
 		}
 		// The timeout's bounds are MCP-1.3's: whole seconds from 1 to 3600
@@ -157,7 +206,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 					agents: { requested: () => undefined, list: () => [], get: () => undefined, onDidChange: emitter.event, launch: () => '', started: async () => ({ state: 'closed' }), warmedUp: async () => undefined, close: async () => 'already_ended', rename: () => undefined },
 					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
-					clis: { list: async () => [] },
+					clis: { list: async () => ({ clis: [], problems: [] }) },
 					history: { last: () => ({}), remember: () => undefined },
 					execution: { reveal: async () => false, onDidActivate: emitter.event },
 					workspaceState: { get: () => undefined, update: async () => undefined, keys: () => [] } as never,
@@ -173,7 +222,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Message History and Copy Diagnostics (UX-3.2, E03)', () => {
+		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Message History, Copy Diagnostics, Show Agent Launch and Show Agents Log (UX-3.2, E03)', () => {
 			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id));
 			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
 		});

@@ -14,7 +14,7 @@ import { INPUT_ADAPTERS, InputCell, InputScreen, InputState, readInput } from '.
  * `scripts/capture-inputs.mjs`, which keeps a paste's text with its screen - Claude Code 2.1.316 and Codex 0.166.0 then new, Codex
  * with the warning under its input that its configuration overrides bring - and again in a 120x24 terminal, as an editor's panel
  * may be, with a taller paste and a wider one: where Antigravity and Pi scroll a draft in its input box, and Pi draws a wide paste
- * as `[paste #1 1284 chars]` (D112).
+ * as `[paste #1 1284 chars]` (D118).
  */
 const FIXTURES = path.join(__dirname, '..', '..', '..', 'src', 'test', 'fixtures', 'composer');
 
@@ -137,7 +137,7 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		}
 	});
 
-	test('each CLI\'s pasted draft reads as the message\'s own - its text, or its placeholder for a paste of its size - and a typed one does not (RULES-1.6, D98)', () => {
+	test('each CLI\'s pasted draft reads as the message\'s own - its text, or its placeholder for a paste of its size - and a typed one does not (RULES-1.6, D104)', () => {
 		// What the probes pasted: three lines, a Facade message, and 33 lines of 3,886 characters, here as long as those were
 		const pasted: { readonly [name: string]: string } = {
 			'pasted': 'first pasted line\nsecond pasted line\nthird pasted line',
@@ -163,7 +163,7 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 			assert.ok(reading.draft !== undefined && isOwnDraft(reading.draft, each.fixture.paste!, each.adapter, each.fixture.lead, reading.hidden), `${label(each)}: ${JSON.stringify(reading.draft)}`);
 			assert.ok(!isOwnDraft(reading.draft, `${each.fixture.paste}\nmore`, each.adapter, each.fixture.lead, reading.hidden), label(each));
 		}
-		// A draft scrolled in its box: the rows out of sight said apart from it, its marks no part of it (D112)
+		// A draft scrolled in its box: the rows out of sight said apart from it, its marks no part of it (D118)
 		const scrolled = captured.filter(each => readInput(each.screen, each.adapter).hidden !== undefined).map(each => `${each.folder}/${each.fixture.name}`);
 		assert.deepStrictEqual(scrolled.sort(), ['agy-1.4.12-24rows/wide-pasted', 'pi-1.4.0-24rows/medium-pasted']);
 		for (const each of captured.filter(probed => readInput(probed.screen, probed.adapter).hidden !== undefined)) {
