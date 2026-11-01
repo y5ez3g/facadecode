@@ -45,7 +45,9 @@ function resumeFixture(cwd: string): { sessionId: string; args: string[] } {
 		write(path.join(dir, `${id}.jsonl`), [
 			{ type: 'user', sessionId: id, cwd, parentUuid: null, message: { role: 'user', content: 'Initial prompt before native naming' } },
 			{ type: 'attachment', padding: 'x'.repeat(80_000) },
-			{ type: 'assistant', sessionId: id, timestamp: new Date(Date.now() - 3 * 3600_000).toISOString(), message: { role: 'assistant', content: [] } },
+			// This journey accepts the most recent entry. In a complete serial run the other vendors' earlier fixtures remain,
+			// so this newly written conversation must also have new native activity, not an artificially old timestamp.
+			{ type: 'assistant', sessionId: id, timestamp: new Date().toISOString(), message: { role: 'assistant', content: [] } },
 			{ type: 'ai-title', sessionId: id, aiTitle: title }
 		].map(value => JSON.stringify(value)).join('\n') + '\n');
 	} else if (CLI === 'codex') {
