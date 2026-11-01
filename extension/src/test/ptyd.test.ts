@@ -458,7 +458,9 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	test('a resize reaches the process', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'r6');
-		await spawn(client, 'r6', `process.stdout.write('one\\n'); ${eachLine(`const [columns, rows] = process.stdout.getWindowSize(); process.stdout.write(rows + ' ' + columns + '\\n');`)} ${IDLE}`);
+		// Node caches the TTY size until it handles SIGWINCH; input can arrive before that notification.
+		await spawn(client, 'r6', `const reportSize = () => { const [columns, rows] = process.stdout.getWindowSize(); process.stdout.write(rows + ' ' + columns + '\\n'); };
+			process.stdout.on('resize', reportSize); ${eachLine('reportSize();')} process.stdout.write('one\\n'); ${IDLE}`);
 		await until('its line', () => outputOf(events).includes('one'));
 		await client.request('resize', { run: 'r6', cols: 100, rows: 30 });
 		await client.request('input', { run: 'r6', data: '\r' });

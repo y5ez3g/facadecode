@@ -10,6 +10,7 @@
 // reader stay the page's.
 
 import type { Scrolling } from './protocol';
+import { pageDimensions } from './viewport';
 
 /** The pixels a wheel's line scrolls. */
 const SCROLL_WHEEL_SENSITIVITY = 50;
@@ -162,7 +163,7 @@ function animationOf(from: number, to: number, viewport: number): (completion: n
 let smooth: { readonly to: number; readonly start: number; readonly duration: number; readonly move: (completion: number) => number; frame: number; at: number } | undefined;
 
 const root = () => document.scrollingElement ?? document.documentElement;
-const clamped = (scrollTop: number) => Math.max(0, Math.min(scrollTop, root().scrollHeight - root().clientHeight));
+const clamped = (scrollTop: number) => Math.max(0, Math.min(scrollTop, pageDimensions().range));
 
 /** Ends a smooth scroll under way where it is: the keyboard moved, or the person took the scrollbar. */
 export function cancelSmoothScroll(): void {
@@ -185,7 +186,7 @@ function smoothTo(to: number): void {
 		}
 		const completion = (Date.now() - next.start) / next.duration;
 		// Whole pixels, cut as a list's scroll position is
-		next.at = Math.trunc(completion < 1 ? next.move(completion) : next.to);
+		next.at = completion < 1 ? Math.trunc(next.move(completion)) : next.to;
 		root().scrollTop = next.at;
 		if (completion < 1) {
 			next.frame = requestAnimationFrame(tick);

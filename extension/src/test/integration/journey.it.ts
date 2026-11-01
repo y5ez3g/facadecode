@@ -194,6 +194,34 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
+	test('PANEL-3.3: native Modern UI settings reach the webview initially and on live changes, with a traditional fallback on older editors', async function () {
+		if (CLI !== 'claude') { this.skip(); }
+		const setting = 'workbench.experimental.modernUI';
+		const configuration = vscode.workspace.getConfiguration();
+		const original = configuration.inspect<boolean>(setting);
+		const check = async (modern: boolean) => {
+			const wanted = modern ? ['8px', '4px', '2px'] : ['10px', '0px', '0px'];
+			return until(`scrollbar style ${wanted}`, async () => {
+				const styles = await vscode.commands.executeCommand<{ width: string; top: string; bottom: string; clipBottom: string; borderRadius: string }[]>('facade.probe', { op: 'style', selector: '.facade-scrollbar, .facade-scrollbar-thumb' });
+				return styles?.length === 2 && styles[0].width === wanted[0] && styles[1].borderRadius === wanted[1]
+					&& styles[0].top === wanted[2] && Math.abs(parseFloat(styles[0].bottom) - parseFloat(styles[0].clipBottom) - (modern ? 2 : 0)) < 0.001 ? true : undefined;
+			});
+		};
+		await check(configuration.get(setting) === true);
+		if (original?.defaultValue === undefined) {
+			assert.notStrictEqual(configuration.get(setting), true, 'an editor without Modern UI uses traditional lists');
+			return;
+		}
+		try {
+			for (const modern of [false, true, false]) {
+				await configuration.update(setting, modern, vscode.ConfigurationTarget.Global);
+				await check(modern);
+			}
+		} finally {
+			await configuration.update(setting, original.globalValue, vscode.ConfigurationTarget.Global);
+		}
+	});
+
 	test('Resume uses the saved cwd and exact ID; Pin and Unpin synchronize with the native tab', async function () {
 		if (CUSTOM) { this.skip(); }
 		const cwd = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'nested');

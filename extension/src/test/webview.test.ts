@@ -29,6 +29,24 @@ suite('The agent panel in Chromium', function () {
 			await wait(30);
 		}
 	};
+	/** Read the rendered pixel: validates the actual visible color/opacity rather than only its CSS declaration. */
+	const pixelAt = async (x: number, y: number): Promise<number[]> => {
+		const offset = await evaluate('({ x: scrollX, y: scrollY })');
+		const png = Buffer.from((await call('Page.captureScreenshot', { format: 'png', clip: { x: x + offset.x, y: y + offset.y, width: 1, height: 1, scale: 1 } })).result.data, 'base64');
+		const chunks: Buffer[] = [];
+		for (let at = 8; at < png.length; at += 12 + png.readUInt32BE(at)) {
+			if (png.toString('ascii', at + 4, at + 8) === 'IDAT') { chunks.push(png.subarray(at + 8, at + 8 + png.readUInt32BE(at))); }
+		}
+		return [...zlib.inflateSync(Buffer.concat(chunks)).subarray(1, 4)];
+	};
+	const snapshot = async (name: string) => {
+		const folder = process.env.FACADE_UI_EVIDENCE_DIR;
+		if (folder) {
+			fs.mkdirSync(folder, { recursive: true });
+			const shot = await call('Page.captureScreenshot', { format: 'png' });
+			fs.writeFileSync(path.join(folder, `${name}.png`), Buffer.from(shot.result.data, 'base64'));
+		}
+	};
 	/** The shipped page, and the integration build's: the same source, its test mode defined either way (UX-3.2). */
 	let shipped: string;
 	let tested: string;
@@ -39,6 +57,8 @@ suite('The agent panel in Chromium', function () {
 	const load = async (bundle = shipped, saved?: unknown) => {
 		await call('Page.navigate', { url: 'about:blank' });
 		await wait(50);
+		// The shipped webview declares HTML5. about:blank otherwise leaves this fixture in quirks mode, where the body owns scrolling.
+		await evaluate(`document.open(); document.write('<!DOCTYPE html><html><head></head><body></body></html>'); document.close()`);
 		await evaluate(`document.body.innerHTML = '<style>' + ${JSON.stringify(css)} + '</style><div id="list"></div><div id="empty"></div>'; window.errors = []; window.posted = []; window.saved = ${JSON.stringify(saved ?? null)}; window.acquireVsCodeApi = () => ({postMessage(message) { window.posted.push(message); if (message.type === 'error') window.errors.push(message.message); }, getState: () => window.saved ?? undefined, setState: state => { window.saved = state; }}); window.FACADE_STRINGS = new Proxy(${JSON.stringify(words)}, {get: (words, key) => words[key] ?? String(key)}); window.FACADE_LOGOS = '';`);
 		await evaluate(bundle);
 		await evaluate(CARDS);
@@ -97,7 +117,8 @@ suite('The agent panel in Chromium', function () {
 		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 2, mobile: false });
 		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
 		await load();
-		await wait(30);
+		// The initial cards schedule a ResizeObserver update; input tests need its overlay ready first.
+		await until(() => evaluate(`!document.querySelector('.facade-scrollbar').hidden && document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().height > 0`));
 		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 
@@ -451,16 +472,7 @@ suite('The agent panel in Chromium', function () {
 
 	test('PANEL-3.3: a wheel scrolls the page as it does a VS Code list - 50 px a line times `mouseWheelScrollSensitivity`, `fastScrollSensitivity` times more with Alt, never past its end, the list taking every wheel and leaving Ctrl\'s to the editor - and its scrollbar is VS Code\'s: 10px in the slider colours over no track, whatever VS Code\'s own webview default', async () => {
 		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
-		/** The screen's colour at one CSS pixel: a 1x1 PNG's only pixel, whichever filter its one row has. */
-		const pixelAt = async (x: number, y: number) => {
-			const png = Buffer.from((await call('Page.captureScreenshot', { format: 'png', clip: { x, y, width: 1, height: 1, scale: 1 } })).result.data, 'base64');
-			const chunks: Buffer[] = [];
-			for (let at = 8; at < png.length; at += 12 + png.readUInt32BE(at)) {
-				if (png.toString('ascii', at + 4, at + 8) === 'IDAT') { chunks.push(png.subarray(at + 8, at + 8 + png.readUInt32BE(at))); }
-			}
-			return [...zlib.inflateSync(Buffer.concat(chunks)).subarray(1, 4)].join(',');
-		};
-		// VS Code 1.143's own default, in its layer (webview/browser/pre/index.html): its root's scrollbar-color turns the page's rules off
+		// VS Code's own webview defaults must not restore a browser scrollbar/gutter behind the overlay.
 		await evaluate(`(() => {
 			const vscode = document.createElement('style');
 			vscode.textContent = '@layer vscode-default { html { scrollbar-color: var(--vscode-scrollbarSlider-background) var(--vscode-editor-background); } ::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background-color: var(--vscode-scrollbarSlider-background); } }';
@@ -469,12 +481,14 @@ suite('The agent panel in Chromium', function () {
 			window.cancelled = [];
 			window.addEventListener('wheel', event => window.cancelled.push(event.defaultPrevented));
 		})()`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
+		await wait(150);
 		const width = await evaluate('innerWidth - document.documentElement.clientWidth');
-		const [slider, track] = [await pixelAt(395, 5), await pixelAt(395, 295)];
+		const [slider, track] = [(await pixelAt(395, 5)).join(','), (await pixelAt(395, 295)).join(',')];
 		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 10 });
-		const hovered = await pixelAt(395, 5);
+		const hovered = (await pixelAt(395, 5)).join(',');
 		await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: 395, y: 10, button: 'left', clickCount: 1 });
-		const pressed = await pixelAt(395, 5);
+		const pressed = (await pixelAt(395, 5)).join(',');
 		await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 395, y: 10, button: 'left', clickCount: 1 });
 		// A real wheel turn: one line to Chromium, whatever its pixels - natively, these four would scroll 373 px
 		const wheel = async (modifiers = 0) => {
@@ -494,9 +508,413 @@ suite('The agent panel in Chromium', function () {
 		const ctrl = await evaluate(`(() => { const before = document.scrollingElement.scrollTop; const event = new WheelEvent('wheel', { deltaY: 100, ctrlKey: true, cancelable: true }); window.dispatchEvent(event); return [event.defaultPrevented, document.scrollingElement.scrollTop === before]; })()`);
 		// Out of every card's way, for the tests after
 		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 295 });
-		assert.deepStrictEqual([width, slider, track, hovered, pressed, await evaluate(`document.querySelectorAll('.scrollbar, .slider').length`)], [10, '255,0,0', '255,255,255', '0,255,0', '0,0,255', 0]);
+		assert.deepStrictEqual([width, slider, track, hovered, pressed, await evaluate(`document.querySelectorAll('.facade-scrollbar').length`)], [0, '255,0,0', '255,255,255', '0,255,0', '0,0,255', 1]);
 		assert.deepStrictEqual({ lines, sensitive, fast, atEnd: atEnd === end, cancelled: cancelled.length === 5 && cancelled.every(Boolean), ctrl, errors: await evaluate('window.errors') },
 			{ lines: [50, 100], sensitive: 200, fast: 700, atEnd: true, cancelled: true, ctrl: [false, true], errors: [] });
+	});
+
+	test('PANEL-3.3: the overlay reveals on hover/scroll and fades while idle without taking width', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.documentElement.style.cssText = '--vscode-scrollbarSlider-background:#ff0000;--vscode-scrollbarSlider-hoverBackground:#00ff00;--vscode-scrollbarSlider-activeBackground:#0000ff'`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 310 });
+		await wait(900);
+		const bounds = () => evaluate(`({ gutter: innerWidth - document.documentElement.clientWidth, width: document.querySelector('.agent').getBoundingClientRect().width })`);
+		const hiddenBounds = await bounds();
+		assert.deepStrictEqual(hiddenBounds, { gutter: 0, width: 392 });
+		assert.deepStrictEqual(await pixelAt(395, 5), [255, 255, 255]);
+		await snapshot('scrollbar-hidden');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
+		await wait(160);
+		assert.deepStrictEqual(await pixelAt(395, 5), [255, 0, 0]);
+		assert.deepStrictEqual(await bounds(), hiddenBounds);
+		await snapshot('scrollbar-visible');
+		await wait(600);
+		assert.deepStrictEqual(await pixelAt(395, 5), [255, 0, 0], 'hover holds the scrollbar beyond the scroll idle timeout');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 310 });
+		await wait(200);
+		const fading = await pixelAt(395, 5);
+		assert.ok(fading[0] === 255 && fading[1] > 0 && fading[1] < 255, `overlay must actually fade: ${fading}`);
+		await snapshot('scrollbar-fading');
+		await wait(700);
+		assert.deepStrictEqual(await pixelAt(395, 5), [255, 255, 255]);
+		assert.deepStrictEqual(await bounds(), hiddenBounds);
+		// A scroll without hover, such as keyboard navigation, wakes the thumb and extends its idle deadline.
+		await evaluate(`document.scrollingElement.scrollTop = 50`);
+		await wait(180);
+		assert.deepStrictEqual(await pixelAt(395, 25), [255, 0, 0]);
+		await wait(250);
+		await evaluate(`document.scrollingElement.scrollTop = 100`);
+		await wait(250);
+		await snapshot('scrollbar-scrolled');
+		assert.deepStrictEqual(await pixelAt(395, 25), [255, 0, 0]);
+		await wait(1200);
+		assert.deepStrictEqual(await pixelAt(395, 25), [255, 255, 255]);
+		assert.equal(await evaluate('document.scrollingElement.scrollTop'), 100);
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
+	});
+
+	test('PANEL-3.3: dragging outside stays visible and releasing outside cannot leave the overlay stuck', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.documentElement.style.cssText = '--vscode-scrollbarSlider-background:#ff0000;--vscode-scrollbarSlider-hoverBackground:#00ff00;--vscode-scrollbarSlider-activeBackground:#0000ff'`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 10 });
+		await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: 395, y: 10, button: 'left', clickCount: 1 });
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 140, button: 'left', buttons: 1 });
+		await wait(1450);
+		assert.ok(await evaluate('document.scrollingElement.scrollTop') > 0, 'captured pointer movement must scroll outside the viewport');
+		const thumbY = await evaluate(`document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().top + 5`);
+		await snapshot('scrollbar-dragging');
+		assert.deepStrictEqual(await pixelAt(395, thumbY), [0, 0, 255]);
+		await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 420, y: 140, button: 'left', clickCount: 1 });
+		await wait(900);
+		assert.deepStrictEqual(await pixelAt(395, thumbY), [255, 255, 255]);
+		// Track clicks scroll without triggering a card underneath the overlay.
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 295 });
+		const before = await evaluate('document.scrollingElement.scrollTop');
+		await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: 395, y: 295, button: 'left', clickCount: 1 });
+		await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 395, y: 295, button: 'left', clickCount: 1 });
+		await wait(250);
+		assert.ok(await evaluate('document.scrollingElement.scrollTop') > before);
+		assert.deepStrictEqual(await evaluate(`window.posted.filter(message => message.type === 'act')`), []);
+	});
+
+	test('PANEL-3.3: entering the overlay thumb fades its hover color too', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.documentElement.style.cssText = '--vscode-scrollbarSlider-background:#ff0000;--vscode-scrollbarSlider-hoverBackground:#00ff00'`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 310 });
+		await wait(900);
+		// Slow CSS animations for this one observation, so the 100 ms reveal cannot finish during screenshot capture.
+		await call('Animation.enable');
+		await call('Animation.setPlaybackRate', { playbackRate: 0.1 });
+		try {
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 10 });
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 10 });
+			await wait(120);
+			const fading = await pixelAt(395, 5);
+			assert.ok(fading[1] === 255 && fading[0] > 0 && fading[0] < 255, `hover must fade, not appear at full opacity: ${fading}`);
+		} finally {
+			await call('Animation.setPlaybackRate', { playbackRate: 1 });
+		}
+	});
+
+	test('PANEL-3.3: scrollbar follows both reduced-motion preferences and clears visibility after focus loss', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.documentElement.style.cssText = '--vscode-scrollbarSlider-background:#ff0000'`);
+		for (const source of ['editor', 'system']) {
+			await evaluate(`document.body.classList.toggle('vscode-reduce-motion', ${source === 'editor'})`);
+			await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: source === 'system' ? 'reduce' : 'no-preference' }] });
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 310 });
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
+			assert.deepStrictEqual(await pixelAt(395, 5), [255, 0, 0]);
+			assert.equal(await evaluate(`getComputedStyle(document.querySelector('.facade-scrollbar')).transitionDuration`), '0s');
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 310 });
+			assert.deepStrictEqual(await pixelAt(395, 5), [255, 255, 255]);
+		}
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
+		await evaluate(`window.dispatchEvent(new Event('blur'))`);
+		assert.deepStrictEqual(await pixelAt(395, 5), [255, 255, 255]);
+		await evaluate(`window.dispatchEvent(new Event('focus'))`);
+		assert.deepStrictEqual(await pixelAt(395, 5), [255, 0, 0]);
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
+	});
+
+	test('PANEL-3.3: Modern UI changes width, painted corners and hit area live without moving cards, scrolling or keyboard focus', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.body.classList.add('vscode-reduce-motion'); document.documentElement.style.cssText = '--vscode-scrollbarSlider-background:#ff0000;--vscode-scrollbar-background:#123456';
+			document.querySelectorAll('.agent')[3].focus({ preventScroll: true }); scrollTo(0, 50)`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
+		await wait(30);
+		const settings = { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1 };
+		const geometry = () => evaluate(`(() => {
+			const bar = document.querySelector('.facade-scrollbar'), thumb = bar.firstElementChild;
+			return { width: bar.getBoundingClientRect().width, left: bar.getBoundingClientRect().left, radius: getComputedStyle(thumb).borderRadius,
+				top: thumb.getBoundingClientRect().top, gutter: innerWidth - document.documentElement.clientWidth,
+				cardWidth: document.querySelector('.agent').getBoundingClientRect().width, scroll: scrollY, focus: document.activeElement.dataset.run };
+		})()`);
+		for (const modernUI of [true, false, true]) {
+			await deliver({ type: 'scrolling', scrolling: { ...settings, modernUI } });
+			const seen = await geometry();
+			assert.deepStrictEqual([seen.width, seen.radius, seen.gutter, seen.cardWidth, seen.scroll, seen.focus], [modernUI ? 8 : 10, modernUI ? '4px' : '0px', 0, 392, 50, 'run-4']);
+			const corner = await pixelAt(seen.left, seen.top);
+			assert.deepStrictEqual(corner, modernUI ? [18, 52, 86] : [255, 0, 0], 'rounded corners expose the track; square ones fill it: ' + JSON.stringify(seen));
+			assert.deepStrictEqual(await pixelAt(396, seen.top + 6), [255, 0, 0]);
+			await snapshot(modernUI ? 'scrollbar-modern' : 'scrollbar-traditional');
+		}
+		await evaluate(`document.documentElement.style.setProperty('--vscode-cornerRadius-small', '2px')`);
+		assert.equal((await geometry()).radius, '2px', 'the native size token takes precedence over the 4 px fallback');
+		// At x=390 the old 10 px bar covered the card; the inset modern 8 px bar must leave it clickable.
+		await evaluate('scrollTo(0, 0); window.posted = []');
+		const click = async () => {
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 390, y: 200 });
+			for (const type of ['mousePressed', 'mouseReleased']) {
+				await call('Input.dispatchMouseEvent', { type, x: 390, y: 200, button: 'left', clickCount: 1 });
+			}
+		};
+		await click();
+		assert.equal(await evaluate('scrollY'), 0);
+		assert.deepStrictEqual(await evaluate(`window.posted.filter(message => message.type === 'act').map(message => message.what)`), ['open']);
+		// An old host's message removes the optional mode: the same pixel belongs to the traditional track again.
+		await deliver({ type: 'scrolling', scrolling: settings });
+		assert.deepStrictEqual([(await geometry()).width, (await geometry()).radius], [10, '0px']);
+		await evaluate('window.posted = []');
+		await click();
+		assert.ok(await evaluate('scrollY') > 0);
+		assert.deepStrictEqual(await evaluate(`window.posted.filter(message => message.type === 'act')`), []);
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
+		await deliver({ type: 'scrolling', scrolling: { ...settings, modernUI: 'true' } });
+		assert.equal((await evaluate('window.errors')).length, 1);
+	});
+
+	test('PANEL-3.3: host clipping is corrected and removed even when the inner iframe size stays unchanged', async () => {
+		await call('Page.navigate', { url: 'about:blank' });
+		await wait(50);
+		await evaluate(`document.open(); document.write('<!DOCTYPE html><html><body style="margin:0"><div id="clip" style="width:400px;height:300px;overflow:hidden"><iframe style="display:block;border:0;width:400px;height:300px"></iframe></div></body></html>'); document.close()`);
+		const inside = (script: string) => evaluate(`document.querySelector('iframe').contentWindow.eval(${JSON.stringify(script)})`);
+		await inside(`document.open(); document.write('<!DOCTYPE html><html><head></head><body></body></html>'); document.close();
+			document.body.innerHTML = '<style>' + ${JSON.stringify(css)} + '</style><div id="list"></div><div id="empty"></div>';
+			window.errors = []; window.posted = []; window.acquireVsCodeApi = () => ({ postMessage(message) { posted.push(message); if (message.type === 'error') errors.push(message.message); }, getState() {}, setState() {} });
+			window.FACADE_STRINGS = new Proxy(${JSON.stringify(words)}, { get: (words, key) => words[key] ?? String(key) }); window.FACADE_LOGOS = '';`);
+		await inside(shipped);
+		await inside(CARDS);
+		await inside(`document.body.classList.add('vscode-reduce-motion'); document.querySelectorAll('.agent')[3].focus({ preventScroll: true }); scrollTo(0, 50)`);
+		for (const deviceScaleFactor of [1, 1.25, 1.5, 2]) {
+			await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor, mobile: false });
+			for (const modernUI of [true, false]) {
+				await inside(`window.dispatchEvent(new MessageEvent('message', { data: { page: panel.page, type: 'scrolling', scrolling: { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1, modernUI: ${modernUI} } } }))`);
+				for (const lostPixels of [0, 1, 2, 1, 0]) {
+					const width = 400 - lostPixels / deviceScaleFactor, height = 300 - lostPixels / deviceScaleFactor;
+					await evaluate(`document.getElementById('clip').style.width = '${width}px'; document.getElementById('clip').style.height = '${height}px'`);
+					const geometry = () => inside(`(() => { const bar = document.querySelector('.facade-scrollbar'); return { rect: bar.getBoundingClientRect().toJSON(), viewport: [innerWidth, innerHeight], card: document.querySelector('.agent').getBoundingClientRect().width, scroll: scrollY, focus: document.activeElement.dataset.run }; })()`);
+					await until(async () => { const { rect } = await geometry(); return Math.abs(rect.right - (width - (modernUI ? 1 : 0))) < 0.05 && Math.abs(rect.bottom - (height - (modernUI ? 2 : 0))) < 0.05; });
+					const seen = await geometry();
+					assert.deepStrictEqual([seen.viewport, seen.scroll, seen.focus, seen.rect.width], [[400, 300], 50, 'run-4', modernUI ? 8 : 10]);
+					assert.ok(Math.abs(seen.card - (width - 8)) < 0.05, 'card layout follows the same visible width as the track');
+				}
+				await inside('scrollTo(0, document.documentElement.scrollHeight)');
+				// Scroll events update the overlay on the next animation frame, which can be delayed on CI.
+				await until(() => inside(`Math.abs(document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().bottom - ${modernUI ? 298 : 300}) < 0.05`));
+				const end = await inside(`({ card: document.querySelector('.agent:last-child').getBoundingClientRect().bottom, thumb: document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().bottom })`);
+				assert.ok(Math.abs(end.card - 300) < 0.05);
+				assert.ok(Math.abs(end.thumb + (modernUI ? 2 : 0) - end.card) < 1 / deviceScaleFactor, 'only the modern slider is inset from the safe content bottom: ' + JSON.stringify({ deviceScaleFactor, modernUI, end }));
+				await inside('scrollTo(0, 50)');
+			}
+		}
+		// Clipping compensation is also needed when no scrollbar exists, and after the list becomes empty.
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.getElementById('clip').style.width = '398px'; document.getElementById('clip').style.height = '298px'`);
+		await inside(`agents = agents.slice(0, 2); redraw({ revision: 2 }); scrollTo(0, 0)`);
+		await until(() => inside(`Math.abs(document.querySelector('.agent').getBoundingClientRect().right - 394) < 0.05 && document.querySelector('.facade-scrollbar').hidden`));
+		assert.deepStrictEqual(await inside(`({ hidden: document.querySelector('.facade-scrollbar').hidden, top: document.querySelector('.agent').getBoundingClientRect().top })`), { hidden: true, top: 0 });
+		await inside(`agents = []; redraw({ revision: 3, empty: 'noAgents' })`);
+		await wait(30);
+		assert.deepStrictEqual(await inside(`({ hidden: document.querySelector('.facade-scrollbar').hidden, right: document.body.getBoundingClientRect().right - parseFloat(getComputedStyle(document.body).paddingRight), bottomPadding: getComputedStyle(document.body).paddingBottom })`), { hidden: true, right: 398, bottomPadding: '2px' });
+		assert.deepStrictEqual(await inside('window.errors'), []);
+	});
+
+	test('PANEL-3.3: both modern caps survive the rounded host clip at four display scales, with full-range dragging and clickable clearance', async () => {
+		await evaluate(`document.body.classList.add('vscode-reduce-motion'); document.documentElement.style.cssText = '--vscode-scrollbarSlider-background:#ff0000';`);
+		const settings = { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1 };
+		await deliver({ type: 'scrolling', scrolling: { ...settings, modernUI: true } });
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
+		// The native webview overlay clips all four corners, including the top below the title bar.
+		await evaluate(`(() => {
+			const clip = document.createElement('div'); clip.id = 'host-clip-fixture';
+			clip.style.cssText = 'position:fixed;inset:0;overflow:hidden;transform:translateZ(0);pointer-events:none';
+			document.body.append(clip); clip.append(document.querySelector('.facade-scrollbar'));
+		})()`);
+		const box = () => evaluate(`document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().toJSON()`);
+		// Compare the cap against the same unclipped layer: preserve its filled shape, allowing shared-edge antialiasing.
+		const cap = async (bottom: boolean): Promise<number[]> => {
+			const bounds = await box();
+			const offset = await evaluate('scrollY');
+			const png = (await call('Page.captureScreenshot', { format: 'png', clip: { x: bounds.left, y: offset + (bottom ? bounds.bottom - 8 : bounds.top), width: 8, height: 8, scale: 1 } })).result.data;
+			return evaluate(`(async () => {
+				const image = new Image(); image.src = 'data:image/png;base64,${png}'; await image.decode();
+				const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
+				const context = canvas.getContext('2d'); context.drawImage(image, 0, 0);
+				return [...context.getImageData(0, 0, image.width, image.height).data];
+			})()`);
+		};
+		const clippedCaps: { scale: number; bottom: boolean; filledPixelsLost: number; edgePixelsLost: number }[] = [];
+		for (const deviceScaleFactor of [1, 1.25, 1.5, 2]) {
+			await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor, mobile: false });
+			for (const bottom of [false, true]) {
+				await evaluate(`scrollTo(0, ${bottom ? 'document.documentElement.scrollHeight' : '0'}); document.getElementById('host-clip-fixture').style.borderRadius = '0'`);
+				await until(async () => (await box())[bottom ? 'bottom' : 'top'] === (bottom ? 298 : 2));
+				assert.equal((await box())[bottom ? 'bottom' : 'top'], bottom ? 298 : 2, `The thumb reaches the track endpoint at scale ${deviceScaleFactor}, including fractional scroll limits`);
+				const before = await cap(bottom);
+				assert.ok(before.some((value, index) => index % 4 === 1 && value === 0), 'the reference contains the painted red cap');
+				await evaluate(`document.getElementById('host-clip-fixture').style.borderRadius = '8px'`);
+				const after = await cap(bottom);
+				assert.equal(after.length, before.length);
+				let filledPixelsLost = 0, edgePixelsLost = 0;
+				for (let pixel = 0; pixel < before.length; pixel += 4) {
+					if (before[pixel + 1] === 0 && after[pixel + 1] !== 0) { filledPixelsLost++; }
+					// Red on white: green measures uncovered area. Preserve the half-coverage contour;
+					// subpixel fringes outside it can disappear where the two antialiased clips meet.
+					else if (before[pixel + 1] < 128 && after[pixel + 1] >= 128) { edgePixelsLost++; }
+				}
+				if (filledPixelsLost || edgePixelsLost) { clippedCaps.push({ scale: deviceScaleFactor, bottom, filledPixelsLost, edgePixelsLost }); }
+				if (deviceScaleFactor === 1) { await snapshot(`scrollbar-${bottom ? 'bottom' : 'top'}-host-clip`); }
+			}
+		}
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		const end = await evaluate('scrollY');
+		for (const modernUI of [false, true]) {
+			const previous = await evaluate('scrollY');
+			await deliver({ type: 'scrolling', scrolling: { ...settings, modernUI } });
+			assert.equal(await evaluate('scrollY'), previous, 'mode changes preserve scroll position without adding content height');
+		}
+		await evaluate('scrollTo(0, 0)');
+		await wait(30);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 12 });
+		await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: 395, y: 12, button: 'left', clickCount: 1 });
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 310, button: 'left', buttons: 1 });
+		await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 395, y: 310, button: 'left', clickCount: 1 });
+		assert.equal(await evaluate('scrollY'), end, 'the shortened track still maps to the full content range');
+		assert.equal((await box()).bottom, 298);
+		assert.equal(await evaluate(`document.querySelector('.agent:last-child').getBoundingClientRect().bottom`), 300);
+		for (const [position, y, targets] of [[end, 299, ['run-30']], [0, 1, ['run-1']]] as const) {
+			await evaluate(`scrollTo(0, ${position}); window.posted = []`);
+			await wait(30);
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 393, y });
+			for (const type of ['mousePressed', 'mouseReleased']) {
+				await call('Input.dispatchMouseEvent', { type, x: 393, y, button: 'left', clickCount: 1 });
+			}
+			assert.deepStrictEqual(await evaluate(`window.posted.filter(message => message.type === 'act').map(message => message.target)`), targets, 'the strips beyond the inset scrollbar still belong to the first and last cards');
+		}
+		await evaluate(`document.querySelector('.agent').focus()`);
+		await call('Input.dispatchKeyEvent', { type: 'keyDown', key: 'End', code: 'End' });
+		await call('Input.dispatchKeyEvent', { type: 'keyUp', key: 'End', code: 'End' });
+		await wait(30);
+		assert.deepStrictEqual(await evaluate(`({ target: document.activeElement.dataset.run, bottom: document.activeElement.getBoundingClientRect().bottom })`), { target: 'run-30', bottom: 300 }, 'keyboard End reaches the corrected content edge without decorative padding');
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
+		if (process.env.FACADE_UI_EVIDENCE_DIR) {
+			fs.writeFileSync(path.join(process.env.FACADE_UI_EVIDENCE_DIR, 'cap-clipping.json'), JSON.stringify(clippedCaps, null, 2));
+		}
+		assert.deepStrictEqual(clippedCaps, [], 'the host clip must preserve both filled cap contours');
+	});
+
+	test('PANEL-3.3: resizing and changing card counts never reserve a gutter; the slider overlays card paint and reaches both ends', async () => {
+		await evaluate(`document.body.classList.add('vscode-reduce-motion')`);
+		let revision = 2;
+		for (const [width, height] of [[400, 300], [200, 300], [500, 120]]) {
+			await call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false });
+			for (const count of [2, 30, 100, 2]) {
+				await evaluate(`agents = Array.from({ length: ${count} }, (_, i) => newCard(i + 1)); redraw({ revision: ${revision++} }); scrollTo(0, 0)`);
+				// Card layout is synchronous, but ResizeObserver schedules the overlay's next frame.
+				await until(() => evaluate(`document.querySelector('.facade-scrollbar').hidden === ${count === 2}
+					&& (${count === 2} || document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().top === 0)`));
+				const geometry = await evaluate(`(() => {
+					const bar = document.querySelector('.facade-scrollbar'), thumb = bar.firstElementChild, card = document.querySelector('.agent').getBoundingClientRect();
+					return { gutter: innerWidth - document.documentElement.clientWidth, content: document.documentElement.scrollWidth,
+						card: [card.left, card.right], hidden: bar.hidden, width: bar.getBoundingClientRect().width,
+						size: thumb.getBoundingClientRect().height, top: thumb.getBoundingClientRect().top, tab: bar.tabIndex,
+						aria: bar.getAttribute('aria-hidden'), position: getComputedStyle(bar).position };
+				})()`);
+				assert.deepStrictEqual([geometry.gutter, geometry.content, geometry.card, geometry.hidden, geometry.tab, geometry.aria, geometry.position],
+					[0, width, [4, width - 4], count === 2, -1, 'true', 'fixed']);
+				if (count > 2) {
+					assert.equal(geometry.width, 10);
+					assert.equal(geometry.top, 0);
+					assert.ok(geometry.size >= 20 && geometry.size < height);
+					await evaluate('scrollTo(0, document.documentElement.scrollHeight)');
+					await until(async () => await evaluate(`document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().bottom`) === height);
+				}
+			}
+		}
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.documentElement.style.cssText = '--vscode-list-activeSelectionBackground:#123456;--vscode-scrollbarSlider-background:#ff0000';
+			agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1, { selected: i === 0 })); redraw({ revision: ${revision++} }); scrollTo(0, 0)`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 310 });
+		await until(async () => await evaluate(`getComputedStyle(document.querySelector('.facade-scrollbar')).opacity`) === '0');
+		assert.deepStrictEqual(await pixelAt(392, 30), [18, 52, 86], 'card paint must extend under the hidden overlay');
+		assert.ok(await evaluate(`document.elementFromPoint(392, 30).closest('.agent') !== null`));
+		await snapshot('overlay-card-hidden');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
+		assert.deepStrictEqual(await pixelAt(392, 30), [255, 0, 0], 'the revealed slider paints over the same card pixels');
+		await snapshot('overlay-card-visible');
+	});
+
+	test('PANEL-3.3: track clicks center the slider or page by the live list setting, keeping keyboard focus and card actions untouched', async () => {
+		await evaluate(`document.body.classList.add('vscode-reduce-motion'); document.querySelector('.agent').focus()`);
+		const click = async (y: number) => {
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y });
+			for (const type of ['mousePressed', 'mouseReleased']) {
+				await call('Input.dispatchMouseEvent', { type, x: 395, y, button: 'left', clickCount: 1 });
+			}
+			await wait(30);
+		};
+		await click(200);
+		const centered = await evaluate(`(() => { const box = document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect(); return (box.top + box.bottom) / 2; })()`);
+		assert.ok(Math.abs(centered - 200) <= 1);
+		await deliver({ type: 'scrolling', scrolling: { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1, scrollByPage: true } });
+		await evaluate('scrollTo(0, 0)');
+		await wait(30);
+		await click(200);
+		assert.equal(await evaluate('scrollY'), 300);
+		await click(10);
+		assert.equal(await evaluate('scrollY'), 0);
+		// A modern track starts below the viewport top: centering and thumb hit testing use track-local coordinates.
+		for (const scrollByPage of [false, true]) {
+			await deliver({ type: 'scrolling', scrolling: { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1, modernUI: true, scrollByPage } });
+			await evaluate('scrollTo(0, 0)');
+			await wait(30);
+			await click(200);
+			const bounds = await evaluate(`document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().toJSON()`);
+			if (scrollByPage) { assert.equal(await evaluate('scrollY'), 300); }
+			else { assert.ok(Math.abs((bounds.top + bounds.bottom) / 2 - 200) <= 1); }
+			const before = await evaluate('scrollY');
+			await click(bounds.bottom - 2);
+			assert.equal(await evaluate('scrollY'), before, 'pressing the lower cap is a thumb press, not a track click');
+			if (scrollByPage) { await click(10); assert.equal(await evaluate('scrollY'), 0); }
+		}
+		// Old host messages remain valid during an update; absence resets the optional setting to its default.
+		await deliver({ type: 'scrolling', scrolling: { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1 } });
+		await click(200);
+		assert.ok(await evaluate('scrollY') > 300);
+		assert.deepStrictEqual(await evaluate(`[document.activeElement.dataset.run, window.posted.filter(message => message.type === 'act'), window.errors]`), ['run-1', [], []]);
+		await deliver({ type: 'scrolling', scrolling: { sensitivity: 1, fastSensitivity: 5, smooth: false, zoomFactor: 1, scrollByPage: 'yes' } });
+		assert.equal((await evaluate('window.errors')).length, 1);
+	});
+
+	test('PANEL-3.3: canceled, interrupted and touch drags release capture and visibility; Windows sideways reset keeps the original position', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await evaluate(`document.body.classList.add('vscode-reduce-motion'); window.addEventListener('pointerdown', event => window.pointer = event.pointerId, true)`);
+		for (const end of ['cancel', 'capture', 'blur']) {
+			await evaluate('scrollTo(0, 0)');
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 10 });
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 395, y: 10 });
+			await call('Input.dispatchMouseEvent', { type: 'mousePressed', x: 395, y: 10, button: 'left', clickCount: 1 });
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 120, button: 'left', buttons: 1 });
+			assert.ok(await evaluate('scrollY') > 0);
+			if (process.platform === 'win32') {
+				await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 550, y: 120, button: 'left', buttons: 1 });
+				assert.equal(await evaluate('scrollY'), 0, 'moving over 140 px sideways resets the drag');
+				await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 120, button: 'left', buttons: 1 });
+				assert.ok(await evaluate('scrollY') > 0);
+			}
+			// Cancellation and loss are event-driven, but each follows a real captured drag, never a synthetic pointerdown.
+			await evaluate(end === 'cancel' ? `window.dispatchEvent(new PointerEvent('pointercancel', { pointerId: window.pointer }))`
+				: end === 'capture' ? `document.querySelector('.facade-scrollbar').releasePointerCapture(window.pointer)`
+					: `window.dispatchEvent(new Event('blur'))`);
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 421, y: 121, button: 'left', buttons: 1 });
+			await wait(550);
+			assert.deepStrictEqual(await evaluate(`(() => { const bar = document.querySelector('.facade-scrollbar'); return [bar.hasPointerCapture(window.pointer), bar.classList.contains('dragging'), getComputedStyle(bar).opacity]; })()`), [false, false, '0'], end);
+			const top = await evaluate('scrollY');
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 420, y: 250, button: 'left', buttons: 1 });
+			assert.equal(await evaluate('scrollY'), top);
+			await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x: 420, y: 250, button: 'left', clickCount: 1 });
+		}
+		// Touch has no persistent hover after release, even when the finger ends inside the view.
+		await evaluate('scrollTo(0, 50)');
+		await wait(30);
+		await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 395, y: 20 }] });
+		await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 395, y: 150 }] });
+		assert.ok(await evaluate('scrollY') > 50);
+		await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+		await wait(550);
+		assert.deepStrictEqual(await evaluate(`(() => { const bar = document.querySelector('.facade-scrollbar'); return [bar.hasPointerCapture(window.pointer), bar.classList.contains('dragging'), getComputedStyle(bar).opacity]; })()`), [false, false, '0']);
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 
 	test('PANEL-3.3: with `smoothScrolling` a mouse wheel\'s scroll glides over 125 ms, ended where it is by what else scrolls the page; for a person who asked for less motion it does not glide; settings the page cannot read are refused', async () => {

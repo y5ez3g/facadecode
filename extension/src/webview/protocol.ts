@@ -89,7 +89,7 @@ export interface Outcome {
 	readonly reason?: 'gone' | 'failed';
 }
 
-/** What the page's wheel follows, as VS Code's lists do (PANEL-3.3): the person's list settings, and the window's zoom. */
+/** Native list scrolling and scrollbar appearance (PANEL-3.3): the person's settings and the window's zoom. */
 export interface Scrolling {
 	/** `workbench.list.mouseWheelScrollSensitivity`: what a wheel's movement is multiplied by. */
 	readonly sensitivity: number;
@@ -99,6 +99,10 @@ export interface Scrolling {
 	readonly smooth: boolean;
 	/** `1.2 ^ window.zoomLevel`, which Chrome multiplies a wheel's movement by. */
 	readonly zoomFactor: number;
+	/** `workbench.list.scrollByPage`: track clicks page instead of centering; absent from older hosts, defaults to false. */
+	readonly scrollByPage?: boolean;
+	/** Effective `workbench.experimental.modernUI`; absent from older hosts, defaults to the traditional list appearance. */
+	readonly modernUI?: boolean;
 }
 
 /** The words the page draws itself; every card text comes with its card. */

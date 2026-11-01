@@ -171,6 +171,7 @@ rejected several of them. Their old implementation/tests must follow the current
 | D122 | Owner visual review 2026-10-31: the Pin looks disproportionately small beside the name. The preview uses a 14 px icon box, a 4 px name gap and the selected/high-contrast colors of secondary text; these sizes are the implementation's adjustment for the requested preview | PANEL-1.3 |
 | D123 | Owner correction 2026-10-31: Resume, Pin and Unpin must meet release quality across all six built-ins. The initial four history readers and Claude-only Pin were an incomplete implementation, not an approved scope reduction. Verify native identity changes and preservation of user configuration for each adapter; record actual release evidence and remaining blockers. Native checks also established that Antigravity loses the original cwd when `--add-dir` is used; the implementation preserves that ambiguity and asks for a working location rather than inventing an original cwd | CLIS-2.4, LIFECYCLE-3.2, LIFECYCLE-3.4 |
 | D124 | Owner's 2026-10-31 comparison with native Claude `/resume` exposed missing AI/custom titles, file mtime shown as activity and a superseded segment shown twice. Correct native metadata and continuation handling, including cache invalidation and pagination order; the all-CLI scope does not justify different facts for the same conversation | CLIS-2.4, LIFECYCLE-3.2 |
+| D125 | Owner-approved 2026-10-31: the panel scrollbar auto-hides, overlays existing content without taking width, and follows the effective Modern UI setting automatically. Correct the visible webview boundary independently of decorative clearance. Modern UI leaves 2 px at the scrollbar ends and 1 px at its right; the list keeps its 4 px sides and has no additional top or bottom padding. Traditional UI has no decorative scrollbar clearance. Both modes compensate clipping for content and overlay. This supersedes D87's choice of the browser scrollbar | PANEL-3.3 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -179,6 +180,12 @@ implementation feasibility findings from that day's code audit. D42 defines only
 scripted start and its single human Close Agent both remain.
 
 ## Latest simplification review
+
+The scrollbar follow-up (D125) separates actual clipping correction from visual clearance. Native lists have no extra
+webview corner clip. For the default 8 px host radius, 4 px thumb radius and 1 px side clearance, the ideal minimum end
+clearance is 4 - sqrt(7), about 1.35 px; 2 px is the smallest whole-CSS-pixel choice, verified at fractional display scales.
+The cards already have 4 px side padding, so neither end needs decorative padding. Their right padding absorbs the
+one-device-pixel guard: adding it again made the right gap visibly larger. Keep the scrollbar's separate right clearance.
 
 The owner explicitly asked to find overdesign. The earlier review's setup barriers and extra status states were rejected
 as complexity without sufficient product value. Unverified platform mechanisms stay evidence questions rather than
@@ -237,6 +244,8 @@ proven platform limitations instead of silently weakening a product promise. The
 full spec revision; it does not authorize publication or unrelated source changes.
 
 ## Change log
+
+- 2026-10-31: Recorded the accepted overlay scrollbar, automatic Modern UI appearance and separate content/scrollbar clipping clearance (D125).
 
 - 2026-10-31: D120 records the resolved intersections with main; earlier source evidence remains separate from merged-build verification.
 
