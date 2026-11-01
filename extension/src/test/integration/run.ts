@@ -12,7 +12,7 @@ import { spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { EDITOR_FLAGS, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { EDITOR_FLAGS, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
 import { probeEnvironment } from './probeState';
 
 /** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
@@ -96,10 +96,11 @@ async function main(): Promise<void> {
 	fs.writeFileSync(path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json'), '{}\n');
 
 	/** What agents' terminals are given - the suite's home folder, and `more` - by the editor's terminal settings. */
+	const isolatedStorage = { XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state') };
 	const terminalEnv = (more: { readonly [name: string]: string } = {}) => ({
-		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state'), ...more },
-		'terminal.integrated.env.osx': { HOME: agentsHome, XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state'), ...more },
-		'terminal.integrated.env.linux': { HOME: agentsHome, XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state'), ...more }
+		'terminal.integrated.env.windows': { USERPROFILE: agentsHome, ...isolatedStorage, ...more },
+		'terminal.integrated.env.osx': { HOME: agentsHome, ...isolatedStorage, ...more },
+		'terminal.integrated.env.linux': { HOME: agentsHome, ...isolatedStorage, ...more }
 	});
 	// Every built-in points to a fake: the suite never starts a person's real CLI.
 	const settings = {
@@ -151,17 +152,22 @@ async function main(): Promise<void> {
 	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake CLI in the folder window
 	 * and adds a folder, then, in the extension host the editor restarts, says what Facade shows; this judges it.
 	 */
-	const conversion = async () => {
-		const solo = path.join(root, 'solo');
-		const second = path.join(root, 'second');
-		const user = path.join(root, 'u-conversion');
-		const facade = path.join(home, 'conversion');
-		const out = path.join(root, 'conversion.jsonl');
-		const driver = path.join(root, 'driver');
+	const conversion = async (cli: typeof BUILT_INS[number], reopening = false, expiry = false) => {
+		const suffix = `${cli.id}${expiry ? '-expiry' : reopening ? '-reopen' : ''}`;
+		// VS Code puts its main IPC socket below user data on macOS. Its already long canonical TMPDIR leaves no room for
+		// names such as u-conversion-opencode or u-conversion-claude-reopen (the Unix socket limit is 103 characters).
+		const profile = `${BUILT_INS.indexOf(cli)}${expiry ? 'e' : reopening ? 'r' : 'c'}`;
+		const solo = path.join(root, `solo-${suffix}`);
+		const second = path.join(root, `second-${suffix}`);
+		const user = path.join(root, `u-${profile}`);
+		const extensions = path.join(root, `x-${profile}`), shared = path.join(root, `s-${profile}`);
+		const facade = path.join(home, `conversion-${suffix}`);
+		const out = path.join(root, `conversion-${suffix}.jsonl`);
+		const driver = path.join(root, `driver-${suffix}`);
 		for (const dir of [solo, second, path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])) }));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'conversionDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
@@ -169,30 +175,76 @@ async function main(): Promise<void> {
 		}
 		// The flags runTests gives the other parts too: Electron's sandbox cannot start where unprivileged user namespaces are
 		// restricted, as on Ubuntu 24.04 and later
-		const editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-conversion'), '--shared-data-dir', path.join(root, 's-conversion'),
+		let editorOutput = '';
+		const editors: ReturnType<typeof spawn>[] = [];
+		const capture = (child: ReturnType<typeof spawn>) => {
+			editors.push(child);
+			const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
+			child.stdout?.on('data', append);
+			child.stderr?.on('data', append);
+			child.on('error', append);
+		};
+		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
-			stdio: 'ignore',
-			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_SECOND: second, CLAUDE_CONFIG_DIR: claudeConfig }
+			stdio: ['ignore', 'pipe', 'pipe'],
+			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', CLAUDE_CONFIG_DIR: claudeConfig }
 		});
+		capture(editor);
 		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
 		const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 		try {
 			const end = Date.now() + 90_000;
-			while (Date.now() < end && !lines().some(line => line.phase === 'workspace' || line.phase === 'error')) {
+			while (Date.now() < end && !lines().some(line => line.phase === (reopening ? 'folder' : 'workspace') || line.phase === 'error')) {
 				await new Promise(resolve => setTimeout(resolve, 500));
+			}
+			if (reopening) {
+				const before = lines().find(line => line.phase === 'folder');
+				if (!before) { throw new Error(`Could not pin before closing: ${JSON.stringify(lines())}`); }
+				const closeBy = Date.now() + 20_000;
+				while ((!lines().some(line => line.phase === 'closed') || (process.platform !== 'darwin' && editor.exitCode === null)) && Date.now() < closeBy) { await new Promise(resolve => setTimeout(resolve, 200)); }
+				// macOS can keep the application process after its last window closes; its extension host must have stopped.
+				if (!lines().some(line => line.phase === 'closed') || (process.platform !== 'darwin' && editor.exitCode === null)) { throw new Error('The isolated window did not close.'); }
+				if (expiry) {
+					const closedAt = Date.now();
+					const expiresBy = closedAt + 330_000;
+					while (alive(Number(before.pid)) && Date.now() < expiresBy) { await new Promise(resolve => setTimeout(resolve, 500)); }
+					if (alive(Number(before.pid)) || Date.now() - closedAt < 280_000) { throw new Error('The closed window did not keep and then end its process at the five-minute grace period.'); }
+					console.log(`  ✔ ${cli.id}: the closed window's process ended after ${Date.now() - closedAt} ms, using the production grace period`);
+				}
+				editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+					`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
+					stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_REOPEN: '1', CLAUDE_CONFIG_DIR: claudeConfig }
+				});
+				capture(editor);
+				const reopenBy = Date.now() + 45_000;
+				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
+				const after = lines().find(line => line.phase === 'reopened');
+				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid : after.runId !== before.runId || after.pid !== before.pid)
+					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))) {
+					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
+				}
+				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after expiry restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
+				return;
 			}
 			const said = lines();
 			const before = said.find(line => line.phase === 'folder') as { runId: string; name: string; pid: number } | undefined;
-			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string } | null; terminals: string[] } | undefined;
-			console.log(`  Journey: a folder window becomes a multi-root workspace and keeps its agents (ARCHITECTURE-2.2, D70)\n    ${JSON.stringify(said)}`);
-			if (!before || !after || after.folders !== 2 || after.card?.runId !== before.runId || !alive(before.pid) || after.terminals.filter(each => each === before.name).length !== 1) {
-				throw new Error('The agent of the folder window was not the same run, card, live process and one terminal in the workspace it became.');
+			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string; pinned: boolean } | null; terminals: string[] } | undefined;
+			console.log(`  Journey: ${suffix}: Pin and Unpin survive reload; a folder window becomes a multi-root workspace and keeps its pinned agent (LIFECYCLE-3.4, ARCHITECTURE-2.2, D70)\n    ${JSON.stringify(said)}`);
+			if (!before || !after || after.folders !== 2 || after.card?.runId !== before.runId || !after.card.pinned || !alive(before.pid)
+				|| after.terminals.filter(each => each === before.name).length !== 1 || !['reload-pinned', 'reload-unpinned'].every(phase => said.some(line => line.phase === phase))) {
+				throw new Error('Pin/Unpin did not survive reload, or the folder agent was not the same pinned run, live process and one terminal in the workspace it became.');
 			}
-			console.log('    ✔ the agent started in the folder window is the same run, card, live process and one terminal in the workspace');
+			console.log('    ✔ Pin and Unpin survive reload; the same pinned run, live process and one terminal survive conversion');
+		} catch (error) {
+			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
+			throw error;
 		} finally {
-			editor.kill('SIGTERM');
-			endMatching(user);
-			endMatching(path.join(facade, 'extension', 'ptyd'));
+			try {
+				await endEditors(editors);
+			} finally {
+				endMatching(user);
+				endMatching(path.join(facade, 'extension', 'ptyd'));
+			}
 		}
 	};
 	/**
@@ -273,7 +325,14 @@ async function main(): Promise<void> {
 			await crossWindow();
 		}
 		if (!only || only === 'conversion') {
-			await conversion();
+			for (const cli of BUILT_INS) { await conversion(cli); }
+		}
+		if (!only || only === 'reopen') {
+			for (const cli of BUILT_INS) { await conversion(cli, true); }
+		}
+		if (!only || only === 'expiry') {
+			// The shared supervisor's real five-minute policy, not a shortened fixture timer.
+			await conversion(BUILT_INS[0], true, true);
 		}
 		// Never unasked: it signs in and uses an account's usage
 		if (only === 'real') {

@@ -38,7 +38,7 @@ export function locationOfFilter(filter: PanelFilter | undefined, locations: rea
 }
 
 interface PanelModelDeps {
-	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange'>;
+	readonly agents: Pick<Agents, 'list' | 'get' | 'onDidChange'> & Partial<Pick<Agents, 'pins' | 'reorderPins'>>;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'onDidChange' | 'onDidRemove' | 'removalOf'>;
 	readonly prefs: PanelPrefs;
 	readonly words: CardWords;
@@ -56,6 +56,8 @@ interface PanelModelDeps {
 export interface SelectedAgent {
 	readonly run: RunId;
 	readonly ended: boolean;
+	readonly pinned?: boolean;
+	readonly resumable?: boolean;
 }
 
 /**
@@ -68,6 +70,7 @@ export class PanelModel implements Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	private readonly listeners = new Set<(state: PanelState) => void>();
 	private order: string[];
+	private readonly pinByRun = new Map<RunId, string | undefined>();
 	private filter: PanelFilter | undefined;
 	private selectedRun: RunId | undefined;
 	private loading = true;
@@ -99,6 +102,7 @@ export class PanelModel implements Disposable {
 		}
 		for (const run of [...deps.agents.list()].sort((a, b) => a.createdAt - b.createdAt)) {
 			this.order = withNew(this.order, run.id);
+			this.pinByRun.set(run.id, run.pin);
 		}
 		const { state, selection } = this.compute(1);
 		this.current = state;
@@ -196,10 +200,11 @@ export class PanelModel implements Disposable {
 	move(run: RunId, by: -1 | 1): boolean {
 		const runs = this.deps.agents.list();
 		const byId = new Map(runs.map(each => [each.id, each]));
-		const next = moved(this.arrangedIds(runs), run, by, id => this.matches(byId.get(id), this.filter));
+		const next = moved(this.arrangedIds(runs), run, by, id => this.matches(byId.get(id), this.filter) && !!byId.get(id)?.pin === !!byId.get(run)?.pin);
 		if (!next) {
 			return false;
 		}
+		this.deps.agents.reorderPins?.(next.flatMap(id => byId.get(id)?.pin ? [byId.get(id)!.pin!] : []));
 		this.setOrder(next);
 		this.schedule();
 		return true;
@@ -219,6 +224,11 @@ export class PanelModel implements Disposable {
 	}
 
 	private changed(change: RunChange): void {
+		const pin = this.deps.agents.get(change.run)?.pin;
+		if (change.kind !== 'removed' && this.pinByRun.get(change.run) !== pin) {
+			this.setOrder([change.run, ...this.order.filter(id => id !== change.run)]);
+		}
+		if (change.kind === 'removed') { this.pinByRun.delete(change.run); } else { this.pinByRun.set(change.run, pin); }
 		if (change.kind === 'added') {
 			this.setOrder(withNew(this.order, change.run));
 		} else if (change.kind === 'removed') {
@@ -352,9 +362,12 @@ export class PanelModel implements Disposable {
 		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
 			const folder = this.known.get(facts.location)?.folders[0];
+			const withinArea = (other: string) => visible(other) && !!byId.get(other)?.pin === !!facts.pin;
 			const menu: CardMenu = {
-				moveUp: moved(ids, id, -1, visible) !== undefined,
-				moveDown: moved(ids, id, 1, visible) !== undefined,
+				...(facts.resumable && !facts.pin ? { pin: true } : {}),
+				...(facts.pin ? { unpin: true } : {}),
+				moveUp: moved(ids, id, -1, withinArea) !== undefined,
+				moveDown: moved(ids, id, 1, withinArea) !== undefined,
 				filterLocation: wouldChange({ kind: 'location', id: facts.location }),
 				// A folder filter only where the window has several folders, as Filter by Working Location offers one
 				filterFolder: folder !== undefined && catalog.folders.length > 1 && wouldChange({ kind: 'folder', id: folder.uri }),
@@ -377,7 +390,7 @@ export class PanelModel implements Disposable {
 				capabilities: { remote: this.deps.remote },
 				...(exited.length ? { exited } : {})
 			},
-			...(selected ? { selection: { run: selected.id, ended: selected.lifecycle === 'ended' } } : {})
+			...(selected ? { selection: { run: selected.id, ended: selected.lifecycle === 'ended', ...(selected.pin ? { pinned: true } : {}), ...(selected.resumable ? { resumable: true } : {}) } } : {})
 		};
 	}
 
@@ -389,7 +402,12 @@ export class PanelModel implements Disposable {
 
 	/** The run IDs of `runs` as the panel lists them: by the stack, any it does not know yet first, newest first (PANEL-2.1). */
 	private arrangedIds(runs: readonly RunFacts[]): string[] {
-		return arranged(this.order, [...runs].sort((a, b) => b.createdAt - a.createdAt).map(run => run.id));
+		const order = arranged(this.order, [...runs].sort((a, b) => b.createdAt - a.createdAt).map(run => run.id));
+		const byId = new Map(runs.map(run => [run.id, run]));
+		const pins = this.deps.agents.pins?.().map(pin => pin.id) ?? [];
+		const pinned = order.filter(id => byId.get(id)?.pin);
+		pinned.sort((a, b) => pins.indexOf(byId.get(a)!.pin!) - pins.indexOf(byId.get(b)!.pin!));
+		return [...pinned, ...order.filter(id => !byId.get(id)?.pin)];
 	}
 
 	/** The filter as the view names it now: a location's current label, a folder's name; the label kept where neither is known. */

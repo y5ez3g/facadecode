@@ -57,7 +57,10 @@ export class WindowHuman implements HumanPort {
 	}
 
 	failed(failure: HumanFailure, options: { readonly show?: RunId; readonly configure?: boolean }): void {
-		this.error(launchFailureText(failure.name, failure.reason, failure.worktree), options);
+		const text = failure.kind === 'pin' ? vscode.l10n.t("Could not pin {0}: {1}", failure.name, failure.reason) : failure.kind === 'restore'
+			? (failure.count > 1 ? vscode.l10n.t("Could not restore {0} pinned agents. Their cards show why.", failure.count) : vscode.l10n.t("Could not restore {0}: {1}", failure.name, failure.reason))
+			: launchFailureText(failure.name, failure.reason, failure.worktree);
+		this.error(text, options);
 	}
 
 	error(text: string, options: { readonly show?: RunId; readonly configure?: boolean }): void {

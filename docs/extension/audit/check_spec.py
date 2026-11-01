@@ -10,14 +10,14 @@ errors=[];links=0;rule_count=0
 
 def anchors(path):
     seen={};out=set()
-    for h in re.findall(r'^#{1,6} ([^\n]+)',path.read_text(),re.M):
+    for h in re.findall(r'^#{1,6} ([^\n]+)',path.read_text(encoding='utf-8'),re.M):
         key=re.sub(r'[^\w\- ]','',h.strip().lower()).replace(' ','-')
         n=seen.get(key,0);seen[key]=n+1;out.add(key+(f'-{n}' if n else ''))
     return out
 
 known={}
 for p in NORM:
-    s=p.read_text();ids=re.findall(r'^### (\d+\.\d+) ',s,re.M)
+    s=p.read_text(encoding='utf-8');ids=re.findall(r'^### (\d+\.\d+) ',s,re.M)
     groups=set(re.findall(r'^## (\d+) ',s,re.M));known[p.stem]=set(ids)|groups;rule_count+=len(ids)
     if len(ids)!=len(set(ids)):errors.append(f'{p}: repeated rule ID')
     if '## Change log' not in s:errors.append(f'{p}: missing change log')
@@ -29,12 +29,12 @@ for p in NORM:
     if s.count('```')%2:errors.append(f'{p}: unmatched code fence')
 
 for p in NORM:
-    for doc,n in re.findall(r'\b([A-Z][A-Z]+)-(\d+(?:\.\d+)?)',p.read_text()):
+    for doc,n in re.findall(r'\b([A-Z][A-Z]+)-(\d+(?:\.\d+)?)',p.read_text(encoding='utf-8')):
         if doc in known and n not in known[doc]:errors.append(f'{p.name}: invalid current reference {doc}-{n}')
 
 paths=[ROOT/'AGENTS.md',ROOT/'README.md']+list((ROOT/'docs').glob('*.md'))+list(SPEC.rglob('*.md'))
 for p in paths:
-    for ref in re.findall(r'(?<!!)\[[^\]\n]+\]\(([^)\n]+)\)',p.read_text()):
+    for ref in re.findall(r'(?<!!)\[[^\]\n]+\]\(([^)\n]+)\)',p.read_text(encoding='utf-8')):
         if re.match(r'\w+://',ref): continue
         target,_,anchor=ref.partition('#');q=(p.parent/target).resolve() if target else p
         links+=1
@@ -45,7 +45,7 @@ for p in paths:
 ledger=[p.exists() for p in LEDGER];inv=None;source_ids=[]
 if any(ledger) and not all(ledger):errors.append('Incomplete migration ledger: missing '+', '.join(str(p.relative_to(SPEC)) for p,e in zip(LEDGER,ledger) if not e))
 if all(ledger):
-    inv=json.loads((SPEC/'audit/source-inventory.json').read_text());migration=json.loads((SPEC/'audit/migration.json').read_text())
+    inv=json.loads((SPEC/'audit/source-inventory.json').read_text(encoding='utf-8'));migration=json.loads((SPEC/'audit/migration.json').read_text(encoding='utf-8'))
     source_ids=[r['id'] for r in inv['rules']];mapped=[r['id'] for r in migration]
     if len(source_ids)!=427 or len(inv['groups'])!=83 or len(inv['gaps'])!=97: errors.append('Source inventory counts changed')
     if sorted(source_ids)!=sorted(mapped) or len(mapped)!=len(set(mapped)): errors.append('Rule migration missing/duplicated')

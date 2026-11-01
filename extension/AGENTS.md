@@ -66,7 +66,7 @@ npm run test:integration
 ```
 
 `npm run test:package` checks the VSIX `npm run package` made. The integration suite runs the official VS Code with its own
-profile, a temporary Facade root and fake CLIs only; `FACADE_IT_ONLY=journeys`, `cross` or `conversion` runs one part of
+profile, a temporary Facade root and fake CLIs only; `FACADE_IT_ONLY=journeys`, `cross`, `conversion`, `reopen` or `expiry` runs one part of
 it, and `FACADE_IT_KEEP=1` keeps what a run left. Linux runs it under `xvfb-run -a`; Windows runs it in the desktop session.
 
 `npm run test:remote` runs the journeys over Remote-SSH to a host: `FACADE_IT_SSH_CONFIG` and `FACADE_IT_SSH_HOST` name

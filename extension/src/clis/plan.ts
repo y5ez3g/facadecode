@@ -6,6 +6,7 @@
 // alone, before any file or process exists. Discovery and launch use the same environment, so the program found is the one
 // started; every prerequisite that can be checked is checked here, and a failure carries its actual reason.
 
+import { newSessionId, SESSION_FILE_VARIABLE } from './identity';
 import { Capability, CliAdapter, expanded, invocation, WarmUp } from './adapter';
 import { BUILT_IN_ADAPTERS, Catalog, CatalogEntry, entryOf } from './catalog';
 import { CliSaid, shown } from './config';
@@ -31,6 +32,9 @@ export interface DestinationEnvironment {
 
 /** What is asked of the planner (PlanRequest's facts, as plain data). */
 export interface PlanInput {
+	readonly resume?: { readonly sessionId: string };
+	readonly sessionFile?: string;
+	readonly sessionHook?: string;
 	readonly cli: string;
 	/** The run's `#aN` alias, which its environment carries (CLIS-1.2). */
 	readonly alias: string;
@@ -57,6 +61,9 @@ export type LaunchTrust = {
 
 /** A launch as planned: the same facts as the core's LaunchPlan, kept as plain data here. */
 export interface PlannedLaunch {
+	readonly files?: readonly { readonly file: string; readonly content: string }[];
+	readonly sessionId?: string;
+	readonly exactResume?: boolean;
 	readonly cli: string;
 	readonly displayName: string;
 	readonly command: string;
@@ -257,6 +264,10 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		throw new CliPlanError(found.problem, 'not_found', found.said);
 	}
 	const target = targetOf(entry, found.executable, env, platform, input.cwd);
+	if (input.resume && (!input.resume.sessionId || input.resume.sessionId.includes('\0') || (!entry.custom && !adapter.groups.resume))) {
+		throw new CliPlanError(`${adapter.displayName} cannot resume this exact conversation`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
+	}
+	const sessionId = input.resume?.sessionId ?? (adapter.groups.session && input.sessionFile ? newSessionId() : undefined);
 	const takes = takesThrough(adapter, target.throughCmd, input.cwd, platform);
 	for (const asked of ['model', 'effort'] as const) {
 		if (input[asked] !== undefined && !takes[asked]) {
@@ -265,19 +276,12 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	}
 	const prompt = input.prompt === undefined ? undefined : promptOf(adapter, input.prompt, target.throughCmd);
 	const native = prompt?.path === 'native';
-	const values = adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, model: input.model, effort: input.effort, env });
+	const values = { ...adapter.values({ yolo: input.yolo, cwd: input.cwd, platform, model: input.model, effort: input.effort, env, sessionId, sessionHook: input.sessionHook }), ...sessionId ? { sessionId } : {} };
 	// Explicit MCP choices replace only their matching configured options (CLIS-1.4), without duplicate native flags.
-	const extra = configuredArguments(entry.extra, [
+	const extra = configuredArguments(input.resume && entry.custom ? entry.custom.resume.map(arg => arg.replace(/\$\{sessionId\}/g, () => input.resume!.sessionId)) : entry.extra, [
 		...input.model !== undefined ? adapter.groups.model ?? [] : [],
 		...input.effort !== undefined ? adapter.groups.effort ?? [] : []
 	]);
-	const argsWith = (injection: Injection | undefined) => [...target.args, ...injection?.args ?? [], ...invocation(adapter.groups, extra.map(each => each.value), {
-		yolo: input.yolo, connect: injection !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: native
-	}, {
-		...values,
-		...injection?.values,
-		...native ? { prompt: input.prompt! } : {}
-	})];
 	let injection = input.tools ? adapter.tools?.inject({ ...input.tools, platform }) : undefined;
 	let tools: PlannedLaunch['tools'] = injection ? { state: 'injected' } : { state: 'not_injected' };
 	// The tools' variables on the person's own, where a CLI's variable must keep theirs: one that cannot be read keeps theirs whole,
@@ -292,13 +296,30 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		}
 		merged[name] = kept;
 	}
-	let args = argsWith(injection);
-	if (target.throughCmd && injection && args.some(unsafeForCmd) && !argsWith(undefined).some(unsafeForCmd)) {
-		// The tools alone cannot pass through cmd.exe: the CLI starts without them rather than not at all (MCP-6.1)
+	const launchWith = (active: Injection | undefined) => {
+		const started = { ...env };
+		if (active) {
+			for (const [name, value] of Object.entries(merged)) { setVariable(started, name, value, platform); }
+		}
+		const arguments_ = [...active?.args ?? [], ...invocation(adapter.groups, extra.map(each => each.value), {
+			yolo: input.yolo, resume: !!input.resume && !entry.custom, session: !!sessionId,
+			connect: active !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: false
+		}, { ...values, ...active?.values })];
+		// Compose native identity with the complete tool settings. A second --settings must not erase either integration.
+		const integration = input.sessionFile && input.sessionHook ? adapter.sessionIntegration?.({
+			file: input.sessionFile, hook: input.sessionHook, env: started, cwd: input.cwd, platform, extra: arguments_, tools: active !== undefined, throughCmd: target.throughCmd
+		}) : undefined;
+		const args = [...target.args, ...integration?.extra ?? arguments_, ...integration?.args ?? [],
+			...native ? expanded(adapter.groups.prompt!, { ...values, prompt: input.prompt! }) : []];
+		return { args, started, integration };
+	};
+	let launch = launchWith(injection);
+	if (target.throughCmd && injection && launch.args.some(unsafeForCmd) && !launchWith(undefined).args.some(unsafeForCmd)) {
 		injection = undefined;
 		tools = { state: 'unavailable', problem: 'cmd', reason: `${found.executable} runs through cmd.exe, which cannot be given the Facade tools' arguments safely; set ${adapter.setting}.path to the CLI's own program or Node entry point` };
-		args = argsWith(undefined);
+		launch = launchWith(undefined);
 	}
+	const { args, started, integration } = launch;
 	if (isNodeScript(target.executable, platform)) {
 		// A Node entry point - what a refusal below advises - that no Node on the PATH can run: Windows cannot run it itself
 		throw new CliPlanError(`${target.executable} is a Node script, and Node is not on the PATH to run it`, 'not_found',
@@ -330,16 +351,15 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 				{ kind: 'cmd_unsafe', values: [found.executable, shown(args[unsafe]), adapter.setting] });
 		}
 	}
-	const started = { ...env };
-	if (injection) {
-		for (const [name, value] of Object.entries(merged)) {
-			setVariable(started, name, value, platform);
-		}
-	}
 	const runEnv = runEnvironment(started, input.alias, platform);
+	if (adapter.sessionIdentity && input.sessionFile) { runEnv[SESSION_FILE_VARIABLE] = input.sessionFile; }
+	Object.assign(runEnv, integration?.env);
 	const version = installedVersionOf(adapter.id, found.executable)?.version;
 	return {
+		...integration?.files ? { files: integration.files } : {},
 		cli: adapter.id,
+		...(sessionId ? { sessionId } : {}),
+		exactResume: !!adapter.sessionIdentity && !!input.sessionFile && !!input.sessionHook && !integration?.unavailable,
 		displayName: adapter.displayName,
 		command: adapter.command,
 		executable: target.executable,

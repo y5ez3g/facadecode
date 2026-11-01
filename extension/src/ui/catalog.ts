@@ -10,6 +10,9 @@ export const PANEL_VIEW = 'facade.agents';
 /** The public commands of UX-3.1 and the context-only ones of UX-3.2. */
 export const COMMANDS = {
 	newAgent: 'facade.newAgent',
+	history: 'facade.history',
+	pinAgent: 'facade.pinAgent',
+	unpinAgent: 'facade.unpinAgent',
 	showActiveAgents: 'facade.showActiveAgents',
 	renameAgent: 'facade.renameAgent',
 	copyAgentReference: 'facade.copyAgentReference',
@@ -42,6 +45,8 @@ export const CONTEXT = {
 	hasAgents: 'facade.hasAgents',
 	agentSelected: 'facade.agentSelected',
 	agentSelectedEnded: 'facade.agentSelectedEnded',
+	agentSelectedPinned: 'facade.agentSelectedPinned',
+	agentSelectedResumable: 'facade.agentSelectedResumable',
 	filtered: 'facade.filtered'
 } as const;
 

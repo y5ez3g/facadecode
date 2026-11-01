@@ -47,7 +47,7 @@ export interface CatalogEntry {
  */
 export function ownedOptions(adapter: CliAdapter): readonly string[] {
 	// A generic configuration flag carries unrelated user settings too; never reserve all of Codex's or Muse's -c.
-	return [...adapter.groups.quiet ?? [], ...adapter.groups.yoloOn ?? [], ...adapter.groups.yoloOff ?? []].filter(token => token.startsWith('-') && token !== '-c');
+	return [...adapter.groups.quiet ?? [], ...adapter.groups.yoloOn ?? [], ...adapter.groups.yoloOff ?? [], ...adapter.groups.resume ?? [], ...adapter.groups.session ?? [], ...adapter.identityOptions ?? []].filter(token => token.startsWith('-') && (token !== '-c' || (adapter.id !== 'codex' && adapter.id !== 'muse')));
 }
 
 /** How the catalog reads the settings: by their full names, as the destination environment's editor has them. */

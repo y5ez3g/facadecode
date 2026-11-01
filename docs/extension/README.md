@@ -45,11 +45,11 @@ This is the subset for the owner-tested steps so far. Step 1 shipped Claude Code
 that serves them, as the 0.0.1 preview; Antigravity, Muse Code, OpenCode and Pi join them at the same level (D77). Step 2
 adds agents that work together, with every built-in CLI: the nine MCP tools, messages and their results, contact with the
 person, Message History, and control of agents in every Facade window on this computer, local and remote alike. The integrated steps also include panel display filters, built-in launch settings, Show Agent Launch, Show Agents Log
-and custom CLIs. Every rule keeps its final number; Resume and Pin remain later steps.
+custom CLIs, and Resume with linked Pin/Unpin. Every rule keeps its final number.
 
 ## 3 Coverage and evidence limits
 
-The set contains **12 normative documents and 179 numbered rules**. The [audit report](audit/REPORT.md) records
+The set contains **12 normative documents and 185 numbered rules**. The [audit report](audit/REPORT.md) records
 structural and reference checks; the migration ledger joins in the last step. These do not constitute a runtime pass.
 
 Required product evidence includes native/compatible-editor installation, routing between local and remote windows,
@@ -71,6 +71,7 @@ the owner to repeatedly approve speculative edge cases. Verification states rema
 
 ## Change log
 
+- 2026-10-31: Resume and linked Pin/Unpin extend the current step; 134 rules.
 - 2026-10-31: Integrate the MCP feature and current main: 12 normative documents, 179 rules, with all local links and numbered references checked.
 
 - 2026-10-31: The step summary includes custom CLIs; CLIS-3.4 makes 128 rules.

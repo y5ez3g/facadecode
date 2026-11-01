@@ -50,6 +50,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let config: { [key: string]: unknown };
 	/** The editor's tabs as the test has them: the active tab, its changes, and the commands run on the active editor. */
 	let tabsChanged: TestEmitter<{ opened: unknown[]; closed: unknown[]; changed: unknown[] }>;
+	let groupsChanged: TestEmitter<undefined>;
+	let visibleTabs: unknown[] | undefined;
 	let activeTab: unknown;
 	let activeTerminal: unknown;
 	let commands: string[];
@@ -94,6 +96,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		configChanged = new TestEmitter();
 		config = { 'terminal.integrated.tabs.separator': ' | ' };
 		tabsChanged = new TestEmitter();
+		groupsChanged = new TestEmitter();
+		visibleTabs = undefined;
 		activeTab = undefined;
 		activeTerminal = undefined;
 		commands = [];
@@ -112,7 +116,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const vscodeApi = {
 			TabInputTerminal,
 			TabInputText,
-			commands: { executeCommand: async (command: string) => { commands.push(command); } },
+			commands: { executeCommand: async (command: string) => {
+				commands.push(command);
+				if (activeTab && (command === 'workbench.action.pinEditor' || command === 'workbench.action.unpinEditor')) {
+					Object.assign(activeTab, { isPinned: command === 'workbench.action.pinEditor' });
+					tabsChanged.fire({ opened: [], closed: [], changed: [activeTab] });
+				}
+			} },
 			EventEmitter: TestEmitter,
 			ThemeIcon: class { constructor(readonly id: string) { } },
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: path.posix.join(base.path, ...parts) }) },
@@ -125,7 +135,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			},
 			window: {
 				get activeTerminal() { return activeTerminal; },
-				tabGroups: { onDidChangeTabs: tabsChanged.event, get activeTabGroup() { return { activeTab }; } },
+				tabGroups: { onDidChangeTabs: tabsChanged.event, onDidChangeTabGroups: groupsChanged.event,
+					get all() { return [{ tabs: visibleTabs ?? terminals.filter(terminal => !terminal.disposed).map(terminal => terminal.tab) }]; },
+					get activeTabGroup() { return { activeTab }; } },
 				onDidChangeActiveTerminal: activeChanged.event,
 				onDidCloseTerminal: closed.event,
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => {
@@ -202,7 +214,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
-		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
+		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect, join: PtydClient.join.bind(PtydClient) }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
 	});
 
 	teardown(() => {
@@ -266,6 +278,67 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	const resets = (terminal: FakeTerminal) => titled(terminal, terminal.options.name);
 	/** A CLI that echoes what it is typed and reports itself as a status-reporting CLI does. */
 	const ECHO = `process.stdin.setRawMode(true); process.stdout.write('ready\\r\\n'); process.stdin.on('data', d => { const s = d.toString(); if (s === 'q') process.exit(3); process.stdout.write('got ' + s + '\\r\\n'); }); setInterval(() => {}, 1000);`;
+
+	test('Pin waits for its exact active tab, never focuses a background terminal, and survives a kept tab reopening', async () => {
+		const port = portOf();
+		const changes: unknown[] = [];
+		port.onDidPinTab(change => changes.push(change));
+		port.openPair(facts('run-1'), { reveal: false });
+		const first = terminals[0];
+		open(first);
+		tabsChanged.fire({ opened: [first.tab], closed: [], changed: [] });
+		port.pinTab('run-1', true);
+		assert.deepStrictEqual([commands, first.shown], [[], []]);
+		activeTab = first.tab; activeTerminal = first;
+		activeChanged.fire(first);
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first.tab, { isActive: true })] });
+		await until('the exact tab pinned', () => first.tab.isPinned);
+		await Promise.resolve();
+		assert.deepStrictEqual(commands, ['workbench.action.pinEditor']);
+		assert.deepStrictEqual(changes, [], 'programmatic synchronization does not become another human Pin');
+		Object.assign(first.tab, { isPinned: false });
+		tabsChanged.fire({ opened: [], closed: [], changed: [first.tab] });
+		assert.deepStrictEqual(changes, [{ run: 'run-1', pinned: false }]);
+		port.pinTab('run-1', true);
+		await Promise.resolve();
+		closed.fire(first);
+		port.reopen('run-1');
+		const next = terminals[1];
+		open(next);
+		activeTab = next.tab; activeTerminal = next;
+		activeChanged.fire(next);
+		tabsChanged.fire({ opened: [Object.assign(next.tab, { isActive: true })], closed: [], changed: [] });
+		await until('the reopened tab pinned', () => next.tab.isPinned);
+	});
+
+	test('a rebuilt tab-group model replaces stale objects; Pin follows only the exactly correlated terminal, including duplicate names', async () => {
+		const port = portOf();
+		port.openPair(facts('run-1'), { reveal: false });
+		const first = terminals[0]; open(first);
+		tabsChanged.fire({ opened: [first.tab], closed: [], changed: [] });
+		port.openPair(facts('run-2'), { reveal: false });
+		const second = terminals[1]; open(second);
+		tabsChanged.fire({ opened: [second.tab], closed: [], changed: [] });
+		activeTab = first.tab; activeTerminal = first;
+		activeChanged.fire(first);
+		port.pinTab('run-1', true);
+		await until('the original tab pinned', () => first.tab.isPinned);
+		await Promise.resolve();
+		const replacement = { ...first.tab, isActive: true }, other = { ...second.tab };
+		visibleTabs = [replacement, other]; activeTab = replacement;
+		groupsChanged.fire(undefined);
+		port.pinTab('run-1', false);
+		await until('the replacement tab unpinned', () => !replacement.isPinned);
+		assert.strictEqual(first.tab.isPinned, true, 'the obsolete object is never used as the command target');
+		port.pinTab('run-2', true);
+		assert.deepStrictEqual([other.isPinned, first.shown, second.shown], [false, [], []]);
+		// The other equal-name tab is correlated only when that terminal actually becomes active.
+		activeTab = other; activeTerminal = second;
+		activeChanged.fire(second);
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(other, { isActive: true })] });
+		await until('the second exact tab pinned', () => other.isPinned);
+		assert.strictEqual(replacement.isPinned, false);
+	});
 
 	test('a pair is one editor terminal from acceptance on, with the agent\'s name and its CLI\'s logo; Facade\'s lines show before any process, and the process starts in that same terminal', async () => {
 		const port = portOf();
@@ -842,20 +915,28 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 
 	/** A ptyd of an earlier protocol, holding a run its window started before that window reloaded into this build. */
-	const earlierWith = async (run: RunId): Promise<{ readonly server: PtydServer; readonly socket: string }> => {
-		const protocol = EARLIER_PROTOCOLS[0];
+	const earlierWith = async (run: RunId, protocol = EARLIER_PROTOCOLS[0], owner = 'workspace-1', extra: Partial<RunMeta> = {}): Promise<{ readonly server: PtydServer; readonly socket: string }> => {
 		const socket = ptydSocketPath(home, protocol);
 		const server = new PtydServer(socket, () => undefined, undefined, protocol);
 		assert.strictEqual(await server.listen(), true);
 		const before = (await PtydClient.join(socket, protocol))!;
-		await before.request('claim', nextOwnerClaim('workspace-1', home));
+		await before.request('claim', nextOwnerClaim(owner, home));
 		await before.request('spawn', {
-			run, owner: 'workspace-1', file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: { ...meta(run) }
+			run, owner, file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: { ...meta(run), ...extra }
 		});
 		before.dispose();
 		return { server, socket };
 	};
 
+	test('global discovery preserves another window\'s protocol-9 tool files and excludes its exact conversation without taking ownership', async () => {
+		const prior = await earlierWith('prior-other-window', 9, 'other-workspace', { sessionId: 'exact-prior', cli: 'claude', environment: 'local' });
+		try {
+			const port = portOf();
+			assert.ok((await port.allRunIds()).includes('prior-other-window'));
+			assert.deepStrictEqual(await port.conversations(), [{ sessionId: 'exact-prior', cli: 'claude', environment: 'local' }]);
+			assert.deepStrictEqual(await port.live(), [], 'no ownership of another window was taken');
+		} finally { prior.server.close(); }
+	});
 	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1, D86)', async function () {
 		this.timeout(20_000);
 		const protocol = EARLIER_PROTOCOLS[0];

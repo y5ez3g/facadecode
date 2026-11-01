@@ -76,6 +76,22 @@
 				"icon": "$(facade-new-agent)"
 			},
 			{
+				"command": "facade.history",
+				"title": "%command.history%",
+				"category": "%command.category%",
+				"icon": "$(history)"
+			},
+			{
+				"command": "facade.pinAgent",
+				"title": "%command.pinAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.unpinAgent",
+				"title": "%command.unpinAgent%",
+				"category": "%command.category%"
+			},
+			{
 				"command": "facade.showActiveAgents",
 				"title": "%command.showActiveAgents%",
 				"category": "%command.category%"
@@ -181,6 +197,11 @@
 					"group": "navigation@1"
 				},
 				{
+					"command": "facade.history",
+					"when": "view == facade.agents",
+					"group": "navigation@2"
+				},
+				{
 					"command": "facade.newAgent",
 					"when": "view == facade.agents",
 					"group": "navigation@3"
@@ -211,6 +232,16 @@
 					"command": "facade.renameAgent",
 					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
 					"group": "1_agent@1"
+				},
+				{
+					"command": "facade.unpinAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewUnpin",
+					"group": "1_agent@2"
+				},
+				{
+					"command": "facade.pinAgent",
+					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewPin",
+					"group": "1_agent@2"
 				},
 				{
 					"command": "facade.copyAgentReference",
@@ -292,6 +323,14 @@
 				{
 					"command": "facade.revealAgent",
 					"when": "false"
+				},
+				{
+					"command": "facade.pinAgent",
+					"when": "facade.agentSelected && facade.agentSelectedResumable && !facade.agentSelectedPinned"
+				},
+				{
+					"command": "facade.unpinAgent",
+					"when": "facade.agentSelectedPinned"
 				}
 			]
 		},
@@ -723,7 +762,9 @@
 		"@xterm/addon-serialize": "^0.14.0",
 		"@xterm/addon-unicode11": "^0.9.0",
 		"@xterm/headless": "^6.0.0",
-		"node-pty": "1.2.0-beta.15"
+		"jsonc-parser": "3.3.1",
+		"node-pty": "1.2.0-beta.15",
+		"smol-toml": "1.9.1"
 	},
 	"devDependencies": {
 		"@types/mocha": "^10.0.10",

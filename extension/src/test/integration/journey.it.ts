@@ -5,6 +5,8 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { pathToFileURL } from 'url';
+import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
 
@@ -29,6 +31,52 @@ const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 };
 /** Whether this run's CLI is the suite's custom one rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
+
+/** Native store fixtures: actual vendor interoperability is verified separately with isolated native CLIs. */
+function resumeFixture(cwd: string): { sessionId: string; args: string[] } {
+	const id = '86da4482-2bae-4a45-b193-a5664c19826a', title = 'Resume integration fixture';
+	const write = (file: string, content: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); };
+	const sqlite = (file: string, sql: string, insert: string, values: (string | number)[]) => {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		const db = new DatabaseSync(file); try { db.exec(sql); db.prepare(insert).run(...values); } finally { db.close(); }
+	};
+	if (CLI === 'claude') {
+		const dir = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', cwd.replace(/[^A-Za-z0-9]/g, '-'));
+		write(path.join(dir, `${id}.jsonl`), [
+			{ type: 'user', sessionId: id, cwd, parentUuid: null, message: { role: 'user', content: 'Initial prompt before native naming' } },
+			{ type: 'attachment', padding: 'x'.repeat(80_000) },
+			// This journey accepts the most recent entry. In a complete serial run the other vendors' earlier fixtures remain,
+			// so this newly written conversation must also have new native activity, not an artificially old timestamp.
+			{ type: 'assistant', sessionId: id, timestamp: new Date().toISOString(), message: { role: 'assistant', content: [] } },
+			{ type: 'ai-title', sessionId: id, aiTitle: title }
+		].map(value => JSON.stringify(value)).join('\n') + '\n');
+	} else if (CLI === 'codex') {
+		write(path.join(AGENTS_HOME!, '.codex', 'sessions', '2026', '10', '31', `rollout-it-${id}.jsonl`), [
+			{ type: 'session_meta', payload: { id, cwd } },
+			{ type: 'response_item', payload: { role: 'user', content: [{ type: 'input_text', text: title }] } }
+		].map(value => JSON.stringify(value)).join('\n'));
+	} else if (CLI === 'pi') {
+		write(path.join(AGENTS_HOME!, '.pi', 'agent', 'sessions', '--integration--', `${id}.jsonl`), [
+			{ type: 'session', version: 3, id, cwd }, { type: 'message', message: { role: 'user', content: title } }
+		].map(value => JSON.stringify(value)).join('\n'));
+	} else if (CLI === 'agy') {
+		const dir = path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli');
+		write(path.join(dir, 'conversations', `${id}.db`), 'fixture');
+		sqlite(path.join(dir, 'conversation_summaries.db'), 'CREATE TABLE IF NOT EXISTS conversation_summaries (conversation_id TEXT, title TEXT, preview TEXT, last_modified_time TEXT, workspace_uris TEXT, parent_conversation_id TEXT)',
+			'INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, ?)', [id, title, title, new Date().toISOString(), JSON.stringify([pathToFileURL(cwd).href]), '']);
+	} else if (CLI === 'opencode') {
+		const session = 'ses_integration';
+		sqlite(path.join(AGENTS_HOME!, '.local', 'share', 'opencode', 'opencode.db'), 'CREATE TABLE IF NOT EXISTS session_v2 (id TEXT, directory TEXT, title TEXT, time_updated INTEGER, parent_id TEXT)',
+			'INSERT INTO session_v2 VALUES (?, ?, ?, ?, NULL)', [session, cwd, title, Date.now()]);
+		return { sessionId: session, args: ['--session', session] };
+	} else if (CLI === 'muse') {
+		const dir = path.join(AGENTS_HOME!, '.local', 'share', 'muse'), log = path.join(dir, `${id}.jsonl`);
+		write(log, '{}\n');
+		sqlite(path.join(dir, 'session-index.db'), 'CREATE TABLE IF NOT EXISTS sessions (session_id TEXT PRIMARY KEY, workspace_root TEXT, status TEXT, prompt_count INTEGER, session_log_path TEXT, first_user_prompt TEXT, updated_at_us INTEGER)',
+			"INSERT OR REPLACE INTO sessions VALUES (?, ?, 'valid', 1, ?, ?, ?)", [id, cwd, log, title, Date.now() * 1000]);
+	}
+	return { sessionId: id, args: [({ codex: 'resume', muse: 'resume', agy: '--conversation', pi: '--session' } as Record<string, string>)[CLI] ?? '--resume', id] };
+}
 
 /** Whether two paths name one folder as this system names them: Windows ignores case, and VS Code writes its drive in lower case. */
 function sameFolder(a: string, b: string): boolean {
@@ -108,8 +156,20 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		} else if (CLI === 'codex') {
 			assert.ok(launch.args.includes('--dangerously-bypass-approvals-and-sandbox'), launch.args.join(' '));
 			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
+		} else if (CLI === 'claude') {
+			const settingsAt = launch.args.indexOf('--settings');
+			assert.ok(settingsAt >= 0, 'the native session hooks accompany the MCP configuration');
+			assert.strictEqual(launch.args.filter(arg => arg === '--settings').length, 1);
+			assert.ok(launch.args.includes('--mcp-config'));
+			const settings = JSON.parse(launch.args[settingsAt + 1]);
+			assert.deepStrictEqual(settings.env, { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' });
+			assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes('hook.cjs'));
+			assert.match(launch.args[launch.args.indexOf('--session-id') + 1], /^[0-9a-f-]{36}$/);
+			assert.ok(launch.args.includes('--dangerously-skip-permissions'));
+		} else if (CUSTOM) {
+			assert.deepStrictEqual(launch.args, ARGUMENTS[CLI]);
 		} else {
-			assert.deepStrictEqual(launch.args.slice(-ARGUMENTS[CLI].length), ARGUMENTS[CLI], launch.args.join(' '));
+			for (const arg of ARGUMENTS[CLI]) { assert.ok(launch.args.includes(arg), `missing native argument ${arg}`); }
 		}
 		// Antigravity's trust in the folder, in its settings in the home its terminal sees: the suite's, never the person's (CLIS-3.3)
 		if (CLI === 'agy') {
@@ -132,6 +192,41 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Close Agent removes the card at once');
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
+	});
+
+	test('Resume uses the saved cwd and exact ID; Pin and Unpin synchronize with the native tab', async function () {
+		if (CUSTOM) { this.skip(); }
+		const cwd = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'nested');
+		fs.mkdirSync(cwd, { recursive: true });
+		const fixture = resumeFixture(cwd);
+		const before = (await state()).cardCount;
+		void vscode.commands.executeCommand('facade.history');
+		const card = await until('the resumed card', async () => {
+			const current = await state();
+			if (current.cardCount > before) { return current.cards[0]; }
+			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+			return undefined;
+		});
+		assert.strictEqual(card.name, 'Resume integration fixture');
+		const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
+		const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
+		assert.ok(sameFolder(launch.cwd, cwd));
+		const resumeAt = launch.args.indexOf(fixture.args[0]);
+		assert.ok(resumeAt >= 0, 'the native resume option accompanies the MCP configuration');
+		assert.deepStrictEqual(launch.args.slice(resumeAt, resumeAt + 2), fixture.args);
+		await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
+		await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
+		await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
+		await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label.startsWith(card.name) && tab.isPinned) ? true : undefined).catch(error => {
+			console.error('Native Pin state', JSON.stringify({ terminal: vscode.window.activeTerminal?.name, tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
+			throw error;
+		});
+		await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
+		await until('the unpinned card and tab', async () => !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label.startsWith(card.name) && !tab.isPinned) ? true : undefined);
+		// A native action saves the same restoration intent.
+		await vscode.commands.executeCommand('workbench.action.pinEditor');
+		await until('the card following a native Pin', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
+		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	});
 
 	test('PANEL-1.2, 2.3: a card\'s location filter keeps the count; with no card left the page says none is in its location, and its Clear Filter shows every agent again', async function () {
@@ -161,9 +256,15 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			this.skip();
 		}
 		const before = (await state()).cardCount;
-		// As the Command Palette runs it, with no argument; one working location: no picker, its document at once
-		await vscode.commands.executeCommand('facade.showAgentLaunch');
-		const launch = await until('the launch document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-launch'));
+		// As the Command Palette runs it; Resume may have remembered a nested cwd, so accept the location picker if shown.
+		const showing = vscode.commands.executeCommand('facade.showAgentLaunch');
+		const launch = await until('the launch document', async () => {
+			const document = vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-launch');
+			if (document) { return document; }
+			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+			return undefined;
+		});
+		await showing;
 		const text = launch.getText();
 		assert.match(text, /^Agent launch in /);
 		assert.match(text, /^YOLO: on, from facade\.yolo; it applies to agents started from now on$/m);

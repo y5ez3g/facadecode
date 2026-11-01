@@ -226,6 +226,45 @@ title over OSC 0/2, except the placeholder an adapter knows its CLI reports befo
 user punctuation. Never rewrite useful original CLI text. Terminal emoji width follows tested Unicode cell tables;
 wide-character/wrapped-line reading and bracketed paste modes are verified per terminal backend.
 
+### 2.4 Exact conversations and vendor extensions
+
+**Resume and Pin use the vendor's exact session identity and native discovery/resume, without external-writer policing.**
+
+Use a supported session ID/hook/metadata source demonstrably tied to the selected conversation. Ambiguity remains
+unknown; never replace it with --continue, --last, the newest file or a made-up ID. Data-capture hooks do not impose work.
+Keep native interactive conversation stores and account configuration. Facade does not attach MCP to an existing
+external process; resume creates a new interactive run.
+
+Discover metadata relevant to all current-window folders/subfolders and their related worktrees, including external
+vendor histories in that scope. Paginate and reuse metadata rather than parse full logs or repeatedly rescan on every
+search key. There is no 30-day exclusion or hide/delete option. A simple bounded scan must be able to continue to older
+relevant records. Do not copy histories across environments or include unrelated project histories.
+Resolve native storage overrides from the launch environment, native settings and configured launch arguments with the
+vendor's precedence, so that discovery and the resumed process use the same store.
+Claude metadata includes the transcript head and tail: latest custom title (including its native title sidecar), AI title,
+summary, then native prompt fallback. Use its last user/assistant timestamp, bounded by file mtime, for activity; mtime is
+only the fallback when that timestamp is unavailable. Honor `continued-in` while its successor has conversation records;
+a later meaningful turn in the original makes it independent again. Cache invalidation includes title sidecars and
+continuation targets. Metadata enrichment must not leave pages ordered by stale file-maintenance timestamps.
+Antigravity's sorted `workspace_uris` includes `--add-dir` folders and does not identify the launch cwd. Preserve that
+ambiguity through discovery for LIFECYCLE-3.2's explicit location choice; never treat the first matching URI as the original cwd.
+
+A session already running in Facade is not duplicated; later Pin restorations skip it. Facade does not scan for or
+acquire external writer locks. An externally active session may be resumed; return the vendor's actual acceptance or
+error without promising concurrency safety. Restoration context follows RULES-4.2.
+Verify interoperability with the actual Claude/Codex/vendor extensions where promised. Different stores cannot be
+silently imported and called the same conversation. Custom Resume/Pin depends on exact capabilities, not CLI branding. Configuration alone supplies no discovery or live identity.
+
+All six built-ins support native history discovery and exact Resume: Claude Code, Codex, Antigravity, Muse Code, OpenCode 2.x and Pi. Pin and Unpin require a maintained, process-bound session identity, including native new, switch, clear and fork operations; discovering history alone does not establish that identity. Each adapter uses its vendor's native per-launch hooks, extension interfaces or process registry without replacing user configuration, changing global hook trust, or selecting a session by recency. Pin becomes available only when the running session is identified. Missing or disabled native integration cannot silently save a stale session.
+
+Release verification covers each built-in's actual native history format, exact resume arguments, session changes, native tab synchronization and reload/reopen persistence. Reader fixtures establish format compatibility, not live vendor interoperability on an untested platform. Custom CLIs still require a maintained discovery and identity adapter before advertising these capabilities.
+
+Compose session identity and Facade tool settings in the same launch; neither may overwrite the other's settings or a
+user's hooks. An initial prompt remains after all launch options. On Windows, Muse's recognized installer is resolved to
+the active native executable named by its `.muse-version`, only in the installed channel. This bypasses the launcher's
+argument conversion so native JSON hooks reach Muse unchanged; that Facade launch does not run the launcher's update check.
+An unrecognized batch wrapper still starts as configured, without claiming session tracking it cannot install safely.
+
 ## 3 Launch configuration
 
 ### 3.1 Launch arguments and environment
@@ -377,6 +416,29 @@ not working, ready for input, signed in, and blocked on sign-in signed out. Its 
 | OpenCode 2.2.4 | Windows, run as Facade plans it - npm's shim started as its program - in isolated XDG folders with `--standalone`, not signed in: answered probe, `idle`, title `OpenCode`, Ctrl+C exit 0; from the panel, isolated, `idle`. macOS, 2.1.4 as Facade plans it, isolated with `--standalone`: answered probe, `idle`, title `OpenCode`, Ctrl+C exit 0; one signed-in turn, its own configuration read with its data and state isolated, `qwen3.8-flash` at low effort: `working`, its record titled `New session - {ISO time}` until it names the session, `idle` without a title; its session's record (with an `id`) `working` and cleared; its terminal then titled `OC \| Reply OK only`. Read from its source: reports of its own record and each session's (with an `id`), `OC \| {session title}`, no trust question; 1.19.5 sends no reports | A signed-in turn on Windows, not run: its background service was in the owner's use; its shared background server; Linux |
 | Pi 1.4.0 | Windows, run as Facade plans it - its installer's `pi.cmd` started as `pi-launcher.js` with Node, `--approve` - in an isolated `PI_CODING_AGENT_DIR`, not signed in: answered probe, `idle` 13 ms later, title `π - {folder}`, two Ctrl+C `clear` and exit 0; from the panel, isolated, `idle`. macOS, as Facade plans it, isolated: the same; one signed-in turn, `qwen3.8-flash` with thinking off and no session kept: `working`, then `done` 1.4 s later, its reply shown; two Ctrl+C `clear` and exit 0. Read from its source: no approvals or sandbox; an unknown long option is passed to extensions, not refused | A signed-in turn on Windows; Linux |
 
+Native Resume/Pin observations on 2026-10-31, Linux x64, isolated state:
+
+| CLI | Exercised identity and history behavior | Mechanism and limits |
+| --- | --- | --- |
+| Claude Code 2.1.316 | First prompt, `/clear`, second prompt, exact resume; both native JSONL conversations discovered. `/fork` creates a separate background session while the selected conversation stays unchanged, and the recorded identity correctly stays with it | Per-run native hooks; user hooks remain native. Model responses came from a local test HTTP server |
+| Codex 0.166.0 | First prompt, `/new`, `/fork`, exact resume and the current paginated SQLite history | SessionStart/SessionEnd hooks with trust for these two commands alone; no global trust bypass. Local test HTTP model |
+| Antigravity installed Linux CLI | First prompt, `/clear`, exact resume, original title callback preserved; SQLite summaries and conversation files read. Two opposite cwd/`--add-dir` launches produced identical sorted workspace sets | Per-run native title callback; ambiguous external multi-folder histories require explicit cwd selection under LIFECYCLE-3.2 |
+| Muse Code 1.4.14-R7309.1 | First prompt, `/clear`, second prompt, exact resume and SQLite index. Its per-launch hooks disappear after `/clear`, and its endpoint changes while its PID stays the same | Hook-bound or exact-PTY-PID-bound schema-v1 process registry and leases; native `echo` provider. A wrapper with a different PID waits for the first native hook |
+| OpenCode 2.2.5 | Native session creation, selected session, Home, selecting the same session again, exact `--session` resume and SQLite `session_v2` history | Native per-run TUI plugin reads the selected route and `session.location.directory`; no model call, no shared-owner server |
+| Pi 1.4.0 | Empty session, first prompt, `/new`, `/fork`, second prompt and exact `--session` resume; native JSONL header/cwd/name and storage overrides | Native per-run extension; identity becomes resumable when its own session file exists. Local test HTTP model |
+
+These checks use isolated HOME/XDG/native configuration and never probe Qwen. They establish the listed Linux behavior;
+Windows command construction tests and prior activity observations do not establish native Resume/Pin support on Windows,
+macOS or remote hosts. Required platform regression remains in VERIFICATION-2.1.
+
+After the owner's native-picker comparison (D124), Claude 2.1.316's actual `--resume` picker and Facade discovery were
+compared against the same isolated store in `/tmp/fc74-claude-picker-fD68QO`: tail AI title, manual title sidecar,
+three-hour-old message activity despite a 45-minute-old file mtime, and suppression of a continued segment all agree.
+The native screen and Facade metadata are retained there; `/tmp/fc74-claude-picker.log` records the passing assertions.
+Read-only inspection of the owner's reported folder also gives the same nine Claude entries, titles and ordering as
+the supplied native screenshot. The documented [native session-picker naming](https://code.claude.com/docs/en/sessions)
+is the vendor contract; the isolated CLI check is the runtime evidence.
+
 ### 5.2 Current external facts used by the handoff
 
 **Vendor mappings and external documentation are evidence inputs, not substitutes for actual integration checks.**
@@ -398,6 +460,10 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
+
+- 2026-10-31: D123 completes the six built-in history/identity adapters, preserves user integration settings, and records native Linux evidence and platform limits. Antigravity multi-folder metadata retains its cwd ambiguity.
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 2.1 reads Antigravity's and Pi's scrolled drafts and Pi's `[paste #N C chars]` (D118).
 - 2026-10-31: 2.1 records input boxes with `scripts/capture-inputs.mjs`, and reads Codex 0.166.0's status at the end of its

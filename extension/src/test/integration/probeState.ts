@@ -30,7 +30,7 @@ export function probeEnvironment(values: unknown, keepHome: boolean, claudeConfi
 }
 
 export function assertTemporaryState(value: string, name: string): void {
-	const temporary = [os.tmpdir(), ...(process.platform !== 'win32' ? ['/tmp'] : [])].filter(dir => fs.existsSync(dir)).map(dir => fs.realpathSync(dir));
+	const temporary = [os.tmpdir(), ...(process.platform !== 'win32' ? ['/tmp'] : [])].filter(dir => fs.existsSync(dir)).map(dir => fs.realpathSync.native(dir));
 	let target = path.resolve(value);
 	const tail: string[] = [];
 	while (!fs.existsSync(target)) {
@@ -41,7 +41,8 @@ export function assertTemporaryState(value: string, name: string): void {
 		tail.unshift(path.basename(target));
 		target = parent;
 	}
-	const real = path.join(fs.realpathSync(target), ...tail);
+	// Native realpath also expands Windows 8.3 names, as the temporary-folder helpers do.
+	const real = path.join(fs.realpathSync.native(target), ...tail);
 	const inside = temporary.some(dir => {
 		const relative = path.relative(dir, real);
 		return !!relative && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);

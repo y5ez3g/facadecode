@@ -71,6 +71,7 @@ interface Step {
 	readonly arguments: { readonly [key: string]: unknown };
 	readonly save?: { readonly [name: string]: string };
 	readonly until?: string;
+	readonly untilAbsent?: string;
 	readonly wait?: number;
 }
 
@@ -215,7 +216,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'typed by its creator' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'typed by its creator' },
 			{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } },
-			{ tool: 'read_screen', arguments: { agent: '$child' } }
+			// Keys sent is not a redraw barrier: wait for the CLI to consume Ctrl+U and paint its now-empty input.
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', untilAbsent: 'typed by its creator' }
 		]);
 		const options = ran.content('list_start_options');
 		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
@@ -223,8 +225,9 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		// Muse Code goes through cmd.exe on Windows, which cannot be given a message block as an argument: it goes after startup there
-		const native = CLI === 'muse' && process.platform === 'win32' ? undefined : NATIVE[CLI];
+		// These fixtures run directly, including the Node-backed Muse fixture on Windows. The adapter's unknown-batch-wrapper
+		// fallback is checked separately; it must not change what this direct launch can carry as a native prompt.
+		const native = NATIVE[CLI];
 		assert.deepStrictEqual([started.data.prompt.path, started.data.yolo, started.data.creator], [native ? 'native' : 'post_start', true, card.runId]);
 		// After startup it may still be on its way when the start answers - a CLI slow to draw its input - and is delivered then (MCP-2.3)
 		assert.ok(native ? started.data.prompt.status === 'success' : ['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));
@@ -251,15 +254,24 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.deepStrictEqual([ran.content('type_text')?.status, ran.content('type_text')?.effects.text_written, ran.content('type_text')?.effects.enter_written], ['success', 'full', false]);
 		assert.ok(JSON.stringify(ran.content('read_screen', 1)).includes('typed by its creator'), 'direct text is a draft in its box');
 		assert.deepStrictEqual([ran.content('press_keys')?.status, ran.content('press_keys')?.effects.keys_sent], ['success', 1], JSON.stringify(ran.content('press_keys')));
+		assert.strictEqual(ran.content('read_screen', 2)?.status, 'success', JSON.stringify(ran.content('read_screen', 2)));
+		assert.ok(JSON.stringify(ran.content('read_screen', 2)).includes('Review the README.'), 'the completed screen keeps its earlier output');
 		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
 
 		// What Copy Diagnostics copies, with both agents running (ARCHITECTURE-3.3, D116, D117): the versions, each agent with what its
 		// input reads and its last rows, and the log with each tool call, the home folder written ~
-		const diagnostics = await vscode.commands.executeCommand<string>('facade.diagnostics');
+		const inputLine = (each: string) => new RegExp(`^- @\\S+ ${each} run-\\w+: .*\\n {2}running, .*; tools available; input reader ${INPUT[CLI]}, reads usable\\n {2}\\| `, 'm');
+		let diagnostics = '';
+		// The background terminal can still receive its first resize after the child prints its task. During that redraw
+		// an unknown input is correct; judge the completed screen and tool connection, not an arbitrary startup instant.
+		await until('both agents\' completed diagnostic screens', async () => {
+			diagnostics = await vscode.commands.executeCommand<string>('facade.diagnostics');
+			return [alias, childAlias].every(each => inputLine(each).test(diagnostics)) ? true : undefined;
+		}, 10_000).catch(error => { throw new Error(`${String(error)}\n${diagnostics}`); });
 		const version = vscode.extensions.getExtension('facade.facadecode')!.packageJSON.version as string;
 		assert.ok(diagnostics.startsWith('Facade Code diagnostics, ') && diagnostics.includes(`\nFacade Code ${version}; window component ${version}; `), diagnostics.slice(0, 400));
 		for (const each of [alias, childAlias]) {
-			assert.match(diagnostics, new RegExp(`^- @\\S+ ${each} run-\\w+: .*\\n {2}running, .*; input reader ${INPUT[CLI]}, reads usable\\n {2}\\| `, 'm'), diagnostics);
+			assert.match(diagnostics, inputLine(each), diagnostics);
 		}
 		for (const tool of ['list_start_options', 'start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
 			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms$`, 'm'), `${tool} is logged`);

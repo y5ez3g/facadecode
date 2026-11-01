@@ -8,6 +8,11 @@
 // fails, the CLI starts without them (CLIS-2.2). A start of a CLI that keeps its trust in a file of its own has its folder trusted
 // there first; where it cannot be, the start goes ahead and the CLI asks in its terminal (CLIS-3.3, D62).
 
+import { SESSION_HOOK_SCRIPT, sessionFileOf, sessionHookCommand } from '../clis/identity';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { StoreEnvironments } from '../clis/history';
+import { facadeHome } from '../record/paths';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { CatalogEntry, catalogOf, SettingsReader } from '../clis/catalog';
@@ -19,7 +24,6 @@ import { runDirOf, ToolsInput } from '../clis/tools';
 import { writeTrust } from '../clis/trust';
 import type { CliFacts } from '../contract/tools';
 import { CliCatalogPort, CliChoice, CliChoices, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
-import { facadeHome } from '../record/paths';
 import { FACADE_SKILL } from '../schema/skill';
 import { readCollaboration, readSetting } from './settings';
 import type { CliProblem } from '../clis/config';
@@ -40,7 +44,7 @@ export interface HostClisOptions {
 
 /** The plan as the core has it: without the trust and injected files written for it. */
 function launchPlanOf(planned: PlannedLaunch): LaunchPlan {
-	const { injection, trust, ...plan } = planned;
+	const { injection, trust, files, ...plan } = planned;
 	return plan;
 }
 
@@ -103,6 +107,24 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		};
 	}
 
+	storeEnvironments(location: Location): StoreEnvironments {
+		const destination = this.destination(location);
+		return Object.fromEntries(catalogOf(this.read).entries.filter(entry => entry.enabled && !entry.problems.length)
+			.map(entry => [entry.adapter.id, environmentOf(entry, destination)]));
+	}
+
+	storeArguments(): Readonly<Record<string, readonly string[]>> {
+		return Object.fromEntries(catalogOf(this.read).entries.map(entry => [entry.adapter.id, entry.extra]));
+	}
+
+	resumeProblem(cli: string, location: Location): string | undefined {
+		const catalog = catalogOf(this.read);
+		const entry = catalog.entries.find(each => each.adapter.id === cli);
+		if (!entry || !entry.enabled || (!entry.custom && !entry.adapter.groups.resume)) { return 'This CLI cannot resume conversations here.'; }
+		const found = discover(catalog, this.destination(location), location.path).find(each => each.entry === entry);
+		return found?.available ? undefined : found?.problem ?? 'This CLI is unavailable.';
+	}
+
 	/**
 	 * The built-ins new starts are offered in CLIS-1.1 order - a turned-off one hidden - then the custom CLIs, for `location`; and the
 	 * errors of `facade.custom` no CLI stands for (CLIS-3.4).
@@ -149,9 +171,19 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		try {
 			const catalog = catalogOf(this.read);
 			const destination = this.destination(request.location);
-			const planned = planLaunch(catalog, { ...input, ...request.tools ? { tools: this.toolsOf(request.run, request.tools) } : {} }, destination);
+			const file = sessionFileOf(this.home, request.run);
+			const script = path.join(file.replace(/\.json$/, '.d'), 'hook.cjs');
+			const resumable = { ...input, resume: request.resume, sessionFile: file, sessionHook: sessionHookCommand(process.execPath, destination.platform, request.cli, file, script) };
+			let planned = planLaunch(catalog, { ...resumable, ...request.tools ? { tools: this.toolsOf(request.run, request.tools) } : {} }, destination);
 			const failure = planned.injection && this.inject(request.run, input.cwd, planned);
-			const plan = failure === undefined ? launchPlanOf(planned) : { ...launchPlanOf(planLaunch(catalog, input, destination)), tools: { state: 'unavailable' as const, reason: failure.reason, problem: failure.problem, ...failure.file !== undefined ? { file: failure.file } : {} } };
+			if (failure) {
+				planned = { ...planLaunch(catalog, resumable, destination), tools: { state: 'unavailable', reason: failure.reason, problem: failure.problem, ...failure.file !== undefined ? { file: failure.file } : {} } };
+			}
+			for (const owned of [...planned.files ?? [], ...planned.exactResume ? [{ file: script, content: SESSION_HOOK_SCRIPT }] : []]) {
+				fs.mkdirSync(path.dirname(owned.file), { recursive: true, mode: 0o700 });
+				fs.writeFileSync(owned.file, owned.content, { mode: 0o600 });
+			}
+			const plan = launchPlanOf(planned);
 			this.trust(planned);
 			return plan;
 		} catch (err) {

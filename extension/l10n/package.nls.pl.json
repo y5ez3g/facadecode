@@ -59,5 +59,8 @@
 	"config.custom.launch": "Jak uruchamia się CLI: `start` dla nowej rozmowy, `resume` dla zapisanej i `environment` dla jego zmiennych środowiskowych.",
 	"config.custom.launch.start": "Argumenty dla nowej interaktywnej rozmowy, przekazywane dokładnie tak, jak zostały zapisane.",
 	"config.custom.launch.resume": "Wymagane: argumenty, które wznawiają dokładnie określoną zapisaną rozmowę. Symbol zastępczy `${sessionId}` jest zastępowany identyfikatorem jej sesji i musi występować.",
-	"icon.newAgent": "Ikona polecenia „Nowy agent”"
+	"icon.newAgent": "Ikona polecenia „Nowy agent”",
+	"command.history": "Wznów agenta...",
+	"command.pinAgent": "Przypnij agenta",
+	"command.unpinAgent": "Odepnij agenta"
 }

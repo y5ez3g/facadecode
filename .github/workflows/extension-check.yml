@@ -1,0 +1,70 @@
+name: Extension checks
+
+on:
+  pull_request:
+    paths:
+      - 'extension/**'
+      - 'docs/extension/**'
+      - '.github/workflows/extension-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Extension on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: extension/.nvmrc
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: npm ci
+      - run: npm run compile
+      - run: npm test
+      - run: node scripts/l10n.mjs check
+      - run: python ../docs/extension/audit/check_spec.py
+      - run: npm run package
+      - run: npm run test:package
+      - name: Download official VS Code for isolated tests
+        run: |
+          node <<'JS'
+          const fs = require('fs');
+          require('@vscode/test-electron').downloadAndUnzipVSCode('stable').then(executable => {
+            fs.appendFileSync(process.env.GITHUB_ENV, `VSCODE_EXECUTABLE=${executable}\n`);
+          }).catch(error => { console.error(error); process.exitCode = 1; });
+          JS
+      - name: Isolated editor journeys on Linux
+        if: runner.os == 'Linux'
+        run: xvfb-run -a npm run test:integration 2>&1 | tee build/integration.log
+      - name: Isolated editor journeys on Windows and macOS
+        if: runner.os != 'Linux'
+        run: npm run test:integration 2>&1 | tee build/integration.log
+      - name: Keep editor test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: editor-tests-${{ runner.os }}-${{ runner.arch }}
+          path: extension/build/integration.log
+          if-no-files-found: ignore
+      - name: Keep tested packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-${{ runner.os }}-${{ runner.arch }}
+          path: extension/build/vsix/*.vsix
+          if-no-files-found: error

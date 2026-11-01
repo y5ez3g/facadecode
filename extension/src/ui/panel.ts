@@ -41,6 +41,7 @@ const isTarget: Check = value => typeof value === 'string' && value.length > 0 &
 const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	open: { target: true },
 	new: { target: false },
+	resume: { target: false },
 	clearFilter: { target: false },
 	openFolder: { target: false },
 	// F2 on a card: the host opens the Input Box and validates the name (D38)
@@ -252,6 +253,8 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			[CONTEXT.hasAgents, state.cardCount > 0],
 			[CONTEXT.agentSelected, selected !== undefined],
 			[CONTEXT.agentSelectedEnded, selected?.ended === true],
+			[CONTEXT.agentSelectedPinned, selected?.pinned === true],
+			[CONTEXT.agentSelectedResumable, selected?.resumable === true],
 			[CONTEXT.filtered, state.filter !== undefined]
 		];
 		for (const [key, value] of keys) {
@@ -287,6 +290,8 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		const strings: Strings = {
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
+			resumeAgent: vscode.l10n.t("Resume Agent"),
+			pinnedHint: vscode.l10n.t("Restores this conversation when the workspace opens again"),
 			clearFilter: vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
 			noAgents: vscode.l10n.t("Launch an agent in this workspace."),

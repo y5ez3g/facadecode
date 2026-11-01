@@ -42,14 +42,14 @@ export function installedVersionOf(cli: string, executable: string): { readonly 
 		case 'muse': {
 			// Its binary is named by its version; its launcher script keeps the version it runs in `.muse-version` beside it, and runs
 			// `muse-bin-<version>` there - having first downloaded another where that binary is not there, so then no version is known
-			const named = /^muse-bin-(?<version>.+)$/.exec(path.basename(real))?.groups?.version;
+			const named = /^muse-bin-(?<version>.+)$/.exec(path.basename(real).replace(/\.exe$/i, ''))?.groups?.version;
 			if (named !== undefined) {
 				return VERSION.test(named) ? { version: named, source: real } : undefined;
 			}
 			const file = path.join(path.dirname(real), '.muse-version');
 			try {
 				const version = fs.readFileSync(file, 'utf8').trim();
-				return VERSION.test(version) && fs.statSync(path.join(path.dirname(real), `muse-bin-${version}`)).isFile() ? { version, source: file } : undefined;
+				return VERSION.test(version) && ['', '.exe'].some(suffix => fs.existsSync(path.join(path.dirname(real), `muse-bin-${version}${suffix}`))) ? { version, source: file } : undefined;
 			} catch {
 				return undefined;
 			}

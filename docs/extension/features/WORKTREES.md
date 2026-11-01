@@ -29,7 +29,7 @@ Preserve editor folder order. In each folder's location picker, put the reposito
 opened location if different, then other worktrees by display name/path. Show each physical location once. Presentation
 order does not choose the launch default: LIFECYCLE-1.2 retains the remembered location or the actual opened folder.
 The catalog keeps the opened location first within each folder for that fallback; the picker orders a copy for display.
-An opened subfolder remains a valid launch location. Discover
+An opened subfolder remains a valid launch location. A successful Resume remembers its exact cwd as a known location within the workspace or a related worktree; it becomes available in later launch choices. An unavailable cwd is never registered. Confirmed directory deletion removes that location; failed reads preserve its association. Discover
 worktrees made by any tool, including legacy Facade paths; no Facade-ownership gate applies. Related worktrees outside
 the folder are normal. Deduplicate physical paths while preserving workspace associations. Paginate discovery if needed;
 no arbitrary catalog cutoff makes a valid known location permanently inaccessible. Labels use a display alias, then
@@ -235,6 +235,8 @@ final creation acceptance.
 Evidence: [Verification](../engineering/VERIFICATION.md). Git tests use disposable repositories.
 
 ## Change log
+
+- 2026-10-31: Resume and linked Pin/Unpin extend the current step; 134 rules.
 
 - 2026-10-30: Step 2 of the Facade Code extension: MCP discovery reads the same catalog (1.2), start_agent creates a
   worktree through the same flow (2.1, 4.1, 4.3), and no MCP tool deletes one (3.2).

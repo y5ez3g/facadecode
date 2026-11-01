@@ -60,6 +60,66 @@ Separate pre-integration evidence from main, recorded before the MCP merge (not 
 
 Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. On 2026-10-30, a Windows x64 client with VS Code 1.140.0: the integration suite, and the four CLIs D77 adds started from the panel; a macOS arm64 client with VS Code 1.143.1: the native build, unit and package checks and the integration suite; Linux x64: the native build, unit and package checks. On 2026-10-31, a Windows x64 client with VS Code 1.144.0: Remote-SSH to Linux x64 and macOS arm64 hosts - an agent started there, a reload, a restarted remote extension host, a lost network, Close All's one question, reopening within five minutes, and the runs ending five minutes after the last window closed; the integration suite with VS Code 1.144.0 and the declared minimum 1.105.0, whose codicons have no `new-session` for New Agent's title button; Linux x64 under xvfb with VS Code 1.144.0: the integration suite. Not run: a full Windows or a Linux client walkthrough, Remote-SSH to a Windows host, WSL, containers, a compatible editor, other architectures. OPEN
 
+Resume/Pin/Unpin evidence for the 2026-10-31 `feature/74-resume-pin` worktree: Linux x64 and official VS Code 1.144.0.
+The editor journey suite exercises native history fixtures and exact cwd/ID, card/native-tab Pin and Unpin for all six
+built-ins. For each built-in separately, real window reloads preserve Pin, preserve Unpin, and keep the same run ID,
+PID and single terminal when the folder becomes a multi-root workspace. The CLIs in these editor tests are fakes;
+CLIS-5.1 separately records the six actual native CLI probes. Native Windows/macOS/remote Resume/Pin regressions are
+not run in this handoff and G5 remains open for them. Reproduce editor coverage with `npm run test:integration`;
+`FACADE_IT_ONLY=journeys` and `conversion` select the two parts. Do not run them against a live owner profile.
+
+Pre-MCP Linux checks after D124's Claude metadata correction passed: `npm run compile`; `CHROMIUM_EXECUTABLE=/opt/google/chrome/chrome npm test`
+(577 passing, one Windows-only file-lock test pending); `npm run package` and `npm run test:package` (11 passing);
+`node scripts/l10n.mjs check` (247 runtime texts and 60 manifest strings, English plus 11 translations); the seven editor
+journeys (15 passing across six built-ins and one custom CLI); and all six Pin/Unpin reload/conversion journeys.
+The spec audit passes 134 rules and 70 local links. Test logs remain in `/tmp/fc74-claude-metadata-tests.log`,
+`/tmp/fc74-claude-metadata-package-tests.log` and `/tmp/fc74-claude-metadata-integration.log`; the complete editor run
+is retained at `/tmp/fdit-ddtoI0`. The actual Claude 2.1.316 picker comparison passed separately in
+`/tmp/fc74-claude-picker-fD68QO` (CLIS-5.1). Regression fixtures cover rename-sidecar and continuation-target cache
+invalidation, misleading mtimes, fork metadata, and activity ordering across the 100-entry pages and 1,000-read bound.
+A new normal installed-VSIX window uses `/tmp/fc74-metadata-__g4nc_l`, titled `Facade Code · Resume 修复版`, with only
+`facade.facadecode` and its window component installed. Its workspace bundle matches the VSIX (SHA-256
+`95c852f7334c39f0f0534bde00545ca1b860cb5b3b8aed68cfe95b0a4a029e18`); it has no driver or fake CLI, and uses the user's
+normal native CLI configuration. This window is for the owner to test, not an automated test subject.
+
+The merged candidate integrates MCP main `b9bd5996` with Resume/Pin. Linux checks on 2026-10-31, at `ee355c07`,
+pass compilation, 990 unit tests (one Windows-only file-lock test pending), 11 package checks, 296 runtime and
+64 manifest strings in English plus 11 translations, and the specification audit (185 rules, 80 local links).
+Logs are `/tmp/fc74-final-unit.log`, `/tmp/fc74-final-package-tests.log` and `/tmp/fc74-tabs-unit.log`.
+Native Linux exact Resume with the combined MCP and session configuration passes for all six built-ins; Claude,
+Codex and Pi also change native sessions and resume the new ID, using isolated stores and a local model stub.
+MCP configuration probes use a local MCP stub and observe initialization/tool discovery; real Facade tools are exercised
+by the separate editor journeys. Logs are `/tmp/fc74-reviewed-{claude,codex,pi,muse-opencode,agy}.log`.
+
+On official VS Code 1.144.0, every built-in passes actual Pin/Unpin reload and folder-to-workspace conversion
+(`/tmp/fc74-final-conversion.log`, `/tmp/fdit-SFAhpD`), and real close/immediate reopen preserves the original run ID,
+PID, saved session and one terminal (`/tmp/fc74-final-reopen.log`, `/tmp/fdit-1b3daX`). The shared lifetime policy is
+checked with its actual production timer: after closing the window, its process ends at 298,974 ms; reopening starts
+one new run and process with the exact previously pinned session (`/tmp/fc74-final-expiry.log`, `/tmp/fdit-CsfAwA`).
+The complete human and MCP journeys pass 33 tests across the six built-ins and custom CLI
+(`/tmp/fc74-final-journeys.log`, `/tmp/fdit-wpL7YA`). Cross-window journeys pass five tests (`/tmp/fc74-final-cross.log`, `/tmp/fdit-yvzB2W`).
+The minimum official VS Code 1.105.0 passes all six built-ins' Resume/Pin/Unpin and the custom launch journey
+(15 tests; `/tmp/fc74-minimum-integration2.log`, `/tmp/fdit-7xriwE`), plus all six reload/conversion journeys
+(`/tmp/fc74-minimum-conversion.log`, `/tmp/fdit-WXSIkt`). This found and fixed a native Pin defect: VS Code can
+replace every public Tab object through its tab-group event; stale bindings now expire and rebind only from the exact
+active Terminal/Tab correlation, including terminals with duplicate names. No name or position matching is used.
+
+The complete serial Linux suite also passes at `b0a7df41` (`/tmp/fc74-final-serial.log`, `/tmp/fdit-E7MjCO`),
+including expiry at 299,830 ms and exact restoration. The diagnostic readiness assertion added at `4c1cb8af` passes
+separately for all six CLIs (`/tmp/fc74-final-diagnostics.log`, `/tmp/fdit-Oh42rh`). A clean installation of both
+production VSIX packages activates both components and exposes Resume/Pin/Unpin without any test commands
+(`/tmp/fc74-installed-package.log`, `/tmp/fc74-installed-kb3UYJ`). The Linux workspace VSIX SHA-256 is
+`92afee1c30c924655a80ba0990f8c4ebf8e638e015f46b36ed2708e4f1409a9e`.
+
+The three-platform workflow runs compilation, units, translations, audit, packaging and the complete isolated editor
+suite on Linux x64, Windows x64 and macOS arm64. Its current result is attached to
+[PR 41](https://github.com/y5ez3g/facadecode/pull/41/checks); do not infer a platform pass from a queued or incomplete check.
+At `ee355c07`, Linux and macOS pass 990 units, Windows passes 988 (the Unix old-Git fixture and three Unix-socket checks skipped).
+CI also found two test-tool defects: an overlong fake CLI footer wrapped over its input on macOS, and the Python
+specification audit read UTF-8 documents using Windows' default code page. Their fixes preserve the product assertions.
+Native Windows/macOS and remote Resume/Pin remain unverified; fake-CLI editor coverage does not certify those native
+vendor integrations. No earlier platform result certifies this merged build.
+
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
 the available environment, complete independent work and record the exact missing evidence and required next action.
@@ -102,7 +162,9 @@ passes.
 | J07 | Close card/terminal, stop during creation, unreachable remote cleanup; close live agents' tabs alone and with Close All, then Cancel and confirm | Immediately remove pair; cleanup background, no fixed five-second wait; created files remain; one question for tabs closed together, Cancel reopens their terminals, confirm ends them; LIFECYCLE-3.1 |
 | J08 | Close creator, keep worker in same/other window | Workers remain except those owned by a window actually closed; RULES-4.1 |
 | J09 | Reload, extension-host restart, an update from the last released build with its agents running, remote loss, close-one, close-last, immediate reopen, close-last without reopen | G2 trace; original process survives reload/disconnect/update; after the update the earlier build's agents show and work through its ptyd, which exits once they are gone (ARCHITECTURE-2.4); reopen within five minutes claims the original runs; without it they end at five minutes (RULES-4.1) |
-| J12 | Both EXPERIENCE-4.1 journeys through review/integration and ordinary cleanup | No built-in task/workflow; files accessible without Git |
+| J11 | Resume an external and a Facade conversation, a nested cwd, old history beyond the first page, a disabled CLI and a running session | Exact ID/CLI/cwd, known name and current launch settings; no duplicate process or age cutoff; no implicit re-pin; LIFECYCLE-3.2, LIFECYCLE-3.3 |
+| J12 | Pin/Unpin from a card and native tab; reopen, failed restoration, session change, explicit close and normal/abnormal exit | One saved intent, pinned area/order, two background starts at most, no focus theft or retry loop; individual failure cards and one summary; LIFECYCLE-3.4, RULES-4.2 |
+| J16 | Both EXPERIENCE-4.1 journeys through review/integration and ordinary cleanup | No built-in task/workflow; files accessible without Git |
 | J13 | New VS Code user follows empty-panel explanation | First agent starts without a separate onboarding wizard |
 | J14 | 100 agents in one window, then request another | Panel/search/manual order remain usable at 100; no 100-agent hard cap |
 | J15 | One local and two remote execution environments on one client | Agent starts, messages, screens, keys and stops work between them within YOLO/tree rules |
@@ -288,6 +350,10 @@ for review, not acceptance evidence.
 | 4.1, 4.3 | Handoff, spec-amendment log and independent review |
 
 ## Change log
+
+- 2026-10-31: J11/J12 now run for all six built-ins, with a separate real reload/conversion journey for each. Native Linux CLI observations are recorded separately from fake-CLI editor evidence (D123).
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 4.2 records the merged-build evidence for D120, separately from the original D119 review and earlier platform runs.
 - 2026-10-31: 4.2 records D119's final local verification; M10 and M26 cover keyed retries, and M15 covers an owned draft

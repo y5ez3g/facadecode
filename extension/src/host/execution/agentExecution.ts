@@ -2,6 +2,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { SessionIdentity } from './sessionIdentity';
+import type { ConversationKey } from '../../core/ports';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
@@ -19,7 +21,7 @@ import { McpServerLaunch, shimLaunch as launchShim } from '../../transport/launc
 import { AgentTerminals, type AgentTerminal } from './agentTerminals';
 import { ExecutionSession, RECONCILE_MS } from './executionSession';
 import { PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from './ptydClient';
-import { PTYD_PROTOCOL } from '../../ptyd/protocol';
+import { EARLIER_PROTOCOLS, PTYD_PROTOCOL } from '../../ptyd/protocol';
 
 /** How long a CLI has to end on the hang-up before ptyd kills its process group (LIFECYCLE-4.2): no UI waits for it. */
 const GRACE_MS = 3_000;
@@ -162,6 +164,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly activations = new Emitter<RunId | undefined>();
 	private readonly closes = new Emitter<RunId>();
 	private readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
+	private readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
+	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
+	readonly onDidIdentify = this.identities.event;
+	readonly onDidPinTab = this.tabPins.event;
 	private readonly transfers = new Emitter<void>();
 	private readonly toolConnections = new Emitter<RunId>();
 	private toolHandler: ToolHandler | undefined;
@@ -179,8 +185,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidFindRuns = this.finds.event;
 	private readonly terminals: AgentTerminals;
 	private readonly session: ExecutionSession;
+	private readonly identity: SessionIdentity;
 
 	constructor(private readonly options: AgentExecutionOptions) {
+		this.identity = new SessionIdentity(options.home, (run, sessionId, cwd) => this.identities.fire({ run, sessionId, cwd }), options.log);
 		// Acquire the activation claim before subscribing any editor resources.
 		this.session = new ExecutionSession({
 			...options,
@@ -197,12 +205,22 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
 				closed: run => this.closes.fire(run),
-				renamed: (run, name) => this.tabRenames.fire({ run, name })
+				renamed: (run, name) => this.tabRenames.fire({ run, name }),
+			pinned: (run, pinned) => this.tabPins.fire({ run, pinned })
 			});
 		} catch (err) {
 			this.session.dispose();
 			throw err;
 		}
+	}
+
+	pinTab(run: RunId, pinned: boolean): void { this.terminals.pin(run, pinned); }
+	async conversations(): Promise<readonly ConversationKey[]> {
+		return (await this.allRuns()).flatMap(run => {
+			const meta = run.meta;
+			return !run.exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
+				? [{ sessionId: meta.sessionId, cli: meta.cli, environment: meta.environment }] : [];
+		});
 	}
 
 	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void {
@@ -250,8 +268,19 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 * injected files may still be in use (CLIS-2.2). Rejects where ptyd cannot be reached - never an empty list for an unknown one.
 	 */
 	async allRunIds(): Promise<readonly string[]> {
-		const runs = await this.ask('list', {});
-		return runs.filter(run => !run.exited).map(run => run.run);
+		return (await this.allRuns()).filter(run => !run.exited).map(run => run.run);
+	}
+
+	/** Global discovery also sees the previous release's live runs; observing another workspace never claims it. */
+	private async allRuns(): Promise<readonly RunInfo[]> {
+		const runs = [...await this.ask('list', {})];
+		for (const protocol of EARLIER_PROTOCOLS.filter(value => value >= 9)) {
+			const client = await PtydClient.join(ptydSocketPath(this.options.home, protocol), protocol);
+			if (!client) { continue; }
+			try { runs.push(...await within(client.request('list', {}))); }
+			finally { client.dispose(); }
+		}
+		return runs;
 	}
 
 	/** The bottom `lines` logical lines of `run`'s screen (MCP-5.1). */
@@ -335,6 +364,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ readonly pid: number; readonly startedAt: number }> {
+		if (plan.exactResume) { this.identity.track(run); }
 		const pair = this.pairs.get(run);
 		if (!pair) {
 			throw new Error('The agent was closed before its CLI started.');
@@ -376,6 +406,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			throw new Error('The agent was closed before its CLI started.');
 		}
 		pair.process = { pid: info.pid, startedAt: info.startedAt };
+		this.identity.process(run, info.pid);
 		pair.startupEnds = this.startupEndOf(info.startedAt);
 		pair.starting = false;
 		pair.status = info.status;
@@ -426,6 +457,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	async attach(live: LiveRun, facts: PairFacts): Promise<void> {
+		if (live.meta.exactResume) { this.identity.track(live.run); this.identity.process(live.run, live.pid); }
 		// VS Code opens a background pseudoterminal lazily, ignoring name events until then. Its initial tab name must include
 		// the restored CLI title, so create the native terminal after the attach snapshot has supplied it (LIFECYCLE-2.2).
 		const pair = this.pairs.get(live.run) ?? this.create(facts, false, true);
@@ -510,6 +542,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	removePair(run: RunId): void {
+		this.identity.untrack(run);
 		const pair = this.detachPair(run);
 		if (!pair || (!pair.process && !pair.starting) || this.session.ownershipLost) {
 			return;
@@ -611,6 +644,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	dispose(): void {
+		this.identity.dispose();
+		this.identities.clear();
+		this.tabPins.clear();
 		this.session.dispose();
 		for (const pair of this.pairs.values()) {
 			pair.lifetime.abort();
@@ -794,6 +830,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			cleanup = cleanup.then(result => {
 				if (result === 'terminated' || result === 'already_exited') {
 					this.pendingCleanup.delete(run);
+					this.identity.forget(run);
 				} else if (!this.session.closed) {
 					this.pendingCleanup.add(run);
 				}

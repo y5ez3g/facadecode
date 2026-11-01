@@ -104,7 +104,7 @@ Everything a person sees says what happened in plain words; internal mechanisms 
 
 **Facade provides agent operation, communication and work locations.**
 
-Start, find, inspect, type into and stop agents; send messages with explicit results; contact the person; choose
+Start, find, inspect, type into, resume, pin/unpin and stop agents; send messages with explicit results; contact the person; choose
 locations and optionally create/use worktrees. Each feature
 states its limits honestly, including unsupported CLI capabilities. None imposes a workflow.
 
@@ -163,6 +163,8 @@ and retains access to failures. A passing build alone does not prove the product
 capabilities are named; technical limitations do not quietly redefine the product.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: Configured custom CLIs run interactively beside the built-ins (CLIS-3.4).
 - 2026-10-30: Step 2 of the Facade Code extension: agents start, message and operate one another across this computer's

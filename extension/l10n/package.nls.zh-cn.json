@@ -59,5 +59,8 @@
 	"config.custom.launch": "CLI 的启动方式: `start` 用于新对话，`resume` 用于已保存的对话，`environment` 用于其环境变量。",
 	"config.custom.launch.start": "用于新交互式对话的参数，按所写内容原样传递。",
 	"config.custom.launch.resume": "必填: 用于恢复某个确切的已保存对话的参数。`${sessionId}` 会被替换为其会话 ID，且必须出现。",
-	"icon.newAgent": "新建 Agent 图标"
+	"icon.newAgent": "新建 Agent 图标",
+	"command.history": "恢复 agent...",
+	"command.pinAgent": "固定 agent",
+	"command.unpinAgent": "取消固定 agent"
 }

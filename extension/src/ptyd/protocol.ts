@@ -13,14 +13,14 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 9;
+export const PTYD_PROTOCOL = 10;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
  * through those ptyds, and starts none there (ARCHITECTURE-2.4). None is ever dropped. 8, of 0.0.1, is 9 without `spawn`'s
- * `screenStatus`, which this window sends to no earlier ptyd.
+ * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. New requests go to neither.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9];
 
 import type { OwnerClaim } from '../base/ownership';
 import { isJsonObject } from '../base/json';
@@ -154,6 +154,8 @@ export type CallRefusal = 'window_unavailable' | 'not_found' | 'protocol_incompa
 
 /** The requests, by method: what each takes, and what it answers. */
 export interface Requests {
+	/** Exact conversations currently held anywhere in this execution environment. */
+	conversations: { params: Record<string, never>; result: readonly { readonly environment: string; readonly cli: string; readonly sessionId: string }[] };
 	/**
 	 * The protocol each side speaks: a window of another protocol reports the difference and ends nothing (ARCHITECTURE-2.4). A
 	 * run's shim says it is one, and for which run; ptyd refuses a shim of another protocol and closes its connection.

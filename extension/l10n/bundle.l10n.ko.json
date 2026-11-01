@@ -280,5 +280,19 @@
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "이 창의 Facade Code 기록이 손상되어 여기에서 에이전트를 복원할 수 없습니다. 이 창을 닫고 폴더 또는 작업 영역을 다시 열거나 {0}을(를) 다시 시작하세요.",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0}은(는) cmd.exe를 통해 실행되지만 cmd.exe는 UNC 폴더 {1}에서 실행할 수 없습니다. {2}.path를 CLI 자체 프로그램 또는 Node 진입점으로 설정하세요",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0}은(는) Node 스크립트이지만 이를 실행할 Node가 PATH에 없습니다",
-	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "신뢰: 홈 폴더, 상위 폴더 또는 파일 시스템 루트에는 부여하지 않습니다. CLI가 터미널에서 확인합니다"
+	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "신뢰: 홈 폴더, 상위 폴더 또는 파일 시스템 루트에는 부여하지 않습니다. CLI가 터미널에서 확인합니다",
+	"Could not restore {0} pinned agents. Their cards show why.": "고정된 에이전트 {0}개를 복원할 수 없습니다. 각 카드에 이유가 표시됩니다.",
+	"Could not restore {0}: {1}": "{0}을(를) 복원할 수 없습니다: {1}",
+	"Could not pin {0}: {1}": "{0}을(를) 고정할 수 없습니다: {1}",
+	"Could not unpin {0}: {1}": "{0}을(를) 고정 해제할 수 없습니다: {1}",
+	"Pinned": "고정됨",
+	"Could not read the saved conversations: {0}": "저장된 대화를 읽을 수 없습니다: {0}",
+	"Resume Agent": "에이전트 재개",
+	"Restores this conversation when the workspace opens again": "작업 영역을 다시 열면 이 대화를 복원합니다",
+	"Search saved conversations by title or location": "제목 또는 위치로 저장된 대화 검색",
+	"Open a folder to resume its conversations.": "폴더를 열어 해당 대화를 재개하세요.",
+	"Untitled conversation": "제목 없는 대화",
+	"No saved conversations in this window's folders": "이 창의 폴더에 저장된 대화가 없습니다",
+	"Could not resume {0}: {1}": "{0}을(를) 재개할 수 없습니다: {1}",
+	"{0} is already running in another window.": "{0}이(가) 이미 다른 창에서 실행 중입니다."
 }

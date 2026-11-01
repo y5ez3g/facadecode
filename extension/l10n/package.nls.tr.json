@@ -59,5 +59,8 @@
 	"config.custom.launch": "CLI'nin nasıl başladığı: yeni bir konuşma için `start`, kayıtlı bir konuşma için `resume` ve ortam değişkenleri için `environment`.",
 	"config.custom.launch.start": "Yeni bir etkileşimli konuşma için, tam olarak yazıldığı gibi geçirilen bağımsız değişkenler.",
 	"config.custom.launch.resume": "Gerekli: kaydedilmiş belirli bir konuşmayı sürdüren bağımsız değişkenler. `${sessionId}`, oturum kimliğiyle değiştirilir ve bulunmalıdır.",
-	"icon.newAgent": "Yeni Aracı simgesi"
+	"icon.newAgent": "Yeni Aracı simgesi",
+	"command.history": "Ajanı Sürdür...",
+	"command.pinAgent": "Ajanı Sabitle",
+	"command.unpinAgent": "Ajanın Sabitlemesini Kaldır"
 }

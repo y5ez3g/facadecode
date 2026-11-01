@@ -127,7 +127,7 @@ as menu-only. Arguments bypass a picker only
 when their schema fully identifies the target; invalid arguments fail without guessing. The table is the authoritative
 command inventory, not a second description of behavior.
 
-For Rename, Copy Agent Reference and Close Agent, a palette invocation without an explicit target uses PANEL-2.1's
+For Rename, Pin, Unpin, Copy Agent Reference and Close Agent, a palette invocation without an explicit target uses PANEL-2.1's
 current selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does
 not open a target picker. Rename still asks for the new name. Explicit arguments and card/tab context target that exact
 run and are validated against current state, without falling back to the selection.
@@ -135,6 +135,9 @@ run and are validated against current state, without falling back to the selecti
 | ID after `facade.` | Title | Availability / other surface | Owner |
 | --- | --- | --- | --- |
 | `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
+| `history` | Resume Agent... | Always; panel/empty state | LIFECYCLE-3.2 |
+| `pinAgent` | Pin Agent | Exact resumable unpinned conversation; card | LIFECYCLE-3.4 |
+| `unpinAgent` | Unpin Agent | Pinned record; card | LIFECYCLE-3.4 |
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `copyAgentReference` | Copy Agent Reference | Known owned record; card/Go to Agent | LIFECYCLE-2.1 |
@@ -149,8 +152,7 @@ run and are validated against current state, without falling back to the selecti
 | `copyDiagnostics` | Copy Diagnostics | Always; Command Palette | ARCHITECTURE-3.3 |
 
 PANEL-1.1 places the editor's own Add Folder to Workspace... command in the view menu; it is not another `facade.` command.
-Refresh, New Agent Here, Pin/Unpin Agent and the former working-location rename/navigation/copy/terminal commands
-have no contributed entry or hidden compatibility alias. Facade Dots' `facade.agents.showLaunch` and
+Refresh, New Agent Here, the former working-location rename/navigation/copy/terminal commands have no contributed entry or hidden compatibility alias. Facade Dots' `facade.agents.showLaunch` and
 `facade.agents.showLog` are not aliases of Show Agent Launch and Show Agents Log.
 
 ### 3.2 Context and internal commands
@@ -170,7 +172,7 @@ every argument, appear in no palette or menu and are not a public API.
 
 Test commands `state`, `selectRow` (selects a card by run ID) and `probe` are registered only in test mode and excluded
 from production manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected`
-identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded` and `filtered` reflect current state.
+identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded`, `agentSelectedPinned`, `agentSelectedResumable` and `filtered` reflect current state.
 
 ## 4 Settings
 
@@ -258,6 +260,8 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 3.1 adds Copy Diagnostics (D116).
 - 2026-10-30: Step 2 of the Facade Code extension: 1.2 adds the notification for a message to the person; 1.3 adds the

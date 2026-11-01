@@ -137,6 +137,46 @@ suite('Locations: the window\'s location service (WORKTREES-1, 3; RULES-2.4)', (
 		return started;
 	}
 
+	test('a successful Resume remembers only an existing scoped cwd; uncertainty preserves it and confirmed deletion removes it', async () => {
+		const world = new World();
+		world.setFolders(MAIN);
+		const { service, removals } = serviceIn(world);
+		try {
+			await service.refresh();
+			const cwd = `${FEAT}/nested`;
+			world.present.add(cwd);
+			assert.strictEqual(service.conversationLocation('/unrelated'), undefined);
+			assert.strictEqual(service.conversationLocation(`${MAIN}/missing`), undefined);
+			assert.strictEqual(service.conversationLocation(cwd)?.path, cwd);
+			assert.ok(!service.snapshot().locations.some(each => each.path === cwd), 'preview does not register a location');
+			service.rememberLocation(cwd);
+			assert.ok(service.snapshot().locations.some(each => each.path === cwd));
+			world.present.delete(cwd); world.unanswered.add(cwd);
+			await service.refresh();
+			assert.ok(service.snapshot().locations.some(each => each.path === cwd));
+			assert.strictEqual(removals.length, 0);
+			world.unanswered.delete(cwd);
+			await service.refresh();
+			assert.ok(!service.snapshot().locations.some(each => each.path === cwd));
+			assert.ok(removals.some(each => each.cause === 'deleted' && each.ids.includes(id(cwd))));
+		} finally { service.dispose(); }
+	});
+
+	test('a folder removed during a host restart removes its remembered conversation subdirectories too', async () => {
+		const world = new World(); world.setFolders(MAIN);
+		const first = serviceIn(world);
+		await first.service.refresh();
+		const cwd = `${MAIN}/nested`; world.present.add(cwd);
+		first.service.rememberLocation(cwd);
+		first.service.dispose();
+		world.setFolders(NOTES);
+		const next = serviceIn(world);
+		try {
+			await settled();
+			assert.strictEqual(next.service.removalOf(id(cwd)), 'folder');
+		} finally { next.service.dispose(); }
+	});
+
 	test('workspace folders are usable locations at once, while Git is still read and without it; Git metadata follows (WORKTREES-1.1; J01)', async () => {
 		world.setFolders(NOTES, MAIN);
 		let release = () => { };

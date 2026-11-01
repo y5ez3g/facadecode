@@ -280,5 +280,19 @@
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "此窗口的 Facade Code 记录已损坏，无法在此恢复其 Agent。请关闭此窗口并重新打开其文件夹或工作区，或重启 {0}。",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，而 cmd.exe 无法在 UNC 文件夹 {1} 中运行；请将 {2}.path 设置为 CLI 自身的程序或 Node 入口点",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} 是 Node 脚本，但 PATH 上没有可运行它的 Node",
-	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "信任：不授予主目录、其父目录或文件系统根目录；CLI 会在终端中询问"
+	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "信任：不授予主目录、其父目录或文件系统根目录；CLI 会在终端中询问",
+	"Could not restore {0} pinned agents. Their cards show why.": "无法恢复 {0} 个已固定的 agent。原因显示在各自的卡片上。",
+	"Could not restore {0}: {1}": "无法恢复已固定的 {0}: {1}",
+	"Could not pin {0}: {1}": "无法固定 {0}: {1}",
+	"Could not unpin {0}: {1}": "无法取消固定 {0}: {1}",
+	"Pinned": "已固定",
+	"Could not read the saved conversations: {0}": "无法读取已保存的对话: {0}",
+	"Resume Agent": "恢复 agent",
+	"Restores this conversation when the workspace opens again": "重新打开工作区时恢复此对话",
+	"Search saved conversations by title or location": "按标题或位置搜索已保存的对话",
+	"Open a folder to resume its conversations.": "请打开文件夹以恢复其对话。",
+	"Untitled conversation": "无标题对话",
+	"No saved conversations in this window's folders": "此窗口的文件夹中没有已保存的对话",
+	"Could not resume {0}: {1}": "无法恢复 {0}: {1}",
+	"{0} is already running in another window.": "{0} 已在另一个窗口中运行。"
 }

@@ -99,10 +99,40 @@ function workingDirectoryOf(cwd: string, env: Environment, platform: NodeJS.Plat
  */
 export const antigravityAdapter: CliAdapter = {
 	id: 'agy',
+	sessionIdentity: true,
+	sessionIntegration: ({ hook, env, platform, cwd, extra, tools }) => {
+		const settingsFile = antigravitySettingsFile(env, platform);
+		let native;
+		try { native = fs.existsSync(settingsFile) ? nodeValue(parseJsonc(fs.readFileSync(settingsFile, 'utf8'))) : {}; }
+		catch { return { unavailable: true }; }
+		if (!isJsonObject(native)) { return { unavailable: true }; }
+		let overlay: Record<string, unknown> = {};
+		const remaining: string[] = [];
+		for (let i = 0; i < extra.length; i++) {
+			const arg = extra[i] === '--settings' ? extra[++i] : extra[i].startsWith('--settings=') ? extra[i].slice(11) : undefined;
+			if (arg !== undefined) {
+				let value: unknown;
+				try { value = JSON.parse(arg.trim().startsWith('{') ? arg : fs.readFileSync(path.resolve(cwd, arg), 'utf8')); }
+				catch { throw new Error('Antigravity per-launch settings must be a readable JSON object.'); }
+				if (!isJsonObject(value)) { throw new Error('Antigravity per-launch settings must be a JSON object.'); }
+				overlay = { ...overlay, ...value };
+			} else if (extra[i] !== undefined) { remaining.push(extra[i]); }
+		}
+		if (tools) {
+			const permissions = isJsonObject(overlay.permissions) ? overlay.permissions : antigravityPermissions(env, platform);
+			const allow = Array.isArray(permissions.allow) ? permissions.allow : [];
+			overlay.permissions = { ...permissions, allow: allow.includes(ALLOW_TOOLS) ? allow : [...allow, ALLOW_TOOLS] };
+		}
+		const title = { ...isJsonObject(native.title) ? native.title : {}, ...isJsonObject(overlay.title) ? overlay.title : {} };
+		return { extra: remaining, args: ['--settings', JSON.stringify({ ...overlay, title: { ...title, type: 'command', enabled: true, command: hook } })],
+			env: { FACADE_CODE_TITLE_COMMAND: title.enabled !== false && typeof title.command === 'string' ? title.command : '' } };
+	},
+	identityOptions: ['--continue', '-c'],
 	displayName: 'Antigravity',
 	setting: 'facade.antigravity',
 	command: 'agy',
 	groups: {
+		resume: ['--conversation', '${sessionId}'],
 		// Its own settings for the session alone, never saved: Facade's tools allowed beside the person's own rules
 		connect: ['--settings', '${settings}'],
 		yoloOn: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],

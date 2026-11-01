@@ -7,6 +7,44 @@ import * as path from 'path';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, variableOf } from './environment';
 import { LaunchTarget, nodeOnPath } from './executable';
+import type { SessionIntegrationInput } from './identity';
+
+/** Pi emits this for startup, reload, new, resume and fork. No global extension or dependency is installed. */
+export const PI_SESSION_EXTENSION = `import fs from 'node:fs';
+import path from 'node:path';
+export default function (pi) {
+  let current, reason, timer, last;
+  const capture = () => {
+    try {
+      const ctx = current;
+      if (!ctx) return;
+      const file = process.env.FACADE_CODE_SESSION_FILE;
+      if (!file || !path.isAbsolute(file)) return;
+      const id = ctx.sessionManager.getSessionId();
+      if (!/^[0-9a-f-]{36}$/i.test(id)) return;
+      const saved = ctx.sessionManager.getSessionFile();
+      const session = saved && fs.existsSync(saved) ? id : null;
+      const key = JSON.stringify([session,ctx.cwd]);
+      if (last === key) return;
+      fs.mkdirSync(path.dirname(file), {recursive: true});
+      const temp = file + '.' + process.pid + '.tmp';
+      fs.writeFileSync(temp, JSON.stringify({session_id: session, cwd: ctx.cwd, source: reason}), {mode: 0o600});
+      fs.renameSync(temp, file);
+      last = key;
+    } catch {}
+  };
+  pi.on('session_start', (event, ctx) => {
+    current = ctx; reason = event.reason; capture();
+    clearInterval(timer); timer = setInterval(capture,250); timer.unref?.();
+  });
+  pi.on('session_shutdown', () => { clearInterval(timer); current = undefined; });
+}
+`;
+
+function piSession({ file }: SessionIntegrationInput) {
+	const extension = path.join(file.replace(/\.json$/, '.d'), 'pi.mjs');
+	return { args: ['--extension', extension], files: [{ file: extension, content: PI_SESSION_EXTENSION }] };
+}
 import { McpServer, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** `line` as a regular expression that matches it alone. */
@@ -107,10 +145,15 @@ const piTools: ToolsIntegration = {
  */
 export const piAdapter: CliAdapter = {
 	id: 'pi',
+	sessionIdentity: true,
+	sessionIntegration: piSession,
 	displayName: 'Pi',
 	setting: 'facade.pi',
 	command: 'pi',
+	identityOptions: ['--session', '--session-id', '--continue', '-c', '--resume', '-r', '--fork', '--no-session'],
 	groups: {
+		resume: ['--session', '${sessionId}'],
+		session: ['--session-id', '${sessionId}'],
 		connect: ['-e', '${extension}', '--skill', '${skillDir}'],
 		model: ['--model', '${model}'],
 		effort: ['--thinking', '${effort}'],

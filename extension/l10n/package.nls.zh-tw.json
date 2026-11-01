@@ -59,5 +59,8 @@
 	"config.custom.launch": "CLI 的啟動方式: `start` 用於新對話，`resume` 用於已儲存的對話，`environment` 用於其環境變數。",
 	"config.custom.launch.start": "用於新互動式對話的引數，會完全依照所寫的內容傳遞。",
 	"config.custom.launch.resume": "必要: 用於接續某個確切已儲存對話的引數。`${sessionId}` 會由其工作階段 ID 取代，且必須出現。",
-	"icon.newAgent": "新增 Agent 圖示"
+	"icon.newAgent": "新增 Agent 圖示",
+	"command.history": "恢復 agent...",
+	"command.pinAgent": "釘選 agent",
+	"command.unpinAgent": "取消釘選 agent"
 }

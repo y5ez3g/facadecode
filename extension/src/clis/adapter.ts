@@ -10,13 +10,14 @@ import type { Environment } from './environment';
 import type { Capability, ToolsIntegration } from './tools';
 import type { LaunchTarget } from './executable';
 import type { TrustTarget } from './trust';
+import type { SessionIntegration, SessionIntegrationInput } from './identity';
 
 /**
  * The argument groups of an invocation, in the order an adapter gives them (CLIS-3.2): the MCP connection, the CLI's own run
  * settings, the YOLO mapping, model, effort, the trust in the folder for this launch alone (CLIS-3.3, D62), and last a positional
  * initial prompt, after the end of the options. Configured extra arguments keep their literal values before that prompt.
  */
-export const GROUP_ORDER = ['connect', 'quiet', 'yoloOn', 'yoloOff', 'model', 'effort', 'trust', 'extra', 'prompt'] as const;
+export const GROUP_ORDER = ['resume', 'connect', 'quiet', 'yoloOn', 'yoloOff', 'model', 'effort', 'trust', 'session', 'extra', 'prompt'] as const;
 
 export type Group = (typeof GROUP_ORDER)[number];
 
@@ -28,6 +29,8 @@ export type Groups = { readonly [G in Exclude<Group, 'extra'>]?: readonly string
  * separate facts of the request; a launch that has none of them never expands those groups.
  */
 export interface LaunchUses {
+	readonly resume?: boolean;
+	readonly session?: boolean;
 	readonly yolo: boolean;
 	readonly connect: boolean;
 	readonly model: boolean;
@@ -38,6 +41,8 @@ export interface LaunchUses {
 /** Whether `group` applies to a launch `uses` describes. */
 export function applies(group: Group, uses: LaunchUses): boolean {
 	switch (group) {
+		case 'resume': return !!uses.resume;
+		case 'session': return !!uses.session && !uses.resume;
 		case 'yoloOn': return uses.yolo;
 		case 'yoloOff': return !uses.yolo;
 		case 'connect': return uses.connect;
@@ -92,6 +97,8 @@ export function invocation(groups: Groups, extra: readonly string[], uses: Launc
 
 /** What a launch is asked for and where, as an adapter's values are computed from it. */
 export interface LaunchInput {
+	readonly sessionId?: string;
+	readonly sessionHook?: string;
 	readonly yolo: boolean;
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
@@ -135,6 +142,12 @@ export type ApprovalFact = { readonly state: 'bypassed'; readonly by: readonly s
 export interface CliAdapter {
 	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, or a custom CLI's key (CLIS-1.1, 3.4). */
 	readonly id: string;
+	/** A maintained exact identity across native session changes, required for Pin. */
+	readonly sessionIdentity?: boolean;
+	/** Vendor integration for exact identity, scoped to this process and preserving native user settings. */
+	sessionIntegration?(input: SessionIntegrationInput): SessionIntegration;
+	/** Native shortcuts that can replace/fork the exact conversation selected by Facade. */
+	readonly identityOptions?: readonly string[];
 	readonly displayName: string;
 	/** Its settings: `facade.<segment>`, or `facade.custom.<key>`. */
 	readonly setting: string;

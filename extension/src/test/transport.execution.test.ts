@@ -50,7 +50,7 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 			workspace: { getConfiguration: () => ({ get: () => undefined }), onDidChangeConfiguration: never.event },
 			window: {
 				activeTerminal: undefined,
-				tabGroups: { onDidChangeTabs: never.event, activeTabGroup: { activeTab: undefined } },
+				tabGroups: { onDidChangeTabs: never.event, onDidChangeTabGroups: never.event, all: [], activeTabGroup: { activeTab: undefined } },
 				onDidChangeActiveTerminal: never.event,
 				onDidCloseTerminal: never.event,
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => ({

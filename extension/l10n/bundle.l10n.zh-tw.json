@@ -280,5 +280,19 @@
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "此視窗的 Facade Code 記錄已損毀，無法在此還原其 Agent。請關閉此視窗並重新開啟其資料夾或工作區，或重新啟動 {0}。",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} 透過 cmd.exe 執行，而 cmd.exe 無法在 UNC 資料夾 {1} 中執行；請將 {2}.path 設定為 CLI 自身的程式或 Node 進入點",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} 是 Node 指令碼，但 PATH 上沒有可執行它的 Node",
-	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "信任：不授予主目錄、其父目錄或檔案系統根目錄；CLI 會在終端機中詢問"
+	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "信任：不授予主目錄、其父目錄或檔案系統根目錄；CLI 會在終端機中詢問",
+	"Could not restore {0} pinned agents. Their cards show why.": "無法恢復 {0} 個已固定的 agent。原因顯示在各自的卡片上。",
+	"Could not restore {0}: {1}": "無法還原 {0}: {1}",
+	"Could not pin {0}: {1}": "無法釘選 {0}: {1}",
+	"Could not unpin {0}: {1}": "無法取消釘選 {0}: {1}",
+	"Pinned": "已釘選",
+	"Could not read the saved conversations: {0}": "無法讀取已儲存的對話: {0}",
+	"Resume Agent": "恢復 agent",
+	"Restores this conversation when the workspace opens again": "重新開啟工作區時恢復此對話",
+	"Search saved conversations by title or location": "依標題或位置搜尋已儲存的對話",
+	"Open a folder to resume its conversations.": "請開啟資料夾以接續其對話。",
+	"Untitled conversation": "未命名的對話",
+	"No saved conversations in this window's folders": "此視窗的資料夾中沒有已儲存的對話",
+	"Could not resume {0}: {1}": "無法接續 {0}: {1}",
+	"{0} is already running in another window.": "{0} 已在另一個視窗中執行。"
 }

@@ -59,5 +59,8 @@
 	"config.custom.launch": "CLI 시작 방법: 새 대화에는 `start`, 저장된 대화에는 `resume`, 환경 변수에는 `environment`를 사용합니다.",
 	"config.custom.launch.start": "새 대화형 대화의 인수로, 작성한 그대로 전달됩니다.",
 	"config.custom.launch.resume": "필수: 저장된 특정 대화를 정확히 재개하는 인수입니다. `${sessionId}`는 해당 세션 ID로 바뀌며 반드시 포함되어야 합니다.",
-	"icon.newAgent": "새 에이전트 아이콘"
+	"icon.newAgent": "새 에이전트 아이콘",
+	"command.history": "에이전트 재개...",
+	"command.pinAgent": "에이전트 고정",
+	"command.unpinAgent": "에이전트 고정 해제"
 }

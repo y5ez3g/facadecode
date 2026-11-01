@@ -311,7 +311,7 @@ suite('The agent panel in Chromium', function () {
 		const back = await evaluate(`[(document.scrollingElement ?? document.documentElement).scrollTop, document.activeElement === document.body, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)]`);
 		// A scroll beyond the list is kept within it; a card no longer there, or what an earlier build saved beside it, is nothing
 		await load(shipped, { scrollTop: 1e6, target: 'run-99', focused: 'run-12' });
-		await wait(80);
+		await until(() => evaluate(`(() => { const root = document.scrollingElement ?? document.documentElement; return JSON.stringify(window.saved) === JSON.stringify({ scrollTop: root.scrollHeight - window.innerHeight, target: 'run-1' }); })()`));
 		const kept = await evaluate(`(() => { const root = document.scrollingElement ?? document.documentElement, end = root.scrollHeight - window.innerHeight; return [root.scrollTop === end, document.activeElement === document.body, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run), JSON.stringify(window.saved) === JSON.stringify({ scrollTop: end, target: 'run-1' })]; })()`);
 		await load();
 		assert.deepStrictEqual([saved, back, kept], [{ scrollTop: 400, target: 'run-12' }, [400, true, ['run-12']], [true, true, ['run-1'], true]]);
@@ -337,8 +337,8 @@ suite('The agent panel in Chromium', function () {
 
 	test('PANEL-1.2, J13: the empty panel says why - no agents, none in the filter\'s location, no folder - each with its own native, keyboard-reachable buttons; nothing while loading', async () => {
 		const empty = (state: object) => evaluate(`(() => { panel.render(stateOf([], ${JSON.stringify(state)})); const empty = document.getElementById('empty'); return [empty.hidden, [...empty.children].map(each => { const button = each.querySelector('button'); return button ? (button.classList.contains('secondary') ? 'secondary:' : 'button:') + button.textContent : each.textContent; })]; })()`);
-		// No agent: New Agent, no ellipsis (D60), and nothing else
-		assert.deepStrictEqual(await empty({ empty: 'noAgents' }), [false, ['noAgents', 'button:newAgent']]);
+		// No agent: New Agent, no ellipsis (D60), with Resume secondary
+		assert.deepStrictEqual(await empty({ empty: 'noAgents' }), [false, ['noAgents', 'button:newAgent', 'secondary:resumeAgent']]);
 		// A filter shows none: how many it hides, Clear Filter first and New Agent secondary
 		assert.deepStrictEqual(await empty({ empty: 'noMatch', cardCount: 3, filter: { kind: 'location', id: 'loc-1', label: 'shop · login-fix' } }), [false, ['No agents found in "shop · login-fix".', '3 other agents are in this workspace.', 'button:clearFilter', 'secondary:newAgent']]);
 		assert.deepStrictEqual((await empty({ empty: 'noMatch', cardCount: 1, filter: { kind: 'location', id: 'loc-1', label: 'main' } }))[1][1], '1 other agent is in this workspace.');

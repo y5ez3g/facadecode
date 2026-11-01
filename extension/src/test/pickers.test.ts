@@ -3,7 +3,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import type { Catalog, CliChoice, CliChoices, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
+import * as fs from 'fs';
+import * as path from 'path';
+import { tempDir } from './util';
+import type { Catalog, ConversationEntry, CliChoice, CliChoices, LaunchRequest, Location, RunFacts, WorkspaceFolderInfo, WorktreePort } from '../core/ports';
 import type { PanelFilter } from '../webview/protocol';
 import { TestEmitter, withModules } from './withModules';
 
@@ -836,6 +839,141 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				['Cannot delete worktree "login-fix": uncommitted changes present. Commit or stash them with Git, then try again.', 'Could not delete worktree "login-fix": fatal: cannot remove a locked working tree'],
 				[],
 				{ kind: 'warning', args: ['Delete worktree "loose"?', { modal: true, detail: 'Folder /loose will be deleted (detached HEAD).' }, 'Delete'], over: undefined }
+			]);
+		});
+	});
+
+	suite('Resume Agent', () => {
+		const NOW = Date.UTC(2026, 9, 28, 12);
+		const entry = (n: number, more: Partial<ConversationEntry> = {}): ConversationEntry => ({
+			key: { environment: 'local', cli: n % 2 ? 'claude' : 'codex', sessionId: `s${n}` }, title: `Conversation ${n}`,
+			cwd: n % 3 ? MAIN.path : `${LOGIN.path}/api`, activityAt: NOW - n * 60_000, ...more
+		});
+		let scopes: unknown[];
+		let reads: number;
+		let disposed: boolean;
+		let did: string[];
+		let resumedCwds: string[];
+		let errors: string[];
+		const open = (batches: readonly ConversationEntry[][], result: string | { running: string } = 'run-new', locations: readonly Location[] = [MAIN, LOGIN], running: readonly string[] = []) => {
+			const { resumeAgent } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
+			reads = 0;
+			return resumeAgent({
+				conversations: { open: scope => { scopes.push(scope); return { next: async () => { const entries = batches[reads] ?? []; reads++; return { entries, done: reads >= batches.length }; }, dispose: () => { disposed = true; } }; } },
+				locations: { snapshot: () => ({ locations, folders: [SHOP], pending: false }) },
+				running: key => running.includes(key.sessionId),
+				resume: chosen => { resumedCwds.push(chosen.cwd); assert.strictEqual(chosen.cwdChoices, undefined); did.push(`resume ${chosen.key.sessionId}`); return result as never; },
+				reveal: async run => void did.push(`reveal ${run}`),
+				select: run => void did.push(`select ${run}`),
+				notifyError: text => errors.push(text),
+				media: { path: '/extension/media' } as never,
+				language: 'en',
+				now: () => NOW
+			});
+		};
+
+		setup(() => {
+			scopes = []; reads = 0; disposed = false; did = []; resumedCwds = []; errors = [];
+		});
+
+		test('LIFECYCLE-3.2: this window\'s locations\' histories, recent first, 100 at a time as the person scrolls on, every batch as they search, nothing read twice', async () => {
+			const all = Array.from({ length: 250 }, (_, n) => entry(n));
+			const done = open([all.slice(0, 100), all.slice(100, 200), all.slice(200)]);
+			await settle();
+			const picker = ui.current!;
+			const first = [picker.title, picker.items.length, reads, picker.items.slice(0, 2).map(item => [item.label, item.description, item.detail])];
+			picker.activate(50);
+			await settle();
+			const early = reads;
+			picker.activate(95);
+			await settle();
+			const scrolled = [picker.items.length, reads];
+			picker.type('Conversation 249');
+			await settle();
+			await settle();
+			const searched = [picker.items.length, reads, picker.busy];
+			picker.type('Conversation 2');
+			picker.activate(picker.items.length - 1);
+			await settle();
+			picker.hide();
+			await done;
+			assert.deepStrictEqual([scopes, first, early, scrolled, searched, reads, disposed], [
+				[{ environment: 'local', directories: [MAIN.path, LOGIN.path] }],
+				['Resume Agent', 100, 1, [['Conversation 0', 'now \u00b7 login-fix/api', undefined], ['Conversation 1', '1 min. ago \u00b7 main', undefined]]],
+				1,
+				[200, 2],
+				[250, 3, false],
+				3,
+				true
+			]);
+		});
+
+		test('D64: each conversation is one line - its icon naming the CLI, then time and location; no CLI name or source as text', async () => {
+			const done = open([[entry(4), entry(2)]]);
+			await settle();
+			const lines = ui.current!.items.map(item => [item.description, item.detail]);
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual(lines, [['2 min. ago \u00b7 main', undefined], ['4 min. ago \u00b7 main', undefined]]);
+		});
+
+		test('a location is named for a conversation its CLI recorded by the folder\'s other path - macOS\'s /var is /private/var', async () => {
+			const temp = tempDir('fd-resume-');
+			try {
+				fs.mkdirSync(path.join(temp.dir, 'real', 'shop', 'api'), { recursive: true });
+				fs.symlinkSync(path.join(temp.dir, 'real'), path.join(temp.dir, 'link'), 'junction');
+				const linked = { ...MAIN, path: path.join(temp.dir, 'link', 'shop') };
+				const real = fs.realpathSync.native(path.join(temp.dir, 'real', 'shop'));
+				const done = open([[entry(1, { cwd: real }), entry(2, { cwd: path.join(real, 'api') })]], 'run-new', [linked]);
+				await settle();
+				const lines = ui.current!.items.map(item => item.description);
+				ui.current!.hide();
+				await done;
+				assert.deepStrictEqual(lines, ['1 min. ago \u00b7 main', '2 min. ago \u00b7 main/api']);
+			} finally {
+				temp.remove();
+			}
+		});
+
+		test('D69: a conversation an agent already holds - resumed here, or running in another window - is not listed again', async () => {
+			const done = open([[entry(1), entry(2), entry(3)]], 'run-new', [MAIN, LOGIN], ['s1', 's3']);
+			await settle();
+			const listed = ui.current!.items.map(item => item.label);
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual(listed, ['Conversation 2']);
+		});
+
+		test('a native workspace set asks for its working location; Cancel launches nothing, and selection supplies the exact chosen cwd', async () => {
+			const batch = [[entry(1, { cwdChoices: [MAIN.path, LOGIN.path] })]];
+			let done = open(batch); await settle(); ui.current!.accept('Conversation 1'); await settle();
+			assert.strictEqual(ui.current!.placeholder, 'Select a working location');
+			ui.current!.hide(); await done; assert.deepStrictEqual(did, []);
+			done = open(batch); await settle(); ui.current!.accept('Conversation 1'); await settle();
+			ui.current!.accept('login-fix'); await done;
+			assert.deepStrictEqual(resumedCwds, [LOGIN.path]);
+		});
+
+		test('a conversation listed twice shows once; one that cannot be resumed is not listed (D64); choosing one resumes it, shows the one already running here, or says it runs in another window (LIFECYCLE-3.2, 3.3)', async () => {
+			const batch = [entry(1), entry(2, { unavailable: 'Codex cannot resume this conversation exactly' }), entry(1), entry(3)];
+			let done = open([batch]);
+			await settle();
+			const picker = ui.current!;
+			const listed = picker.items.map(item => item.label);
+			picker.accept('Conversation 1');
+			await done;
+			done = open([batch], { running: 'run-here' });
+			await settle();
+			ui.current!.accept('Conversation 3');
+			await done;
+			done = open([batch], { running: 'elsewhere' });
+			await settle();
+			ui.current!.accept('Conversation 3');
+			await done;
+			assert.deepStrictEqual([listed, did, errors], [
+				['Conversation 1', 'Conversation 3'],
+				['resume s1', 'select run-new', 'resume s3', 'reveal run-here', 'resume s3'],
+				['Conversation 3 is already running in another window.']
 			]);
 		});
 	});

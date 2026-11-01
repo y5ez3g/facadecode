@@ -59,5 +59,8 @@
 	"config.custom.launch": "Cómo se inicia la CLI: `start` para una conversación nueva, `resume` para una guardada y `environment` para sus variables de entorno.",
 	"config.custom.launch.start": "Argumentos para una nueva conversación interactiva, que se pasan exactamente como están escritos.",
 	"config.custom.launch.resume": "Obligatorio: los argumentos que reanudan una conversación guardada exacta. `${sessionId}` se reemplaza por su ID de sesión y debe aparecer.",
-	"icon.newAgent": "Icono de Nuevo agente"
+	"icon.newAgent": "Icono de Nuevo agente",
+	"command.history": "Reanudar agente...",
+	"command.pinAgent": "Anclar agente",
+	"command.unpinAgent": "Desanclar agente"
 }

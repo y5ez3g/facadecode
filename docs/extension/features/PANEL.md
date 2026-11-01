@@ -18,7 +18,7 @@ interaction and tokens. This document owns the card, list, filter and webview co
 Container `facade`, view `facade.agents`, title `Facade Code`, icon `media/facade.svg`; background activation uses
 `onStartupFinished`. Opening the contributed view or invoking a contributed command can activate it on demand.
 Until agent records are reconciled use native view progress and draw no false empty state. Git metadata does not block
-card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), New Agent
+card loading. Title actions in order: Filter by Working Location (`filter`, filled when active), Resume Agent (`history`), New Agent
 (Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
 The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
@@ -31,7 +31,7 @@ records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not 
 **The empty state explains the current condition and offers the next relevant action.**
 
 No folder: `Open a folder to launch agents.` with Open Folder. No agents:
-`Launch an agent in this workspace.` with New Agent (primary). No matching cards with a filter:
+`Launch an agent in this workspace.` with New Agent (primary) and Resume Agent (secondary). No matching cards with a filter:
 `No agents found in "{location}".`, then `{n} other agents are in this workspace.` (`1 other agent is in this
 workspace.`; omitted when no other card exists), Clear Filter (primary) and New Agent (secondary), which starts at the
 filtered location (LIFECYCLE-1.2). Empty-state buttons have no ellipsis, as VS Code's
@@ -57,6 +57,7 @@ automatically launch an agent. This prerequisite step does not ask the person to
 | Card | Minimum 44 px tall; padding 8 px top/bottom/left, 9 px right; 4 px corners |
 | Avatar | 28 px circle, 8 px before text, 1 px theme border |
 | First line | Name 13 px; location 12 px aligned at end; 6 px gaps |
+| Pin | 14 px icon box after the name, 4 px from it; adds no card height |
 | Second line | 12 px, quieter, single line with ellipsis |
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
@@ -69,6 +70,10 @@ outside a folder and still show its actual location. Confirmed location removal 
 temporarily disconnected location is retained. The location keeps its own width, as a chat list keeps a message's time,
 up to 40% of the line, and is cut beyond that; the name has the rest. A workspace-folder prefix is shown whole or not at
 all (D72). Avatar/dot do not shrink. Full values remain in hover and accessibility.
+
+Pinned cards show the Pin beside the name, with its restoration meaning in a tooltip. Its color follows the quieter
+text, including the selected foreground at 80% opacity; high-contrast selections use full opacity. The icon's internal
+space keeps its visible shape smaller than the name's letters (D122).
 
 ### 1.4 Second line and dot
 
@@ -106,18 +111,21 @@ announcements are polite, coalesced, and do not repeatedly announce spinner/prog
 
 ### 2.1 Order and selection
 
-**The list is a manually reorderable stack; state changes do not move cards.**
+**The list is a manually reorderable stack with Pins first; state changes do not move cards.**
 
-A new card goes first, whether a person or an agent started it. Move Up/Down works within the list. Explicit close
-removes a card immediately; no stopping card remains. There are no batch actions or automatic creation-tree grouping. Click selects immediately and reveals its terminal. Selection follows the last
-active owned agent terminal, survives focus on a file/unrelated terminal, and disappears when that record is removed. A
-failed launch remains selected. Keyboard focus and selection are independent.
+A new card goes first, whether a person or an agent started it, below the Pin area. Pin moves it to the very top; Unpin moves it first below the Pin area.
+Move Up/Down works within both the Pin and ordinary areas; hidden cards retain their relative positions. Persist Pin
+order by Pin ID so restoration keeps it. Explicit close removes a card immediately; no stopping card remains.
+There are no batch actions or automatic creation-tree grouping.
+Click selects immediately and reveals its terminal. Selection follows the last active owned agent terminal, survives
+focus on a file/unrelated terminal, and disappears when that record is removed. A failed launch remains selected;
+background starts do not change selection. Keyboard focus and selection are independent.
 
 ### 2.2 Card menu
 
 **A card uses a flat native context menu with only actions meaningful to its current record.**
 
-Groups: Rename / Copy Agent Reference; Move Up/Down; Filter by This Location / Filter by This Folder / Clear Filter;
+Groups: Rename / Pin or Unpin / Copy Agent Reference; Move Up/Down; Filter by This Location / Filter by This Folder / Clear Filter;
 Close Agent for starting, live and retained-ended records. Enable actions by actual availability; name editing need
 not wait for CLI readiness. There is no worktree deletion or bulk selection action. LIFECYCLE-3.1 owns the shared close
 action. No menu outside a card, not even the webview's default Cut/Copy/Paste. Context targets its stable run ID,
@@ -207,6 +215,10 @@ clicks the browser's, so `scrollByPage` does not apply. Keyboard Page Up/Down mo
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
+
+- 2026-10-31: Adjusted the Pin's size, name spacing and selected/high-contrast colors after the owner's visual review (D122).
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 1.5's hover says how long ago a working agent's CLI reported its work (D114).
 - 2026-10-30: Step 2 of the Facade Code extension: 1.1 adds Message History... to the view menu; 1.4 adds an

@@ -59,5 +59,8 @@
 	"config.custom.launch": "Como a CLI inicia: `start` para uma nova conversa, `resume` para uma salva e `environment` para as variáveis de ambiente dela.",
 	"config.custom.launch.start": "Argumentos para uma nova conversa interativa, passados exatamente como escritos.",
 	"config.custom.launch.resume": "Obrigatório: os argumentos que retomam uma conversa salva exata. `${sessionId}` é substituído pela ID da sessão dela e deve aparecer.",
-	"icon.newAgent": "Ícone de Novo Agente"
+	"icon.newAgent": "Ícone de Novo Agente",
+	"command.history": "Retomar Agente...",
+	"command.pinAgent": "Fixar Agente",
+	"command.unpinAgent": "Desafixar Agente"
 }

@@ -7,6 +7,7 @@ import type { AvatarColor, Card, CardMenu } from '../webview/protocol';
 
 /** The words a card is said in, in the person's language. */
 export interface CardWords {
+	readonly pinned?: string;
 	readonly worktreeFailure: (reason: string, effects: WorktreeCreationEffects) => string;
 	readonly starting: string;
 	/** `Starting {0}...`, {0} the CLI's name: the startup stage while its process starts (LIFECYCLE-1.5). */
@@ -194,10 +195,11 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		...tools ? [tools] : [],
 		...facts.origin === 'agent' && (facts.creatorLabel ?? facts.creator) ? [words.startedBy((facts.creatorLabel ?? facts.creator)!)] : []
 	];
-	const label = [facts.name, facts.alias, status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
+	const label = [facts.name, facts.alias, ...(facts.pin && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
 	const avatar = avatarOf(facts.cli, facts.displayName, words.locale);
 	return {
 		runId: facts.id,
+		...(facts.pin ? { pinned: true } : {}),
 		selected: input.selected,
 		name: facts.name,
 		alias: facts.alias,

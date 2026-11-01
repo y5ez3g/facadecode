@@ -36,6 +36,7 @@ export interface KnownLocations {
 }
 
 export interface KnownState {
+	readonly subdirectories?: readonly string[];
 	readonly folders: readonly KnownFolder[];
 	readonly repositories: readonly KnownRepository[];
 }
@@ -134,6 +135,7 @@ export class LocationService implements LocationPort, Disposable {
 	private folderStates: FolderState[];
 	private readonly repositories = new Map<string, RepositoryState>();
 	private catalog: Catalog;
+	private subdirectories: string[] = [];
 	private byId = new Map<LocationId, Location>();
 	/** Locations whose worktrees are being deleted, and the catalog without them that others see meanwhile. */
 	private readonly deleting = new Set<LocationId>();
@@ -155,6 +157,7 @@ export class LocationService implements LocationPort, Disposable {
 		this.probe = deps.probe ?? probePath;
 		this.isDirectory = deps.isDirectory ?? isDirectoryAt;
 		const known = knownStateOf(deps.known.get(), () => deps.log.event('Ignored stored working locations this build does not read, as from an earlier build'));
+		this.subdirectories = [...known?.subdirectories ?? []];
 		// What was known of the same folders seeds the first snapshot as pending; the first reads confirm or correct it
 		this.folderStates = deps.folders.folders().map(info => {
 			const key = this.keyOf(info.path);
@@ -178,7 +181,9 @@ export class LocationService implements LocationPort, Disposable {
 			repositories: new Map(known.repositories.map(each => [each.key, { git: 'ok', worktrees: each.worktrees }])),
 			uriOf: deps.uriOf
 		});
-		const gone = previous?.locations.filter(each => !this.byId.has(each.id) && each.folders.every(folder => !present.has(folder.uri))).map(each => each.id) ?? [];
+		const previousLocations = previous ? [...previous.locations, ...this.subdirectories.map(cwd => this.locationInside(cwd, previous, false)).filter((each): each is Location => !!each)] : [];
+		const gone = previousLocations.filter(each => !this.byId.has(each.id) && each.folders.every(folder => !present.has(folder.uri))).map(each => each.id);
+		this.subdirectories = this.subdirectories.filter(cwd => !gone.includes(locationIdOf(deps.environment, this.keyOf(cwd))));
 		this.subscription = deps.folders.onDidChange(() => this.foldersChanged());
 		this.syncWatchers();
 		void this.start(gone);
@@ -222,6 +227,32 @@ export class LocationService implements LocationPort, Disposable {
 	/** Reads every folder and repository again; rejects with a `LocationRefreshError` for what could not be read (WORKTREES-1.1, 1.3). */
 	refresh(): Promise<void> {
 		return this.full.run(() => this.readAll());
+	}
+
+	/** A saved conversation's exact cwd, scoped to the window's existing folders/worktrees. */
+	conversationLocation(cwd: string): Location | undefined {
+		return this.locationInside(cwd, this.catalog);
+	}
+
+	rememberLocation(cwd: string): LocationId | undefined {
+		const location = this.conversationLocation(cwd);
+		if (!location) { return undefined; }
+		if (!this.byId.has(location.id)) {
+			this.subdirectories.push(location.path);
+			this.publish();
+		}
+		return location.id;
+	}
+
+	private locationInside(cwd: string, catalog: Catalog, checkExists = true): Location | undefined {
+		if (!path.isAbsolute(cwd) || (checkExists && !this.isDirectory(cwd))) { return undefined; }
+		const key = this.keyOf(cwd);
+		const anchor = [...catalog.locations].filter(each => isWithin(key, this.keyOf(each.path)))
+			.sort((a, b) => this.keyOf(b.path).length - this.keyOf(a.path).length)[0];
+		if (!anchor) { return undefined; }
+		if (this.keyOf(anchor.path) === key) { return anchor; }
+		return { id: locationIdOf(this.deps.environment, key), path: cwd, uri: this.deps.uriOf(anchor.uri, cwd),
+			environment: this.deps.environment, label: path.basename(cwd), folders: anchor.folders, kind: 'folder', opened: false, git: 'none' };
 	}
 
 	/**
@@ -292,6 +323,14 @@ export class LocationService implements LocationPort, Disposable {
 
 	private async readAll(): Promise<void> {
 		this.syncFolders();
+		const missing: LocationId[] = [];
+		for (const cwd of [...this.subdirectories]) {
+			if (await this.probe(cwd) === 'missing') {
+				this.subdirectories = this.subdirectories.filter(each => each !== cwd);
+				missing.push(locationIdOf(this.deps.environment, this.keyOf(cwd)));
+			}
+		}
+		if (missing.length) { this.publish({ ids: missing, cause: 'deleted' }); }
 		const failures: Failure[] = [];
 		await Promise.all(this.folderStates.map(async folder => {
 			const failure = await this.readFolder(folder);
@@ -450,6 +489,14 @@ export class LocationService implements LocationPort, Disposable {
 			return;
 		}
 		const next = this.build();
+		const absent = this.catalog.locations.filter(each => this.subdirectories.includes(each.path) && !next.locations.some(other => other.id === each.id));
+		for (const location of absent) {
+			// A successful directory read or confirmed folder removal is required; uncertainty preserves the saved intent.
+			if (!next.folders.some(folder => location.folders.some(old => old.uri === folder.uri))) {
+				this.subdirectories = this.subdirectories.filter(cwd => cwd !== location.path);
+				this.report({ ids: [location.id], cause: 'folder' });
+			}
+		}
 		const changed = JSON.stringify(next) !== JSON.stringify(this.catalog);
 		this.catalog = next;
 		this.visible = undefined;
@@ -465,12 +512,15 @@ export class LocationService implements LocationPort, Disposable {
 	}
 
 	private build(): Catalog {
-		return buildCatalog({
+		const base = buildCatalog({
 			environment: this.deps.environment,
 			folders: this.folderStates.map(folder => ({ folder: folder.info, key: folder.key, git: folder.git, ...(folder.checkout ? { checkout: folder.checkout } : {}) })),
 			repositories: this.repositories,
 			uriOf: this.deps.uriOf
 		});
+		// A failed stat must not delete saved intent. Refresh confirms removals; resolve revalidates a directory on use.
+		const added = this.subdirectories.map(cwd => this.locationInside(cwd, base, false)).filter((location): location is Location => !!location && !base.locations.some(each => each.id === location.id));
+		return { ...base, locations: [...base.locations, ...added] };
 	}
 
 	/** The published catalog by ID, and each location's comparison key. */
@@ -478,6 +528,7 @@ export class LocationService implements LocationPort, Disposable {
 		this.byId = new Map(this.catalog.locations.map(each => [each.id, each]));
 		const keys = [
 			...this.folderStates.map(each => each.key),
+			...this.subdirectories.map(cwd => this.keyOf(cwd)),
 			...[...this.repositories.values()].flatMap(each => each.worktrees.map(worktree => worktree.key))
 		];
 		this.keys = new Map(keys.map(key => [locationIdOf(this.deps.environment, key), key]));
@@ -519,6 +570,7 @@ export class LocationService implements LocationPort, Disposable {
 	/** Saves what the window knows now, for the next activation's reconciliation. */
 	private persist(): void {
 		const state: KnownState = {
+			...(this.subdirectories.length ? { subdirectories: [...this.subdirectories] } : {}),
 			folders: this.folderStates.map(each => ({ ...each.info, key: each.key, ...(each.checkout ? { checkout: each.checkout } : {}) })),
 			repositories: [...this.repositories.values()].filter(each => this.isReferenced(each.key)).map(each => ({
 				key: each.key,
@@ -581,6 +633,7 @@ function knownStateOf(value: unknown, ignored: () => void): KnownState | undefin
 		&& (each.branch === undefined || text(each.branch)) && typeof each.detached === 'boolean';
 	const isRepository = (each: unknown): each is KnownRepository => isJsonObject(each) && text(each.key) && text(each.commonDir) && Array.isArray(each.worktrees) && each.worktrees.every(isWorktree);
 	const state = {
+		...(Array.isArray(value.subdirectories) ? { subdirectories: value.subdirectories.filter((cwd): cwd is string => typeof cwd === 'string' && path.isAbsolute(cwd)) } : {}),
 		folders: value.folders.filter(isFolder),
 		repositories: value.repositories.filter(isRepository)
 	};

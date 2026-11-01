@@ -1,6 +1,6 @@
 # Specification audit report
 
-The maintained documentation of the Facade Code extension is `docs/extension/`. This revision is the subset for step 2
+The maintained documentation of the Facade Code extension is `docs/extension/`. This revision integrates the owner-authorized steps
 of its sequence of owner-tested additive steps, carried from the Facade Dots specification with each rule's final number.
 
 ## Reproducible checks
@@ -10,7 +10,7 @@ The [saved result](review-2026-10-31-mcp-merge.json) records the latest outcome 
 
 | Check | Scope |
 | --- | --- |
-| Structure | Twelve normative documents, 179 rules, bold decisions, Checks and change logs |
+| Structure | Twelve normative documents, 185 rules, bold decisions, Checks and change logs |
 | References | Local Markdown links/anchors and numbered cross-references |
 | Source coverage and migration | Run only when `audit/source-inventory.json`, `audit/migration.json` and `MIGRATION.md` are present; they join in the last step |
 
@@ -24,6 +24,8 @@ requirements remain in [Verification](../engineering/VERIFICATION.md). Deleted h
 new implementation claims need evidence from the actual build. This audit runs no code, editor, CLI or platform suite; merged-build results are recorded separately in Verification.
 
 ## Change log
+
+- 2026-10-31: Integrate Resume and linked Pin/Unpin with MCP; 185 rules.
 
 - 2026-10-31: Integrate the MCP feature and current main: 12 normative documents, 179 rules, with all local links and numbered references checked.
 

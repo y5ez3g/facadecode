@@ -180,6 +180,9 @@ that capture; every extra open makes it ambiguous even if that extra object clos
 close events do not contaminate the capture. Same-host completion additionally validates the actual Terminal reference.
 Only successful registration replaces and disposes the prior registered object for that run. Names, empty names and CLI
 titles may repeat freely. Cancellation, expiration, an old claim or ambiguous events do not guess an association.
+An editor can replace its public Tab objects when rebuilding the tab-group model. Discard bindings to objects no longer
+present, then correlate the active terminal and tab through public activation/group events again; never recover them by
+title or index. Pending native Pin changes wait for that exact active association and do not reveal another editor.
 
 Queued creation retains only the latest explicit reveal request and cancels
 it on closure, so an earlier queued agent cannot steal focus after a later selection. Restoration after a reload waits up
@@ -274,8 +277,9 @@ own ptyd. Upgrade/reload behavior must be verified with in-flight work.
 | Store | Contents |
 | --- | --- |
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension/client` on the client computer | Window registry - each open window's routing ID, label, environment, socket and protocol - and the client-wide alias counter |
-| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, per-run launch files, the injection record (CLIS-2.2), message records, previously successful model/effort choices and location metadata |
-| Editor workspace storage | Human CLI/location choices, filter, order and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, per-run launch files, the injection record (CLIS-2.2), message records, previously successful model/effort choices location metadata and Facade conversation names/locations |
+| Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70) |
+| Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
@@ -473,6 +477,8 @@ what was tested and what remains. Task assignments, pauses and discussion author
 See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this design.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 2.4 retains request-bearing metadata without restoring closed pairs; 5.3 enforces temporary CLI state in
   integration and input-capture probes (D119).

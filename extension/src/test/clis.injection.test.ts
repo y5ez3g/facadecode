@@ -249,6 +249,31 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.match(attached.prompt!.capability.reason, /starts with @ as a file to attach/);
 	});
 
+
+	for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
+		test(`${cli}: exact Resume, session tracking, the Facade tools and a native first prompt compose in one launch`, () => {
+			const sessionId = cli === 'opencode' ? 'ses_Selected' : '86da4482-2bae-4a45-b193-a5664c19826a';
+			const planned = plan({ cli, tools, resume: { sessionId }, sessionFile: path.join(temp.dir, 'our.session.json'), sessionHook: 'our-hook', prompt: 'Do the selected task' });
+			assert.strictEqual(planned.sessionId, sessionId);
+			assert.strictEqual(planned.exactResume, true);
+			assert.strictEqual(planned.tools.state, 'injected');
+			assert.ok(planned.args.includes(sessionId), 'the native command receives the selected ID');
+			if (planned.prompt?.path === 'native') { assert.strictEqual(planned.args.at(-1), 'Do the selected task'); }
+			if (cli === 'agy') {
+				assert.strictEqual(planned.args.filter(value => value === '--settings').length, 1);
+				const settings = JSON.parse(planned.args[planned.args.indexOf('--settings') + 1]);
+				assert.deepStrictEqual(settings.permissions.allow, ['mcp(facade_facade/*)']);
+				assert.strictEqual(settings.title.command, 'our-hook');
+			}
+			if (cli === 'muse') { assert.ok(planned.args.some(value => value.startsWith('hooks='))); }
+			if (cli === 'opencode') {
+				assert.ok(JSON.parse(planned.env.OPENCODE_CONFIG_CONTENT).mcp.facade);
+				assert.strictEqual(JSON.parse(planned.env.OPENCODE_CLI_CONFIG_CONTENT).plugins.length, 1);
+			}
+			if (cli === 'pi') { assert.strictEqual(planned.args.filter(value => value === '-e' || value === '--extension').length, 2); }
+		});
+	}
+
 	test('without tools - orchestration off - nothing is injected and no file is named; planning writes nothing', () => {
 		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
 			const planned = plan({ cli });

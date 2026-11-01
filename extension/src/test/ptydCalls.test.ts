@@ -283,7 +283,7 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		const window = await connect();
 		await assert.rejects(window.request('call', { caller: 'r7', elapsedMs: 0 }), /come from a run's MCP shim/);
 		// Nor may a shim claim a workspace, attach a run or type into one
-		for (const method of ['claim', 'attach', 'type', 'keys', 'read', 'inspect', 'terminate']) {
+		for (const method of ['claim', 'attach', 'type', 'keys', 'read', 'inspect', 'terminate', 'conversations']) {
 			assert.match((await shim.ask(method, {})).error ?? '', new RegExp(`A run's MCP shim does not ${method}`), method);
 		}
 	});

@@ -37,7 +37,7 @@ export const MOST_RUN_CALLS = 256;
 const SHIM_METHODS: ReadonlySet<Method> = new Set<Method>(['hello', 'call']);
 
 /** Requests whose answer is the run's current state: never kept in the duplicate-request cache, where a repeat would read it stale. */
-const UNCACHED: ReadonlySet<Method> = new Set<Method>(['attach', 'list', 'hello', 'read', 'inspect', 'call']);
+const UNCACHED: ReadonlySet<Method> = new Set<Method>(['attach', 'list', 'conversations', 'hello', 'read', 'inspect', 'call']);
 
 /** What a request's handling answers where it wrote its response itself: a shim's call, or an attach the calls waiting follow. */
 const RESPONDED = Symbol('responded');
@@ -427,11 +427,21 @@ export class PtydServer {
 			case 'claim':
 				this.owners.claim(params as Requests['claim']['params'], connection);
 				return undefined;
+			case 'conversations':
+				return [...this.runs.values()].flatMap(run => {
+					const meta = run.meta;
+					return !run.removed && !run.info(false).exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
+						? [{ environment: meta.environment, cli: meta.cli, sessionId: meta.sessionId }] : [];
+				});
 			case 'spawn': {
 				const spawn = params as Requests['spawn']['params'];
 				this.owners.assert(spawn.owner, connection);
 				if (typeof spawn.run !== 'string' || !spawn.run || this.seen.has(spawn.run)) {
 					throw new Error(`Run ${JSON.stringify(spawn.run)} was started before: ptyd never starts a run ID twice.`);
+				}
+				if (typeof spawn.meta.sessionId === 'string' && [...this.runs.values()].some(run => !run.removed && !run.info(false).exited
+					&& run.meta.sessionId === spawn.meta.sessionId && run.meta.cli === spawn.meta.cli && run.meta.environment === spawn.meta.environment)) {
+					throw new Error('This conversation is already running in Facade.');
 				}
 				this.seen.add(spawn.run);
 				const run = new Run(spawn);

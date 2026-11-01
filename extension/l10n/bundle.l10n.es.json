@@ -280,5 +280,19 @@
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "El registro de Facade Code de esta ventana está dañado, por lo que sus agentes no se pueden restaurar aquí. Cierre esta ventana y vuelva a abrir su carpeta o espacio de trabajo, o reinicie {0}.",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} se ejecuta a través de cmd.exe, que no puede ejecutarse en la carpeta UNC {1}; establezca {2}.path en el programa propio de la CLI o en el punto de entrada de Node",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} es un script de Node y no hay ningún Node en el PATH para ejecutarlo",
-	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "Confianza: no se concede a la carpeta personal, sus carpetas superiores ni la raíz de un sistema de archivos; la CLI pregunta en su terminal"
+	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "Confianza: no se concede a la carpeta personal, sus carpetas superiores ni la raíz de un sistema de archivos; la CLI pregunta en su terminal",
+	"Could not restore {0} pinned agents. Their cards show why.": "No se pudieron restaurar {0} agentes anclados. Sus tarjetas muestran el motivo.",
+	"Could not restore {0}: {1}": "No se pudo restaurar {0}: {1}",
+	"Could not pin {0}: {1}": "No se pudo anclar {0}: {1}",
+	"Could not unpin {0}: {1}": "No se pudo desanclar {0}: {1}",
+	"Pinned": "Anclado",
+	"Could not read the saved conversations: {0}": "No se pudieron leer las conversaciones guardadas: {0}",
+	"Resume Agent": "Reanudar agente",
+	"Restores this conversation when the workspace opens again": "Restaura esta conversación al volver a abrir el área de trabajo",
+	"Search saved conversations by title or location": "Buscar conversaciones guardadas por título o ubicación",
+	"Open a folder to resume its conversations.": "Abra una carpeta para reanudar sus conversaciones.",
+	"Untitled conversation": "Conversación sin título",
+	"No saved conversations in this window's folders": "No hay conversaciones guardadas en las carpetas de esta ventana",
+	"Could not resume {0}: {1}": "No se pudo reanudar {0}: {1}",
+	"{0} is already running in another window.": "{0} ya se está ejecutando en otra ventana."
 }

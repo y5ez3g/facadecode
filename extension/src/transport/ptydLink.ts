@@ -15,7 +15,7 @@ import type { FailureCode } from './failure';
  * The ptyd protocol the shim speaks: ptyd's own `PTYD_PROTOCOL`, which the layers keep this one from importing - a test holds the
  * two equal. A ptyd of another protocol refuses the shim's hello.
  */
-export const SHIM_PTYD_PROTOCOL = 9;
+export const SHIM_PTYD_PROTOCOL = 10;
 
 /** How long ptyd has to answer the shim's hello: the two seconds of a call's first response (RULES-1.2). */
 const HELLO_WAIT_MS = 2_000;

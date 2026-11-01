@@ -280,5 +280,19 @@
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "Der Facade Code-Eintrag dieses Fensters ist beschädigt, daher können seine Agents hier nicht wiederhergestellt werden. Schließen Sie dieses Fenster und öffnen Sie seinen Ordner oder Arbeitsbereich erneut, oder starten Sie {0} neu.",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} wird über cmd.exe ausgeführt, das nicht im UNC-Ordner {1} ausgeführt werden kann; legen Sie {2}.path auf das eigene Programm der CLI oder den Node-Einstiegspunkt fest",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} ist ein Node-Skript, und im PATH ist kein Node, um es auszuführen",
-	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "Vertrauen: keines für den persönlichen Ordner, seine übergeordneten Ordner oder ein Dateisystem-Stammverzeichnis gewährt; die CLI fragt in ihrem Terminal nach"
+	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "Vertrauen: keines für den persönlichen Ordner, seine übergeordneten Ordner oder ein Dateisystem-Stammverzeichnis gewährt; die CLI fragt in ihrem Terminal nach",
+	"Could not restore {0} pinned agents. Their cards show why.": "{0} angeheftete Agenten konnten nicht wiederhergestellt werden. Ihre Karten zeigen den Grund.",
+	"Could not restore {0}: {1}": "{0} konnte nicht wiederhergestellt werden: {1}",
+	"Could not pin {0}: {1}": "{0} konnte nicht angeheftet werden: {1}",
+	"Could not unpin {0}: {1}": "{0} konnte nicht gelöst werden: {1}",
+	"Pinned": "Angeheftet",
+	"Could not read the saved conversations: {0}": "Die gespeicherten Konversationen konnten nicht gelesen werden: {0}",
+	"Resume Agent": "Agent fortsetzen",
+	"Restores this conversation when the workspace opens again": "Stellt diese Unterhaltung beim erneuten Öffnen des Arbeitsbereichs wieder her",
+	"Search saved conversations by title or location": "Gespeicherte Konversationen nach Titel oder Ort durchsuchen",
+	"Open a folder to resume its conversations.": "Öffnen Sie einen Ordner, um seine Konversationen fortzusetzen.",
+	"Untitled conversation": "Unbenannte Konversation",
+	"No saved conversations in this window's folders": "Keine gespeicherten Konversationen in den Ordnern dieses Fensters",
+	"Could not resume {0}: {1}": "{0} konnte nicht fortgesetzt werden: {1}",
+	"{0} is already running in another window.": "{0} wird bereits in einem anderen Fenster ausgeführt."
 }

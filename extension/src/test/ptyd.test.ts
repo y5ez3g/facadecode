@@ -93,6 +93,24 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	};
 	const outputOf = (events: readonly RunEvent[]) => events.map(event => event.event === 'output' ? event.data : '').join('');
 
+	test('two windows racing to resume one exact conversation start it only once, without exposing other metadata', async () => {
+		const a = await connect();
+		const b = await connect(false);
+		await b.request('claim', { owner: 'w2', generation: 1, token: 'other-window' });
+		const key = { environment: 'local', cli: 'claude', sessionId: 'exact-session' };
+		const results = await Promise.allSettled([
+			spawn(a, 'r-a', 'sleep 30', { meta: { ...key, name: 'private-name' } }),
+			spawn(b, 'r-b', 'sleep 30', { owner: 'w2', meta: { ...key, name: 'private-name' } })
+		]);
+		assert.strictEqual(results.filter(result => result.status === 'fulfilled').length, 1);
+		const rejected = results.find(result => result.status === 'rejected') as PromiseRejectedResult;
+		assert.match(String(rejected.reason), /already running/);
+		assert.deepStrictEqual(await a.request('conversations', {}), [key]);
+		const won = results[0].status === 'fulfilled' ? [a, 'r-a'] as const : [b, 'r-b'] as const;
+		await won[0].request('terminate', { run: won[1], graceMs: 50 });
+		await until('the terminated conversation to leave the running list', async () => (await a.request('conversations', {})).length === 0 ? true : undefined);
+	});
+
 	test('says which protocol it speaks; a second ptyd on the socket gives way; a window of another protocol is told so and nothing is ended', async () => {
 		const client = await connect();
 		assert.deepStrictEqual(await client.request('hello', { protocol: PTYD_PROTOCOL }), { protocol: PTYD_PROTOCOL, pid: process.pid });
@@ -277,7 +295,9 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const events = eventsOf(client, 'r1');
 		const info = await spawn(client, 'r1', `process.stdout.write('started\\n'); ${eachLine(finish(`'got ' + line + '\\n'`, 3))}`);
 		assert.ok(info.pid > 1);
-		assert.deepStrictEqual([info.claimedElsewhere, info.seq], [false, 0]);
+		assert.strictEqual(info.claimedElsewhere, false);
+		// ConPTY can emit its terminal initialization before the spawn reply. All output still has consecutive sequence numbers.
+		assert.ok(Number.isSafeInteger(info.seq) && info.seq >= 0);
 		await until('its first line', () => outputOf(events).includes('started'));
 		await client.request('input', { run: 'r1', data: 'hello\r' });
 		await until('its answer', () => outputOf(events).includes('got hello'));

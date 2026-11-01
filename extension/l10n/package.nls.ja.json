@@ -59,5 +59,8 @@
 	"config.custom.launch": "CLI の起動方法: 新しい会話には `start`、保存された会話には `resume`、環境変数には `environment` を使います。",
 	"config.custom.launch.start": "新しい対話型の会話の引数。記述したとおりに渡されます。",
 	"config.custom.launch.resume": "必須: 保存された特定の会話を正確に再開する引数。`${sessionId}` はそのセッション ID に置き換えられ、必ず含める必要があります。",
-	"icon.newAgent": "新しいエージェントのアイコン"
+	"icon.newAgent": "新しいエージェントのアイコン",
+	"command.history": "エージェントを再開...",
+	"command.pinAgent": "エージェントをピン留め",
+	"command.unpinAgent": "エージェントのピン留めを外す"
 }

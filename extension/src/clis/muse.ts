@@ -4,8 +4,70 @@
 
 import * as path from 'path';
 import { CliAdapter, sigintExit } from './adapter';
-import { RUN_VARIABLE } from './environment';
+import * as fs from 'fs';
+import { isJsonObject } from '../base/json';
+import { executableAt, homeOf, launchTarget, LaunchTarget } from './executable';
+import { variableOf } from './environment';
+import type { SessionIntegration, SessionIntegrationInput } from './identity';
+import { museDataDir } from './history/muse';
+import { RUN_VARIABLE, Environment } from './environment';
 import { SERVER_NAME, serverEntry, sharedServer, ToolsIntegration } from './tools';
+
+/** The installer's active native program avoids cmd.exe/PowerShell changing JSON arguments (CLIS-2.4). */
+export function museTarget(file: string, platform: NodeJS.Platform, env: Environment, cwd: string): LaunchTarget {
+	const target = launchTarget(file, platform, env, cwd);
+	if (platform !== 'win32' || !target.throughCmd) { return target; }
+	try {
+		const shim = fs.readFileSync(file, 'utf8');
+		if (!/-File\s+"%~dp0\.muse-launcher\.ps1"\s+%\*/i.test(shim)) { return target; }
+		const dir = path.dirname(file);
+		const launcher = fs.readFileSync(path.join(dir, '.muse-launcher.ps1'), 'utf8');
+		if (!launcher.includes('function Get-ActiveBinary') || !launcher.includes('"muse-bin-$version.exe"')) { return target; }
+		const version = fs.readFileSync(path.join(dir, '.muse-version'), 'utf8').trim();
+		if (!/^\d+\.\d+\.\d+-R\d+(?:\.\d+)?$/.test(version)) { return target; }
+		const channelFile = path.join(dir, '.muse-channel');
+		const channel = fs.existsSync(channelFile) ? fs.readFileSync(channelFile, 'utf8').trim() : 'muse-stable';
+		if (channel !== (variableOf(env, 'MUSE_CHANNEL', platform)?.trim() || 'muse-stable')) { return target; }
+		const executable = executableAt(path.join(dir, `muse-bin-${version}.exe`), env, platform);
+		return executable ? { executable, args: [], throughCmd: false } : target;
+	} catch { return target; }
+}
+
+/** Preserve the user's hook groups; managed and project hooks remain loaded by Muse itself. */
+export function museSession({ file, hook, env, extra, throughCmd, platform }: SessionIntegrationInput): SessionIntegration {
+	if (throughCmd) { return { unavailable: true }; }
+	const xdg = variableOf(env, 'XDG_CONFIG_HOME', platform);
+	const settings = path.join(xdg && path.isAbsolute(xdg) ? xdg : path.join(homeOf(env, platform), '.config'), 'muse', 'settings.json');
+	let hooks: unknown;
+	if (fs.existsSync(settings)) {
+		let parsed: unknown;
+		try { parsed = JSON.parse(fs.readFileSync(settings, 'utf8')); }
+		catch { throw new Error(`Muse Code settings in ${settings} are not readable JSON.`); }
+		hooks = isJsonObject(parsed) ? parsed.hooks : undefined;
+	}
+	const remaining: string[] = [];
+	let overridden = false;
+	for (let i = 0; i < extra.length; i++) {
+		const start = i;
+		const arg = extra[i] === '-c' || extra[i] === '--config' ? extra[++i] : extra[i].startsWith('--config=') ? extra[i].slice(9) : undefined;
+		if (arg?.startsWith('hooks=')) {
+			if (overridden) { throw new Error('Muse Code hooks configuration is repeated.'); }
+			overridden = true;
+			try { hooks = JSON.parse(arg.slice(6)); }
+			catch { throw new Error('Muse Code per-launch hooks must be valid JSON.'); }
+		} else { remaining.push(...extra.slice(start, i + 1)); }
+	}
+	if (hooks !== undefined && !isJsonObject(hooks)) { throw new Error(`Muse Code hooks in ${settings} must be an object.`); }
+	const previous = isJsonObject(hooks) ? hooks : {};
+	const merged = { ...previous };
+	for (const event of ['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd']) {
+		const groups = merged[event];
+		if (groups !== undefined && !Array.isArray(groups)) { throw new Error(`Muse Code ${event} hooks in ${settings} must be an array.`); }
+		merged[event] = [...(groups ?? []), { hooks: [{ type: 'command', command: hook, timeout: 5 }] }];
+	}
+	return { extra: remaining, args: ['-c', `hooks=${JSON.stringify(merged)}`],
+		files: [{ file: path.join(file.replace(/\.json$/, '.d'), 'muse.json'), content: JSON.stringify({ data: museDataDir(env, platform) }) }] };
+}
 
 /** The project's MCP file Muse Code reads in a trusted folder, and where it reads skills there (CLIS-2.2). */
 const MCP_FILE = '.mcp.json';
@@ -48,16 +110,20 @@ const museTools: ToolsIntegration = {
  * --disable-sandbox` - not `--yolo`, which also withholds its question tool. YOLO off: its approvals and its sandbox as its own
  * configuration has them, the sandbox on unless that turns it off. Every launch trusts the folder it starts in for that launch alone
  * with `--trust-workspace`, as accepting its trust question would, writing nothing (CLIS-3.3, D62). On Windows its installer's
- * `muse.cmd` runs a PowerShell launcher that picks its current program, so it goes through cmd.exe, which takes these arguments
- * safely (CLIS-1.2). It reports its activity by OSC 7501 on Linux and macOS but sends nothing on Windows, where ptyd reads it from
+ * `muse.cmd` runs a PowerShell launcher that picks its current program, whose installed native program is resolved directly to preserve JSON hook arguments (CLIS-2.4). It reports its activity by OSC 7501 on Linux and macOS but sends nothing on Windows, where ptyd reads it from
  * its screen instead (CLIS-2.3, D80).
  */
 export const museAdapter: CliAdapter = {
 	id: 'muse',
+	sessionIdentity: true,
+	sessionIntegration: museSession,
+	identityOptions: ['--no-session-log', '--continue', '--last'],
 	displayName: 'Muse Code',
 	setting: 'facade.muse',
 	command: 'muse',
+	launchTarget: museTarget,
 	groups: {
+		resume: ['resume', '${sessionId}'],
 		yoloOn: ['--disable-approval', '--disable-sandbox'],
 		model: ['--model', '${model}'],
 		// For the run alone, its values JSON: its own --reasoning-effort is kept in the person's settings, and the efforts its settings

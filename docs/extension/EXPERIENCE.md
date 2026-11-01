@@ -162,6 +162,14 @@ to a closed A, that send reports the error to B. If B also cannot receive it, dr
 outcome remains unchanged. Only an agent's explicit decision to contact the person uses `#human`, which shows a
 notification in that agent's window.
 
+### 2.5 Resume and Pin
+
+**Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
+
+Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are
+the same intent. Unpin keeps the current agent running. Explicit close and normal exit Unpin; abnormal exit and
+whole-window close preserve the intent. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
+
 ## 4 Completing the work
 
 ### 4.1 Both ways are followed through to the result
@@ -210,6 +218,8 @@ Creation trees do not group the list or imply a team workflow.
 Evidence is recorded in [Verification](engineering/VERIFICATION.md); these scenarios have not been run by this rewrite.
 
 ## Change log
+
+- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-30: 4.3 says a panel filter affects display only (PANEL-2.3).
 - 2026-10-30: Step 2 of the Facade Code extension: group 3 and 4.1 carry the Facade Dots collaboration journeys across

@@ -20,6 +20,9 @@ const english = (value: string) => value.replace(/^%(.+)%$/, (_, key) => nls[key
 const PUBLIC: readonly [string, string, string?][] = [
 	// Facade's own copy of codicons' `new-session`, which VS Code before 1.111 has not (PANEL-1.1, D85)
 	['facade.newAgent', 'New Agent...', '$(facade-new-agent)'],
+	['facade.history', 'Resume Agent...', '$(history)'],
+	['facade.pinAgent', 'Pin Agent'],
+	['facade.unpinAgent', 'Unpin Agent'],
 	['facade.showActiveAgents', 'Go to Agent...'],
 	['facade.renameAgent', 'Rename Agent...'],
 	['facade.copyAgentReference', 'Copy Agent Reference'],
@@ -80,6 +83,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			'view/title': [
 				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered', group: 'navigation@1' },
 				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered', group: 'navigation@1' },
+				{ command: 'facade.history', when: 'view == facade.agents', group: 'navigation@2' },
 				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@3' },
 				// The More Actions menu (PANEL-1.1, D58): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
@@ -89,6 +93,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			],
 			'webview/context': [
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
+				{ command: 'facade.unpinAgent', when: `${card} && webviewUnpin`, group: '1_agent@2' },
+				{ command: 'facade.pinAgent', when: `${card} && webviewPin`, group: '1_agent@2' },
 				{ command: 'facade.copyAgentReference', when: card, group: '1_agent@3' },
 				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
 				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' },
@@ -102,7 +108,9 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.copyAgentReference', when: 'facade.agentSelected' },
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.clearFilter', when: 'facade.filtered' },
-				...HIDDEN.map(([command]) => ({ command, when: 'false' }))
+				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
+				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedResumable && !facade.agentSelectedPinned' },
+				{ command: 'facade.unpinAgent', when: 'facade.agentSelectedPinned' }
 			]
 		});
 	});
@@ -203,7 +211,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				const { registerUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 				const emitter = new TestEmitter<never>();
 				const disposables = registerUi({
-					agents: { requested: () => undefined, list: () => [], get: () => undefined, onDidChange: emitter.event, launch: () => '', started: async () => ({ state: 'closed' }), warmedUp: async () => undefined, close: async () => 'already_ended', rename: () => undefined },
+					agents: { requested: () => undefined, started: async () => ({ state: 'closed' }), warmedUp: async () => undefined, list: () => [], get: () => undefined, onDidChange: emitter.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: () => {}, unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
+			launch: () => '', close: async () => 'already_ended', rename: () => undefined },
 					worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
 					clis: { list: async () => ({ clis: [], problems: [] }) },

@@ -1,7 +1,7 @@
 {
   "status": "PASS",
   "normative_documents": 10,
-  "current_rules": 128,
+  "current_rules": 134,
   "local_links_checked": 70,
   "migration_ledger": "absent; checked once its files are added",
   "source_groups": null,
