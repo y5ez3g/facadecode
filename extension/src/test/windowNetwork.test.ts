@@ -99,9 +99,25 @@ suite('Window network: window components register and carry requests between win
 		const ghost = windowAddress(TOKEN_B);
 		registerWindow(home.dir, { protocol: WINDOW_NETWORK_PROTOCOL, window: ghost, socket: windowSocketPath(home.dir, ghost, 'gone'), pid: process.pid, started: 1, incarnation: 'gone', label: 'Ghost', environment: 'local', agents: [AGENT], updatedAt: 1 });
 		assert.ok(a.directory().windows.some(each => each.window === ghost), 'listed until its start is checked');
-		await new Promise(resolve => setTimeout(resolve, 20));
+		for (const deadline = Date.now() + 2_000; fs.existsSync(entryOf(ghost)) && Date.now() < deadline;) {
+			await new Promise(resolve => setTimeout(resolve, 20));
+		}
 		assert.deepStrictEqual(a.directory().windows.map(each => each.window), [a.window]);
 		assert.ok(!fs.existsSync(entryOf(ghost)));
+	});
+
+	test('a live window whose start the system reads otherwise - a clock step, a start read to the second - is kept, with its socket (ARCHITECTURE-1.1)', async () => {
+		const skewed = (_pid: number, recorded: number) => Promise.resolve(recorded + 60_000);
+		const a = windowOf(TOKEN_A, 'Design', async () => undefined, 'local', { startOf: skewed });
+		await a.start();
+		const b = windowOf(TOKEN_B, 'Backend', async () => 'reached');
+		await b.start();
+		assert.ok(a.directory().windows.some(each => each.window === b.window));
+		// Its start is checked, and found other than it said: its socket still answers, so it stays
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.ok(fs.existsSync(entryOf(b.window)), 'the entry of a window that still listens stays');
+		assert.ok(a.directory().windows.some(each => each.window === b.window));
+		assert.deepStrictEqual(await a.route({ to: b.window, op: 'summary', args: {}, deadlineMs: 5_000 }), { ok: true, result: 'reached' });
 	});
 
 	test('an address is the same for a token every time, another token\'s another, and tells nothing of the token', () => {

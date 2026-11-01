@@ -398,8 +398,10 @@ export class WindowNetwork {
 				continue;
 			}
 			this.startsChecked.set(key, now);
-			void (this.options.startOf ?? processStartTimeOfAsync)(entry.pid, started).then(start => {
-				if (start !== undefined && !isSameStart(start, started) && !this.disposed) {
+			void (this.options.startOf ?? processStartTimeOfAsync)(entry.pid, started).then(async start => {
+				// A start the system reads otherwise than the window said its own - after a clock step, or read to the second - proves
+				// nothing alone: the entry goes only once its socket proves that no window listens there any more (ARCHITECTURE-1.1)
+				if (start !== undefined && !isSameStart(start, started) && !this.disposed && await this.unheard(entry)) {
 					this.forget(entry);
 				}
 			}, () => undefined);
@@ -410,6 +412,13 @@ export class WindowNetwork {
 			}
 		}
 		return entries;
+	}
+
+	/** Whether nothing listens at `entry`'s socket: no such socket, or on POSIX one refused. A busy one may still be a window's. */
+	private async unheard(entry: RegisteredWindow): Promise<boolean> {
+		const reached = await connectWithin(entry.socket, CONNECT_MS);
+		reached.socket?.destroy();
+		return !reached.socket && reached.absent;
 	}
 
 	/** Removes the entry of a window found gone, where it is unchanged, and on POSIX its socket file in this computer's socket folder. */
