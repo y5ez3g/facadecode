@@ -51,6 +51,7 @@ class FakeExecution implements ExecutionPort {
 	failSpawnFor?: (plan: LaunchPlan) => boolean;
 	readonly transfers = new Emitter<void>();
 	readonly toolConnections = new Emitter<RunId>();
+	readonly toolDisconnections = new Emitter<RunId>();
 	readonly reveals = new Map<RunId, boolean>();
 	readonly reopened: RunId[] = [];
 	liveRuns: LiveRun[] = [];
@@ -65,6 +66,7 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
+	readonly onDidDisconnectTools = this.toolDisconnections.event;
 	openPair(facts: PairFacts, options: { reveal: boolean }): void { this.pairs.set(facts.run, facts); this.reveals.set(facts.run, options.reveal); }
 	note(run: RunId, text: string): void { this.notes.push({ run, text }); }
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ pid: number; startedAt: number }> {
@@ -1212,11 +1214,19 @@ suite('Agents started by agents, and their tools (RULES-4.3, LIFECYCLE-2.2, CLIS
 		world.execution.toolConnections.fire(id);
 		assert.strictEqual(world.agents.get(id)?.tools, 'available');
 		assert.strictEqual(world.execution.metas.get(id)?.tools, 'available');
+		// Its shim gone, none other connected: its tools are unavailable, said so, until a shim says hello again (RULES-3.1)
+		world.execution.toolDisconnections.fire(id);
+		assert.deepStrictEqual([world.agents.get(id)?.tools, world.agents.get(id)?.toolsProblem, world.execution.metas.get(id)?.tools], ['unavailable', 'disconnected', 'unavailable']);
+		world.execution.toolConnections.fire(id);
+		assert.deepStrictEqual([world.agents.get(id)?.tools, world.agents.get(id)?.toolsProblem, world.agents.get(id)?.toolsReason], ['available', undefined, undefined]);
 		// Tools the plan could not give leave the CLI running without them, with why
 		const without = setUp({ tools: true, plan: { tools: { state: 'unavailable', reason: 'another facade skill is in the project' } } });
 		const other = without.agents.launch({ name: 'b', location: 'loc-1', cli: 'codex', origin: 'human' });
 		await settle();
 		assert.deepStrictEqual([without.agents.get(other)?.lifecycle, without.agents.get(other)?.tools, without.agents.get(other)?.toolsReason], ['running', 'unavailable', 'another facade skill is in the project']);
+		// A shim going says nothing of tools that never connected: theirs stays why the plan gave none
+		without.execution.toolDisconnections.fire(other);
+		assert.deepStrictEqual([without.agents.get(other)?.tools, without.agents.get(other)?.toolsProblem], ['unavailable', undefined]);
 	});
 
 	test('started() settles once the process started, the launch failed or the run was closed first, with how its prompt goes in', async () => {

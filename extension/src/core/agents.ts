@@ -145,6 +145,9 @@ export class AgentService implements Agents, Disposable {
 		if (execution.onDidConnectTools) {
 			this.subscriptions.push(execution.onDidConnectTools(run => this.toolsConnected(run)));
 		}
+		if (execution.onDidDisconnectTools) {
+			this.subscriptions.push(execution.onDidDisconnectTools(run => this.toolsDisconnected(run)));
+		}
 		if (execution.onDidLoseOwnership) {
 			this.subscriptions.push(execution.onDidLoseOwnership(() => {
 				this.ownershipLost = true;
@@ -584,7 +587,18 @@ export class AgentService implements Agents, Disposable {
 	private toolsConnected(id: RunId): void {
 		const run = this.runs.get(id);
 		if (run && run.facts.lifecycle !== 'ended' && run.facts.tools !== 'available') {
-			this.update(run, { tools: 'available' }, 'reported');
+			this.update(run, { tools: 'available', toolsProblem: undefined, toolsReason: undefined }, 'reported');
+			if (run.facts.pid !== undefined) {
+				this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
+			}
+		}
+	}
+
+	/** Its MCP shim went, none other connected: its tools, once there, are unavailable, and the card says so (RULES-3.1, PANEL-1.4). */
+	private toolsDisconnected(id: RunId): void {
+		const run = this.runs.get(id);
+		if (run && run.facts.lifecycle !== 'ended' && run.facts.tools === 'available') {
+			this.update(run, { tools: 'unavailable', toolsProblem: 'disconnected', toolsReason: 'its Facade MCP server disconnected' }, 'reported');
 			if (run.facts.pid !== undefined) {
 				this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 			}
@@ -1156,7 +1170,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(typeof meta.version === 'string' ? { version: meta.version } : {}),
 		tools: meta.tools === 'connecting' || meta.tools === 'available' || meta.tools === 'unavailable' ? meta.tools : 'not_injected',
 		...(typeof meta.toolsReason === 'string' ? { toolsReason: meta.toolsReason } : {}),
-		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' ? { toolsProblem: meta.toolsProblem } : {}),
+		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' || meta.toolsProblem === 'disconnected' ? { toolsProblem: meta.toolsProblem } : {}),
 		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
 		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
 		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),

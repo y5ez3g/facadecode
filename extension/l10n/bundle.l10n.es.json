@@ -50,6 +50,7 @@
 	"Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file": "No se puede trabajar con otros agentes: en «Configurar agentes», establezca la ruta al programa propio de la CLI, no a un archivo .cmd",
 	"Cannot work with other agents: move or rename {0} in this folder": "No se puede trabajar con otros agentes: mueva o cambie el nombre de {0} en esta carpeta",
 	"Cannot work with other agents: Facade could not read your {0} setting": "No se puede trabajar con otros agentes: Facade no pudo leer su ajuste {0}",
+	"Cannot work with other agents: its Facade tools stopped": "No se puede trabajar con otros agentes: sus herramientas de Facade se detuvieron",
 	"Cannot work with other agents: Facade could not create the files it needs": "No se puede trabajar con otros agentes: Facade no pudo crear los archivos que necesita",
 	"Started by {0}": "Iniciado por {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "El comando «Nuevo árbol de trabajo» necesita una ubicación de trabajo en un repositorio Git con al menos una confirmación.",

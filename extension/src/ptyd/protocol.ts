@@ -243,13 +243,18 @@ export interface OwnerEvent {
 	readonly owner: string;
 }
 
-/** What ptyd tells the connection that claims a run, as it happens: `tools` once the run's shim says hello (MCP-6.1). */
+/**
+ * What ptyd tells the connection that claims a run, as it happens: `tools` once the run's shim says hello (MCP-6.1), `toolsGone` once
+ * no shim of the run is connected any more, or none is as a window claims it again - its tool connection unavailable (RULES-3.1).
+ * A ptyd of protocol 9 tells no `toolsGone`.
+ */
 export type RunEvent =
 	| { readonly event: 'output'; readonly run: string; readonly seq: number; readonly data: string }
 	| { readonly event: 'title'; readonly run: string; readonly title: string }
 	| { readonly event: 'status'; readonly run: string; readonly status?: RunStatus }
 	| ({ readonly event: 'exit'; readonly run: string } & RunExit)
-	| { readonly event: 'tools'; readonly run: string };
+	| { readonly event: 'tools'; readonly run: string }
+	| { readonly event: 'toolsGone'; readonly run: string };
 
 /** A shim's call for the window that owns its run, numbered by ptyd: the window answers it with `answer`. */
 export interface CallEvent {
@@ -275,7 +280,7 @@ export function isPtydEvent(value: unknown): value is RunEvent | OwnerEvent | Ca
 	switch (value.event) {
 		case 'output': return typeof value.data === 'string' && Number.isSafeInteger(value.seq) && Number(value.seq) >= 0;
 		case 'title': return typeof value.title === 'string';
-		case 'tools': return true;
+		case 'tools': case 'toolsGone': return true;
 		case 'exit': return typeof value.exitCode === 'number' && Number.isFinite(value.exitCode) &&
 			(value.signal === undefined || typeof value.signal === 'number') && (value.ctrlC === undefined || value.ctrlC === true);
 		case 'status': {

@@ -79,7 +79,10 @@ function cardWords(): CardWords {
 				: problem === 'variable' && file
 					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
 					? vscode.l10n.t("Cannot work with other agents: Facade could not read your {0} setting", file)
-					: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
+					: problem === 'disconnected'
+						// The agent's CLI stopped the Facade tools it had started with, or they ended on their own
+						? vscode.l10n.t("Cannot work with other agents: its Facade tools stopped")
+						: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
 		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
 		startedBy: creator => vscode.l10n.t("Started by {0}", creator),
 		locale: vscode.env.language

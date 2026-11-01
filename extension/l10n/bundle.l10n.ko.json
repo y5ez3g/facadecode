@@ -50,6 +50,7 @@
 	"Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file": "다른 에이전트와 협업할 수 없습니다: [Agent 구성]에서 경로를 .cmd 파일이 아닌 CLI 자체 프로그램으로 설정하세요",
 	"Cannot work with other agents: move or rename {0} in this folder": "다른 에이전트와 협업할 수 없습니다: 이 폴더에서 {0}을(를) 이동하거나 이름을 바꾸세요",
 	"Cannot work with other agents: Facade could not read your {0} setting": "다른 에이전트와 협업할 수 없습니다: Facade에서 {0} 설정을 읽을 수 없었습니다",
+	"Cannot work with other agents: its Facade tools stopped": "다른 에이전트와 협업할 수 없습니다: Facade 도구가 중지되었습니다",
 	"Cannot work with other agents: Facade could not create the files it needs": "다른 에이전트와 협업할 수 없습니다: Facade에서 필요한 파일을 만들 수 없었습니다",
 	"Started by {0}": "시작한 에이전트: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "새 작업 트리를 사용하려면 커밋이 하나 이상 있는 Git 리포지토리의 작업 위치가 필요합니다.",

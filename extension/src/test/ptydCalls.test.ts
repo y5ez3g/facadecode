@@ -121,6 +121,30 @@ suite('ptyd: a run\'s tool calls carried to the window that claims it, and its a
 		assert.deepStrictEqual(toolsOf(later), [{ event: 'tools', run: 'r1' }]);
 	});
 
+	test('once its run\'s last shim goes, the window that claims the run is told its tools are gone, and a window that claims it with none connected (RULES-3.1)', async () => {
+		const first = await connect();
+		const events = eventsOf(first, 'r23');
+		await spawn(first, 'r23');
+		const shim = await shimOf('r23');
+		const second = await shimOf('r23', PTYD_PROTOCOL);
+		await until('the tools event', () => toolsOf(events).length > 0);
+		const gone = () => events.filter(event => event.event === 'toolsGone');
+		// One of two shims going leaves its tools there; the last going takes them
+		second.socket.destroy();
+		await new Promise(resolve => setTimeout(resolve, 100));
+		assert.deepStrictEqual(gone(), []);
+		shim.socket.destroy();
+		assert.deepStrictEqual(await until('the tools gone', () => gone().length > 0 && gone()), [{ event: 'toolsGone', run: 'r23' }]);
+		// Its window reloads meanwhile: the window that claims it next is told none is there, then told once one says hello again
+		first.dispose();
+		const reloaded = await connect();
+		const later = eventsOf(reloaded, 'r23');
+		await reloaded.request('attach', { run: 'r23' });
+		assert.deepStrictEqual(later.filter(event => event.event === 'toolsGone' || event.event === 'tools'), [{ event: 'toolsGone', run: 'r23' }]);
+		await shimOf('r23');
+		assert.deepStrictEqual(await until('the tools back', () => toolsOf(later).length > 0 && toolsOf(later)), [{ event: 'tools', run: 'r23' }]);
+	});
+
 	test('a call goes to the window that claims its caller, its time in ptyd added; that window\'s answer goes back, concurrent calls of the run matched by number', async () => {
 		const window = await connect();
 		const calls = callsOf(window);

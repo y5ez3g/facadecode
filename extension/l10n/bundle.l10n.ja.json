@@ -50,6 +50,7 @@
 	"Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file": "他のエージェントと連携できません: [Agent の構成] で、パスを .cmd ファイルではなく CLI 自身のプログラムに設定してください",
 	"Cannot work with other agents: move or rename {0} in this folder": "他のエージェントと連携できません: このフォルダー内の {0} を移動するか、名前を変更してください",
 	"Cannot work with other agents: Facade could not read your {0} setting": "他のエージェントと連携できません: Facade が {0} の設定を読み取れませんでした",
+	"Cannot work with other agents: its Facade tools stopped": "他のエージェントと連携できません: Facade のツールが停止しました",
 	"Cannot work with other agents: Facade could not create the files it needs": "他のエージェントと連携できません: Facade が必要なファイルを作成できませんでした",
 	"Started by {0}": "起動元: {0}",
 	"New Worktree needs a working location in a Git repository with a commit.": "新しい作業ツリーには、コミットが 1 つ以上ある Git リポジトリ内の作業場所が必要です。",

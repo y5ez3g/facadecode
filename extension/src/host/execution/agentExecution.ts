@@ -173,6 +173,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidPinTab = this.tabPins.event;
 	private readonly transfers = new Emitter<void>();
 	private readonly toolConnections = new Emitter<RunId>();
+	private readonly toolDisconnections = new Emitter<RunId>();
 	private toolHandler: ToolHandler | undefined;
 	readonly onDidReport = this.reports.event;
 	readonly onDidExit = this.exits.event;
@@ -181,6 +182,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
+	readonly onDidDisconnectTools = this.toolDisconnections.event;
 	/**
 	 * After the first restore, a ptyd lists runs of this window that it shows no pair of - one of an earlier protocol found late, or
 	 * one whose reattach failed: the composition root restores again, so that none is left out (RULES-4.1, D86).
@@ -794,6 +796,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			}
 			case 'tools':
 				this.toolConnections.fire(pair.run);
+				break;
+			case 'toolsGone':
+				this.toolDisconnections.fire(pair.run);
 				break;
 		}
 	}

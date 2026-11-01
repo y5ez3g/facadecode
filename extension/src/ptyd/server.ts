@@ -489,6 +489,10 @@ export class PtydServer {
 					throw new Error(`Run ${run.id} is claimed by another connected window.`);
 				}
 				this.claim(run, connection);
+				// A shim that went while no window claimed the run: what the window kept of its tools is told gone (RULES-3.1)
+				if (!this.shims.get(run.id)?.size) {
+					connection.send({ event: 'toolsGone', run: run.id });
+				}
 				// Its calls wait until the window was answered that the run is its: it knows the caller when they come (RULES-1.9, 4.1)
 				this.attaching.add(run);
 				try {
@@ -644,11 +648,17 @@ export class PtydServer {
 		}
 	}
 
+	/** `connection` is no shim of its run any more: where it was the run's last, the window that claims the run is told (RULES-3.1). */
 	private shimGone(connection: Connection): void {
 		const run = connection.shimRun;
 		const shims = run !== undefined ? this.shims.get(run) : undefined;
 		if (run !== undefined && shims?.delete(connection) && !shims.size) {
 			this.shims.delete(run);
+			const claimed = this.runs.get(run);
+			const claimant = claimed && this.claims.get(claimed);
+			if (claimant && !claimant.closed) {
+				claimant.send({ event: 'toolsGone', run });
+			}
 		}
 		connection.shimRun = undefined;
 	}

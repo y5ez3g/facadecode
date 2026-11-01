@@ -109,6 +109,7 @@
 	"Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file": "Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file",
 	"Cannot work with other agents: move or rename {0} in this folder": "Cannot work with other agents: move or rename {0} in this folder",
 	"Cannot work with other agents: Facade could not read your {0} setting": "Cannot work with other agents: Facade could not read your {0} setting",
+	"Cannot work with other agents: its Facade tools stopped": "Cannot work with other agents: its Facade tools stopped",
 	"Cannot work with other agents: Facade could not create the files it needs": "Cannot work with other agents: Facade could not create the files it needs",
 	"Started by {0}": "Started by {0}",
 	"Could not read the saved conversations: {0}": "Could not read the saved conversations: {0}",
