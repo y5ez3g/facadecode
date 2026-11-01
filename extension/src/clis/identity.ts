@@ -19,6 +19,8 @@ export interface SessionIntegrationInput {
 	readonly platform: NodeJS.Platform;
 	readonly cwd: string;
 	readonly extra: readonly string[];
+	readonly tools?: boolean;
+	readonly throughCmd?: boolean;
 }
 
 /** Per-process integration only. The host materializes owned files after validating the complete launch. */

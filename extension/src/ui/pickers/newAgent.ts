@@ -133,7 +133,7 @@ function start(deps: NewAgentDeps, name: string, destination: Destination, cli: 
 	let run: RunId;
 	try {
 		run = deps.agents.launch({
-			name, location: destination.location.id, cli: cli.id,
+			name, location: destination.location.id, cli: cli.id, origin: 'human',
 			...(destination.worktree ? { worktree: { branch: destination.worktree.branch } } : {})
 		});
 	} catch (err) {

@@ -28,9 +28,9 @@ interface Row {
 }
 
 /** Muse Code's data folder: `muse` in `XDG_DATA_HOME` where that is an absolute path, else in `.local/share` of the home folder. */
-export function museDataDir(env: Environment): string {
-	const set = variableOf(env, 'XDG_DATA_HOME');
-	return path.join(set && path.isAbsolute(set) ? set : path.join(homeOf(env), '.local', 'share'), 'muse');
+export function museDataDir(env: Environment, platform: NodeJS.Platform = process.platform): string {
+	const set = variableOf(env, 'XDG_DATA_HOME', platform);
+	return path.join(set && path.isAbsolute(set) ? set : path.join(homeOf(env, platform), '.local', 'share'), 'muse');
 }
 
 /**

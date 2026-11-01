@@ -8,11 +8,13 @@
 // shows. Each step is a line of FACADE_IT_CONVERSION for the runner to judge; setup runs only on the first activation.
 
 import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
 
 const OUT = process.env.FACADE_IT_CONVERSION!;
 const RECORD = process.env.FACADE_IT_RECORD!;
+const REOPEN = process.env.FACADE_IT_REOPEN === '1';
 
 function write(line: object): void {
 	fs.appendFileSync(OUT, `${JSON.stringify(line)}\n`);
@@ -74,9 +76,22 @@ export async function activate(): Promise<void> {
 			await until('its native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
 			await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 			await pinState(card.runId, true);
-			write({ phase: 'folder', runId: card.runId, name: card.name, pid });
+			const session = JSON.parse(fs.readFileSync(path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`), 'utf8')).session_id;
+			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session });
 			// Reload tears down this host, which may cancel its command promise after the window accepted the request.
-			void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
+			void vscode.commands.executeCommand(REOPEN ? 'workbench.action.closeWindow' : 'workbench.action.reloadWindow').then(undefined, () => undefined);
+			return;
+		}
+		if (REOPEN) {
+			const card = await until('the reopened pinned agent', async () => (await state()).cards.find(each => each.pinned));
+			await pinState(card.runId, true);
+			const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
+			const pid = await until('the restored CLI process', async () => fs.existsSync(`${RECORD}.${alias}`) ? Number(fs.readFileSync(`${RECORD}.${alias}`, 'utf8').trim()) : undefined);
+			const sessionFile = path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`);
+			const session = await until('the restored native session identity', async () => {
+				try { return JSON.parse(fs.readFileSync(sessionFile, 'utf8')).session_id as string | undefined; } catch { return undefined; }
+			});
+			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length });
 			return;
 		}
 		const runId = steps[0].runId!;
@@ -100,8 +115,14 @@ export async function activate(): Promise<void> {
 		}
 		await pinState(runId, true);
 		const card = await until('the same card in the workspace', async () => (await state()).cards.find(each => each.runId === runId)).catch(() => undefined);
+		// The editor closes the terminals of the extension host it restarted in its own time: what the window settles to is judged
+		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => each.name === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: vscode.window.terminals.map(each => each.name) });
 	} catch (err) {
 		write({ phase: 'error', error: String(err) });
 	}
+}
+
+export function deactivate(): void {
+	if (REOPEN) { write({ phase: 'closed' }); }
 }

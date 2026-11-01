@@ -26,8 +26,10 @@ const WORDS: CardWords = {
 	hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Beendet mit Code ${code}`,
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
-	exitUnknown: 'Getrennt; Exit-Ursache unbekannt',
 	window: label => `Window: ${label}`,
+	toolsUnavailable: problem => `Can't work with other agents: ${problem}`,
+	startedBy: creator => `Started by ${creator}`,
+	exitUnknown: 'Getrennt; Exit-Ursache unbekannt',
 	locale: 'en'
 };
 
@@ -35,7 +37,8 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 	return {
 		id: 'run-00000000000000000000000000000001', alias: '#a1', name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude',
 		location: 'loc-1', cwd: '/app', environment: 'local', yolo: true, createdAt: 1000,
-		lifecycle: 'running', phase: 'running', pid: 42, startedAt: 2000, activity: 'working', reporting: true, ...more
+		lifecycle: 'running', phase: 'running', pid: 42, startedAt: 2000, activity: 'working', reporting: true,
+		root: 'run-00000000000000000000000000000001', origin: 'human', tools: 'not_injected', ...more
 	};
 }
 
@@ -43,6 +46,12 @@ const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', 
 const menu = { moveUp: false, moveDown: true, filterLocation: false, filterFolder: false, clearFilter: false };
 
 suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () => {
+
+	test('a working card carries when its CLI reported that work, for its hover to say how long ago; any other card does not (RULES-3.2)', () => {
+		const working = cardOf(run({ activity: 'working', reporting: true, activitySince: 1_234 }), { place, selected: false, menu, words: WORDS });
+		const idle = cardOf(run({ activity: 'not_working', reporting: true, activitySince: 1_234 }), { place, selected: false, menu, words: WORDS });
+		assert.deepStrictEqual([working.workingSince, idle.workingSince], [1_234, undefined]);
+	});
 
 	test('a retained worktree failure renders its stored effects in the current language', () => {
 		const effects = { branch: 'fix', folder: '/app.worktrees/fix' };

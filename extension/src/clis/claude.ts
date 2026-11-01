@@ -9,6 +9,7 @@ import { canonicalFolder, isEqualPath, realFolderOf } from '../base/files';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, setVariable, variableOf } from './environment';
 import { homeOf } from './executable';
+import { MCP_CONFIG, mcpConfigText, pluginManifest, SERVER_NAME, SKILL_FILE, ToolsIntegration } from './tools';
 import type { TrustTarget } from './trust';
 
 /** Claude Code has a sandbox on macOS and Linux, not on Windows. */
@@ -21,7 +22,8 @@ const TITLE_SWITCH = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
 
 /**
  * Claude Code's settings for one run, passed inline with `--settings`, which overrides the same keys of its settings files for
- * that session alone: no more than a run needs, so that the person's own settings stay in force (CLIS-1.3). Its title switch also
+ * that session alone: no more than a run needs, so that the person's own settings stay in force (CLIS-1.3). It never takes a
+ * project's `facade` server from `.mcp.json`, which would ask about it at its start. Its title switch also
  * turns off its OSC 7501 status reports, which a run needs to show its activity (CLIS-2.3), and it reapplies `env` from its
  * settings files after launch, so the run's settings clear the switch too. With YOLO off its sandbox is turned on where it has one;
  * with YOLO on its sandbox is its own setting's, as YOLO maps to the permission bypass alone.
@@ -30,6 +32,9 @@ export function claudeRunSettings(yolo: boolean, platform: NodeJS.Platform, sess
 	return {
 		env: { [TITLE_SWITCH]: '' },
 		...(sessionHook ? { hooks: Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'].map(event => [event, [{ hooks: [{ type: 'command', command: sessionHook }] }]])) } : {}),
+		// A project's own `facade` server - Muse Code's shared entry, on Windows - is never this run's: it has its own, and no question
+		// about the project's stops it at its start
+		disabledMcpjsonServers: [SERVER_NAME],
 		...!yolo && hasSandbox(platform) ? { sandbox: { enabled: true } } : {}
 	};
 }
@@ -115,6 +120,51 @@ export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string
 }
 
 /**
+ * Why Claude Code's trust is not written for its project folder `folder` (CLIS-3.3, D103): its trust covers every folder below a
+ * trusted one, so for a filesystem root, the home folder `home` or a folder above it, it would trust every project there. None for
+ * any other folder.
+ */
+export function trustWithheld(folder: string, home: string, platform: NodeJS.Platform): string | undefined {
+	const paths = platform === 'win32' ? path.win32 : path.posix;
+	// Compared as the platform compares them: Windows ignores case and takes either slash
+	const spelled = (each: string) => paths.resolve(platform === 'win32' ? each.toLowerCase() : each);
+	// A home folder reached through a link is that folder; one that is not here is compared as it is named
+	const real = fs.existsSync(home) ? canonicalFolder(home) : home;
+	const project = spelled(folder);
+	if (paths.dirname(project) === project) {
+		return 'it is a filesystem root, and Claude Code trusts every folder below a trusted one';
+	}
+	const below = paths.relative(project, spelled(real));
+	if (below === '') {
+		return 'it is the home folder, and Claude Code trusts every folder below a trusted one';
+	}
+	return !below.startsWith('..') && !paths.isAbsolute(below) ? 'the home folder is inside it, and Claude Code trusts every folder below a trusted one' : undefined;
+}
+
+/** The run's plugin of the skill, as `--plugin-dir` loads one: its manifest and its skill. */
+const PLUGIN_DIR = 'plugin';
+
+/**
+ * Claude Code is given the server in a per-run `--mcp-config` file, which adds it to the person's own servers, and the skill in a
+ * per-run `--plugin-dir` plugin: nothing in the project or the person's settings (CLIS-2.2). `--allowedTools mcp__facade` lets
+ * Facade's own tools run without asking, with YOLO off too; the CLI's own commands and edits keep their approvals (CLIS-1.3).
+ */
+const claudeTools: ToolsIntegration = {
+	capability: { state: 'unverified', reason: 'the server in a per-run --mcp-config file, its tools allowed by --allowedTools, and the skill in a per-run --plugin-dir plugin' },
+	where: runDir => `--mcp-config ${path.join(runDir, MCP_CONFIG)} and --plugin-dir ${path.join(runDir, PLUGIN_DIR)}, files of the run alone`,
+	inject: ({ server, skill, runDir }) => ({
+		values: { mcpConfig: path.join(runDir, MCP_CONFIG), pluginDir: path.join(runDir, PLUGIN_DIR), allowedTools: `mcp__${SERVER_NAME}` },
+		runFiles: [
+			{ path: path.join(runDir, MCP_CONFIG), content: mcpConfigText(server) },
+			{ path: path.join(runDir, PLUGIN_DIR, '.claude-plugin', 'plugin.json'), content: `${JSON.stringify(pluginManifest(), undefined, 2)}\n` },
+			{ path: path.join(runDir, PLUGIN_DIR, SKILL_FILE), content: skill }
+		],
+		project: [],
+		env: {}
+	})
+};
+
+/**
  * Claude Code in its own UI (CLIS-1.3). YOLO on: its permissions bypassed, its sandbox as its own settings have it. YOLO off: its
  * sandbox on where it has one, its permission mode and rules its own. Every launch trusts its repository - or, outside any, its
  * folder - as accepting its trust question does: `hasTrustDialogAccepted` for the project in its global configuration (CLIS-3.3,
@@ -130,15 +180,28 @@ export const claudeAdapter: CliAdapter = {
 	groups: {
 		session: ['--session-id', '${sessionId}'],
 		resume: ['--resume', '${sessionId}'],
+		connect: ['--mcp-config', '${mcpConfig}', '--plugin-dir', '${pluginDir}', '--allowedTools', '${allowedTools}'],
 		quiet: ['--settings', '${runSettings}'],
-		yoloOn: ['--dangerously-skip-permissions']
+		yoloOn: ['--dangerously-skip-permissions'],
+		model: ['--model', '${model}'],
+		effort: ['--effort', '${effort}'],
+		// After the end of its options: some of them, --mcp-config and --allowedTools among them, take every value up to the next option
+		prompt: ['--', '${prompt}']
 	},
+	takes: { model: true, effort: true },
 	values: input => ({
-		runSettings: JSON.stringify(claudeRunSettings(input.yolo, input.platform, input.sessionHook))
+		runSettings: JSON.stringify(claudeRunSettings(input.yolo, input.platform, input.sessionHook)),
+		...input.model !== undefined ? { model: input.model } : {},
+		...input.effort !== undefined ? { effort: input.effort } : {}
 	}),
+	tools: claudeTools,
+	// Its input frame, recorded signed in on macOS with 2.1.312 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
+	input: { adapter: 'claude-frame', evidence: 'its input frame between two rules: empty, a typed, pasted, multi-line, history or slash-command draft, and gone behind a permission or trust question' },
+	initialPrompt: { state: 'unverified', reason: 'the prompt as its positional argument after --, which starts the interactive session with it' },
 	trustTarget: (cwd, env, platform): TrustTarget => {
 		const folder = claudeProjectKey(cwd, platform);
-		return { file: claudeConfigFile(env, platform, cwd), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder };
+		const withheld = trustWithheld(folder, homeOf(env, platform), platform);
+		return { file: claudeConfigFile(env, platform, cwd), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder, ...withheld ? { withheld } : {} };
 	},
 	// The switch would also turn off its status reports; the run's --settings clears it for the files' copy (CLIS-2.3)
 	adjustEnvironment: (env, platform) => setVariable(env, TITLE_SWITCH, null, platform),

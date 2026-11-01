@@ -46,6 +46,8 @@ export interface Card {
 	/** The accessible label (PANEL-1.5). */
 	readonly label: string;
 	readonly startedAt?: number;
+	/** Epoch ms its CLI reported the work it is doing, where it is working: the hover says how long ago (RULES-3.2). */
+	readonly workingSince?: number;
 	readonly menu: CardMenu;
 }
 
@@ -117,4 +119,5 @@ export interface Strings {
 	readonly openFolder: string;
 	/** `Started {0}`, {0} a relative time. */
 	readonly started: string;
+	readonly workingSince: string;
 }

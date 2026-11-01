@@ -66,8 +66,25 @@ npm run test:integration
 ```
 
 `npm run test:package` checks the VSIX `npm run package` made. The integration suite runs the official VS Code with its own
-profile, a temporary Facade root and fake CLIs only; `FACADE_IT_ONLY=journeys` or `conversion` runs one part of it, and
-`FACADE_IT_KEEP=1` keeps what a run left.
+profile, a temporary Facade root and fake CLIs only; `FACADE_IT_ONLY=journeys`, `cross`, `conversion`, `reopen` or `expiry` runs one part of
+it, and `FACADE_IT_KEEP=1` keeps what a run left. Linux runs it under `xvfb-run -a`; Windows runs it in the desktop session.
+
+`npm run test:remote` runs the journeys over Remote-SSH to a host: `FACADE_IT_SSH_CONFIG` and `FACADE_IT_SSH_HOST` name
+it, and `FACADE_IT_REMOTE_EXTENSION` the extension's folder there, built with `npm run compile`, `npm run bundle` and
+`node scripts/build-it.mjs`. `FACADE_IT_ONLY=ssh`, `ssh-ssh`, `local-ssh` or `ssh-local` runs one scenario.
+
+`node scripts/capture-inputs.mjs <cli>` records a built-in's input box as text is typed and pasted, never submitted, and
+checks the input readers against it; run it once a CLI updates, and keep its screens in `build/captures` as recorded cases.
+It creates a temporary home and working folder. `--home` and `--cwd` accept only temporary folders; sign in there for
+testing or supply temporary state overrides with `FACADE_CAPTURE_ENV`. It never inherits the owner's CLI configuration.
+
+`FACADE_IT_ONLY=real npm run test:integration` runs real agents of one built-in with YOLO off, never by default: it signs
+in and uses an account's usage. `FACADE_IT_REAL` names the built-in (Claude Code by default) and `FACADE_IT_REAL_PATH` its
+executable (`FACADE_IT_CLAUDE` for Claude Code, with `FACADE_IT_CLAUDE_CONFIG` a temporary configuration folder signed in for
+testing). Its terminals get `FACADE_IT_REAL_ENV`, a JSON object such as its own configuration folders, and the variables
+`FACADE_IT_REAL_PASS` names, taken from your environment and never written to a file. State overrides must name temporary
+storage; `FACADE_IT_REAL_HOME=keep` and personal-home overrides are refused. The runner's default Claude configuration,
+terminal home and XDG directories are isolated. The run takes back each launch's temporary trust.
 
 ## 6 Other files
 

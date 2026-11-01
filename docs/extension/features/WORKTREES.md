@@ -35,6 +35,7 @@ the folder are normal. Deduplicate physical paths while preserving workspace ass
 no arbitrary catalog cutoff makes a valid known location permanently inaccessible. Labels use a display alias, then
 branch, then folder name. Detached HEAD has no invented branch. Use environment and canonical paths for identity, never
 branch text. Revalidate a selected location when starting; plain folders remain usable during optional Git reads.
+New Agent and MCP discovery (MCP-2.1) read this same catalog.
 
 ### 1.3 Optional management and refresh
 
@@ -85,6 +86,9 @@ the full destination as description and uses `Branch {branch} · Base: {base} ({
 Change Base... describes `Commit, branch, or tag to start from`. Its input uses
 `Commit, branch, or tag (e.g. HEAD)`, prompt `Base ref for {branch}`, and required-value message
 `Enter a commit, branch, or tag.`
+
+Agent creation supplies its location, branch and base_ref through start_agent (MCP-2.2); there is no separate
+create-worktree MCP tool. Uncommitted edits are not automatically copied as a checkout snapshot.
 
 ### 2.2 Destination and creation effects
 
@@ -163,9 +167,9 @@ confirmed ended it deletes nothing: `Cannot delete worktree "{0}": an agent's pr
 ended. Try again once it has.` It then checks for changes again - what the agents wrote as they ended - refusing as above,
 and runs `git worktree remove <path>` without `--force`, with 4.1's Git and execution environment; the branch is kept. Git's
 own refusal is reported as `Could not delete worktree "{0}": {1}` and nothing is retried. The catalog is then read
-again, which confirms the deletion under 1.3 (3.3). There is no deletion command or agent API, no stop-and-delete,
-branch deletion, `--force`, discard flow or recursive removal by Facade. Stopping an agent does not delete its directory
-or branch (D73).
+again, which confirms the deletion under 1.3 (3.3). There is no deletion command, MCP tool or other agent API, no
+stop-and-delete, branch deletion, `--force`, discard flow or recursive removal by Facade. Stopping an agent does not
+delete its directory or branch (D73).
 
 ### 3.3 Observe external removal
 
@@ -182,7 +186,7 @@ remove workspace roots, close editor windows or repair another tool's Git operat
 
 ### 4.1 One service in the owning environment
 
-**One location service in the execution environment supplies human flows.**
+**One location service in the execution environment supplies human flows and MCP startup.**
 
 The native creation interface is the VS Code Git extension API's repository worktree creation, feature-detected in
 each supported editor. Where the editor does not supply it, worktree creation reports unavailable with its reason and
@@ -203,7 +207,7 @@ deletion is 3.2's. Background cleanup of an agent does not wait for native post-
 
 ### 4.3 Creation entry boundary
 
-**The standalone worktree command belongs to the view menu and targets current-window locations.**
+**The standalone worktree command belongs to the view menu and targets current-window locations; agent creation uses MCP-2.2.**
 
 `facade.newWorktree` is registered for the view's `…` menu and explicitly hidden from the Command Palette. With no
 arguments - nothing, `null`, or the `{preserveFocus: boolean}` alone that the editor adds when a menu item is clicked
@@ -234,6 +238,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Git tests use disposab
 
 - 2026-10-31: Resume and linked Pin/Unpin extend the current step; 134 rules.
 
+- 2026-10-30: Step 2 of the Facade Code extension: MCP discovery reads the same catalog (1.2), start_agent creates a
+  worktree through the same flow (2.1, 4.1, 4.3), and no MCP tool deletes one (3.2).
 - 2026-10-31: 3.2 keeps work Git would delete with a worktree, found by the night verification: a worktree another one is
   inside is refused, as is an edit to a file Git assumes unchanged or skips; the worktree is out of the catalog while it is
   deleted; an agent whose process cannot be confirmed ended keeps it; and changes are checked again after its agents close.

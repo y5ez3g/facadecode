@@ -84,6 +84,9 @@ function trustText(trust: LaunchTrust): string {
 		return vscode.l10n.t("Trust: none given by Facade; a custom CLI that asks about the folder asks in its terminal");
 	}
 	if (trust.kind === 'file') {
+		if (trust.target.withheld) {
+			return vscode.l10n.t("Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal");
+		}
 		// {0} is the entry, as JSON; {1} the CLI's file
 		return vscode.l10n.t("Trust: {0} merged into {1} before each start, as the CLI writes it when its trust question is accepted; a file that cannot be read is left as it is, and the CLI asks in its terminal", JSON.stringify(trustEntryJson(trust.target)), trust.target.file);
 	}
@@ -268,7 +271,7 @@ export function registerShowLaunch(clis: HostClis, locations: LocationPort, log:
 	const document = (): string => {
 		const location = shown && locations.resolve(shown.id);
 		const yolo = readYolo();
-		const described = clis.describe(location, yolo.value ?? true);
+		const described = clis.describeLaunch(location, yolo.value ?? true);
 		return launchDocument({
 			...shown && !location ? { gone: shown.label } : {},
 			...location ? {

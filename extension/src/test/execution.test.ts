@@ -13,6 +13,7 @@ import type { AgentExecution } from '../host/execution/agentExecution';
 import { EarlierPtyds, PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from '../host/execution/ptydClient';
 import { EARLIER_PROTOCOLS, lineReader, type Method, type Requests } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
+import { programEnv } from './ptydPlace';
 import { nextOwnerClaim } from '../record/ownership';
 import { TestEmitter, withModules } from './withModules';
 
@@ -39,9 +40,6 @@ interface FakeTerminal {
 const EXIT_REASON = { Unknown: 0, Shutdown: 1, Process: 2, User: 3, Extension: 4 };
 
 suite('The execution port: an agent\'s terminal and its process held by ptyd (ARCHITECTURE-2.3, LIFECYCLE-1.5, 2.2, 3.1)', function () {
-	if (process.platform === 'win32') {
-		return;
-	}
 	this.timeout(20_000);
 	let home: string;
 	let server: PtydServer;
@@ -206,10 +204,11 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				onRunEvent: (...args: Parameters<PtydClient['onRunEvent']>) => real.onRunEvent(...args),
 				onDidClose: (...args: Parameters<PtydClient['onDidClose']>) => real.onDidClose(...args),
 				onDidLoseOwner: (...args: Parameters<PtydClient['onDidLoseOwner']>) => real.onDidLoseOwner(...args),
+				onCall: (...args: Parameters<PtydClient['onCall']>) => real.onCall(...args),
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
-		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
+		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect, join: PtydClient.join.bind(PtydClient) }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
 	});
 
 	teardown(() => {
@@ -232,7 +231,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 	const plan = (script: string): LaunchPlan => ({
 		cli: 'claude', displayName: 'Claude Code', command: 'claude', executable: process.execPath, args: ['-e', script],
-		env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cwd: os.tmpdir()
+		env: programEnv(), cwd: os.tmpdir(),
+		tools: { state: 'not_injected' }, input: { capability: { state: 'unavailable', reason: 'no input reader in this test' } }
 	});
 	const until = async <T>(what: string, check: () => T | undefined | false | Promise<T | undefined | false>, ms = 8_000): Promise<T> => {
 		const deadline = Date.now() + ms;
@@ -413,16 +413,18 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await last.next.terminate('run-40'), 'terminated');
 	});
 
-	test('a CLI that asked whether its terminal takes reports and has not reported since is still starting until its bound, then waited for with why (CLIS-2.3, D81)', async () => {
-		const port = portOf(1_500);
+	test('a CLI that asked whether its terminal takes reports and has not reported since is still starting until its bound, then waited for with why (CLIS-2.3, D81)', async function () {
+		this.timeout(20_000);
+		// A bound its program asks well within: Node takes a second or two to start in a Windows console
+		const port = portOf(4_000);
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
 		port.openPair(facts('run-41'), { reveal: false });
 		open(terminals[0]);
 		await port.spawn('run-41', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); setInterval(() => {}, 1000);`), meta('run-41'));
 		await until('its probe answered', () => reports.some(report => report.reporting));
-		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 6_000);
-		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', reporting: true, reason: 'Waiting for the CLI\'s first activity report' });
+		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 10_000);
+		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', reporting: true, reason: 'Waiting for the CLI\'s first activity report' }, JSON.stringify(reports));
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity), JSON.stringify(reports));
 		assert.strictEqual(reports.at(-2)?.reporting, true);
 	});
@@ -878,20 +880,28 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 
 	/** A ptyd of an earlier protocol, holding a run its window started before that window reloaded into this build. */
-	const earlierWith = async (run: RunId): Promise<{ readonly server: PtydServer; readonly socket: string }> => {
-		const protocol = EARLIER_PROTOCOLS[0];
+	const earlierWith = async (run: RunId, protocol = EARLIER_PROTOCOLS[0], owner = 'workspace-1', extra: Partial<RunMeta> = {}): Promise<{ readonly server: PtydServer; readonly socket: string }> => {
 		const socket = ptydSocketPath(home, protocol);
 		const server = new PtydServer(socket, () => undefined, undefined, protocol);
 		assert.strictEqual(await server.listen(), true);
 		const before = (await PtydClient.join(socket, protocol))!;
-		await before.request('claim', nextOwnerClaim('workspace-1', home));
+		await before.request('claim', nextOwnerClaim(owner, home));
 		await before.request('spawn', {
-			run, owner: 'workspace-1', file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: { ...meta(run) }
+			run, owner, file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: { PATH: process.env.PATH ?? '/usr/bin:/bin' }, cols: 80, rows: 24, meta: { ...meta(run), ...extra }
 		});
 		before.dispose();
 		return { server, socket };
 	};
 
+	test('global discovery preserves another window\'s protocol-9 tool files and excludes its exact conversation without taking ownership', async () => {
+		const prior = await earlierWith('prior-other-window', 9, 'other-workspace', { sessionId: 'exact-prior', cli: 'claude', environment: 'local' });
+		try {
+			const port = portOf();
+			assert.ok((await port.allRunIds()).includes('prior-other-window'));
+			assert.deepStrictEqual(await port.conversations(), [{ sessionId: 'exact-prior', cli: 'claude', environment: 'local' }]);
+			assert.deepStrictEqual(await port.live(), [], 'no ownership of another window was taken');
+		} finally { prior.server.close(); }
+	});
 	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1, D86)', async function () {
 		this.timeout(20_000);
 		const protocol = EARLIER_PROTOCOLS[0];
@@ -907,6 +917,15 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			await until('its screen', () => screenOf(terminal).includes('ready'));
 			terminal.options.pty.handleInput!('old');
 			await until('its answer, through the earlier ptyd', () => screenOf(terminal).includes('got old'));
+			// Protocol 8 has no MCP screen/input operations. They fail before sending, without targeting the newer ptyd.
+			for (const ask of [
+				() => port.readScreen('run-old', 20),
+				() => port.typeText('run-old', 'do not send', true),
+				() => port.pressKeys('run-old', ['Enter']),
+				() => port.inspectInput('run-old', 'claude-frame')
+			]) {
+				await assert.rejects(ask, error => error instanceof PtydNotSent && /does not support MCP screen or input requests/.test(error.message));
+			}
 			// A new agent starts in this window's own ptyd alone
 			port.openPair(facts('run-new'), { reveal: false });
 			open(terminals[1]);

@@ -1,0 +1,13 @@
+{
+  "status": "PASS",
+  "normative_documents": 12,
+  "current_rules": 175,
+  "local_links_checked": 80,
+  "migration_ledger": "absent; checked once its files are added",
+  "source_groups": null,
+  "source_rules": null,
+  "source_gap_claims": null,
+  "archive_files_checked": 0,
+  "errors": [],
+  "scope": "Extension specification structure, references and, when present, migration coverage only; no runtime claims."
+}

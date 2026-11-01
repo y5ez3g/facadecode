@@ -2,7 +2,7 @@
 	"name": "facadecode",
 	"displayName": "%displayName%",
 	"description": "%description%",
-	"version": "0.0.1",
+	"version": "0.2.0",
 	"preview": true,
 	"private": true,
 	"publisher": "facade",
@@ -31,7 +31,7 @@
 	"extensionKind": [
 		"workspace"
 	],
-	"extensionDependencies": [
+	"extensionPack": [
 		"facade.facadecode-window"
 	],
 	"activationEvents": [
@@ -46,7 +46,8 @@
 		"test": "mocha --ui tdd --timeout 30000 --require build/out/test/setup.js \"build/out/test/**/*.test.js\"",
 		"package": "node scripts/package.mjs",
 		"test:package": "node --test scripts/package.test.mjs",
-		"test:integration": "node scripts/build-it.mjs && node ./build/out/test/integration/run.js"
+		"test:integration": "node scripts/build-it.mjs && node ./build/out/test/integration/run.js",
+		"test:remote": "node scripts/build-it.mjs && node ./build/out/test/integration/remote.js"
 	},
 	"contributes": {
 		"viewsContainers": {
@@ -111,6 +112,11 @@
 				"category": "%command.category%"
 			},
 			{
+				"command": "facade.messageHistory",
+				"title": "%command.messageHistory%",
+				"category": "%command.category%"
+			},
+			{
 				"command": "facade.filter",
 				"title": "%command.filter%",
 				"category": "%command.category%",
@@ -124,6 +130,11 @@
 			{
 				"command": "facade.configureAgents",
 				"title": "%command.configureAgents%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.copyDiagnostics",
+				"title": "%command.copyDiagnostics%",
 				"category": "%command.category%"
 			},
 			{
@@ -206,9 +217,14 @@
 					"group": "1_locations@2"
 				},
 				{
-					"command": "facade.configureAgents",
+					"command": "facade.messageHistory",
 					"when": "view == facade.agents",
 					"group": "9_configure@1"
+				},
+				{
+					"command": "facade.configureAgents",
+					"when": "view == facade.agents",
+					"group": "9_configure@2"
 				}
 			],
 			"webview/context": [
@@ -339,6 +355,22 @@
 						"scope": "machine",
 						"order": 1,
 						"markdownDescription": "%config.yolo%"
+					},
+					"facade.collaboration.enabled": {
+						"type": "boolean",
+						"default": true,
+						"scope": "machine",
+						"order": 2,
+						"markdownDescription": "%config.collaboration.enabled%"
+					},
+					"facade.collaboration.waitSeconds": {
+						"type": "integer",
+						"default": 120,
+						"minimum": 1,
+						"maximum": 3600,
+						"scope": "machine",
+						"order": 3,
+						"markdownDescription": "%config.collaboration.waitSeconds%"
 					}
 				}
 			},
@@ -731,7 +763,7 @@
 		"@xterm/addon-unicode11": "^0.9.0",
 		"@xterm/headless": "^6.0.0",
 		"jsonc-parser": "3.3.1",
-		"node-pty": "^1.1.0",
+		"node-pty": "1.2.0-beta.15",
 		"smol-toml": "1.9.1"
 	},
 	"devDependencies": {

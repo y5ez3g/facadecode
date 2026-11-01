@@ -78,14 +78,19 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.deepStrictEqual([...commands.keys()], [], 'nothing answers as damaged');
 	});
 
-	test('a window component that does not answer: the workspace component says to reload, which tries again, with Reload Window', async () => {
+	test('a missing window component uses its installation wait and missing-component explanation, without inventing an identity', async () => {
 		const vscode = api();
-		const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
-		const failure = await service.activateFacade({ subscriptions: [] } as never).then(() => assert.fail('Facade started'), (err: unknown) => err);
-		assert.ok(failure instanceof service.ActivationError);
-		assert.strictEqual(failure.message, 'Could not restore agents for this window. Reload the window to try again.');
-		assert.strictEqual(failure.reloadHelps, true);
-		service.sayActivationFailed({ subscriptions: [] } as never, failure);
-		assert.deepStrictEqual(shown, [{ text: failure.message, items: ['Reload Window'] }]);
+		let missing = 0;
+		let disposed = 0;
+		const service = withModules({ vscode, './windowComponent': {
+			waitForWindowIdentity: async (asked: string) => { assert.strictEqual(asked, session); return undefined; },
+			showComponentMissing: () => { missing++; return { dispose: () => { disposed++; } }; }
+		} })<typeof import('../host/service')>(require.resolve('../host/service'));
+		const stop = await service.activateFacade({ subscriptions: [] } as never);
+		assert.strictEqual(missing, 1);
+		assert.ok(!executed.includes(WINDOW_TERMINALS_COMMAND));
+		assert.deepStrictEqual(shown, []);
+		await stop();
+		assert.strictEqual(disposed, 1);
 	});
 });

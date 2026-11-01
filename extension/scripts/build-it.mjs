@@ -17,6 +17,7 @@ const common = { outdir: path.join(stage, 'dist'), bundle: true, alias: { 'jsonc
 await Promise.all([
 	esbuild.build({ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, external: ['vscode'] }),
 	esbuild.build({ ...common, entryPoints: { ptyd: path.join(root, 'src', 'test', 'integration', 'ptydFixture.ts') }, external: ['node-pty'] }),
+	esbuild.build({ ...common, entryPoints: { shim: path.join(root, 'src', 'transport', 'shim.ts') } }),
 	// The page with its test probe, which the shipped page compiles out (UX-3.2)
 	esbuild.build({ ...common, entryPoints: { webview: path.join(root, 'src', 'webview', 'panel.ts') }, outdir: path.join(stage, 'dist', 'webview'), platform: 'browser', format: 'iife', target: 'es2022' })
 ]);

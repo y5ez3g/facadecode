@@ -88,8 +88,9 @@ suite('ptyd: a run\'s screen and its numbered output meet once (ARCHITECTURE-2.3
 	test('a pid that is no process group is never signalled as one: the stand-in\'s own kill is used', async () => {
 		const { run, calls } = runOf();
 		assert.strictEqual(await run.terminate(0), 'unconfirmed');
-		// Windows has no signals or process groups: node-pty's kill ends the console's processes there
-		assert.deepStrictEqual(calls, process.platform === 'win32' ? ['kill', 'kill'] : ['kill SIGHUP', 'kill SIGKILL']);
+		// Windows has no signals or process groups: node-pty's kill ends the console's processes there, once - a second reaches a
+		// console already freed
+		assert.deepStrictEqual(calls, process.platform === 'win32' ? ['kill'] : ['kill SIGHUP', 'kill SIGKILL']);
 		run.dispose();
 	});
 });

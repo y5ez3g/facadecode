@@ -2,6 +2,23 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+/** The command URI scheme, including the character references HTML links decode before their scheme is checked. */
+const COMMAND_SCHEME = new RegExp(`(${
+	[...'command'].map(letter => {
+		const codes = [letter.charCodeAt(0), letter.toUpperCase().charCodeAt(0)];
+		return `(?:${letter}|&#0*(?:${codes.join('|')});?|&#x0*(?:${codes.map(code => code.toString(16)).join('|')});?)`;
+	}).join('')
+})(:|&colon;?|&#0*58;?|&#x0*3a;?)`, 'gi');
+
+/**
+ * Markdown a person may open in VS Code: its editor allows command links, including reference, auto and HTML links. Breaks their URI
+ * scheme with a zero-width space. The words and other Markdown stay readable, ordinary links stay usable, and repeating this does
+ * nothing more. This is for a displayed record, never the text delivered to an agent (COLLABORATION-3.2).
+ */
+export function inertCommandLinks(text: string): string {
+	return text.replace(COMMAND_SCHEME, '$1​$2');
+}
+
 /**
  * `text` cut to at most `max` Unicode code points, its ellipsis included, cut only between whole code points: the display caps
  * of CLIS-2.3 and UX-1.2 count code points, not UTF-16 units.

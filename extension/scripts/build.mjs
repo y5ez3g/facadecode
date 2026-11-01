@@ -33,8 +33,9 @@ const nativeManifest = JSON.parse(fs.readFileSync(path.join(nativeRoot, 'package
 manifest.dependencies = { 'node-pty': nativeManifest.version };
 fs.writeFileSync(path.join(stage, 'package.json'), `${JSON.stringify(manifest, undefined, '\t')}\n`);
 const windowManifest = JSON.parse(fs.readFileSync(path.join(root, 'window', 'package.json'), 'utf8'));
-if (windowManifest.version !== manifest.version || !manifest.extensionDependencies?.includes(`${windowManifest.publisher}.${windowManifest.name}`)) {
-	throw new Error('The workspace extension must depend on its matching window component.');
+// Installed with it through its extension pack, never as a dependency that blocks activation in a remote window (ARCHITECTURE-4.3, D94)
+if (windowManifest.version !== manifest.version || !manifest.extensionPack?.includes(`${windowManifest.publisher}.${windowManifest.name}`) || manifest.extensionDependencies?.length) {
+	throw new Error('The workspace extension must install its matching window component through its extension pack.');
 }
 fs.writeFileSync(path.join(windowStage, 'package.json'), `${JSON.stringify(windowManifest, undefined, '\t')}\n`);
 for (const file of fs.readdirSync(path.join(root, 'l10n'))) {
@@ -48,6 +49,8 @@ for (const file of ['LICENSE.txt', 'ThirdPartyNotices.txt']) {
 // Repository setup links belong to the checkout. Preserve all other README content unchanged (ARCHITECTURE-4.1).
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
 fs.writeFileSync(path.join(stage, 'README.md'), packageReadme(readme));
+// The Marketplace shows it as the extension's Changelog
+fs.copyFileSync(path.join(root, 'CHANGELOG.md'), path.join(stage, 'CHANGELOG.md'));
 // The window component's own page sends people to Facade Code, which installs it
 fs.copyFileSync(path.join(root, 'window', 'README.md'), path.join(windowStage, 'README.md'));
 fs.copyFileSync(path.join(root, 'media', 'icon.png'), path.join(windowStage, 'media', 'icon.png'));
@@ -112,6 +115,8 @@ const builds = [
 	{ ...common, entryPoints: { window: path.join(root, 'src', 'host', 'window.ts') }, outdir: path.join(windowStage, 'dist'), platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'] },
 	// ptyd: run by the extension host's binary as Node, detached; node-pty is native and loads from node_modules beside it
 	{ ...common, entryPoints: { ptyd: path.join(root, 'src', 'ptyd', 'main.ts') }, outdir: dist, platform: 'node', format: 'cjs', target: 'node20', external: ['node-pty'] },
+	// The runs' MCP shim: started by each agent's CLI with the extension host's binary as Node (MCP-6.1)
+	{ ...common, entryPoints: { shim: path.join(root, 'src', 'transport', 'shim.ts') }, outdir: dist, platform: 'node', format: 'cjs', target: 'node20' },
 	{ ...common, entryPoints: { webview: path.join(root, 'src', 'webview', 'panel.ts') }, outdir: page, platform: 'browser', format: 'iife', target: 'es2022' }
 ];
 

@@ -303,7 +303,9 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			noFolder: vscode.l10n.t("Open a folder to launch agents."),
 			openFolder: vscode.l10n.t("Open Folder"),
 			// {0} is how long ago, as the browser says it in the window's language: now, 5 min. ago, yesterday
-			started: vscode.l10n.t("Started {0}")
+			started: vscode.l10n.t("Started {0}"),
+			// {0} is how long ago, as in "5 min. ago": a long time with no other report is for the person to judge (RULES-3.2)
+			workingSince: vscode.l10n.t("Reported working {0}")
 		};
 		return `<!DOCTYPE html>
 <html lang="${escapeAttribute(vscode.env.language)}" data-vscode-context='{"preventDefaultContextMenuItems":true}'>

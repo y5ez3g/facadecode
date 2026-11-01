@@ -145,7 +145,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
 /** An agent running at `location`. */
 const runAt = (n: number, location: Location): RunFacts => ({
 	id: `run-${n}`, alias: `#a${n}`, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: location.id, cwd: location.path,
-	environment: 'local', yolo: true, createdAt: n, lifecycle: 'running', phase: 'running', activity: 'working', reporting: true
+	environment: 'local', yolo: true, createdAt: n, lifecycle: 'running', phase: 'running', activity: 'working', reporting: true,
+	root: `run-${n}`, origin: 'human', tools: 'not_injected'
 });
 
 /** Each item's buttons as `[icon, tooltip]`, for the items that have any. */
@@ -330,7 +331,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			picker.accept();
 			await done;
 			assert.deepStrictEqual(shown, { title: 'New Agent · Ada · main', placeholder: 'Select a CLI', labels: ['Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], active: ['Claude Code'], where: 'main', name: 'Ada', launched: 0 });
-			assert.deepStrictEqual([launched, selected, picker.shown, ui.current], [[{ name: 'Ada', location: MAIN.id, cli: 'claude' }], ['run-new'], false, undefined]);
+			assert.deepStrictEqual([launched, selected, picker.shown, ui.current], [[{ name: 'Ada', location: MAIN.id, cli: 'claude', origin: 'human' }], ['run-new'], false, undefined]);
 		});
 
 		test('from the filtered empty panel it starts at the filtered location, still changeable; one no longer offered gives way to the remembered location (LIFECYCLE-1.2)', async () => {
@@ -530,7 +531,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				['New Agent · Ada · feat/login (new)', 'New worktree feat/login from main'],
 				['loc-app feat/bad name', 'loc-app feat/login'],
 				0,
-				[{ name: 'Ada', location: opened.id, cli: 'claude', worktree: { branch: 'feat/login' } }]
+				[{ name: 'Ada', location: opened.id, cli: 'claude', origin: 'human', worktree: { branch: 'feat/login' } }]
 			]);
 		});
 
@@ -1313,7 +1314,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		const run = (n: number, more: Partial<RunFacts> = {}): RunFacts => ({
 			id: `run-${String(n).padStart(32, '0')}`, alias: `#a${n}`, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: MAIN.id,
 			cwd: MAIN.path, environment: 'local', yolo: true, createdAt: n, lifecycle: 'running', phase: 'running',
-			activity: 'working', reporting: true, ...more
+			activity: 'working', reporting: true, root: `run-${String(n).padStart(32, '0')}`, origin: 'human', tools: 'not_injected', ...more
 		});
 
 		test('U06, LIFECYCLE-2.3: this window\'s agents, one line each - the name, then short ID, CLI, state, location and title, searched alike - duplicates told apart by short ID; an ID or copied reference finds its run; each copies or closes; choosing shows its terminal', async () => {
@@ -1324,7 +1325,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en'
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`,
+				toolsUnavailable: (problem?: string) => `Can't work with other agents: ${problem}`, startedBy: (creator: string) => `Started by ${creator}`,
+				exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
@@ -1370,7 +1373,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en'
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by ${creator}`
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },

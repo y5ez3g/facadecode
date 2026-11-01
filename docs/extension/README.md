@@ -9,16 +9,18 @@ rule bodies and [Decisions](DECISIONS.md); historical task records and review fi
 
 | Layer | Document | Owns |
 | --- | --- | --- |
-| 1 Product | [PRODUCT](PRODUCT.md) | Users, access to every agent, responsibilities, priorities and first-release scope |
+| 1 Product | [PRODUCT](PRODUCT.md) | Users, ways of working, access to every agent, responsibilities, priorities and first-release scope |
 | 2 Experience | [EXPERIENCE](EXPERIENCE.md) | Complete human journeys |
-| 2 Shared rules | [RULES](RULES.md) | Identity, locations, state, error ownership, lifetime, YOLO and retention |
+| 2 Shared rules | [RULES](RULES.md) | Messages, identity, client network, locations, state, error ownership, lifetime, reach, YOLO and retention |
 | 3 Common interaction | [UX](UX.md) | Native surfaces, fixed presentation, accessibility, commands/settings and languages |
 | 3 Features | [LIFECYCLE](features/LIFECYCLE.md) | Display names, editor terminals, local finding and immediate close |
 | 3 Features | [WORKTREES](features/WORKTREES.md) | Folder/worktree discovery, native creation and observing external removal |
 | 3 Features | [PANEL](features/PANEL.md) | Cards, count, stack order, local filters and webview |
-| 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, processes, data, packaging and working safeguards |
-| 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, capability evidence and trust |
-| 4 Verification | [VERIFICATION](engineering/VERIFICATION.md) | G2 and G5, required journeys/scale and actual evidence |
+| 3 Features | [COLLABORATION](features/COLLABORATION.md) | Cross-window agent operations, messages, human contact and Message History |
+| 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, window components, processes, data, packaging and working safeguards |
+| 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, input readers, Facade tool files, capability evidence and trust |
+| 4 Engineering | [MCP](engineering/MCP.md) | The nine agent tools, results, waits, injection and protocol |
+| 4 Verification | [VERIFICATION](engineering/VERIFICATION.md) | G1, G2, G3 and G5, required journeys/scale and actual evidence |
 
 Read Product, then Experience for the whole product in plain terms. Shared Rules defines cross-feature behavior. Lower
 layers supply implementation details without adding work management, security services, rare features or extra approval
@@ -39,21 +41,21 @@ and do not reinstate a requirement explicitly superseded by the current body.
 deleted behavior must change its expectation; it is not evidence that the deleted feature should be restored.
 
 The Facade Code extension is committed in additive steps, and each commit carries only the specification its step needs.
-This is the subset for six of a sequence of owner-tested steps: step 1, Claude Code and Codex with the whole user
-interface that serves them; the step that adds Antigravity, Muse Code, OpenCode and Pi at the same level (D77); the
-step that adds the panel's display filters; the step that adds each built-in's `.enabled` and `.launch` settings
-with Show Agent Launch and Show Agents Log; the step that adds custom CLIs; and the step that adds Resume and linked Pin/Unpin.
-Every rule keeps its final number, so the numbering has gaps that later steps fill; their rules, decisions
-and checks are not part of these steps.
+This is the subset for the owner-tested steps so far. Step 1 shipped Claude Code and Codex with the whole user interface
+that serves them, as the 0.0.1 preview; Antigravity, Muse Code, OpenCode and Pi join them at the same level (D77). Step 2
+adds agents that work together, with every built-in CLI: the nine MCP tools, messages and their results, contact with the
+person, Message History, and control of agents in every Facade window on this computer, local and remote alike. The integrated steps also include panel display filters, built-in launch settings, Show Agent Launch, Show Agents Log
+custom CLIs, and Resume with linked Pin/Unpin. Every rule keeps its final number.
 
 ## 3 Coverage and evidence limits
 
-The set contains **10 normative documents and 134 numbered rules**. The [audit report](audit/REPORT.md) records
+The set contains **12 normative documents and 185 numbered rules**. The [audit report](audit/REPORT.md) records
 structural and reference checks; the migration ledger joins in the last step. These do not constitute a runtime pass.
 
-Required product evidence includes native/compatible-editor installation, true close versus reload/disconnect, each
-supported CLI's activity capabilities, 100-agent window usability and a real user's walkthrough. Unknown CLI versions
-can start interactively; only verified capabilities/version/platform combinations are advertised as supported.
+Required product evidence includes native/compatible-editor installation, routing between local and remote windows,
+true close versus reload/disconnect, each supported CLI's activity and message-input capabilities, 100-agent window
+usability and a real user's walkthrough. Unknown CLI versions can start interactively and are attempted for messages;
+only verified capabilities/version/platform combinations are advertised as supported.
 Browser-only editors are outside this release. The current review does not manufacture evidence for an unavailable
 environment or close a platform gate by declaration.
 
@@ -70,6 +72,7 @@ the owner to repeatedly approve speculative edge cases. Verification states rema
 ## Change log
 
 - 2026-10-31: Resume and linked Pin/Unpin extend the current step; 134 rules.
+- 2026-10-31: Integrate the MCP feature and current main: 12 normative documents, 179 rules, with all local links and numbered references checked.
 
 - 2026-10-31: The step summary includes custom CLIs; CLIS-3.4 makes 128 rules.
 
@@ -77,6 +80,7 @@ the owner to repeatedly approve speculative edge cases. Verification states rema
 
 - 2026-10-30: The step summary includes the panel's display filters; PANEL-2.3 makes 126 rules.
 
+- 2026-10-30: Step 2 of the Facade Code extension: added COLLABORATION and MCP; 12 documents and 175 rules.
 - 2026-10-30: The step summary includes the step adding Antigravity, Muse Code, OpenCode and Pi (D77).
 
 - 2026-10-30: Corrected the stale step summary to include the owner's already-authorized Codex addition to step 1.

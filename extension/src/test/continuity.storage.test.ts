@@ -8,6 +8,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { SESSION_HOOK_SCRIPT, SESSION_FILE_VARIABLE, sessionFileOf } from '../clis/identity';
 import { SessionIdentity } from '../host/execution/sessionIdentity';
+import { keepWorkspaceUri, workspaceRecord } from '../record/workspace';
 import { WorkspacePins } from '../host/pins';
 import { KeptWorkspaceState } from '../host/workspaceState';
 import { ConversationFile } from '../record/conversations';
@@ -67,6 +68,29 @@ suite('Exact conversation identity and durable restoration intent (CLIS-2.4, RUL
 				fs.writeFileSync(path.join(temp.dir, 'conversations', file), '{broken');
 			}
 			assert.strictEqual(a.get(key), undefined);
+		} finally { temp.remove(); }
+	});
+
+
+	test('a canonical workspace reopens its durable Pin and Unpin even when every editor Memento write failed', async () => {
+		const temp = tempDir('fd-pin-memento-');
+		const memory = { keys: () => [], get: <T>(_key: string) => undefined as T, update: async () => { throw new Error('editor storage unavailable'); } };
+		try {
+			const uri = 'file:///test/pinned-workspace';
+			const open = () => {
+				const record = workspaceRecord(uri, temp.dir);
+				keepWorkspaceUri(uri, record, temp.dir);
+				return new WorkspacePins(new KeptWorkspaceState(memory, path.join(record.dir, 'workspace-state.json'), record.binding.key === record.key, () => undefined));
+			};
+			const pin = { id: 'pin-a', name: 'A', cwd: temp.dir, location: 'loc', conversation: { environment: 'local', cli: 'claude', sessionId: 'exact' } };
+			open().save(pin);
+			await new Promise(resolve => setImmediate(resolve));
+			const reopened = open();
+			assert.deepStrictEqual(reopened.list(), [pin]);
+			reopened.remove(pin.id);
+			await new Promise(resolve => setImmediate(resolve));
+			assert.deepStrictEqual(open().list(), []);
+			await new Promise(resolve => setImmediate(resolve));
 		} finally { temp.remove(); }
 	});
 

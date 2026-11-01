@@ -17,11 +17,12 @@ const AVATAR = process.env.FACADE_IT_AVATAR ?? `avatar-${CLI}.png`;
 const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
 
 /**
- * The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3) - Codex's trust is checked apart -
- * and the custom CLI the suite configures, with its start arguments exactly as configured (CLIS-3.4).
+ * The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3), after its Facade tools' own,
+ * which the tools' journey checks (CLIS-3.2); Codex's trust is checked apart.
+ * The configured custom CLI starts with its exact start arguments (CLIS-3.4).
  */
 const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
-	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""}}', '--dangerously-skip-permissions'],
+	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"]}', '--dangerously-skip-permissions'],
 	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 	muse: ['--disable-approval', '--disable-sandbox', '--trust-workspace'],
 	opencode: ['--auto'],
@@ -147,12 +148,18 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		}
 		const launch = JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] };
 		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);
-		if (CLI === 'codex') {
-			assert.strictEqual(launch.args[0], '--dangerously-bypass-approvals-and-sandbox');
+		if (CUSTOM) {
+			assert.deepStrictEqual(launch.args, ARGUMENTS[CLI], 'no injected MCP or built-in arguments');
+			assert.strictEqual(fs.existsSync(`${RECORD}.mcp.${alias}`), false, 'no MCP server is started for an unintegrated custom CLI');
+		} else if (CLI === 'codex') {
+			assert.ok(launch.args.includes('--dangerously-bypass-approvals-and-sandbox'), launch.args.join(' '));
 			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
 		} else if (CLI === 'claude') {
-			assert.strictEqual(launch.args[0], '--settings');
-			const settings = JSON.parse(launch.args[1]);
+			const settingsAt = launch.args.indexOf('--settings');
+			assert.ok(settingsAt >= 0, 'the native session hooks accompany the MCP configuration');
+			assert.strictEqual(launch.args.filter(arg => arg === '--settings').length, 1);
+			assert.ok(launch.args.includes('--mcp-config'));
+			const settings = JSON.parse(launch.args[settingsAt + 1]);
 			assert.deepStrictEqual(settings.env, { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' });
 			assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes('hook.cjs'));
 			assert.match(launch.args[launch.args.indexOf('--session-id') + 1], /^[0-9a-f-]{36}$/);

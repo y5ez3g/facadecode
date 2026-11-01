@@ -4,13 +4,16 @@
 
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
+import { displayLine } from '../base/text';
 import { FacadeError, invalid } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
 import { labelOf, normalizeName } from './names';
+import { REQUEST_MS } from './requests';
 import {
-	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
-	LaunchPlanner, LaunchRequest, LiveRun, Location, LocationId, LocationPort, LocationRemoval, LogPort, PairFacts, PlanError, RetainedStore, RunChange,
-	RunFacts, RunId, RunMeta, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
+	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, LocationId,
+	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
+	LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError,
+	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
 
 export interface AgentServiceDeps {
@@ -30,19 +33,31 @@ export interface AgentServiceDeps {
 	readonly lifetime: WindowLifetimePort;
 	/** The destination's current `facade.yolo`, read when each launch is accepted (RULES-4.3). */
 	readonly yolo: () => boolean;
+	/** The run's MCP shim where `facade.collaboration.enabled` is on when its launch is planned; none injects nothing (RULES-4.4). */
+	readonly tools?: (run: RunId) => McpServerLaunch | undefined;
 	/** A failure in the person's language (UX-2.4): Facade's own reasons translated, any other its `english` as it is. */
 	readonly describe?: (err: unknown, english: string) => string;
+	/**
+	 * Types what a run's start needs before its first turn into its CLI, ahead of any other automated input (COLLABORATION-2.2), and
+	 * settles once that is done or given up; none, and nothing is typed.
+	 */
+	readonly warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
 	readonly newRunId: () => RunId;
 }
 
 interface Run {
 	exactResume?: boolean;
-	settled?: Promise<void>;
 	facts: RunFacts;
 	/** Known startup creation effects, retained if later CLI planning or spawning fails. */
 	worktree?: WorktreeCreationEffects;
 	/** Whether an explicit close of this run was requested: its exit is then normal (RULES-3.3). */
 	closing: boolean;
+	/** Settles once its process started, its launch failed or it was closed first (MCP-2.3). */
+	settled: Promise<void>;
+	/** How its creation prompt goes in, once planned. */
+	prompt?: LaunchPlan['prompt'];
+	/** Settles once what its start types before its first turn is done or given up (COLLABORATION-2.2). */
+	warm?: Promise<void>;
 }
 
 interface StartOptions {
@@ -117,6 +132,9 @@ export class AgentService implements Agents, Disposable {
 		if (execution.onDidRenameTab) {
 			this.subscriptions.push(execution.onDidRenameTab(({ run, name }) => this.tabRenamed(run, name)));
 		}
+		if (execution.onDidConnectTools) {
+			this.subscriptions.push(execution.onDidConnectTools(run => this.toolsConnected(run)));
+		}
 		if (execution.onDidLoseOwnership) {
 			this.subscriptions.push(execution.onDidLoseOwnership(() => {
 				this.ownershipLost = true;
@@ -142,6 +160,33 @@ export class AgentService implements Agents, Disposable {
 
 	get(run: RunId): RunFacts | undefined {
 		return this.runs.get(run)?.facts;
+	}
+
+	requested(from: RunId, requestId: string): RunFacts | undefined {
+		const cutoff = this.deps.clock.now() - REQUEST_MS;
+		const kept = this.deps.retained.list().filter(record => isRetainedRun(record) || isRequestRun(record));
+		for (const record of kept) {
+			if (record.requestOnly && record.createdAt <= cutoff) {
+				this.deps.retained.remove(record.id);
+			}
+		}
+		return [...this.list(), ...kept].find(run => run.creator === from && run.requestId === requestId && run.createdAt > cutoff);
+	}
+
+	/** Keep the existing run metadata, not a second request ledger. Closed pairs are never restored by this record. */
+	private rememberRequest(facts: RunFacts, required = false): boolean {
+		if (facts.requestId !== undefined && facts.createdAt > this.deps.clock.now() - REQUEST_MS) {
+			try {
+				this.deps.retained.put({ ...facts, requestOnly: true });
+				return true;
+			} catch (err) {
+				if (required) {
+					throw err;
+				}
+				this.deps.log.event(`Could not update the request-bearing metadata of ${facts.alias}: ${messageOf(err)}`);
+			}
+		}
+		return false;
 	}
 
 	/**
@@ -173,11 +218,18 @@ export class AgentService implements Agents, Disposable {
 			return 0;
 		}
 		const liveIds = new Set(live.map(run => run.run));
-		for (const facts of this.deps.retained.list()) {
-			if (!isRetainedRun(facts)) {
+		for (const kept of this.deps.retained.list()) {
+			if (isRequestRun(kept)) {
+				if (kept.createdAt <= this.deps.clock.now() - REQUEST_MS) {
+					this.deps.retained.remove(kept.id);
+				}
+				continue;
+			}
+			if (!isRetainedRun(kept)) {
 				this.deps.log.event('Ignored an invalid retained agent record.');
 				continue;
 			}
+			const facts = retainedFacts(kept);
 			// Its location removed while no window showed it: closed as the removal would have closed it (RULES-2.4)
 			if (liveIds.has(facts.id) || this.deps.locations.removalOf(facts.location)) {
 				this.deps.retained.remove(facts.id);
@@ -186,7 +238,7 @@ export class AgentService implements Agents, Disposable {
 			if (!this.runs.has(facts.id) && !this.released.has(facts.id)) {
 				const pin = facts.pin && this.pins().find(pin => pin.id === facts.pin);
 				const { pin: _previousPin, ...rest } = facts;
-				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, closing: false, exactResume: facts.resumable });
+				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, closing: false, exactResume: facts.resumable, settled: Promise.resolve() });
 				this.deps.execution.openPair(pairOf(facts), { reveal: false });
 				if (facts.error) {
 					this.deps.execution.note(facts.id, facts.error.reason);
@@ -208,13 +260,13 @@ export class AgentService implements Agents, Disposable {
 			}
 			const facts: RunFacts = {
 				...factsOf(each.run, each.meta),
-				...(each.meta.sessionId && this.pinOf({ environment: each.meta.environment, cli: each.meta.cli, sessionId: each.meta.sessionId }) ? { pin: this.pinOf({ environment: each.meta.environment, cli: each.meta.cli, sessionId: each.meta.sessionId })!.id } : {}),
+				...this.restoredPin(each.meta) ? { pin: this.restoredPin(each.meta)!.id } : {},
 				lifecycle: 'running',
 				phase: 'running',
 				pid: each.pid,
 				startedAt: each.startedAt
 			};
-			const run: Run = { facts, closing: false, exactResume: each.meta.exactResume };
+			const run: Run = { facts, closing: false, exactResume: each.meta.exactResume, settled: Promise.resolve() };
 			this.runs.set(each.run, run);
 			try {
 				await this.deps.execution.attach(each, pairOf(facts));
@@ -275,11 +327,42 @@ export class AgentService implements Agents, Disposable {
 		return this.accept(request, this.validated(request));
 	}
 
-	/** Reports every problem of a request together before any effect (RULES-5.1). */
+	async started(id: RunId): Promise<StartOutcome> {
+		const run = this.runs.get(id);
+		if (!run) {
+			return { state: 'closed' };
+		}
+		await run.settled;
+		const facts = this.runs.get(id) === run && !run.closing ? run.facts : undefined;
+		const prompt = run.prompt ? { prompt: run.prompt } : {};
+		if (!facts) {
+			return { state: 'closed', ...prompt };
+		}
+		return facts.lifecycle === 'running' ? { state: 'running', ...prompt } : { state: 'failed', ...(facts.error ? { error: facts.error.reason } : {}), ...prompt };
+	}
+
+	async warmedUp(id: RunId): Promise<void> {
+		const run = this.runs.get(id);
+		if (run) {
+			await run.settled;
+			await run.warm;
+		}
+	}
+
+	/** Reports every problem of a request together before any effect (RULES-5.1, MCP-1.1). */
 	private validated(request: LaunchRequest): Location {
 		const problems: string[] = [];
 		if (typeof request.name !== 'string') {
 			problems.push('The name must be a string.');
+		}
+		if (request.origin === 'agent' && !request.creator) {
+			problems.push('An agent start needs its calling agent.');
+		}
+		for (const field of ['model', 'effort'] as const) {
+			const value = request[field];
+			if (value !== undefined && (typeof value !== 'string' || !value.trim())) {
+				problems.push(`The ${field} must be a nonempty string where given.`);
+			}
 		}
 		const location = request.location ? this.deps.locations.resolve(request.location) : undefined;
 		if (!request.location) {
@@ -302,6 +385,8 @@ export class AgentService implements Agents, Disposable {
 	private accept(request: LaunchRequest, location: Location, options: StartOptions = {}): RunId {
 		const id = this.deps.newRunId();
 		const now = this.deps.clock.now();
+		const byAgent = request.origin === 'agent' && request.creator ? request.creator : undefined;
+		const promptLine = request.promptLine ?? firstLine(request.prompt);
 		const facts: RunFacts = {
 			id,
 			alias: this.deps.aliases.next(),
@@ -312,6 +397,7 @@ export class AgentService implements Agents, Disposable {
 			location: location.id,
 			cwd: location.path,
 			environment: location.environment,
+			// Every launch reads the setting; a child keeps its creator's tree, not its creator's YOLO (RULES-4.3)
 			yolo: this.deps.yolo(),
 			createdAt: now,
 			lifecycle: 'starting',
@@ -319,20 +405,32 @@ export class AgentService implements Agents, Disposable {
 			activity: 'unknown',
 			reporting: false,
 			...(options.resume ? { sessionId: options.resume.key.sessionId } : {}),
-			...(options.pin ? { pin: options.pin } : {})
+			...(options.pin ? { pin: options.pin } : {}),
+			root: byAgent?.root ?? id,
+			...(byAgent ? { creator: byAgent.run } : {}),
+			...(byAgent?.label ? { creatorLabel: byAgent.label } : {}),
+			origin: byAgent ? 'agent' : 'human',
+			...(byAgent && request.requestId !== undefined ? { requestId: request.requestId } : {}),
+			...(request.model !== undefined ? { model: request.model.trim() } : {}),
+			...(request.effort !== undefined ? { effort: request.effort.trim() } : {}),
+			tools: 'not_injected',
+			...(promptLine ? { promptLine } : {})
 		};
 		if (options.pin) {
 			for (const other of this.runs.values()) { if (other.facts.pin === options.pin) { this.losePin(other); } }
 		}
-		const run: Run = { facts, closing: false };
+		let settle!: () => void;
+		const run: Run = { facts, closing: false, settled: new Promise(resolve => settle = resolve) };
+		// Persist a request-bearing accepted run before creating its worktree or process, including starts interrupted by reload.
+		this.rememberRequest(facts, true);
 		if (options.restoring) { this.restoring.add(id); }
 		this.runs.set(id, run);
-		// The person's own launch shows its terminal (LIFECYCLE-2.2)
-		this.deps.execution.openPair(pairOf(facts), { reveal: options.reveal !== false });
+		// The person's own launch shows its terminal; an agent's opens in the background, the person's focus kept (LIFECYCLE-2.2)
+		this.deps.execution.openPair(pairOf(facts), { reveal: options.reveal !== false && !byAgent });
 		if (options.pin) { this.deps.execution.pinTab?.(id, true); }
 		this.emit({ run: id, kind: 'added' });
-		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]`);
-		run.settled = this.start(run, request, location, options).catch(err => this.deps.log.event(`The start of ${run.facts.alias} failed unexpectedly: ${messageOf(err)}`));
+		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]${byAgent ? ` for agent ${byAgent.run}` : ''}`);
+		void this.start(run, request, location, options).catch(err => this.deps.log.event(`The start of ${run.facts.alias} failed unexpectedly: ${messageOf(err)}`)).finally(settle);
 		return id;
 	}
 
@@ -357,18 +455,40 @@ export class AgentService implements Agents, Disposable {
 		if (!location) {
 			return this.fail(run, `The working location ${run.facts.cwd} is no longer available.`, 'location');
 		}
-		let plan;
+		let plan: LaunchPlan;
 		try {
-			plan = await this.deps.planner.plan({ run: run.facts.id, alias: run.facts.alias, name: run.facts.name, cli: request.cli, location, yolo: run.facts.yolo, ...(options.resume ? { resume: { sessionId: options.resume.key.sessionId } } : {}) });
+			const tools = this.deps.tools?.(run.facts.id);
+			plan = await this.deps.planner.plan({
+				run: run.facts.id, alias: run.facts.alias, name: run.facts.name, cli: request.cli, location, yolo: run.facts.yolo,
+				...(run.facts.model !== undefined ? { model: run.facts.model } : {}),
+				...(run.facts.effort !== undefined ? { effort: run.facts.effort } : {}),
+				...(request.prompt !== undefined ? { prompt: request.prompt } : {}),
+				...(options.resume ? { resume: { sessionId: options.resume.key.sessionId } } : {}),
+				...(tools ? { tools } : {})
+			});
 		} catch (err) {
-			return this.fail(run, err instanceof PlanError || err instanceof FacadeError ? err.message : messageOf(err), 'launch', err);
+			this.fail(run, err instanceof PlanError || err instanceof FacadeError ? err.message : messageOf(err), 'launch', err);
+			return this.release(run.facts.id);
 		}
 		if (!this.live(run)) {
-			return;
+			// Closed while it planned: what the plan injected goes again, after the close's own release (CLIS-2.2)
+			return this.release(run.facts.id);
 		}
 		run.exactResume = plan.exactResume;
 		const sessionId = plan.sessionId ?? run.facts.sessionId;
-		this.update(run, { displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: false }, 'lifecycle');
+		if (plan.prompt) {
+			run.prompt = plan.prompt;
+		}
+		this.update(run, {
+			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: false,
+			...(plan.version !== undefined ? { version: plan.version } : {}),
+			tools: plan.tools.state === 'injected' ? 'connecting' : plan.tools.state === 'unavailable' ? 'unavailable' : 'not_injected',
+			...(plan.tools.state === 'unavailable' && plan.tools.reason ? { toolsReason: plan.tools.reason } : {}),
+			...(plan.tools.state === 'unavailable' && plan.tools.problem ? { toolsProblem: plan.tools.problem } : {}),
+			...(plan.tools.state === 'unavailable' && plan.tools.file ? { toolsFile: plan.tools.file } : {}),
+			...(plan.input.adapter !== undefined ? { inputAdapter: plan.input.adapter } : {}),
+			inputCapability: plan.input.capability
+		}, 'lifecycle');
 		try {
 			const meta = metaOf(run.facts, run.exactResume);
 			const started = await this.deps.execution.spawn(run.facts.id, plan, meta);
@@ -385,11 +505,36 @@ export class AgentService implements Agents, Disposable {
 			}
 			this.remember(run);
 			if (options.resume) { this.deps.locations.rememberLocation?.(run.facts.cwd); }
-			if (options.remember !== false) { this.deps.history.remember(run.facts.location, run.facts.cli); }
-			// The arguments may hold a credential: never logged (ARCHITECTURE-3.3, CLIS-4.2)
+			if (run.facts.lifecycle !== 'ended' && plan.warmUp && this.deps.warmUp) {
+				// Ahead of its creation prompt and any message: its first turn can use the tools then (COLLABORATION-2.2)
+				const alias = run.facts.alias;
+				run.warm = this.deps.warmUp(run.facts.id, plan.warmUp).catch(err => this.deps.log.event(`Could not prepare ${alias}'s tools before its first turn: ${messageOf(err)}`));
+			}
+			if (run.facts.origin === 'human' && options.remember !== false) {
+				// The person's last successful launch alone is remembered (LIFECYCLE-1.2)
+				this.deps.history.remember(run.facts.location, run.facts.cli);
+			}
+			// The arguments may hold a prompt or a credential: never logged (ARCHITECTURE-3.3, CLIS-4.2)
 			this.deps.log.event(`Started ${run.facts.alias} (${plan.cli}) pid ${started.pid}: ${plan.executable} with ${plan.args.length} argument${plan.args.length === 1 ? '' : 's'}`);
 		} catch (err) {
 			this.fail(run, messageOf(err), 'launch', err);
+			this.release(run.facts.id);
+		}
+	}
+
+	/** The run's injected files and project references go once it ends or is closed (CLIS-2.2). */
+	private release(id: RunId): void {
+		void this.deps.planner.release(id).catch(err => this.deps.log.event(`Could not release ${id}'s injected files: ${messageOf(err)}`));
+	}
+
+	/** Its MCP shim said hello: its tools are there (CLIS-2.2), kept across a reload in what ptyd keeps of it. */
+	private toolsConnected(id: RunId): void {
+		const run = this.runs.get(id);
+		if (run && run.facts.lifecycle !== 'ended' && run.facts.tools !== 'available') {
+			this.update(run, { tools: 'available' }, 'reported');
+			if (run.facts.pid !== undefined) {
+				this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
+			}
 		}
 	}
 
@@ -409,7 +554,10 @@ export class AgentService implements Agents, Disposable {
 		this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, source, at, ...effects } }, 'lifecycle');
 		this.deps.execution.note(run.facts.id, reason);
 		this.deps.log.event(`Could not start ${run.facts.alias}: ${english}`);
-		if (!this.restoring.has(run.facts.id)) { this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' }); }
+		if (run.facts.origin === 'human' && !this.restoring.has(run.facts.id)) {
+			// An agent's start reports its failure to that agent, never as the person's popup (RULES-1.8)
+			this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' });
+		}
 		this.retain(run);
 	}
 
@@ -429,13 +577,17 @@ export class AgentService implements Agents, Disposable {
 		}
 		this.unpinned(run);
 		run.closing = true;
+		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
 		this.released.add(id);
 		const key = keyOf(run.facts);
 		if (key) { this.elsewhere.delete(conversationId(key)); }
-		this.deps.retained.remove(id);
+		if (!kept) {
+			this.deps.retained.remove(id);
+		}
 		this.deps.execution.removePair(id);
 		this.emit({ run: id, kind: 'removed', cause: 'close' });
+		this.release(id);
 		if (run.facts.lifecycle === 'ended') {
 			this.deps.log.event(`Closed ${run.facts.alias}`);
 			return 'already_ended';
@@ -527,7 +679,7 @@ export class AgentService implements Agents, Disposable {
 		// A name of its own, else its title, else a suggestion no agent here has (D57)
 		const name = meta?.name ?? entry.title?.trim() ?? entry.key.cli;
 		return this.accept(
-			{ name, location: location.id, cli: entry.key.cli },
+			{ name, location: location.id, cli: entry.key.cli, origin: 'human' },
 			location,
 			{ reveal: options.reveal, resume: { key: entry.key }, remember: true, ...this.pinOf(entry.key) ? { pin: this.pinOf(entry.key)!.id } : {} }
 		);
@@ -549,6 +701,7 @@ export class AgentService implements Agents, Disposable {
 		const pin: Pin = { id: (this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`), conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
 		this.pinStore.save(pin);
 		this.update(run, { pin: pin.id }, 'lifecycle');
+		this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 		this.deps.execution.pinTab?.(id, true);
 		this.deps.log.event(`Pinned ${run.facts.alias}`);
 	}
@@ -562,6 +715,7 @@ export class AgentService implements Agents, Disposable {
 		if (run.facts.pin) {
 			this.unpinned(run);
 			this.update(run, { pin: undefined }, 'lifecycle');
+			this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 			if (run.facts.end?.kind === 'failed') { this.retain(run); }
 			this.deps.execution.pinTab?.(id, false);
 			this.deps.log.event(`Unpinned ${run.facts.alias}`);
@@ -588,7 +742,7 @@ export class AgentService implements Agents, Disposable {
 				return;
 			}
 			const id = this.accept(
-				{ name: pin.name, location: location.id, cli: pin.conversation.cli },
+				{ name: pin.name, location: location.id, cli: pin.conversation.cli, origin: 'human' },
 				location,
 				{ resume: { key: pin.conversation }, reveal: false, remember: false, pin: pin.id, restoring: true }
 			);
@@ -620,7 +774,7 @@ export class AgentService implements Agents, Disposable {
 		const id = this.deps.newRunId();
 		const at = this.deps.clock.now();
 		const facts: RunFacts = {
-			id, alias: this.deps.aliases.next(), name: pin.name, cli: pin.conversation.cli, displayName: pin.conversation.cli, command: pin.conversation.cli,
+			id, root: id, origin: 'human', tools: 'not_injected', alias: this.deps.aliases.next(), name: pin.name, cli: pin.conversation.cli, displayName: pin.conversation.cli, command: pin.conversation.cli,
 			location: pin.location, cwd: pin.cwd, environment: pin.conversation.environment, yolo: this.deps.yolo(),
 			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, resumable: true,
 			sessionId: pin.conversation.sessionId, pin: pin.id, end: { kind: 'failed', at }, error: { reason, source: 'location', at }
@@ -659,6 +813,10 @@ export class AgentService implements Agents, Disposable {
 			return byPath;
 		}
 		return this.deps.locations.conversationLocation?.(cwd);
+	}
+
+	private restoredPin(meta: RunMeta): Pin | undefined {
+		return this.pins().find(pin => pin.id === meta.pin) ?? (meta.sessionId ? this.pinOf({ environment: meta.environment, cli: meta.cli, sessionId: meta.sessionId }) : undefined);
 	}
 
 	private pinOf(key: ConversationKey): Pin | undefined {
@@ -721,6 +879,7 @@ export class AgentService implements Agents, Disposable {
 		}
 		const changes: Partial<Mutable<RunFacts>> = {
 			activity: report.activity,
+			...report.activity !== run.facts.activity ? { activitySince: this.deps.clock.now() } : {},
 			reporting: report.reporting,
 			awaitingActivity: report.awaitingActivity,
 			activityReason: report.reason,
@@ -755,9 +914,19 @@ export class AgentService implements Agents, Disposable {
 		}
 		// A signal's end is abnormal though its code be 0, as node-pty reports a process killed on Linux and macOS (RULES-3.3)
 		const normal = (exit.code === 0 && !exit.signal) || run.closing || exit.interruptVerified;
+		this.release(exit.run);
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
-			try { this.unpinned(run); } catch (err) { this.deps.log.event(`Could not remove the Pin of ${run.facts.alias}: ${messageOf(err)}`); }
+			try { this.unpinned(run); } catch (err) {
+				const reason = messageOf(err), at = this.deps.clock.now();
+				this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, source: 'pin', at } }, 'lifecycle');
+				this.retain(run);
+				this.deps.execution.note(exit.run, reason);
+				this.deps.log.event(`Could not remove the Pin of ${run.facts.alias}: ${reason}`);
+				this.deps.human.failed({ kind: 'pin', name: labelOf(run.facts), reason }, { show: exit.run });
+				return;
+			}
+			this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 			this.runs.delete(exit.run);
 			this.released.add(exit.run);
 			const key = keyOf(run.facts);
@@ -799,6 +968,9 @@ export class AgentService implements Agents, Disposable {
 			}
 		}
 		run.facts = next;
+		if (kind === 'lifecycle') {
+			this.rememberRequest(next);
+		}
 		this.emit({ run: run.facts.id, kind });
 	}
 
@@ -809,27 +981,49 @@ export class AgentService implements Agents, Disposable {
 	}
 }
 
-/** Disk records are observations, not typed objects: reject a damaged record before opening any of its UI. */
-function isRetainedRun(value: unknown): value is RunFacts {
+/** Disk records are observations, not typed objects: validate them before returning facts or opening any UI. */
+function isRunRecord(value: unknown): value is RunFacts {
 	if (!isJsonObject(value)) {
 		return false;
 	}
 	const strings = ['id', 'alias', 'name', 'cli', 'displayName', 'command', 'location', 'cwd', 'environment'];
 	return strings.every(key => typeof value[key] === 'string') && typeof value.yolo === 'boolean' &&
-		typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) && value.lifecycle === 'ended' &&
+		typeof value.createdAt === 'number' && Number.isFinite(value.createdAt) &&
+		typeof value.lifecycle === 'string' && ['starting', 'running', 'ended'].includes(value.lifecycle) &&
 		typeof value.phase === 'string' && ['creating_worktree', 'launching_cli', 'running'].includes(value.phase) &&
 		typeof value.activity === 'string' && ['working', 'not_working', 'unknown'].includes(value.activity) && typeof value.reporting === 'boolean' &&
 		['title', 'activityReason'].every(key => value[key] === undefined || typeof value[key] === 'string') &&
 		['pid', 'startedAt'].every(key => value[key] === undefined || typeof value[key] === 'number' && Number.isFinite(value[key])) &&
 		(value.blocker === undefined || isJsonObject(value.blocker) && typeof value.blocker.kind === 'string' &&
 			['permission', 'question', 'auth'].includes(value.blocker.kind) && (value.blocker.text === undefined || typeof value.blocker.text === 'string')) &&
-		isJsonObject(value.end) && value.end.kind === 'failed' && typeof value.end.at === 'number' && Number.isFinite(value.end.at) &&
-		(value.end.code === undefined || typeof value.end.code === 'number') && (value.end.signal === undefined || typeof value.end.signal === 'string') &&
-		isJsonObject(value.error) && typeof value.error.reason === 'string' && typeof value.error.source === 'string' && typeof value.error.at === 'number' && Number.isFinite(value.error.at) &&
+		(value.end === undefined || isJsonObject(value.end) && ['failed', 'abnormal'].includes(value.end.kind as string) && typeof value.end.at === 'number' && Number.isFinite(value.end.at) &&
+		(value.end.code === undefined || typeof value.end.code === 'number') && (value.end.signal === undefined || typeof value.end.signal === 'string')) &&
+		(value.error === undefined || isJsonObject(value.error) && typeof value.error.reason === 'string' && typeof value.error.source === 'string' && typeof value.error.at === 'number' && Number.isFinite(value.error.at) &&
 		(value.error.worktree === undefined || (isJsonObject(value.error.worktree) &&
 			(value.error.worktree.branch === undefined || (typeof value.error.worktree.branch === 'string' && !!value.error.worktree.branch)) &&
 			(value.error.worktree.folder === undefined || (typeof value.error.worktree.folder === 'string' && !!value.error.worktree.folder)) &&
-			(value.error.worktree.branch !== undefined || value.error.worktree.folder !== undefined)));
+			(value.error.worktree.branch !== undefined || value.error.worktree.folder !== undefined))));
+}
+
+function isRetainedRun(value: unknown): value is RunFacts {
+	return isRunRecord(value) && !('requestOnly' in value) && value.lifecycle === 'ended' && value.end?.kind === 'failed' && value.error !== undefined;
+}
+
+function isRequestRun(value: unknown): value is RunFacts & { readonly requestOnly: true } {
+	return isRunRecord(value) && 'requestOnly' in value && value.requestOnly === true &&
+		typeof value.creator === 'string' && !!value.creator && typeof value.requestId === 'string' && !!value.requestId &&
+		typeof value.root === 'string' && !!value.root;
+}
+
+/** A retained record as this build keeps runs: one an earlier build wrote is a root of its own, without tools (ARCHITECTURE-4.2). */
+function retainedFacts(kept: RunFacts): RunFacts {
+	const record = kept as RunFacts & { readonly [key: string]: unknown };
+	return {
+		...kept,
+		root: typeof record.root === 'string' && record.root ? record.root : kept.id,
+		origin: record.origin === 'agent' ? 'agent' : 'human',
+		tools: record.tools === 'connecting' || record.tools === 'available' || record.tools === 'unavailable' ? record.tools : 'not_injected'
+	};
 }
 
 function factsOf(id: RunId, meta: RunMeta): RunFacts {
@@ -849,7 +1043,23 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		lifecycle: 'running',
 		phase: 'running',
 		activity: 'unknown',
-		reporting: false
+		reporting: false,
+		// A run an earlier build started is a root of its own, its tools unknown to this one (ARCHITECTURE-4.2)
+		root: typeof meta.root === 'string' && meta.root ? meta.root : id,
+		...(typeof meta.creator === 'string' && meta.creator ? { creator: meta.creator } : {}),
+		...(typeof meta.creatorLabel === 'string' && meta.creatorLabel ? { creatorLabel: meta.creatorLabel } : {}),
+		origin: meta.origin === 'agent' ? 'agent' : 'human',
+		...(typeof meta.requestId === 'string' && meta.requestId ? { requestId: meta.requestId } : {}),
+		...(typeof meta.model === 'string' ? { model: meta.model } : {}),
+		...(typeof meta.effort === 'string' ? { effort: meta.effort } : {}),
+		...(typeof meta.version === 'string' ? { version: meta.version } : {}),
+		tools: meta.tools === 'connecting' || meta.tools === 'available' || meta.tools === 'unavailable' ? meta.tools : 'not_injected',
+		...(typeof meta.toolsReason === 'string' ? { toolsReason: meta.toolsReason } : {}),
+		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' ? { toolsProblem: meta.toolsProblem } : {}),
+		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
+		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
+		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),
+		...(isCapability(meta.inputCapability) ? { inputCapability: meta.inputCapability } : {})
 	};
 }
 
@@ -857,6 +1067,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 	return {
 		alias: facts.alias,
 		exactResume: !!exactResume,
+		...facts.pin ? { pin: facts.pin } : {},
 		...(facts.sessionId ? { sessionId: facts.sessionId } : {}),
 		name: facts.name,
 		cli: facts.cli,
@@ -866,8 +1077,33 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		cwd: facts.cwd,
 		environment: facts.environment,
 		yolo: facts.yolo,
-		createdAt: facts.createdAt
+		createdAt: facts.createdAt,
+		root: facts.root,
+		...(facts.creator !== undefined ? { creator: facts.creator } : {}),
+		...(facts.creatorLabel !== undefined ? { creatorLabel: facts.creatorLabel } : {}),
+		...(facts.requestId !== undefined ? { requestId: facts.requestId } : {}),
+		origin: facts.origin,
+		...(facts.model !== undefined ? { model: facts.model } : {}),
+		...(facts.effort !== undefined ? { effort: facts.effort } : {}),
+		...(facts.version !== undefined ? { version: facts.version } : {}),
+		tools: facts.tools,
+		...(facts.toolsReason !== undefined ? { toolsReason: facts.toolsReason } : {}),
+		...(facts.toolsProblem !== undefined ? { toolsProblem: facts.toolsProblem } : {}),
+		...(facts.toolsFile !== undefined ? { toolsFile: facts.toolsFile } : {}),
+		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
+		...(facts.inputAdapter !== undefined ? { inputAdapter: facts.inputAdapter } : {}),
+		...(facts.inputCapability !== undefined ? { inputCapability: facts.inputCapability } : {})
 	};
+}
+
+function isCapability(value: unknown): value is NonNullable<RunMeta['inputCapability']> {
+	return isJsonObject(value) && typeof value.reason === 'string' && (value.state === 'supported' || value.state === 'unavailable' || value.state === 'unverified');
+}
+
+/** The first line of a creation prompt as a card's hover shows it: one trimmed line, or none. */
+function firstLine(prompt: string | undefined): string | undefined {
+	const line = prompt?.split(/\r?\n/).map(each => each.trim()).find(each => !!each);
+	return line ? displayLine(line, 300) : undefined;
 }
 
 export function pairOf(facts: RunFacts): PairFacts {

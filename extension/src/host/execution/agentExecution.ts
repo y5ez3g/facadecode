@@ -5,6 +5,7 @@
 import { SessionIdentity } from './sessionIdentity';
 import type { ConversationKey } from '../../core/ports';
 import * as os from 'os';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { timeout } from '../../base/async';
@@ -13,10 +14,14 @@ import { activityOf, cliTitle, interruptVerified } from '../../clis/activity';
 import {
 	ActivityReport, CleanupResult, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, PairFacts, RunId, RunMeta
 } from '../../core/ports';
-import { PTYD_PROTOCOL, type OwnerClaim, type Requests, type RunEvent, type RunExit, type RunInfo, type RunStatus } from '../../ptyd/protocol';
+import type { CallEvent, InputEffect, InputReading, Method, OwnerClaim, Requests, RunEvent, RunExit, RunInfo, RunStatus, ScreenRead } from '../../ptyd/protocol';
+import type { ServedAnswer, ToolCall } from '../../schema/protocol';
+import { failureAnswer, isToolAnswer } from '../../transport/failure';
+import { McpServerLaunch, shimLaunch as launchShim } from '../../transport/launch';
 import { AgentTerminals, type AgentTerminal } from './agentTerminals';
 import { ExecutionSession, RECONCILE_MS } from './executionSession';
-import { PtydClient, PtydGone, PtydLost, PtydNotSent, within } from './ptydClient';
+import { PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from './ptydClient';
+import { EARLIER_PROTOCOLS, PTYD_PROTOCOL } from '../../ptyd/protocol';
 
 /** How long a CLI has to end on the hang-up before ptyd kills its process group (LIFECYCLE-4.2): no UI waits for it. */
 const GRACE_MS = 3_000;
@@ -49,8 +54,25 @@ export interface AgentExecutionOptions {
 	readonly log: (line: string) => void;
 	/** The local companion registers actual native objects under this activation claim. */
 	readonly terminalOwner?: TerminalOwner & { readonly remote: boolean };
+	/** The runs' MCP shim, which their CLIs start (MCP-6.1): `shim.js` beside ptyd's script where not given. */
+	readonly shimScript?: string;
 	/** How long a run is still starting while its CLI shows no activity: {@link STARTUP_MS}, or a test's. */
 	readonly startupMs?: number;
+}
+
+/** What answers a tool call: told when this window read it, on this process's monotonic clock (RULES-1.2). */
+export type ToolHandler = (call: ToolCall, receivedAt: number) => Promise<ServedAnswer>;
+
+/**
+ * Whether `value` is a tool call as a run's shim sends it: the window validates its arguments before any effect (MCP-1.1), and the
+ * tool service its tool protocol (MCP-6.2).
+ */
+function isToolCall(value: unknown): value is ToolCall {
+	if (!value || typeof value !== 'object') {
+		return false;
+	}
+	const { caller, tool, callId, elapsedMs } = value as { [key: string]: unknown };
+	return typeof caller === 'string' && typeof tool === 'string' && typeof callId === 'string' && typeof elapsedMs === 'number' && Number.isFinite(elapsedMs);
 }
 
 /** One run's pair as this window shows it: its terminal, and its process once it has one. */
@@ -147,12 +169,15 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidIdentify = this.identities.event;
 	readonly onDidPinTab = this.tabPins.event;
 	private readonly transfers = new Emitter<void>();
+	private readonly toolConnections = new Emitter<RunId>();
+	private toolHandler: ToolHandler | undefined;
 	readonly onDidReport = this.reports.event;
 	readonly onDidExit = this.exits.event;
 	readonly onDidActivate = this.activations.event;
 	readonly onDidClosePair = this.closes.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
+	readonly onDidConnectTools = this.toolConnections.event;
 	/**
 	 * After the first restore, a ptyd lists runs of this window that it shows no pair of - one of an earlier protocol found late, or
 	 * one whose reattach failed: the composition root restores again, so that none is left out (RULES-4.1, D86).
@@ -172,7 +197,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			busy: protocol => [...this.cleanups.keys(), ...this.pendingCleanup, ...this.pendingForget].some(run => this.protocolOf(run) === protocol),
 			transferred: () => this.transferred(),
 			reconnect: () => this.reclaim(),
-			reconcile: () => this.reconcile()
+			reconcile: () => this.reconcile(),
+			connected: client => client.onCall((event, receivedAt) => void this.answerCall(client, event, receivedAt))
 		});
 		try {
 			this.terminals = new AgentTerminals({
@@ -189,7 +215,13 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	pinTab(run: RunId, pinned: boolean): void { this.terminals.pin(run, pinned); }
-	async conversations(): Promise<readonly ConversationKey[]> { return (await this.session.client()).request('conversations', {}); }
+	async conversations(): Promise<readonly ConversationKey[]> {
+		return (await this.allRuns()).flatMap(run => {
+			const meta = run.meta;
+			return !run.exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
+				? [{ sessionId: meta.sessionId, cli: meta.cli, environment: meta.environment }] : [];
+		});
+	}
 
 	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void {
 		if (this.pairs.has(facts.run)) {
@@ -209,6 +241,126 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	note(run: RunId, text: string): void {
 		this.pairs.get(run)?.terminal.pty.note(text);
+	}
+
+	/** Serves this window's runs' tool calls with `handler` (MCP-6.1); until then, and after it is disposed, calls are refused. */
+	serveTools(handler: ToolHandler): vscode.Disposable {
+		this.toolHandler = handler;
+		return new vscode.Disposable(() => {
+			if (this.toolHandler === handler) {
+				this.toolHandler = undefined;
+			}
+		});
+	}
+
+	/** How `run`'s CLI starts the run's MCP shim (MCP-6.1): this extension host's runtime as Node, the bundled shim, ptyd's socket. */
+	shimLaunch(run: RunId): McpServerLaunch {
+		return launchShim({
+			runtime: process.execPath,
+			script: this.options.shimScript ?? path.join(path.dirname(this.options.ptydScript), 'shim.js'),
+			socket: ptydSocketPath(this.options.home),
+			run
+		});
+	}
+
+	/**
+	 * The runs with a live process that ptyd holds in this execution environment, of every window and workspace: those whose
+	 * injected files may still be in use (CLIS-2.2). Rejects where ptyd cannot be reached - never an empty list for an unknown one.
+	 */
+	async allRunIds(): Promise<readonly string[]> {
+		return (await this.allRuns()).filter(run => !run.exited).map(run => run.run);
+	}
+
+	/** Global discovery also sees the previous release's live runs; observing another workspace never claims it. */
+	private async allRuns(): Promise<readonly RunInfo[]> {
+		const runs = [...await this.ask('list', {})];
+		for (const protocol of EARLIER_PROTOCOLS.filter(value => value >= 9)) {
+			const client = await PtydClient.join(ptydSocketPath(this.options.home, protocol), protocol);
+			if (!client) { continue; }
+			try { runs.push(...await within(client.request('list', {}))); }
+			finally { client.dispose(); }
+		}
+		return runs;
+	}
+
+	/** The bottom `lines` logical lines of `run`'s screen (MCP-5.1). */
+	readScreen(run: RunId, lines: number): Promise<ScreenRead> {
+		return this.ask('read', { run, lines });
+	}
+
+	/**
+	 * Pastes `text` into `run`'s terminal, then Enter where asked, in turn with its other automated input (MCP-5.2), `lead` typed
+	 * before it where given (D108). Rejects with {@link PtydNotSent} where nothing reached ptyd, {@link PtydLost} where its answer was
+	 * lost and the effects are not known.
+	 */
+	typeText(run: RunId, text: string, enter: boolean, lead?: string): Promise<InputEffect> {
+		return this.ask('type', { run, text, enter, ...lead !== undefined ? { lead } : {} });
+	}
+
+	/** Presses `keys`, already validated names, in `run`'s terminal, in turn with its other automated input (MCP-5.2). */
+	pressKeys(run: RunId, keys: readonly string[]): Promise<InputEffect> {
+		return this.ask('keys', { run, keys });
+	}
+
+	/** `run`'s ordinary-message input as the input reader `adapter` reads it from ptyd's screen of the run (CLIS-2.1, RULES-1.4). */
+	inspectInput(run: RunId, adapter: string): Promise<InputReading> {
+		return this.ask('inspect', { run, adapter });
+	}
+
+	/** Asks ptyd `method`, connecting where this window is not: rejects plainly where ptyd cannot be reached, nothing asked. */
+	private async ask<M extends Method>(method: M, params: Requests[M]['params']): Promise<Requests[M]['result']> {
+		const run = 'run' in params && typeof params.run === 'string' ? params.run : undefined;
+		const protocol = run === undefined ? PTYD_PROTOCOL : this.protocolOf(run);
+		// Protocol 9 added MCP input/screen requests. An earlier run remains usable in its existing terminal; never
+		// send these requests to the window's newer ptyd, which does not own it, or to an older ptyd that cannot serve them.
+		if (protocol < 9 && ['read', 'type', 'keys', 'inspect'].includes(method)) {
+			throw new PtydNotSent(`This agent's runtime uses protocol ${protocol}, which does not support MCP screen or input requests. Its existing terminal remains usable; no request was sent.`);
+		}
+		let client: PtydClient;
+		try {
+			client = await this.session.client(protocol);
+		} catch (err) {
+			throw err instanceof PtydNotSent ? err : new PtydNotSent(`The agent runtime (ptyd) cannot be reached: ${messageOf(err)}`);
+		}
+		return client.request(method, params);
+	}
+
+	/**
+	 * Answers a tool call ptyd carried from a run's shim: with the handler's answer, else a failure saying what is known. What follows
+	 * the answer's handing back happens once ptyd says the shim has it; an answer it could not hand back is handed back to nobody.
+	 */
+	private async answerCall(client: PtydClient, event: CallEvent, receivedAt: number): Promise<void> {
+		const { answer, delivered } = await this.answerOf(event.call, receivedAt);
+		try {
+			await client.request('answer', { id: event.id, answer });
+		} catch (err) {
+			this.options.log(`Could not answer a tool call of ${String(event.call.caller)}: ${messageOf(err)}`);
+			return;
+		}
+		try {
+			delivered?.();
+		} catch (err) {
+			this.options.log(`Could not complete a tool call of ${String(event.call.caller)} after its answer: ${messageOf(err)}`);
+		}
+	}
+
+	private async answerOf(call: unknown, receivedAt: number): Promise<ServedAnswer> {
+		if (!isToolCall(call)) {
+			return { answer: failureAnswer('INVALID', 'invalid_argument', 'The tool call reached the Facade Code window incomplete: it had no effect.', 'none') };
+		}
+		const handler = this.toolHandler;
+		if (!handler) {
+			return { answer: failureAnswer('UNAVAILABLE', 'window_unavailable', 'The Facade Code window does not take tool calls now: the call had no effect.', 'none') };
+		}
+		let served: ServedAnswer;
+		try {
+			served = await handler(call, receivedAt);
+		} catch (err) {
+			this.options.log(`The tool call ${call.callId} (${call.tool}) of ${call.caller} failed: ${messageOf(err)}`);
+			return { answer: failureAnswer('FAILED', 'internal_error', `The Facade Code window could not complete ${call.tool}: ${messageOf(err)}. Whether it took effect is not known.`, 'unknown') };
+		}
+		return isToolAnswer(served?.answer) ? served
+			: { answer: failureAnswer('FAILED', 'internal_error', `The Facade Code window gave no answer to ${call.tool}. Whether it took effect is not known.`, 'unknown') };
 	}
 
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ readonly pid: number; readonly startedAt: number }> {
@@ -571,6 +723,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				this.ended(pair, exit);
 				break;
 			}
+			case 'tools':
+				this.toolConnections.fire(pair.run);
+				break;
 		}
 	}
 

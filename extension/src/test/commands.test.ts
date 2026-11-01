@@ -10,7 +10,8 @@ const LOCATION: Location = { id: 'loc-main', path: '/shop', uri: 'file:///shop',
 const RUN = `run-${'3'.padStart(32, '0')}`;
 const FACTS: RunFacts = {
 	id: RUN, alias: '#a3', name: 'Ada Lovelace', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: LOCATION.id, cwd: '/shop', environment: 'local',
-	yolo: true, createdAt: 1, lifecycle: 'running', phase: 'running', pid: 7, startedAt: 2, activity: 'working', reporting: true
+	yolo: true, createdAt: 1, lifecycle: 'running', phase: 'running', pid: 7, startedAt: 2, activity: 'working', reporting: true,
+	root: RUN, origin: 'human', tools: 'not_injected'
 };
 
 suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)', () => {
@@ -48,7 +49,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const runs = new Map([[RUN, FACTS]]);
 		disposables = registerUi({
 			agents: {
-				list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: () => {}, unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
+				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: () => {}, unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
 			launch: () => RUN,
 				close: async id => { closed.push(id); runs.delete(id); return cleanup; }, rename: () => undefined
 			},

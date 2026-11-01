@@ -272,7 +272,7 @@ export function check(root = REPOSITORY) {
 	const manifest = readOrRecord(problems, at.manifest, 'package.json');
 	if (nls && manifest) {
 		const used = manifestKeys(manifest);
-		if (fs.existsSync(at.windowManifest) || manifest.extensionDependencies?.includes('facade.facadecode-window')) {
+		if (fs.existsSync(at.windowManifest) || manifest.extensionPack?.includes('facade.facadecode-window')) {
 			const windowManifest = readOrRecord(problems, at.windowManifest, 'window/package.json');
 			if (windowManifest) { manifestKeys(windowManifest, used); }
 		}

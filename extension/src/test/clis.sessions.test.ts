@@ -8,7 +8,7 @@ import * as path from 'path';
 import { execFileSync } from 'child_process';
 import { parse as parseToml } from 'smol-toml';
 import { codexSession } from '../clis/codex';
-import { museSession } from '../clis/muse';
+import { museSession, museTarget } from '../clis/muse';
 import { openCodeSession, OPENCODE_SESSION_PLUGIN } from '../clis/opencode';
 import { antigravityAdapter } from '../clis/antigravity';
 import { pathToFileURL } from 'url';
@@ -45,11 +45,11 @@ suite('Native session integration preserves configuration and exact identity (CL
 		const configured = { UserPromptSubmit: [{ hooks: [{ type: 'command', command: 'user-prompt' }] }], Stop: [{ hooks: [{ type: 'command', command: 'user-stop' }] }] };
 		const result = museSession({ ...input, extra: ['--model', 'own-model', '-c', `hooks=${JSON.stringify(configured)}`] });
 		assert.deepStrictEqual(result.extra, ['--model', 'own-model']);
-		const hooks = JSON.parse(result.args[1].slice(6));
+		const hooks = JSON.parse(result.args![1].slice(6));
 		assert.strictEqual(hooks.UserPromptSubmit[0].hooks[0].command, 'user-prompt');
 		assert.strictEqual(hooks.Stop[0].hooks[0].command, 'user-stop');
 		assert.strictEqual(fs.readFileSync(file, 'utf8'), text);
-		const normal = JSON.parse(museSession(input).args[1].slice(6));
+		const normal = JSON.parse(museSession(input).args![1].slice(6));
 		assert.strictEqual(normal.SessionStart[0].hooks[0].command, 'from-settings');
 	});
 
@@ -75,6 +75,31 @@ suite('Native session integration preserves configuration and exact identity (CL
 		assert.strictEqual(result.env?.FACADE_CODE_TITLE_COMMAND, 'run-title');
 		assert.strictEqual(JSON.parse(result.args![1]).theme, 'custom');
 		assert.strictEqual(fs.readFileSync(file, 'utf8'), original);
+	});
+
+
+	test('Antigravity composes tool permissions, per-launch settings and native identity into one overlay', () => {
+		const result = antigravityAdapter.sessionIntegration!({ ...input, tools: true, extra: [
+			'--conversation', 'exact', '--settings', '{"permissions":{"allow":["mcp(facade_facade/*)"]}}',
+			'--settings', '{"permissions":{"allow":["read(*)"],"deny":["shell(rm *)"]},"theme":"dark"}'
+		] });
+		assert.deepStrictEqual(result.extra, ['--conversation', 'exact']);
+		const settings = JSON.parse(result.args![1]);
+		assert.deepStrictEqual(settings.permissions, { allow: ['read(*)', 'mcp(facade_facade/*)'], deny: ['shell(rm *)'] });
+		assert.deepStrictEqual([settings.theme, settings.title.command], ['dark', input.hook]);
+	});
+
+	test('the Windows Muse installer resolves its selected native version, never another channel or an arbitrary batch wrapper', () => {
+		const file = path.join(temp.dir, 'muse.cmd'), program = path.join(temp.dir, 'muse-bin-1.4.14-R7309.1.exe');
+		fs.writeFileSync(file, '@echo off\r\n"%SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -NoProfile -ExecutionPolicy Bypass -File "%~dp0.muse-launcher.ps1" %*\r\nexit /b %ERRORLEVEL%\r\n');
+		fs.writeFileSync(path.join(temp.dir, '.muse-launcher.ps1'), 'function Get-ActiveBinary { $binary = Join-Path $Dir "muse-bin-$version.exe" }');
+		fs.writeFileSync(path.join(temp.dir, '.muse-version'), '1.4.14-R7309.1\n');
+		fs.writeFileSync(program, 'native fixture');
+		assert.deepStrictEqual(museTarget(file, 'win32', {}, temp.dir), { executable: program, args: [], throughCmd: false });
+		assert.strictEqual(museTarget(file, 'win32', { MUSE_CHANNEL: 'muse-canary' }, temp.dir).throughCmd, true);
+		fs.writeFileSync(file, '@echo off\r\nmy-own-launcher %*\r\n');
+		assert.strictEqual(museTarget(file, 'win32', {}, temp.dir).throughCmd, true);
+		assert.deepStrictEqual(museSession({ ...input, throughCmd: true }), { unavailable: true });
 	});
 
 	test('OpenCode follows its selected native route and location, clears identity on Home, and leaves background sessions alone', () => {
