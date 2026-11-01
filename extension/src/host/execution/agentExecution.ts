@@ -434,9 +434,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	/** Keeps an accepted start visibly disconnected until its actual outcome is known; never replays the start request. */
 	private async recoverStart(pair: Pair): Promise<{ readonly client: PtydClient; readonly attached: Requests['attach']['result'] }> {
-		const reason = vscode.l10n.t("The connection to the agent's process was lost; reconnecting");
-		pair.lost = true;
-		this.reports.fire({ run: pair.run, activity: 'unknown', reporting: false, reason, disconnected: true });
+		this.tellLost(pair);
 		while (this.pairs.get(pair.run) === pair && !this.session.closed) {
 			try {
 				const client = await this.session.client();
@@ -504,8 +502,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				// connection is back - never forgotten for a moment's loss (RULES-4.1, LIFECYCLE-3.5)
 				pair.process = { pid: live.pid, startedAt: live.startedAt };
 				pair.startupEnds = this.startupEndOf(live.startedAt);
-				pair.lost = true;
-				this.reports.fire({ run: live.run, activity: 'unknown', reporting: false, reason: vscode.l10n.t("The connection to the agent's process was lost; reconnecting"), disconnected: true });
+				this.tellLost(pair);
 				this.options.log(`${live.run} could not be claimed again yet: ${messageOf(err)}`);
 				return this.openRestored(pair, live.run);
 			}
@@ -911,27 +908,31 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 * so its activity is not known meanwhile, and its card says why (RULES-3.1, 3.2).
 	 */
 	private connectionLost(protocol: number): void {
-		const reason = vscode.l10n.t("The connection to the agent's process was lost; reconnecting");
 		for (const pair of this.pairs.values()) {
 			if ((!pair.process && !pair.starting) || pair.exited || pair.protocol !== protocol) {
 				continue;
 			}
-			const facts = activityOf(pair.status);
-			const title = this.titleOf(pair);
-			pair.lost = true;
-			const report: ActivityReport = {
-				run: pair.run,
-				activity: 'unknown',
-				reporting: facts.reporting,
-				reason,
-				disconnected: true,
-				...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("The CLI reported an error") } : {}),
-				...(title ? { title } : {})
-			};
-			// Told as the last report, so that the same report as before the loss is told again once the run is claimed
-			pair.told = JSON.stringify(report);
-			this.reports.fire(report);
+			this.tellLost(pair);
 		}
+	}
+
+	/** `pair`'s run is not heard until it is claimed again: its activity is not known meanwhile, and its card says why (RULES-3.1, 3.2). */
+	private tellLost(pair: Pair): void {
+		const facts = activityOf(pair.status);
+		const title = this.titleOf(pair);
+		pair.lost = true;
+		const report: ActivityReport = {
+			run: pair.run,
+			activity: 'unknown',
+			reporting: facts.reporting,
+			reason: vscode.l10n.t("The connection to the agent's process was lost; reconnecting"),
+			disconnected: true,
+			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("The CLI reported an error") } : {}),
+			...(title ? { title } : {})
+		};
+		// Told as the last report, so that the same report as before the loss is told again once the run is claimed
+		pair.told = JSON.stringify(report);
+		this.reports.fire(report);
 	}
 
 	/**
