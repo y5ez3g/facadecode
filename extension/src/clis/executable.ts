@@ -42,6 +42,15 @@ export function homeOf(env: Environment = process.env, platform: NodeJS.Platform
 	return variableOf(env, homeVariable(platform), platform) || os.homedir();
 }
 
+/**
+ * A base folder of a CLI that keeps the XDG layout on every platform, as `env` names it: `XDG_CONFIG_HOME` or `XDG_DATA_HOME` where
+ * that is an absolute path, else `.config` or `.local/share` in the home folder.
+ */
+export function xdgDirOf(kind: 'config' | 'data', env: Environment, platform: NodeJS.Platform = process.platform): string {
+	const set = variableOf(env, kind === 'config' ? 'XDG_CONFIG_HOME' : 'XDG_DATA_HOME', platform);
+	return set && path.isAbsolute(set) ? set : path.join(homeOf(env, platform), ...kind === 'config' ? ['.config'] : ['.local', 'share']);
+}
+
 /** The file names `base` can be on `platform`: on Windows with each of PATHEXT's extensions too. */
 function candidatesOf(base: string, env: Environment, platform: NodeJS.Platform): string[] {
 	if (platform !== 'win32') {

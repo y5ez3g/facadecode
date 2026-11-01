@@ -4,9 +4,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { canonicalFolder } from '../base/files';
+import { canonicalFolder, readJsonFile } from '../base/files';
 import { isJsonObject, JsonObject } from '../base/json';
-import { nodeValue, parseJsonc } from '../base/jsonc';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, variableOf } from './environment';
 import { homeOf } from './executable';
@@ -56,13 +55,9 @@ const antigravityTools: ToolsIntegration = {
  * Settings it cannot read give the rule alone, as Antigravity itself would have none of theirs.
  */
 export function antigravityPermissions(env: Environment | undefined, platform: NodeJS.Platform): JsonObject {
-	let theirs: unknown;
-	try {
-		theirs = env && nodeValue(parseJsonc(fs.readFileSync(antigravitySettingsFile(env, platform), 'utf8')));
-	} catch {
-		theirs = undefined;
-	}
-	const permissions = isJsonObject(theirs) && isJsonObject(theirs.permissions) ? theirs.permissions : {};
+	const settings = env && readJsonFile(antigravitySettingsFile(env, platform));
+	const theirs = settings?.kind === 'object' ? settings.value : undefined;
+	const permissions = theirs && isJsonObject(theirs.permissions) ? theirs.permissions : {};
 	const allow = Array.isArray(permissions.allow) ? permissions.allow : [];
 	return { ...permissions, allow: allow.includes(ALLOW_TOOLS) ? allow : [...allow, ALLOW_TOOLS] };
 }
@@ -100,12 +95,12 @@ function workingDirectoryOf(cwd: string, env: Environment, platform: NodeJS.Plat
 export const antigravityAdapter: CliAdapter = {
 	id: 'agy',
 	sessionIdentity: true,
+	// Settings or per-launch settings it cannot read stay as they are, for Antigravity to say what is wrong with them, and the launch
+	// claims no identity tracking (CLIS-2.4)
 	sessionIntegration: ({ hook, env, platform, cwd, extra, tools }) => {
-		const settingsFile = antigravitySettingsFile(env, platform);
-		let native;
-		try { native = fs.existsSync(settingsFile) ? nodeValue(parseJsonc(fs.readFileSync(settingsFile, 'utf8'))) : {}; }
-		catch { return { unavailable: true }; }
-		if (!isJsonObject(native)) { return { unavailable: true }; }
+		const settings = readJsonFile(antigravitySettingsFile(env, platform));
+		if (settings.kind === 'other') { return { unavailable: true }; }
+		const native: JsonObject = settings.kind === 'object' ? settings.value : {};
 		let overlay: Record<string, unknown> = {};
 		const remaining: string[] = [];
 		for (let i = 0; i < extra.length; i++) {
@@ -113,8 +108,8 @@ export const antigravityAdapter: CliAdapter = {
 			if (arg !== undefined) {
 				let value: unknown;
 				try { value = JSON.parse(arg.trim().startsWith('{') ? arg : fs.readFileSync(path.resolve(cwd, arg), 'utf8')); }
-				catch { throw new Error('Antigravity per-launch settings must be a readable JSON object.'); }
-				if (!isJsonObject(value)) { throw new Error('Antigravity per-launch settings must be a JSON object.'); }
+				catch { return { unavailable: true }; }
+				if (!isJsonObject(value)) { return { unavailable: true }; }
 				overlay = { ...overlay, ...value };
 			} else if (extra[i] !== undefined) { remaining.push(extra[i]); }
 		}

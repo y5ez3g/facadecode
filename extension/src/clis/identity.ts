@@ -25,7 +25,10 @@ export interface SessionIntegrationInput {
 
 /** Per-process integration only. The host materializes owned files after validating the complete launch. */
 export interface SessionIntegration {
-	/** Native settings were unreadable: let the CLI show its own error, without claiming identity tracking. */
+	/**
+	 * Native settings or per-launch configuration the integration cannot read: the launch keeps them as configured and lets the CLI show
+	 * its own error, without claiming identity tracking - never a start refused over them.
+	 */
 	readonly unavailable?: boolean;
 	readonly args?: readonly string[];
 	/** Config overrides merged into the integration replace only their original argument pair. */

@@ -275,6 +275,18 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		});
 	}
 
+	test('a CLI whose own settings its session integration cannot read still starts as configured, its tools given, no identity tracking claimed (CLIS-2.4)', () => {
+		const session = { sessionFile: path.join(temp.dir, 'our.session.json'), sessionHook: 'our-hook' };
+		const write = (file: string, text: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+		write(path.join(temp.dir, '.config', 'muse', 'settings.json'), '{ "hooks": ');
+		write(path.join(temp.dir, '.config', 'opencode', 'cli.json'), '{ "plugins": "oops" }');
+		for (const cli of ['muse', 'opencode']) {
+			const planned = plan({ cli, tools, ...session });
+			assert.deepStrictEqual([planned.exactResume, planned.tools.state, planned.files], [false, 'injected', undefined], cli);
+			assert.ok(!planned.args.some(arg => arg.startsWith('hooks=')) && !('OPENCODE_CLI_CONFIG_CONTENT' in planned.env), `${cli}: ${planned.args.join(' ')}`);
+		}
+	});
+
 	test('without tools - orchestration off - nothing is injected and no file is named; planning writes nothing', () => {
 		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
 			const planned = plan({ cli });

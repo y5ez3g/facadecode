@@ -95,6 +95,37 @@ export function invocation(groups: Groups, extra: readonly string[], uses: Launc
 	return args;
 }
 
+/** A `key=value` override of a CLI's configuration among a launch's arguments, as Codex and Muse Code take one (CLIS-1.4, 2.4). */
+export interface ConfigOverride {
+	/** Where its option is among the arguments, and how many arguments it spans: `-c key=value` two, `-c=key=value` one. */
+	readonly index: number;
+	readonly span: 1 | 2;
+	/** Its key, the text before the first `=`, trimmed. */
+	readonly key: string;
+	/** The text after that `=`; none where it has none. */
+	readonly value?: string;
+}
+
+/** The configuration overrides of `args` in their order: `-c` and `--config`, the value apart or after `=` alike. */
+export function configOverrides(args: readonly string[]): ConfigOverride[] {
+	const overrides: ConfigOverride[] = [];
+	for (let index = 0; index < args.length; index++) {
+		const arg = args[index];
+		const apart = arg === '-c' || arg === '--config';
+		const joined = /^(?:-c|--config)=/.exec(arg)?.[0];
+		const text = apart ? args[index + 1] : joined ? arg.slice(joined.length) : undefined;
+		if (text === undefined) {
+			continue;
+		}
+		const at = text.indexOf('=');
+		overrides.push({ index, span: apart ? 2 : 1, key: (at < 0 ? text : text.slice(0, at)).trim(), ...at < 0 ? {} : { value: text.slice(at + 1) } });
+		if (apart) {
+			index++;
+		}
+	}
+	return overrides;
+}
+
 /** What a launch is asked for and where, as an adapter's values are computed from it. */
 export interface LaunchInput {
 	readonly sessionId?: string;
