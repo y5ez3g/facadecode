@@ -584,6 +584,32 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.ok(screenOf(terminals[terminals.length - 1]).includes('[Agent process exited with code 5]'));
 	});
 
+	test('a run whose reattach failed, or that went to another window, has its conversation watched by this window no more (CLIS-2.4)', async function () {
+		this.timeout(20_000);
+		const first = portOf();
+		const identified: string[] = [];
+		first.onDidIdentify(({ run }) => identified.push(run));
+		first.openPair(facts('run-47'), { reveal: false });
+		open(terminals[0]);
+		await first.spawn('run-47', { ...plan(QUIET), exactResume: true }, { ...meta('run-47'), exactResume: true });
+		await until('its screen', () => screenOf(terminals[0]).includes('ready'));
+		// Another window of the workspace takes it over: the first watches its conversation no more
+		const next = portOf();
+		const nextIdentified: string[] = [];
+		next.onDidIdentify(({ run }) => nextIdentified.push(run));
+		const listed = await until('the run listed', async () => {
+			const runs = await next.live();
+			return runs.length === 1 && runs;
+		});
+		// Its reattach fails - the run went as it was listed - and the second watches it no more either
+		assert.strictEqual(await next.terminate('run-47'), 'terminated');
+		await assert.rejects(next.attach(listed[0], facts('run-47')));
+		fs.mkdirSync(path.join(home, 'runs'), { recursive: true });
+		fs.writeFileSync(path.join(home, 'runs', 'run-47.session.json'), JSON.stringify({ session_id: '12345678-1234-4234-8234-123456789abc' }));
+		await new Promise(resolve => setTimeout(resolve, 1_500));
+		assert.deepStrictEqual([identified, nextIdentified], [[], []]);
+	});
+
 	test('a window that shows no run connects again when its connection goes: its claim, which ptyd would let expire, is kept (RULES-4.1, D75)', async function () {
 		this.timeout(20_000);
 		const port = portOf();

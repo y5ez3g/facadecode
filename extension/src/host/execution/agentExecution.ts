@@ -588,6 +588,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.lifetime.abort();
 		pair.events?.dispose();
 		pair.terminal.dispose();
+		// Its conversation is not watched for a run this window does not show: one that failed to reattach, or went to another window
+		this.identity.untrack(run);
 		return pair;
 	}
 
