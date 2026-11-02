@@ -243,7 +243,7 @@ export interface ActivityReport {
 	readonly error?: string;
 	/** A missing supervisor connection is infrastructure uncertainty, independent of the CLI's activity. */
 	readonly disconnected?: boolean;
-	/** The CLI's own title, sanitized and capped at 300 code points. */
+	/** The CLI's own title, sanitized and capped at 300 code points. Empty clears it; absent leaves it unchanged. */
 	readonly title?: string;
 	/** Whether this run's CLI has proven it reports activity (S12). */
 	readonly reporting: boolean;

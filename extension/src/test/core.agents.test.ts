@@ -580,6 +580,21 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.get(id)!.disconnected, undefined);
 	});
 
+	test('an explicit empty title removes the old title; missing connection information preserves it (CLIS-2.3)', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, title: 'Fix tests' });
+		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: true, disconnected: true, reason: 'Lost' });
+		assert.strictEqual(world.agents.get(id)?.title, 'Fix tests');
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, title: '' });
+		assert.strictEqual(world.agents.get(id)?.title, undefined, 'the card can now use its no-title fallback');
+		assert.strictEqual(world.agents.get(id)?.error, undefined, 'reconnection still clears its connection error');
+		assert.strictEqual(world.agents.get(id)?.name, 'Ada');
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Next task' });
+		assert.strictEqual(world.agents.get(id)?.title, 'Next task');
+	});
+
 	test('a run is awaiting its CLI\'s activity while its reports say so, and no longer once one does not (CLIS-2.3, D81)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });

@@ -49,7 +49,7 @@ export interface StatusReport {
 	readonly state: StatusState | 'clear';
 	readonly kind?: StatusKind;
 	readonly msg?: string;
-	/** The title it gives, which a window prefers over the terminal title (CLIS-2.3). */
+	/** The report's title, used when the program has no nonempty terminal title (CLIS-2.3). */
 	readonly title?: string;
 	readonly app?: string;
 	readonly progress?: number;

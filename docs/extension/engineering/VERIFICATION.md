@@ -565,6 +565,18 @@ tab kept the agent's name. Compilation, 1,205 unit checks (six platform skips), 
 specification audits passed on macOS arm64 / VS Code 1.144.0. These fixtures verify Facade's handling of both title
 channels; they are not new native CLI/version certification. Logs remain local in `extension/build/mcp-review-window/`.
 
+The owner's follow-up title audit read current supervisor snapshots in the two review windows without claiming,
+attaching to, typing into or reloading their runs. Claude, Codex, Muse Code, OpenCode and Pi had native terminal titles;
+the three observed Antigravity runs had neither terminal nor report titles. Installed Claude Code 2.1.316 code confirms
+that accepting program-status support suppresses its native title prefix. Installed OpenCode code shortens long native
+titles itself; Pi 1.4.0 builds its title from its symbol, optional session name and folder. These are current observations,
+not a guarantee that other versions or settings behave identically. Facade does not synthesize missing symbols.
+The audit also reproduced stale card text after a CLI cleared its title: the execution report omitted the empty value,
+so the core retained the old one. Explicit clearing now crosses that boundary, while missing information during a
+connection loss still preserves the last title. Regression checks cover clearing, reattachment and subsequent titles.
+Compilation, all 155 checks in the adapter, execution, core lifecycle, card and program-status suites, and the
+specification audit passed. The new clearing regressions failed before the fix and passed afterward.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**
@@ -585,6 +597,7 @@ for review, not acceptance evidence.
 
 ## Change log
 
+- 2026-11-02: Recorded the six-CLI title audit and regression coverage for clearing a title without retaining stale card text.
 - 2026-11-02: Recorded the actual-terminal-title precedence, decoration updates and reattachment checks (D160).
 
 - 2026-11-02: Recorded the terminal-logo theme/size/layer regression checks and native rendering evidence (D159).

@@ -256,6 +256,9 @@ A later activity report must not replace a terminal title or suppress its decora
 visible title, including status symbols, decorations, CLI/folder/agent
 names and default session titles, even when the card already provides the same information (D126). There is no
 adapter-specific title filtering or rewriting; the owner deferred content cleanup to retain the original CLI display.
+When both current title sources are empty, discard the previous title and use PANEL-1.4's fallback, including after
+reattachment. A lost connection alone does not clear the last known title. Native CLIs may omit decorations after
+status-protocol negotiation or shorten their own titles; Facade preserves what they actually send.
 This choice applies when the card displays a CLI title. Startup, blocker, error and unavailable-tool messages retain
 PANEL-1.4's precedence; message delivery and notifications are unaffected.
 Terminal emoji width follows tested Unicode cell tables;
@@ -502,6 +505,7 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-02: Empty current titles clear stale card text after live updates and reattachment; native title formatting remains the CLI's choice.
 - 2026-11-02: The CLI's actual terminal title takes precedence over a status report's title, preserving its native decorations (D160).
 
 - 2026-11-01: 2.2 gives Muse Code on Windows its server by `-c` as elsewhere: its project `.mcp.json` entry's `mode` made

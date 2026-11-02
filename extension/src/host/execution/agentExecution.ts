@@ -868,7 +868,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			...(facts.blocker ? { blocker: facts.blocker } : {}),
 			...(reason ? { reason } : {}),
 			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("The CLI reported an error") } : {}),
-			...(title ? { title } : {})
+			// This is the complete current title selection, including an explicit clear when both sources are empty.
+			title: title ?? ''
 		};
 		const told = JSON.stringify(report);
 		if (told !== pair.told) {

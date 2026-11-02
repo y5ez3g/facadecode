@@ -1008,7 +1008,7 @@ export class AgentService implements Agents, Disposable {
 			awaitingActivity: report.awaitingActivity,
 			activityReason: report.reason,
 			blocker: report.blocker,
-			title: report.title ?? run.facts.title
+			title: report.title === '' ? undefined : report.title ?? run.facts.title
 		};
 		let kind: RunChange['kind'] = 'reported';
 		if (report.disconnected && report.reason && !run.facts.error) {

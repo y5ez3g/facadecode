@@ -372,7 +372,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		open(terminals[0]);
 		const title = Buffer.from('Fixing tests').toString('base64');
 		await port.spawn('run-3', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]0;\\u2733 Claude Code\\x07\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => { if (d.toString().includes('7501;?:')) process.stdout.write('\\x1b]7501;state=working:title=${title}\\x1b\\\\'); }); setInterval(() => {}, 1000);`), meta('run-3'));
-		assert.deepStrictEqual(reports[0], { run: 'run-3', activity: 'unknown', reporting: false, awaitingActivity: true });
+		assert.deepStrictEqual(reports[0], { run: 'run-3', activity: 'unknown', reporting: false, awaitingActivity: true, title: '' });
 		await until('its report', () => reports.some(report => report.activity === 'working'));
 		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', observedAt: reports[reports.length - 1].observedAt, reporting: true, title: '✳ Claude Code' });
 		// Its probe answered, it was still starting until it reported: never unknown with a reason meanwhile
@@ -423,6 +423,40 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await next.terminate('run-title'), 'terminated');
 	});
 
+	test('an empty CLI title clears the previous title and stays empty after reattachment (CLIS-2.3)', async () => {
+		const first = portOf();
+		const reports: ActivityReport[] = [];
+		first.onDidReport(report => reports.push(report));
+		first.openPair(facts('run-title-clear'), { reveal: false });
+		open(terminals[0]);
+		const program = `process.stdin.setRawMode(true);
+		process.stdout.write('\\x1b]7501;state=idle\\x1b\\\\\\x1b]2;Fix tests\\x07');
+		process.stdin.on('data', () => process.stdout.write('\\x1b]2;\\x07'));
+		setInterval(() => {}, 1000);`;
+		await first.spawn('run-title-clear', plan(program), meta('run-title-clear'));
+		await until('the initial title', () => reports.at(-1)?.title === 'Fix tests');
+		const count = reports.length;
+		terminals[0].options.pty.handleInput!('c');
+		await until('the cleared title event', () => reports.length > count);
+		assert.strictEqual(reports.at(-1)?.title, '', 'an explicit clear must reach the core');
+		first.dispose();
+		ports.splice(ports.indexOf(first), 1);
+		const next = portOf();
+		const restored: ActivityReport[] = [];
+		next.onDidReport(report => restored.push(report));
+		const live = await until('the untitled run to be unclaimed', async () => {
+			const runs = await next.live();
+			return runs.length === 1 && !runs[0].claimedElsewhere && runs[0];
+		});
+		const before = terminals.length;
+		const attaching = next.attach(live, facts('run-title-clear'));
+		await until('the restored terminal', () => terminals.length > before);
+		open(terminals.at(-1)!);
+		await attaching;
+		assert.strictEqual(restored.at(-1)?.title, '', 'restoration must also replace a stale saved title');
+		assert.strictEqual(await next.terminate('run-title-clear'), 'terminated');
+	});
+
 	test('a listing answered before what the run said since is no newer than that: a reconcile never puts back an older status (CLIS-2.3, UX-5.2)', async function () {
 		this.timeout(20_000);
 		const port = portOf();
@@ -460,7 +494,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		open(terminals[0]);
 		const before = performance.now();
 		await first.spawn('run-40', plan(QUIET), meta('run-40'));
-		assert.deepStrictEqual(reports, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true }]);
+		assert.deepStrictEqual(reports, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true, title: '' }]);
 		/** The window `from` reloads: the next one claims the run again, and what it tells of it. */
 		const reload = async (from: AgentExecution) => {
 			ports.splice(ports.indexOf(from), 1);
@@ -481,13 +515,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		};
 		// Reloaded within its bound: still starting, until the bound from its process start passes
 		const { next, told } = await reload(first);
-		assert.deepStrictEqual(told, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true }]);
+		assert.deepStrictEqual(told, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true, title: '' }]);
 		const over = await until('its startup over', () => told.find(report => !report.awaitingActivity), 6_000);
 		assert.ok(performance.now() - before >= BOUND - 50, 'not before its bound');
-		assert.deepStrictEqual(over, { run: 'run-40', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' });
+		assert.deepStrictEqual(over, { run: 'run-40', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity', title: '' });
 		// Reloaded past it: unknown at once, its startup not begun again
 		const last = await reload(next);
-		assert.deepStrictEqual(last.told, [{ run: 'run-40', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' }]);
+		assert.deepStrictEqual(last.told, [{ run: 'run-40', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity', title: '' }]);
 		assert.strictEqual(await last.next.terminate('run-40'), 'terminated');
 	});
 
@@ -502,7 +536,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await port.spawn('run-41', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); setInterval(() => {}, 1000);`), meta('run-41'));
 		await until('its probe answered', () => reports.some(report => report.reporting));
 		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 10_000);
-		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, reason: 'Waiting for the CLI\'s first activity report' }, JSON.stringify(reports));
+		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, reason: 'Waiting for the CLI\'s first activity report', title: '' }, JSON.stringify(reports));
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity), JSON.stringify(reports));
 		assert.strictEqual(reports.at(-2)?.reporting, true);
 	});
@@ -518,7 +552,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await port.spawn('run-43', { ...plan(script), cli: 'muse', displayName: 'Muse Code', command: 'muse', screenStatus: 'muse' }, meta('run-43'));
 		await until('its screen read', () => reports.some(report => report.activity === 'not_working'));
 		const asked = await until('its probe told', () => reports.find(report => report.reporting && report.activity === 'unknown'), 5_000);
-		assert.deepStrictEqual(asked, { run: 'run-43', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, reason: 'Waiting for the CLI\'s first activity report' });
+		assert.deepStrictEqual(asked, { run: 'run-43', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, reason: 'Waiting for the CLI\'s first activity report', title: '' });
 		assert.strictEqual(await port.terminate('run-43'), 'terminated');
 	});
 
@@ -534,7 +568,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			open(terminals[0]);
 			await port.spawn('run-47', { ...plan(`process.stdout.write('\\x1b]0;π - ${path.basename(worktree)}\\x07ready\\r\\n'); setInterval(() => {}, 1000);`), cli: 'pi', displayName: 'Pi', command: 'pi', cwd: worktree }, meta('run-47'));
 			await until('its screen', () => screenOf(terminals[0]).includes('ready'));
-			const titled = await until('its CLI-and-folder title', () => reports.find(report => report.title !== undefined));
+			const titled = await until('its CLI-and-folder title', () => reports.find(report => !!report.title));
 			assert.strictEqual(titled.title, `π - ${path.basename(worktree)}`);
 			assert.strictEqual(await port.terminate('run-47'), 'terminated');
 		} finally {
@@ -696,7 +730,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('the loss told', () => heard.some(each => each.report.disconnected));
 		port.rename('run-42', 'Grace');
 		const back = await until('the run claimed again', () => heard.find(each => !each.report.disconnected && heard.indexOf(each) > heard.findIndex(lost => lost.report.disconnected)), 10_000);
-		assert.deepStrictEqual(back, { report: { run: 'run-42', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' }, connections: 2 });
+		assert.deepStrictEqual(back, { report: { run: 'run-42', activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity', title: '' }, connections: 2 });
 		assert.strictEqual(await port.terminate('run-42'), 'terminated');
 	});
 

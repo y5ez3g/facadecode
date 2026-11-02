@@ -71,7 +71,7 @@ export interface RunStatus {
 	readonly kind?: StatusKind;
 	/** What it says it is doing, or why it waits: its own words, shown as text alone. */
 	readonly msg?: string;
-	/** The title its reports give, which a window prefers over the terminal title (CLIS-2.3). */
+	/** The report's title, used when the program has no nonempty terminal title (CLIS-2.3). */
 	readonly title?: string;
 	/** When it came to this, in milliseconds since 1970 on ptyd's clock. */
 	readonly at: number;
