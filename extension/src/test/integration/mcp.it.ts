@@ -450,29 +450,39 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const ran = await script(alias, [
 			{ tool: 'start_agent', arguments: { name: 'Remote helper', window_id: peer.window_id, location_id: location.location_id, cli: 'claude', prompt: 'Help from afar.' }, save: { child: 'data.agent_id' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Try a task' },
-			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.' } },
+			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello across windows.' } }
+		], 90_000);
+		const started = ran.content('start_agent');
+		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
+		assert.strictEqual(started.data.window_id, peer.window_id, 'it started in the other window');
+		// Submitted within its response budget, or accepted and reported submitted later, as a slower computer can take it (RULES-1.2,
+		// MCP-1.3): either way submitted before the agent is stopped
+		const sent = ran.content('send_message');
+		assert.ok(sent?.status === 'success' || sent?.status === 'accepted', JSON.stringify(sent));
+		assert.strictEqual(sent.data.window_id, peer.window_id);
+		if (sent.status === 'success') {
+			assert.deepStrictEqual([sent.effects.text_written, sent.effects.enter_written], ['full', true]);
+		} else {
+			const result = await until(`the result about ${sent.data.message_id}`, () => received(alias).find(each => each.includes(`message ${sent.data.message_id}`)), 30_000);
+			assert.strictEqual(receiptFacts(result, sent.data.message_id).data.disposition, 'submitted_to_cli');
+		}
+		const after = await script(alias, [
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
 			{ tool: 'list_agents', arguments: { details: true } },
 			{ tool: 'stop_agent', arguments: { agent: '$child' } },
 			{ tool: 'list_agents', arguments: {} }
 		], 90_000);
-		const started = ran.content('start_agent');
-		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		assert.strictEqual(started.data.window_id, peer.window_id, 'it started in the other window');
 		const child = started.data.agent_id as string;
 		const childAlias = started.data.agent_id as string;
 		assert.ok(!(await state()).cards.some(each => each.alias === child), 'its card is in its own window, not this one');
-		const listed = ran.content('list_agents')?.data.agents as { agent_id: string; window_id: string; cwd: string; environment: string }[];
+		const listed = after.content('list_agents')?.data.agents as { agent_id: string; window_id: string; cwd: string; environment: string }[];
 		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.window_id, each.cwd, each.environment]), [[peer.window_id, location.path, peer.environment]],
 			'its CLI runs in the other window\'s folder and environment');
 		// Its first task and the message, each whole, on its screen as this window reads it
 		const first = JSON.stringify(ran.content('read_screen'));
 		assert.ok(first.includes('Help from afar.') && first.includes(started.data.prompt.message_id), first);
 
-		const sent = ran.content('send_message');
-		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
-		assert.deepStrictEqual([sent.effects.text_written, sent.effects.enter_written, sent.data.window_id], ['full', true, peer.window_id]);
-		const screen = JSON.stringify(ran.content('read_screen', 1));
+		const screen = JSON.stringify(after.content('read_screen'));
 		assert.ok(screen.includes('Hello across windows.') && screen.includes(sent.data.message_id), screen);
 		if (!PEER_ELSEWHERE) {
 			const launch = argsOf(childAlias);
@@ -483,8 +493,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			assert.ok(received(childAlias).some(each => block(sent.data.message_id, alias, window, 'Hello across windows.').test(each)), JSON.stringify(received(childAlias)));
 		}
 
-		assert.strictEqual(ran.content('stop_agent')?.status, 'success', JSON.stringify(ran.content('stop_agent')));
-		assert.ok(!(ran.content('list_agents', 1)?.data.agents as { agent_id: string }[]).some(each => each.agent_id === child), 'a stopped agent is no longer listed');
+		assert.strictEqual(after.content('stop_agent')?.status, 'success', JSON.stringify(after.content('stop_agent')));
+		assert.ok(!(after.content('list_agents', 1)?.data.agents as { agent_id: string }[]).some(each => each.agent_id === child), 'a stopped agent is no longer listed');
 		if (!PEER_ELSEWHERE) {
 			const pid = Number(fs.readFileSync(`${RECORD}.${childAlias}`, 'utf8').trim());
 			await until('its process to end', () => alive(pid) ? undefined : true);

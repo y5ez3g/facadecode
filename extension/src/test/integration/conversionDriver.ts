@@ -166,5 +166,6 @@ export async function activate(): Promise<void> {
 }
 
 export function deactivate(): void {
-	if (REOPEN) { write({ phase: 'closed' }); }
+	// The extension host's process: the window has closed once it ends
+	if (REOPEN) { write({ phase: 'closed', host: process.pid }); }
 }

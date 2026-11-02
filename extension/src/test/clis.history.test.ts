@@ -186,6 +186,10 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		fs.writeFileSync(sidecar, JSON.stringify({ customTitle: 'Native rename' }));
 		assert.strictEqual(await title(), 'Native rename');
 		fs.writeFileSync(sidecar, JSON.stringify({ customTitle: 'Second rename' }));
+		// A later rename, as a person makes one: written within the same clock tick, as Windows keeps file times, a same-length
+		// title would leave the file as it was in every respect but its bytes
+		const later = new Date(Date.now() + 60_000);
+		fs.utimesSync(sidecar, later, later);
 		assert.strictEqual(await title(), 'Second rename');
 		fs.unlinkSync(sidecar);
 		assert.strictEqual(await title(), 'Old head title');
