@@ -645,8 +645,9 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			s: '\x1b[?2026h\x1b[2J\x1b[H',
 			e: `${work}\x1b[?2026l`
 		};
+		// PTY input is a stream: ConPTY may combine consecutive writes in one stdin chunk.
 		const program = `process.stdin.setRawMode(true); const frames = ${JSON.stringify(frames)};
-		process.stdout.write(frames.w); process.stdin.on('data', d => process.stdout.write(frames[d.toString()] || ''));
+		process.stdout.write(frames.w); process.stdin.on('data', chunk => { for (const command of chunk.toString()) { process.stdout.write(frames[command] || ''); } });
 		setInterval(() => {}, 1000);`;
 		await spawn(client, 'screen-reset', program, { cols: 38, rows: 24, screenStatus: 'muse' });
 		const latest = () => events.flatMap(event => event.event === 'status' && event.status ? [event.status] : []).at(-1);
@@ -656,8 +657,8 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await send('s');
 		await new Promise(resolve => setTimeout(resolve, 250));
 		assert.strictEqual(latest()?.state, 'working', 'an unfinished synchronized draw is not an observation');
-		await send('e');
-		await send('u');
+		// Finish the synchronized draw and replace it in one write, regardless of how stdin groups the commands.
+		await send('eu');
 		await until('unknown layout revokes working', () => latest()?.unavailable === 'screen_unrecognized');
 		await send('i');
 		await until('a known resting layout recovers', () => latest()?.state === 'idle');
