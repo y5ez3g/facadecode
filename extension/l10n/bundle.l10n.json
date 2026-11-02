@@ -279,6 +279,7 @@
 	"{0} runs through cmd.exe, which cannot be given {1}[{2}] safely, as that argument contains {3}; set {4}.path to the CLI's own program or Node entry point": "{0} runs through cmd.exe, which cannot be given {1}[{2}] safely, as that argument contains {3}; set {4}.path to the CLI's own program or Node entry point",
 	"{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point": "{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point",
+	"OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli": "OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} is a Node script, and Node is not on the PATH to run it",
 	"facade.yolo must be true or false; received {0}": "facade.yolo must be true or false; received {0}",
 	"{0} must be an object of custom CLIs by ID; received {1}": "{0} must be an object of custom CLIs by ID; received {1}",

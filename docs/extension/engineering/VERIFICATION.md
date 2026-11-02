@@ -51,10 +51,10 @@ proves native support.
 
 | Gate | Required proof | Current evidence / status |
 | --- | --- | --- |
-| G1 Client network and packaging | Install the workspace component and its window component through the extension pack in clean local and Remote-SSH profiles; register windows, including windows with no agents or no folder; route every tool local→SSH, SSH→local, SSH→SSH and between two local windows; recover from stale registry entries; replace a window component on update with messages in flight; prove native backend packaging | 2026-10-30, official VS Code with isolated profiles and fake CLIs - 1.143.1 on macOS arm64, 1.144.0 on Linux x64 (Ubuntu 26.04, under xvfb) and Windows x64 (10.0.26200, in the desktop session): between two local windows on each, an agent listed the other window, started an agent there, messaged it, read its screen and stopped it. Over Remote-SSH 0.128.0 from macOS (`npm run test:remote`, each host's server in a folder of the run's own) the same journey passed local→SSH, SSH→local and SSH→SSH on Linux x64 and on Windows x64, and between an SSH window on Linux and one on Windows; the single-window journeys passed in an SSH window on each. The 0.2.0 packages were built natively for darwin-arm64, linux-x64 and win32-x64 with node-pty 1.2.0-beta.15 (D99), each passing `test:package`, and installed with the window component in clean profiles, where both parts started and registered the window under its name. Unit tests cover registry staleness, protocol mismatch, timeouts, a window not yet served and the name a window publishes. Installation through the extension pack from the Marketplace and window-component replacement with messages in flight not run; OPEN |
+| G1 Client network and packaging | Install the workspace component and its window component through the extension pack in clean local and Remote-SSH profiles; register windows, including windows with no agents or no folder; route every tool local→SSH, SSH→local, SSH→SSH and between two local windows; recover from stale registry entries; replace a window component on update with messages in flight; prove native backend packaging | 2026-10-30, official VS Code with isolated profiles and fake CLIs - 1.143.1 on macOS arm64, 1.144.0 on Linux x64 (Ubuntu 26.04, under xvfb) and Windows x64 (10.0.26200, in the desktop session): between two local windows on each, an agent listed the other window, started an agent there, messaged it, read its screen and stopped it. Over Remote-SSH 0.128.0 from macOS (`npm run test:remote`, each host's server in a folder of the run's own) the same journey passed local→SSH, SSH→local and SSH→SSH on Linux x64 and on Windows x64, and between an SSH window on Linux and one on Windows; the single-window journeys passed in an SSH window on each. This release's packages were built natively for darwin-arm64, linux-x64 and win32-x64 with node-pty 1.2.0-beta.15 (D99), each passing `test:package`, and installed with the window component in clean profiles, where both parts started and registered the window under its name. Unit tests cover registry staleness, protocol mismatch, timeouts, a window not yet served and the name a window publishes. Installation through the extension pack from the Marketplace and window-component replacement with messages in flight not run; OPEN |
 | G3 Draft-safe ordinary input | For every built-in, on the current version and at least one earlier one, prove input box versus menu, actual empty versus history/paste/multiline draft, working-CLI submission, full text + Enter, uncertain effects and an unrecognized layout left untouched; macOS, Linux and Windows terminals | Recorded screens of real CLIs on macOS arm64 are the readers' fixtures: Claude Code 2.1.312 and Codex 0.165.0 (Facade Dots, 2026-10-29), and on 2026-10-30 Antigravity 1.4.12, Muse Code 1.4.14, OpenCode 2.1.4 and Pi 1.4.0 - 110 screens, every reader reading every other CLI's as unknown. On 2026-10-31 the integration suite proved, for each of the six, the paste, draft protection, Enter, deadline failure and read delivery against a fake CLI drawing that CLI's own input, in macOS and Linux terminals and Windows ConPTY. Later that day, on macOS: `scripts/capture-inputs.mjs` recorded every built-in's pastes - Claude Code 2.1.316, Codex 0.166.0 with the warning under its input that its `-c` overrides bring without `--no-daemon`, Antigravity 1.4.12, Muse Code 1.4.14, OpenCode 2.1.4 and Pi 1.4.0, each paste's text kept, 37 screens, all read as expected and every paste as its own draft, Claude Code's with its lead (D104, D108, D112); and the integration suite proved a draft waited for until it goes and never submitted with the message, an input it cannot read failing at fifteen seconds, and a submission its CLI takes slowly or whose Enter it misses typed once, for every built-in's input (D104, D106), with Copy Diagnostics naming both agents of each journey with what their input readers read and their last rows, and the log naming each tool call (D116, D117). In a 120x24 terminal the same day `scripts/capture-inputs.mjs` recorded all six with a taller and a wider paste as well, 49 screens: Antigravity and Pi scroll a tall draft and Pi folds a wide one as `[paste #1 1284 chars]`, which their readers then failed and now read as the message's own (D118). With every fix of D118 in, the integration suite passed again for all six on macOS, on Linux under xvfb and on Windows in its desktop session, ConPTY; the unit suites passed with 791 tests on macOS and Linux, and on Windows all but a trust test of their own that used macOS paths there - writing two entries for its temporary folders into that computer's Claude Code configuration, taken back at once under Claude Code's lock - which now uses that computer's own paths and home variables and checks its target file before any write, and passes there. Real agents with YOLO off on macOS (`FACADE_IT_ONLY=real`), each starting a second of the same CLI with a first task and exchanging messages pasted and submitted, no approval asked for Facade's tools: Claude Code 2.1.316 and Codex 0.166.0 on the Qwen token plan in their own configuration folders, Antigravity 1.4.12 signed in (its first task after its MCP panel was opened and closed, D100), OpenCode 2.1.4 and Pi 1.4.0 on the Qwen token plan in their own configuration folders - OpenCode's configured to ask for every tool. Not run: Muse Code with a model (its account's usage ran out until 2026-11-01; with the Qwen API it cannot call tools), so whether it asks for Facade's tools with YOLO off is not observed; real CLIs on Linux and Windows; earlier versions of the four CLIs D77 adds. OPEN |
 | G2 True window lifetime | Distinguish reload, extension-host restart, remote loss, close-one, close-last and immediate reopen without mistaken replay/restart | Owner-accepted five-minute policy (D75) implemented in place of a close detector. Candidate 4/5 native evidence on a macOS VS Code 1.143.1 client with Remote-SSH to Linux x64 and Windows x64: reload and remote extension-host restart keep the original runs; close-last then immediate reopen keeps the original processes; no takeover ends them at about 300 s. Evidence stays with the handoff. True close detection remains OPEN |
-| G5 Native environment matrix | Native macOS/Windows/Linux, SSH, WSL and containers, compatible editor, native PTY ABI, paths/quoting/Unicode/keys and package install | Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. On 2026-10-30, a Windows x64 client with VS Code 1.140.0 ran the integration suite and started from the panel the four CLIs D77 adds; 0.2.0 ran natively on Linux x64 (under xvfb) and Windows x64 (in the desktop session) - the unit, package and integration suites, which on Windows run ptyd's named pipes and ConPTY. They found and fixed two crashes of ptyd on Windows - a second kill of an ended console, and node-pty 1.1.0's unlocked console list (D99) - after which ptyd's terminal tests passed 20 runs in a row where they had crashed 2 of 10. On 2026-10-31, on the release code: the unit suites (745 tests; on Windows 743 and the three Unix-socket tests skipped), the integration suites - each of the six CLIs' journeys, tools and messages, cross-window and workspace conversion - and the package checks passed on macOS arm64, Linux x64 and Windows x64; the packages installed in clean profiles on all three, both parts finding each other; and Remote-SSH from macOS passed all nine scenarios on the Linux and Windows hosts and between them. On 2026-10-31, with D101-D118 in, Remote-SSH passed all nine again, Copy Diagnostics in each SSH window naming its window component by the version that component answered with (D116), and the unit suites, integration suites and packages passed on all three. Not run: Linux and Windows as Remote-SSH clients, WSL, containers, a compatible editor, the declared minimum VS Code 1.105, other architectures. OPEN |
+| G5 Native environment matrix | Native macOS/Windows/Linux, SSH, WSL and containers, compatible editor, native PTY ABI, paths/quoting/Unicode/keys and package install | Exercised: macOS arm64 local and Remote-SSH to Linux x64 and Windows x64, packages installed for those three targets, Unicode input. On 2026-10-30, a Windows x64 client with VS Code 1.140.0 ran the integration suite and started from the panel the four CLIs D77 adds; this release ran natively on Linux x64 (under xvfb) and Windows x64 (in the desktop session) - the unit, package and integration suites, which on Windows run ptyd's named pipes and ConPTY. They found and fixed two crashes of ptyd on Windows - a second kill of an ended console, and node-pty 1.1.0's unlocked console list (D99) - after which ptyd's terminal tests passed 20 runs in a row where they had crashed 2 of 10. On 2026-10-31, on the release code: the unit suites (745 tests; on Windows 743 and the three Unix-socket tests skipped), the integration suites - each of the six CLIs' journeys, tools and messages, cross-window and workspace conversion - and the package checks passed on macOS arm64, Linux x64 and Windows x64; the packages installed in clean profiles on all three, both parts finding each other; and Remote-SSH from macOS passed all nine scenarios on the Linux and Windows hosts and between them. On 2026-10-31, with D101-D118 in, Remote-SSH passed all nine again, Copy Diagnostics in each SSH window naming its window component by the version that component answered with (D116), and the unit suites, integration suites and packages passed on all three. Not run: Linux and Windows as Remote-SSH clients, WSL, containers, a compatible editor, the declared minimum VS Code 1.105, other architectures. On 2026-11-01, the release review's test round: WSL in an imported Ubuntu 24.04 distribution, both scenarios; a Docker container on Linux attached as Dev Containers attaches, a local window's agent working with the container window's - the scenarios with a suite in a container window not run; Remote-SSH from macOS to Linux x64 and Windows x64 hosts; the minimum VS Code 1.105.0 on Linux. Still not run: Linux and Windows as Remote-SSH clients, a compatible editor, other architectures. OPEN |
 
 Separate pre-integration evidence from main, recorded before the MCP merge (not certification of the merged build):
 
@@ -131,6 +131,81 @@ integration suite, and 1088 of 1089 units: a Windows-only flake of a POSIX worki
 NTFS file IDs as JavaScript numbers, fixed in `3229090d` and then passing five runs in a row. The specification audit
 passes 12 documents, 185 rules and 80 links. Not run: macOS (the test Mac was offline), real CLIs (their test
 credentials are on that Mac), Remote-SSH, WSL, containers and the minimum VS Code 1.105.
+
+The release review's test round of the same evening, at the owner's request (`feature/77-release-review`, D139-D147),
+each run's credentials read into that run alone and every real CLI in temporary state. Real CLIs, each starting a second
+of its kind with a first task and exchanging messages pasted and submitted, no approval asked for Facade's tools
+(`FACADE_IT_ONLY=real`), YOLO off: on Windows x64 Claude Code 2.1.316 (Haiku), Codex 0.166.0, Pi 1.4.0 and OpenCode
+2.2.4 (Qwen Cloud Token Plan, qwen3.8-flash at low effort; OpenCode set to ask for every tool) and Antigravity (signed
+in by the owner in a temporary home, gemini-3.8-flash-low); on Linux x64 Claude Code 2.1.316 and Codex 0.166.0; on macOS
+Claude Code 2.1.316, Codex 0.166.0 and Pi 1.4.0. They found D139 (Claude Code's trust on Windows) and D140, then D145
+(OpenCode 1.19.5 took Facade's tools but no message: its 1.x line is refused), and D144: Claude Code 2.1.316 in a VS
+Code terminal without its extension installs it and waits for Enter at a welcome - with D144, the Windows journey passes
+with neither the test's own switch nor its setting, and the isolated editor got no extension. Muse Code 1.4.14, signed
+in by the owner in a temporary home (muse-spark-1.3 at low effort): with YOLO off it first set up its Windows sandbox,
+which the test cancelled, and exited; with YOLO on it ran the person's task with no Facade tools, its MCP turned off
+over the project `.mcp.json` entry - the owner reported Muse Code had worked with them, and Muse Code started on
+variants of that entry, sent nothing, showed its `mode` alone made Muse Code refuse it (D147); with D147 the journey
+passed with YOLO on. On Linux x64 Muse Code 1.4.14, signed in by the owner in a temporary home, passed it too, with YOLO
+on, and so it did on macOS arm64 with YOLO on, at the owner's request with the owner's own sign-in and settings
+(muse-spark-1.3 at low effort): Muse Code keeps that sign-in in the macOS Keychain, which it reaches only from the desktop
+session and in the person's own home, so the agents' terminals had that home there, for that run alone without the
+runner's check that refuses it. The editor kept its temporary profile, extensions and Facade root, and Muse Code's
+settings and trusted folders were left as they were.
+
+Remote-SSH passed its four scenarios from a macOS client to a Windows x64 host (26 checks), once the runner gave each
+scenario a Facade root and profiles of its own, and to a Linux x64 host (26 checks, again at the final commit), its run
+root moved off the host's /tmp, a tmpfs near its user quota, with `FACADE_IT_REMOTE_ROOT`. Containers, on Linux x64 with
+Docker 29.1.3 and Dev Containers 0.469.0, a `node:24` container attached: an agent of a local window worked with an
+agent of the container window (6 checks, again at the final commit), ptyd, the CLI and the shim running in the
+container; the scenarios whose suite runs in a container window were not run: a test editor keeps no state, and Dev
+Containers asks it whether to attach, in a dialog it refuses. WSL, in an Ubuntu 24.04 distribution imported for testing
+alone, with VS Code 1.144.0 on Windows and Remote - WSL 1.104.7: one WSL window's journeys (8 checks) and a local
+window's agent working with a WSL window's (6) passed; VS Code 1.144.0 on Windows exits at once for `--folder-uri
+vscode-remote://wsl+…`, and `--remote wsl+<distribution>` opens the folder. Git for Windows 2.53.0(1) and 2.53.0(4)
+delete what an ignored junction in a worktree leads to, 2.54 and 2.55 do not; with `git.path` at 2.53.0(4), Delete
+Worktree was refused and nothing deleted. Linux x64 on the declared minimum VS Code 1.105.0 passed the integration suite
+(40 checks in its eight editor runs).
+
+Updates with agents running, on Windows with fake CLIs: from the Marketplace's 0.0.2 (ptyd protocol 10), installing this
+release's packages and reloading kept the agents' processes, cards, terminals with their scrollback, input, Close and
+new starts, the 0.0.2 ptyd serving on; from 0.0.1 (protocol 8) the two ptyds ran side by side, the earlier agents kept
+input and Close, `read_screen` and `type_text` on them failed as unavailable with no request sent, the update started no
+five-minute cleanup, and the earlier ptyd exited five minutes after its last agent ended. This found D141. A clean
+install of both packages activated and registered its window. J14 on Windows with fake CLIs: 100 agents in one window,
+each started in about 0.22 s; the panel's state answered in 3-25 ms with all 100 cards drawn, Go to Agent listed and
+searched in under 60 ms, Move Up and Move Down moved the card, and a 101st agent started. This found D143, then D146: 11
+of 100 agents started one after another, and 4 of 20 started right after closing 20, did not start, ptyd held by program
+creations Microsoft Defender checked at 0.2-1 s each; with D146 all 100, and all 20, started.
+
+At `fce52648`, after an independent review of D144-D146 and its re-review: Windows x64 (10.0.26200, desktop session)
+passed compilation, 1101 units (6 pending), the translations (300 runtime texts, 64 manifest strings, 11 languages), the
+win32-x64 and window packages, the 11 package checks and the integration suite (40 checks in its eight editor runs, none
+failing); Linux x64 (Ubuntu, under xvfb) compilation, 1099 units (7 pending), the translations, the linux-x64 and window
+packages, the 11 package checks and the integration suite (40 checks); macOS arm64 compilation, 1100 units (6 pending),
+the translations, the darwin-arm64 and window packages, the 11 package checks and the integration suite (40 checks).
+With D147 at `a8955e68`, Windows x64 passed compilation, 1101 units (6 pending), the translations and the integration
+suite (40 checks), and Linux x64 compilation, 1099 units (7 pending) and the integration suite (40 checks); macOS was
+not run again, as D147 changes the Windows launch alone. Not run: the scenarios with a suite in a container window, a
+compatible editor, Remote-SSH from a Linux or Windows client, real CLIs other than those named on each platform.
+
+The pull request's CI, on GitHub's Windows, macOS and Ubuntu runners, then found four test-tool defects, each in one run
+of a few. The panel's Chromium suite gave the browser eight seconds to start, which Chrome once took longer than on a
+Windows runner; it now gets 60 seconds, and a start that fails says whether the browser ended or is still running, and
+what it printed. On macOS the close-and-reopen scenarios lost the reopened window, in PR #44's run too: macOS keeps the
+editor running after its last window closes, and the second editor, started while the first was still closing its
+window, handed its window to it, which reuses an extension development window it still lists for the same extensions and
+reloads it instead of opening one. The runner now waits for the closed window's extension host to end and on macOS ends
+the editor before reopening, as Windows and Linux end it; on the test Mac with every core kept busy the runner before
+this lost the window in one of two runs and the fixed one in none, and with it the reopen scenarios of all six CLIs and
+the five-minute expiry scenario passed on macOS, Linux and Windows. A history test rewrote a Claude Code title sidecar
+at once with a title of the same length: Windows keeps file times by its clock's tick - two such writes on the Windows
+test computer shared every time, the size and the file ID in 1,126 of 2,000 pairs - so the cached title stood; its
+second rename is now a minute later, as a person's is. The cross-window journey required its message submitted within
+send_message's two-second budget, which a slower Ubuntu runner exceeded; as the same-window journeys do, it now takes an
+accepted message too, with the Facade result that reports it submitted, waited for before the agent is stopped - with
+the recipient taking its submissions 4.5 s late, that result came and the journey passed. The fixes preserve the product
+assertions.
 
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
@@ -284,7 +359,7 @@ over the extension specification files except this evidence document.
 | --- | --- |
 | `npm run compile` | PASS: host and webview TypeScript |
 | `npm test -- --reporter dot` | PASS: 815 tests, including 23 added regressions; one Windows-only file replacement test skipped on macOS |
-| Bundle and `npm run package` | PASS: final production rebuild and both 0.2.0 VSIX files; native package is darwin-arm64 only |
+| Bundle and `npm run package` | PASS: final production rebuild and both VSIX files; native package is darwin-arm64 only |
 | `npm run test:package` | PASS: 10 checks, including the relocated native PTY and exclusion of integration probes |
 | `node scripts/l10n.mjs check` | PASS: 190 runtime and 34 manifest strings, English and all 11 translations |
 | `FACADE_IT_KEEP=1 npm run test:integration` | PASS: 24 journeys across the six fake CLI adapters, 2 cross-window checks and 1 workspace-conversion check; 27 total |
@@ -321,7 +396,7 @@ official VS Code 1.143.1. This is new local evidence for the merged code, separa
 | --- | --- |
 | `npm run compile` | PASS: host and webview TypeScript |
 | `npm test` | PASS: 915 tests; one Windows-only file replacement test skipped on macOS |
-| `npm run package` and `npm run test:package` | PASS: both 0.2.0 VSIX files, darwin-arm64 native package, all 11 package checks |
+| `npm run package` and `npm run test:package` | PASS: both VSIX files, darwin-arm64 native package, all 11 package checks |
 | `node scripts/l10n.mjs check` | PASS: 282 runtime texts and 61 manifest strings, English and all 11 translations |
 | `FACADE_IT_KEEP=1 npm run test:integration` | PASS: 31 editor checks plus one workspace-conversion check; six fake built-in CLIs, one fake custom CLI, and two local windows |
 | `python3 -I -B docs/extension/audit/check_spec.py` | PASS: 12 normative documents, 179 rules and 80 local links; numbered references valid |
@@ -365,6 +440,8 @@ for review, not acceptance evidence.
 
 ## Change log
 
+- 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D147).
+- 2026-11-01: Evidence that named this release's packages by the version an earlier commit wrote names them as this release's: its version is 0.0.2 (D142).
 - 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
 - 2026-11-01: U13 covers the panel status, stable-name and responsive-location decisions D127/D128.
@@ -385,7 +462,7 @@ for review, not acceptance evidence.
 - 2026-10-31: G3 covers every built-in: the four CLIs D77 adds have readers on recorded screens, the integration suite runs
   each of the six, and five worked together as real agents with YOLO off; M23 names how each keeps Facade's tools from
   asking (D100).
-- 2026-10-30: G1, G3 and G5 record 0.2.0 run natively on Linux and Windows and over Remote-SSH to both, the real Claude Code
+- 2026-10-30: G1, G3 and G5 record this release run natively on Linux and Windows and over Remote-SSH to both, the real Claude Code
   attempt, and the two Windows crashes of ptyd found and fixed.
 
 - 2026-10-30: Step 2 of the Facade Code extension: G1 covers the client network and extension-pack installation; G3

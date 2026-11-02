@@ -29,7 +29,9 @@ dated observations; an old probe is not current-platform certification.
 Use this order, then custom entries in configuration order. `.enabled:false` hides a built-in from new starts, never
 stops its runs. Recompute on relevant settings/PATH changes, picker/discovery request, and immediately before launch.
 Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or modifying
-settings.
+settings. A line of a CLI Facade does not support, known by the version its installation names, is unavailable for new
+starts and refused at a start, saying how to update: OpenCode's 1.x line, a program of npm's `opencode-ai` (D145). A
+version no installation file names is started.
 
 ### 1.2 Executable and environment
 
@@ -53,7 +55,9 @@ inherited run markers, which would make a run act as another's: Facade's own run
 Claude Code session's (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_BRIDGE_SESSION_ID`,
 `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_JOB_DIR`), as competitive analysis found necessary. A configured layer may set any of
 them again (D134). Set `TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `FACADE_AGENT` to the run's `#aN` alias. Never copy
-credentials from the client to a remote environment.
+credentials from the client to a remote environment. Claude Code is given `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` where
+no layer sets that variable: in a VS Code terminal without its VS Code extension, Claude Code 2.1.316 installs it and
+shows a welcome that waits for Enter, past which no message goes (D144).
 
 Empty `.path` means command on PATH. A simple name is searched on that PATH; relative path is from launch cwd; leading
 `~` uses that environment's home; absolute path is exact. Whitespace-only is invalid, no silent fallback to another CLI.
@@ -176,7 +180,7 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | Claude Code | Per-run `--mcp-config` file | Per-run `--plugin-dir` plugin | `--allowedTools mcp__facade` |
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
 | Antigravity | Project plugin `.agents/plugins/facade`, shared | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
-| Muse Code | Per-run `-c mcpServers.facade`; on Windows a `facade` entry merged into the project's `.mcp.json`, shared | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
+| Muse Code | Per-run `-c mcpServers.facade`, optional, on Windows too, where Facade starts its native program; one that starts through cmd.exe gets a `facade` entry merged into the project's `.mcp.json`, shared, with no `mode`, which Muse Code 1.4.14 refuses there (D147) | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
 | OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
 | Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
 
@@ -214,8 +218,8 @@ authentication mechanism is introduced.
 Support the existing OSC 7501 adapter where verified: `working` → working; `idle|done|blocked` → not_working; `error` →
 known error; `clear`, reset or pending probe → unknown. Activity reporting is verified for a run when that run's CLI
 answers the OSC 7501 capability probe or sends valid reports, independent of CLI version; CLI-specific quirks remain
-version-scoped evidence. OpenCode reports from its 2.x line; OpenCode 1.x sends no reports, so its runs show unavailable
-activity (D78). Ignore worker reports carrying a distinct worker ID. Respond to capability probes only for
+version-scoped evidence. OpenCode reports from its 2.x line; its 1.x line, which sends no reports, is not started
+(D78, D145). Ignore worker reports carrying a distinct worker ID. Respond to capability probes only for
 protocols implemented by the PTY adapter. A run is still starting, green with its startup stage, until its CLI first
 shows its activity - a valid report or, where its screen is read, a state its reader knows - for at most 20 s from its
 process start, a reloaded window counting from that start too (D81). Past that bound, a missing reliable activity
@@ -340,8 +344,10 @@ provide a generic engine to edit arbitrary settings files or mirror their schema
 starts in, as the person would by accepting the CLI's own trust question (D62): where the CLI takes trust for one launch,
 in that launch (Codex `-c projects` with `trust_level = "trusted"` for the folder; Muse Code `--trust-workspace`; Pi
 `--approve`); where it keeps trust in its own file, by merging only that entry as the CLI itself writes it, under the
-CLI's lock and preserving the rest of the file (Claude Code `hasTrustDialogAccepted` for the repository's main checkout
-in its global configuration; Antigravity `trustedWorkspaces` with the folder, spelled as Antigravity names its
+CLI's lock and preserving the rest of the file (Claude Code `hasTrustDialogAccepted` in its global configuration for the
+folder it keys the project on - on macOS and Linux the real path of the repository's main checkout; on Windows the folder
+with `.git` at or above the folder it starts in, a linked worktree's own, spelled as the run is given it with forward
+slashes, D139; Antigravity `trustedWorkspaces` with the folder, spelled as Antigravity names its
 working directory, in `~/.gemini/antigravity-cli/settings.json`). OpenCode asks no trust question and is given none.
 A file that cannot be read, or that does not exist, is left as it is and the CLI asks in its terminal. Claude Code's trust
 covers every folder below a trusted one, so it is never written for the home folder, a folder above it or a filesystem
@@ -480,6 +486,16 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-01: 2.2 gives Muse Code on Windows its server by `-c` as elsewhere: its project `.mcp.json` entry's `mode` made
+  Muse Code 1.4.14 turn off its MCP, at the owner's report (D147).
+- 2026-11-01: 1.1 and 2.3 refuse OpenCode's 1.x line with how to update, at the owner's decision, and 2.2 gives every
+  OpenCode run with Facade's tools `--standalone` again: started without it, 1.19.5 took no message (D145, superseding
+  D140).
+- 2026-11-01: 1.2 keeps Claude Code from installing its VS Code extension, whose welcome waited for Enter, at the owner's
+  request (D144).
+- 2026-11-01: 2.2 gives OpenCode `--standalone` on its 2.x line alone: its 1.x line refused it and did not start (D140).
+- 2026-11-01: 3.3 keys Claude Code's trust on Windows as Claude Code 2.1.316 reads it there - the folder with `.git` at or
+  above the start folder, a linked worktree's own, spelled as given - found by the release review's real-CLI run (D139).
 - 2026-11-01: From the owner-requested release review: 1.2 takes the host environment as VS Code's terminal does, without
   inherited run markers, and only programs a launch can start on Windows; 1.4 and 3.1 recognize every spelling of an option;
   2.1 gives Codex on Windows its per-character paste time; 2.4 starts without session tracking where settings cannot be

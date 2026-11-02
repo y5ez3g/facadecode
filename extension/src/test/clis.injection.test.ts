@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import type { CliAdapter } from '../clis/adapter';
-import { Catalog, catalogOf } from '../clis/catalog';
+import { Catalog, catalogOf, entryOf } from '../clis/catalog';
 import { claudeAdapter } from '../clis/claude';
 import { codexAdapter } from '../clis/codex';
 import { antigravityAdapter } from '../clis/antigravity';
@@ -16,7 +16,7 @@ import { openCodeAdapter } from '../clis/opencode';
 import { piAdapter } from '../clis/pi';
 import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconcileRuns, releaseProject, releaseRun } from '../clis/injected';
 import { sessionDirOf, sessionFileOf } from '../clis/identity';
-import { DestinationEnvironment, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
+import { CliPlanError, DestinationEnvironment, discoverEntry, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
 import { INPUT_ADAPTERS } from '../ptyd/composer';
 import { McpServer, ProjectWrite, runDirOf, ToolsInput } from '../clis/tools';
 import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
@@ -200,7 +200,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([without.args.includes('--settings'), without.warmUp], [false, undefined]);
 	});
 
-	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows, through cmd.exe, the project\'s .mcp.json entry instead, its references empty where unset', () => {
+	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows too, but through cmd.exe the project\'s .mcp.json entry instead, its references empty where unset and with no mode (D147)', () => {
 		const planned = plan({ cli: 'muse', tools, prompt: 'Fix the build' });
 		const references = { ELECTRON_RUN_AS_NODE: '${FACADE_ELECTRON_RUN_AS_NODE}', FACADE_RUN: '${FACADE_RUN}', FACADE_PTYD: '${FACADE_PTYD}', FACADE_AGENT: '${FACADE_AGENT}' };
 		// Optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (D107)
@@ -209,9 +209,13 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		// Each reference names a variable the CLI's environment carries; the runtime's under a name no other program reads
 		assert.deepStrictEqual([planned.env.FACADE_ELECTRON_RUN_AS_NODE, planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.FACADE_AGENT, planned.env.ELECTRON_RUN_AS_NODE], ['1', 'run-1', '/tmp/ptyd.sock', '#a1', undefined]);
 		assert.deepStrictEqual(planned.prompt?.path, 'native');
-		// On Windows its launcher goes through cmd.exe, which cannot carry the entry: it is a shared project entry there
-		const windows = museAdapter.tools!.inject({ ...tools, platform: 'win32' });
-		assert.deepStrictEqual([windows.args, windows.project[0]], [undefined, { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' }, mode: 'optional' } }]);
+		// On Windows its installed native program, which Facade starts directly, takes the entry as an argument too, as its hooks' (D147)
+		const native = museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: false });
+		assert.deepStrictEqual([native.args, native.project.map(each => each.path)], [museAdapter.tools!.inject({ ...tools, platform: 'darwin' }).args, [path.join('.agents', 'skills', 'facade', 'SKILL.md')]]);
+		// Through cmd.exe, which cannot carry it, a shared project entry - with no mode: Muse Code 1.4.14 takes a project's .mcp.json with
+		// one for a configuration error, and turns off all its MCP servers
+		const windows = museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: true });
+		assert.deepStrictEqual([windows.args, windows.project[0]], [undefined, { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } } }]);
 		assert.deepStrictEqual(windows.env, { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' });
 	});
 
@@ -247,6 +251,57 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.strictEqual(plan({ cli: 'opencode', tools, prompt: '-v' }).prompt?.path, 'post_start');
 		const without = plan({ cli: 'opencode' }, theirs);
 		assert.deepStrictEqual([without.args.includes('--standalone'), without.env.OPENCODE_CONFIG_CONTENT], [false, theirs.host.OPENCODE_CONFIG_CONTENT]);
+	});
+
+	// OpenCode 1.18.34, npm's `opencode-ai`, printed its usage and exited 1 at --standalone in the release review's real-CLI run, and
+	// 1.19.5 started without it took no message: the owner decided its 1.x line is refused, saying how to update (D145)
+	test('OpenCode\'s 1.x line, known by the npm package its program is in, is refused where new starts are offered it and at a start, saying how to update; 2.x and an unknown one start with --standalone (D145)', () => {
+		const installed = (folder: string, name: string, version: string) => {
+			const pkg = path.join(temp.dir, folder, 'node_modules', ...name.split('/'));
+			program(path.join(pkg, 'bin'), 'opencode');
+			fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name, version }));
+			return path.join(pkg, 'bin', 'opencode');
+		};
+		const catalogAt = (file: string) => catalogOf(name => name === 'facade.opencode.path' ? file : undefined);
+		const at = (file: string) => (input: Partial<PlanInput>) => planLaunch(catalogAt(file), { alias: '#a1', cwd, yolo: false, cli: 'opencode', ...input }, destination);
+		const first = installed('one', 'opencode-ai', '1.18.34');
+		const refusal = { kind: 'opencode_1x', values: ['1.18.34'] };
+		const refused = (err: unknown) => err instanceof CliPlanError && err.reason === 'unsupported' && JSON.stringify(err.said) === JSON.stringify(refusal)
+			&& err.message === 'OpenCode 1.18.34 is not supported: Facade Code needs OpenCode 2 or later. Replace npm\'s opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli';
+		// With Facade's tools or without, a new conversation or a resumed one alike
+		assert.throws(() => at(first)({ tools }), refused);
+		assert.throws(() => at(first)({}), refused);
+		assert.throws(() => at(first)({ resume: { sessionId: 'ses_1' } }), refused);
+		const offered = discoverEntry(entryOf(catalogAt(first), 'opencode')!, destination, cwd);
+		assert.deepStrictEqual([offered.available, offered.said, offered.notInstalled, offered.executable], [false, refusal, undefined, undefined]);
+		assert.ok(refused(new CliPlanError(offered.problem!, 'unsupported', offered.said)), 'the picker says what a start would');
+		const second = at(installed('two', '@opencode/cli', '2.2.4'))({ tools });
+		assert.deepStrictEqual([second.args, second.version], [['--standalone'], '2.2.4']);
+		assert.strictEqual(discoverEntry(entryOf(catalogAt(installed('three', '@opencode/cli', '2.2.4')), 'opencode')!, destination, cwd).available, true);
+		// Another package's folder, or none: no version known, started as the current line
+		const unknown = at(installed('other', 'opencode-wrapper', '1.0.0'))({ tools });
+		assert.deepStrictEqual([unknown.args, unknown.version], [['--standalone'], undefined]);
+		assert.deepStrictEqual(plan({ cli: 'opencode', yolo: false, tools }).args, ['--standalone']);
+	});
+
+	// npm's shims on Windows, as `npm install -g` writes them, read for the program each runs
+	(process.platform === 'win32' ? test : test.skip)('on Windows OpenCode\'s version is read through npm\'s shim, from the package of the program it runs: 1.x is refused, 2.x starts as its program (D145)', () => {
+		const prefix = path.join(temp.dir, 'npm-prefix');
+		const shimOf = (name: string, version: string) => {
+			const pkg = path.join(prefix, 'node_modules', ...name.split('/'));
+			fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true });
+			fs.writeFileSync(path.join(pkg, 'bin', 'opencode.exe'), 'MZ');
+			fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name, version }));
+			const shim = path.join(prefix, 'opencode.cmd');
+			fs.writeFileSync(shim, `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\${name.replace('/', '\\')}\\bin\\opencode.exe"   %*\r\n`);
+			return { shim, program: path.join(pkg, 'bin', 'opencode.exe') };
+		};
+		const start = (shim: string) => planLaunch(catalogOf(name => name === 'facade.opencode.path' ? shim : undefined), { alias: '#a1', cwd, yolo: false, cli: 'opencode', tools }, { host: { ...destination.host, PATH: prefix }, platform: 'win32' });
+		const first = shimOf('opencode-ai', '1.18.34');
+		assert.throws(() => start(first.shim), (err: unknown) => err instanceof CliPlanError && JSON.stringify(err.said) === JSON.stringify({ kind: 'opencode_1x', values: ['1.18.34'] }));
+		const second = shimOf('@opencode/cli', '2.2.4');
+		const planned = start(second.shim);
+		assert.deepStrictEqual([planned.executable, planned.version, planned.args], [second.program, '2.2.4', ['--standalone']]);
 	});
 
 	test('Pi\'s prompt is its message after --, except one it would read as a file to attach', () => {

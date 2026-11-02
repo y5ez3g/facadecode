@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0
+## 0.0.2
 
 Agents that work together, six native CLIs, and saved conversations.
 
@@ -21,9 +21,14 @@ Agents that work together, six native CLIs, and saved conversations.
 - **Antigravity's first turn.** Antigravity loads Facade's tools only once it is in use. Facade opens and closes its MCP list right after it starts, so that its first task can already use them.
 - **New settings.** `facade.collaboration.enabled` (on by default) turns working together on or off for new agents. `facade.collaboration.waitSeconds` (120 by default) sets how long an agent waits for another agent to start or stop.
 - **Installing in a remote window.** Facade Code now waits up to a minute for its Window Component while VS Code installs it, so a first install in a remote window usually needs no reload. If the component is missing or turned off, the panel says so and offers **Show Window Component**.
-- **Updating from 0.0.1.** Agents started before the update keep their cards and terminals. Operations supported by their original runtime continue to work; new launch integrations apply to new agents.
+- **Updating from 0.0.1.** Agents started before the update keep their cards and terminals. Operations supported by their original runtime continue to work; new launch integrations apply to new agents. Agents started after the update are numbered after them, never with their `#a1`, `#a2`.
 - **Fixed on Windows.** Closing an agent, or several agents ending at once, could crash the background process that keeps agents running, which ended every agent in every window.
+- **Muse Code on Windows gets Facade's tools.** Facade gave them to it in the folder's `.mcp.json` in a form Muse Code 1.4.14 refuses, which turned off all its MCP servers in that folder; it now gives them to the agent's run alone, as on macOS and Linux, and leaves your `.mcp.json` as it is.
+- **Many agents at once on Windows.** Starting many agents within seconds - twenty together, or a hundred one after another - no longer leaves some of them unstarted with "did not start within 10 seconds": Facade now starts their programs one at a time.
 - **Safer worktree deletion.** Deleting a worktree now also closes agents working in its subfolders first. On Windows, a worktree that contains a link to another folder is not deleted with a Git older than 2.54, which would delete the linked folder's files too; long paths are handled, and Facade says when Git leaves the folder behind.
+- **Claude Code on Windows starts without its trust question.** Facade now trusts the folder as Claude Code on Windows names it - the drive and folders as written, a worktree as itself - so agents no longer wait at "Do you trust this folder?" in new folders and worktrees.
+- **OpenCode 1.x is not started.** Agents need OpenCode 2 (`@opencode/cli`). With OpenCode 1.x (npm's `opencode-ai`) installed, New Agent lists OpenCode as unavailable and says how to update, instead of starting an agent that exits at once or takes no message.
+- **Claude Code's first agent takes messages.** In a VS Code terminal, Claude Code installed its VS Code extension and then waited for Enter at a welcome, which held back every message to that agent. Agents now start with that install turned off, unless you set `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL` yourself.
 - **Agents start with a clean environment.** Agents get the environment a VS Code terminal gets, without VS Code's internal variables or those of another agent session Facade Code was opened from.
 - **Steadier after reloads.** Messages on their way when a window reloads are still delivered, or their senders are told; when the background process that keeps agents running is slow to answer, Facade waits for it instead of starting a second one; and a window keeps trying until every one of its agents shows.
 

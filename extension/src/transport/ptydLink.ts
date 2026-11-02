@@ -12,8 +12,15 @@ import { PTYD_PROTOCOL, type CallRefusal, type Response } from '../ptyd/protocol
 import { TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import type { FailureCode } from './failure';
 
-/** How long ptyd has to answer the shim's hello: the two seconds of a call's first response (RULES-1.2). */
+/** How long a call waits for the shim's connection to ptyd: the two seconds of a call's first response (RULES-1.2). */
 const HELLO_WAIT_MS = 2_000;
+
+/**
+ * How long ptyd has to take a connection and answer its hello. A ptyd busy starting many CLIs at once can answer later than a call
+ * waits; given up then, just after ptyd took it, the connection would tell the window the run's tools went (RULES-3.1) though the
+ * next call connects again. It is kept instead, for the calls after, and only a call fails at its two seconds.
+ */
+const CONNECT_WAIT_MS = 30_000;
 
 /** Why a call came back with no window's answer, as MCP-1.2 reports it, and whether it may have acted. */
 export class CallFailed extends Error {
@@ -135,7 +142,7 @@ export class PtydLink {
 	 * process's monotonic clock (RULES-1.2).
 	 */
 	async call(call: Omit<ToolCall, 'elapsedMs' | 'caller' | 'protocol'>, readAt: number): Promise<unknown> {
-		const connection = await this.connected();
+		const connection = await within(this.connected(), HELLO_WAIT_MS, () => notCarried(`the agent runtime (ptyd) at ${this.socketPath} did not answer within ${HELLO_WAIT_MS} ms`));
 		return connection.request('call', { protocol: TOOL_PROTOCOL, caller: this.run, ...call, elapsedMs: Math.ceil(performance.now() - readAt) });
 	}
 
@@ -170,7 +177,7 @@ export class PtydLink {
 				socket.destroy();
 				reject(err);
 			};
-			const timer = setTimeout(() => fail(notCarried(`the agent runtime (ptyd) at ${this.socketPath} did not answer within ${HELLO_WAIT_MS} ms`)), HELLO_WAIT_MS);
+			const timer = setTimeout(() => fail(notCarried(`the agent runtime (ptyd) at ${this.socketPath} did not answer within ${CONNECT_WAIT_MS} ms`)), CONNECT_WAIT_MS);
 			socket.once('error', err => {
 				if (!connected) {
 					fail(notCarried(`the agent runtime (ptyd) cannot be reached at ${this.socketPath} (${err.message})`));
@@ -191,6 +198,14 @@ export class PtydLink {
 			});
 		});
 	}
+}
+
+/** `promise`, or `failure()` once `ms` passed first: what `promise` waits for goes on. */
+function within<T>(promise: Promise<T>, ms: number, failure: () => Error): Promise<T> {
+	return new Promise((resolve, reject) => {
+		const timer = setTimeout(() => reject(failure()), ms);
+		promise.then(value => { clearTimeout(timer); resolve(value); }, err => { clearTimeout(timer); reject(err); });
+	});
 }
 
 /** The shim and the ptyd it reached do not speak one protocol. */

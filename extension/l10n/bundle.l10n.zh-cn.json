@@ -282,6 +282,7 @@
 	"Deleted worktree \"{0}\", but Git left its folder {1} behind.": "已删除工作树“{0}”，但 Git 留下了它的目录 {1}。",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "此窗口的 Facade Code 记录已损坏，无法在此恢复其 Agent。请关闭此窗口并重新打开其文件夹或工作区，或重启 {0}。",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} 通过 cmd.exe 运行，而 cmd.exe 无法在 UNC 文件夹 {1} 中运行；请将 {2}.path 设置为 CLI 自身的程序或 Node 入口点",
+	"OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli": "不支持 OpenCode {0}：Facade Code 需要 OpenCode 2 或更高版本。请将 npm 的 opencode-ai 换成 @opencode/cli：先运行 npm uninstall -g opencode-ai，再运行 npm install -g @opencode/cli",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} 是 Node 脚本，但 PATH 上没有可运行它的 Node",
 	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "信任：不授予主目录、其父目录或文件系统根目录；CLI 会在终端中询问",
 	"Could not restore {0} pinned agents. Their cards show why.": "无法恢复 {0} 个已固定的 agent。原因显示在各自的卡片上。",

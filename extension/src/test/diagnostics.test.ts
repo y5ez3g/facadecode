@@ -23,7 +23,7 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 function diagnostics(more: Partial<Diagnostics> = {}): Diagnostics {
 	return {
 		at: Date.UTC(2026, 9, 31, 12),
-		about: ['Facade Code 0.2.0', 'window component 0.2.0', 'Visual Studio Code 1.143.0', 'darwin arm64', 'local'],
+		about: ['Facade Code 0.0.2', 'window component 0.0.2', 'Visual Studio Code 1.143.0', 'darwin arm64', 'local'],
 		collaboration: true,
 		agents: [],
 		log: ['2026-10-31T11:00:00.000Z Agent @Ada #a1 started in /Users/ada/shop'],
@@ -61,7 +61,7 @@ suite('Copy Diagnostics: what it copies (ARCHITECTURE-3.3, D116)', () => {
 		}));
 		assert.strictEqual(text, [
 			'Facade Code diagnostics, 2026-10-31T12:00:00.000Z',
-			'Facade Code 0.2.0; window component 0.2.0; Visual Studio Code 1.143.0; darwin arm64; local',
+			'Facade Code 0.0.2; window component 0.0.2; Visual Studio Code 1.143.0; darwin arm64; local',
 			'Collaboration through Facade\'s tools: on',
 			'',
 			'CLIs for ~/shop',
@@ -126,7 +126,7 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			l10n: { t: (text: string) => text },
 			env: { appName: 'Visual Studio Code', remoteName: undefined, clipboard: { writeText: async (text: string) => void clipboard.push(text) } },
 			version: '1.143.0',
-			extensions: { getExtension: (id: string) => id === 'facade.facadecode-window' ? { packageJSON: { version: '0.2.0' } } : undefined },
+			extensions: { getExtension: (id: string) => id === 'facade.facadecode-window' ? { packageJSON: { version: '0.0.2' } } : undefined },
 			commands: { registerCommand: (id: string, handler: () => Promise<void>) => { handlers.set(id, handler); return { dispose: () => undefined }; } },
 			window: { showInformationMessage: async (text: string) => void notices.push(text) }
 		};
@@ -155,12 +155,12 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 				},
 				inspect: id => id === bo.id ? new Promise(() => undefined) : Promise.resolve('usable'),
 				logFile,
-				version: '0.2.0',
+				version: '0.0.2',
 				home: dir
 			});
 			await handlers.get('facade.copyDiagnostics')!();
 			const [text] = clipboard;
-			assert.match(text, /^Facade Code 0\.2\.0; window component 0\.2\.0; Visual Studio Code 1\.143\.0; \w+ \w+; local$/m);
+			assert.match(text, /^Facade Code 0\.0\.2; window component 0\.0\.2; Visual Studio Code 1\.143\.0; \w+ \w+; local$/m);
 			assert.match(text, /^CLIs for ~\/app\n- Claude Code \(claude\): 2\.1\.316; input reader claude-frame$/m);
 			assert.match(text, /^ {2}running, working; tools available; input reader claude-frame, reads usable\n {2}\| │ >\n {2}\| ╰──╯$/m);
 			assert.match(text, /^- @Bo #a2 .*\n {2}running, working; tools available; input reader none, reads nothing: it did not answer\n {2}\| \(its screen could not be read: ptyd is not running\)$/m);
@@ -186,9 +186,9 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			agents: { list: () => [] }, locations: { snapshot: () => ({ locations: [], folders: [], pending: false }) },
 			clis: { list: async () => [], describe: () => ({ launches: [] }), collaborationEnabled: () => false } as never,
 			readScreen: async () => ({ lines: [], text: [], buffer: 'normal', older: false }) as unknown as ScreenRead,
-			inspect: async () => 'usable', logFile: path.join(os.tmpdir(), 'facade-no-such-agents.log'), version: '0.2.0', home: '/home/ada'
+			inspect: async () => 'usable', logFile: path.join(os.tmpdir(), 'facade-no-such-agents.log'), version: '0.0.2', home: '/home/ada'
 		};
-		for (const [component, named] of [['0.2.0', 'window component 0.2.0'], [undefined, 'window component out of sight of this extension host']] as const) {
+		for (const [component, named] of [['0.0.2', 'window component 0.0.2'], [undefined, 'window component out of sight of this extension host']] as const) {
 			const handlers = new Map<string, () => Promise<void>>();
 			const { registerDiagnostics } = withModules({ vscode: remoteApi(handlers) })<typeof import('../host/diagnostics')>(require.resolve('../host/diagnostics'));
 			registerDiagnostics({ ...deps, ...component ? { component } : {} });

@@ -159,11 +159,18 @@ const DRAWING = {};
 /**
  * One agent's process in a pty of ptyd's, with a headless terminal that draws everything it writes: what a window shows again
  * after a reload (ARCHITECTURE-2.3). It outlives the window that shows it; the supervisor owns explicit close and the selected
- * five-minute connection cleanup policy. An upgrade alone never terminates it.
+ * five-minute connection cleanup policy. An upgrade alone never terminates it. Its program is created as it is made, or for
+ * ptyd's starts in its turn ({@link spawn}, D146): until then it has no process, keeps its size and what the person types for
+ * it, takes no automated input, and a close ends it with none ever created.
  */
 export class Run {
 
-	private readonly pty: IPty;
+	/** Its pty, once its turn created its program (D146). */
+	private pty: IPty | undefined;
+	/** What was typed before its program was created, written to it once it is: a console takes what is typed as it starts (D146). */
+	private readonly unwritten: string[] = [];
+	/** When its program was created; until then, when it was asked for (D81, D146). */
+	private startTime = Date.now();
 	private readonly terminal: import('@xterm/headless').Terminal;
 	private readonly serializer: import('@xterm/addon-serialize').SerializeAddon;
 	private listener: RunListener | undefined;
@@ -214,11 +221,18 @@ export class Run {
 	private disposed = false;
 	/** Set once a window removed it: no window lists it again, and it is dropped as it ends. */
 	removed = false;
-	readonly startedAt = Date.now();
+	/**
+	 * When its program was created - the process start a run's startup counts from (D81) - or, until its turn, now: a window that sees
+	 * it before then gives its startup no less time than it has (D146).
+	 */
+	get startedAt(): number {
+		return this.pty ? this.startTime : Date.now();
+	}
 	/** What the window keeps with its run, as it said last. */
 	meta: { readonly [key: string]: unknown };
 
-	constructor(readonly params: SpawnParams) {
+	/** `later` makes it with no program, for {@link spawn} to create in its turn (D146); else its program is created now. */
+	constructor(readonly params: SpawnParams, options: { readonly later?: boolean } = {}) {
 		this.meta = params.meta;
 		this.screenReader = screenReaderOf(params.screenStatus);
 		const { Terminal } = loadXterm();
@@ -237,26 +251,47 @@ export class Run {
 		this.followStatus();
 		this.followModes();
 		this.programStatus.onDidChange(status => this.listener?.status(status));
-		try {
-			this.pty = spawnPty(params);
-		} catch (error) {
-			terminal.dispose();
-			throw error;
-		}
 		// With no window showing it, ptyd answers what the program asks its terminal - where its cursor is - so that a CLI waiting
 		// for the answer goes on; a window that shows it answers itself
 		terminal.onData(reply => {
 			if (!this.listener && this.writable) {
-				this.pty.write(reply);
+				this.send(reply);
 			}
 		});
-		this.pty.onData(data => {
+		if (!options.later) {
+			try {
+				this.spawn();
+			} catch (error) {
+				terminal.dispose();
+				throw error;
+			}
+		}
+	}
+
+	/**
+	 * Creates its program, in its size as it stands, and writes what was typed for it meanwhile (D146). Throws where the run was
+	 * ended first - its program is then never created - or where node-pty cannot create it.
+	 */
+	spawn(): void {
+		if (this.exited || this.disposed) {
+			throw new Error(`Run ${this.params.run} was closed before its turn to start came: it never started.`);
+		}
+		if (this.pty) {
+			return;
+		}
+		const pty = this.pty = spawnPty({ ...this.params, cols: this.terminal.cols, rows: this.terminal.rows });
+		this.startTime = Date.now();
+		// Held back already - its window over its buffer - it is not read either until let go
+		if (this.holders.size) {
+			pty.pause();
+		}
+		pty.onData(data => {
 			this.lastOutput = Date.now();
 			const seq = ++this.seq;
 			this.draw(data);
 			this.listener?.output(seq, data);
 		});
-		this.pty.onExit(({ exitCode, signal }) => {
+		pty.onExit(({ exitCode, signal }) => {
 			this.reaped = true;
 			this.reapedCode = exitCode;
 			const ctrlC = this.ctrlCAt !== undefined && Date.now() - this.ctrlCAt <= INTERRUPT_EVIDENCE_MS;
@@ -267,18 +302,36 @@ export class Run {
 					// It ended on the alternate screen: that is its last frame, and the normal buffer its final output
 					this.keepFrame();
 				}
-				this.exited = { exitCode, ...(signal ? { signal } : {}), ...(ctrlC ? { ctrlC: true as const } : {}) };
-				this.holders.clear();
-				this.listener?.exit(this.exited);
-				// A listener may drop/dispose this run. Every waiter registered for this exit still receives it.
-				for (const listener of [...this.exitListeners]) {
-					listener(this.exited);
-				}
+				this.ended({ exitCode, ...(signal ? { signal } : {}), ...(ctrlC ? { ctrlC: true as const } : {}) });
 			});
 			if (process.platform === 'win32') {
-				setTimeout(() => releaseConsole(this.pty), CONSOLE_FLUSH_MS).unref?.();
+				setTimeout(() => releaseConsole(pty), CONSOLE_FLUSH_MS).unref?.();
 			}
 		});
+		for (const data of this.unwritten.splice(0)) {
+			pty.write(data);
+		}
+	}
+
+	/** It ended with `exit`: its input ends, and its claimant and every waiter for its exit are told. */
+	private ended(exit: RunExit): void {
+		this.queue.end();
+		this.exited = exit;
+		this.holders.clear();
+		this.listener?.exit(exit);
+		// A listener may drop/dispose this run. Every waiter registered for this exit still receives it.
+		for (const listener of [...this.exitListeners]) {
+			listener(exit);
+		}
+	}
+
+	/** Writes `data` to its program, or keeps it for the program its turn creates (D146). */
+	private send(data: string): void {
+		if (this.pty) {
+			this.pty.write(data);
+		} else {
+			this.unwritten.push(data);
+		}
 	}
 
 	get id(): string {
@@ -292,24 +345,27 @@ export class Run {
 	/**
 	 * Resolves once its program has started, with its PID: at once where node-pty starts it as it spawns, and on Windows - where
 	 * node-pty 1.2 starts it only once the console's output is connected - as soon as it has one. Rejects where it ended first, as
-	 * a program that could not start does, or none came within {@link START_WAIT_MS}.
+	 * a program that could not start does, or none came within {@link START_WAIT_MS}: what ptyd heard meanwhile is read first, as
+	 * timers run before I/O, so that a busy ptyd never takes a program that started for one that did not (D146).
 	 */
 	started(): Promise<void> {
 		return new Promise((resolve, reject) => {
 			const end = Date.now() + START_WAIT_MS;
-			const check = () => {
-				if (this.pty.pid > 0) {
+			const check = (last: boolean) => {
+				if ((this.pty?.pid ?? 0) > 0) {
 					resolve();
 				} else if (this.reaped) {
 					// node-pty's own words for a program Windows could not start, as it threw them before it started programs later
 					reject(new Error(`Cannot create process (error code: ${this.reapedCode})`));
-				} else if (Date.now() > end) {
+				} else if (last) {
 					reject(new Error(`${this.params.file} did not start within ${START_WAIT_MS / 1_000} seconds.`));
+				} else if (Date.now() > end) {
+					setImmediate(() => check(true));
 				} else {
-					setTimeout(check, 20);
+					setTimeout(() => check(false), 20);
 				}
 			};
-			check();
+			check(false);
 		});
 	}
 
@@ -319,7 +375,7 @@ export class Run {
 		return {
 			run: this.params.run,
 			owner: this.params.owner,
-			pid: this.pty.pid,
+			pid: this.pty?.pid ?? 0,
 			cwd: this.params.cwd,
 			cols: this.terminal.cols,
 			rows: this.terminal.rows,
@@ -364,14 +420,14 @@ export class Run {
 			return;
 		}
 		if (!this.holders.size) {
-			this.pty.pause();
+			this.pty?.pause();
 		}
 		this.holders.add(holder);
 	}
 
 	release(holder: object): void {
 		if (this.holders.delete(holder) && !this.holders.size && !this.exited) {
-			this.pty.resume();
+			this.pty?.resume();
 		}
 	}
 
@@ -383,14 +439,14 @@ export class Run {
 		if (hasCtrlC(data)) {
 			this.ctrlCAt = Date.now();
 		}
-		this.pty.write(data);
+		this.send(data);
 	}
 
 	resize(cols: number, rows: number): void {
 		if (!this.writable || cols < 1 || rows < 1 || (cols === this.terminal.cols && rows === this.terminal.rows)) {
 			return;
 		}
-		this.pty.resize(cols, rows);
+		this.pty?.resize(cols, rows);
 		this.terminal.resize(cols, rows);
 		this.terminal.options.scrollback = scrollbackRows(cols);
 	}
@@ -405,8 +461,12 @@ export class Run {
 			if (!alive()) {
 				return { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false };
 			}
+			if (!this.pty) {
+				// No program yet to take it: nothing is kept to go in later, in modes it has not set yet (D146)
+				return { outcome: 'not_applied', pasted: false, entered: false };
+			}
 			if (text) {
-				this.pty.write(`${lead ?? ''}${pasteSequence(this.terminal.modes.bracketedPasteMode, text)}`);
+				this.send(`${lead ?? ''}${pasteSequence(this.terminal.modes.bracketedPasteMode, text)}`);
 			}
 			if (!enter) {
 				return { outcome: 'applied', pasted: !!text, entered: false };
@@ -415,7 +475,7 @@ export class Run {
 			if (!alive()) {
 				return { outcome: text ? 'partial' : 'not_applied', reason: 'ended', pasted: !!text, entered: false };
 			}
-			this.pty.write(keySequence(this.keyModes(), 'Enter'));
+			this.send(keySequence(this.keyModes(), 'Enter'));
 			return { outcome: 'applied', pasted: !!text, entered: true };
 		}, { outcome: 'not_applied', pasted: false, entered: false });
 	}
@@ -426,6 +486,10 @@ export class Run {
 	 */
 	keys(keys: readonly string[]): Promise<InputEffect> {
 		return this.queue.add(async alive => {
+			if (!this.pty) {
+				// No program yet to take them (D146)
+				return { outcome: 'not_applied', keysSent: 0 };
+			}
 			let lone = false;
 			for (let sent = 0; sent < keys.length; sent++) {
 				if (lone) {
@@ -440,7 +504,7 @@ export class Run {
 				}
 				const sequence = keySequence(this.keyModes(), keys[sent]);
 				lone = sequence === '\x1b';
-				this.pty.write(sequence);
+				this.send(sequence);
 			}
 			return { outcome: 'applied', keysSent: keys.length };
 		}, { outcome: 'not_applied', keysSent: 0 });
@@ -455,6 +519,11 @@ export class Run {
 		this.queue.end();
 		if (this.exited) {
 			return 'already_exited';
+		}
+		if (!this.pty) {
+			// Its turn never came: it ends now, nothing having run, and its turn creates no program (D146)
+			this.ended({ exitCode: 0 });
+			return 'terminated';
 		}
 		// A run held back is read on as it ends: node-pty tells its exit once its output is drained, which a paused read never is
 		this.ending = true;
@@ -527,7 +596,8 @@ export class Run {
 	 * Windows node-pty's kill, once (`consoleEnded`). False where nothing could be signalled.
 	 */
 	private signal(signal: NodeJS.Signals | undefined): boolean {
-		if (this.reaped) {
+		const pty = this.pty;
+		if (this.reaped || !pty) {
 			return false;
 		}
 		if (process.platform === 'win32') {
@@ -537,12 +607,12 @@ export class Run {
 			try {
 				// node-pty queues its kill until the console is ready, and one never ready would never be ended: it is ended through its
 				// agent at once, as node-pty ends a console it gave up on, and nothing is queued to end it again
-				const console = this.pty as unknown as WindowsConsole;
+				const console = pty as unknown as WindowsConsole;
 				if (console._isReady === false && console._agent?.kill) {
 					console._agent.kill();
-					releaseConsole(this.pty);
+					releaseConsole(pty);
 				} else {
-					this.pty.kill();
+					pty.kill();
 				}
 				this.consoleEnded = true;
 				return true;
@@ -552,14 +622,14 @@ export class Run {
 		}
 		if (signal === undefined) {
 			try {
-				this.pty.kill();
+				pty.kill();
 				return true;
 			} catch {
 				return false;
 			}
 		}
 		// Only a real process group: -1 would be every process this user may signal, -0 the caller's own group
-		const pid = this.pty.pid;
+		const pid = pty.pid;
 		try {
 			if (!Number.isInteger(pid) || pid <= 1) {
 				throw new Error(`No process group ${pid}.`);
@@ -569,7 +639,7 @@ export class Run {
 		} catch {
 			// No group of its own: its leader alone
 			try {
-				this.pty.kill(signal);
+				pty.kill(signal);
 				return true;
 			} catch {
 				return false;
@@ -735,7 +805,7 @@ export class Run {
 			const message = parseStatus(data);
 			if (message === 'query') {
 				if (this.writable) {
-					this.pty.write(STATUS_REPLY);
+					this.send(STATUS_REPLY);
 				}
 				this.programStatus.asked();
 			} else if (message) {

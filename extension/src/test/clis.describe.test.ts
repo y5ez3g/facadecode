@@ -63,7 +63,10 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 			yolo: false, sandbox: { state: 'on', by: ['--sandbox', 'workspace-write'] }, approvals: { state: 'native' }, problems: []
 		});
 		const claude = described.find(each => each.cli === 'claude')!;
-		assert.deepStrictEqual(claude.environment.variables.filter(each => each.source === 'adapter'), [{ source: 'adapter', name: 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE', value: null }]);
+		assert.deepStrictEqual(claude.environment.variables.filter(each => each.source === 'adapter'), [
+			{ source: 'adapter', name: 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE', value: null },
+			{ source: 'adapter', name: 'CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL', value: '1' }
+		]);
 		// The trust each start is given, as its arguments, or as the entry merged into the CLI's file - named, never written (CLIS-3.3)
 		const trusted = ['-c', `projects={ ${tomlString(fs.realpathSync(cwd))} = { trust_level = "trusted" } }`];
 		const trustAt = codex.args!.indexOf(trusted[1]);

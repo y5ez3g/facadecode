@@ -453,6 +453,21 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		assert.deepStrictEqual([cleared, settingsOf(plan({ cli: 'claude', yolo: false }, {}, where))], [[false, false], { env: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' }, disabledMcpjsonServers: ['facade'], sandbox: { enabled: true } }]);
 	});
 
+	test('Claude Code is kept from installing its VS Code extension, whose welcome would wait for Enter in the agent\'s terminal, unless the person set the switch (D144)', () => {
+		assert.deepStrictEqual([plan({ cli: 'claude' }).env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, 'CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL' in plan({ cli: 'codex' }).env], ['1', false]);
+		// Whatever value the person gave, in any layer, is theirs: '0' or '' lets Claude Code install its extension
+		const given = (where: DestinationEnvironment) => plan({ cli: 'claude' }, {}, where).env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL;
+		assert.deepStrictEqual([given({ ...destination, terminal: { CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '0' } }), given({ ...destination, host: { ...destination.host, CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '' } })], ['0', '']);
+		assert.strictEqual(plan({ cli: 'claude' }, { 'facade.claude.launch': { environment: { CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: 'false' } } }).env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, 'false');
+		// On Windows a spelling of the person's in another case is theirs too, and no second spelling is set beside it
+		const bin = path.join(temp.dir, 'winbin');
+		fs.mkdirSync(bin);
+		fs.writeFileSync(path.join(bin, 'claude.exe'), '');
+		const windows: DestinationEnvironment = { host: { Path: bin, PATHEXT: '.EXE', USERPROFILE: temp.dir, Claude_Code_Ide_Skip_Auto_Install: '0' }, platform: 'win32' };
+		const env = plan({ cli: 'claude' }, {}, windows).env;
+		assert.deepStrictEqual(Object.entries(env).filter(([name]) => /^claude_code_ide_skip_auto_install$/i.test(name)), [['Claude_Code_Ide_Skip_Auto_Install', '0']]);
+	});
+
 	test('the groups go in their order: the run\'s own settings, then the YOLO mapping', () => {
 		assert.deepStrictEqual([...GROUP_ORDER], ['resume', 'connect', 'quiet', 'yoloOn', 'yoloOff', 'model', 'effort', 'trust', 'session', 'extra', 'prompt']);
 		const groups = { quiet: ['q', '${value}'], yoloOn: ['on'], connect: ['--mcp'], prompt: ['--', '${prompt}'] };
@@ -474,7 +489,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		const env = plan({ cli: 'claude' }, { 'facade.claude.launch': { environment: { LAUNCHED: '${env:HOST_VALUE} via launch', LAYERED: 'launch', PROFILE: null } } }, where).env;
 		assert.deepStrictEqual({ ...env, PATH: undefined, HOME: undefined }, {
 			PATH: undefined, HOME: undefined, SHELL_ONLY: 'kept', HOST_VALUE: 'from host', TERMINAL: 'from host via terminal', LAYERED: 'launch', MISSING: '', LAUNCHED: 'from host via launch',
-			TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor', FACADE_AGENT: '#a7'
+			CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL: '1', TERM_PROGRAM: 'vscode', COLORTERM: 'truecolor', FACADE_AGENT: '#a7'
 		});
 		assert.ok(!('CLAUDE_CODE_DISABLE_TERMINAL_TITLE' in env) && !('ELECTRON_RUN_AS_NODE' in env));
 	});

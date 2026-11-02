@@ -21,6 +21,13 @@ function hasSandbox(platform: NodeJS.Platform): boolean {
 const TITLE_SWITCH = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
 
 /**
+ * The switch that keeps Claude Code from installing its VS Code extension. In a VS Code terminal without that extension, Claude Code
+ * 2.1.316 installs it and then shows a welcome waiting for Enter in the agent's terminal, past which no message goes (RULES-1.4).
+ * A run sets it where the person has not (D144).
+ */
+const AUTO_INSTALL_SWITCH = 'CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL';
+
+/**
  * Claude Code's settings for one run, passed inline with `--settings`, which overrides the same keys of its settings files for
  * that session alone: no more than a run needs, so that the person's own settings stay in force (CLIS-1.3). It never takes a
  * project's `facade` server from `.mcp.json`, which would ask about it at its start. Its title switch also
@@ -108,15 +115,20 @@ function mainCheckoutOf(root: string): string {
 }
 
 /**
- * The folder Claude Code keys a project's configuration and trust on for a run in `cwd` (2.1.312): the repository's main checkout -
- * for a linked worktree, the checkout whose Git directory it shares - else, outside any repository, `cwd` itself. Its real path in
- * Unicode NFC, with forward slashes and an upper-case drive on Windows.
+ * The folder Claude Code keys a project's configuration and trust on for a run in `cwd`. On macOS and Linux (2.1.312, 2.1.316): the
+ * repository's main checkout - for a linked worktree, the checkout whose Git directory it shares - else, outside any repository, `cwd`
+ * itself; its real path in Unicode NFC. On Windows (2.1.316) it neither follows a worktree to its main checkout nor respells a path:
+ * the folder at or above `cwd` with a `.git` in it - a linked worktree's own - else `cwd` itself, as the run is given it, the case of
+ * its drive and folders kept, with forward slashes (D139).
  */
 export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string {
+	if (platform === 'win32') {
+		const given = path.win32.resolve(cwd);
+		return (gitRootOf(given) ?? given).split('\\').join('/');
+	}
 	const real = canonicalFolder(cwd);
 	const root = gitRootOf(real);
-	const key = (root === undefined ? real : mainCheckoutOf(root)).normalize('NFC');
-	return platform === 'win32' ? key.split('\\').join('/').replace(/^[a-z]:/, drive => drive.toUpperCase()) : key;
+	return (root === undefined ? real : mainCheckoutOf(root)).normalize('NFC');
 }
 
 /**
@@ -203,8 +215,14 @@ export const claudeAdapter: CliAdapter = {
 		const withheld = trustWithheld(folder, homeOf(env, platform), platform);
 		return { file: claudeConfigFile(env, platform, cwd), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder, ...withheld ? { withheld } : {} };
 	},
-	// The switch would also turn off its status reports; the run's --settings clears it for the files' copy (CLIS-2.3)
-	adjustEnvironment: (env, platform) => setVariable(env, TITLE_SWITCH, null, platform),
+	// The title switch would also turn off its status reports; the run's --settings clears it for the files' copy (CLIS-2.3). No
+	// install of its VS Code extension, and so no welcome in the way of messages, where the person set nothing (D144)
+	adjustEnvironment: (env, platform) => {
+		setVariable(env, TITLE_SWITCH, null, platform);
+		if (variableOf(env, AUTO_INSTALL_SWITCH, platform) === undefined) {
+			setVariable(env, AUTO_INSTALL_SWITCH, '1', platform);
+		}
+	},
 	// YOLO off turns its sandbox on through the run's settings, where it has one; YOLO on leaves it to its own settings
 	sandbox: (yolo, platform) => !hasSandbox(platform) ? { state: 'none' } : yolo ? { state: 'native' } : { state: 'on' },
 	approvals: yolo => yolo ? { state: 'bypassed', by: ['--dangerously-skip-permissions'] } : { state: 'native' },
