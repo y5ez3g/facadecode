@@ -146,7 +146,9 @@ in by the owner in a temporary home (muse-spark-1.3 at low effort): with YOLO of
 which the test cancelled, and exited; with YOLO on it ran the person's task with no Facade tools, its MCP turned off
 over the project `.mcp.json` entry - the owner reported Muse Code had worked with them, and Muse Code started on
 variants of that entry, sent nothing, showed its `mode` alone made Muse Code refuse it (D147); with D147 the journey
-passed with YOLO on.
+passed with YOLO on. On Linux x64 Muse Code 1.4.14, signed in by the owner in a temporary home, passed it too, with YOLO
+on; on macOS it was not run: Muse Code keeps its sign-in in the macOS Keychain, which a session over SSH cannot reach,
+and its sign-in there was not saved.
 
 Remote-SSH passed its four scenarios from a macOS client to a Windows x64 host (26 checks), once the runner gave each
 scenario a Facade root and profiles of its own, and to a Linux x64 host (26 checks, again at the final commit), its run
