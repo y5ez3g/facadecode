@@ -605,15 +605,16 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		assert.deepStrictEqual(statuses.map(status => [status.state, status.negotiating, status.title, status.kind]), [
 			['pending', true, undefined, undefined],
 			['working', undefined, 'Fixing tests', undefined],
-			['blocked', undefined, 'Fixing tests', 'permission']
+			['blocked', undefined, undefined, 'permission']
 		]);
 	});
 
 	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3, D80)', async function () {
 		this.timeout(10_000);
 		const client = await connect();
-		const idle = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
-		const working = `◈ Thinking (1s · esc to interrupt)\r\n\r\n${idle}`;
+		const input = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
+		const idle = `  Muse Code 1.4.14\r\n${input}`;
+		const working = `◈ Thinking (1s · esc to interrupt)\r\n\r\n${input}`;
 		const drawing = (ask: boolean) => `const out = s => process.stdout.write(s); ${ask ? 'out(\'\\x1b]7501;?\\x1b\\\\\');' : ''} out('\\x1b[2J\\x1b[H' + ${JSON.stringify(idle)}); setTimeout(() => out('\\x1b[2J\\x1b[H' + ${JSON.stringify(working)}), 600); setInterval(() => {}, 1000);`;
 		const start = (run: string, ask: boolean) => client.request('spawn', { run, owner: 'w1', file: process.execPath, args: ['-e', drawing(ask)], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {}, screenStatus: 'muse' });
 		const statesOf = (events: readonly RunEvent[]) => events.flatMap(event => event.event === 'status' && event.status ? [event.status.state] : []);
@@ -627,6 +628,46 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('its question answered', () => statesOf(asking).length > 0);
 		await new Promise(resolve => setTimeout(resolve, 1_200));
 		assert.deepStrictEqual(statesOf(asking), ['pending']);
+	});
+
+	test('screen status survives soft wrap and resize, loses invalidated evidence and recovers without retaining false working or idle', async function () {
+		this.timeout(15_000);
+		const client = await connect();
+		const events = eventsOf(client, 'screen-reset');
+		const input = `${'─'.repeat(60)}\r\n❯\r\n${'─'.repeat(60)}\r\n  model · effort · /work`;
+		const work = `◈ Checking 编译结果 with a long description (3s · esc to interrupt)\r\n${input}`;
+		const frame = (above: string) => `\x1b[2J\x1b[H${above}\r\n${input}`;
+		const frames = {
+			u: frame('◇ Future indicator (esc to cancel)'),
+			r: '\x1bc',
+			w: `\x1b[2J\x1b[H${work}`,
+			i: frame('• READY'),
+			s: '\x1b[?2026h\x1b[2J\x1b[H',
+			e: `${work}\x1b[?2026l`
+		};
+		const program = `process.stdin.setRawMode(true); const frames = ${JSON.stringify(frames)};
+		process.stdout.write(frames.w); process.stdin.on('data', d => process.stdout.write(frames[d.toString()] || ''));
+		setInterval(() => {}, 1000);`;
+		await spawn(client, 'screen-reset', program, { cols: 38, rows: 24, screenStatus: 'muse' });
+		const latest = () => events.flatMap(event => event.event === 'status' && event.status ? [event.status] : []).at(-1);
+		await until('soft wrapped work', () => latest()?.state === 'working');
+		await client.request('resize', { run: 'screen-reset', cols: 100, rows: 24 });
+		const send = (data: string) => client.request('input', { run: 'screen-reset', data });
+		await send('s');
+		await new Promise(resolve => setTimeout(resolve, 250));
+		assert.strictEqual(latest()?.state, 'working', 'an unfinished synchronized draw is not an observation');
+		await send('e');
+		await send('u');
+		await until('unknown layout revokes working', () => latest()?.unavailable === 'screen_unrecognized');
+		await send('i');
+		await until('a known resting layout recovers', () => latest()?.state === 'idle');
+		await send('w');
+		await until('work resumes', () => latest()?.state === 'working');
+		await send('r');
+		await until('a full reset revokes work', () => latest()?.unavailable === 'screen_reset');
+		await until('claimable snapshot is also unknown', async () => (await client.request('list', { owner: 'w1' })).find(run => run.run === 'screen-reset')?.status?.state === 'pending');
+		await send('w');
+		await until('a fresh screen recovers after reset', () => latest()?.state === 'working');
 	});
 
 	test('a window that does not take its output pauses the run once the output waiting for it passes the bound, and lets it go on once it is gone (ARCHITECTURE-2.4)', async function () {

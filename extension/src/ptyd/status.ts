@@ -29,8 +29,8 @@ const MOST_APP = 32;
 const MOST_ID = 128;
 const MOST_ID_DEPTH = 8;
 
-/** How much of a program's words and title ptyd keeps, in code points: what a card shows (CLIS-2.3). */
-const KEPT_TEXT = 300;
+/** The wire byte limits already bound these texts; keep them whole for hover (CLIS-2.3). */
+const KEPT_TEXT = 2048;
 
 const KEY = /^[a-z]+$/;
 const VALUE = /^[A-Za-z0-9_.,+/=-]*$/;
@@ -156,8 +156,7 @@ function keptText(text: string | undefined): string | undefined {
 
 /**
  * The status of a run's program: none while it has neither asked whether ptyd takes reports nor reported - it takes no part;
- * `pending` once it asked, or cleared its record, and stands on no report; else its last report, from when it came. The title its
- * reports give stays until a report gives another, or its record is cleared.
+ * `pending` once it asked, cleared its record or lost screen evidence; else its latest complete report.
  */
 export class ProgramStatus {
 
@@ -196,11 +195,19 @@ export class ProgramStatus {
 	 * What the run's screen shows, for a program that takes no part (CLIS-2.3, D80): taken as its own report would be, the same
 	 * state and kind again keeping its time; nothing once the program has asked or reported.
 	 */
-	observed(reading: ScreenReading): void {
+	observed(reading: ScreenReading | undefined): void {
 		if (this.partaking) {
 			return;
 		}
 		const now = this.current;
+		if (!reading) {
+			// Initial unknown drawing retains the startup grace. Once observed, a lost layout revokes that evidence.
+			if (now && now.unavailable !== 'screen_unrecognized') {
+				this.fromScreen = true;
+				this.set({ state: 'pending', unavailable: 'screen_unrecognized', at: Date.now() });
+			}
+			return;
+		}
 		if (now !== undefined && now.state === reading.state && now.kind === reading.kind) {
 			return;
 		}
@@ -220,7 +227,7 @@ export class ProgramStatus {
 			return;
 		}
 		const msg = keptText(report.msg);
-		const title = keptText(report.title) ?? (this.current?.state !== 'pending' ? this.current?.title : undefined);
+		const title = keptText(report.title);
 		const next: RunStatus = {
 			state: report.state,
 			...(report.kind ? { kind: report.kind } : {}),
@@ -247,16 +254,12 @@ export class ProgramStatus {
 	}
 
 	/**
-	 * Its record taken away - `clear`, or a full reset of the terminal: it stands on no report, pending the next. What its screen
-	 * showed is no record of its own to take away: the screen goes on deciding. Nor is a probe answered and no report since: its
-	 * first report is still waited for (CLIS-2.3, D81).
+	 * `clear`, a full reset or a new prompt revokes old evidence, including a screen observation. A probe with no report since
+	 * still waits for its first report (CLIS-2.3, D81).
 	 */
 	clear(): void {
-		if (this.fromScreen) {
-			return;
-		}
 		if (this.current && this.current.state !== 'pending') {
-			this.set({ state: 'pending', at: Date.now() });
+			this.set({ state: 'pending', ...this.fromScreen ? { unavailable: 'screen_reset' as const } : {}, at: Date.now() });
 		}
 	}
 

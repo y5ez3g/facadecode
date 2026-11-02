@@ -67,7 +67,13 @@ process.stdout.write('fake agent ready\r\n');
 
 const NBSP = ' ';
 const PLACEHOLDER = 'Try a task';
-const lines: string[] = ['fake agent ready'];
+/** The built-in whose native input and surrounding transcript this fixture draws (CLIS-2.1, 2.3). */
+const as = process.env.FACADE_IT_AS ?? (process.env.FACADE_IT_SCREEN === 'muse' ? 'muse' : 'claude');
+const lines: string[] = [as === 'muse' ? '  Muse Code 1.4.14' : 'fake agent ready'];
+
+function appendTranscript(text: string): void {
+	lines.push(...text.split('\n').map((line, index) => as === 'muse' ? `${index === 0 ? '❯ ' : '  '}${line}` : line));
+}
 let draft = '';
 /** Where the paste in its draft starts: what was typed before it stays as typed, as a lead does (D108). */
 let pastedFrom: number | undefined;
@@ -75,11 +81,8 @@ let pastedFrom: number | undefined;
 // A native prompt: after `--`, or OpenCode's `--prompt`
 const prompt = args.includes('--prompt') ? args.indexOf('--prompt') : args.indexOf('--');
 if (prompt >= 0 && args[prompt + 1] !== undefined) {
-	lines.push(...args[prompt + 1].split('\n'));
+	appendTranscript(args[prompt + 1]);
 }
-
-/** The built-in it stands in for, whose input it draws as that CLI does, for that CLI's reader (CLIS-2.1): Claude Code by default. */
-const as = process.env.FACADE_IT_AS ?? (process.env.FACADE_IT_SCREEN === 'muse' ? 'muse' : 'claude');
 
 /** A row of its input, including SGR and the cursor-save sequence at its actual input position. */
 interface Row {
@@ -168,7 +171,10 @@ function draw(): void {
 		// Antigravity's MCP panel in place of its input: its server ready once it was started
 		? [{ text: 'MCP Servers' }, { text: `${SAVE_CURSOR}>  ✓ facade_facade  Tools: list_agents` }, { text: 'Keyboard: esc Exit' }]
 		: inputRows(width, shown);
-	const body = lines.flatMap(line => line.match(new RegExp(`.{1,${width}}`, 'gu')) ?? ['']).slice(-(height - input.length));
+	const body = lines.flatMap(line => {
+		const parts = line.match(new RegExp(`.{1,${as === 'muse' ? width - 2 : width}}`, 'gu')) ?? [''];
+		return parts.map((part, index) => as === 'muse' && index > 0 ? `  ${part}` : part);
+	}).slice(-(height - input.length));
 	const out = ['\x1b[?2026h', '\x1b[H\x1b[2J'];
 	// What it printed sits right above its input, as a CLI's transcript does
 	const top = height - input.length;
@@ -226,7 +232,7 @@ function take(): void {
 		return;
 	}
 	fs.appendFileSync(`${record}.received.${agent}`, `${JSON.stringify(draft)}\n`);
-	lines.push(...draft.split('\n'));
+	appendTranscript(draft);
 	draft = '';
 }
 

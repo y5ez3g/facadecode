@@ -392,7 +392,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		first.openPair(facts('run-title'), { reveal: false });
 		open(terminals[0]);
 		const plain = Buffer.from('Checking tests').toString('base64');
-		const decorated = ['✳ Checking tests', '⠐ Checking tests', '✓ Checking tests | workspace'];
+		const decorated = ['✳ Checking tests', '⠐ Checking tests', '✓ Checking tests | workspace', `✳ ${'x'.repeat(298)}👨‍👩‍👧‍👦 full title | workspace`];
 		// Emit an undecorated report both before the first title and after every later title.
 		const program = `process.stdin.setRawMode(true); const titles = ${JSON.stringify(decorated)}; let i = 0;
 		const status = () => process.stdout.write('\\x1b]7501;state=idle:title=${plain}\\x1b\\\\');
@@ -547,7 +547,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		port.onDidReport(report => reports.push(report));
 		port.openPair(facts('run-43', { cli: 'muse', displayName: 'Muse Code', command: 'muse' }), { reveal: false });
 		open(terminals[0]);
-		const idle = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
+		const idle = `  Muse Code 1.4.14\r\n── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
 		const script = `process.stdin.setRawMode(true); process.stdout.write('\\x1b[2J\\x1b[H' + ${JSON.stringify(idle)}); setTimeout(() => process.stdout.write('\\x1b]7501;?\\x1b\\\\'), 800); setInterval(() => {}, 1000);`;
 		await port.spawn('run-43', { ...plan(script), cli: 'muse', displayName: 'Muse Code', command: 'muse', screenStatus: 'muse' }, meta('run-43'));
 		await until('its screen read', () => reports.some(report => report.activity === 'not_working'));

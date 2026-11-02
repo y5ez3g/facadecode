@@ -852,13 +852,17 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 		const reason = awaiting
 			? undefined
-			: facts.unknown === 'not_reporting'
-				? vscode.l10n.t("The CLI has not reported its activity")
-				: facts.unknown === 'waiting'
-					? vscode.l10n.t("Waiting for the CLI's first activity report")
-					: facts.unknown === 'cleared'
-						? vscode.l10n.t("The CLI cleared its activity report")
-						: undefined;
+			: facts.unknown === 'screen_unrecognized'
+				? vscode.l10n.t("The CLI's current screen is not recognized")
+				: facts.unknown === 'screen_reset'
+					? vscode.l10n.t("The terminal was reset; waiting for activity")
+					: facts.unknown === 'not_reporting'
+						? vscode.l10n.t("The CLI has not reported its activity")
+						: facts.unknown === 'waiting'
+							? vscode.l10n.t("Waiting for the CLI's first activity report")
+							: facts.unknown === 'cleared'
+								? vscode.l10n.t("The CLI cleared its activity report")
+								: undefined;
 		const report: ActivityReport = {
 			run: pair.run,
 			activity: facts.activity,

@@ -67,6 +67,23 @@ suite('CLIs: the environment composer (CLIS-1.2)', () => {
 
 suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 
+	test('status review: an unspecified blocker is still blocked, and the native words survive', () => {
+		assert.deepStrictEqual(activityOf({ state: 'blocked', msg: 'Check the terminal' }), {
+			activity: 'not_working', reporting: true, blocker: { kind: 'unknown', text: 'Check the terminal' }
+		});
+	});
+
+	test('status review: titles retain their bounded full text for the hover', () => {
+		const title = 'x'.repeat(298) + '👨‍👩‍👧‍👦' + ' the full title';
+		assert.strictEqual(cliTitle({ terminal: title }), title);
+	});
+
+	test('status review: preview limits never split a grapheme', () => {
+		for (const symbol of ['👨‍👩‍👧‍👦', '🇨🇳', '👍🏽', 'e\u0301']) {
+			assert.strictEqual(truncateCodePoints('ab' + symbol + 'cd', 4), 'ab…');
+		}
+	});
+
 	test('working is working; idle, done and blocked are not working, blocked with what it waits for; error is a known error; a pending probe, clear or reset is unknown', () => {
 		assert.deepStrictEqual([
 			activityOf({ state: 'working' }),
@@ -83,7 +100,7 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 			{ activity: 'not_working', reporting: true },
 			{ activity: 'not_working', reporting: true },
 			{ activity: 'not_working', reporting: true, blocker: { kind: 'permission', text: 'Run npm install?' } },
-			{ activity: 'not_working', reporting: true },
+			{ activity: 'not_working', reporting: true, blocker: { kind: 'unknown' } },
 			{ activity: 'not_working', reporting: true, error: { text: 'Rate limited' } },
 			{ activity: 'not_working', reporting: true, error: {} },
 			{ activity: 'unknown', reporting: true, unknown: 'waiting' },
@@ -134,11 +151,11 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 		], ['OpenCode', 'OC | Reply OK only', 'Child session - 2026-10-31T03:29:22.759Z', 'New session - plan the release', 'OC | Fix the login bug']);
 	});
 
-	test('titles and status words are capped at 300 code points with an ellipsis, never splitting a character', () => {
-		const long = `${'a'.repeat(298)}🌍🌍tail`;
+	test('bounded CLI text and shorter previews keep complete visible characters', () => {
+		const long = `${'a'.repeat(MOST_SHOWN - 2)}🌍🌍tail`;
 		const title = cliTitle({ terminal: long })!;
 		assert.strictEqual([...title].length, MOST_SHOWN);
-		assert.strictEqual(title, `${'a'.repeat(298)}🌍…`);
+		assert.strictEqual(title, `${'a'.repeat(MOST_SHOWN - 2)}🌍…`);
 		assert.deepStrictEqual([truncateCodePoints('ab🌍cd', 4), truncateCodePoints('ab🌍', 3), truncateCodePoints('abc', 0)], ['ab🌍…', 'ab🌍', '']);
 		assert.strictEqual(displayLine('a\tb\r\nc\u0007d\u202e', 10), 'a b c d');
 	});

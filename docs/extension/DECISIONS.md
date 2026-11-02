@@ -211,6 +211,8 @@ rejected several of them. Their old implementation/tests must follow the current
 | D162 | Owner chose VS Code's time style after comparing the Resume examples: use its short localized singular/plural phrases with `ago`, round by its second/minute/hour/day/week/month/year thresholds, and retain the existing last-activity meaning. This replaces the proposed 30-day date switch and `yesterday` calendar label in history lists. Preserve a future source timestamp as an absolute time rather than labeling it fresh | UX-2.4 |
 | D163 | Owner-approved 2026-11-02: use list_agents as the current snapshot of windows, folders, worktrees, available CLIs and reachable agents, including empty windows. Coalesce equal CLI rows within a window and scope differing rows to locations. Remove list_start_options and bulk ended-agent lookup; retain targeted recovery. Requested model/effort on agents describes only explicit launch inputs. Window/CLI scans and launch outcomes belong in bounded structured logs, read with ordinary file tools; use native history or a native model picker for unknown choices instead of maintaining a model catalog or history MCP. No old-tool compatibility is required | MCP-2.1, 3.1, 6.2; CLIS-1.4; ARCHITECTURE-3.3 |
 
+| D164 | Owner authorized all findings from the panel status review on 2026-11-02. Preserve the four dot meanings and CLI title content. A blocked report without a known kind remains blocked; idle does not promise usable input. Show injected tools that have not connected without inferring failure from elapsed time. Screen-derived status requires complete recognized layout evidence, real soft-wrap boundaries and native marker styling; reset or an unrecognized completed screen revokes it. Preserve complete bounded title/reason text for hover and cut previews only between graphemes. Follow OSC 7501 whole-record replacement, including omitted/empty titles; unknown-state reports are ignored as the protocol requires, correcting the audit suspicion. New runs use updated ptyd behavior; an upgrade does not kill existing runs. Native/platform claims remain limited to recorded evidence | RULES-3.2; PANEL-1.4, 1.5; CLIS-2.3; ARCHITECTURE-2.4; VERIFICATION-1.2 |
+
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
 D38–D53 follow the owner's 2026-10-28 instruction that the product contain only what the specification requires, using
@@ -282,6 +284,8 @@ proven platform limitations instead of silently weakening a product promise. The
 full spec revision; it does not authorize publication or unrelated source changes.
 
 ## Change log
+
+- 2026-11-02: D164 records the owner-authorized status review fixes and protocol correction.
 
 - 2026-11-02: D162 records the owner-selected VS Code relative-time convention for history lists.
 - 2026-11-02: D161 records the single-line picker and manual Resume naming review.

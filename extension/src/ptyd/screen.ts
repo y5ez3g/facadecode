@@ -65,6 +65,23 @@ export function drawnCells(line: IBufferLine | undefined, cell: IBufferCell | un
 	return cells;
 }
 
+/** Visible logical lines only, preserving soft-wrap boundaries and whether the first line's beginning was clipped. */
+export function readStatusLines(raw: Terminal): { readonly lines: readonly string[]; readonly clippedStart: boolean; readonly boldHeads: ReadonlySet<number> } {
+	const buffer = raw.buffer.active;
+	const cell = buffer.getNullCell();
+	const lines: string[] = [];
+	const boldHeads = new Set<number>();
+	let start = buffer.baseY;
+	for (let row = start; row < buffer.baseY + raw.rows; row++) {
+		if (row + 1 === buffer.baseY + raw.rows || !buffer.getLine(row + 1)?.isWrapped) {
+			if (buffer.getLine(start)?.getCell(0, cell)?.isBold()) { boldHeads.add(lines.length); }
+			lines.push(renderLine(buffer, start, row, cell).plain);
+			start = row + 1;
+		}
+	}
+	return { lines, clippedStart: !!buffer.getLine(buffer.baseY)?.isWrapped, boldHeads };
+}
+
 /**
  * The bottom `count` lines of `raw`'s active buffer - or of the one asked for - as the terminal draws them:
  * the rows a line wraps over joined into one line, blank lines between kept, the spaces a line ends in cut,

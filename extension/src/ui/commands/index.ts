@@ -60,7 +60,8 @@ function cardWords(): CardWords {
 		// {0} is why: the failure the agent ended with, or the error its CLI reported
 		error: reason => vscode.l10n.t("Error: {0}", reason),
 		activityUnavailable: vscode.l10n.t("Activity unavailable"),
-		readyForInput: vscode.l10n.t("Ready for input"),
+		needsAttention: vscode.l10n.t("Needs attention"),
+		toolsConnecting: vscode.l10n.t("Not connected to other agents yet"),
 		needsPermission: vscode.l10n.t("Needs permission"),
 		needsSignIn: vscode.l10n.t("Sign-in required"),
 		hasQuestion: vscode.l10n.t("Waiting for an answer"),

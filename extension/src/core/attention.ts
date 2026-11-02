@@ -33,6 +33,7 @@ export function attentionText(run: Pick<RunFacts, 'name' | 'alias'>, waiting: Wa
 		case 'permission': return `${who} is waiting for approval from the user.${quote}`;
 		case 'auth': return `${who} needs the user to sign in.${quote}`;
 		case 'question': return `There's a question from ${who}:${quote || ' Open the terminal to read it.'}`;
+		case 'unknown': return `${who} needs the user's attention.${quote || ' Open the terminal to see what it needs.'}`;
 	}
 }
 

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { parseStatus, ProgramStatus } from '../ptyd/status';
+import { parseStatus, ProgramStatus, STATUS_REPLY } from '../ptyd/status';
 import { RunStatus } from '../ptyd/protocol';
 import { sleep, useFakeClock } from './clock';
 
@@ -15,6 +15,34 @@ function b64(text: string): string {
 suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 
 	useFakeClock();
+
+	test('capability negotiation advertises only implemented states; future or invalid reports leave the last valid record intact', async () => {
+		assert.strictEqual(STATUS_REPLY, '\x1b]7501;?:states=idle,working,done,blocked,error:kinds=permission,question,auth\x1b\\');
+		for (const state of ['idle', 'working', 'done', 'blocked', 'error'] as const) {
+			const status = new ProgramStatus();
+			status.report({ state, title: 'Current task' });
+			const previous = status.status;
+			await sleep(100);
+			for (const body of ['state=future', 'title=', 'state=working:msg=A', 'id=worker:state=error']) {
+				const parsed = parseStatus(body);
+				if (parsed && parsed !== 'query') { status.report(parsed); }
+				assert.strictEqual(status.status, previous, body);
+			}
+		}
+	});
+
+	test('status review: each report replaces its title, including missing and explicit empty values', () => {
+		for (const next of ['state=working', 'state=working:title=']) {
+			const status = new ProgramStatus();
+			status.report({ state: 'working', title: 'Old task' });
+			const at = status.status!.at;
+			const parsed = parseStatus(next);
+			assert.ok(parsed && parsed !== 'query');
+			status.report(parsed);
+			assert.strictEqual(status.status?.title, undefined, next);
+			assert.strictEqual(status.status?.at, at, 'a title change is not a new activity episode');
+		}
+	});
 
 	test('a program\'s question whether its terminal takes reports, and its reports: its state, what it waits for where it is blocked, its words decoded, its id, its progress where it works or waits; what is no report is none', () => {
 		assert.deepStrictEqual([
@@ -93,8 +121,8 @@ suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 		assert.deepStrictEqual({ before, asked, seen: seen.map(each => each && [each.state, each.msg && [...each.msg].length]), at: seen.map(each => each?.at) }, {
 			before: undefined,
 			asked: 'pending',
-			// The program's words as they are shown: invisible formatting out, one line, and cut at 300 code points
-			seen: [['pending', undefined], ['idle', undefined], ['working', 300], ['pending', undefined], ['done', undefined], ['pending', undefined]],
+			// The bounded protocol text stays whole for hover; only display formatting is removed.
+			seen: [['pending', undefined], ['idle', undefined], ['working', 439], ['pending', undefined], ['done', undefined], ['pending', undefined]],
 			at: [0, 0, 10, 10, 10, 10].map(ms => ms + seen[0]!.at)
 		});
 	});
@@ -110,7 +138,7 @@ suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 		assert.deepStrictEqual([status.status?.state, status.status?.negotiating], ['pending', true]);
 	});
 
-	test('the title a report gives is kept until another report gives another or the record is cleared; a title change alone keeps the episode\'s time', async () => {
+	test('reports replace the whole record, while title changes alone keep the episode\'s time', async () => {
 		const status = new ProgramStatus();
 		status.report({ state: 'working', title: 'Fixing tests' });
 		const began = status.status!.at;
@@ -122,7 +150,7 @@ suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 		status.report({ state: 'idle' });
 		const idle = status.status!.title;
 		status.clear();
-		assert.deepStrictEqual({ kept, changed, idle, cleared: status.status!.title }, { kept: ['Fixing tests', 0], changed: ['Fixing more tests', 0], idle: 'Fixing more tests', cleared: undefined });
+		assert.deepStrictEqual({ kept, changed, idle, cleared: status.status!.title }, { kept: [undefined, 0], changed: ['Fixing more tests', 0], idle: undefined, cleared: undefined });
 	});
 
 	test('a report that moves only its progress on keeps the time its state began: a program held up on the same prompt is held up since it first said so; new words, or a new state, begin anew', async () => {
