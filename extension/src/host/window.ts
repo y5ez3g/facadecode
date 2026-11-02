@@ -4,6 +4,8 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
+import { monotonic } from '../base/clock';
+import { expiredRoute, RouteExpired, spendRouteTime, withinRoute } from '../base/routeBudget';
 import { WINDOW_IDENTITY_COMMAND, WINDOW_TERMINALS_COMMAND, type DamagedWindowIdentity, type UnreadableWindowIdentity, type WindowIdentity } from '../base/windowIdentity';
 import {
 	AGENTS_ROUTE_COMMAND, Allocation, Directory, isDirectoryAgent, isRouteRequest, PublishStatus, RouteResponse, ServedRoute, WINDOW_ALLOCATE_COMMAND,
@@ -74,8 +76,11 @@ export function activate(context: vscode.ExtensionContext): void {
 			if (!here(session) || !isRouteRequest(request)) {
 				return undefined;
 			}
-			await started;
-			return network.route(request);
+			if (request.deadlineMs <= 0) { return expiredRoute(false); }
+			const began = monotonic();
+			try { await withinRoute(started, request.deadlineMs); }
+			catch (err) { if (err instanceof RouteExpired) { return expiredRoute(false); } throw err; }
+			return network.route(spendRouteTime(request, monotonic() - began));
 		}),
 		vscode.commands.registerCommand(WINDOW_PUBLISH_COMMAND, async (session: unknown, agents: unknown, label: unknown): Promise<PublishStatus | undefined> => {
 			if (!here(session) || !Array.isArray(agents) || !agents.every(isDirectoryAgent)) {

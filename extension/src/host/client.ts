@@ -8,6 +8,7 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
+import { expiredRoute, RouteExpired, withinRoute } from '../base/routeBudget';
 import {
 	AGENTS_ROUTE_COMMAND, Directory, isAllocation, isDirectory, isPublishStatus, isRouteResponse, isServedRoute, RouteResponse, ServedRoute,
 	WINDOW_ALLOCATE_COMMAND, WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND, WORKSPACE_REPUBLISH_COMMAND
@@ -39,14 +40,17 @@ export class ClientNetwork implements NetworkPort {
 	}
 
 	async route(window: string, op: RouteOp, args: unknown, deadlineMs: number): Promise<RouteResponse> {
+		if (deadlineMs <= 0) { return expiredRoute(false); }
 		let response: unknown;
 		try {
-			response = await vscode.commands.executeCommand<unknown>(WINDOW_ROUTE_COMMAND, this.session, { to: window, op, args, deadlineMs });
+			response = await withinRoute(vscode.commands.executeCommand<unknown>(WINDOW_ROUTE_COMMAND, this.session, { to: window, op, args, deadlineMs }), deadlineMs);
 		} catch (err) {
-			return { ok: false, reason: 'window_unavailable', message: `The Facade Code Window Component could not carry the request: ${messageOf(err)}. It had no effect.`, effects: 'none' };
+			if (err instanceof RouteExpired) { return expiredRoute(true); }
+			const missing = messageOf(err).includes(`'${WINDOW_ROUTE_COMMAND}' not found`);
+			return { ok: false, reason: 'window_unavailable', message: `The Facade Code Window Component could not return an answer: ${messageOf(err)}. ${missing ? 'The request had no effect.' : 'Whether the request took effect is unknown.'}`, effects: missing ? 'none' : 'unknown' };
 		}
 		return isRouteResponse(response) ? response
-			: { ok: false, reason: 'window_unavailable', message: 'The Facade Code Window Component did not carry the request: it had no effect.', effects: 'none' };
+			: { ok: false, reason: 'failed', message: 'The Facade Code Window Component returned an unreadable answer. Whether the request took effect is unknown.', effects: 'unknown' };
 	}
 }
 

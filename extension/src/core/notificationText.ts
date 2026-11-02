@@ -42,6 +42,14 @@ export function deliveryText(original: MessageRecord, cli?: string): string {
 	}
 	const reason = delivery.reason;
 	const untouched = delivery.effects.outcome === 'none';
+	if (reason === 'window_unavailable') {
+		return untouched ? `Your message ${original.alias} couldn't be sent to ${who}. The destination window couldn't be reached. Nothing was entered.`
+			: `I couldn't get a reply from the destination window, so I can't confirm whether your message ${original.alias} reached ${who}.`
+				+ (delivery.effects.text_written === 'partial' || delivery.effects.text_written === 'full' || delivery.effects.enter_written === true ? ` ${inputEffectText(delivery.effects)}` : '');
+	}
+	if (reason === 'not_found' && untouched) {
+		return `Your message ${original.alias} couldn't be sent. ${who} is no longer available in the destination window.`;
+	}
 	if (reason === 'input_draft' && untouched) {
 		return `Your message ${original.alias} couldn't be sent to ${who}. There was already a draft in the terminal, and it was left untouched.`;
 	}

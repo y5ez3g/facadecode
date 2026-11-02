@@ -103,14 +103,14 @@ suite('The workspace extension on the client network (ARCHITECTURE-2.1; RULES-1.
 		assert.deepStrictEqual([await empty.prime(), empty.next()], [false, 43]);
 	});
 
-	test('routes go through the window component as it answers them; a missing or silent component had no effect anywhere', async () => {
+	test('routes distinguish a missing command from an unreadable reply after dispatch', async () => {
 		const editor = fakeEditor();
 		const network = new editor.client.ClientNetwork('win-1', 'session-1');
 		const missing = await network.route('win-2', 'agents', { caller: 'x' }, 9_000);
 		assert.deepStrictEqual([missing.ok, !missing.ok && missing.reason, !missing.ok && missing.effects], [false, 'window_unavailable', 'none']);
 		editor.handlers.set(WINDOW_ROUTE_COMMAND, () => undefined);
 		const silent = await network.route('win-2', 'agents', {}, 9_000);
-		assert.deepStrictEqual([silent.ok, !silent.ok && silent.effects], [false, 'none']);
+		assert.deepStrictEqual([silent.ok, !silent.ok && silent.effects], [false, 'unknown']);
 		const answered = { ok: false, reason: 'timeout', message: 'No answer within 9 seconds.', effects: 'unknown' };
 		editor.handlers.set(WINDOW_ROUTE_COMMAND, (session, request) => {
 			assert.deepStrictEqual([session, request], ['session-1', { to: 'win-2', op: 'deliver', args: { id: 'm-1' }, deadlineMs: 2_993 }]);
@@ -127,6 +127,23 @@ suite('The workspace extension on the client network (ARCHITECTURE-2.1; RULES-1.
 		assert.strictEqual(await editor.client.networkAddress('session-1'), 'win-1');
 		editor.handlers.delete(WINDOW_DIRECTORY_COMMAND);
 		assert.strictEqual(await editor.client.networkAddress('session-1'), undefined);
+	});
+
+	test('outer route timeout bounds the wait but does not cancel, repeat or invent the outcome of a dispatched command', async () => {
+		const editor = fakeEditor();
+		const network = new editor.client.ClientNetwork('win-1');
+		const expired = await network.route('win-2', 'deliver', {}, 0);
+		assert.ok(!expired.ok && expired.reason === 'timeout' && expired.effects === 'none');
+		assert.strictEqual(editor.executed.length, 0);
+		let release!: (value: unknown) => void;
+		editor.handlers.set(WINDOW_ROUTE_COMMAND, () => new Promise(resolve => release = resolve));
+		const timedOut = await network.route('win-2', 'deliver', {}, 10);
+		assert.ok(!timedOut.ok && timedOut.reason === 'timeout' && timedOut.effects === 'unknown');
+		release({ ok: true, result: 'late' });
+		editor.handlers.set(WINDOW_ROUTE_COMMAND, () => { throw new Error('Reply lost after forwarding'); });
+		const lost = await network.route('win-2', 'deliver', {}, 1000);
+		assert.ok(!lost.ok && lost.effects === 'unknown');
+		assert.strictEqual(editor.executed.length, 2, 'one dispatch for each non-expired request');
 	});
 
 	test('what other windows route here is served while registered; an incomplete request is refused before anything is served', async () => {

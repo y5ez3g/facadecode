@@ -31,7 +31,7 @@ function recoveryOf(tool: string, result: Result, data: Record<string, unknown>,
 	const check = (name: 'list_agents' | 'read_screen'): Pick<Recovery, 'check'> => target && data.closed !== true
 		? { check: { tool: name, arguments: { agent: target } } } : {};
 	// A lost route can be asked about under its ORIGINAL key. This retrieves that operation; it is no new effect.
-	if (effects.outcome === 'unknown' && reason === 'window_unavailable' && (tool === 'start_agent' || tool === 'send_message') && typeof args.request_id === 'string' && args.request_id.length > 0 && args.request_id.length <= 200) {
+	if (effects.outcome === 'unknown' && ['window_unavailable', 'timeout', 'invalid_response', 'route_failed'].includes(reason ?? '') && (tool === 'start_agent' || tool === 'send_message') && typeof args.request_id === 'string' && [...args.request_id].length > 0 && [...args.request_id].length <= 200) {
 		return { action: 'repeat_original_request', request_id: args.request_id, condition: 'within_original_hour' };
 	}
 	if (effects.outcome === 'partial' || effects.outcome === 'unknown' || effects.outcome === 'confirmed' || effects.worktree_created !== undefined) {
@@ -56,7 +56,7 @@ function recoveryOf(tool: string, result: Result, data: Record<string, unknown>,
 	if (reason === 'unsupported' || reason === 'configuration_invalid') {
 		return { action: 'check_capability', ...check('list_agents') };
 	}
-	if (reason === 'window_unavailable') {
+	if (reason === 'window_unavailable' || reason === 'timeout' || reason === 'invalid_response' || reason === 'route_failed') {
 		return { action: 'reconnect' };
 	}
 	return { action: 'resolve_blocker', ...check(tool === 'start_agent' ? 'list_agents' : 'read_screen') };

@@ -20,6 +20,8 @@ The network is every Facade window open on this client computer, whatever execut
 Startup discovery includes open windows, valid locations and actual CLI choices, including empty-agent windows.
 RULES-4.3 owns run YOLO and reach. A new child joins its creator's tree even when placed in another window.
 Startup arguments follow MCP-2.2. Agent-created runs appear in the destination without changing human focus.
+A disconnected window is not an absent agent. A cross-window failure states whether the request never reached the
+execution path or whether its answer is missing; only the latter leaves an earlier effect uncertain.
 No automatic child-idle, completion or exit reports are generated. Organization and reporting belong to prompt/skill.
 
 ### 1.2 Screens and deliberate terminal control
@@ -68,6 +70,9 @@ receipt number. An async start/stop result uses its reserved message number unde
 records. Partial input, uncertain submission, process/tools/prompt distinctions and created worktrees remain explicit;
 ordinary success needs no boilerplate. Receipt delivery is separate from the operation it reports. Existing permission,
 question and sign-in notices use the same voice without changing recipients, frequency or authority.
+An unavailable window before execution says the message could not be sent and confirms untouched input only when known.
+After forwarding without an answer, it says delivery could not be confirmed; it never recommends a blind resend.
+These distinctions refine existing failure notifications; they add no new notification or recipient.
 These are Facade facts, not replies authored by the recipient, and request no response. An unreachable result ends;
 do not notify a person, send another error to B, or resend the original content.
 Use the native interactive prompt argument that CLIS-3.2 maps for the CLI, even while it is unverified, and report its

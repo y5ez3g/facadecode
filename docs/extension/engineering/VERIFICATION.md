@@ -277,6 +277,7 @@ passes.
 | M30 | Human/agent creation, two runs in one directory, a newly created worktree, creator closure, no prompt, shim reconnect and restored conversation | Each launch's own identity, creator address, actual location and initial message remain available through private instructions; shared files contain no personalized context; no welcome turn, mandatory report or replay; MCP-6.2 |
 | M31 | Current and retained terminal frames, inverse/dim together, blank cursor, literal marker characters, Unicode/combining text and large local/routed output | One reversible styled body with exact text and cues; one complete JSON file uses the same representation; historical frames keep their own time; unavailable source cues explicit; compare payload cost and real-model interpretation without changing raw input; MCP-5.1–5.2 |
 | M32 | All six native clients: injection, first task, complete notification/receipt, one-call discovery, screen interpretation, reload and exact restoration | Version/platform/provider recorded separately for native input, controlled-provider and real-model checks; a fake CLI or an unauthenticated launch is no model-support claim; isolated state only, with missing login/platform evidence explicit; VERIFICATION-2.1 |
+| M33 | Route connection/queue time, exhausted budgets, lost/malformed/late replies, pure queries versus delivery-confirming inbox reads, and retries after target disappearance | One remaining budget through hops; no request forwarded after expiry; none/unknown/partial remain truthful; original target/request identity preserved; no automatic replay; MCP-1.1–1.3 |
 
 Native lifecycle probes use the isolated editor driver, record the actual CLI PID and native session ID, and compare
 both across reload and reopening. Ending that test-owned process after window closure can exercise exact restoration
@@ -412,10 +413,10 @@ Not rerun for this merge: real-model/C4 journeys, native Windows or Linux, Remot
 or the minimum supported editor. Earlier platform results remain evidence for their own snapshots. The local passes
 do not certify those platforms or close their release gates.
 
-#### MCP-05–11 local evidence, 2026-11-01
+#### MCP polish items 05–11 local evidence, 2026-11-01
 
 The MCP polish snapshot over merge `cd80cac0` includes release-review head `29b73c2d`. The local source manifest and
-logs stay in `extension/build/mcp0511/`; the before-MCP-12 source fingerprints are in `extension/build/mcp1215/baseline.json`.
+logs stay in `extension/build/mcp0511/`; the before-item-12 source fingerprints are in `extension/build/mcp1215/baseline.json`.
 These are build-specific results, not a certification of every native platform.
 
 | Check | Observed result |
@@ -431,7 +432,7 @@ These are build-specific results, not a certification of every native platform.
 Muse's collaboration probe used YOLO on; with YOLO off its native approval appeared as CLIS-2.2 specifies. No product
 approval bypass was added. The other collaboration probes used YOLO off. Native forced supervisor exit exercises exact
 restoration; only the separately timed fake-CLI grace run proves the five-minute policy. All editor/CLI state was isolated.
-The split MCP-05–11 commits additionally compiled independently and passed their affected focused suites.
+The split MCP polish items 05–11 commits additionally compiled independently and passed their affected focused suites.
 
 Not rerun on this snapshot: native Windows/Linux, Remote-SSH, WSL, containers, minimum-supported editor, or actual-model
 collaboration for Codex/Antigravity/Muse. Earlier release-review evidence remains tied to its own source. No real Qwen probe ran.

@@ -102,6 +102,11 @@ RULES-1.5. A reader that does not recognize the input box leaves it untouched; t
 A request refused before it reached its effect reports no effect: a routed message the destination refuses before
 recording it - its agent gone or out of reach - is `NOT_FOUND`, and direct text or keys that never reached the terminal's
 runtime are `UNAVAILABLE` (D132).
+A failed route preserves timeout versus unavailable versus malformed-response reasons and the known destination.
+Unreachable windows do not prove absent agents. Lost answers to pure queries report no agent/message-state effect;
+read_messages is different because handoff can mark messages delivered. A malformed reply or disconnected route after
+forwarding a mutation leaves its effect unknown. A failed lookup of an earlier uncertain request cannot erase that
+uncertainty merely because its target is now gone. Only an authoritative original record can settle the earlier effect.
 CLI/Git/transport errors retain their actual useful diagnostic. Exceptional results may include compact `recovery`
 facts: an `action` naming correction, target/capability/blocker inspection, effect inspection, original-request reuse,
 reconnection or tool update; an optional read-only `check` names an existing tool and its arguments. Only original-request
@@ -119,6 +124,10 @@ Queries use a ten-second route deadline and report unavailable windows rather th
 `facade.collaboration.waitSeconds` is 1–3600 seconds, default 120, for startup/stop/control waiting. Completion can return sooner.
 A CLI that times its MCP calls is given 3660 seconds for one of Facade's - the longest wait and a minute for the call's
 own route and answer - so that it never gives up on a call Facade is still answering within its wait (D132).
+Every forwarding layer charges connection and queue time to the same remaining route budget. A budget exhausted before
+forwarding writes no request; a forwarded request whose reply is lost remains uncertain. Transport timeouts end waiting,
+not the destination's operation. Locally measured elapsed time uses a monotonic clock; process clocks are never subtracted
+across environments. Query deadlines do not make delivery-confirming reads side-effect-free.
 An actual continuing operation may return accepted with its run/effects; later completion returns to its initiating
 agent through a Facade system result. The accepted response and later result identify the same originating tool call
 and target run, using existing call correlation facts so concurrent calls, including calls to the same target, are

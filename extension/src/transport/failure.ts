@@ -5,6 +5,7 @@
 import type { ToolAnswer } from '../schema/protocol';
 import { answerOf, failure } from '../schema/result';
 import { withRecovery } from '../schema/recovery';
+import { READ_ONLY_TOOLS } from '../schema/tools';
 
 /** The MCP-1.2 error codes a transport failure can have. */
 export type FailureCode = 'INVALID' | 'NOT_FOUND' | 'UNAVAILABLE' | 'FAILED';
@@ -14,7 +15,8 @@ export type FailureCode = 'INVALID' | 'NOT_FOUND' | 'UNAVAILABLE' | 'FAILED';
  * Both channels retain its diagnostic and effects; `unknown` where the call may have reached the window and acted.
  */
 export function failureAnswer(code: FailureCode, reason: string, message: string, outcome: 'none' | 'unknown', call?: { readonly tool: string; readonly arguments: unknown }): ToolAnswer {
-	return answerOf(withRecovery(call?.tool ?? '', failure({ code, reason, message }, {}, { outcome }), call?.arguments));
+	const readOnly = READ_ONLY_TOOLS.has(call?.tool ?? '');
+	return answerOf(withRecovery(call?.tool ?? '', failure({ code, reason, message }, {}, { outcome: readOnly ? 'none' : outcome }), call?.arguments));
 }
 
 /** Whether `value` is a tool call's answer as a window gives it. */

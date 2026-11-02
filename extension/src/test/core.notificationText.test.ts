@@ -46,6 +46,13 @@ suite('Notifications retain the facts needed to decide what to do (COLLABORATION
 		assert.ok(!text.includes('passed on'));
 	});
 
+	test('a lost route explains uncertainty without claiming failed delivery or automatic replay', () => {
+		assert.strictEqual(delivery('unknown', { outcome: 'unknown' }, { reason: 'window_unavailable' }), "I couldn't get a reply from the destination window, so I can't confirm whether your message #m42 reached Ada (#a7).");
+		assert.strictEqual(delivery('failure', { outcome: 'none' }, { reason: 'window_unavailable' }), "Your message #m42 couldn't be sent to Ada (#a7). The destination window couldn't be reached. Nothing was entered.");
+		assert.strictEqual(delivery('failure', { outcome: 'none' }, { reason: 'not_found' }), "Your message #m42 couldn't be sent. Ada (#a7) is no longer available in the destination window.");
+		assert.match(delivery('unknown', { outcome: 'partial', text_written: 'partial', enter_written: false }, { reason: 'window_unavailable' }), /Only part of the message was entered/);
+	});
+
 	for (const written of ['none', 'partial', 'full', 'unknown'] as const) {
 		for (const enter of [true, false, null] as const) {
 			test(`${written} text with Enter ${enter}: no uncertain delivery is described as passed on`, () => {

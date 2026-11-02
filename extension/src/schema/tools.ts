@@ -32,8 +32,11 @@ const REQUEST = { type: 'string', minLength: 1, maxLength: 200, description: 'Op
 /** The most Unicode code points of a message body, and of a result returned inline rather than in a file (MCP-4.1, 4.2, 5.1). */
 export const MESSAGE_LIMIT = 8000;
 
-/** The tools that only read: none changes anything a caller could see, so one that cannot be answered had no effect (MCP-1.2). */
+/** Bounded queries. read_messages acknowledges delivery only after handoff, so this is not the metadata's read-only set. */
 export const QUERY_TOOLS: ReadonlySet<string> = new Set<ToolName>(['list_start_options', 'list_agents', 'read_messages', 'read_screen']);
+
+/** These tools never change agent or message state, even if their answer is lost after handoff. */
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set<ToolName>(['list_start_options', 'list_agents', 'read_screen']);
 
 /** How long a query's route waits for a window's answer before it reports the window unavailable (MCP-1.3). */
 export const QUERY_ROUTE_MS = 10_000;

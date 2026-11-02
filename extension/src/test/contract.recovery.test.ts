@@ -59,6 +59,21 @@ suite('Contract: recovery preserves effects and existing operations', () => {
 		assert.ok(!JSON.stringify(lost).includes('secret body'));
 	});
 
+	test('lost pure queries have no state effects; an inbox read can acknowledge delivery', () => {
+		for (const tool of ['list_start_options', 'list_agents', 'read_screen', 'read_messages']) {
+			const result = resultOf(failureAnswer('UNAVAILABLE', 'timeout', 'Reply lost.', 'unknown', { tool, arguments: {} }));
+			assert.strictEqual(result.effects.outcome, tool === 'read_messages' ? 'unknown' : 'none');
+		}
+	});
+
+	test('every lost-answer reason preserves a valid Unicode original request key', () => {
+		for (const reason of ['timeout', 'window_unavailable', 'invalid_response', 'route_failed']) {
+			const request_id = '🔔'.repeat(200);
+			const result = resultOf(failureAnswer('UNAVAILABLE', reason, 'Reply lost.', 'unknown', { tool: 'send_message', arguments: { request_id } }));
+			assert.deepStrictEqual(result.recovery, { action: 'repeat_original_request', request_id, condition: 'within_original_hour' });
+		}
+	});
+
 	test('normal success has no recovery; an ambiguous name offers scoped discovery, not another target', async () => {
 		const lead = runFacts(1, { yolo: true });
 		s.agents.add(lead, runFacts(2, { name: 'same' }), runFacts(3, { name: 'same' }));

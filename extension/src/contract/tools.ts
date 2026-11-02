@@ -16,19 +16,24 @@ import type { InputPort, MessageRecord, Messages, SendResult } from '../core/mes
 import type { Agents, CapabilityState, CliChoice, CliChoices, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
 import { reaches, referenceOf, resolveAgent, ResolveOptions, trailingId } from '../core/reach';
 import type { StartChoices } from '../record/choices';
-import type { ServedRoute } from '../base/windowNetwork';
+import type { RouteResponse, ServedRoute } from '../base/windowNetwork';
 import { ServedAnswer, TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import { accepted, answerOf, codedOf, Effects, errorResult, failure, Result, resultErrorOf, success } from '../schema/result';
 import { compactResult } from '../schema/compact';
 import { screenText } from '../base/screenStyle';
 import { withRecovery } from '../schema/recovery';
 import { receiptTextOf } from './receiptText';
-import { MESSAGE_LIMIT, QUERY_ROUTE_MS, QUERY_TOOLS, ToolName, TOOLS } from '../schema/tools';
+import { MESSAGE_LIMIT, QUERY_ROUTE_MS, QUERY_TOOLS, READ_ONLY_TOOLS, ToolName, TOOLS } from '../schema/tools';
 import { ArgumentError, codePoints, ToolArguments, validateArguments } from '../schema/validate';
 import { agentOf, cliOf, Data, defined, isoOf, locationOf, messageFile, messageOf, sendFailureOf, ToolWindow } from './facts';
 import { GuestCaller, isGuestCaller, NetworkPort, Reachable, reachableOf, RoutedCall, RoutedDelivery, RoutedResult } from './network';
 
 export type { ToolWindow } from './facts';
+
+/** Keep the route's reason independent of whether an operation may already have acted. */
+function routeError(response: Extract<RouteResponse, { ok: false }>): FacadeError {
+	return new FacadeError(response.reason === 'failed' ? 'FAILED' : 'UNAVAILABLE', response.reason === 'failed' ? 'route_failed' : response.reason, response.message);
+}
 
 /** A screen as a read gives it: ptyd's `ScreenRead`, by its shape, as this layer does not import ptyd. */
 export interface ScreenSnapshot {
@@ -445,15 +450,16 @@ class ToolService {
 	private async routeCall(window: string, tool: ToolName, args: object, caller: Caller, call: Received, deadlineMs: number, inline = false): Promise<Outcome> {
 		const routed: RoutedCall = { tool, arguments: args, caller: this.guestOf(caller), callId: call.callId, elapsedMs: this.elapsed(call), protocol: call.protocol, ...inline ? { inline } : {} };
 		const response = await this.deps.network!.route(window, 'call', routed, deadlineMs);
+		const data = { window_id: window, ...'agent' in args && typeof args.agent === 'string' ? { agent_id: args.agent } : {} };
 		if (!response.ok) {
-			const unknown = response.effects === 'unknown' && !QUERY_TOOLS.has(tool);
+			const unknown = response.effects === 'unknown' && !READ_ONLY_TOOLS.has(tool);
 			return {
-				result: failure({ code: 'UNAVAILABLE', reason: response.reason === 'protocol_incompatible' ? 'protocol_incompatible' : 'window_unavailable', message: response.message }, { window_id: window }, unknown ? { outcome: 'unknown' } : { outcome: 'none' })
+				result: failure(routeError(response), data, unknown ? { outcome: 'unknown' } : { outcome: 'none' })
 			};
 		}
 		const answer = response.result as { readonly result?: Result; readonly headline?: string } | undefined;
 		if (!answer || typeof answer !== 'object' || !answer.result || typeof answer.result.status !== 'string') {
-			return { result: failure({ code: 'FAILED', reason: 'internal_error', message: `The Facade window ${window} answered ${tool} with nothing this window can read: whether it took effect is not known.` }, { window_id: window }, { outcome: 'unknown' }) };
+			return { result: failure({ code: 'FAILED', reason: 'invalid_response', message: `The Facade window ${window} returned an unreadable answer to ${tool}.` }, data, { outcome: READ_ONLY_TOOLS.has(tool) ? 'none' : 'unknown' }) };
 		}
 		return { result: answer.result, ...answer.headline !== undefined ? { headline: answer.headline } : {} };
 	}
@@ -511,7 +517,7 @@ class ToolService {
 			try {
 				return { window, value: await ask(window.window) };
 			} catch (err) {
-				unavailable.push({ window_id: window.window, label: window.label, reason: 'window_unavailable', message: errorText(err) });
+				unavailable.push({ window_id: window.window, label: window.label, reason: err instanceof FacadeError ? err.reason : 'window_unavailable', message: errorText(err) });
 				return undefined;
 			}
 		}));
@@ -648,9 +654,12 @@ class ToolService {
 			const { windows, unavailable } = await this.everyWindow(async other => {
 				const response = await this.deps.network!.route(other, 'summary', {}, this.queryDeadline(call));
 				if (!response.ok) {
-					throw new Error(response.message);
+					throw routeError(response);
 				}
-				return response.result as Data;
+				if (!isJsonObject(response.result) || response.result.window_id !== other || !Array.isArray(response.result.locations)) {
+					throw new FacadeError('FAILED', 'invalid_response', `The Facade window ${other} returned an unreadable location list.`);
+				}
+				return response.result;
 			});
 			const all = [this.summary(), ...windows];
 			return {
@@ -1000,10 +1009,13 @@ class ToolService {
 		const { windows: remote, unavailable } = await this.everyWindow(async other => {
 			const response = await this.deps.network!.route(other, 'agents', { caller: this.guestOf(caller), include_ended: includeEnded }, this.queryDeadline(call));
 			if (!response.ok) {
-				throw new Error(response.message);
+				throw routeError(response);
 			}
 			const agents = (response.result as { readonly agents?: unknown } | undefined)?.agents;
-			return Array.isArray(agents) ? agents as Data[] : [];
+			if (!Array.isArray(agents) || !agents.every(agent => isJsonObject(agent) && typeof agent.agent_id === 'string')) {
+				throw new FacadeError('FAILED', 'invalid_response', `The Facade window ${other} returned an unreadable agent list.`);
+			}
+			return agents as Data[];
 		}, windowId);
 		const agents = [...local, ...remote.flat()]
 			.filter(agent => selected === undefined || agent.agent_id === selected)
@@ -1148,21 +1160,21 @@ class ToolService {
 			if (response.effects === 'unknown') {
 				keepUnknown();
 			}
-			return { result: failure({ code: 'UNAVAILABLE', reason: response.reason === 'protocol_incompatible' ? 'protocol_incompatible' : 'window_unavailable', message: response.message }, data, effects), headline: `Message ${alias} to ${shown}: ${effects === unknown ? 'whether it was delivered is not known' : 'it was not delivered'}. ${response.message}` };
+			return { result: failure(routeError(response), data, effects), headline: `Message ${alias} to ${shown}: ${effects === unknown ? 'whether it was delivered is not known' : 'it was not delivered'}. ${response.message}` };
 		}
 		const answered = response.result as { readonly status?: SendResult['status']; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord; readonly error?: unknown } | undefined;
 		const refused = resultErrorOf(answered?.error);
 		if (refused && !answered?.record) {
-			// Refused there before it was recorded - its agent gone, or out of the sender's reach: nothing went in, there or ever (MCP-1.2)
+			// A refusal proves this attempt did nothing. It cannot settle an earlier attempt whose original record is missing.
 			if (earlier) {
-				this.deps.messages.keepSent({ ...earlier, delivery: { ...earlier.delivery, status: 'failure', reason: refused.reason, effects: none } });
+				return { result: failure({ ...refused, message: `${refused.message} The earlier delivery still could not be confirmed.` }, data, unknown) };
 			}
 			return { result: failure(refused, data, none), headline: `Message ${alias} to ${shown} was not delivered: ${refused.message}` };
 		}
 		const record = answered?.record;
 		if (!answered || !record || (answered.status !== 'success' && answered.status !== 'accepted' && answered.status !== 'failure')) {
 			keepUnknown();
-			return { result: failure({ code: 'FAILED', reason: 'internal_error', message: `The Facade window of ${shown} answered with nothing this window can read: whether the message went in is not known.` }, data, unknown) };
+			return { result: failure({ code: 'FAILED', reason: 'invalid_response', message: `The Facade window of ${shown} returned an unreadable delivery answer.` }, data, unknown) };
 		}
 		this.deps.messages.keepSent(args.request_id !== undefined ? { ...record, requestId: args.request_id } : record);
 		// The destination may have deduplicated a retry whose first reply was lost: its original ID, never the proposed new one.

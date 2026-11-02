@@ -51,6 +51,32 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 	});
 	teardown(() => s.dispose());
 
+	test('malformed query replies mean an unavailable window, never an empty complete list', async () => {
+		const { stranger } = team(s);
+		network.window(2, 'Backend', [remoteAgent(20)]);
+		for (const body of [undefined, {}, { agents: 'empty', locations: 'empty' }]) {
+			network.respond = () => ({ ok: true, result: body });
+			for (const tool of ['list_start_options', 'list_agents'] as const) {
+				const result = resultOf(await s.call(stranger, tool, tool === 'list_start_options' ? { scope: 'all' } : {}));
+				assert.strictEqual(result.data.complete, false);
+				assert.strictEqual(result.data.unavailable_windows[0].reason, 'invalid_response');
+				assert.strictEqual(result.effects.outcome, 'none');
+			}
+		}
+	});
+
+	test('a lost targeted screen read has no input effect; raw input on the same route remains unknown', async () => {
+		const { stranger } = team(s);
+		network.window(2, 'Backend', [remoteAgent(20)]);
+		network.respond = () => ({ ok: false, reason: 'timeout', message: 'Reply lost.', effects: 'unknown' });
+		const screen = resultOf(await s.call(stranger, 'read_screen', { agent: '#a20' }));
+		const input = resultOf(await s.call(stranger, 'type_text', { agent: '#a20', text: 'x' }));
+		assert.deepStrictEqual([screen.error?.reason, screen.effects.outcome], ['timeout', 'none']);
+		assert.deepStrictEqual([input.error?.reason, input.effects.outcome], ['timeout', 'unknown']);
+		assert.strictEqual(input.data.window_id, 'win-2');
+		assert.strictEqual(network.routed.length, 2);
+	});
+
 	suite('list_start_options', () => {
 
 		test('default discovery stays on the caller worktree even if the window directory is unavailable', async () => {
@@ -80,7 +106,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.strictEqual(result.data.complete, false);
 			assert.deepStrictEqual(result.data.unavailable_windows, [
 				{ window_id: 'win-4', label: 'Newer build', reason: 'protocol_incompatible' },
-				{ window_id: 'win-3', label: 'Docs', reason: 'window_unavailable', message: 'The Facade window win-3 did not answer within 10 seconds: the request may have taken effect there.' }
+				{ window_id: 'win-3', label: 'Docs', reason: 'timeout', message: 'The Facade window win-3 did not answer within 10 seconds: the request may have taken effect there.' }
 			]);
 			// Each other window asked once, within what is left of the query's ten seconds
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args, each.deadlineMs]), [['win-2', 'summary', {}, 9_993], ['win-3', 'summary', {}, 9_993]]);
@@ -188,7 +214,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 9.9 seconds.', effects: 'unknown' });
 			const result = resultOf(await s.call(lead, 'list_agents', {}));
 			assert.deepStrictEqual(result.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a1', '#a2', '#a3']);
-			assert.deepStrictEqual([result.data.complete, result.data.unavailable_windows], [false, [{ window_id: 'win-2', label: 'Backend', reason: 'window_unavailable', message: 'The Facade window win-2 did not answer within 9.9 seconds.' }]]);
+			assert.deepStrictEqual([result.data.complete, result.data.unavailable_windows], [false, [{ window_id: 'win-2', label: 'Backend', reason: 'timeout', message: 'The Facade window win-2 did not answer within 9.9 seconds.' }]]);
 		});
 	});
 
@@ -379,10 +405,10 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.strictEqual(s.messages.kept.length, 0);
 			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 3 seconds.', effects: 'unknown' });
 			const unknown = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-1' }));
-			assert.deepStrictEqual([unknown.data.message_id, unknown.error?.reason, unknown.effects], ['#m3', 'window_unavailable', { outcome: 'unknown', text_written: 'unknown', enter_written: null }]);
+			assert.deepStrictEqual([unknown.data.message_id, unknown.error?.reason, unknown.effects], ['#m3', 'timeout', { outcome: 'unknown', text_written: 'unknown', enter_written: null }]);
 			network.respond = () => ({ ok: true, result: { status: 'delivered' } });
 			const unreadable = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
-			assert.deepStrictEqual([unreadable.error?.code, unreadable.error?.reason, unreadable.effects.outcome], ['FAILED', 'internal_error', 'unknown']);
+			assert.deepStrictEqual([unreadable.error?.code, unreadable.error?.reason, unreadable.effects.outcome], ['FAILED', 'invalid_response', 'unknown']);
 			// What may have gone in there is kept here, its outcome not known: a retry asks that window, as its history shows it
 			assert.deepStrictEqual(s.messages.kept.map(copy => [copy.id, copy.window, copy.environment, copy.fromWindow, copy.to.run, copy.requestId, copy.delivery.status, copy.delivery.effects]), [
 				['m-3', 'win-2', 'ssh-remote+box', 'win-1', runId(20), 'ask-1', 'pending', { outcome: 'unknown', text_written: 'unknown', enter_written: null }],
@@ -416,7 +442,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.deepStrictEqual([gone.status, gone.error?.reason, gone.data.message_id, gone.data.repeated, gone.effects.outcome], ['failure', 'window_unavailable', '#m2', true, 'unknown']);
 		});
 
-		test('a delivery the other window refuses before recording it - its agent gone - is not found, with no effect, and settles the copy of a lost reply (MCP-1.2)', async () => {
+		test('a delivery the other window refuses before recording it - its agent gone - is not found, with no effect on this attempt; an earlier lost reply stays unknown (MCP-1.2)', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
 			const refusal = { status: 'failure', error: { code: 'NOT_FOUND', reason: 'not_found', message: `No agent ${runId(20)} that the sender reaches is in this window.` } };
@@ -424,13 +450,14 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const refused = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
 			assert.deepStrictEqual([refused.error?.code, refused.error?.reason, refused.effects], ['NOT_FOUND', 'not_found', { outcome: 'none', text_written: 'none', enter_written: false }]);
 			assert.strictEqual(s.messages.kept.length, 0);
-			// A lost reply, then the window says it never had it: not delivered, nothing went in
+			// The target vanished after a lost reply. This does not prove what happened to the earlier delivery.
 			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 3 seconds.', effects: 'unknown' });
 			await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-4' });
 			network.respond = () => ({ ok: true, result: refusal });
 			const settled = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-4' }));
-			assert.deepStrictEqual([settled.error?.reason, settled.data.repeated, settled.effects.outcome], ['not_found', true, 'none']);
-			assert.deepStrictEqual(s.messages.kept.at(-1)?.delivery, { status: 'failure', reason: 'not_found', effects: { outcome: 'none', text_written: 'none', enter_written: false }, deadline: s.messages.kept[0].delivery.deadline, attempts: 0 });
+			assert.deepStrictEqual([settled.error?.reason, settled.data.repeated, settled.effects.outcome], ['not_found', true, 'unknown']);
+			assert.strictEqual(s.messages.kept.at(-1)?.delivery.effects.outcome, 'unknown');
+			assert.strictEqual(s.messages.allocated.length, 2, 'the retry never allocates another message');
 		});
 
 		test('an ended agent of another window takes no message, and #human is the person in this window, never routed', async () => {

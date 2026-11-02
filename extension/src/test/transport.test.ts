@@ -370,7 +370,7 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		const odd = shim.call('list_agents', {}, 'odd');
 		await until('the fourth call', () => fake.calls().length === 4);
 		fake.answer(fake.calls()[3], { text: 'no structure' });
-		assert.deepStrictEqual(failureOf(await odd), ['UNAVAILABLE', 'protocol_incompatible', 'unknown']);
+		assert.deepStrictEqual(failureOf(await odd), ['UNAVAILABLE', 'protocol_incompatible', 'none']);
 	});
 
 	test('arguments and answers of several megabytes go whole both ways', async () => {
