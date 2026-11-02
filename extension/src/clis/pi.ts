@@ -119,18 +119,35 @@ export function piExtensionText(server: McpServer): string {
 	// Direct MCP tools carry namespace metadata that not every provider exposes to its model. Use Pi's native section
 	// hook for the same run-private instructions, preserving its other sections and avoiding an extra welcome message.
 	const context = server.instructions ? `\n\tpi.on('before_agent_start', (event) => {\n\t\tevent.systemPromptOptions.sections.facade = ${JSON.stringify(server.instructions)};\n\t});` : '';
-	return `// Facade Code: this run's tools, registered for its session alone\nexport default function (pi) {\n\tpi.registerMcpServer(${JSON.stringify(SERVER_NAME)}, ${JSON.stringify(config)});${context}\n}\n`;
+	return `// Facade Code: this run's tools, registered for its session alone
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
+export default function (pi) {
+\tpi.registerMcpServer(${JSON.stringify(SERVER_NAME)}, ${JSON.stringify(config)});${context}
+\tpi.on('resources_discover', () => {
+\t\tconst own = new URL('./skills/facade/SKILL.md', import.meta.url);
+\t\tconst content = fs.readFileSync(own, 'utf8');
+\t\tfor (const command of pi.getCommands()) {
+\t\t\tif (command.source !== 'skill' || command.name !== 'skill:facade') continue;
+\t\t\ttry {
+\t\t\t\tif (fs.readFileSync(command.sourceInfo.path, 'utf8') === content) return;
+\t\t\t} catch { /* A missing or unreadable source does not replace this run's skill. */ }
+\t\t}
+\t\treturn { skillPaths: [fileURLToPath(own)] };
+\t});
+}
+`;
 }
 
 /**
- * Pi is given the server by a per-run extension, `-e`, which registers it for the session, and the skill in a per-run `--skill`
- * folder: nothing in the project or the person's settings (CLIS-2.2). Pi has no approvals, so Facade's tools never ask (CLIS-1.3).
+ * Pi is given the server by a per-run extension, `-e`, and its resource-discovery hook supplies the per-run skill unless an
+ * identical one is already loaded (CLIS-2.2, D158). Nothing is written to the project or the person's settings.
  */
 const piTools: ToolsIntegration = {
-	capability: { state: 'unverified', reason: 'the server registered for the session by a per-run extension, -e, its tools declared to the model directly, and the skill in a per-run --skill folder' },
-	where: runDir => `-e ${path.join(runDir, EXTENSION)} and --skill ${path.join(runDir, SKILL_DIR)}, files of the run alone`,
+	capability: { state: 'unverified', reason: 'the server registered for the session by a per-run extension, -e, its tools declared to the model directly; its resource-discovery hook adds the run skill only when no identical Facade skill is loaded' },
+	where: runDir => `-e ${path.join(runDir, EXTENSION)}, whose resource-discovery hook supplies ${path.join(runDir, SKILL_DIR)} when no identical Facade skill is loaded`,
 	inject: ({ server, skill, runDir }) => ({
-		values: { extension: path.join(runDir, EXTENSION), skillDir: path.join(runDir, SKILL_DIR) },
+		values: { extension: path.join(runDir, EXTENSION) },
 		runFiles: [
 			{ path: path.join(runDir, EXTENSION), content: piExtensionText(server) },
 			{ path: path.join(runDir, SKILL_DIR, 'SKILL.md'), content: skill }
@@ -157,7 +174,7 @@ export const piAdapter: CliAdapter = {
 	groups: {
 		resume: ['--session', '${sessionId}'],
 		session: ['--session-id', '${sessionId}'],
-		connect: ['-e', '${extension}', '--skill', '${skillDir}'],
+		connect: ['-e', '${extension}'],
 		model: ['--model', '${model}'],
 		effort: ['--thinking', '${effort}'],
 		trust: ['--approve'],

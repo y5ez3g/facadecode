@@ -187,7 +187,8 @@ function assertTools(alias: string): void {
 		}
 		case 'pi':
 			assert.ok(fs.readFileSync(after(args, '-e'), 'utf8').includes('"exposure":"direct"'), 'its own extension');
-			assert.ok(fs.existsSync(path.join(after(args, '--skill'), 'SKILL.md')), 'its own skill folder');
+			assert.ok(!args.includes('--skill'), 'the native resource hook avoids a duplicate project skill');
+			assert.ok(fs.existsSync(path.join(path.dirname(after(args, '-e')), 'skills', 'facade', 'SKILL.md')), 'its private skill remains available to the hook');
 			break;
 		default:
 			assert.fail(`no check for ${CLI}`);

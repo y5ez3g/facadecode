@@ -533,6 +533,17 @@ test setup, the old project skill was backed up byte-for-byte under `extension/b
 and replaced with the current generated skill. Product protection of unknown conflicting files remains unchanged;
 this local repair is not an automatic migration or a claim that existing processes acquired tools after startup.
 
+The subsequent mixed-CLI review found Pi discovering both the shared project skill and its explicit per-run copy.
+Its resource-discovery hook now reuses an already loaded byte-identical skill instead of adding the second copy.
+Pi 1.4.0's native SDK passed startup with a project skill, reload after its removal, and reload after its return;
+each loaded one Facade skill without a collision. A different-content skill still reported the native collision,
+and another skill remained loaded throughout, including with skill commands disabled. The isolated probe used
+a fixture consumer of registered MCP servers and made no transport or model calls; it verifies native resource
+discovery, not new model or platform support. Compilation, 81 focused checks (one platform skip), all six built-in
+fake-CLI tool-injection journeys and 11 package checks passed. The custom-CLI version of that journey is deliberately
+skipped. Native Windows/Linux Pi and future CLI releases were not verified. Unrelated user skill warnings are outside
+this product fix. Evidence remains local in `extension/build/mcp-review-window/`.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**

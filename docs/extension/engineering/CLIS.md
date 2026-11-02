@@ -188,7 +188,7 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | Antigravity | Project plugin `.agents/plugins/facade`, shared; its PreInvocation hook supplies run-private ephemeral initialization context through the run environment | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
 | Muse Code | Per-run `-c mcpServers.facade`, optional, on Windows too, where Facade starts its native program; one that starts through cmd.exe gets a `facade` entry merged into the project's `.mcp.json`, shared, with no `mode`, which Muse Code 1.4.14 refuses there (D147); private initialization context through its SessionStart hook | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
 | OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
-| Pi | Per-run extension, `-e`, that registers it with its tools given directly and supplies the same initialization instructions in its own native prompt section under MCP-6.2 | Per-run `--skill` folder | It has no approvals |
+| Pi | Per-run extension, `-e`, that registers it with its tools given directly and supplies the same initialization instructions in its own native prompt section under MCP-6.2 | Its resource-discovery hook supplies the per-run skill only when Pi has not already loaded identical Facade instructions | It has no approvals |
 
 These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
 RULES-4.3 chose (D90). An entry shared by a folder's runs holds no run's identity: the run's variables reach the server
@@ -208,6 +208,12 @@ start, so its entry says so (D107). Codex
 waits up to 10 s for its optional servers before its first model request, so a server that starts slowly still serves the
 first turn (D101). The server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
 orchestration is off, inject no Facade server, skill or approval into that new process.
+
+Pi automatically discovers the project skill Codex or Muse Code may have written in the same folder. On each native
+startup or resource reload, inspect Pi's loaded skill commands and their source files. Reuse a loaded `facade` skill
+only when its complete bytes match the run's bundled skill; otherwise supply the per-run file through Pi's
+`resources_discover` hook. If the project copy disappears, the next reload loads the per-run copy. Different content
+retains Pi's native collision diagnostic: do not suppress warnings, overwrite it, or disable other skills (D158).
 
 Before a project write, snapshot exact original bytes/existence, lock the path across runs, merge only owned content,
 and record content hashes/reference counts. An existing different `facade` server/skill is a conflict; fail integration

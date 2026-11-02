@@ -169,10 +169,11 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([planned.injection!.runFiles, planned.tools], [[], { state: 'injected' }]);
 	});
 
-	test('Pi: the server registered for the session by a per-run extension, -e, its tools declared to the model directly, and the skill in a per-run --skill folder; nothing in the project', async () => {
+	test('Pi: the server and conditional skill discovery use a per-run extension, -e; nothing in the project', async () => {
 		const planned = plan({ cli: 'pi', tools });
 		const extension = path.join(tools.runDir, 'facade-pi.mjs');
-		assert.deepStrictEqual(planned.args.slice(0, 4), ['-e', extension, '--skill', path.join(tools.runDir, 'skills', 'facade')]);
+		assert.deepStrictEqual(planned.args.slice(0, 2), ['-e', extension]);
+		assert.ok(!planned.args.includes('--skill'), 'an explicit second copy would collide with a project skill');
 		assert.deepStrictEqual([planned.tools, planned.injection!.project, planned.injection!.env, planned.warmUp], [{ state: 'injected' }, [], {}, undefined]);
 		const files = Object.fromEntries(planned.injection!.runFiles.map(each => [path.relative(tools.runDir, each.path), each.content]));
 		assert.deepStrictEqual(Object.keys(files), ['facade-pi.mjs', path.join('skills', 'facade', 'SKILL.md')]);
@@ -184,7 +185,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		// A real dynamic import: the compiled tests are CommonJS, whose import() becomes require
 		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
 		const loaded = await importModule(pathToFileURL(extension).href);
-		loaded.default({ registerMcpServer: (name: string, config: unknown) => registered.push([name, config]) });
+		loaded.default({ registerMcpServer: (name: string, config: unknown) => registered.push([name, config]), on: () => {} });
 		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3660, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
 	});
 
@@ -200,7 +201,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			const handlers = new Map<string, (event: { systemPromptOptions: { sections: Record<string, string> } }) => unknown>();
 			const loaded = await importModule(pathToFileURL(file.path).href);
 			loaded.default({ registerMcpServer: () => {}, on: (event: string, handler: (event: { systemPromptOptions: { sections: Record<string, string> } }) => unknown) => handlers.set(event, handler) });
-			assert.deepStrictEqual([...handlers.keys()], ['before_agent_start']);
+			assert.deepStrictEqual([...handlers.keys()], ['before_agent_start', 'resources_discover']);
 			const event = { systemPromptOptions: { sections: { other: 'Keep the other extension.', facade: 'An earlier turn.' } } };
 			assert.strictEqual(handlers.get('before_agent_start')!(event), undefined, 'no extra message or full prompt replacement');
 			assert.deepStrictEqual(event.systemPromptOptions.sections, { other: 'Keep the other extension.', facade: instructions });
@@ -208,6 +209,41 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			assert.strictEqual(event.systemPromptOptions.sections.facade, instructions, 'each turn replaces its own section without accumulation');
 			assert.deepStrictEqual(planned.injection!.project, []);
 		}
+	});
+
+	test('Pi reuses only a loaded identical skill, and restores its private copy after the project file disappears (D158)', async () => {
+		const planned = plan({ cli: 'pi', tools });
+		for (const file of planned.injection!.runFiles) {
+			fs.mkdirSync(path.dirname(file.path), { recursive: true });
+			fs.writeFileSync(file.path, file.content);
+		}
+		const file = path.join(tools.runDir, 'facade-pi.mjs');
+		const own = path.join(tools.runDir, 'skills', 'facade', 'SKILL.md');
+		const project = path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md');
+		fs.mkdirSync(path.dirname(project), { recursive: true });
+		fs.writeFileSync(project, FACADE_SKILL);
+		let commands: { source: string; name: string; sourceInfo: { path: string } }[] = [];
+		let discover!: () => { skillPaths: string[] } | undefined;
+		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
+		(await importModule(pathToFileURL(file).href)).default({
+			registerMcpServer: () => {}, getCommands: () => commands,
+			on: (event: string, handler: typeof discover) => { if (event === 'resources_discover') discover = handler; }
+		});
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'a file merely present but not loaded is insufficient');
+		commands = [{ source: 'skill', name: 'skill:facade', sourceInfo: { path: project } }];
+		assert.strictEqual(discover(), undefined, 'reuse the skill Pi actually loaded');
+		assert.strictEqual(textOf(project), FACADE_SKILL, 'discovery never rewrites the project file');
+		fs.unlinkSync(project);
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'its other CLI ended before resource reload');
+		commands = [];
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'no project skill on the next reload');
+		commands = [{ source: 'skill', name: 'skill:facade', sourceInfo: { path: own } }];
+		assert.strictEqual(discover(), undefined, 'a second discovery does not add the same private file');
+		fs.writeFileSync(project, FACADE_SKILL + '\nDifferent instructions.\n');
+		commands = [{ source: 'skill', name: 'skill:facade', sourceInfo: { path: project } }];
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'different content keeps the native conflict visible');
+		commands = [{ source: 'extension', name: 'skill:facade', sourceInfo: { path: own } }];
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'another command is no loaded skill');
 	});
 
 	test('Antigravity: a plugin in the folder\'s .agents/plugins/facade, shared, the run\'s variables in its environment; its tools allowed for the session beside the person\'s own rules; its MCP panel opened before the first turn', () => {
