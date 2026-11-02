@@ -335,6 +335,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const disposables: vscode.Disposable[] = [
 		...registerUi({
 			agents,
+			savedName: key => conversations.get(key)?.name,
 			conversations: new VendorHistory({
 				knownCwd: key => conversations.get(key)?.cwd,
 				arguments: () => clis.storeArguments(),

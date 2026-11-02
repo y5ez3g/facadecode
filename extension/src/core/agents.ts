@@ -8,7 +8,7 @@ import { isJsonObject } from '../base/json';
 import { displayLine } from '../base/text';
 import { FacadeError, invalid } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
-import { labelOf, normalizeName } from './names';
+import { labelOf, normalizeName, suggestName } from './names';
 import { REQUEST_MS } from './requests';
 import {
 	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, LocationId,
@@ -767,8 +767,8 @@ export class AgentService implements Agents, Disposable {
 		if (!location || location.environment !== entry.key.environment) {
 			throw new FacadeError('INVALID', 'not_found', `The conversation's working location ${meta?.cwd ?? entry.cwd} is not available in this window.`);
 		}
-		// A name of its own, else its title, else a suggestion no agent here has (D57)
-		const name = meta?.name ?? entry.title?.trim() ?? entry.key.cli;
+		// Manual Resume names an unnamed conversation only now, without turning its title into an agent name (D161).
+		const name = meta?.name.trim() || suggestName(this.list().map(run => run.name));
 		return this.accept(
 			{ name, location: location.id, cli: entry.key.cli, origin: 'human' },
 			location,

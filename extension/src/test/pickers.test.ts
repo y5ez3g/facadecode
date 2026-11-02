@@ -253,24 +253,33 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.deepStrictEqual(asked, ['feat/x']);
 	});
 
-	test('UX-2.4: how long ago is said by one formatter for each language, however many rows a picker says it for', () => {
-		const original = Intl.RelativeTimeFormat;
-		let made = 0;
-		const counting = class extends original {
-			constructor(...args: ConstructorParameters<typeof original>) {
-				super(...args);
-				made++;
-			}
-		};
-		(Intl as { RelativeTimeFormat: unknown }).RelativeTimeFormat = counting;
-		try {
-			const { ago } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
-			const now = Date.UTC(2026, 10, 1, 12);
-			const said = Array.from({ length: 100 }, (_, n) => ago(now - n * 60_000, now, 'en'));
-			assert.deepStrictEqual([said[0], said[5], made], ['now', '5 min. ago', 1]);
-		} finally {
-			(Intl as { RelativeTimeFormat: unknown }).RelativeTimeFormat = original;
+	test('D162: list ages follow VS Code short words, unit thresholds and rounding, including old conversations', () => {
+		const { ago } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+		const now = Date.UTC(2026, 10, 1, 12);
+		const cases: readonly [number, string][] = [
+			[0, 'now'], [29.499, 'now'], [29.5, '30 secs ago'], [59.499, '59 secs ago'],
+			[59.5, '1 min ago'], [90, '2 mins ago'], [300, '5 mins ago'], [3_599, '60 mins ago'],
+			[3_600, '1 hr ago'], [79_200, '22 hrs ago'], [86_399, '24 hrs ago'],
+			[86_400, '1 day ago'], [259_200, '3 days ago'], [604_799, '7 days ago'],
+			[604_800, '1 wk ago'], [1_209_600, '2 wks ago'], [2_591_999, '4 wks ago'],
+			[2_592_000, '1 mo ago'], [7_776_000, '3 mos ago'], [31_535_999, '12 mos ago'],
+			[31_536_000, '1 yr ago'], [63_072_000, '2 yrs ago']
+		];
+		for (const [seconds, expected] of cases) {
+			assert.strictEqual(ago(now - seconds * 1_000, now, 'en'), expected, `${seconds} seconds`);
 		}
+		const future = now + 60_000;
+		assert.strictEqual(ago(future, now, 'en'), new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'medium' }).format(future));
+	});
+
+	test('D162: time phrases use the shipped editor-language translations', () => {
+		const translated = vscodeFor(ui);
+		const bundle = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../l10n/bundle.l10n.zh-cn.json'), 'utf8')) as Record<string, string>;
+		translated.l10n.t = (text, ...args) => (bundle[text] ?? text).replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)]));
+		const { ago } = withModules({ vscode: translated })<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+		const now = Date.UTC(2026, 10, 1, 12);
+		assert.deepStrictEqual([0, 60, 300, 79_200, 86_400, 1_209_600, 7_776_000, 63_072_000].map(seconds => ago(now - seconds * 1_000, now, 'zh-cn')),
+			['现在', '1 分钟前', '5 分钟前', '22 小时前', '1 天前', '2 周前', '3 个月前', '2 年前']);
 	});
 
 	test('a remote environment is named as VS Code\'s remote indicator names it, from the authority the local window sees (LIFECYCLE-1.1, D67)', () => {
@@ -978,11 +987,14 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		let did: string[];
 		let resumedCwds: string[];
 		let errors: string[];
+		let savedNames: Map<string, string>;
+		let nameReads: string[];
 		const open = (batches: readonly ConversationEntry[][], result: string | { running: string } = 'run-new', locations: readonly Location[] = [MAIN, LOGIN], running: readonly string[] = []) => {
 			const { resumeAgent } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
 			reads = 0;
 			return resumeAgent({
 				conversations: { open: scope => { scopes.push(scope); return { next: async () => { const entries = batches[reads] ?? []; reads++; return { entries, done: reads >= batches.length }; }, dispose: () => { disposed = true; } }; } },
+				savedName: key => { nameReads.push(key.sessionId); return savedNames.get(key.sessionId); },
 				locations: { snapshot: () => ({ locations, folders: [SHOP], pending: false }) },
 				running: key => running.includes(key.sessionId),
 				resume: chosen => { resumedCwds.push(chosen.cwd); assert.strictEqual(chosen.cwdChoices, undefined); did.push(`resume ${chosen.key.sessionId}`); return result as never; },
@@ -996,7 +1008,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		};
 
 		setup(() => {
-			scopes = []; reads = 0; disposed = false; did = []; resumedCwds = []; errors = [];
+			scopes = []; reads = 0; disposed = false; did = []; resumedCwds = []; errors = []; savedNames = new Map(); nameReads = [];
 		});
 
 		test('LIFECYCLE-3.2: this window\'s locations\' histories, recent first, 100 at a time as the person scrolls on, every batch as they search, nothing read twice', async () => {
@@ -1022,7 +1034,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([scopes, first, early, scrolled, searched, reads, disposed], [
 				[{ environment: 'local', directories: [MAIN.path, LOGIN.path] }],
-				['Resume Agent', 100, 1, [['Conversation 0', 'now \u00b7 login-fix/api', undefined], ['Conversation 1', '1 min. ago \u00b7 main', undefined]]],
+				['Resume Agent', 100, 1, [['Conversation 0', 'now \u00b7 login-fix/api', undefined], ['Conversation 1', '1 min ago \u00b7 main', undefined]]],
 				1,
 				[200, 2],
 				[250, 3, false],
@@ -1037,7 +1049,33 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const lines = ui.current!.items.map(item => [item.description, item.detail]);
 			ui.current!.hide();
 			await done;
-			assert.deepStrictEqual(lines, [['2 min. ago \u00b7 main', undefined], ['4 min. ago \u00b7 main', undefined]]);
+			assert.deepStrictEqual(lines, [['2 mins ago \u00b7 main', undefined], ['4 mins ago \u00b7 main', undefined]]);
+		});
+
+		test('D161: title leads, saved names follow time/location even when equal; absent names stay absent and CLI search reaches later pages', async () => {
+			savedNames.set('s0', 'Same title');
+			savedNames.set('s1', '');
+			savedNames.set('s3', 'Ada');
+			const done = open([[entry(0, { title: 'Same title' }), entry(1), entry(2)], [entry(3)]]);
+			await settle();
+			const picker = ui.current!;
+			assert.deepStrictEqual(picker.items.map(item => [item.label, item.description, item.detail]), [
+				['Same title', 'now · login-fix/api · Same title', undefined],
+				['Conversation 1', '1 min ago · main', undefined],
+				['Conversation 2', '2 mins ago · main', undefined]
+			]);
+			picker.type('Claude Code');
+			await settle();
+			await settle();
+			assert.deepStrictEqual(picker.items.filter(item => item.alwaysShow).map(item => item.label), ['Conversation 1', 'Conversation 3']);
+			picker.type('claude Ada');
+			assert.deepStrictEqual(picker.items.filter(item => item.alwaysShow).map(item => item.label), ['Conversation 3']);
+			picker.type('codex Same');
+			assert.deepStrictEqual(picker.items.filter(item => item.alwaysShow).map(item => item.label), ['Same title']);
+			assert.deepStrictEqual(nameReads, ['s0', 's1', 's2', 's3'], 'saved metadata is read once per entry, not on each search');
+			assert.deepStrictEqual(did, [], 'browsing/searching never resumes or names a conversation');
+			picker.hide();
+			await done;
 		});
 
 		test('a location is named for a conversation its CLI recorded by the folder\'s other path - macOS\'s /var is /private/var', async () => {
@@ -1052,7 +1090,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				const lines = ui.current!.items.map(item => item.description);
 				ui.current!.hide();
 				await done;
-				assert.deepStrictEqual(lines, ['1 min. ago \u00b7 main', '2 min. ago \u00b7 main/api']);
+				assert.deepStrictEqual(lines, ['1 min ago \u00b7 main', '2 mins ago \u00b7 main/api']);
 			} finally {
 				temp.remove();
 			}
@@ -1440,9 +1478,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			activity: 'working', reporting: true, root: `run-${String(n).padStart(32, '0')}`, origin: 'human', tools: 'not_injected', ...more
 		});
 
-		test('U06, LIFECYCLE-2.3: this window\'s agents, one line each - the name, then short ID, CLI, state, location and title, searched alike - duplicates told apart by short ID; an ID or copied reference finds its run; each copies or closes; choosing shows its terminal', async () => {
+		test('U06, D161: single-line names, IDs, state, location and titles; empty/equal names, hidden CLI search, copied references and item actions', async () => {
 			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
-			let runs = [run(1, { title: 'Fix login' }), run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }), run(3, { lifecycle: 'starting', phase: 'launching_cli' })];
+			let runs = [run(1, { title: 'Fix login' }), run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }), run(3, { lifecycle: 'starting', phase: 'launching_cli' }), run(4, { name: '', title: 'Unnamed work' }), run(5, { name: 'Same', title: 'Same', cli: 'muse', displayName: 'Muse Code' })];
 			const changed = new TestEmitter<RunChange>();
 			const did: string[] = [];
 			const words = {
@@ -1464,6 +1502,10 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const picker = ui.current!;
 			const listed = picker.items.map(item => [item.label, item.description, item.detail]);
 			const searched = [picker.matchOnDescription, picker.matchOnDetail];
+			picker.type('Muse Code');
+			assert.deepStrictEqual(picker.items.filter(item => item.alwaysShow).map(item => item.label), ['Same']);
+			picker.type('claude login');
+			assert.deepStrictEqual(picker.items.filter(item => item.alwaysShow).map(item => item.label), ['Ada']);
 			picker.type('#a2');
 			const byId = picker.items.map(item => [item.description, item.alwaysShow]);
 			picker.type('@Grace #a1');
@@ -1479,12 +1521,12 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([picker.title, listed, searched, byId, byReference, all, afterClose, did], [
 				'Go to Agent',
-				[['Ada', '#a1 · Claude Code · Working · main · Fix login', undefined], ['Ada', '#a2 · Claude Code · Error: Not found · main', undefined], ['Ada', '#a3 · Claude Code · Starting · main', undefined]],
+				[['Ada', '#a1 · Working · main · Fix login', undefined], ['Ada', '#a2 · Error: Not found · main', undefined], ['Ada', '#a3 · Starting · main', undefined], ['#a4', 'Working · main · Unnamed work', undefined], ['Same', '#a5 · Working · main · Same', undefined]],
 				[true, false],
-				[['#a2 · Claude Code · Error: Not found · main', true]],
-				['#a1 · Claude Code · Working · main · Fix login'],
-				3,
-				['#a1 · Claude Code · Working · main · Fix login', '#a3 · Claude Code · Starting · main'],
+				[['#a2 · Error: Not found · main', true]],
+				['#a1 · Working · main · Fix login'],
+				5,
+				['#a1 · Working · main · Fix login', '#a3 · Starting · main', 'Working · main · Unnamed work', '#a5 · Working · main · Same'],
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
 		});
@@ -1545,7 +1587,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const shown = [picker.items[0].label, picker.items[0].description];
 			picker.hide();
 			await done;
-			assert.deepStrictEqual([shown, plainText('no icon here')], [['\\$(rocket) Ada', '#a1 · Claude Code · Working · main · Fix \\$(build) and \\$(x'], 'no icon here']);
+			assert.deepStrictEqual([shown, plainText('no icon here')], [['\\$(rocket) Ada', '#a1 · Working · main · Fix \\$(build) and \\$(x'], 'no icon here']);
 		});
 	});
 });

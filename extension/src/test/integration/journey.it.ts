@@ -9,6 +9,7 @@ import { pathToFileURL } from 'url';
 import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
 import { piSessionFolderName } from '../../clis/history/pi';
+import { SUGGESTED_NAMES } from '../../core/names';
 import type { PanelState } from '../../webview/protocol';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -248,7 +249,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			return undefined;
 		});
-		assert.strictEqual(card.name, 'Resume integration fixture');
+		assert.ok(SUGGESTED_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
 		const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
 		const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 		assert.ok(sameFolder(launch.cwd, cwd));

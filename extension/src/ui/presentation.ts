@@ -7,14 +7,19 @@ import { clauseOf } from '../base/errors';
 import type { FacadeReason, WorktreeCreationEffects } from '../core/ports';
 
 /** Native agent presentation shared by pickers, terminal tabs and notifications (ARCHITECTURE-1.3). */
-const LOGOS: { readonly [cli: string]: { readonly light: string; readonly dark: string } } = {
-	claude: { light: 'claude.svg', dark: 'claude.svg' },
-	codex: { light: 'codex-light.svg', dark: 'codex-dark.svg' },
-	agy: { light: 'antigravity.png', dark: 'antigravity.png' },
-	muse: { light: 'muse.png', dark: 'muse.png' },
-	opencode: { light: 'opencode-light.svg', dark: 'opencode-dark.svg' },
-	pi: { light: 'pi.svg', dark: 'pi.svg' }
+const LOGOS: { readonly [cli: string]: { readonly name: string; readonly light: string; readonly dark: string } } = {
+	claude: { name: 'Claude Code', light: 'claude.svg', dark: 'claude.svg' },
+	codex: { name: 'Codex', light: 'codex-light.svg', dark: 'codex-dark.svg' },
+	agy: { name: 'Antigravity', light: 'antigravity.png', dark: 'antigravity.png' },
+	muse: { name: 'Muse Code', light: 'muse.png', dark: 'muse.png' },
+	opencode: { name: 'OpenCode', light: 'opencode-light.svg', dark: 'opencode-dark.svg' },
+	pi: { name: 'Pi', light: 'pi.svg', dark: 'pi.svg' }
 };
+
+/** The name behind a built-in's logo, for searching rows that show only that logo (D161). */
+export function cliDisplayName(cli: string): string {
+	return Object.hasOwn(LOGOS, cli) ? LOGOS[cli].name : cli;
+}
 
 /** Image logos for native pickers; terminal tabs use cliTerminalIcon (LIFECYCLE-2.2). */
 export function cliIcon(media: vscode.Uri, cli: string): vscode.IconPath {
@@ -142,23 +147,42 @@ export function configureAgentsLabel(): string {
 	return vscode.l10n.t("Configure Agents");
 }
 
-/** A formatter for each language: making one costs far more than using it, and a picker says how long ago for each of its rows. */
-const relativeTimeFormats = new Map<string, Intl.RelativeTimeFormat>();
-
-/** How long ago `time` was, in the window's language, as briefly as it says it: now, 5 min. ago, yesterday (UX-2.4). */
+/**
+ * History-list age in the window's language (UX-2.4, D162). Unit thresholds, rounding and short phrases follow VS Code's
+ * `fromNow` with `ago` enabled (Microsoft, MIT; ThirdPartyNotices.txt). No private editor API is imported.
+ */
 export function ago(time: number, now: number, language: string): string {
-	let format = relativeTimeFormats.get(language);
-	if (!format) {
-		format = new Intl.RelativeTimeFormat(language, { numeric: 'auto', style: 'short' });
-		relativeTimeFormats.set(language, format);
+	// Preserve a source clock ahead of this window instead of inventing fresh activity.
+	if (time > now) {
+		return new Intl.DateTimeFormat(language, { dateStyle: 'medium', timeStyle: 'medium' }).format(time);
 	}
-	const minutes = Math.floor(Math.max(0, now - time) / 60_000);
-	if (minutes < 1) {
-		return format.format(0, 'second');
+	const seconds = Math.round((now - time) / 1_000);
+	if (seconds < 30) {
+		return vscode.l10n.t("now");
 	}
-	if (minutes < 60) {
-		return format.format(-minutes, 'minute');
+	if (seconds < 60) {
+		return vscode.l10n.t("{0} secs ago", seconds);
 	}
-	const hours = Math.floor(minutes / 60);
-	return hours < 24 ? format.format(-hours, 'hour') : format.format(-Math.floor(hours / 24), 'day');
+	if (seconds < 3_600) {
+		const minutes = Math.round(seconds / 60);
+		return minutes === 1 ? vscode.l10n.t("{0} min ago", minutes) : vscode.l10n.t("{0} mins ago", minutes);
+	}
+	if (seconds < 86_400) {
+		const hours = Math.round(seconds / 3_600);
+		return hours === 1 ? vscode.l10n.t("{0} hr ago", hours) : vscode.l10n.t("{0} hrs ago", hours);
+	}
+	if (seconds < 604_800) {
+		const days = Math.round(seconds / 86_400);
+		return days === 1 ? vscode.l10n.t("{0} day ago", days) : vscode.l10n.t("{0} days ago", days);
+	}
+	if (seconds < 2_592_000) {
+		const weeks = Math.round(seconds / 604_800);
+		return weeks === 1 ? vscode.l10n.t("{0} wk ago", weeks) : vscode.l10n.t("{0} wks ago", weeks);
+	}
+	if (seconds < 31_536_000) {
+		const months = Math.round(seconds / 2_592_000);
+		return months === 1 ? vscode.l10n.t("{0} mo ago", months) : vscode.l10n.t("{0} mos ago", months);
+	}
+	const years = Math.round(seconds / 31_536_000);
+	return years === 1 ? vscode.l10n.t("{0} yr ago", years) : vscode.l10n.t("{0} yrs ago", years);
 }

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import type { Agents, ConversationDiscoveryPort, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, WorktreePort } from '../../core/ports';
+import type { Agents, ConversationDiscoveryPort, ConversationKey, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
 import { AGENT_SETTINGS, COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
@@ -26,6 +26,7 @@ declare const FACADE_TEST_MODE: boolean;
 export interface UiDeps {
 	readonly agents: Agents;
 	readonly conversations?: ConversationDiscoveryPort;
+	readonly savedName: (key: ConversationKey) => string | undefined;
 	readonly locations: LocationPort;
 	readonly clis: CliCatalogPort;
 	readonly history: LaunchHistoryPort;
@@ -119,7 +120,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			// Said by the picker, which takes it: never a rejection no one hears where the picker could not be made
 			prepared.catch(() => undefined);
 			try {
-				await resumeAgent({ conversations: deps.conversations, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
+				await resumeAgent({ conversations: deps.conversations, savedName: deps.savedName, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
 					resume: entry => deps.agents.resume(entry, { reveal: true }), reveal: run => agent.reveal(run), select: run => model.select(run),
 					notifyError: deps.notifyError, media, language: vscode.env.language });
 			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }

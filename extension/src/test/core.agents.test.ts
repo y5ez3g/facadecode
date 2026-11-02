@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import { AgentService } from '../core/agents';
 import { FacadeError } from '../core/errors';
+import { SUGGESTED_NAMES } from '../core/names';
 import {
 	ActivityReport, CleanupResult, Disposable, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, Location, LocationPort,
 	ConversationEntry, ConversationMeta, ConversationKey, Pin, PinStore,
@@ -898,6 +899,28 @@ const continuitySetup = (options: Parameters<typeof setUp>[0] = {}) => setUp({ .
 const ENTRY: ConversationEntry = { key: { environment: 'local', cli: 'claude', sessionId: 'sess-1' }, cwd: '/work/app', title: 'Saved work' };
 suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RULES-4.2, WORKTREES-2)', () => {
 	const setUp = (options: Parameters<typeof continuitySetup>[0] = {}) => continuitySetup(options);
+	test('D161: manual Resume generates and saves only missing/empty names; existing names, even a title, stay literal', async () => {
+		for (const saved of [undefined, '', '   ', 'Saved work', 'Reviewer']) {
+			const world = setUp();
+			world.agents.launch({ name: 'Bolt', location: 'loc-1', cli: 'claude', origin: 'human' });
+			if (saved !== undefined) { world.conversations.set('sess-1', { cwd: ENTRY.cwd, location: 'loc-1', name: saved }); }
+			const id = world.agents.resume(ENTRY, { reveal: true }) as RunId;
+			await world.agents.started(id);
+			const name = world.agents.get(id)!.name;
+			if (saved?.trim()) {
+				assert.strictEqual(name, saved);
+			} else {
+				assert.ok(SUGGESTED_NAMES.includes(name), name);
+				assert.notStrictEqual(name, 'Bolt', 'use an available suggestion');
+			}
+			assert.strictEqual(world.conversations.get('sess-1')?.name, name);
+			await world.agents.close(id);
+			const again = world.agents.resume(ENTRY, { reveal: true }) as RunId;
+			await world.agents.started(again);
+			assert.strictEqual(world.agents.get(again)?.name, name, 'subsequent Resume keeps the saved name');
+		}
+	});
+
 	test('Resume starts the exact conversation in a new run, keeps its name, and never runs it twice (J11, LIFECYCLE-3.3)', async () => {
 		const world = setUp();
 		world.conversations.set('sess-1', { location: 'loc-1', cwd: '/work/app', name: 'Reviewer' });

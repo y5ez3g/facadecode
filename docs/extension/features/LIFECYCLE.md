@@ -147,8 +147,11 @@ as an alternative.
 **Go to Agent searches and opens agents in the current window only.**
 
 Match name, CLI, title, working location and run ID. Accept the existing short ID and a copied agent reference as search
-input; an ID in a copied reference matches that run even if its descriptive name is stale. Show the short ID in picker
-detail alongside status/location so duplicate names are distinguishable. Include starting/running and retained-error
+input; an ID in a copied reference matches that run even if its descriptive name is stale. Use one native picker line:
+CLI icon, prominent name, then quieter short ID, current state, working location and CLI title, in that order (D161).
+An empty name uses the short ID as the prominent identifier, with state/location/title after it. The icon identifies
+the CLI; its name stays searchable without being repeated in the row. Keep name and title even when equal; omit only
+missing fields. Native width clipping never changes the stored or searchable text. Include starting/running and retained-error
 cards. Copy Reference and Close Agent actions target that exact run. No cross-window picker, focus transfer or proxy
 card is provided. The person switches editor windows to manage another window; agents can use MCP across windows.
 Terminal-tab context actions require accurate public context; do not substitute the foreground terminal when unknown.
@@ -184,9 +187,11 @@ running conversations are read (D135). Read only list metadata, recent activity 
 of 100; search continues beyond the first page. Reuse already read metadata during the picker session rather than
 rescanning every log on each page or keystroke. Prefer vendor discovery; do not build a new conversation store.
 There is no 30-day age cutoff. A scan limit must not silently make older matching history permanently unreachable.
-Deduplicate by environment/CLI/session ID. Each conversation is one line: its CLI's icon and its title, then activity
-time and original location; the icon names the CLI, so no CLI name is repeated as text, and search covers title and
-location. Use the vendor's saved display title and conversation activity time, including native renames; file maintenance
+Deduplicate by environment/CLI/session ID. Each conversation uses the same single-line native presentation as Go to
+Agent: its CLI icon and prominent conversation title, then quieter activity time, original location and saved Facade
+name, in that order (D161). Omit a missing or empty name without generating one while browsing. Keep the saved name
+even when it equals the title. The icon names the CLI, so no CLI name is repeated as text; search covers title, saved
+name, CLI and location, including beyond the first page. Use the vendor's saved display title and conversation activity time, including native renames; file maintenance
 does not make an old conversation recently active. Ordering remains correct across page boundaries. Omit superseded
 history segments when the vendor's continuation points to an existing resumable conversation.
 A conversation that cannot be resumed now - its working directory gone, or its CLI turned off or not installed
@@ -204,6 +209,11 @@ call vendor resume and return its result. No external-writer scan, lease or conc
 **Resume starts an exact saved conversation in its original CLI and location using current CLI startup settings.**
 
 Restore RULES-4.2's conversation context, use RULES-4.3's launch-time YOLO and leave model/effort to the native session and current launch arguments.
+Manual Resume keeps a nonempty saved Facade name. A missing or empty saved name receives a random short name from
+New Agent's existing suggestions only when the launch is accepted, avoiding current-window names where possible;
+save it with the conversation for subsequent Resume. Never derive the name from the conversation title or CLI ID.
+Existing saved names, including long ones, remain unchanged. Ordinary reload and automatic Pin restoration preserve
+their recorded names, including empty ones (D161).
 Missing original session/location/configuration fails honestly without selecting another session or folder.
 For a vendor's ambiguous workspace-folder set under 3.2, the person's explicit location choice supplies the missing cwd.
 An accepted Resume creates its pair immediately and retains actual launch failure. Do not acquire an external conversation-writer lease or replay the original creation prompt.
@@ -278,6 +288,7 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 
 ## Change log
 
+- 2026-11-02: D161 keeps both agent pickers on one line, gives name/title their separate priorities, retains equal fields, and generates missing names only on manual Resume.
 - 2026-11-02: Keep terminal tab logos visible across themes and restoration through contributed native icons (D159).
 
 - 2026-11-01: From the owner-requested release review: 1.3 counts a worktree's subfolder agents and leaves a branch

@@ -207,6 +207,8 @@ rejected several of them. Their old implementation/tests must follow the current
 | D158 | The owner's mixed-CLI test on 2026-11-02 showed Pi loading both Codex/Muse's project skill and its own explicit copy. Pi's resource-discovery hook now supplies a copy only when no byte-identical Facade skill is already loaded. Reevaluate on reload so ending another CLI cannot remove Pi's instructions. Keep different-content conflicts and unrelated skill warnings visible; no global skill-discovery switch or project-file deletion | CLIS-2.2; MCP-6.2 |
 | D159 | The owner's light-theme window showed file glyphs in place of terminal logos. An isolated VS Code 1.144.0 reproduction loses every image-backed terminal icon when switching from Dark Modern to Light Modern, and restores them when switching back. Use the public contributed-icon/ThemeIcon path for terminal logos, preserving brand colors and adapting monochrome marks to the theme. Keep picker/panel images, native tab settings and editor files unchanged; verify rendered tabs across themes and reload | LIFECYCLE-2.2; ARCHITECTURE-1.2 |
 | D160 | Owner clarified on 2026-11-02 that the panel must show the title the CLI actually sets, including Claude/Codex decorations. D126 removed content filters but retained a precedence rule that let the plain status-report title mask the decorated terminal title. Prefer the latest nonempty OSC 0/2 title, using the report title only when no terminal title is available. State reports still determine activity; they never replace the terminal title or stop decoration-only updates. Apply the same rule to live events and restored runs, without per-CLI symbol reconstruction | CLIS-2.3; PANEL-1.4 |
+| D161 | Owner-approved 2026-11-02: Go to Agent and Resume share a native single-line layout. Go to Agent emphasizes name, followed by short ID, state, location and CLI title; an empty name uses the ID. Resume emphasizes conversation title, followed by activity time, location and an existing Facade name. CLI icons replace repeated CLI text while both pickers retain CLI search. Do not deduplicate equal names/titles. Manual Resume assigns a missing or empty name a saved short random suggestion instead of copying the title; browsing, reload and automatic Pin restoration do not generate names | LIFECYCLE-2.3, 3.2, 3.3 |
+| D162 | Owner chose VS Code's time style after comparing the Resume examples: use its short localized singular/plural phrases with `ago`, round by its second/minute/hour/day/week/month/year thresholds, and retain the existing last-activity meaning. This replaces the proposed 30-day date switch and `yesterday` calendar label in history lists. Preserve a future source timestamp as an absolute time rather than labeling it fresh | UX-2.4 |
 
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
@@ -280,6 +282,8 @@ full spec revision; it does not authorize publication or unrelated source change
 
 ## Change log
 
+- 2026-11-02: D162 records the owner-selected VS Code relative-time convention for history lists.
+- 2026-11-02: D161 records the single-line picker and manual Resume naming review.
 - 2026-11-02: D160 corrects title-source precedence so native CLI decorations reach the panel.
 
 - 2026-11-02: D159 records the reproduced light-theme terminal icon failure and its public-API fix.
