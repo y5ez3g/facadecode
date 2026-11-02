@@ -53,7 +53,9 @@ inherited run markers, which would make a run act as another's: Facade's own run
 Claude Code session's (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_BRIDGE_SESSION_ID`,
 `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_JOB_DIR`), as competitive analysis found necessary. A configured layer may set any of
 them again (D134). Set `TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `FACADE_AGENT` to the run's `#aN` alias. Never copy
-credentials from the client to a remote environment.
+credentials from the client to a remote environment. Claude Code is given `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` where
+no layer sets that variable: in a VS Code terminal without its VS Code extension, Claude Code 2.1.316 installs it and
+shows a welcome that waits for Enter, past which no message goes (D144).
 
 Empty `.path` means command on PATH. A simple name is searched on that PATH; relative path is from launch cwd; leading
 `~` uses that environment's home; absolute path is exact. Whitespace-only is invalid, no silent fallback to another CLI.
@@ -482,6 +484,8 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-01: 1.2 keeps Claude Code from installing its VS Code extension, whose welcome waited for Enter, at the owner's
+  request (D144).
 - 2026-11-01: 2.2 gives OpenCode `--standalone` on its 2.x line alone: its 1.x line refused it and did not start (D140).
 - 2026-11-01: 3.3 keys Claude Code's trust on Windows as Claude Code 2.1.316 reads it there - the folder with `.git` at or
   above the start folder, a linked worktree's own, spelled as given - found by the release review's real-CLI run (D139).
