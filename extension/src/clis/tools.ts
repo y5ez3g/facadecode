@@ -30,6 +30,8 @@ export interface McpServer {
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly env: { readonly [name: string]: string };
+	/** Private model context for a native hook; never a shared server configuration field. */
+	readonly instructions?: string;
 }
 
 /** What a launch with the tools is given (CLIS-2.2): the run's server, the bundled skill's SKILL.md and the run's own folder. */

@@ -179,10 +179,10 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | --- | --- | --- | --- |
 | Claude Code | Per-run `--mcp-config` file | Per-run `--plugin-dir` plugin | `--allowedTools mcp__facade` |
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
-| Antigravity | Project plugin `.agents/plugins/facade`, shared | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
-| Muse Code | Per-run `-c mcpServers.facade`, optional, on Windows too, where Facade starts its native program; one that starts through cmd.exe gets a `facade` entry merged into the project's `.mcp.json`, shared, with no `mode`, which Muse Code 1.4.14 refuses there (D147) | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
+| Antigravity | Project plugin `.agents/plugins/facade`, shared; its PreInvocation hook supplies run-private ephemeral initialization context through the run environment | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
+| Muse Code | Per-run `-c mcpServers.facade`, optional, on Windows too, where Facade starts its native program; one that starts through cmd.exe gets a `facade` entry merged into the project's `.mcp.json`, shared, with no `mode`, which Muse Code 1.4.14 refuses there (D147); private initialization context through its SessionStart hook | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
 | OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
-| Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
+| Pi | Per-run extension, `-e`, that registers it with its tools given directly and supplies the same initialization instructions in its own native prompt section under MCP-6.2 | Per-run `--skill` folder | It has no approvals |
 
 These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
 RULES-4.3 chose (D90). An entry shared by a folder's runs holds no run's identity: the run's variables reach the server
@@ -505,6 +505,7 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
   titles, at the owner's request to defer title cleanup (D126); report precedence and safe display bounds remain.
 - 2026-10-31: D123 completes the six built-in history/identity adapters, preserves user integration settings, and records native Linux evidence and platform limits. Antigravity multi-folder metadata retains its cwd ambiguity.
 
+- 2026-11-01: Pi supplies run-private initialization instructions through its native prompt section when direct MCP namespace instructions do not reach the model (MCP-6.2, D152).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 2.1 reads Antigravity's and Pi's scrolled drafts and Pi's `[paste #N C chars]` (D118).

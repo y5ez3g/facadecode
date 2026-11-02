@@ -9,6 +9,7 @@ import { isJsonObject, JsonObject } from '../base/json';
 import { CliAdapter, sigintExit } from './adapter';
 import { Environment, variableOf } from './environment';
 import { homeOf } from './executable';
+import { nodeHookCommand } from './identity';
 import { mcpConfigText, pluginManifest, SERVER_NAME, sharedServer, SKILL_FILE, ToolsIntegration } from './tools';
 import type { TrustTarget } from './trust';
 
@@ -34,7 +35,7 @@ const ALLOW_TOOLS = `mcp(${PLUGIN_SERVER}/*)`;
 const antigravityTools: ToolsIntegration = {
 	capability: { state: 'unverified', reason: 'a plugin in the folder\'s .agents/plugins/facade with its mcp_config.json and the skill, shared by the folder\'s runs, the server given the run\'s variables through the CLI\'s environment; its tools allowed for the session by --settings, and started before the first turn through its MCP panel' },
 	where: (_runDir, cwd) => `the plugin ${path.join(cwd, PLUGIN)}, shared by the runs there, with the run's variables in its environment`,
-	inject: ({ server, skill }) => {
+	inject: ({ server, skill, platform }) => {
 		const shared = sharedServer(server);
 		return {
 			values: {},
@@ -42,6 +43,8 @@ const antigravityTools: ToolsIntegration = {
 			project: [
 				{ kind: 'file', path: path.join(PLUGIN, 'plugin.json'), content: `${JSON.stringify(pluginManifest(), undefined, 2)}\n` },
 				{ kind: 'file', path: path.join(PLUGIN, 'mcp_config.json'), content: mcpConfigText(shared.server) },
+				{ kind: 'file', path: path.join(PLUGIN, 'hooks.json'), content: `${JSON.stringify({ facade: { PreInvocation: [{ type: 'command',
+					command: nodeHookCommand(shared.server.command, platform ?? process.platform, 'agy', [...shared.server.args, '--antigravity-context']) }] } }, undefined, 2)}\n` },
 				{ kind: 'file', path: path.join(PLUGIN, SKILL_FILE), content: skill }
 			],
 			env: shared.env

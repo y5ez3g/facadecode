@@ -67,6 +67,24 @@ suite('Native session integration preserves configuration and exact identity (CL
 		assert.deepStrictEqual(JSON.parse(overlay.env!.OPENCODE_CLI_CONFIG_CONTENT).theme, { name: 'run' });
 	});
 
+	test('Muse supplies each run\'s private initialization on native SessionStart, including resume, without a user message or subagent leak', () => {
+		const id = '86da4482-2bae-4a45-b193-a5664c19826a';
+		for (const [run, instructions] of [['one', 'You are Facade Code agent #a1.'], ['two', 'You are Facade Code agent #a2.']]) {
+			const file = path.join(temp.dir, `${run}.session.json`);
+			const planned = museSession({ ...input, file, instructions });
+			for (const owned of planned.files!) { fs.mkdirSync(path.dirname(owned.file), { recursive: true }); fs.writeFileSync(owned.file, owned.content); }
+			const invoke = (event: string, source: string, thread = id) => execFileSync(process.execPath, ['-e', SESSION_HOOK_SCRIPT, file], {
+				env: { MUSE_SESSION_ID: id, MUSE_THREAD_ID: thread }, input: JSON.stringify({ session_id: id, hook_event_name: event, source, cwd: temp.dir }), encoding: 'utf8'
+			});
+			for (const source of ['startup', 'resume', 'compact']) {
+				assert.deepStrictEqual(JSON.parse(invoke('SessionStart', source)), { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: instructions } });
+			}
+			assert.strictEqual(invoke('UserPromptSubmit', 'prompt'), '', 'ordinary prompts do not append the same initialization repeatedly');
+			assert.strictEqual(invoke('SessionStart', 'startup', '96da4482-2bae-4a45-b193-a5664c19826a'), '', 'a native subagent does not inherit the parent\'s Facade identity');
+		}
+		assert.ok(!museSession(input).files!.some(owned => owned.file.endsWith('context.json')), 'orchestration off adds no Facade context');
+	});
+
 	test('settings or per-launch configuration an integration cannot read leave the launch as configured, without identity tracking, for the CLI to say what is wrong: never a start refused (CLIS-2.4)', () => {
 		const write = (file: string, text: string) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
 		const unavailable = { unavailable: true };

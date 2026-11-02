@@ -274,6 +274,7 @@ passes.
 | M27 | Default discovery from a folder or worktree; unavailable peer directory; explicit all/destination/CLI selection; lists of 1/20/100/200 agents with equal timestamps and a changed cursor selection | One current-location discovery call without a peer scan; no guessed location; compact rows with explicit scope/completeness; complete, stable pages and targeted details; incompatible cursor selection fails before remote reads; MCP-2.1, MCP-3.1 |
 | M28 | Repeated activity reports, title changes, reconnection/reload, missing source time and browser/source clock differences | Source state observation stays distinct from query time and panel reconstruction; reliable relative or absolute hover time, no invented recency or elapsed-time warning; RULES-3.1, PANEL-1.5 |
 | M29 | Notifications with blank/long/duplicate names, Unicode and literal boundary text; parallel accepted operations; routed duplicate result after reload; a receipt batch partially submitted before reload | Approved 📨/🔔 English templates, complete original bodies, no terminal JSON/footer; reserved result_message_id matches the final result without a fake inbox item; frozen input is not reformatted or pasted twice; success/unknown/partial, input, prompt, process and worktree facts stay distinguishable; COLLABORATION-2.1–2.2, MCP-1.3 |
+| M30 | Human/agent creation, two runs in one directory, a newly created worktree, creator closure, no prompt, shim reconnect and restored conversation | Each launch's own identity, creator address, actual location and initial message remain available through private instructions; shared files contain no personalized context; no welcome turn, mandatory report or replay; MCP-6.2 |
 
 
 
@@ -428,7 +429,7 @@ for review, not acceptance evidence.
 
 - 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D147).
 - 2026-11-01: Evidence that named this release's packages by the version an earlier commit wrote names them as this release's: its version is 0.0.2 (D142).
-- 2026-11-01: Added MCP polish scenarios through MCP-08 (D152).
+- 2026-11-01: Added MCP polish scenarios through MCP-09 (D152).
 - 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
 - 2026-11-01: U13 covers the panel status, stable-name and responsive-location decisions D127/D128.

@@ -116,7 +116,10 @@ export function piExtensionText(server: McpServer): string {
 		timeout: CALL_SECONDS,
 		description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.'
 	};
-	return `// Facade Code: this run's tools, registered for its session alone\nexport default function (pi) {\n\tpi.registerMcpServer(${JSON.stringify(SERVER_NAME)}, ${JSON.stringify(config)});\n}\n`;
+	// Direct MCP tools carry namespace metadata that not every provider exposes to its model. Use Pi's native section
+	// hook for the same run-private instructions, preserving its other sections and avoiding an extra welcome message.
+	const context = server.instructions ? `\n\tpi.on('before_agent_start', (event) => {\n\t\tevent.systemPromptOptions.sections.facade = ${JSON.stringify(server.instructions)};\n\t});` : '';
+	return `// Facade Code: this run's tools, registered for its session alone\nexport default function (pi) {\n\tpi.registerMcpServer(${JSON.stringify(SERVER_NAME)}, ${JSON.stringify(config)});${context}\n}\n`;
 }
 
 /**

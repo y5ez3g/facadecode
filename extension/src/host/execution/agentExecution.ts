@@ -272,12 +272,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	/** How `run`'s CLI starts the run's MCP shim (MCP-6.1): this extension host's runtime as Node, the bundled shim, ptyd's socket. */
-	shimLaunch(run: RunId): McpServerLaunch {
+	shimLaunch(run: RunId, alias: string, context?: string): McpServerLaunch {
 		return launchShim({
 			runtime: process.execPath,
 			script: this.options.shimScript ?? path.join(path.dirname(this.options.ptydScript), 'shim.js'),
 			socket: ptydSocketPath(this.options.home),
-			run
+			run, alias, context
 		});
 	}
 

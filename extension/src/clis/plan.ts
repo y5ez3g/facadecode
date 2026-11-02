@@ -326,7 +326,8 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		}, { ...values, ...active?.values })];
 		// Compose native identity with the complete tool settings. A second --settings must not erase either integration.
 		const integration = input.sessionFile && input.sessionHook ? adapter.sessionIntegration?.({
-			file: input.sessionFile, hook: input.sessionHook, env: started, cwd: input.cwd, platform, extra: arguments_, tools: active !== undefined, throughCmd: target.throughCmd
+			file: input.sessionFile, hook: input.sessionHook, env: started, cwd: input.cwd, platform, extra: arguments_, tools: active !== undefined,
+			instructions: active ? input.tools?.server.instructions : undefined, throughCmd: target.throughCmd
 		}) : undefined;
 		const args = [...target.args, ...integration?.extra ?? arguments_, ...integration?.args ?? [],
 			...native ? expanded(adapter.groups.prompt!, { ...values, prompt: input.prompt! }) : []];

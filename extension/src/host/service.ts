@@ -33,6 +33,7 @@ import { AgentLog } from '../record/log';
 import { MessageCounter, MessageFile } from '../record/messages';
 import { facadeHome } from '../record/paths';
 import { pruneResults, writeResult } from '../record/results';
+import { instructionsFor, launchContextText } from '../schema/instructions';
 import { RetainedFile } from '../record/retained';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
@@ -206,7 +207,15 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		// Facade's own reasons in the person's language: a worktree's problem, a CLI's configuration (UX-2.4)
 		describe: (err, english) => worktreeProblemText(err, err instanceof PlanError ? reasonText(err.said, english) : english),
 		// The run's own shim, where orchestration is on for this start (RULES-4.4, MCP-6.1)
-		tools: run => clis.collaborationEnabled() ? execution.shimLaunch(run) : undefined,
+		tools: (run, facts, location) => {
+			if (!clis.collaborationEnabled()) { return undefined; }
+			const context = launchContextText({
+				creator: { id: facts.creator ? /#a\d+$/.exec(facts.creatorLabel ?? '')?.[0] ?? facts.creator : '#human', label: facts.creatorLabel },
+				window: window.label, location,
+				...(facts.promptId ? { initialMessage: facts.promptId.replace(/^m-/, '#m') } : {})
+			});
+			return { ...execution.shimLaunch(run, facts.alias, context), instructions: instructionsFor(facts.alias, context) };
+		},
 		// What a start types before its first turn goes ahead of every message to it (COLLABORATION-2.2); `input` exists by any launch
 		warmUp: (run, warmUp): Promise<void> => input.warmUp(run, warmUp),
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`

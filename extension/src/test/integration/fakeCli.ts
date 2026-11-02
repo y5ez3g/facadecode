@@ -375,7 +375,14 @@ async function serverOf(): Promise<Server | undefined> {
 	if (extension >= 0) {
 		let registered: Server | undefined;
 		const load = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
-		(await load(pathToFileURL(args[extension + 1]).href)).default({ registerMcpServer: (_name: string, server: Server) => registered = server });
+		const hooks: (() => void)[] = [];
+		(await load(pathToFileURL(args[extension + 1]).href)).default({
+			registerMcpServer: (_name: string, server: Server) => registered = server,
+			on: (event: string, handler: (event: { systemPromptOptions: { sections: Record<string, string> } }) => void) => {
+				if (event === 'before_agent_start') { hooks.push(() => handler({ systemPromptOptions: { sections: {} } })); }
+			}
+		});
+		for (const hook of hooks) { hook(); }
 		return registered;
 	}
 	const inline = process.env.OPENCODE_CONFIG_CONTENT;

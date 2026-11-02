@@ -90,8 +90,8 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 	};
 	/** The run's shim as its CLI starts it, from the launch the window gives: requests by id over stdio. */
 	const shimOf = (port: AgentExecution, run: RunId) => {
-		const launch = port.shimLaunch(run);
-		const child = spawn(launch.command, [...launch.args], { env: { ...programEnv(), ...launch.env, FACADE_AGENT: '#a1' }, stdio: ['pipe', 'pipe', 'inherit'] });
+		const launch = port.shimLaunch(run, '#a1');
+		const child = spawn(launch.command, [...launch.args], { env: { ...programEnv(), ...launch.env }, stdio: ['pipe', 'pipe', 'inherit'] });
 		cleanups.push(() => child.kill());
 		const waiting = new Map<number, (result: any) => void>(); // eslint-disable-line @typescript-eslint/no-explicit-any
 		child.stdout.on('data', lineReader(line => {
@@ -121,12 +121,12 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 	};
 
 	test('a run\'s shim starts with this host\'s runtime as Node, the shim beside ptyd\'s script or the one given, and ptyd\'s socket - addresses, no token', () => {
-		assert.deepStrictEqual(portOf().shimLaunch('run-1'), {
+		assert.deepStrictEqual(portOf().shimLaunch('run-1', '#a1'), {
 			command: process.execPath,
 			args: [path.join('/ext/dist', 'shim.js')],
-			env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: 'run-1', FACADE_PTYD: ptydSocketPath(home) }
+			env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: 'run-1', FACADE_AGENT: '#a1', FACADE_PTYD: ptydSocketPath(home) }
 		});
-		assert.deepStrictEqual(portOf({ shimScript: SHIM }).shimLaunch('run-2').args, [SHIM]);
+		assert.deepStrictEqual(portOf({ shimScript: SHIM }).shimLaunch('run-2', '#a2').args, [SHIM]);
 	});
 
 	test('the shim\'s hello tells the window its run\'s tools are there; each call is answered by the handler served, a failure where there is none or it throws', async () => {

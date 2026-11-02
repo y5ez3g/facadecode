@@ -412,6 +412,24 @@ work for that same message. A new send call has a new ID, even if its text match
 message is a separate kind of information, not another copy of that message's instruction.”
 This is model-side handling of transport duplicates, not a Facade deduplication database or an exactly-once guarantee.
 The skill does not prescribe project workflow, mandatory replies or escalation to a person.
+Per-run initialization instructions identify the agent, its creator (or person), initial message ID when present, and
+launch window/environment/location including folder and worktree. A creator's short ID is a callable send_message
+address, never a reporting requirement. Context is private to the run's launch and survives shim reconnect/reload.
+The creator is named explicitly with its address; a general explanation of #human must not substitute for that fact.
+The MCP launch explicitly carries the caller's short ID; a client's filtered child environment must not erase it.
+Initialization explains that terminal delivery continues after a model turn ends, while read_messages is an immediate
+snapshot rather than a wait operation. It tells agents not to poll inboxes or screens for automatic delivery, without
+prescribing project workflow or a particular turn ending.
+Shared skill/config files contain no personalized context. A client that does not expose server instructions to the
+model receives the same instructions through its run-private native context hook; Pi uses a dedicated system-prompt
+section in its existing per-run extension, Muse uses SessionStart additionalContext from its private session hook,
+and Antigravity uses a PreInvocation ephemeral message from its shared plugin hook. That hook contains no run identity;
+the same run environment as its MCP server supplies the private context, including after native resume. Transient
+context must not accumulate in conversation history across invocations.
+These preserve existing instructions and hooks and add no user message or model turn.
+A proven client limitation may use the same initial message as fallback, never an extra welcome turn.
+Missing facts stay absent, and launch context never claims to track shell cd.
+
 Old task workflows, operation-query/deletion tools, input_policy and authentication instructions are absent.
 No migration guide for already-published user skills is required: this is the first release of the contract.
 

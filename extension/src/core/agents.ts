@@ -35,7 +35,7 @@ export interface AgentServiceDeps {
 	/** The destination's current `facade.yolo`, read when each launch is accepted (RULES-4.3). */
 	readonly yolo: () => boolean;
 	/** The run's MCP shim where `facade.collaboration.enabled` is on when its launch is planned; none injects nothing (RULES-4.4). */
-	readonly tools?: (run: RunId) => McpServerLaunch | undefined;
+	readonly tools?: (run: RunId, facts: RunFacts, location: Location) => McpServerLaunch | undefined;
 	/** A failure in the person's language (UX-2.4): Facade's own reasons translated, any other its `english` as it is. */
 	readonly describe?: (err: unknown, english: string) => string;
 	/**
@@ -520,7 +520,7 @@ export class AgentService implements Agents, Disposable {
 		}
 		let plan: LaunchPlan;
 		try {
-			const tools = this.deps.tools?.(run.facts.id);
+			const tools = this.deps.tools?.(run.facts.id, run.facts, location);
 			plan = await this.deps.planner.plan({
 				run: run.facts.id, alias: run.facts.alias, name: run.facts.name, cli: request.cli, location, yolo: run.facts.yolo,
 				...(run.facts.model !== undefined ? { model: run.facts.model } : {}),

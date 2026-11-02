@@ -127,6 +127,7 @@ function setUp(options: {
 	const retained = new Map<RunId, RetainedRun>();
 	const released: RunId[] = [];
 	const shims: RunId[] = [];
+	const shimInputs: { run: RunId; facts: RunFacts; location: Location }[] = [];
 	const log: string[] = [];
 	let next = 0;
 	let alias = 0;
@@ -183,14 +184,18 @@ function setUp(options: {
 		log: { event: text => log.push(text) },
 		lifetime: { onDidClose: closes.event },
 		yolo: () => true,
-		...(options.tools ? { tools: (run: RunId) => (shims.push(run), { command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } }) } : {}),
+		...(options.tools ? { tools: (run: RunId, facts: RunFacts, location: Location) => {
+			shims.push(run);
+			shimInputs.push({ run, facts: { ...facts }, location });
+			return { command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } };
+		} } : {}),
 		...(options.describe ? { describe: options.describe } : {}),
 		...(options.warmUp ? { warmUp: options.warmUp } : {}),
 		newRunId: () => `run-${(++next).toString(16).padStart(32, '0')}`
 	});
 	const changes: RunChange[] = [];
 	agents.onDidChange(change => changes.push(change));
-	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, log, changes, created, plans, advance: (ms: number) => { now += ms; } };
+	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, shimInputs, log, changes, created, plans, advance: (ms: number) => { now += ms; } };
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -781,6 +786,25 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 });
 
 suite('Agent launches into new worktrees (WORKTREES-2)', () => {
+	test('private initialization uses the completed worktree and this run\'s creator and first message, before planning', async () => {
+		let release!: () => void;
+		const world = setUp({ tools: true, worktreeGate: new Promise(resolve => release = resolve) });
+		const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+		const id = world.agents.launch({ name: 'Ada', location: LOCATION.id, cli: 'claude', origin: 'agent',
+			creator: { run: creator, root: creator, label: 'Ben #a42' }, promptId: 'm-10', worktree: { branch: 'fix' } });
+		await settle();
+		assert.strictEqual(world.shimInputs.length, 0, 'no stale parent-checkout context while creation is pending');
+		release();
+		await world.agents.started(id);
+		const first = world.shimInputs[0];
+		assert.strictEqual(first.run, id);
+		assert.deepStrictEqual(first.location, WORKTREE);
+		assert.deepStrictEqual([first.facts.creator, first.facts.creatorLabel, first.facts.promptId], [creator, 'Ben #a42', 'm-10']);
+		const other = world.agents.launch({ name: 'Ada', location: LOCATION.id, cli: 'claude', origin: 'human' });
+		await world.agents.started(other);
+		assert.deepStrictEqual([world.shimInputs[1].run, world.shimInputs[1].location, world.shimInputs[1].facts.creator, world.shimInputs[1].facts.promptId], [other, LOCATION, undefined, undefined]);
+		assert.strictEqual(world.shimInputs[0].facts.promptId, 'm-10', 'a later launch never replaces another run\'s context');
+	});
 
 	test('partial Git failures retain only confirmed effects and carry them through notifications and reload', async () => {
 		for (const effects of [{}, { branchCreated: true }, { destinationCreated: WORKTREE.path }, { branchCreated: true, destinationCreated: WORKTREE.path }]) {

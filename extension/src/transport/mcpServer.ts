@@ -25,6 +25,7 @@ const ALWAYS_LOAD = { 'antigravity/alwaysLoad': true };
 export interface McpShimOptions {
 	/** The run's short ID, `#aN`, whose instructions the model is given. */
 	readonly alias: string;
+	readonly context?: string;
 	readonly version: string;
 	/**
 	 * Whether it speaks for a run: false where its CLI started it without the run's variables - a session the person started by hand
@@ -151,7 +152,7 @@ export class McpShim {
 					protocolVersion: typeof asked === 'string' && MCP_VERSIONS.includes(asked) ? asked : MCP_VERSIONS[0],
 					capabilities: { tools: { listChanged: false } },
 					serverInfo: { name: 'facade', version: this.options.version },
-					instructions: serving ? instructionsFor(this.options.alias) : NOT_SERVING
+					instructions: serving ? instructionsFor(this.options.alias, this.options.context) : NOT_SERVING
 				};
 			}
 			case 'ping':

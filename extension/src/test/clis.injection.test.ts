@@ -65,6 +65,25 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	const plan = (input: Partial<PlanInput> & { readonly cli: string }, where = destination) =>
 		planLaunch(catalogOf(() => undefined), { alias: '#a1', cwd, yolo: true, ...input }, where);
 
+	test('two runs in one directory keep personalized context out of every shared skill and server file', () => {
+		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
+			program(path.join(temp.dir, 'bin'), `${cli}.${cli === 'muse' ? 'cmd' : 'exe'}`);
+			for (const platform of ['darwin', 'win32'] as const) {
+				const inject = (n: number) => plan({ cli, alias: `#a${n}`, tools: { ...tools, runDir: runDirOf(path.join(temp.dir, 'home'), `run-${n}`),
+					server: { ...SERVER, instructions: `private-instructions-${n}`, env: { ...SERVER.env, FACADE_RUN: `run-${n}`, FACADE_LAUNCH_CONTEXT: `private-launch-${n}` } } } }, { ...destination, platform });
+				const first = inject(1), second = inject(2);
+				assert.deepStrictEqual(first.injection?.project, second.injection?.project, `${cli}/${platform}: shared files must be identical`);
+				assert.ok(!JSON.stringify(first.injection?.project).includes('private-launch-'), cli);
+				assert.ok(!JSON.stringify(first.injection?.project).includes('private-instructions-'), cli);
+				for (const [n, planned] of [[1, first], [2, second]] as const) {
+					const privateLaunch = JSON.stringify([planned.args, planned.env, planned.injection?.runFiles]);
+					assert.ok(privateLaunch.includes(`private-launch-${n}`), `${cli}/${platform}: context reaches the private launch`);
+					assert.ok(!privateLaunch.includes(`private-launch-${3 - n}`), cli);
+				}
+			}
+		}
+	});
+
 	test('an explicit MCP model and effort replace configured defaults while other options stay before the initial prompt', () => {
 		const catalog = catalogOf(name => name === 'facade.claude.launch' ? { arguments: ['--model', 'configured', '--effort=low', '--verbose'] } : undefined);
 		const planned = planLaunch(catalog, { cli: 'claude', alias: '#a1', cwd, yolo: true, tools, model: 'requested', effort: 'high', prompt: 'Fix it' }, destination);
@@ -169,6 +188,28 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3660, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
 	});
 
+	test('Pi supplies each run\'s initialization to the model without changing other prompt sections or adding messages', async () => {
+		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
+		for (const alias of ['#a7', '#a8']) {
+			const instructions = `You are Facade Code agent ${alias}.\nAda (#a1) started this session.\nLaunch path: "a \\"quoted\\" folder".`;
+			const runTools = { ...tools, runDir: path.join(tools.runDir, alias.slice(1)), server: { ...SERVER, instructions } };
+			const planned = plan({ cli: 'pi', tools: runTools });
+			const file = planned.injection!.runFiles.find(each => each.path.endsWith('facade-pi.mjs'))!;
+			fs.mkdirSync(path.dirname(file.path), { recursive: true });
+			fs.writeFileSync(file.path, file.content);
+			const handlers = new Map<string, (event: { systemPromptOptions: { sections: Record<string, string> } }) => unknown>();
+			const loaded = await importModule(pathToFileURL(file.path).href);
+			loaded.default({ registerMcpServer: () => {}, on: (event: string, handler: (event: { systemPromptOptions: { sections: Record<string, string> } }) => unknown) => handlers.set(event, handler) });
+			assert.deepStrictEqual([...handlers.keys()], ['before_agent_start']);
+			const event = { systemPromptOptions: { sections: { other: 'Keep the other extension.', facade: 'An earlier turn.' } } };
+			assert.strictEqual(handlers.get('before_agent_start')!(event), undefined, 'no extra message or full prompt replacement');
+			assert.deepStrictEqual(event.systemPromptOptions.sections, { other: 'Keep the other extension.', facade: instructions });
+			handlers.get('before_agent_start')!(event);
+			assert.strictEqual(event.systemPromptOptions.sections.facade, instructions, 'each turn replaces its own section without accumulation');
+			assert.deepStrictEqual(planned.injection!.project, []);
+		}
+	});
+
 	test('Antigravity: a plugin in the folder\'s .agents/plugins/facade, shared, the run\'s variables in its environment; its tools allowed for the session beside the person\'s own rules; its MCP panel opened before the first turn', () => {
 		const settings = path.join(temp.dir, '.gemini', 'antigravity-cli', 'settings.json');
 		fs.mkdirSync(path.dirname(settings), { recursive: true });
@@ -181,7 +222,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.ok(!planned.args.includes('--dangerously-skip-permissions'), 'YOLO off keeps its own approvals');
 		assert.strictEqual(fs.readFileSync(settings, 'utf8'), before, 'planning writes nothing');
 		const plugin = path.join('.agents', 'plugins', 'facade');
-		assert.deepStrictEqual(planned.injection!.project.map(each => each.path), [path.join(plugin, 'plugin.json'), path.join(plugin, 'mcp_config.json'), path.join(plugin, 'skills', 'facade', 'SKILL.md')]);
+		assert.deepStrictEqual(planned.injection!.project.map(each => each.path), [path.join(plugin, 'plugin.json'), path.join(plugin, 'mcp_config.json'), path.join(plugin, 'hooks.json'), path.join(plugin, 'skills', 'facade', 'SKILL.md')]);
 		const config = planned.injection!.project[1] as Extract<ProjectWrite, { kind: 'file' }>;
 		// A shared entry holds no run's identity: the run's variables reach the server through the CLI's environment
 		assert.deepStrictEqual(JSON.parse(config.content), { mcpServers: { facade: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1' } } } });

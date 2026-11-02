@@ -138,6 +138,8 @@ export interface McpServerLaunch {
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly env: { readonly [name: string]: string };
+	/** The same model instructions for a client's native context hook where MCP server instructions are not exposed. */
+	readonly instructions?: string;
 }
 
 /**
