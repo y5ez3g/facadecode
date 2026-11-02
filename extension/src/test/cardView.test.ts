@@ -208,15 +208,23 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual(new Set(['a', 'b', 'c', 'd', 'e', 'f'].map(name => custom(name).color)).size, 3);
 		// A name with nothing to show has no avatar: the card leaves it out
 		assert.deepStrictEqual([avatarOf('', '', 'en'), avatarOf(' ', ' ', 'en')], [undefined, undefined]);
-		// And each one's logo for pickers and terminal tabs, in both themes
+		// Image logos for pickers, and registered native glyphs for terminal tabs in every theme
 		const vscode = {
 			ThemeIcon: class { constructor(readonly id: string) { } },
+			ThemeColor: class { constructor(readonly id: string) { } },
 			Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: path.join(base.fsPath, ...parts) }) }
 		};
-		const { cliIcon } = withModules({ vscode })<typeof PresentationModule>(require.resolve('../ui/presentation'));
+		const { cliIcon, cliTerminalIcon } = withModules({ vscode })<typeof PresentationModule>(require.resolve('../ui/presentation'));
 		const logos = builtIns.map(cli => cliIcon({ fsPath: media } as never, cli) as unknown as { readonly light: { readonly fsPath: string }; readonly dark: { readonly fsPath: string } });
 		assert.deepStrictEqual(logos.flatMap(logo => [logo.light?.fsPath, logo.dark?.fsPath]).filter(file => !file || !fs.existsSync(file)), []);
 		assert.deepStrictEqual((cliIcon({ fsPath: media } as never, 'other') as unknown as { readonly id: string }).id, 'terminal');
+		const manifest = JSON.parse(fs.readFileSync(path.join(media, '..', 'package.json'), 'utf8'));
+		for (const cli of builtIns) {
+			const icon = cliTerminalIcon(cli);
+			assert.strictEqual(icon.id, `facade-cli-${cli}`);
+			assert.ok(manifest.contributes.icons[icon.id], `${cli}'s terminal icon is registered`);
+		}
+		assert.strictEqual(cliTerminalIcon('other').id, 'terminal');
 		const cardFor = (more: Partial<RunFacts>) => cardOf(run(more), { place, selected: false, menu, words: WORDS });
 		assert.deepStrictEqual([cardFor({}).avatar, cardFor({ cli: 'my-cli', displayName: 'my-cli' }).avatar, 'avatar' in cardFor({ cli: 'my-cli', displayName: ' ' })],
 			[{ file: 'avatar-claude.png' }, avatarOf('my-cli', 'my-cli', 'en'), false]);

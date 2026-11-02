@@ -544,6 +544,18 @@ fake-CLI tool-injection journeys and 11 package checks passed. The custom-CLI ve
 skipped. Native Windows/Linux Pi and future CLI releases were not verified. Unrelated user skill warnings are outside
 this product fix. Evidence remains local in `extension/build/mcp-review-window/`.
 
+The owner's light-theme tab review reproduced a native VS Code 1.144.0 defect in an isolated editor with no Facade:
+all four image-backed terminal logos disappeared on switching to Light Modern and returned in Dark Modern. Terminal
+logos now use contributed icons from the existing artwork. Asset checks catch displaced color layers; native checks
+compare the glyph's rendered advance with the original 16 px icon slot, including the 13 px native label font.
+`node scripts/test-agent-icons.mjs`, after compilation and packaging, passed all six logos in Light Modern, Dark Modern,
+both High Contrast themes, Solarized Light, the Minimal file-icon theme, and a reload into Light Modern. It also
+preserved the native choice to hide icons when the file-icon theme is disabled. Actual screenshots were inspected
+after correcting the first font trial's layer bearings and undersized glyphs. Compilation, 1,204 unit checks
+(six platform skips), all seven fake-CLI launch journeys, 12 package checks, localization and specification audits
+passed. These rendering results are for macOS arm64 / VS Code 1.144.0; they do not certify other editors/platforms or
+the declared minimum version. Screenshots and probe logs remain local; no owner's live terminal was driven as a test.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**
@@ -563,6 +575,8 @@ for review, not acceptance evidence.
 | 4.1, 4.3 | Handoff, spec-amendment log and independent review |
 
 ## Change log
+
+- 2026-11-02: Recorded the terminal-logo theme/size/layer regression checks and native rendering evidence (D159).
 
 - 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D147).
 - 2026-11-01: Evidence that named this release's packages by the version an earlier commit wrote names them as this release's: its version is 0.0.2 (D142).

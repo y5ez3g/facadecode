@@ -126,6 +126,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			} },
 			EventEmitter: TestEmitter,
 			ThemeIcon: class { constructor(readonly id: string) { } },
+			ThemeColor: class { constructor(readonly id: string) { } },
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: path.posix.join(base.path, ...parts) }) },
 			ViewColumn: { Active: -1 },
 			TerminalExitReason: EXIT_REASON,
@@ -349,7 +350,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			['Ada', { viewColumn: -1, preserveFocus: false }, true],
 			['Ada', { viewColumn: -1, preserveFocus: true }, true]
 		]);
-		assert.deepStrictEqual(terminals[0].options.iconPath, { light: { path: '/ext/media/agents/claude.svg' }, dark: { path: '/ext/media/agents/claude.svg' } });
+		assert.strictEqual((terminals[0].options.iconPath as { id: string }).id, 'facade-cli-claude');
 		assert.strictEqual((terminals[1].options.iconPath as { id: string }).id, 'terminal');
 		port.note('run-1', 'Starting Claude Code…');
 		open(terminals[0]);

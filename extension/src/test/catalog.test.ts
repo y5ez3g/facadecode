@@ -54,10 +54,11 @@ const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
 
-	test('one view container `facade` with the webview view `facade.agents`, activated after startup; New Agent\'s icon is the one icon contributed, and nothing else is - no colours, keybindings or languages (PANEL-1.1, UX-2.1, 2.3)', () => {
+	test('one view container and webview, startup activation, native New Agent and CLI icons; no keybindings or languages (PANEL-1.1, LIFECYCLE-2.2, UX-2.1, 2.3)', () => {
 		assert.deepStrictEqual([Object.keys(contributes), manifest.activationEvents], [['viewsContainers', 'views', 'commands', 'menus', 'icons', 'configuration'], ['onStartupFinished']]);
 		// Facade's own copy of codicons' `new-session`, at its codicon's code point in the font beside the manifest
-		assert.deepStrictEqual(contributes.icons, { 'facade-new-agent': { description: '%icon.newAgent%', default: { fontPath: './media/new-agent.woff', fontCharacter: '\\EC84' } } });
+		assert.deepStrictEqual(contributes.icons['facade-new-agent'], { description: '%icon.newAgent%', default: { fontPath: './media/new-agent.woff', fontCharacter: '\\EC84' } });
+		assert.deepStrictEqual(Object.keys(contributes.icons).sort(), ['facade-new-agent', ...['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'].map(cli => `facade-cli-${cli}`)].sort());
 		assert.ok(fs.statSync(path.join(ROOT, 'media', 'new-agent.woff')).isFile());
 		assert.strictEqual(english('%icon.newAgent%'), 'New Agent icon');
 		assert.deepStrictEqual(contributes.viewsContainers, { activitybar: [{ id: 'facade', title: '%view.container%', icon: 'media/facade.svg' }] });

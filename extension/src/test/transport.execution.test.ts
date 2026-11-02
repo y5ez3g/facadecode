@@ -42,6 +42,7 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 			commands: { executeCommand: async () => undefined },
 			EventEmitter: TestEmitter,
 			ThemeIcon: class { constructor(readonly id: string) { } },
+			ThemeColor: class { constructor(readonly id: string) { } },
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: path.posix.join(base.path, ...parts) }) },
 			ViewColumn: { Active: -1 },
 			TerminalExitReason: { Unknown: 0, Shutdown: 1, Process: 2, User: 3, Extension: 4 },

@@ -149,6 +149,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, 'terminal');
 		} else {
 			assert.deepStrictEqual(card.avatar, { file: AVATAR });
+			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, `facade-cli-${CLI}`);
 		}
 		const launch = JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] };
 		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);

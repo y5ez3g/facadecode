@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { TERMINAL_REGISTRATION_MS, WINDOW_TERMINALS_COMMAND, type TerminalOwner, type TerminalRegistration } from '../../base/windowIdentity';
 import type { PairFacts, RunId } from '../../core/ports';
-import { cliIcon } from '../../ui/presentation';
+import { cliTerminalIcon } from '../../ui/presentation';
 import { AgentPty } from './agentPty';
 
 /** One run's terminal resource; process state and subscriptions belong to the execution coordinator. */
@@ -209,7 +209,7 @@ export class AgentTerminals implements vscode.Disposable {
 		pair.terminal = vscode.window.createTerminal({
 			name: pty.creationName(),
 			pty,
-			iconPath: cliIcon(this.options.media, cli),
+			iconPath: cliTerminalIcon(cli),
 			// The editor area alone (LIFECYCLE-2.2); never restored by the editor itself after a reload, which reattaches instead
 			location: { viewColumn: vscode.ViewColumn.Active, preserveFocus: !reveal },
 			isTransient: true

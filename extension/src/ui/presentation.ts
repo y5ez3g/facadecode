@@ -16,10 +16,17 @@ const LOGOS: { readonly [cli: string]: { readonly light: string; readonly dark: 
 	pi: { light: 'pi.svg', dark: 'pi.svg' }
 };
 
-/** A built-in CLI's theme logo, or the native terminal icon for another CLI (LIFECYCLE-2.2). */
+/** Image logos for native pickers; terminal tabs use cliTerminalIcon (LIFECYCLE-2.2). */
 export function cliIcon(media: vscode.Uri, cli: string): vscode.IconPath {
 	const logo = Object.hasOwn(LOGOS, cli) ? LOGOS[cli] : undefined;
 	return logo ? { light: vscode.Uri.joinPath(media, 'agents', logo.light), dark: vscode.Uri.joinPath(media, 'agents', logo.dark) } : new vscode.ThemeIcon('terminal');
+}
+
+/** Contributed glyphs survive native file-icon theme rules that can hide terminal URI icons (D159). */
+export function cliTerminalIcon(cli: string): vscode.ThemeIcon {
+	return Object.hasOwn(LOGOS, cli)
+		? new vscode.ThemeIcon(`facade-cli-${cli}`, new vscode.ThemeColor('foreground'))
+		: new vscode.ThemeIcon('terminal');
 }
 
 /** The same launch failure whether it is caught by the picker or reported later by the host (UX-1.2). */

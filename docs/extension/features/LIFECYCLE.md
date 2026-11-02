@@ -133,7 +133,10 @@ explicitly renames it (D127). Rename uses a native Input Box and changes no run/
 
 Human New shows the terminal; agent creation preserves focus. Card/Go to Agent reveals the same terminal without
 launching another. The tab shows only the agent name beside the CLI's theme-appropriate logo; custom CLIs use a terminal
-icon (D130). CLI titles and status remain in PANEL-1.4's second line, never appended to the tab name. Do not add a name
+icon (D130). Built-in tab logos use contributed native icons, with their brand colors and theme foreground for monochrome
+marks. They remain recognizable in light, dark and high-contrast themes, including after a theme change or terminal
+restoration (D159). This uses the public icon API; it does not patch editor styles or change the person's theme.
+CLI titles and status remain in PANEL-1.4's second line, never appended to the tab name. Do not add a name
 length limit or change the editor's tab-width settings. Native tab renames synchronize the complete display name when
 valid, without removing text that resembles a CLI title. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
@@ -274,6 +277,8 @@ integration evidence, not a fact established by this document.
 See [Verification](../engineering/VERIFICATION.md). Runtime results remain unverified.
 
 ## Change log
+
+- 2026-11-02: Keep terminal tab logos visible across themes and restoration through contributed native icons (D159).
 
 - 2026-11-01: From the owner-requested release review: 1.3 counts a worktree's subfolder agents and leaves a branch
   prefix unjudged; 3.1 answers a close during a start, records an unconfirmed close and keeps a tab whose Unpin failed;

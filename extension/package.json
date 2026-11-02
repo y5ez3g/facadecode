@@ -337,6 +337,48 @@
 					"fontPath": "./media/new-agent.woff",
 					"fontCharacter": "\\EC84"
 				}
+			},
+			"facade-cli-claude": {
+				"description": "%config.claude.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E001"
+				}
+			},
+			"facade-cli-codex": {
+				"description": "%config.codex.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E002"
+				}
+			},
+			"facade-cli-agy": {
+				"description": "%config.antigravity.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E003"
+				}
+			},
+			"facade-cli-muse": {
+				"description": "%config.muse.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E004"
+				}
+			},
+			"facade-cli-opencode": {
+				"description": "%config.opencode.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E005"
+				}
+			},
+			"facade-cli-pi": {
+				"description": "%config.pi.title%",
+				"default": {
+					"fontPath": "./media/agent-icons.woff",
+					"fontCharacter": "\\E006"
+				}
 			}
 		},
 		"configuration": [
