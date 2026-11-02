@@ -110,7 +110,7 @@ export function messageOf(record: MessageRecord, withText: boolean): Data {
 		reply_to: record.replyTo,
 		about: record.about,
 		// A Facade result completing an accepted call names that call and the agent it was on (MCP-1.3)
-		call_id: record.callId,
+		call_id: record.kind === 'result' ? record.callId : undefined,
 		agent: record.agent?.run,
 		agent_reference: record.agent ? participant(record.agent) : undefined,
 		length: record.length,
@@ -149,7 +149,7 @@ export function messageFile(records: readonly MessageRecord[]): string {
 			...record.replyTo ? [`reply to ${record.replyTo}`] : [],
 			...record.about ? [`about ${record.about}`] : [],
 			...record.agent ? [`agent ${participant(record.agent) ?? record.agent.run}`] : [],
-			...record.callId ? [`call ${headerText(record.callId)}`] : [],
+			...record.kind === 'result' && record.callId ? [`call ${headerText(record.callId)}`] : [],
 			`${[...body].length} code points`
 		];
 		return `[${fields.join(' | ')}]\n${body}\n[/${kind} ${record.alias}]`;

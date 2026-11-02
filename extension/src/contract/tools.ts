@@ -459,11 +459,12 @@ class ToolService {
 	 * window's, else in its own window, routed there; nobody else hears of it going astray.
 	 */
 	private reportTo(caller: Caller, report: { readonly callId: string; readonly agent: RunFacts; readonly text: string; readonly result?: Data }): void {
+		const agent = { run: report.agent.id, alias: report.agent.alias, name: report.agent.name };
 		if (caller.window === undefined || caller.window === this.deps.window.id) {
-			this.deps.messages.report({ to: caller.id, callId: report.callId, agent: report.agent.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {} });
+			this.deps.messages.report({ to: caller.id, callId: report.callId, agent: report.agent.id, agentParty: agent, text: report.text, ...report.result !== undefined ? { result: report.result } : {} });
 			return;
 		}
-		const result: RoutedResult = { to: caller.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {}, callId: report.callId, agent: { run: report.agent.id, alias: report.agent.alias, name: report.agent.name } };
+		const result: RoutedResult = { to: caller.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {}, callId: report.callId, agent };
 		void this.deps.network?.route(caller.window, 'result', result, STAGE_MS).then(response => {
 			if (!response.ok) {
 				this.deps.log?.(`A Facade result for ${caller.alias} could not reach its window ${caller.window}: ${response.message}`);
@@ -738,10 +739,13 @@ class ToolService {
 			...args.worktree ? { worktree: { branch: args.worktree.branch, baseRef: args.worktree.base_ref } } : {},
 			...prompt ? { promptId: prompt.id, prompt: prompt.text, promptLine: args.prompt!.split(/\r\n?|\n/).find(line => line.trim()) ?? args.prompt! } : {},
 			origin: 'agent',
+			startCallId: call.callId,
 			creator: { run: caller.id, root: caller.root, label: [caller.name, caller.alias].filter(Boolean).join(' ') },
 			...args.request_id !== undefined ? { requestId: args.request_id } : {}
 		});
-		const start: Start = { run, args, caller, call, location, ...prompt ? { promptId: prompt.id } : {}, answerBy: Date.now() + this.deps.timeout() * 1000 };
+		const launched = this.deps.agents.get(run);
+		const start: Start = { run, args, caller, call, location, ...launched ? { identity: { alias: launched.alias, name: launched.name } } : {},
+			...prompt ? { promptId: prompt.id } : {}, answerBy: Date.now() + this.deps.timeout() * 1000 };
 		const settled = this.deps.agents.started(run);
 		let outcome: { readonly value: StartOutcome } | undefined;
 		try {
@@ -756,13 +760,13 @@ class ToolService {
 		// Still starting: accepted now, its outcome reported to the caller under this call's ID once it settles (MCP-1.3)
 		void settled.then(async late => {
 			const final = await this.finishStart({ ...start, answerBy: Infinity }, late);
-			const facts = this.deps.agents.get(run);
+			const facts = this.deps.agents.get(run) ?? launched;
 			if (facts) {
 				this.reportTo(caller, { callId: call.callId, agent: facts, text: receiptTextOf(final.result, final.headline),
 					result: answerOf(withRecovery('start_agent', compactResult('start_agent', final.result), args)).structured });
 			}
 		}).catch(err => this.deps.log?.(`Could not report the start of ${run} to ${caller.alias}: ${errorText(err)}`));
-		const facts = this.deps.agents.get(run);
+		const facts = this.deps.agents.get(run) ?? launched;
 		return {
 			result: accepted(this.startData(start, facts, 'starting'), { outcome: 'pending', agent_id: run }),
 			headline: `Accepted ${facts ? referenceOf(facts) : args.name} (${run}): its process is still starting. The start's outcome is ${LATER}.`
@@ -776,7 +780,8 @@ class ToolService {
 	private startedBefore(facts: RunFacts, args: ToolArguments['start_agent']): Outcome {
 		const present = this.deps.agents.get(facts.id);
 		const prompt = facts.promptId !== undefined ? this.originalPrompt(facts) : undefined;
-		const data = { ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true, ...prompt ? { prompt } : {} };
+		const data = defined({ ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true,
+			...prompt ? { prompt } : {}, call_id: facts.lifecycle === 'starting' ? facts.startCallId : undefined });
 		const before = `Request ${args.request_id} started ${referenceOf(facts)} (${facts.id}) already, at ${isoOf(facts.createdAt)}: nothing was started again.`;
 		const effects: Effects = { outcome: 'none', agent_id: facts.id };
 		if (!present && facts.lifecycle !== 'ended') {
@@ -799,7 +804,7 @@ class ToolService {
 	private async finishStart(start: Start, outcome: StartOutcome): Promise<Outcome> {
 		const { run, args } = start;
 		const facts = this.deps.agents.get(run);
-		const shown = facts ? `${referenceOf(facts)} (${run})` : `${JSON.stringify(args.name.trim())} (${run})`;
+		const shown = facts || start.identity ? `${referenceOf(facts ?? start.identity!)} (${run})` : `${JSON.stringify(args.name.trim())} (${run})`;
 		const created = outcome.worktreeCreated ?? (args.worktree && facts && facts.location !== args.location_id ? facts.cwd : undefined);
 		const effects = (outcome: Effects['outcome']): Effects => defined({ outcome, agent_id: run, worktree_created: created });
 		if (outcome.state === 'running') {
@@ -852,9 +857,9 @@ class ToolService {
 		const { window } = this.deps;
 		return defined({
 			agent_id: run,
-			reference: facts ? referenceOf(facts) : undefined,
-			alias: facts?.alias,
-			name: facts?.name ?? args.name.trim(),
+			reference: facts || start.identity ? referenceOf(facts ?? start.identity!) : undefined,
+			alias: facts?.alias ?? start.identity?.alias,
+			name: facts?.name ?? start.identity?.name ?? args.name.trim(),
 			window_id: window.id,
 			window: window.label,
 			environment: facts?.environment ?? location.environment,
@@ -866,6 +871,7 @@ class ToolService {
 			yolo: facts?.yolo,
 			process_state: state === 'closed' ? 'unknown' : state,
 			closed: state === 'closed' ? true : undefined,
+			call_id: state === 'starting' ? facts?.startCallId ?? start.call.callId : undefined,
 			tools_state: facts?.tools,
 			requested_model: args.model,
 			requested_effort: args.effort
@@ -1025,7 +1031,7 @@ class ToolService {
 				result: answerOf(withRecovery('stop_agent', compactResult('stop_agent', final.result))).structured });
 		}).catch(err => this.deps.log?.(`Could not report the stop of ${target.alias} to ${caller.alias}: ${errorText(err)}`));
 		return {
-			result: accepted({ agent_id: target.id, reference: referenceOf(target), closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
+			result: accepted({ agent_id: target.id, reference: referenceOf(target), call_id: call.callId, closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
 			headline: `Closed ${shown}'s card and terminal; its process is still being ended, and that outcome is ${LATER}.`
 		};
 	}
@@ -1177,7 +1183,7 @@ class ToolService {
 			headline = `${count} from your inbox, oldest first. Their ${total} code points are more than ${MESSAGE_LIMIT.toLocaleString('en-US')}, so their complete text is in the file ${file.path} (${file.size} bytes); their details follow.`;
 		} else {
 			data = defined({ messages: records.map(record => messageOf(record, true)), next_cursor: page.nextCursor, not_found: missing });
-			headline = records.length ? `${count} from your inbox, oldest first.` : args.ids || args.all ? 'No messages in your inbox match.' : 'Nothing is waiting for you: every message sent to you was delivered.';
+			headline = records.length ? `${count} from your inbox, oldest first.` : 'No incoming messages match this read.';
 		}
 		if (missing) {
 			headline += ` Not in your inbox: ${missing.join(', ')}.`;
@@ -1334,6 +1340,7 @@ class ToolService {
 }
 
 interface Start {
+	readonly identity?: Pick<RunFacts, 'alias' | 'name'>;
 	readonly run: RunId;
 	readonly args: ToolArguments['start_agent'];
 	readonly caller: Caller;

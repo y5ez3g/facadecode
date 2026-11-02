@@ -90,7 +90,11 @@ person in your window. \`@human\` also works unless a reachable agent is named h
   to read again; \`all: true\` pages retained records. Continue \`next_cursor\` with the same \`all\` and \`limit\` selection.
   A receipt in your inbox has its own ID and \`about\` relation to a sent message; read the receipt's ID, not the sent ID.
 
-Unverified native prompt acceptance is \`unknown\`; it is neither confirmed delivery nor a continuing verification job.
+Accepted operations already continue. Later results match messages by \`about\` and accepted starts/stops by \`call_id\`;
+same-request start lookups keep the original call ID. Unverified native prompt acceptance is \`unknown\`: no background
+verification or promised later result. An empty inbox is a snapshot, not proof all work/delivery finished. Held input can
+extend a delivery deadline; its passing alone does not establish failure. Results arrive in the terminal or the caller's
+inbox. Handoff is finite and may fail if the caller is unreachable. No routine polling or particular turn ending is required.
 
 ${REPEATED_MESSAGE_TEXT}
 

@@ -112,6 +112,7 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		s.timeout = 0;
 		const pending = resultOf(await s.service({ caller: lead.id, tool: 'stop_agent', arguments: { agent: '#a3' }, callId: 'stop-42' }));
 		assert.strictEqual(pending.status, 'accepted');
+		assert.strictEqual(pending.data.call_id, 'stop-42');
 		assert.strictEqual(s.agents.get(runId(3)), undefined);
 		finish('terminated');
 		await waitFor(() => s.messages.records.some(record => record.callId === 'stop-42'));
@@ -127,6 +128,7 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		s.timeout = 0;
 		const initial = resultOf(await s.service({ caller: lead.id, tool: 'start_agent', arguments: START, callId: 'launch-42' }));
 		assert.strictEqual(initial.status, 'accepted');
+		assert.strictEqual(initial.data.call_id, 'launch-42');
 		const run = s.agents.list().find(each => each.alias === initial.data.agent_id)!;
 		s.agents.settle(run.id, { state: 'running' });
 		await waitFor(() => s.messages.records.some(record => record.kind === 'result'));

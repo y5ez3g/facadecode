@@ -98,7 +98,8 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 			pid: undefined, startedAt: undefined, tools: 'connecting', activity: 'unknown', reporting: false,
 			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {},
 			...request.requestId !== undefined ? { requestId: request.requestId } : {},
-			...request.promptId !== undefined ? { promptId: request.promptId } : {}
+			...request.promptId !== undefined ? { promptId: request.promptId } : {},
+			startCallId: request.startCallId
 		});
 		this.runs.set(facts.id, facts);
 		this.starts.set(facts.id, new Deferred());
@@ -227,10 +228,11 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return record;
 	}
 
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
+	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
 		this.reports.push(request);
 		const base = this.recordOf({ from: 'facade', to: request.to, text: request.text, ...request.callId ? { callId: request.callId } : {} }, { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 }, 'result');
-		const record: MessageRecord = { ...base, ...request.result ? { result: request.result } : {}, ...request.agent ? { agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : {} };
+		const record: MessageRecord = { ...base, ...request.result ? { result: request.result } : {},
+			...request.agentParty ? { agent: request.agentParty } : request.agent ? { agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : {} };
 		this.records.push(record);
 		return record;
 	}

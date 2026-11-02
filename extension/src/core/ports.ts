@@ -342,6 +342,8 @@ export interface RunMeta {
 	readonly requestId?: string;
 	/** The original creation prompt's message ID, retained for start-result lookup without replay. */
 	readonly promptId?: string;
+	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
+	readonly startCallId?: string;
 	readonly model?: string;
 	readonly effort?: string;
 	readonly version?: string;
@@ -529,6 +531,8 @@ export interface RunFacts {
 	readonly requestId?: string;
 	/** The original creation prompt's message ID; no new prompt is inferred from a repeated request. */
 	readonly promptId?: string;
+	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
+	readonly startCallId?: string;
 	/** The model and effort this start asked for, where it asked (CLIS-1.4). */
 	readonly model?: string;
 	readonly effort?: string;
@@ -633,6 +637,8 @@ export interface LaunchRequest {
 	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D110). */
 	readonly requestId?: string;
 	readonly promptId?: string;
+	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
+	readonly startCallId?: string;
 	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
 	readonly prompt?: string;
 	/** The first line of the caller's own prompt text, shown in the card's hover. */

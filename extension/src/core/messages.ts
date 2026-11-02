@@ -238,6 +238,7 @@ export class MessageService implements Messages, Disposable {
 			to: request.to === '@human' ? { run: '@human' } : this.party(request.to),
 			text: request.text,
 			...(request.replyTo !== undefined ? { replyTo: request.replyTo } : {}),
+			...(request.callId !== undefined ? { callId: request.callId } : {}),
 			...(request.sender ? { fromWindow: request.sender.window } : {}),
 			// The label its header shows, kept: a delivery that goes on after a reload pastes and recognizes the same text, though the
 			// window was renamed meanwhile, as a folder becoming a multi-root workspace renames it (RULES-1.6, 1.9)
@@ -302,6 +303,7 @@ export class MessageService implements Messages, Disposable {
 			to: request.to === '@human' ? { run: '@human' } : this.party(request.to),
 			text: request.text,
 			...(request.replyTo !== undefined ? { replyTo: request.replyTo } : {}),
+			...(request.callId !== undefined ? { callId: request.callId } : {}),
 			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {})
 		}, delivery, true, request.id);
 	}
@@ -451,7 +453,7 @@ export class MessageService implements Messages, Disposable {
 	 * The Facade result of an accepted send, once its outcome is known (RULES-1.7): a record in the sender's inbox, about the original,
 	 * given to the sender's terminal with a budget of its own. It is never the original again, and nobody hears of it going astray.
 	 */
-	private reportOutcome(original: MessageRecord, callId: string | undefined): void {
+	private reportOutcome(original: MessageRecord, callId: string | undefined = original.callId): void {
 		if (original.from.run === 'facade') {
 			return;
 		}

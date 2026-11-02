@@ -34,7 +34,7 @@ export interface MessageRecord {
 	readonly replyTo?: string;
 	/** For a Facade result: the message it reports on. */
 	readonly about?: string;
-	/** For a Facade result: the tool call whose accepted response it completes (MCP-1.3). */
+	/** Original tool call, retained with the message for its later Facade result, including after reload (MCP-1.3). */
 	readonly callId?: string;
 	/** For a Facade result about another operation than a message: the agent it was on, a start's or a stop's (MCP-1.3). */
 	readonly agent?: { readonly run: RunId; readonly alias?: string; readonly name?: string };

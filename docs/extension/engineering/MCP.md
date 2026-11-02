@@ -122,9 +122,17 @@ own route and answer - so that it never gives up on a call Facade is still answe
 An actual continuing operation may return accepted with its run/effects; later completion returns to its initiating
 agent through a Facade system result. The accepted response and later result identify the same originating tool call
 and target run, using existing call correlation facts so concurrent calls, including calls to the same target, are
-distinguishable. This adds no public operation object or query API. Result handoff follows
+distinguishable. Accepted start/stop results expose the original `call_id`, matched by the later system receipt; a
+same-request start lookup keeps the original ID, including after reload. The original prompt/message ID identifies
+prompt delivery separately. Message records retain originating-call correlation while delivery resumes after reload.
+Local and routed receipts retain the target's known name and short reference even after its card closes; rendering
+does not depend on looking up that removed target again.
+This adds no public operation object or query API. Result handoff follows
 RULES-1.7, including no duplicate receipt for an immediate final result and no human fallback when handoff fails.
-Use list_agents for current run state; there is no separate operation inspection API.
+Use list_agents for current run state; there is no separate operation inspection API. A pending operation continues
+without another send/start. Final system results request no reply. Unknown outcomes with no active operation promise
+no later verification. Receipt delivery remains finite and may end when its initiator is unreachable.
+An earlier returned message deadline can extend under RULES-1.5; its passing or an empty inbox alone proves no final outcome.
 send_message always uses the initial-response and delivery-stage budgets owned by RULES-1.2 and RULES-1.5.
 A slow operation never keeps a closed card/terminal visible or extends a message budget. Native MCP progress may
 describe a continuing call; it does not produce progress popups.
@@ -296,7 +304,8 @@ in it is delivered (RULES-1.3): its sender's result says it was delivered throug
 unstarted pastes and permits only completion of an already pasted owned draft. An uncertain return may repeat the same record without starting another paste to the
 terminal. Above 8,000 combined code points, return the complete selected content in a file readable in the caller
 environment, with path/size and per-message metadata. COLLABORATION-4.2 defines transfer and expiry.
-No instructions to print, answer, escalate or follow a workflow are embedded in results.
+An empty result describes only this read's snapshot. A next_cursor continues the same all/default selection and limit.
+No instructions to poll, end a turn, print, answer, escalate or follow a workflow are embedded in results.
 The compact projection omits duplicate identity spellings, the already-known recipient, routine length and delivery
 attempt counts. A system result with structured operation facts returns those as `result` instead of repeating its
 human-readable body; ordinary message bodies and old text-only system results remain exact. Large-result files carry
@@ -409,6 +418,9 @@ No migration guide for already-published user skills is required: this is the fi
 [Verification](VERIFICATION.md) records tests actually run; this contract does not assert them passed.
 
 ## Change log
+
+- 2026-11-01: D142 exposes original-call correlation for continuing starts/stops and preserves it through message
+  reloads; async and inbox guidance distinguishes continuation, uncertainty, final receipts and empty snapshots.
 
 - 2026-11-01: D141 permits compact recovery facts based on actual effects, retaining diagnostics and original request identity.
 

@@ -221,7 +221,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(worker, 'start_agent', { ...START, model: 'opus', effort: 'high' });
 			const result = resultOf(answer);
 			// In the background, the caller's tree joined from its own facts: its run and its root (RULES-4.3, LIFECYCLE-2.2)
-			assert.deepStrictEqual(s.agents.launched, [{ name: 'backend review', location: 'loc-1', cli: 'claude', model: 'opus', effort: 'high', origin: 'agent', creator: { run: worker.id, root: runId(1), label: 'worker #a2' } }]);
+			assert.deepStrictEqual(s.agents.launched, [{ name: 'backend review', location: 'loc-1', cli: 'claude', model: 'opus', effort: 'high', origin: 'agent', startCallId: 'call-1', creator: { run: worker.id, root: runId(1), label: 'worker #a2' } }]);
 						assert.strictEqual(result.status, 'success');
 			assert.deepStrictEqual(result.data, {
 				agent_id: '#a100', name: 'backend review', window_id: 'win-1', window: 'Design', environment: 'local',

@@ -945,6 +945,8 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 		const original = stored.get('m-1')!;
 		assert.deepStrictEqual([original.delivery.status, original.delivery.via, original.delivery.deadline! - start], ['success', 'terminal', 600_000]);
 		const result = reopened.inbox(A, { all: true, limit: 10 }).records;
+		assert.strictEqual(original.callId, 'call-1');
+		assert.strictEqual(result[0].callId, 'call-1');
 		assert.deepStrictEqual(result.map(each => [each.kind, each.about, each.text]), [['result', 'm-1', `Your message #m1 to @Bob #a2 (${B}) was submitted to its CLI. This is a Facade result, not a reply from the recipient.`]]);
 	});
 

@@ -50,7 +50,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'start_agent',
-		description: 'Start a new agent in its own terminal, in any Facade window on this computer. It joins your creation tree. The result confirms that its process started; an optional prompt is its first message, with its own outcome.',
+		description: 'Start a new agent in its own terminal in any Facade window. It joins your creation tree. Success confirms process startup; tools and the optional first prompt have separate outcomes. An accepted start continues and its later Facade result matches call_id.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -86,7 +86,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'stop_agent',
-		description: 'Stop one agent: its card and terminal close at once and its process ends in the background. Its children keep running.',
+		description: 'Stop one agent: its card and terminal close at once; its children keep running. Accepted means cleanup continues, with a later result matching call_id. Unconfirmed process exit is a failure with partial effects.',
 		inputSchema: {
 			type: 'object',
 			properties: { agent: AGENT },
@@ -96,7 +96,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'send_message',
-		description: 'Send one complete message to one agent, or to `#human` to notify the person in your window. Returns success, failure, or accepted with a deadline; a Facade result reports an accepted message\'s outcome later.',
+		description: 'Send one complete message to one agent, or to `#human` to notify the person in your window. Success is delivery, not a reply or task completion. Accepted delivery continues with a deadline and later Facade result; a new send is another message.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -111,7 +111,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'read_messages',
-		description: 'Read your own incoming messages: by default those that have not reached you yet, which then count as delivered; ids selects some by ID, also to read one again; all:true pages every retained one.',
+		description: 'Read your own incoming messages: by default those not yet delivered; handoff delivers them. ids selects records to read again; all:true pages retained records. Continue next_cursor with the same all/limit. Empty describes this snapshot only; system results request no reply.',
 		inputSchema: {
 			type: 'object',
 			properties: {
