@@ -547,24 +547,30 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const world = setUp();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Fix login' });
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234, title: 'Fix login' });
 		assert.deepStrictEqual([world.agents.get(id)?.activity, world.agents.get(id)?.title], ['working', 'Fix login']);
-		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, error: 'API overloaded' });
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, observedAt: 2345, error: 'API overloaded' });
 		assert.strictEqual(world.agents.get(id)?.error?.reason, 'API overloaded');
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true });
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234 });
 		assert.strictEqual(world.agents.get(id)?.error, undefined);
 		assert.strictEqual(world.agents.get(id)?.title, 'Fix login', 'the last title stays until the CLI sets another');
 		// When its CLI reported its current activity: the same report again keeps that time, another activity takes its own
 		const since = world.agents.get(id)!.activitySince;
-		assert.strictEqual(typeof since, 'number');
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Still' });
+		assert.strictEqual(since, 1234);
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234, title: 'Still' });
 		assert.strictEqual(world.agents.get(id)!.activitySince, since);
 		assert.strictEqual(world.agents.get(id)!.name, 'A', 'CLI titles never replace the creation name (D127)');
 		world.agents.rename(id, 'Ada');
-		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true });
-		assert.ok(world.agents.get(id)!.activitySince! >= since!);
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'A different task' });
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, observedAt: 2345 });
+		assert.strictEqual(world.agents.get(id)!.activitySince, 2345);
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234, title: 'A different task' });
 		assert.strictEqual(world.agents.get(id)!.name, 'Ada', 'later titles preserve an explicit rename too');
+		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, disconnected: true, reason: 'Lost' });
+		assert.strictEqual(world.agents.get(id)!.activitySince, 1234);
+		assert.strictEqual(world.agents.get(id)!.disconnected, true);
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true });
+		assert.strictEqual(world.agents.get(id)!.activitySince, undefined, 'missing source time is not invented');
+		assert.strictEqual(world.agents.get(id)!.disconnected, undefined);
 	});
 
 	test('a run is awaiting its CLI\'s activity while its reports say so, and no longer once one does not (CLIS-2.3, D81)', async () => {

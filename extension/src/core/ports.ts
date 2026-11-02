@@ -232,6 +232,8 @@ export type Activity = 'working' | 'not_working' | 'unknown';
 export interface ActivityReport {
 	readonly run: RunId;
 	readonly activity: Activity;
+	/** Source state-episode time on the execution environment's clock; absent without source evidence. */
+	readonly observedAt?: number;
 	/** A native blocker the CLI reports, in its own words where it gives them. */
 	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
 	/** Why activity is unknown or in error, for the card's second line. */
@@ -508,8 +510,9 @@ export interface RunFacts {
 	readonly pid?: number;
 	readonly startedAt?: number;
 	readonly activity: Activity;
-	/** Epoch ms its CLI's report of its current activity came: how long ago it said so, never that it still does (RULES-3.2). */
+	/** Source state-episode time, not receipt/query time or a heartbeat (RULES-3.2). */
 	readonly activitySince?: number;
+	readonly disconnected?: boolean;
 	readonly activityReason?: string;
 	/** Whether the run's CLI proved it reports activity; without it activity is unknown, shown red (RULES-3.2). */
 	readonly reporting: boolean;

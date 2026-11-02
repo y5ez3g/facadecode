@@ -157,14 +157,18 @@ export function contrastOf(text: string, background: string): number | undefined
 const relativeTimeFormats = new Map<string, Intl.RelativeTimeFormat>();
 
 /** How long ago `time` was, as the browser says it in the window's language: now, 5 min. ago, yesterday, 3 days ago (UX-2.4). */
-export function relativeTime(time: number): string {
+export function relativeTime(time: number, now = Date.now()): string {
 	const language = document.documentElement.lang;
+	// An inconsistent source clock cannot supply an honest relative age; keep its absolute observation instead.
+	if (time > now) {
+		return new Intl.DateTimeFormat(language || undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(time);
+	}
 	let format = relativeTimeFormats.get(language);
 	if (!format) {
 		format = new Intl.RelativeTimeFormat(language || undefined, { numeric: 'auto', style: 'short' });
 		relativeTimeFormats.set(language, format);
 	}
-	const minutes = Math.floor((Date.now() - time) / 60_000);
+	const minutes = Math.floor((now - time) / 60_000);
 	if (minutes < 1) {
 		return format.format(0, 'second');
 	}

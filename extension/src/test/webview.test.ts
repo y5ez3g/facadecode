@@ -52,7 +52,7 @@ suite('The agent panel in Chromium', function () {
 	let tested: string;
 	let css: string;
 	/** The page's words: each its own key, the templates as the extension gives them. */
-	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}' };
+	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}', workingSince: 'Reported working {0}' };
 	/** Loads a new page of the panel, as the view does each time it shows. */
 	const load = async (bundle = shipped, saved?: unknown) => {
 		await call('Page.navigate', { url: 'about:blank' });
@@ -147,6 +147,18 @@ suite('The agent panel in Chromium', function () {
 			['Started now', 'project · /project · Window: shop'],
 			['Started now', 'project · /project']
 		]]);
+	});
+
+	test('working hover uses the execution clock, with absolute time for a future observation (PANEL-1.5)', async () => {
+		const sourceNow = Date.UTC(2020, 0, 1, 12);
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { workingSince: ${sourceNow - 25 * 60_000}, startedAt: ${sourceNow - 40 * 60_000} })], { clockAt: ${sourceNow} })`) });
+		const title = await evaluate(`document.querySelector('.agent').title`);
+		assert.match(title, /Reported working 25 min/);
+		assert.match(title, /Started 40 min/);
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { workingSince: ${sourceNow + 60_000} })], { revision: 2, clockAt: ${sourceNow} })`) });
+		const future = await evaluate(`document.querySelector('.agent').title`);
+		assert.match(future, /2020/);
+		assert.ok(!future.includes('Reported working now'));
 	});
 
 	test('the dot\'s cut-out ring is the colour the row shows: a translucent hover or selection colour over the side bar, never over the avatar (PANEL-1.3)', async () => {

@@ -62,6 +62,8 @@ export interface PanelFilter {
 }
 
 export interface PanelState {
+	/** Execution-clock reference sent with this snapshot; relative ages never subtract clocks from different machines. */
+	readonly clockAt?: number;
 	/** Which state this is: what the person acts on is said with it, and a later one supersedes it (PANEL-3.1). */
 	readonly revision: number;
 	/** Until this window's runs are reconciled: nothing is drawn, and the view shows native progress (PANEL-1.1). */

@@ -272,6 +272,7 @@ passes.
 | M25 | Message to the person while its agent's terminal is visible and hidden; long message | Notification in the sender's window names the agent; Show Agent and Open Message open the agent and the complete message; no notification in another window; COLLABORATION-2.3 |
 | M26 | Concurrent starts/sends with one request ID; routed delivery with a lost reply; Unicode request IDs; retry after run exit, close, failed start or interrupted startup | One original run/message within the one-hour period; receiver deduplicates before input and returns the original ID; metadata survives reload without restoring closed cards; an unrecorded startup outcome stays unknown; MCP-1.1, D119 |
 | M27 | Default discovery from a folder or worktree; unavailable peer directory; explicit all/destination/CLI selection; lists of 1/20/100/200 agents with equal timestamps and a changed cursor selection | One current-location discovery call without a peer scan; no guessed location; compact rows with explicit scope/completeness; complete, stable pages and targeted details; incompatible cursor selection fails before remote reads; MCP-2.1, MCP-3.1 |
+| M28 | Repeated activity reports, title changes, reconnection/reload, missing source time and browser/source clock differences | Source state observation stays distinct from query time and panel reconstruction; reliable relative or absolute hover time, no invented recency or elapsed-time warning; RULES-3.1, PANEL-1.5 |
 
 
 
@@ -426,7 +427,7 @@ for review, not acceptance evidence.
 
 - 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D147).
 - 2026-11-01: Evidence that named this release's packages by the version an earlier commit wrote names them as this release's: its version is 0.0.2 (D142).
-- 2026-11-01: Added MCP polish scenarios through MCP-06 (D152).
+- 2026-11-01: Added MCP polish scenarios through MCP-07 (D152).
 - 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
 - 2026-11-01: U13 covers the panel status, stable-name and responsive-location decisions D127/D128.

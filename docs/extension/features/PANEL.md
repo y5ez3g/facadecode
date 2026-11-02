@@ -115,7 +115,9 @@ motion is static. Hover explicitly says `Starting`, `Working`, `Idle`, the nativ
 Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason; for
 a working agent, how long ago its CLI reported that work, `Reported working 25 min. ago` - the CLI's last word, which a long
 silence leaves for the person to judge rather than turning it into idle or done, following competitive analysis of
-last-update indicators (D114);
+last-update indicators (D114). This uses the source observation for the current working episode, preserved through
+title changes and reload, not the host's report-receipt or API-query time. Missing source time omits the line.
+Relative times use the source clock; an observation ahead of that clock shows its absolute time instead;
 started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
 written `~` except on Windows; window. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,

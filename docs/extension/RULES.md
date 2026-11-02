@@ -263,6 +263,10 @@ A live process can lack its Facade tools. A working CLI can accept a message. An
 unknown activity report does not prove unusable input. Internal cleanup may be stopping, but explicit close removes UI
 immediately. A stale observation is labeled as such rather than treated as proof of exit.
 
+State observation time comes from the execution environment's current state episode, not the query or view refresh.
+Repeated reports, title-only changes and reload preserve that source time. It is neither a heartbeat nor task duration;
+missing source time stays absent. Lost execution connections mark retained activity observations stale without an age threshold.
+
 ### 3.2 The dot says only what is known
 
 **Starting or working is green, idle is grey, a native blocker is yellow, and an error or unavailable reliable status is red.**

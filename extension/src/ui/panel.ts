@@ -237,7 +237,7 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 
 	private post(state: PanelState): void {
 		if (this.view && this.page !== undefined) {
-			void this.view.webview.postMessage({ type: 'state', page: this.page, state });
+			void this.view.webview.postMessage({ type: 'state', page: this.page, state: { ...state, clockAt: Date.now() } });
 		}
 	}
 

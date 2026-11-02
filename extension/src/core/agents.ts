@@ -1000,7 +1000,9 @@ export class AgentService implements Agents, Disposable {
 		}
 		const changes: Partial<Mutable<RunFacts>> = {
 			activity: report.activity,
-			...report.activity !== run.facts.activity ? { activitySince: this.deps.clock.now() } : {},
+			activitySince: report.disconnected ? run.facts.activitySince
+				: report.observedAt !== undefined && Number.isFinite(report.observedAt) && report.observedAt >= 0 ? report.observedAt : undefined,
+			disconnected: report.disconnected || undefined,
 			reporting: report.reporting,
 			awaitingActivity: report.awaitingActivity,
 			activityReason: report.reason,

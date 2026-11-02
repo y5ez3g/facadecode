@@ -861,6 +861,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		const report: ActivityReport = {
 			run: pair.run,
 			activity: facts.activity,
+			...(pair.status ? { observedAt: pair.status.at } : {}),
 			reporting: facts.reporting,
 			...(awaiting ? { awaitingActivity: true } : {}),
 			...(facts.blocker ? { blocker: facts.blocker } : {}),
