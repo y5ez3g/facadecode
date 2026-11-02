@@ -159,9 +159,10 @@ async function main(): Promise<void> {
 		'remote.SSH.showLoginTerminal': false,
 		'remote.SSH.enableRemoteCommand': false
 	};
-	/** A user data folder of the run's own for one editor. */
+	/** A user data folder of the run's own for one editor, new for each scenario: what an earlier one kept there is not this one's. */
 	const userData = (editor: string) => {
 		const user = path.join(root, `u-${editor}`);
+		fs.rmSync(user, { recursive: true, force: true });
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
 		return user;
@@ -172,13 +173,18 @@ async function main(): Promise<void> {
 	const opened = (folder: Folder) => 'local' in folder ? [folder.local] : ['--folder-uri', folder.host.uri(folder.remote)];
 	const workspaceExtension = (folder: Folder) => 'local' in folder ? extension : folder.host.uri(`${folder.host.build}/extension-it`);
 
-	/** Ends what the run left on `host` - the editor's server, the ptyds, their agents - and its fake CLIs' records there; its root too where asked. */
+	/**
+	 * Ends what the run left on `host` - the editor's server, the ptyds, their agents - and its fake CLIs' records there; then its
+	 * root where asked, else a new Facade root and Claude Code configuration for the next scenario: the records, registry and
+	 * remembered locations of one never reach the next.
+	 */
 	const clean = (host: Host, removeRoot: boolean) => host.run(host.platform === 'windows'
 		? `Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -ne $PID -and $_.CommandLine -and $_.CommandLine.Contains(${literal(name)}) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Start-Sleep -Milliseconds 500
 Remove-Item -Force -ErrorAction SilentlyContinue -Path ${literal(`${host.at(record)}.*`)}
-${removeRoot ? `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath ${literal(host.at(root))}` : ''}`
-		: `pkill -TERM -f ${quoted(name)}; sleep 0.5; rm -f ${quoted(record)}.*; ${removeRoot ? `rm -rf ${quoted(root)};` : ''} true`);
+${removeRoot ? `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath ${literal(host.at(root))}` : `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath ${literal(host.at(facade))}, ${literal(host.at(claude))}
+New-Item -ItemType Directory -Force -Path ${literal(host.at(facade))}, ${literal(host.at(claude))} | Out-Null`}`
+		: `pkill -TERM -f ${quoted(name)}; sleep 0.5; rm -f ${quoted(record)}.*; ${removeRoot ? `rm -rf ${quoted(root)};` : `rm -rf ${quoted(facade)} ${quoted(claude)}; mkdir -m 700 ${quoted(facade)} ${quoted(claude)};`} true`);
 
 	try {
 		fs.mkdirSync(facade, { mode: 0o700 });
@@ -283,6 +289,11 @@ done
 			}
 			for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 				fs.rmSync(path.join(root, file));
+			}
+			// This computer's Facade root and Claude Code configuration anew too, as each host's
+			for (const dir of [facade, claude]) {
+				fs.rmSync(dir, { recursive: true, force: true });
+				fs.mkdirSync(dir, { mode: 0o700 });
 			}
 		};
 		const app = (host: Host): Folder => ({ host, remote: `${root}/app` });
