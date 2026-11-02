@@ -5,8 +5,8 @@
 // What a run's CLI reports, as activity and title (CLIS-2.3, RULES-3.2). Only the root process's OSC 7501 reports count; a run
 // counts as reporting once its CLI takes part in the protocol - it asked whether the terminal takes reports, or sent a valid
 // one - whatever its version (CLIS-2.3). Without that its activity is unknown, which the card shows red with the reason once its
-// run's startup is over (D81): a quiet screen proves nothing. Titles are the CLI's own words, sanitized and capped, the report's
-// preferred over OSC 0/2.
+// run's startup is over (D81): a quiet screen proves nothing. Titles are the CLI's own words, sanitized and capped; the actual
+// terminal title (OSC 0/2) takes precedence over a status report's title (D160).
 
 import { displayLine } from '../base/text';
 import { BUILT_IN_ADAPTERS } from './catalog';
@@ -61,11 +61,11 @@ export function activityOf(status: ReportedStatus | undefined): ActivityFacts {
 }
 
 /**
- * The title a run shows for its CLI (CLIS-2.3, D126): the report's nonempty title over the terminal's OSC 0/2 title, with visible
+ * The title a run shows for its CLI (CLIS-2.3, D160): the terminal's nonempty OSC 0/2 title over the report's title, with visible
  * symbols and words intact. Invisible formatting and controls removed, at most 300 code points with an ellipsis.
  */
 export function cliTitle(titles: { readonly reported?: string; readonly terminal?: string }): string | undefined {
-	for (const raw of [titles.reported, titles.terminal]) {
+	for (const raw of [titles.terminal, titles.reported]) {
 		const text = displayLine(raw ?? '', MOST_SHOWN);
 		if (text) {
 			return text;

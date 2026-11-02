@@ -374,7 +374,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await port.spawn('run-3', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]0;\\u2733 Claude Code\\x07\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => { if (d.toString().includes('7501;?:')) process.stdout.write('\\x1b]7501;state=working:title=${title}\\x1b\\\\'); }); setInterval(() => {}, 1000);`), meta('run-3'));
 		assert.deepStrictEqual(reports[0], { run: 'run-3', activity: 'unknown', reporting: false, awaitingActivity: true });
 		await until('its report', () => reports.some(report => report.activity === 'working'));
-		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', observedAt: reports[reports.length - 1].observedAt, reporting: true, title: 'Fixing tests' });
+		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', observedAt: reports[reports.length - 1].observedAt, reporting: true, title: '✳ Claude Code' });
 		// Its probe answered, it was still starting until it reported: never unknown with a reason meanwhile
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity && !report.reason), JSON.stringify(reports));
 		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'CLI reports never emit tab names');
@@ -383,6 +383,44 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'tab separators no longer affect the name');
 		port.rename('run-3', 'Grace');
 		assert.strictEqual(terminals[0].names.at(-1), 'Grace');
+	});
+
+	test('terminal decorations survive later plain reports, decoration-only updates and reattachment (CLIS-2.3, D160)', async () => {
+		const first = portOf();
+		const reports: ActivityReport[] = [];
+		first.onDidReport(report => reports.push(report));
+		first.openPair(facts('run-title'), { reveal: false });
+		open(terminals[0]);
+		const plain = Buffer.from('Checking tests').toString('base64');
+		const decorated = ['✳ Checking tests', '⠐ Checking tests', '✓ Checking tests | workspace'];
+		// Emit an undecorated report both before the first title and after every later title.
+		const program = `process.stdin.setRawMode(true); const titles = ${JSON.stringify(decorated)}; let i = 0;
+		const status = () => process.stdout.write('\\x1b]7501;state=idle:title=${plain}\\x1b\\\\');
+		const title = () => process.stdout.write('\\x1b]2;' + titles[i] + '\\x1b\\\\');
+		status(); title(); process.stdin.on('data', () => { i++; title(); status(); }); setInterval(() => {}, 1000);`;
+		await first.spawn('run-title', plan(program), meta('run-title'));
+		await until('the decorated initial title', () => reports.at(-1)?.title === decorated[0]);
+		for (const title of decorated.slice(1)) {
+			terminals[0].options.pty.handleInput!('x');
+			await until('the next decorated title', () => reports.at(-1)?.title === title);
+			assert.strictEqual(reports.at(-1)?.activity, 'not_working', 'activity remains independent of title decoration');
+		}
+		first.dispose();
+		ports.splice(ports.indexOf(first), 1);
+		const next = portOf();
+		const restored: ActivityReport[] = [];
+		next.onDidReport(report => restored.push(report));
+		const live = await until('the saved run to be unclaimed', async () => {
+			const runs = await next.live();
+			return runs.length === 1 && !runs[0].claimedElsewhere && runs[0];
+		});
+		const count = terminals.length;
+		const attaching = next.attach(live, facts('run-title'));
+		await until('the restored terminal', () => terminals.length > count);
+		open(terminals.at(-1)!);
+		await attaching;
+		assert.strictEqual(restored.at(-1)?.title, decorated.at(-1), 'reattachment chooses the saved OSC title, not the report title');
+		assert.strictEqual(await next.terminate('run-title'), 'terminated');
 	});
 
 	test('a listing answered before what the run said since is no newer than that: a reconcile never puts back an older status (CLIS-2.3, UX-5.2)', async function () {

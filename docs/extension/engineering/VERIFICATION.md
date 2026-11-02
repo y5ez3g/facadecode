@@ -556,6 +556,15 @@ after correcting the first font trial's layer bearings and undersized glyphs. Co
 passed. These rendering results are for macOS arm64 / VS Code 1.144.0; they do not certify other editors/platforms or
 the declared minimum version. Screenshots and probe logs remain local; no owner's live terminal was driven as a test.
 
+The subsequent title review found that the removed decoration filters were not the only way symbols disappeared:
+the plain OSC 7501 report title still took precedence over the CLI's decorated OSC 0/2 terminal title. D160 reverses
+that source precedence without changing startup, blocker, error or unavailable-tool messages. A real-PTY regression
+passed reports before/after the terminal title, decoration-only updates and reattachment. All seven fake-CLI editor
+launch journeys passed repeated decorated terminal titles followed by a different plain report title, while the editor
+tab kept the agent's name. Compilation, 1,205 unit checks (six platform skips), 12 package checks, localization and
+specification audits passed on macOS arm64 / VS Code 1.144.0. These fixtures verify Facade's handling of both title
+channels; they are not new native CLI/version certification. Logs remain local in `extension/build/mcp-review-window/`.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**
@@ -575,6 +584,8 @@ for review, not acceptance evidence.
 | 4.1, 4.3 | Handoff, spec-amendment log and independent review |
 
 ## Change log
+
+- 2026-11-02: Recorded the actual-terminal-title precedence, decoration updates and reattachment checks (D160).
 
 - 2026-11-02: Recorded the terminal-logo theme/size/layer regression checks and native rendering evidence (D159).
 

@@ -191,9 +191,12 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		});
 		assert.strictEqual(reported.dot, 'idle');
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
-		for (const title of ['✳ Checking responsive layout', '● 检查标题更新 | workspace']) {
-			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title }));
+		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
+			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
 			await until('the CLI title in the panel', async () => (await state()).cards.find(each => each.runId === card.runId)?.line === title ? true : undefined);
+			// The activity report follows the OSC title in the same write cycle; it must not replace it a moment later.
+			await new Promise(resolve => setTimeout(resolve, 250));
+			assert.strictEqual((await state()).cards.find(each => each.runId === card.runId)?.line, title);
 			assert.strictEqual(terminal.name, card.name, 'CLI titles never change the native terminal name');
 			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && tab.label === card.name) ? true : undefined);

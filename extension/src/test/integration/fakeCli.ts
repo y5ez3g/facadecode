@@ -130,6 +130,8 @@ interface Quirks {
 	readonly garble?: boolean;
 	/** A terminal title emitted when this fixture changes, independent of its activity report. */
 	readonly title?: string;
+	/** A separate, undecorated report title, sent after the terminal title to catch source-precedence regressions. */
+	readonly reportedTitle?: string;
 }
 const QUIRKS = `${record}.quirks.${agent}`;
 function quirks(): Quirks {
@@ -317,9 +319,12 @@ function start(): void {
 		const now = fs.existsSync(QUIRKS) ? fs.readFileSync(QUIRKS, 'utf8') : '';
 		if (now !== quirked) {
 			quirked = now;
-			const title = quirks().title;
+			const { title, reportedTitle } = quirks();
 			if (title !== undefined) {
 				process.stdout.write(`${ESC}]0;${title}${ST}`);
+			}
+			if (reportedTitle !== undefined && process.env.FACADE_IT_SCREEN !== 'muse') {
+				process.stdout.write(`${ESC}]7501;state=idle:title=${Buffer.from(reportedTitle).toString('base64')}${ST}`);
 			}
 			draw();
 		}

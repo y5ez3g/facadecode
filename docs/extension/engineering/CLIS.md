@@ -250,10 +250,14 @@ title/status from a new run does not update a previous one. A status episode sta
 progress-only updates keep its start time.
 
 Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes, reject controls and malformed reports; sanitize
-invisible formatting, trim and cap displayed title/status at 300 Unicode code points with ellipsis. Prefer a report's
-nonempty title over OSC 0/2. Preserve the CLI's visible title, including status symbols, decorations, CLI/folder/agent
+invisible formatting, trim and cap displayed title/status at 300 Unicode code points with ellipsis. Prefer the CLI's
+nonempty terminal title from OSC 0/2; use a status report's title only when no terminal title is available (D160).
+A later activity report must not replace a terminal title or suppress its decoration-only updates. Preserve the CLI's
+visible title, including status symbols, decorations, CLI/folder/agent
 names and default session titles, even when the card already provides the same information (D126). There is no
 adapter-specific title filtering or rewriting; the owner deferred content cleanup to retain the original CLI display.
+This choice applies when the card displays a CLI title. Startup, blocker, error and unavailable-tool messages retain
+PANEL-1.4's precedence; message delivery and notifications are unaffected.
 Terminal emoji width follows tested Unicode cell tables;
 wide-character/wrapped-line reading and bracketed paste modes are verified per terminal backend.
 
@@ -497,6 +501,8 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
+
+- 2026-11-02: The CLI's actual terminal title takes precedence over a status report's title, preserving its native decorations (D160).
 
 - 2026-11-01: 2.2 gives Muse Code on Windows its server by `-c` as elsewhere: its project `.mcp.json` entry's `mode` made
   Muse Code 1.4.14 turn off its MCP, at the owner's report (D147).
