@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0
+## 0.0.2
 
 Agents that work together, six native CLIs, and saved conversations.
 
