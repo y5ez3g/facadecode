@@ -159,7 +159,7 @@ export class McpShim {
 				return {};
 			case 'tools/list':
 				// Each tool given directly where a CLI otherwise loads tools on demand: Antigravity's first turn has them so (CLIS-2.2)
-				return { tools: this.options.serving === false ? [] : TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, _meta: ALWAYS_LOAD })) };
+				return { tools: this.options.serving === false ? [] : TOOLS.map(tool => ({ ...tool, _meta: ALWAYS_LOAD })) };
 			case 'tools/call': {
 				if (!isObject(params) || typeof params.name !== 'string') {
 					throw new RpcError(-32602, 'Invalid params: tools/call names its tool by a string `name`.');

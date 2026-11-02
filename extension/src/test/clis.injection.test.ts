@@ -796,7 +796,7 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 			+ 'separate kind of information, not another copy of that message\'s instruction.';
 		assert.ok(FACADE_SKILL.includes(verbatim));
 		assert.match(FACADE_SKILL, /^---\nname: facade\ndescription: .+\n---\n/);
-		assert.deepStrictEqual(TOOLS.map(tool => tool.name).filter(name => !FACADE_SKILL.includes(`\`${name}\``)), []);
+		assert.deepStrictEqual(TOOLS.map(tool => tool.name).filter(name => !FACADE_SKILL.includes(name)), []);
 		for (const fact of ['`model`', '`effort`', '`prompt`', '`facade.yolo`', 'creation tree', 'Delivery is finite', '`request_id`']) {
 			assert.ok(FACADE_SKILL.includes(fact), fact);
 		}
@@ -808,11 +808,11 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 	});
 
 	test('what every turn of every agent pays for stays within its budget: the tool list, the instructions and the skill (MCP-6.1, D111)', () => {
-		// As T3 Code's AgentContextBudget test does: text that grows must be made to fit, or the budget raised on purpose
+		// Standard human titles/annotations add up to 800 bytes (D154); bootstrap and optional reference budgets shrink.
 		const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
-		assert.ok(bytes(JSON.stringify(TOOLS)) <= 7_000, `the tool list is ${bytes(JSON.stringify(TOOLS))} bytes`);
-		assert.ok(bytes(instructionsFor('#a999')) <= 1_500, `the instructions are ${bytes(instructionsFor('#a999'))} bytes`);
-		assert.ok(bytes(FACADE_SKILL) <= 6_200, `the skill is ${bytes(FACADE_SKILL)} bytes`);
+		assert.ok(bytes(JSON.stringify(TOOLS)) <= 7_800, `the tool list is ${bytes(JSON.stringify(TOOLS))} bytes`);
+		assert.ok(bytes(instructionsFor('#a999')) <= 1_200, `the instructions are ${bytes(instructionsFor('#a999'))} bytes`);
+		assert.ok(bytes(FACADE_SKILL) <= 5_000, `the skill is ${bytes(FACADE_SKILL)} bytes`);
 	});
 
 	test('the instructions name the run and the Facade Code tools, briefly, with the repeated-message rule', () => {

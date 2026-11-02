@@ -424,6 +424,16 @@ work for that same message. A new send call has a new ID, even if its text match
 message is a separate kind of information, not another copy of that message's instruction.”
 This is model-side handling of transport duplicates, not a Facade deduplication database or an exactly-once guarantee.
 The skill does not prescribe project workflow, mandatory replies or escalation to a person.
+Initialization owns private launch facts and cross-tool delivery/reach semantics; each tool's description and parameters
+own its use, effects and success/retry boundaries; the skill provides cross-tool examples and occasional reference.
+Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
+lack of draft protection, and bounded optional request-ID reuse. The skill does not duplicate the nine argument schemas.
+Tools publish standard human-readable titles and conservative annotations under the
+[MCP tool schema](https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations).
+Only list_start_options, list_agents and read_screen are read-only business-state queries. read_messages acknowledges
+delivery. Optional request IDs do not make start/send unconditionally idempotent. Mutating tools retain conservative
+destructive/open-world defaults; annotations are hints, never permissions or a reason to change native approval behavior.
+Tool names, argument schemas and the native private-context paths stay identical across presentation changes.
 Per-run initialization instructions identify the agent, its creator (or person), initial message ID when present, and
 launch window/environment/location including folder and worktree. A creator's short ID is a callable send_message
 address, never a reporting requirement. Context is private to the run's launch and survives shim reconnect/reload.

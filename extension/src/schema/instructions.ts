@@ -37,11 +37,10 @@ export function launchContextText(context: {
 export function instructionsFor(alias: string, context?: string): string {
 	return [
 		`You are Facade Code agent ${alias}. These tools start/stop agents, exchange messages and read/type into terminals across this computer's Facade windows.`,
-		"list_start_options defaults to your launch location and CLIs. start_agent needs name, window_id, location_id and cli. With YOLO off you reach your creation tree; with it on, every agent. Each launch uses its environment's YOLO setting.",
-		'Address agents by #aN, ID or unique @name; #human is the person in your window. 📨 introduces a full incoming message; 🔔 reports a system result, not an agent reply. Delivery notices cite the original message; async start/stop notices match result_message_id. Neither confirms task completion.',
-		'Messages and final results are pushed into your terminal, even after your turn ends. Do not poll read_messages or read_screen while waiting. read_messages returns an immediate snapshot of your own inbox: undelivered messages by default, or specific IDs. Full messages need no extra read. type_text/press_keys write raw input without a message wrapper or draft protection.',
+		'YOLO off reaches your creation tree; on reaches all agents. Each launch uses its destination environment\'s setting. Address agents by #aN, ID or unique @name; #human is the person in your window.',
+		'📨 brings a full message; 🔔 is a system result, not an agent reply. Delivery, startup and idle never prove work is complete. Messages/results arrive even after your turn ends. Do not poll read_messages or read_screen while waiting; a full message needs no extra read. read_messages is a snapshot of your own inbox, not a wait.',
 		REPEATED_MESSAGE_TEXT,
-		'If tools are listed by name alone, load the one you need before calling it. The facade skill describes the tools.',
+		'If tools are listed by name alone, load the one you need. The facade skill has cross-tool examples and recovery details.',
 		...(context ? [context] : [])
 	].join('\n');
 }

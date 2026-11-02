@@ -309,7 +309,7 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		]);
 		// No pagination: the whole list, and nothing else
 		// Each given to the model directly where a CLI otherwise loads tools on demand, as Antigravity does (CLIS-2.2)
-		assert.deepStrictEqual(listed, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, _meta: { 'antigravity/alwaysLoad': true } })) });
+		assert.deepStrictEqual(listed, { tools: TOOLS.map(tool => ({ ...tool, _meta: { 'antigravity/alwaysLoad': true } })) });
 		assert.deepStrictEqual((await shim.request('resources/list', {}, 9)).error?.code, -32601);
 		assert.strictEqual((await shim.request('tools/call', { arguments: {} }, 10)).error?.code, -32602);
 		shim.writeLine('{ not json');
