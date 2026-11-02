@@ -340,8 +340,10 @@ provide a generic engine to edit arbitrary settings files or mirror their schema
 starts in, as the person would by accepting the CLI's own trust question (D62): where the CLI takes trust for one launch,
 in that launch (Codex `-c projects` with `trust_level = "trusted"` for the folder; Muse Code `--trust-workspace`; Pi
 `--approve`); where it keeps trust in its own file, by merging only that entry as the CLI itself writes it, under the
-CLI's lock and preserving the rest of the file (Claude Code `hasTrustDialogAccepted` for the repository's main checkout
-in its global configuration; Antigravity `trustedWorkspaces` with the folder, spelled as Antigravity names its
+CLI's lock and preserving the rest of the file (Claude Code `hasTrustDialogAccepted` in its global configuration for the
+folder it keys the project on - on macOS and Linux the real path of the repository's main checkout; on Windows the folder
+with `.git` at or above the folder it starts in, a linked worktree's own, spelled as the run is given it with forward
+slashes, D139; Antigravity `trustedWorkspaces` with the folder, spelled as Antigravity names its
 working directory, in `~/.gemini/antigravity-cli/settings.json`). OpenCode asks no trust question and is given none.
 A file that cannot be read, or that does not exist, is left as it is and the CLI asks in its terminal. Claude Code's trust
 covers every folder below a trusted one, so it is never written for the home folder, a folder above it or a filesystem
@@ -480,6 +482,8 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-01: 3.3 keys Claude Code's trust on Windows as Claude Code 2.1.316 reads it there - the folder with `.git` at or
+  above the start folder, a linked worktree's own, spelled as given - found by the release review's real-CLI run (D139).
 - 2026-11-01: From the owner-requested release review: 1.2 takes the host environment as VS Code's terminal does, without
   inherited run markers, and only programs a launch can start on Windows; 1.4 and 3.1 recognize every spelling of an option;
   2.1 gives Codex on Windows its per-character paste time; 2.4 starts without session tracking where settings cannot be

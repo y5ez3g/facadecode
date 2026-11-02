@@ -40,7 +40,10 @@ function untrust(file: string, root: string): void {
 		return;
 	}
 	const config = JSON.parse(text) as { projects?: { [folder: string]: unknown } };
-	const folders = Object.keys(config.projects ?? {}).filter(folder => folder === root || folder.startsWith(`${root}${path.sep}`));
+	// Compared as the platform names folders: on Windows Claude Code keys them with forward slashes and either case of drive (D139)
+	const spelled = (folder: string) => process.platform === 'win32' ? path.win32.resolve(folder).toLowerCase() : folder;
+	const base = spelled(root);
+	const folders = Object.keys(config.projects ?? {}).filter(folder => spelled(folder) === base || spelled(folder).startsWith(`${base}${path.sep}`));
 	if (!folders.length) {
 		return;
 	}

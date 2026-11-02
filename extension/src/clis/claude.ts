@@ -108,15 +108,20 @@ function mainCheckoutOf(root: string): string {
 }
 
 /**
- * The folder Claude Code keys a project's configuration and trust on for a run in `cwd` (2.1.312): the repository's main checkout -
- * for a linked worktree, the checkout whose Git directory it shares - else, outside any repository, `cwd` itself. Its real path in
- * Unicode NFC, with forward slashes and an upper-case drive on Windows.
+ * The folder Claude Code keys a project's configuration and trust on for a run in `cwd`. On macOS and Linux (2.1.312, 2.1.316): the
+ * repository's main checkout - for a linked worktree, the checkout whose Git directory it shares - else, outside any repository, `cwd`
+ * itself; its real path in Unicode NFC. On Windows (2.1.316) it neither follows a worktree to its main checkout nor respells a path:
+ * the folder at or above `cwd` with a `.git` in it - a linked worktree's own - else `cwd` itself, as the run is given it, the case of
+ * its drive and folders kept, with forward slashes (D139).
  */
 export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string {
+	if (platform === 'win32') {
+		const given = path.win32.resolve(cwd);
+		return (gitRootOf(given) ?? given).split('\\').join('/');
+	}
 	const real = canonicalFolder(cwd);
 	const root = gitRootOf(real);
-	const key = (root === undefined ? real : mainCheckoutOf(root)).normalize('NFC');
-	return platform === 'win32' ? key.split('\\').join('/').replace(/^[a-z]:/, drive => drive.toUpperCase()) : key;
+	return (root === undefined ? real : mainCheckoutOf(root)).normalize('NFC');
 }
 
 /**
