@@ -227,7 +227,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 
 		const window = vscode.workspace.name!;
 		const ran = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
+			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.window_id', location: 'data.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Reviewer', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Review the README.' }, save: { child: 'data.agent_id' } },
 			{ tool: 'list_agents', arguments: { details: true } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', wait: 30_000 },
@@ -239,7 +239,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		]);
 		const options = ran.content('list_start_options');
 		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
-		assert.strictEqual(options.data.windows[0].label, window);
+		assert.strictEqual(options.data.label, window);
 
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
@@ -314,7 +314,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const { card, alias } = await personAgent();
 		const window = vscode.workspace.name!;
 		const first = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
+			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.window_id', location: 'data.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Listener', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } },
 			// Its box is drawn, its first task taken: an ordinary message can go in now (RULES-1.4)
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 },
@@ -399,7 +399,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		this.timeout(120_000);
 		const { card, alias } = await personAgent();
 		const first = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
+			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.window_id', location: 'data.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Slow', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 }
 		]);
@@ -437,7 +437,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const { alias } = await personAgent();
 		const window = vscode.workspace.name!;
 		// Listed and available: a window that is still starting is listed as unavailable
-		const found = await script(alias, [{ tool: 'list_start_options', arguments: {}, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
+		const found = await script(alias, [{ tool: 'list_start_options', arguments: { scope: 'all' }, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
 		const options = found.content('list_start_options');
 		const peer = (options?.data.windows as { window_id: string; label: string; environment: string; locations: { location_id: string; path: string }[] }[]).find(each => each.label === PEER);
 		assert.ok(peer, `the other window is listed: ${JSON.stringify(options)}`);

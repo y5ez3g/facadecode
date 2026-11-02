@@ -66,7 +66,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 
 		test('a call of another tool protocol, or of none, is refused protocol_incompatible before anything is looked at or done', async () => {
 			const { lead } = team(s);
-			for (const protocol of [1, 2, 3, TOOL_PROTOCOL + 1, undefined]) {
+			for (const protocol of [1, 2, 3, 4, TOOL_PROTOCOL + 1, undefined]) {
 				const answer = await s.service({ caller: lead.id, tool: 'start_agent', arguments: START, protocol });
 				const result = resultOf(answer);
 				assert.deepStrictEqual([result.error?.code, result.error?.reason, result.effects], ['UNAVAILABLE', 'protocol_incompatible', { outcome: 'none' }]);
@@ -108,11 +108,12 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 
 	suite('list_start_options', () => {
 
-		test('without window_id: the open window, its locations and availability, complete with no unavailable windows', async () => {
+		test('scope all: open windows, locations and availability, with completeness', async () => {
 			const { lead } = team(s);
-			const result = resultOf(await s.call(lead, 'list_start_options'));
+			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
 			assert.strictEqual(result.status, 'success');
 			assert.deepStrictEqual(result.data, {
+				scope: 'all',
 				windows: [{
 					window_id: 'win-1', label: 'Design', environment: 'local', available: true,
 					locations: [{ location_id: 'loc-1', label: 'app', path: '/work/app' }, { location_id: 'loc-wt', label: 'fix', path: '/work/app.worktrees/fix' }]
@@ -126,7 +127,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 		test('a window with no folder is listed with no location and cannot start an agent', async () => {
 			const { lead } = team(s);
 			s.locations = [];
-			const result = resultOf(await s.call(lead, 'list_start_options'));
+			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
 			assert.strictEqual(result.data.windows[0].available, false);
 			assert.match(result.data.windows[0].reason, /No folder is open/);
 			assert.deepStrictEqual(result.data.windows[0].locations, []);
@@ -157,6 +158,30 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			for (const each of Object.values(capabilities) as { reason: string }[]) {
 				assert.ok(each.reason.length > 0);
 			}
+		});
+
+		test('default discovery gives the caller location and launchable CLIs in one call', async () => {
+			const { lead } = team(s);
+			for (const args of [{}, { scope: 'current' }]) {
+				const result = resultOf(await s.call(lead, 'list_start_options', args));
+				assert.strictEqual(result.status, 'success');
+				assert.deepStrictEqual([result.data.scope, result.data.window_id, result.data.location_id, result.data.location.path], ['current', 'win-1', lead.location, lead.cwd]);
+				assert.ok(result.data.clis.some((cli: { cli: string; available: boolean }) => cli.cli === 'claude' && cli.available));
+				assert.strictEqual(result.data.windows, undefined);
+				assert.deepStrictEqual(result.effects, { outcome: 'none' });
+			}
+		});
+
+		test('current discovery never substitutes another location and scope cannot mix with explicit destinations', async () => {
+			const { lead } = team(s);
+			for (const args of [{ scope: 'all', window_id: 'win-1' }, { scope: 'current', location_id: 'loc-1' }, { scope: 'current', cli: 'claude' }]) {
+				const result = resultOf(await s.call(lead, 'list_start_options', args));
+				assert.deepStrictEqual([result.error?.reason, result.data.invalid[0].field], ['invalid_argument', 'scope']);
+			}
+			s.locations = s.locations.filter(location => location.id !== lead.location);
+			const missing = resultOf(await s.call(lead, 'list_start_options'));
+			assert.strictEqual(missing.error?.reason, 'not_found');
+			assert.deepStrictEqual(missing.effects, { outcome: 'none' });
 		});
 
 		test('a malformed custom catalog reports its configuration error while keeping valid built-ins available', async () => {

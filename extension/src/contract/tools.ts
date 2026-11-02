@@ -622,6 +622,24 @@ class ToolService {
 	// Discover and start (MCP-2)
 
 	private async listStartOptions(args: ToolArguments['list_start_options'], caller: Caller, call: Received): Promise<Outcome> {
+		const selected = args.window_id !== undefined || args.location_id !== undefined || args.cli !== undefined;
+		if (args.scope !== undefined && selected) {
+			throw new ArgumentError('list_start_options', { missing: [], invalid: [{ field: 'scope', problem: '`scope` cannot accompany window_id, location_id or cli.' }] });
+		}
+		if (!selected && args.scope !== 'all') {
+			// The real caller's registered launch location; not a guessed cwd or the person's last choice.
+			const run = this.deps.agents.get(caller.id);
+			if (!run || caller.window !== undefined && caller.window !== this.deps.window.id) {
+				throw new FacadeError('UNAVAILABLE', 'location_unavailable', 'The caller\'s launch location is not available in this window.');
+			}
+			const location = this.location(run.location);
+			const { clis, problems } = await this.deps.clis.list(location);
+			return { result: success({
+				scope: 'current', window_id: this.deps.window.id, label: this.deps.window.label, environment: this.deps.window.environment,
+				location_id: location.id, location: locationOf(location, true), clis: clis.map(cliOf),
+				problems: problems.map(({ setting, problem }) => ({ setting, problem })), complete: !this.deps.locations.snapshot().pending
+			}) };
+		}
 		// A subordinate selection names its parent: nothing is chosen for the caller (MCP-2.1)
 		const missing = [
 			...(args.location_id !== undefined || args.cli !== undefined) && args.window_id === undefined ? ['window_id'] : [],
@@ -644,7 +662,7 @@ class ToolService {
 			});
 			const all = [this.summary(), ...windows];
 			return {
-				result: success({ windows: all, complete: !unavailable.length, unavailable_windows: unavailable }),
+				result: success({ scope: 'all', windows: all, complete: !unavailable.length, unavailable_windows: unavailable }),
 				headline: `${count(all.length, 'open window')} you can start agents in or look into${unavailable.length ? `; ${count(unavailable.length, 'more window')} did not answer and ${unavailable.length === 1 ? 'is' : 'are'} listed in unavailable_windows` : ''}.`
 			};
 		}

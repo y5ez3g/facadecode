@@ -34,8 +34,8 @@ idle does not mean work is complete.
 
 ## Starting and stopping agents
 
-- \`list_start_options\`: no arguments lists windows; \`window_id\` lists that window's locations; add \`location_id\` for
-  available CLIs, then \`cli\` for its model/effort choices and capabilities. Discovery has no effects.
+- \`list_start_options\`: default/current gives your launch location and CLIs; \`scope: "all"\` lists windows.
+  \`window_id\` lists locations; add \`location_id\` for CLIs, then \`cli\` for model/effort and capabilities. No effects.
 - \`start_agent\`: requires \`name\`, \`window_id\`, \`location_id\`, \`cli\`. Optional \`model\` and \`effort\` use launch
   configuration then CLI defaults if omitted; \`prompt\` is the first message. Optional \`worktree: {branch, base_ref}\`
   creates a Git worktree and starts there; otherwise it starts in the selected location. Success confirms process

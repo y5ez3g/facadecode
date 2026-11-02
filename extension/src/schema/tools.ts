@@ -41,10 +41,10 @@ export const QUERY_ROUTE_MS = 10_000;
 export const TOOLS: readonly ToolDefinition[] = [
 	{
 		name: 'list_start_options',
-		description: 'List where an agent can start, without effects: without window_id, the open Facade windows on this computer, local and remote; with window_id, its working locations; with location_id, the CLIs there; with cli, its model and effort choices and capabilities.',
+		description: 'Discover launch choices: current location and CLIs by default; scope:all for windows; window_id for locations; add location_id for CLIs, then cli for details. scope excludes explicit selections.',
 		inputSchema: {
 			type: 'object',
-			properties: { window_id: ID, location_id: ID, cli: ID },
+			properties: { scope: { type: 'string', enum: ['current', 'all'] }, window_id: ID, location_id: ID, cli: ID },
 			additionalProperties: false
 		}
 	},

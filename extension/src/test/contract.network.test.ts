@@ -53,6 +53,17 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 
 	suite('list_start_options', () => {
 
+		test('default discovery stays on the caller worktree even if the window directory is unavailable', async () => {
+			const { lead } = team(s);
+			s.agents.add({ ...lead, location: 'loc-wt' });
+			network.directoryError = new Error('No remote window directory');
+			const result = resultOf(await s.call(lead, 'list_start_options'));
+			assert.strictEqual(result.status, 'success');
+			assert.strictEqual(result.data.location_id, 'loc-wt');
+			assert.ok(result.data.clis.length > 0);
+			assert.deepStrictEqual(network.routed, []);
+		});
+
 		test('without a window: this window first, each other one that answers, and those that do not listed apart - never an empty success', async () => {
 			const { lead } = team(s);
 			network.window(2, 'Backend', [], 'ssh-remote+box');
@@ -62,7 +73,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.respond = route => route.window === 'win-2'
 				? { ok: true, result: backend }
 				: { ok: false, reason: 'timeout', message: 'The Facade window win-3 did not answer within 10 seconds: the request may have taken effect there.', effects: 'unknown' };
-			const result = resultOf(await s.call(lead, 'list_start_options', {}));
+			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
 			assert.strictEqual(result.status, 'success');
 			assert.deepStrictEqual(result.data.windows.map((each: { window_id: string }) => each.window_id), ['win-1', 'win-2']);
 			assert.deepStrictEqual(result.data.windows[1], backend);
@@ -78,7 +89,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 		test('the other windows that cannot be listed at all are one unavailable entry, and this window is still listed', async () => {
 			const { lead } = team(s);
 			network.directoryError = new Error('the Facade Code Window Component did not list the open windows');
-			const result = resultOf(await s.call(lead, 'list_start_options', {}));
+			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
 			assert.deepStrictEqual([result.data.windows.map((each: { window_id: string }) => each.window_id), result.data.complete], [['win-1'], false]);
 			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { window_id: string; reason: string }) => [each.window_id, each.reason]), [['*', 'window_unavailable']]);
 			assert.deepStrictEqual(network.routed, []);

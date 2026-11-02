@@ -13,7 +13,7 @@ import { ArgumentSchema, ToolName, TOOLS } from './tools';
 
 /** Each tool's arguments once valid: defaults filled in, `ids` and `keys` as lists, keys named as ptyd names them. */
 export interface ToolArguments {
-	readonly list_start_options: { readonly window_id?: string; readonly location_id?: string; readonly cli?: string };
+	readonly list_start_options: { readonly scope?: 'current' | 'all'; readonly window_id?: string; readonly location_id?: string; readonly cli?: string };
 	readonly start_agent: {
 		readonly name: string;
 		readonly window_id: string;

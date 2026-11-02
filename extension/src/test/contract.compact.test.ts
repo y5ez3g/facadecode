@@ -23,7 +23,7 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		assert.deepStrictEqual(listed.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a1', '#a2']);
 		assert.strictEqual(listed.data.agents[0].alias, undefined);
 		assert.strictEqual(listed.data.scope, 'all');
-		assert.strictEqual(resultOf(await s.call(lead, 'list_start_options')).data.windows[0].window_id, 'win-1');
+		assert.strictEqual(resultOf(await s.call(lead, 'list_start_options')).data.window_id, 'win-1');
 		const started = resultOf(await s.call(lead, 'start_agent', START));
 		assert.match(started.data.agent_id, /^#a\d+$/);
 		assert.strictEqual(started.data.process_state, 'running');

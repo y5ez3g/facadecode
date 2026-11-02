@@ -1,6 +1,6 @@
 # MCP contract
 
-Layer 4. Protocol **4** defines the target contract. [Rules](../RULES.md) owns effects and
+Layer 4. Protocol **5** defines the target contract. [Rules](../RULES.md) owns effects and
 [Collaboration](../features/COLLABORATION.md) owns message experience. This document does not certify implementation.
 
 | Group | Decides |
@@ -57,7 +57,7 @@ narrative headline. Keep the envelope below, meaningful field names, all actual 
 Public agent/message identities use their directly callable short references where known, with the full ID as a fallback;
 do not repeat alias/reference variants. Internal routing and stored records retain their complete identities. Project
 only at the caller's public result boundary, after cross-window routing and caller-side file transfer. This contract
-is tool protocol 4. All callers use this contract; earlier tool protocols fail explicitly before effects, with no
+is tool protocol 5. All callers use this contract; earlier tool protocols fail explicitly before effects, with no
 parallel result format or automatic downgrade.
 
 Do not echo ordinary input bodies, routine character counts or requested key arrays in operation receipts. Preserve
@@ -143,9 +143,14 @@ describe a continuing call; it does not produce progress popups.
 
 **Query startup choices without side effects, including open windows that have no agents.**
 
-Arguments, optional: `window_id:string`, `location_id:string`, `cli:string`.
-Without window_id, list every open Facade window on this client computer: window IDs/labels, environments when
-present, location summaries and availability. With window_id, list the shared WORKTREES-1.2 location catalog. With
+Arguments, optional: `scope:"current"|"all"`, `window_id:string`, `location_id:string`, `cli:string`.
+With no arguments or scope current, return the caller's registered launch location, window/environment and available
+CLI choices in one query, without waiting for other windows. This is not the terminal's later cwd or the person's
+last selection. A missing or removed launch location fails explicitly; never choose another location. The snapshot
+includes catalog completeness and configuration problems, and startup revalidates the chosen destination.
+Scope all lists every open Facade window on this client computer: window IDs/labels, environments when
+present, location summaries and availability. Scope excludes explicit window/location/CLI selections.
+With window_id, list the shared WORKTREES-1.2 location catalog. With
 location_id, list its installed CLIs and any catalog configuration problems, each naming its setting. A malformed
 custom catalog must not silently appear empty; valid built-ins remain available. With cli, include model/effort choices and actual operation capabilities. A
 subordinate selection must identify its parent; do not silently choose a window/location. A window without a folder
