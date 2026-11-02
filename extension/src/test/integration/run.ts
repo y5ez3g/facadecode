@@ -13,7 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { EDITOR_FLAGS, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
-import { probeEnvironment } from './probeState';
+import { assertTemporaryState, probeEnvironment } from './probeState';
 
 /** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
 const BUILT_INS: readonly { readonly id: string; readonly segment: string; readonly avatar: string }[] = [
@@ -71,11 +71,21 @@ async function main(): Promise<void> {
 	const realConfig = process.env.FACADE_IT_CLAUDE_CONFIG;
 	const realEnv = JSON.parse(process.env.FACADE_IT_REAL_ENV ?? '{}') as { [name: string]: string };
 	const realHome = process.env.FACADE_IT_REAL_HOME === 'keep';
+	// YOLO is off for the real journey, unless FACADE_IT_REAL_YOLO=on: Muse Code, whose approvals have no rule for one server's tools,
+	// asks before each of Facade's with YOLO off, and on Windows first sets up its sandbox, which a new home has not
+	const realYolo = process.env.FACADE_IT_REAL_YOLO === 'on';
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
+	// FACADE_IT_REAL_AGENTS_HOME may name a temporary home a real CLI was set up in for testing - Antigravity's first-run setup and
+	// sign-in done there - for the agents' terminals, never a person's
+	const prepared = only === 'real' ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
 	if (only === 'real') {
 		probeEnvironment(realEnv, realHome, realConfig);
 		probeEnvironment(passed, realHome);
+		if (prepared !== undefined) {
+			assertTemporaryState(prepared, 'FACADE_IT_REAL_AGENTS_HOME');
+		}
 	}
+	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
 	const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fdit-')));
@@ -90,13 +100,16 @@ async function main(): Promise<void> {
 	fs.mkdirSync(claudeConfig);
 	const home = path.join(root, 'home');
 	fs.mkdirSync(home);
-	// The home folder agents' terminals see, where a CLI such as Antigravity keeps the folders it trusts: the suite's own. Only the
-	// terminals' environment names it, as a person's terminal settings could; the editor keeps its own HOME.
-	const agentsHome = path.join(root, 'agents-home');
-	fs.mkdirSync(agentsHome);
-	// Antigravity's settings as it leaves them once it has run there: Facade merges its trust into a file the CLI made, and makes none (D103)
+	// The home folder agents' terminals see, where a CLI such as Antigravity keeps the folders it trusts: the suite's own, or the one
+	// the real journey was given. Only the terminals' environment names it, as a person's terminal settings could; the editor keeps
+	// its own HOME.
+	const agentsHome = prepared ?? path.join(root, 'agents-home');
 	fs.mkdirSync(path.join(agentsHome, '.gemini', 'antigravity-cli'), { recursive: true });
-	fs.writeFileSync(path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json'), '{}\n');
+	// Antigravity's settings as it leaves them once it has run there: Facade merges its trust into a file the CLI made, and makes none (D103)
+	const agySettingsFile = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
+	if (!fs.existsSync(agySettingsFile)) {
+		fs.writeFileSync(agySettingsFile, '{}\n');
+	}
 
 	/** What agents' terminals are given - the suite's home folder, and `more` - by the editor's terminal settings. */
 	const isolatedStorage = { XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state') };
@@ -296,7 +309,7 @@ async function main(): Promise<void> {
 		try {
 			// The other built-ins not installed: the real one is the one New Agent preselects
 			const others = Object.fromEntries(BUILT_INS.filter(each => each !== cli).map(each => [`facade.${each.segment}.path`, path.join(root, `unavailable-${each.id}`)]));
-			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, 'facade.yolo': false, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
+			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, 'facade.yolo': realYolo, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
 		} finally {
 			if (cli.id === 'claude') {
 				untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root);

@@ -3,8 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 // Real agents of one built-in working together through Facade (VERIFICATION G3, J12, M02, D90). It runs only where FACADE_IT_REAL
-// names the CLI - `FACADE_IT_ONLY=real` - as each run signs in and uses an account's usage. YOLO is off: the agent the person starts
-// uses Facade's tools with no approval, starts a second agent of the same CLI with a first task and messages it, and the second
+// names the CLI - `FACADE_IT_ONLY=real` - as each run signs in and uses an account's usage. YOLO is off - on where FACADE_IT_REAL_YOLO
+// says so, for a CLI with no rule for one server's tools - and the agent the person starts uses Facade's tools with no approval, starts a second agent of the same CLI with a first task and messages it, and the second
 // answers through Facade's tools. Every message is pasted whole into its recipient's input box and seen submitted (RULES-1.4,
 // COLLABORATION-2.1). What the models did is checked too (D117): each message sent once, one agent started, and no tool called
 // over and over while an answer is awaited, as the tools' instructions ask - the answer comes as a paste.
@@ -17,6 +17,7 @@ import type { MessageRecord } from '../../core/messagePorts';
 import type { Card, PanelState } from '../../webview/protocol';
 
 const REAL = process.env.FACADE_IT_REAL;
+const YOLO = process.env.FACADE_IT_REAL_YOLO === 'on' ? 'on' : 'off';
 
 async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
@@ -81,7 +82,7 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined, 30_000);
 	});
 
-	test('with YOLO off, an agent starts another with a first task and messages it, and the other answers it, each message pasted and submitted', async function () {
+	test(`with YOLO ${YOLO}, an agent starts another with a first task and messages it, and the other answers it, each message pasted and submitted`, async function () {
 		this.timeout(600_000);
 		try {
 			await journey();
