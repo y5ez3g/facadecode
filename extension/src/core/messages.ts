@@ -9,7 +9,8 @@ import { displayLine } from '../base/text';
 import { invalid } from './errors';
 import { deliveryText, notificationName, operationText } from './notificationText';
 import { REQUEST_MS } from './requests';
-import type { HumanContactPort, InboxPage, InboxQuery, InputEffects, InputPort, MessageRecord, Messages, SendRequest, SendResult } from './messagePorts';
+import { messageTrace } from './messageTrace';
+import type { HumanContactPort, InboxPage, InboxQuery, InputEffects, InputPort, MessageRecord, Messages, ResultReport, SendRequest, SendResult } from './messagePorts';
 import type { Agents, CapabilityState, Clock, Disposable, LogPort, RunChange, RunFacts, RunId } from './ports';
 
 /** The message records, kept in the execution environment's Facade directory for thirty days (RULES-5.3, ARCHITECTURE-3.1). */
@@ -299,11 +300,12 @@ export class MessageService implements Messages, Disposable {
 
 	reserveResult(): string { return `m-${this.deps.ids.next()}`; }
 
-	report(request: { readonly id?: string; readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
+	report(request: ResultReport): MessageRecord {
 		if (request.id !== undefined) {
 			const prior = this.deps.store.list().find(record => record.id === request.id);
 			if (prior) {
-				if (prior.kind !== 'result' || prior.to.run !== request.to || prior.callId !== request.callId) {
+				if (prior.kind !== 'result' || prior.to.run !== request.to || prior.callId !== request.callId || prior.requestId !== request.requestId
+					|| prior.agent?.run !== (request.agentParty?.run ?? request.agent) || prior.operation?.tool !== request.operation?.tool || prior.operation?.window !== request.operation?.window) {
 					throw invalid('invalid_argument', 'The reserved result ID is already in use by a different operation.');
 				}
 				return this.live.get(prior.id) ?? prior;
@@ -318,6 +320,8 @@ export class MessageService implements Messages, Disposable {
 			...(request.result !== undefined ? { result: request.result } : {}),
 			...(request.about !== undefined ? { about: request.about } : {}),
 			...(request.callId !== undefined ? { callId: request.callId } : {}),
+			...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
+			...(request.operation !== undefined ? { operation: request.operation } : {}),
 			...(request.agentParty !== undefined ? { agent: request.agentParty } : request.agent !== undefined ? { agent: this.party(request.agent) } : {})
 		}, PENDING, true, request.id);
 		return this.handOver(record, formatResult(record));
@@ -327,11 +331,13 @@ export class MessageService implements Messages, Disposable {
 		if (!this.deps.sent) {
 			return;
 		}
+		const before = this.deps.sent.list().find(each => each.id === record.id);
 		try {
 			this.deps.sent.put(record);
 		} catch (err) {
 			this.deps.log.event(`Could not keep a copy of message ${record.alias}: ${messageOf(err)}`);
 		}
+		if (!before || messageTrace(before) !== messageTrace(record)) { this.deps.log.event(messageTrace(record)); }
 		this.emit(record);
 	}
 
@@ -476,6 +482,7 @@ export class MessageService implements Messages, Disposable {
 			from: { run: 'facade' },
 			to: original.from,
 			about: original.id,
+			...(original.requestId !== undefined ? { requestId: original.requestId } : {}),
 			text: resultText(original, this.cliOf(original.to.run)),
 			...(result !== undefined ? { result } : {}),
 			...(callId !== undefined ? { callId } : {})
@@ -817,7 +824,7 @@ export class MessageService implements Messages, Disposable {
 	 * A new record with its own ID (RULES-1.1) - the one `allocate` took for it, where given - written before any input and never over
 	 * another; throws where it cannot be written, unless `required` is false.
 	 */
-	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'fromWindow' | 'requestId' | 'initialPrompt' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
+	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'operation' | 'fromWindow' | 'requestId' | 'initialPrompt' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
 		const given = id !== undefined ? messageIdOf(id) : undefined;
 		if (id !== undefined && (given === undefined || given !== id)) {
 			throw new Error(`${JSON.stringify(id)} is not a message ID.`);
@@ -838,6 +845,7 @@ export class MessageService implements Messages, Disposable {
 			...(fields.about !== undefined ? { about: fields.about } : {}),
 			...(fields.callId !== undefined ? { callId: fields.callId } : {}),
 			...(fields.agent !== undefined ? { agent: fields.agent } : {}),
+			...(fields.operation !== undefined ? { operation: fields.operation } : {}),
 			// A retry with the same request ID finds it, in this window or the sender's (MCP-1.1, D110)
 			...(fields.requestId !== undefined ? { requestId: fields.requestId } : {}),
 			...(fields.initialPrompt !== undefined ? { initialPrompt: fields.initialPrompt } : {}),
@@ -858,6 +866,7 @@ export class MessageService implements Messages, Disposable {
 		if (delivery.status === 'pending') {
 			this.live.set(record.id, record);
 		}
+		this.deps.log.event(messageTrace(record));
 		this.emit(record);
 		return record;
 	}
@@ -872,6 +881,7 @@ export class MessageService implements Messages, Disposable {
 	}
 
 	private save(record: MessageRecord): MessageRecord {
+		const before = this.live.get(record.id) ?? this.deps.store.list().find(each => each.id === record.id);
 		if (this.live.has(record.id)) {
 			this.live.set(record.id, record);
 		}
@@ -881,6 +891,7 @@ export class MessageService implements Messages, Disposable {
 			} catch (err) {
 				this.deps.log.event(`Could not record message ${record.alias}: ${messageOf(err)}`);
 			}
+			if (!before || messageTrace(before) !== messageTrace(record)) { this.deps.log.event(messageTrace(record)); }
 			this.emit(record);
 		}
 		return record;

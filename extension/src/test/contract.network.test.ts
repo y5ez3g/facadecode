@@ -516,6 +516,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			s.agents.settle(child, { state: 'running' });
 			await waitFor(() => network.routed.length > 0);
 			assert.strictEqual(network.routed[0].args.id, served.result.data.result_message_id);
+			assert.deepStrictEqual(network.routed[0].args.operation, { tool: 'start_agent', window: 'win-1' });
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs, each.args.to, each.args.callId, each.args.agent]), [['win-2', 'result', 15_000, runId(30), 'c-10', { run: child, alias: s.agents.get(child)!.alias, name: 'child' }]]);
 			assert.match(network.routed[0].args.text, /^Started @child #a\d+ \(run-[0-9a-f]+\) with claude/);
 			assert.deepStrictEqual(s.messages.reports, []);
@@ -568,6 +569,17 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.deepStrictEqual(s.messages.reports, [{ to: lead.id, text: 'Your message #m5 was submitted to its CLI.', callId: 'c-1', about: 'm-5', agentParty: { run: runId(20), alias: '#a20', name: 'builder' } }]);
 			await assert.rejects(services.serve({ from: 'win-2', op: 'result', deadlineMs: 15_000, args: { to: runId(99), text: 'Nobody' } }), /names no agent of this window/);
 			assert.strictEqual(s.messages.reports.length, 1);
+		});
+
+		test('a routed operation keeps its execution window and original call through the receiving inbox', async () => {
+			const { lead } = team(s);
+			const agent = { run: runId(20), alias: '#a20', name: 'closed target' };
+			const operation = { tool: 'stop_agent', window: 'win-2' };
+			await services.serve({ from: 'win-2', op: 'result', deadlineMs: 15000, args: { id: 'm-42', to: lead.id, text: 'It has stopped.', callId: 'stop-original', operation, agent, result: { status: 'success', data: {}, effects: { outcome: 'confirmed' } } } });
+			const receipt = resultOf(await s.call(lead, 'read_messages', { ids: ['#m42'] })).data.messages[0];
+			assert.deepStrictEqual([receipt.message_id, receipt.call_id, receipt.agent, receipt.operation], ['#m42', 'stop-original', '#a20', operation]);
+			await assert.rejects(services.serve({ from: 'win-2', op: 'result', deadlineMs: 15000, args: { to: lead.id, text: 'Unreadable', operation: { tool: 'guessed', window: 'win-2' } } }), /invalid operation/);
+			assert.strictEqual(s.messages.records.length, 1);
 		});
 
 		test('this window\'s agents and summary as other windows ask for them: within the guest\'s reach, ended ones on request', async () => {

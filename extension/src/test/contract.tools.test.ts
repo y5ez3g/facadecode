@@ -50,10 +50,10 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			await s.call(runId(99), 'list_agents', {});
 			const calls = s.log.filter(line => line.startsWith('Tool '));
 			assert.strictEqual(calls.length, 4, calls.join('\n'));
-			assert.match(calls[0], /^Tool list_agents by #a1: success in \d+ ms$/);
-			assert.match(calls[1], /^Tool send_message by #a1: failure NOT_FOUND \(\w+\) in \d+ ms$/);
-			assert.match(calls[2], /^Tool an unknown tool by #a1: failure INVALID \(unsupported\) in \d+ ms$/);
-			assert.match(calls[3], new RegExp(`^Tool list_agents by ${runId(99)}: failure NOT_FOUND \\(not_found\\) in \\d+ ms$`));
+			assert.match(calls[0], /^Tool list_agents by #a1: success in \d+ ms; /);
+			assert.match(calls[1], /^Tool send_message by #a1: failure NOT_FOUND \(\w+\) in \d+ ms; /);
+			assert.match(calls[2], /^Tool an unknown tool by #a1: failure INVALID \(unsupported\) in \d+ ms; /);
+			assert.match(calls[3], new RegExp(`^Tool list_agents by ${runId(99)}: failure NOT_FOUND \\(not_found\\) in \\d+ ms; `));
 			assert.ok(!s.log.some(line => line.includes('secret')), s.log.join('\n'));
 		});
 

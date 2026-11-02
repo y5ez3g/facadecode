@@ -338,6 +338,11 @@ transport logs. Correlation IDs connect UI/MCP/supervisor observations. Retain 3
 capacity policy; ptyd's own log stays within 2 MiB, keeping its newest 512 KiB of whole lines (D136). No telemetry
 service is introduced by this refactor. Each tool call is logged with its tool, its caller's
 alias, its status and error code and how long it took, never its arguments (D117).
+Existing call/request IDs and short agent/message references connect dispatch, route, answer, accepted work and final
+receipt. Start/stop receipts preserve their operation and execution window across routing and persistence. Message log
+entries record identity and meaningful delivery/effect transitions, not repeated unchanged attempts or message bodies.
+Copy Diagnostics labels its window/environment scope: a local log is not a complete distributed trace. No second
+operation ID, telemetry service, new retention period or background history scan is introduced.
 
 An empty agents log opens with `No agent events yet`, with no information toast.
 

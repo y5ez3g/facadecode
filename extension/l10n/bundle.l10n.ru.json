@@ -298,5 +298,10 @@
 	"Untitled conversation": "Беседа без названия",
 	"No saved conversations in this window's folders": "В папках этого окна нет сохраненных бесед",
 	"Could not resume {0}: {1}": "Не удалось возобновить {0}: {1}",
-	"{0} is already running in another window.": "Беседа {0} уже выполняется в другом окне."
+	"{0} is already running in another window.": "Беседа {0} уже выполняется в другом окне.",
+	"Operation: {0}": "Операция: {0}",
+	"Agent: {0}": "Агент: {0}",
+	"Start agent": "Запуск агента",
+	"Stop agent": "Остановка агента",
+	"Technical details": "Технические сведения"
 }

@@ -174,6 +174,27 @@ const since = (start: number, times: readonly number[]) => times.map(at => at - 
 suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 	useFakeClock();
 
+	test('concurrent receipts keep explicit operations through reload and reject conflicting reuse of a reserved ID', async () => {
+		const { service, stored, runs, reload, input, log } = setUp();
+		input.states.set(A, ['draft']);
+		const agentParty = { run: B, alias: '#a2', name: 'Bob' };
+		const first = { id: service.reserveResult(), to: A, agentParty, operation: { tool: 'start_agent' as const, window: 'win-2' }, callId: 'start-original', requestId: 'startup-key', text: 'private receipt body' };
+		const second = { ...first, id: service.reserveResult(), operation: { tool: 'stop_agent' as const, window: 'win-2' }, callId: 'stop-original' };
+		service.report(first); service.report(second);
+		await sleep(1);
+		runs.delete(B);
+		const reopened = reload();
+		assert.deepStrictEqual([...stored.values()].map(record => [record.id, record.callId, record.operation?.tool, record.agent?.alias]), [
+			[first.id, 'start-original', 'start_agent', '#a2'], [second.id, 'stop-original', 'stop_agent', '#a2']
+		]);
+		assert.strictEqual(reopened.report(first).id, first.id);
+		assert.throws(() => reopened.report({ ...first, operation: second.operation }), /different operation/);
+		assert.strictEqual(stored.size, 2);
+		assert.ok(log.some(line => line.includes('"operation":{"tool":"stop_agent","window":"win-2"}') && line.includes('"call_id":"stop-original"')));
+		assert.ok(!log.some(line => line.includes('private receipt body')));
+		reopened.dispose();
+	});
+
 	test('a partly submitted result batch keeps exactly its frozen text through reload and settles every member once', async () => {
 		const { service, input, stored, reload } = setUp();
 		input.states.set(A, ['draft', 'usable', 'own']);

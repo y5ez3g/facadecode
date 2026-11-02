@@ -92,6 +92,7 @@ function withHomeAsTilde(text: string, home: string, platform: NodeJS.Platform):
 export function diagnosticsText(diagnostics: Diagnostics, platform: NodeJS.Platform = process.platform): string {
 	const lines = [
 		`Facade Code diagnostics, ${iso(diagnostics.at)}`,
+		'Scope: this window and execution environment only; other windows\' logs are not collected.',
 		diagnostics.about.join('; '),
 		`Collaboration through Facade's tools: ${diagnostics.collaboration ? 'on' : 'off'}`,
 		'',

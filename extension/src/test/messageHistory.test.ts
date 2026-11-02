@@ -86,6 +86,22 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1.2, 3.1)', () => {
 
+	test('an operation receipt shows the recorded action/target and keeps long identity below the unchanged body', () => {
+		const { history } = fakeEditor();
+		const receipt = record(42, { kind: 'result', from: { run: 'facade' }, to: ada, agent: bob,
+			operation: { tool: 'stop_agent', window: 'win-backend' }, callId: 'stop-original', requestId: 'request-original', text: 'Bob has stopped.',
+			result: { status: 'success', data: { closed: true }, effects: { outcome: 'confirmed' } },
+			delivery: { status: 'failure', reason: 'ended', effects: { outcome: 'none' }, attempts: 0 } }, T);
+		const text = history.recordText(receipt, 'en');
+		assert.ok(text.includes('Operation: Stop agent\nAgent: Bob #a2\nDelivery: Not delivered'));
+		assert.ok(text.includes('Bob has stopped.\n\nTechnical details\ncall_id: stop-original'));
+		assert.ok(text.includes('request_id: request-original') && text.includes('window: win-backend'));
+		assert.ok(text.includes('status: success'), 'a lost receipt does not turn the successful operation into a failed one');
+		const absent = history.recordText({ ...receipt, operation: undefined, about: 'm-999', agent: undefined }, 'en');
+		assert.ok(absent.includes('About message: #m999'));
+		assert.ok(!absent.includes('Operation:'), 'prose never manufactures an operation or missing original');
+	});
+
 	test('unconfirmed native acceptance is not displayed as delivered or still being delivered', () => {
 		const { history } = fakeEditor();
 		const native = { ...RECORDS[0], delivery: { status: 'unknown' as const, effects: { outcome: 'unknown' as const }, via: 'launch' as const, attempts: 0 } };

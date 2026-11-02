@@ -298,5 +298,10 @@
 	"Untitled conversation": "제목 없는 대화",
 	"No saved conversations in this window's folders": "이 창의 폴더에 저장된 대화가 없습니다",
 	"Could not resume {0}: {1}": "{0}을(를) 재개할 수 없습니다: {1}",
-	"{0} is already running in another window.": "{0}이(가) 이미 다른 창에서 실행 중입니다."
+	"{0} is already running in another window.": "{0}이(가) 이미 다른 창에서 실행 중입니다.",
+	"Operation: {0}": "작업: {0}",
+	"Agent: {0}": "에이전트: {0}",
+	"Start agent": "에이전트 시작",
+	"Stop agent": "에이전트 중지",
+	"Technical details": "기술 세부 정보"
 }

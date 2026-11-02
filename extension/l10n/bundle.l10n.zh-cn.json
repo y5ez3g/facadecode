@@ -298,5 +298,10 @@
 	"Untitled conversation": "无标题对话",
 	"No saved conversations in this window's folders": "此窗口的文件夹中没有已保存的对话",
 	"Could not resume {0}: {1}": "无法恢复 {0}: {1}",
-	"{0} is already running in another window.": "{0} 已在另一个窗口中运行。"
+	"{0} is already running in another window.": "{0} 已在另一个窗口中运行。",
+	"Operation: {0}": "操作：{0}",
+	"Agent: {0}": "Agent：{0}",
+	"Start agent": "启动 agent",
+	"Stop agent": "停止 agent",
+	"Technical details": "技术详情"
 }

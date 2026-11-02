@@ -112,6 +112,7 @@ export function messageOf(record: MessageRecord, withText: boolean): Data {
 		about: record.about,
 		// A Facade result completing an accepted call names that call and the agent it was on (MCP-1.3)
 		call_id: record.kind === 'result' ? record.callId : undefined,
+		operation: record.operation,
 		agent: record.agent?.run,
 		agent_reference: record.agent ? participant(record.agent) : undefined,
 		length: record.length,

@@ -216,10 +216,16 @@ class ToolService {
 		// Each call by its tool, caller and outcome, never its arguments: how agents use the tools shows in the log (ARCHITECTURE-3.3, D117)
 		const { status, error } = outcome.result;
 		const tool = TOOLS.some(each => each.name === call.tool) ? call.tool : 'an unknown tool';
-		this.deps.log?.(`Tool ${tool} by ${this.deps.agents.get(call.caller as RunId)?.alias ?? call.caller}: ${status}${error ? ` ${error.code} (${error.reason})` : ''} in ${Math.round(this.mono() - receivedAt)} ms`);
+		const projected = withRecovery(call.tool, compactResult(call.tool, outcome.result, !!(call.arguments as { details?: boolean } | undefined)?.details), call.arguments);
+		const data = isJsonObject(projected.data) ? projected.data : {};
+		const request = isJsonObject(call.arguments) && typeof call.arguments.request_id === 'string' && codePoints(call.arguments.request_id) <= 200 ? call.arguments.request_id : undefined;
+		this.deps.log?.(`Tool ${tool} by ${this.deps.agents.get(call.caller as RunId)?.alias ?? call.caller}: ${status}${error ? ` ${error.code} (${error.reason})` : ''} in ${Math.round(this.mono() - receivedAt)} ms; ${JSON.stringify({
+			call_id: call.callId, request_id: request, window: this.deps.window.id, target_window: data.window_id,
+			agent: data.agent_id ?? data.target, message: data.message_id, result_message: data.result_message_id, effects: projected.effects.outcome
+		})}`);
 		const { after } = outcome;
 		return {
-			answer: answerOf(withRecovery(call.tool, compactResult(call.tool, outcome.result, !!(call.arguments as { details?: boolean } | undefined)?.details), call.arguments)),
+			answer: answerOf(projected),
 			...after ? {
 				delivered: () => {
 					try {
@@ -449,7 +455,9 @@ class ToolService {
 	 */
 	private async routeCall(window: string, tool: ToolName, args: object, caller: Caller, call: Received, deadlineMs: number, inline = false): Promise<Outcome> {
 		const routed: RoutedCall = { tool, arguments: args, caller: this.guestOf(caller), callId: call.callId, elapsedMs: this.elapsed(call), protocol: call.protocol, ...inline ? { inline } : {} };
+		this.deps.log?.(`Route ${JSON.stringify({ phase: 'requested', call_id: call.callId, tool, from: this.deps.window.id, to: window, caller: caller.alias, deadline_ms: Math.round(deadlineMs) })}`);
 		const response = await this.deps.network!.route(window, 'call', routed, deadlineMs);
+		this.deps.log?.(`Route ${JSON.stringify({ phase: response.ok ? 'answered' : 'reply_unavailable', call_id: call.callId, tool, from: this.deps.window.id, to: window, ...!response.ok ? { reason: response.reason, effects: response.effects } : {} })}`);
 		const data = { window_id: window, ...'agent' in args && typeof args.agent === 'string' ? { agent_id: args.agent } : {} };
 		if (!response.ok) {
 			const unknown = response.effects === 'unknown' && !READ_ONLY_TOOLS.has(tool);
@@ -468,16 +476,18 @@ class ToolService {
 	 * Gives the caller a Facade result about something it asked that finished later (RULES-1.7): in its terminal where it is this
 	 * window's, else in its own window, routed there; nobody else hears of it going astray.
 	 */
-	private reportTo(caller: Caller, report: { readonly id: string; readonly callId: string; readonly agent: RunFacts; readonly text: string; readonly result?: Data }): void {
+	private reportTo(caller: Caller, report: { readonly id: string; readonly callId: string; readonly requestId?: string; readonly tool: 'start_agent' | 'stop_agent'; readonly agent: RunFacts; readonly text: string; readonly result?: Data }): void {
 		const agent = { run: report.agent.id, alias: report.agent.alias, name: report.agent.name };
+		const operation = { tool: report.tool, window: this.deps.window.id };
+		this.deps.log?.(`Receipt ${JSON.stringify({ message: report.id.replace(/^m-/, '#m'), call_id: report.callId, request_id: report.requestId, agent: agent.alias, operation, to: caller.alias, to_window: caller.window ?? this.deps.window.id, status: report.result?.status })}`);
 		if (caller.window === undefined || caller.window === this.deps.window.id) {
-			this.deps.messages.report({ id: report.id, to: caller.id, callId: report.callId, agent: report.agent.id, agentParty: agent, text: report.text, ...report.result !== undefined ? { result: report.result } : {} });
+			this.deps.messages.report({ id: report.id, to: caller.id, callId: report.callId, ...report.requestId !== undefined ? { requestId: report.requestId } : {}, operation, agent: report.agent.id, agentParty: agent, text: report.text, ...report.result !== undefined ? { result: report.result } : {} });
 			return;
 		}
-		const result: RoutedResult = { id: report.id, to: caller.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {}, callId: report.callId, agent };
+		const result: RoutedResult = { id: report.id, to: caller.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {}, callId: report.callId, ...report.requestId !== undefined ? { requestId: report.requestId } : {}, operation, agent };
 		void this.deps.network?.route(caller.window, 'result', result, STAGE_MS).then(response => {
 			if (!response.ok) {
-				this.deps.log?.(`A Facade result for ${caller.alias} could not reach its window ${caller.window}: ${response.message}`);
+				this.deps.log?.(`Receipt ${report.id.replace(/^m-/, '#m')} for ${caller.alias} could not reach its window ${caller.window}: ${response.message}`);
 			}
 		}, err => this.deps.log?.(`A Facade result for ${caller.alias} could not reach its window ${caller.window}: ${errorText(err)}`));
 	}
@@ -588,11 +598,16 @@ class ToolService {
 		if (!result || typeof result.to !== 'string' || typeof result.text !== 'string' || (result.result !== undefined && !isJsonObject(result.result)) || (result.id !== undefined && !/^m-[1-9]\d*$/.test(result.id)) || !this.deps.agents.get(result.to)) {
 			throw new Error('The routed Facade result names no agent of this window: it had no effect.');
 		}
+		if (result.operation !== undefined && (!isJsonObject(result.operation) || !['start_agent', 'stop_agent'].includes(result.operation.tool) || typeof result.operation.window !== 'string')) {
+			throw new Error('The routed result has an invalid operation: it had no effect.');
+		}
 		if (result.about) {
 			this.deps.messages.keepSent(result.about);
 		}
 		this.deps.messages.report({
 			...result.id !== undefined ? { id: result.id } : {}, to: result.to, text: result.text, ...result.result !== undefined ? { result: result.result } : {}, ...result.callId !== undefined ? { callId: result.callId } : {},
+			...result.operation !== undefined ? { operation: result.operation } : {},
+			...(result.requestId ?? result.about?.requestId) !== undefined ? { requestId: result.requestId ?? result.about?.requestId } : {},
 			...result.about ? { about: result.about.id } : {}, ...result.agent ? { agentParty: result.agent } : {}
 		});
 		return { taken: true };
@@ -782,7 +797,7 @@ class ToolService {
 			const final = await this.finishStart({ ...start, answerBy: Infinity }, late);
 			const facts = this.deps.agents.get(run) ?? launched;
 			if (facts) {
-				this.reportTo(caller, { id: resultMessageId, callId: call.callId, agent: facts, text: receiptTextOf(final.result, final.headline),
+				this.reportTo(caller, { id: resultMessageId, callId: call.callId, requestId: args.request_id, tool: 'start_agent', agent: facts, text: receiptTextOf(final.result, final.headline),
 					result: answerOf(withRecovery('start_agent', compactResult('start_agent', final.result), args)).structured });
 			}
 		}).catch(err => this.deps.log?.(`Could not report the start of ${run} to ${caller.alias}: ${errorText(err)}`));
@@ -1054,7 +1069,7 @@ class ToolService {
 		const resultMessageId = this.deps.messages.reserveResult();
 		void closing.then(late => {
 			const final = stopped(target, late);
-			this.reportTo(caller, { id: resultMessageId, callId: call.callId, agent: target, text: receiptTextOf(final.result, final.headline),
+			this.reportTo(caller, { id: resultMessageId, callId: call.callId, tool: 'stop_agent', agent: target, text: receiptTextOf(final.result, final.headline),
 				result: answerOf(withRecovery('stop_agent', compactResult('stop_agent', final.result))).structured });
 		}).catch(err => this.deps.log?.(`Could not report the stop of ${target.alias} to ${caller.alias}: ${errorText(err)}`));
 		return {
@@ -1136,7 +1151,9 @@ class ToolService {
 			...args.request_id !== undefined ? { requestId: args.request_id } : {}, elapsedMs: this.elapsed(call) + ROUTE_TRANSIT_MS
 		};
 		// The two seconds hold across the hops: that window answers in time for its answer to come back within them (RULES-1.2)
+		this.deps.log?.(`Route ${JSON.stringify({ phase: 'requested', call_id: call.callId, request_id: args.request_id, tool: 'send_message', message: alias, agent: to.alias ?? to.run, from: this.deps.window.id, to: window })}`);
 		const response = await this.deps.network!.route(window, 'deliver', delivery, Math.max(0, RESPONSE_BUDGET_MS - this.elapsed(call)));
+		this.deps.log?.(`Route ${JSON.stringify({ phase: response.ok ? 'answered' : 'reply_unavailable', call_id: call.callId, message: alias, from: this.deps.window.id, to: window, ...!response.ok ? { reason: response.reason, effects: response.effects } : {} })}`);
 		const data = defined({
 			message_id: id, alias, target: to.run, target_reference: shown, reply_to: replyTo, length: codePoints(text), window_id: window,
 			...earlier ? { request_id: args.request_id, repeated: true } : {}

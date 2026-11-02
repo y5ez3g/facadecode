@@ -298,5 +298,10 @@
 	"Untitled conversation": "無題の会話",
 	"No saved conversations in this window's folders": "このウィンドウのフォルダーに保存された会話はありません",
 	"Could not resume {0}: {1}": "{0} を再開できませんでした: {1}",
-	"{0} is already running in another window.": "{0} は既に別のウィンドウで実行されています。"
+	"{0} is already running in another window.": "{0} は既に別のウィンドウで実行されています。",
+	"Operation: {0}": "操作: {0}",
+	"Agent: {0}": "エージェント: {0}",
+	"Start agent": "エージェントを起動",
+	"Stop agent": "エージェントを停止",
+	"Technical details": "技術的な詳細"
 }

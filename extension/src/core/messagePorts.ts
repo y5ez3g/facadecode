@@ -38,6 +38,8 @@ export interface MessageRecord {
 	readonly callId?: string;
 	/** For a Facade result about another operation than a message: the agent it was on, a start's or a stop's (MCP-1.3). */
 	readonly agent?: { readonly run: RunId; readonly alias?: string; readonly name?: string };
+	/** Explicit operation facts for a start/stop receipt; never inferred from its prose or delivery outcome. */
+	readonly operation?: { readonly tool: 'start_agent' | 'stop_agent'; readonly window: string };
 	readonly text: string;
 	/** Machine facts for a Facade result; text remains its readable history body. Absent on older receipts and messages. */
 	readonly result?: { readonly [key: string]: unknown };
@@ -104,6 +106,20 @@ export interface SendResult {
 	readonly obstacle?: string;
 }
 
+/** A final result for an existing operation, correlated without adding a new operation identity. */
+export interface ResultReport {
+	readonly id?: string;
+	readonly to: RunId;
+	readonly callId?: string;
+	readonly requestId?: string;
+	readonly agent?: RunId;
+	readonly agentParty?: MessageRecord['agent'];
+	readonly operation?: MessageRecord['operation'];
+	readonly about?: string;
+	readonly text: string;
+	readonly result?: MessageRecord['result'];
+}
+
 export interface InboxQuery {
 	readonly ids?: readonly string[];
 	readonly all?: boolean;
@@ -139,7 +155,7 @@ export interface Messages {
 	 * A Facade result about an operation other than a message - a start that completed after its accepted response (MCP-1.3): a
 	 * `result` record in `to`'s inbox, delivered with its own budget, ending quietly where it cannot be (RULES-1.7).
 	 */
-	report(request: { readonly id?: string; readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord;
+	report(request: ResultReport): MessageRecord;
 	/** Keeps a copy of a message this window's agent sent to another window's, for Message History; its outcome updates it. */
 	keepSent(record: MessageRecord): void;
 	/** The caller's own inbox, never another's (MCP-4.2). */

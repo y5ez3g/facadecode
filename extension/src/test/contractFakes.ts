@@ -230,10 +230,11 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reser
 
 	reserveResult(): string { return `m-${++this.n}`; }
 
-	report(request: { readonly id?: string; readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
+	report(request: Parameters<Messages['report']>[0]): MessageRecord {
 		this.reports.push(request);
 		const base = this.recordOf({ id: request.id, from: 'facade', to: request.to, text: request.text, ...request.callId ? { callId: request.callId } : {} }, { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 }, 'result');
 		const record: MessageRecord = { ...base, ...request.result ? { result: request.result } : {},
+			...request.operation ? { operation: request.operation } : {}, ...request.requestId !== undefined ? { requestId: request.requestId } : {},
 			...request.agentParty ? { agent: request.agentParty } : request.agent ? { agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : {} };
 		this.records.push(record);
 		return record;

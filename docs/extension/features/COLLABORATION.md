@@ -146,6 +146,10 @@ client-wide or cross-window management surface. Each record labels its own trans
 then gives the readable operation outcome, with complete structured facts below it. It is Facade message history, not the vendor's whole CLI conversation.
 No live composer, send/replay control, group conversation or delete/hide control is added. Render message content as
 text; do not execute links or commands embedded in it.
+Start/stop results retain the operation name and execution window explicitly, with the target's recorded short identity;
+history labels the operation and agent without inferring them from prose. Full call/request IDs and route fields belong
+below the original body in localized Technical details, together with the unchanged operation result. A reserved receipt
+ID is not a fabricated record. Missing/expired original messages keep their references without invented content.
 
 ### 3.3 History retention
 

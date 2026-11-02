@@ -300,7 +300,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			assert.match(diagnostics, inputLine(each), diagnostics);
 		}
 		for (const tool of ['list_start_options', 'start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
-			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms$`, 'm'), `${tool} is logged`);
+			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms; `, 'm'), `${tool} is logged`);
 		}
 		assert.ok(!diagnostics.includes(os.homedir()), 'the home folder is written ~');
 

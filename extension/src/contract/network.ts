@@ -76,6 +76,8 @@ export interface RoutedResult {
 	readonly text: string;
 	readonly result?: { readonly [key: string]: unknown };
 	readonly callId?: string;
+	readonly requestId?: string;
+	readonly operation?: MessageRecord['operation'];
 	/** The message it reports on, as the delivering window recorded it: the sender's copy is brought up to date with it. */
 	readonly about?: MessageRecord;
 	/** The agent the operation was on, as its window names it. */

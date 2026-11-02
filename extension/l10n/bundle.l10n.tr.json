@@ -298,5 +298,10 @@
 	"Untitled conversation": "Adsız konuşma",
 	"No saved conversations in this window's folders": "Bu pencerenin klasörlerinde kaydedilmiş konuşma yok",
 	"Could not resume {0}: {1}": "{0} sürdürülemedi: {1}",
-	"{0} is already running in another window.": "{0} zaten başka bir pencerede çalışıyor."
+	"{0} is already running in another window.": "{0} zaten başka bir pencerede çalışıyor.",
+	"Operation: {0}": "İşlem: {0}",
+	"Agent: {0}": "Aracı: {0}",
+	"Start agent": "Aracıyı başlat",
+	"Stop agent": "Aracıyı durdur",
+	"Technical details": "Teknik ayrıntılar"
 }

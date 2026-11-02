@@ -298,5 +298,10 @@
 	"Untitled conversation": "未命名的對話",
 	"No saved conversations in this window's folders": "此視窗的資料夾中沒有已儲存的對話",
 	"Could not resume {0}: {1}": "無法接續 {0}: {1}",
-	"{0} is already running in another window.": "{0} 已在另一個視窗中執行。"
+	"{0} is already running in another window.": "{0} 已在另一個視窗中執行。",
+	"Operation: {0}": "操作：{0}",
+	"Agent: {0}": "Agent：{0}",
+	"Start agent": "啟動 agent",
+	"Stop agent": "停止 agent",
+	"Technical details": "技術詳細資料"
 }

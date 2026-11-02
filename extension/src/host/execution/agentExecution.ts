@@ -349,16 +349,17 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 */
 	private async answerCall(client: PtydClient, event: CallEvent, receivedAt: number): Promise<void> {
 		const { answer, delivered } = await this.answerOf(event.call, receivedAt);
+		const correlation = JSON.stringify({ caller: event.call.caller, tool: event.call.tool, call_id: event.call.callId });
 		try {
 			await client.request('answer', { id: event.id, answer });
 		} catch (err) {
-			this.options.log(`Could not answer a tool call of ${String(event.call.caller)}: ${messageOf(err)}`);
+			this.options.log(`Could not hand back tool answer ${correlation}: ${messageOf(err)}`);
 			return;
 		}
 		try {
 			delivered?.();
 		} catch (err) {
-			this.options.log(`Could not complete a tool call of ${String(event.call.caller)} after its answer: ${messageOf(err)}`);
+			this.options.log(`Could not complete tool handoff ${correlation}: ${messageOf(err)}`);
 		}
 	}
 
@@ -375,10 +376,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			served = await handler(call, receivedAt);
 		} catch (err) {
 			this.options.log(`The tool call ${call.callId} (${call.tool}) of ${call.caller} failed: ${messageOf(err)}`);
-			return { answer: failureAnswer('FAILED', 'internal_error', `The Facade Code window could not complete ${call.tool}: ${messageOf(err)}. Whether it took effect is not known.`, 'unknown') };
+			return { answer: failureAnswer('FAILED', 'internal_error', `The Facade Code window could not complete ${call.tool}: ${messageOf(err)}. Whether it took effect is not known.`, 'unknown', call) };
 		}
 		return isToolAnswer(served?.answer) ? served
-			: { answer: failureAnswer('FAILED', 'internal_error', `The Facade Code window gave no answer to ${call.tool}. Whether it took effect is not known.`, 'unknown') };
+			: { answer: failureAnswer('FAILED', 'internal_error', `The Facade Code window gave no answer to ${call.tool}. Whether it took effect is not known.`, 'unknown', call) };
 	}
 
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ readonly pid: number; readonly startedAt: number }> {

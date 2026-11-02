@@ -298,5 +298,10 @@
 	"Untitled conversation": "Conversa sem título",
 	"No saved conversations in this window's folders": "Não há conversas salvas nas pastas desta janela",
 	"Could not resume {0}: {1}": "Não foi possível retomar {0}: {1}",
-	"{0} is already running in another window.": "{0} já está em execução em outra janela."
+	"{0} is already running in another window.": "{0} já está em execução em outra janela.",
+	"Operation: {0}": "Operação: {0}",
+	"Agent: {0}": "Agente: {0}",
+	"Start agent": "Iniciar agente",
+	"Stop agent": "Parar agente",
+	"Technical details": "Detalhes técnicos"
 }

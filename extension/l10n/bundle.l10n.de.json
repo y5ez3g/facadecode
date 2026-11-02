@@ -298,5 +298,10 @@
 	"Untitled conversation": "Unbenannte Konversation",
 	"No saved conversations in this window's folders": "Keine gespeicherten Konversationen in den Ordnern dieses Fensters",
 	"Could not resume {0}: {1}": "{0} konnte nicht fortgesetzt werden: {1}",
-	"{0} is already running in another window.": "{0} wird bereits in einem anderen Fenster ausgeführt."
+	"{0} is already running in another window.": "{0} wird bereits in einem anderen Fenster ausgeführt.",
+	"Operation: {0}": "Vorgang: {0}",
+	"Agent: {0}": "Agent: {0}",
+	"Start agent": "Agent starten",
+	"Stop agent": "Agent stoppen",
+	"Technical details": "Technische Details"
 }
