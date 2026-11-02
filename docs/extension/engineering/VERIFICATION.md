@@ -189,16 +189,23 @@ suite (40 checks), and Linux x64 compilation, 1099 units (7 pending) and the int
 not run again, as D147 changes the Windows launch alone. Not run: the scenarios with a suite in a container window, a
 compatible editor, Remote-SSH from a Linux or Windows client, real CLIs other than those named on each platform.
 
-The pull request's CI, on GitHub's Windows, macOS and Ubuntu runners, then found two test-tool defects. The panel's
-Chromium suite gave the browser eight seconds to start, which Chrome once took longer than on a Windows runner; it now
-gets 60 seconds, and a start that fails says whether the browser ended or is still running, and what it printed. On
-macOS the close-and-reopen scenarios lost the reopened window in one run of a few, in PR #44's run too: macOS keeps the
+The pull request's CI, on GitHub's Windows, macOS and Ubuntu runners, then found four test-tool defects, each in one run
+of a few. The panel's Chromium suite gave the browser eight seconds to start, which Chrome once took longer than on a
+Windows runner; it now gets 60 seconds, and a start that fails says whether the browser ended or is still running, and
+what it printed. On macOS the close-and-reopen scenarios lost the reopened window, in PR #44's run too: macOS keeps the
 editor running after its last window closes, and the second editor, started while the first was still closing its
 window, handed its window to it, which reuses an extension development window it still lists for the same extensions and
 reloads it instead of opening one. The runner now waits for the closed window's extension host to end and on macOS ends
 the editor before reopening, as Windows and Linux end it; on the test Mac with every core kept busy the runner before
 this lost the window in one of two runs and the fixed one in none, and with it the reopen scenarios of all six CLIs and
-the five-minute expiry scenario passed on macOS, Linux and Windows. The fixes preserve the product assertions.
+the five-minute expiry scenario passed on macOS, Linux and Windows. A history test rewrote a Claude Code title sidecar
+at once with a title of the same length: Windows keeps file times by its clock's tick - two such writes on the Windows
+test computer shared every time, the size and the file ID in 1,126 of 2,000 pairs - so the cached title stood; its
+second rename is now a minute later, as a person's is. The cross-window journey required its message submitted within
+send_message's two-second budget, which a slower Ubuntu runner exceeded; as the same-window journeys do, it now takes an
+accepted message too, with the Facade result that reports it submitted, waited for before the agent is stopped - with
+the recipient taking its submissions 4.5 s late, that result came and the journey passed. The fixes preserve the product
+assertions.
 
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
