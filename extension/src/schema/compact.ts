@@ -58,6 +58,14 @@ function identity(source: Data): Data {
 		data.agent_id = agentReference(source.alias) ?? agentReference(source.reference) ?? source.agent_id;
 		delete data.alias;
 		delete data.reference;
+		if (source.process !== undefined) {
+			data.process_state = source.process;
+			delete data.process;
+		}
+		if (source.tools !== undefined) {
+			data.tools_state = source.tools;
+			delete data.tools;
+		}
 	}
 	if (typeof source.message_id === 'string') {
 		data.message_id = messageReference(source.message_id);

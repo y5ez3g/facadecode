@@ -225,7 +225,7 @@ export class MessageService implements Messages, Disposable {
 		// message ID after a lost reply, but the original request still names the original message (MCP-1.1).
 		const earlier = request.requestId !== undefined ? this.findRequest(request.from, request.requestId) : undefined;
 		if (earlier) {
-			return { record: earlier, status: earlier.delivery.status === 'pending' ? 'accepted' : earlier.delivery.status,
+			return { record: earlier, status: earlier.delivery.status === 'pending' ? 'accepted' : earlier.delivery.status === 'unknown' ? 'failure' : earlier.delivery.status,
 				...earlier.delivery.reason ? { reason: earlier.delivery.reason } : {} };
 		}
 		// Queueing and forwarding before Facade had it spent the same budgets, and so does making its record (RULES-1.2, 1.5)
@@ -242,7 +242,8 @@ export class MessageService implements Messages, Disposable {
 			// The label its header shows, kept: a delivery that goes on after a reload pastes and recognizes the same text, though the
 			// window was renamed meanwhile, as a folder becoming a multi-root workspace renames it (RULES-1.6, 1.9)
 			label: request.sender?.label ?? this.deps.window.label,
-			...(request.requestId !== undefined ? { requestId: request.requestId } : {})
+			...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
+			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {})
 		}, PENDING, true, request.id);
 		if (request.to === '@human') {
 			return this.contact(record);
@@ -300,7 +301,8 @@ export class MessageService implements Messages, Disposable {
 			...(request.sender ? { fromWindow: request.sender.window } : {}),
 			to: request.to === '@human' ? { run: '@human' } : this.party(request.to),
 			text: request.text,
-			...(request.replyTo !== undefined ? { replyTo: request.replyTo } : {})
+			...(request.replyTo !== undefined ? { replyTo: request.replyTo } : {}),
+			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {})
 		}, delivery, true, request.id);
 	}
 
@@ -811,7 +813,7 @@ export class MessageService implements Messages, Disposable {
 	 * A new record with its own ID (RULES-1.1) - the one `allocate` took for it, where given - written before any input and never over
 	 * another; throws where it cannot be written, unless `required` is false.
 	 */
-	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'fromWindow' | 'requestId' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
+	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'fromWindow' | 'requestId' | 'initialPrompt' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
 		const given = id !== undefined ? messageIdOf(id) : undefined;
 		if (id !== undefined && (given === undefined || given !== id)) {
 			throw new Error(`${JSON.stringify(id)} is not a message ID.`);
@@ -834,6 +836,7 @@ export class MessageService implements Messages, Disposable {
 			...(fields.agent !== undefined ? { agent: fields.agent } : {}),
 			// A retry with the same request ID finds it, in this window or the sender's (MCP-1.1, D110)
 			...(fields.requestId !== undefined ? { requestId: fields.requestId } : {}),
+			...(fields.initialPrompt !== undefined ? { initialPrompt: fields.initialPrompt } : {}),
 			...(fields.label !== undefined ? { label: fields.label } : {}),
 			text: fields.text,
 			...(fields.result !== undefined ? { result: fields.result } : {}),

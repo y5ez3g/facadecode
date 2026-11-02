@@ -66,7 +66,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 
 		test('a call of another tool protocol, or of none, is refused protocol_incompatible before anything is looked at or done', async () => {
 			const { lead } = team(s);
-			for (const protocol of [1, 2, TOOL_PROTOCOL + 1, undefined]) {
+			for (const protocol of [1, 2, 3, TOOL_PROTOCOL + 1, undefined]) {
 				const answer = await s.service({ caller: lead.id, tool: 'start_agent', arguments: START, protocol });
 				const result = resultOf(answer);
 				assert.deepStrictEqual([result.error?.code, result.error?.reason, result.effects], ['UNAVAILABLE', 'protocol_incompatible', { outcome: 'none' }]);
@@ -272,7 +272,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			const saved = runFacts(100, { creator: worker.id, requestId: 'kept-start', lifecycle: 'ended' });
 			s.agents.requested = () => saved;
 			const ended = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'kept-start' }));
-			assert.deepStrictEqual([ended.status, ended.data.agent_id, ended.data.process, ended.data.repeated], ['success', saved.alias, 'unknown', true]);
+			assert.deepStrictEqual([ended.status, ended.data.agent_id, ended.data.process_state, ended.data.repeated], ['success', saved.alias, 'unknown', true]);
 			s.agents.requested = () => ({ ...saved, lifecycle: 'starting' });
 			const interrupted = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'kept-start' }));
 			assert.deepStrictEqual([interrupted.status, interrupted.error?.reason, interrupted.effects.outcome, s.agents.launched.length], ['failure', 'window_unavailable', 'unknown', 0]);
@@ -296,12 +296,12 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.strictEqual(s.agents.launched[0].prompt, '[Facade message #m1 | from @lead #a1 | window Design]\nReview the changes.\nThen the tests.\n[/Facade message #m1]');
 			assert.strictEqual(s.agents.launched[0].promptLine, 'Review the changes.');
 			assert.deepStrictEqual(s.messages.prompts, [{
-				request: { id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.\nThen the tests.', callId: 'call-1' },
-				// Its launch delivered it: one state, so it is no message waiting in the child's inbox (COLLABORATION-3.1)
-				delivery: { status: 'success', effects: { outcome: 'unknown' }, attempts: 0, via: 'launch', deliveredAt: Date.UTC(2026, 9, 28, 22, 0, 0) }
+				request: { id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.\nThen the tests.', callId: 'call-1', initialPrompt: { path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' } } },
+				// An unverified mapping leaves acceptance unknown; an explicit inbox read may deliver it later.
+				delivery: { status: 'unknown', effects: { outcome: 'unknown' }, attempts: 0, via: 'launch', reason: 'submission_unconfirmed' }
 			}]);
 			assert.deepStrictEqual(s.messages.sent, []);
-			assert.deepStrictEqual(result.data.prompt, { message_id: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' }, status: 'success', effects: { outcome: 'unknown' } });
+			assert.deepStrictEqual(result.data.prompt, { message_id: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' }, status: 'unknown', effects: { outcome: 'unknown' } });
 			assert.strictEqual(result.status, 'success');
 		});
 
@@ -333,7 +333,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			const result = resultOf(answer);
 			// The ID taken before the launch is the one it is sent with
 			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
-			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1' }]);
+			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' } } }]);
 			assert.strictEqual(result.status, 'success');
 			assert.deepStrictEqual(result.data.prompt, {
 				message_id: '#m1', path: 'post_start',
@@ -469,7 +469,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(all.data.agents[0], {
 				agent_id: '#a1', name: 'lead', window_id: 'win-1', environment: 'local',
 				location_id: 'loc-1', cwd: '/work/app', cli: 'claude', yolo: false,
-				process: 'running', activity: 'not_working', tools: 'available', observed_at: '2026-10-28T22:00:00.000Z', stale: false
+				process_state: 'running', activity: 'not_working', tools_state: 'available', observed_at: '2026-10-28T22:00:00.000Z', stale: false
 			});
 			for (const each of all.data.agents) {
 				assert.ok(!Object.keys(each).some(key => /task|operation|credential/.test(key)));
@@ -497,7 +497,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.ok(!live.data.agents.some((each: { agent_id: string }) => each.agent_id === '#a5'));
 			const ended = resultOf(await s.call(lead, 'list_agents', { include_ended: true }));
 			const crashed = ended.data.agents.find((each: { agent_id: string }) => each.agent_id === '#a5');
-			assert.deepStrictEqual([crashed.process, crashed.pid, crashed.exit, crashed.error.reason], ['ended', undefined, { kind: 'abnormal', code: 1, at: '2026-10-28T21:00:00.000Z' }, 'Exited with code 1']);
+			assert.deepStrictEqual([crashed.process_state, crashed.pid, crashed.exit, crashed.error.reason], ['ended', undefined, { kind: 'abnormal', code: 1, at: '2026-10-28T21:00:00.000Z' }, 'Exited with code 1']);
 		});
 
 		test('pages with next_cursor until the last page, and refuses a cursor it did not give', async () => {
@@ -525,7 +525,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(lead, 'stop_agent', { agent: '@worker' });
 			const result = resultOf(answer);
 			assert.deepStrictEqual(s.agents.closed, [worker.id]);
-			assert.deepStrictEqual(result.data, { agent_id: worker.alias, process_state: 'ended', cleanup: 'terminated' });
+			assert.deepStrictEqual(result.data, { agent_id: worker.alias, closed: true, process_state: 'ended', cleanup: 'terminated' });
 			assert.deepStrictEqual(result.effects, { outcome: 'confirmed' });
 			assert.ok(s.agents.get(runId(3)), 'the child keeps running');
 		});
@@ -537,7 +537,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([ended.status, ended.data.already_ended, ended.data.cleanup], ['success', true, 'already_ended']);
 			s.agents.closeWith = 'unconfirmed';
 			const unconfirmed = resultOf(await s.call(lead, 'stop_agent', { agent: '#a3' }));
-			assert.deepStrictEqual([unconfirmed.status, unconfirmed.data.process_state, unconfirmed.effects.outcome], ['success', 'unknown', 'partial']);
+			assert.deepStrictEqual([unconfirmed.status, unconfirmed.data.process_state, unconfirmed.effects.outcome], ['failure', 'unknown', 'partial']);
 			s.agents.closeWith = 'failed';
 			const failed = resultOf(await s.call(lead, 'stop_agent', { agent: lead.id }));
 			assert.deepStrictEqual([failed.status, failed.error?.reason, failed.effects.outcome], ['failure', 'cleanup_failed', 'partial']);

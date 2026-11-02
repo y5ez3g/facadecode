@@ -86,6 +86,14 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1.2, 3.1)', () => {
 
+	test('unconfirmed native acceptance is not displayed as delivered or still being delivered', () => {
+		const { history } = fakeEditor();
+		const native = { ...RECORDS[0], delivery: { status: 'unknown' as const, effects: { outcome: 'unknown' as const }, via: 'launch' as const, attempts: 0 } };
+		const text = history.recordText(native, 'en');
+		assert.ok(text.includes('Status: Facade could not confirm that the agent received the message\n'));
+		assert.ok(!text.includes('Status: Delivered') && !text.includes('Status: Being delivered'));
+	});
+
 	test('machine outcome facts do not replace the readable history body or change older receipts', () => {
 		const { history } = fakeEditor();
 		const old = record(42, { kind: 'result', from: { run: 'facade' }, to: ada, about: 'm-1', text: 'Your message was submitted to its CLI.' }, T);

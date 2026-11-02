@@ -249,8 +249,13 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		// fallback is checked separately; it must not change what this direct launch can carry as a native prompt.
 		const native = NATIVE[CLI];
 		assert.deepStrictEqual([started.data.prompt.path, started.data.yolo, started.data.creator], [native ? 'native' : 'post_start', true, card.runId]);
-		// After startup it may still be on its way when the start answers - a CLI slow to draw its input - and is delivered then (MCP-2.3)
-		assert.ok(native ? started.data.prompt.status === 'success' : ['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));
+		// A native argument alone does not verify acceptance. Post-start delivery may still be under way (MCP-2.3).
+		if (native) {
+			assert.deepStrictEqual([started.data.prompt.capability.state, started.data.prompt.status, started.data.prompt.effects.outcome], ['unverified', 'unknown', 'unknown']);
+			assert.strictEqual(started.data.prompt.delivered_via, undefined);
+		} else {
+			assert.ok(['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));
+		}
 		const child = started.data.agent_id as string;
 		const childAlias = started.data.agent_id as string;
 		// The prompt is the caller's message as any message goes: its header, the whole text and its footer (COLLABORATION-2.1)
@@ -368,17 +373,25 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.deepStrictEqual([receiptFacts(result, third.data.message_id).status, receiptFacts(result, third.data.message_id).error.reason], ['failure', 'input_unknown']);
 		fs.rmSync(`${RECORD}.quirks.${childAlias}`);
 
-		// The recipient reads what never reached it: delivered by that read, and only once (COLLABORATION-3.1, D88)
+		// A native first prompt is also unconfirmed until this explicit handoff; it is never pasted again (MCP-2.3).
+		const unconfirmedPrompt = started.data.prompt.status === 'unknown' ? started.data.prompt.message_id as string : undefined;
+		const initialPastes = received(childAlias).filter(each => each.includes('Wait for my messages.')).length;
+		const readIds = [...unconfirmedPrompt ? [unconfirmedPrompt] : [], third.data.message_id];
+		// The recipient reads what is failed or unconfirmed: delivered by that read, and only once (COLLABORATION-3.1, D88).
 		const read = await script(childAlias, [
 			{ tool: 'read_messages', arguments: {} },
 			{ tool: 'read_messages', arguments: {}, until: '"messages":[]', wait: 5_000 },
-			{ tool: 'read_messages', arguments: { ids: [third.data.message_id] } }
+			{ tool: 'read_messages', arguments: { ids: readIds } }
 		]);
 		const unread = read.content('read_messages')?.data.messages as { message_id: string; text: string; delivery: { status: string; reason?: string } }[];
-		assert.deepStrictEqual(unread.map(each => [each.message_id, each.text, each.delivery.status, each.delivery.reason]), [[third.data.message_id, 'Third message.', 'failure', 'input_unknown']], JSON.stringify(unread));
+		assert.deepStrictEqual(unread.map(each => [each.message_id, each.text, each.delivery.status, each.delivery.reason]), [
+			...unconfirmedPrompt ? [[unconfirmedPrompt, 'Wait for my messages.', 'unknown', 'submission_unconfirmed']] : [],
+			[third.data.message_id, 'Third message.', 'failure', 'input_unknown']
+		], JSON.stringify(unread));
 		assert.deepStrictEqual(read.content('read_messages', 1)?.data.messages, [], JSON.stringify(read.content('read_messages', 1)));
-		const again = read.content('read_messages', 2)?.data.messages as { delivery: { status: string; delivered_via?: string } }[];
-		assert.deepStrictEqual(again.map(each => [each.delivery.status, each.delivery.delivered_via]), [['success', 'read']]);
+		const again = read.content('read_messages', 2)?.data.messages as { message_id: string; delivery: { status: string; delivered_via?: string } }[];
+		assert.deepStrictEqual(again.map(each => [each.message_id, each.delivery.status, each.delivery.delivered_via]), readIds.map(id => [id, 'success', 'read']));
+		assert.strictEqual(received(childAlias).filter(each => each.includes('Wait for my messages.')).length, initialPastes, 'the inbox handoff starts no second prompt paste');
 
 		await closePublicAgent(started.data.agent_id);
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });

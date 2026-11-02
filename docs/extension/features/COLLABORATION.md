@@ -81,6 +81,8 @@ tools for the turns after it. Its creation prompt goes after that, as its first 
 A blocked input box consumes the normal attempts. Both paths use RULES-1.3's meaning of delivery; native acceptance
 does not require a terminal Enter effect.
 Report process startup and prompt input separately. Failed prompt submission leaves the started agent available.
+An unverified native prompt remains unconfirmed in its record and human history; it is neither confirmed delivery nor
+a continuing background delivery. Reading its complete record can subsequently deliver it without another paste.
 MCP-2.3 owns the final report when prompt input remains pending after process startup.
 Do not duplicate a confirmed native prompt through the post-start path; uncertainty follows finite at-least-once rules.
 There is no task, task result, child completion report or replay of a creation prompt.
@@ -184,6 +186,8 @@ Do not add protected-storage or authentication protocols to this generated-conte
 Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remains unverified.
 
 ## Change log
+
+- 2026-11-01: D140 keeps unverified native prompt acceptance unconfirmed in machine results and readable history.
 
 - 2026-11-01: 4.1 shows a sender's copy whose result never came back as unconfirmed after its deadline (D132).
 - 2026-11-01: D139 separates structured system receipts for agents from readable Message History text, preserving

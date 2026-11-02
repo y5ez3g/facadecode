@@ -435,7 +435,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 	suite('what this window serves for other windows', () => {
 
 		test('missing, older and future routed tool protocols fail before launching', async () => {
-			for (const protocol of [undefined, 2, TOOL_PROTOCOL + 1]) {
+			for (const protocol of [undefined, 2, 3, TOOL_PROTOCOL + 1]) {
 				const reply = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: {
 					protocol, tool: 'start_agent', arguments: { name: 'child', window_id: 'win-1', location_id: 'loc-1', cli: 'claude' },
 					caller: guestOf(30), callId: 'wrong-version', elapsedMs: 0

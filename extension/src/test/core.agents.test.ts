@@ -197,7 +197,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 	const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once' } as const;
+	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once', promptId: 'm-7' } as const;
 
 	for (const end of ['close', 'exit', 'failed'] as const) {
 		test(`${end}: the first request survives removal and reload without restoring a closed pair`, async () => {
@@ -221,6 +221,7 @@ suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 			await reload.agents.restore();
 			assert.deepStrictEqual([reload.agents.list(), [...reload.execution.pairs]], [[], []]);
 			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.id, id);
+			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.promptId, 'm-7');
 			reload.advance(60 * 60_000);
 			assert.strictEqual(reload.agents.requested(creator, request.requestId), undefined);
 			assert.strictEqual(reload.retained.size, 0, 'expired metadata is removed');
@@ -828,11 +829,13 @@ suite('Agent launches into new worktrees (WORKTREES-2)', () => {
 		let release!: () => void;
 		const gated = setUp({ worktreeGate: new Promise(resolve => release = resolve) });
 		const closing = gated.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'human', worktree: { branch: 'fix' } });
+		const completed = gated.agents.started(closing);
 		await gated.agents.close(closing);
 		release();
 		await settle();
 		assert.strictEqual(gated.created.length, 1, 'the worktree was still made');
 		assert.strictEqual(gated.execution.spawned.length, 0, 'its CLI never starts');
+		assert.deepStrictEqual(await completed, { state: 'closed', worktreeCreated: WORKTREE.path });
 	});
 
 	test('a worktree that cannot be made keeps the pair red with the actual reason (J04, WORKTREES-2.1)', async () => {

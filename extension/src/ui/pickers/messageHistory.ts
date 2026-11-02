@@ -116,6 +116,9 @@ export function recordText(record: MessageRecord, language: string, results: rea
 /** How a record's delivery went, in plain words (UX-2.4): never a reason code or input-effect field. */
 function outcomeOf(record: MessageRecord, language: string): string {
 	const { delivery } = record;
+	if (delivery.status === 'unknown') {
+		return vscode.l10n.t("Facade could not confirm that the agent received the message");
+	}
 	if (delivery.status === 'pending') {
 		return delivery.deadline !== undefined
 			// {0} is the time of day Facade gives up

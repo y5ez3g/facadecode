@@ -11,7 +11,7 @@ import { waitFor } from './util';
 
 const START = { name: 'worker', window_id: 'win-1', location_id: 'loc-1', cli: 'claude' };
 
-suite('Contract: protocol-3 compact results through the real tool boundary', () => {
+suite('Contract: current-protocol compact results through the real tool boundary', () => {
 	let s: Setup;
 	setup(() => s = setUp());
 	teardown(() => s.dispose());
@@ -52,7 +52,7 @@ suite('Contract: protocol-3 compact results through the real tool boundary', () 
 		s.agents.add(lead, runFacts(2, { name: '', lifecycle: 'ended', title: 'CLI details' }), runFacts(3, { name: 'same' }), runFacts(4, { name: 'same' }));
 		const detail = resultOf(await s.call(lead, 'list_agents', { agent: '#a2', details: true }));
 		assert.strictEqual(detail.data.agents.length, 1);
-		assert.deepStrictEqual([detail.data.agents[0].agent_id, detail.data.agents[0].name, detail.data.agents[0].title, detail.data.agents[0].process], ['#a2', '', 'CLI details', 'ended']);
+		assert.deepStrictEqual([detail.data.agents[0].agent_id, detail.data.agents[0].name, detail.data.agents[0].title, detail.data.agents[0].process_state], ['#a2', '', 'CLI details', 'ended']);
 		assert.strictEqual(detail.data.agents[0].created_at, new Date(1002).toISOString());
 		assert.strictEqual(resultOf(await s.call(lead, 'list_agents', { agent: '@same' })).error?.reason, 'ambiguous_reference');
 		assert.strictEqual(resultOf(await s.call(lead, 'list_agents', { agent: '#a2', window_id: 'other' })).error?.reason, 'invalid_argument');

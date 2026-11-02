@@ -174,6 +174,23 @@ const since = (start: number, times: readonly number[]) => times.map(at => at - 
 suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 	useFakeClock();
 
+	test('an unconfirmed native prompt survives a later inbox read without an automatic paste or result loop', async () => {
+		const { service, input } = setUp();
+		const { id } = service.allocate({ from: A, text: 'Original prompt' });
+		service.recordPrompt({ id, from: A, to: B, text: 'Original prompt', initialPrompt: { path: 'native', capability: { state: 'unverified', reason: 'Not confirmed.' } } },
+			{ status: 'unknown', effects: { outcome: 'unknown' }, attempts: 0, via: 'launch', reason: 'submission_unconfirmed' });
+		await sleep(20_000);
+		const before = service.inbox(B, { limit: 100 }).records;
+		assert.deepStrictEqual(before.map(record => record.delivery.status), ['unknown']);
+		service.markDelivered(B, [id]);
+		assert.deepStrictEqual(service.inbox(B, { limit: 100 }).records, []);
+		const delivered = service.inbox(B, { all: true, limit: 100 }).records[0];
+		assert.deepStrictEqual([delivered.delivery.status, delivered.delivery.via, delivered.delivery.effects.outcome], ['success', 'read', 'unknown']);
+		assert.strictEqual(delivered.text, 'Original prompt');
+		assert.strictEqual(delivered.initialPrompt?.capability.state, 'unverified');
+		assert.deepStrictEqual([input.submitted.length, input.entered.length, service.history().length], [0, 0, 1]);
+	});
+
 	test('a usable composer takes the whole message, header and footer around it, on the first attempt: success at once', async () => {
 		const { service, input, stored } = setUp();
 		const result = await settled(service.send({ from: A, to: B, text: 'Review the API.\nThen the tests.', elapsedMs: 0 }));

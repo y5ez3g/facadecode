@@ -94,10 +94,11 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 		const n = this.next++;
 		const facts = runFacts(n, {
 			name: request.name.trim(), cli: request.cli, location: request.location, origin: request.origin, creator: request.creator?.run,
-			root: request.creator?.root ?? runId(n), yolo: true, lifecycle: 'starting', phase: request.worktree ? 'creating_worktree' : 'launching_cli',
+			root: request.creator?.root ?? runId(n), createdAt: this.now(), yolo: true, lifecycle: 'starting', phase: request.worktree ? 'creating_worktree' : 'launching_cli',
 			pid: undefined, startedAt: undefined, tools: 'connecting', activity: 'unknown', reporting: false,
 			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {},
-			...request.requestId !== undefined ? { requestId: request.requestId } : {}
+			...request.requestId !== undefined ? { requestId: request.requestId } : {},
+			...request.promptId !== undefined ? { promptId: request.promptId } : {}
 		});
 		this.runs.set(facts.id, facts);
 		this.starts.set(facts.id, new Deferred());
@@ -184,7 +185,8 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return {
 			id: `m-${n}`, alias: `#m${n}`, kind, from: this.who(kind === 'result' ? 'facade' : request.from), to: this.who(request.to), window: 'win-1', environment: 'local',
 			at: 3000 + n, ...request.replyTo ? { replyTo: request.replyTo } : {}, ...request.callId ? { callId: request.callId } : {}, text: request.text, length: codePoints(request.text), delivery,
-			...request.requestId !== undefined ? { requestId: request.requestId } : {}
+			...request.requestId !== undefined ? { requestId: request.requestId } : {},
+			...request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {}
 		};
 	}
 

@@ -51,7 +51,9 @@ launch path; no synthetic Enter is required. Passing arguments to an unstarted p
 read_messages result that is handed back to the recipient delivers every record it contains (COLLABORATION-3.1).
 Busy/idle transitions or unrelated output are not evidence that this particular instruction was submitted. The adapter
 reports actual effects; uncertainty remains explicit. Never truncate content and report full success.
-Each message has one delivery state: being delivered, delivered or not delivered. There is no separate fetch state.
+Each message has one delivery state: being delivered, delivered, not delivered, or unconfirmed where native prompt
+acceptance is unknown. Unconfirmed native input starts no automatic post-start delivery; an explicit inbox read may
+deliver that same record without another paste. There is no separate fetch state.
 Human notification handoff is defined separately in COLLABORATION-2.3.
 
 ### 1.4 Input protection applies to every attempt
@@ -405,6 +407,8 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
 ## Change log
+
+- 2026-11-01: D140 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.
 
 - 2026-11-01: From the owner-requested release review: 1.4 tries a starting run's input as unknown; 1.5 joins results
   that come together into one paste; 1.9 continues a reloaded window's deliveries within their deadlines (D132).

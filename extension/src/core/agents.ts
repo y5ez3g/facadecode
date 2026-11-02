@@ -394,10 +394,11 @@ export class AgentService implements Agents, Disposable {
 		await run.settled;
 		const facts = this.runs.get(id) === run ? run.facts : undefined;
 		const prompt = run.prompt ? { prompt: run.prompt } : {};
+		const worktree = run.worktree?.folder ? { worktreeCreated: run.worktree.folder } : {};
 		if (!facts) {
-			return { state: 'closed', ...prompt };
+			return { state: 'closed', ...prompt, ...worktree };
 		}
-		return facts.lifecycle === 'running' ? { state: 'running', ...prompt } : { state: 'failed', ...(facts.error ? { error: facts.error.reason } : {}), ...prompt };
+		return facts.lifecycle === 'running' ? { state: 'running', ...prompt, ...worktree } : { state: 'failed', ...(facts.error ? { error: facts.error.reason } : {}), ...prompt, ...worktree };
 	}
 
 	async warmedUp(id: RunId): Promise<void> {
@@ -470,6 +471,7 @@ export class AgentService implements Agents, Disposable {
 			...(byAgent?.label ? { creatorLabel: byAgent.label } : {}),
 			origin: byAgent ? 'agent' : 'human',
 			...(byAgent && request.requestId !== undefined ? { requestId: request.requestId } : {}),
+			...(byAgent && request.promptId !== undefined ? { promptId: request.promptId } : {}),
 			...(request.model !== undefined ? { model: request.model.trim() } : {}),
 			...(request.effort !== undefined ? { effort: request.effort.trim() } : {}),
 			tools: 'not_injected',
@@ -1169,6 +1171,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(typeof meta.creatorLabel === 'string' && meta.creatorLabel ? { creatorLabel: meta.creatorLabel } : {}),
 		origin: meta.origin === 'agent' ? 'agent' : 'human',
 		...(typeof meta.requestId === 'string' && meta.requestId ? { requestId: meta.requestId } : {}),
+		...(typeof meta.promptId === 'string' && /^m-\d+$/.test(meta.promptId) ? { promptId: meta.promptId } : {}),
 		...(typeof meta.model === 'string' ? { model: meta.model } : {}),
 		...(typeof meta.effort === 'string' ? { effort: meta.effort } : {}),
 		...(typeof meta.version === 'string' ? { version: meta.version } : {}),
@@ -1201,6 +1204,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.creator !== undefined ? { creator: facts.creator } : {}),
 		...(facts.creatorLabel !== undefined ? { creatorLabel: facts.creatorLabel } : {}),
 		...(facts.requestId !== undefined ? { requestId: facts.requestId } : {}),
+		...(facts.promptId !== undefined ? { promptId: facts.promptId } : {}),
 		origin: facts.origin,
 		...(facts.model !== undefined ? { model: facts.model } : {}),
 		...(facts.effort !== undefined ? { effort: facts.effort } : {}),

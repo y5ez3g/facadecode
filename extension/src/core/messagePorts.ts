@@ -45,10 +45,12 @@ export interface MessageRecord {
 	readonly length: number;
 	/** The sender's request ID for this send, where it gave one: the same one again answers this record (MCP-1.1, D110). */
 	readonly requestId?: string;
+	/** Evidence of the original startup path, independent of how this message may later be read. */
+	readonly initialPrompt?: { readonly path: 'native' | 'post_start'; readonly capability: CapabilityState };
 	/** The window its header names, where its sender is another window's: what a delivery that goes on after a reload types again. */
 	readonly label?: string;
 	readonly delivery: {
-		readonly status: 'pending' | 'success' | 'failure';
+		readonly status: 'pending' | 'success' | 'failure' | 'unknown';
 		readonly reason?: string;
 		readonly effects: InputEffects;
 		/** Epoch ms when an accepted delivery ends at the latest. */
@@ -89,6 +91,7 @@ export interface SendRequest {
 	readonly id?: string;
 	/** The caller's request ID, kept with the record (MCP-1.1, D110). */
 	readonly requestId?: string;
+	readonly initialPrompt?: MessageRecord['initialPrompt'];
 }
 
 /** The first response to a send (RULES-1.2): success, failure, or accepted with its deadline and current obstacle. */

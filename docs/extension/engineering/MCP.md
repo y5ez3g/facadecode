@@ -1,6 +1,6 @@
 # MCP contract
 
-Layer 4. Protocol **2** defines the target contract. [Rules](../RULES.md) owns effects and
+Layer 4. Protocol **4** defines the target contract. [Rules](../RULES.md) owns effects and
 [Collaboration](../features/COLLABORATION.md) owns message experience. This document does not certify implementation.
 
 | Group | Decides |
@@ -57,7 +57,7 @@ narrative headline. Keep the envelope below, meaningful field names, all actual 
 Public agent/message identities use their directly callable short references where known, with the full ID as a fallback;
 do not repeat alias/reference variants. Internal routing and stored records retain their complete identities. Project
 only at the caller's public result boundary, after cross-window routing and caller-side file transfer. This contract
-is tool protocol 3. All callers use this contract; earlier tool protocols fail explicitly before effects, with no
+is tool protocol 4. All callers use this contract; earlier tool protocols fail explicitly before effects, with no
 parallel result format or automatic downgrade.
 
 Do not echo ordinary input bodies, routine character counts or requested key arrays in operation receipts. Preserve
@@ -87,6 +87,8 @@ type Result<T> = {
 ```
 
 Failure sets MCP isError; accepted means finite work continues, not success. Unknown is not false/no effect.
+Process and tools facts use `process_state` and `tools_state` consistently across starts, lists, repeated requests and
+receipts. Activity remains separate; idle, delivery and input writes never establish task completion.
 For native initial-prompt acceptance, use confirmed outcome without inventing terminal text/Enter writes; omit those
 optional fields when that path did not use them. RULES-1.3 defines delivery for every path.
 Agent and message IDs identify public objects; no public operation-query identity is required.
@@ -180,7 +182,13 @@ overrides honestly. Do not substitute another CLI, path or conversation.
 
 Return agent_id/name, window/environment, location, creator/tree, yolo, process_state, tools_state and
 requested/observed model/effort where known. For prompt include message_id, the native or post-start path with its
-capability state, and pending/success/failure with actual input effects under RULES-1.3 and MCP-1.2.
+capability state, and pending/success/failure/unknown with actual input effects under RULES-1.3 and MCP-1.2.
+An unverified native prompt has unknown acceptance, with no invented pending delivery or promised later receipt.
+Its message record retains that uncertainty and can be delivered by an explicit inbox read without another paste.
+The run retains its original prompt message ID. A repeated start returns that record's current outcome, or explicit
+unknown where the record is absent; it never replays the prompt or uses replacement prompt text from the retry.
+Startup closed midway retains any known created-worktree path in its final effects and reports `closed:true` with
+`process_state:unknown`. Closure alone does not establish that no process was started or that it exited.
 For a delivered post-start prompt, include `delivered_via` so terminal submission and an inbox read remain distinct.
 COLLABORATION-2.2 owns native/post-start prompt selection and budget start.
 If the process has started but prompt delivery is still pending, return that separation and later report the final
@@ -224,6 +232,8 @@ Do not stop children. Already-ended known runs can return already_ended; missing
 while the agent's process is being started answers how that start's cleanup ended, never that none started (D131).
 Return agent_id, actual process/cleanup state and effects. Accepted/unknown cleanup is not proof of exit, but does not
 restore a Stopping card. Self-stop may end the caller before it receives a result; no public recovery tool is added.
+Once removal occurred, `closed:true` records the closed card and terminal. Continuing cleanup is accepted; completed
+but unconfirmed cleanup fails with `termination_unconfirmed` and partial effects, never a successful stop.
 Errors go to the invoking agent, with no automatic human popup. External location deletion is observed separately.
 
 ## 4 Messages and history
@@ -392,6 +402,9 @@ No migration guide for already-published user skills is required: this is the fi
 [Verification](VERIFICATION.md) records tests actually run; this contract does not assert them passed.
 
 ## Change log
+
+- 2026-11-01: D140 makes native prompt uncertainty and unconfirmed termination explicit, preserves prompt outcomes on
+  repeated starts, and unifies process/tool field names under tool protocol 4.
 
 - 2026-11-01: From the owner-requested release review: 1.1 retries a cross-window send whose answer was lost through the
   window holding it; 1.2 reports refusals before any effect as no effect; 3.2 answers a stop during a start with its

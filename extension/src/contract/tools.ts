@@ -735,7 +735,7 @@ class ToolService {
 			...args.model !== undefined ? { model: args.model } : {},
 			...args.effort !== undefined ? { effort: args.effort } : {},
 			...args.worktree ? { worktree: { branch: args.worktree.branch, baseRef: args.worktree.base_ref } } : {},
-			...prompt ? { prompt: prompt.text, promptLine: args.prompt!.split(/\r\n?|\n/).find(line => line.trim()) ?? args.prompt! } : {},
+			...prompt ? { promptId: prompt.id, prompt: prompt.text, promptLine: args.prompt!.split(/\r\n?|\n/).find(line => line.trim()) ?? args.prompt! } : {},
 			origin: 'agent',
 			creator: { run: caller.id, root: caller.root, label: [caller.name, caller.alias].filter(Boolean).join(' ') },
 			...args.request_id !== undefined ? { requestId: args.request_id } : {}
@@ -774,7 +774,8 @@ class ToolService {
 	 */
 	private startedBefore(facts: RunFacts, args: ToolArguments['start_agent']): Outcome {
 		const present = this.deps.agents.get(facts.id);
-		const data = { ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true };
+		const prompt = facts.promptId !== undefined ? this.originalPrompt(facts) : undefined;
+		const data = { ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true, ...prompt ? { prompt } : {} };
 		const before = `Request ${args.request_id} started ${referenceOf(facts)} (${facts.id}) already, at ${isoOf(facts.createdAt)}: nothing was started again.`;
 		const effects: Effects = { outcome: 'none', agent_id: facts.id };
 		if (!present && facts.lifecycle !== 'ended') {
@@ -798,7 +799,7 @@ class ToolService {
 		const { run, args } = start;
 		const facts = this.deps.agents.get(run);
 		const shown = facts ? `${referenceOf(facts)} (${run})` : `${JSON.stringify(args.name.trim())} (${run})`;
-		const created = args.worktree && facts && facts.location !== args.location_id ? facts.cwd : undefined;
+		const created = outcome.worktreeCreated ?? (args.worktree && facts && facts.location !== args.location_id ? facts.cwd : undefined);
 		const effects = (outcome: Effects['outcome']): Effects => defined({ outcome, agent_id: run, worktree_created: created });
 		if (outcome.state === 'running') {
 			if (facts) {
@@ -819,8 +820,26 @@ class ToolService {
 				headline: `${message} Its card stays, red, until it is closed.`
 			};
 		}
-		const message = `${shown} was closed before its process started.`;
+		const message = `${shown} was closed before startup completed.`;
 		return { result: failure({ code: 'FAILED', reason: 'ended', message }, this.startData(start, facts, 'closed'), effects('unknown')) };
+	}
+
+	/** A retry observes the original prompt, including its later inbox delivery, without replaying or replacing it. */
+	private originalPrompt(facts: RunFacts): Data {
+		const record = this.deps.messages.inbox(facts.id, { ids: [facts.promptId!], limit: 1 }).records[0];
+		if (!record || record.from.run !== facts.creator || !record.initialPrompt) {
+			return { message_id: facts.promptId, status: 'unknown', reason: 'prompt_unrecorded', effects: { outcome: 'unknown' } };
+		}
+		const { delivery } = record;
+		const error = delivery.status === 'failure' ? sendFailureOf(delivery.reason) : undefined;
+		return defined({
+			message_id: record.id, ...record.initialPrompt, status: delivery.status,
+			delivered_via: delivery.status === 'success' ? delivery.via : undefined,
+			reason: error?.reason ?? (delivery.status === 'unknown' ? delivery.reason : undefined), message: error?.message,
+			obstacle: delivery.status === 'pending' ? delivery.reason : undefined,
+			deadline: delivery.status === 'pending' && delivery.deadline !== undefined ? isoOf(delivery.deadline) : undefined,
+			effects: delivery.effects
+		});
 	}
 
 	/**
@@ -844,7 +863,8 @@ class ToolService {
 			creator: caller.id,
 			root: facts?.root ?? caller.root,
 			yolo: facts?.yolo,
-			process_state: state,
+			process_state: state === 'closed' ? 'unknown' : state,
+			closed: state === 'closed' ? true : undefined,
 			tools_state: facts?.tools,
 			requested_model: args.model,
 			requested_effort: args.effort
@@ -881,7 +901,8 @@ class ToolService {
 			const effects: Effects = { outcome: verified ? 'confirmed' : 'unknown' };
 			let record: MessageRecord;
 			try {
-				record = this.deps.messages.recordPrompt({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, callId: call.callId }, { status: 'success', effects, attempts: 0, via: 'launch', deliveredAt: this.now() });
+				record = this.deps.messages.recordPrompt({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, callId: call.callId, initialPrompt: base },
+					{ status: verified ? 'success' : 'unknown', effects, attempts: 0, via: 'launch', ...verified ? { deliveredAt: this.now() } : { reason: 'submission_unconfirmed' } });
 			} catch (err) {
 				// The CLI has its prompt; only its record is missing, and the start stands (MCP-2.3)
 				const failed = errorResult(err);
@@ -891,7 +912,7 @@ class ToolService {
 				};
 			}
 			return {
-				data: { message_id: record.id, alias: record.alias, ...base, status: 'success', effects },
+				data: { message_id: record.id, alias: record.alias, ...base, status: verified ? 'success' : 'unknown', effects },
 				headline: verified
 					? `Its prompt ${record.alias} went in with the CLI's native start argument, which its adapter verified.`
 					: `Its prompt ${record.alias} went in with the CLI's native start argument; that mapping is ${capability.state}, so whether the CLI accepted the prompt is not known.`
@@ -903,7 +924,7 @@ class ToolService {
 			// but not past the call's own wait, which answers the caller in time; the prompt then waits behind that typing (MCP-1.3)
 			const warmed = this.deps.agents.warmedUp(run);
 			await (start.answerBy === Infinity ? warmed : within(warmed, Math.max(0, start.answerBy - Date.now())));
-			sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId });
+			sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId, initialPrompt: base });
 		} catch (err) {
 			const failed = errorResult(err, { effects: { outcome: 'unknown' } });
 			return {
@@ -1003,7 +1024,7 @@ class ToolService {
 				result: answerOf(compactResult('stop_agent', final.result)).structured });
 		}).catch(err => this.deps.log?.(`Could not report the stop of ${target.alias} to ${caller.alias}: ${errorText(err)}`));
 		return {
-			result: accepted({ agent_id: target.id, reference: referenceOf(target), process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
+			result: accepted({ agent_id: target.id, reference: referenceOf(target), closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
 			headline: `Closed ${shown}'s card and terminal; its process is still being ended, and that outcome is ${LATER}.`
 		};
 	}
@@ -1128,7 +1149,7 @@ class ToolService {
 
 	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1, D110). */
 	private sentBefore(record: MessageRecord, args: ToolArguments['send_message']): Outcome {
-		const status = record.delivery.status === 'pending' ? 'accepted' : record.delivery.status;
+		const status = record.delivery.status === 'pending' ? 'accepted' : record.delivery.status === 'unknown' ? 'failure' : record.delivery.status;
 		return sendOutcome(record, status, { shown: shownOf(record.to), requestId: args.request_id });
 	}
 
@@ -1416,7 +1437,7 @@ function sendOutcome(record: MessageRecord, status: SendResult['status'], how: {
 
 function stopped(target: RunFacts, cleanup: Awaited<ReturnType<Agents['close']>>): Outcome {
 	const shown = `${referenceOf(target)} (${target.id})`;
-	const data = (process: string) => ({ agent_id: target.id, reference: referenceOf(target), process_state: process, cleanup });
+	const data = (process: string) => ({ agent_id: target.id, reference: referenceOf(target), closed: true, process_state: process, cleanup });
 	switch (cleanup) {
 		case 'terminated':
 			return { result: success(data('ended'), { outcome: 'confirmed', agent_id: target.id }), headline: `Stopped ${shown}: its card and terminal closed and its process ended. Its children keep running.` };
@@ -1427,7 +1448,7 @@ function stopped(target: RunFacts, cleanup: Awaited<ReturnType<Agents['close']>>
 		case 'not_started':
 			return { result: success(data('not_started'), { outcome: 'confirmed', agent_id: target.id }), headline: `Stopped ${shown} before its process started: its card and terminal closed and it will not start.` };
 		case 'unconfirmed':
-			return { result: success(data('unknown'), { outcome: 'partial', agent_id: target.id }), headline: `Closed ${shown}'s card and terminal; the end of its process could not be confirmed.` };
+			return { result: failure({ code: 'FAILED', reason: 'termination_unconfirmed', message: 'The card and terminal closed, but process exit could not be confirmed.' }, data('unknown'), { outcome: 'partial', agent_id: target.id }), headline: `Closed ${shown}'s card and terminal; the end of its process could not be confirmed.` };
 		case 'failed':
 			return { result: failure({ code: 'FAILED', reason: 'cleanup_failed', message: `${shown}'s card and terminal closed, but its process could not be ended.` }, data('unknown'), { outcome: 'partial', agent_id: target.id }) };
 	}

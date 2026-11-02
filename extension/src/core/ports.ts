@@ -340,6 +340,8 @@ export interface RunMeta {
 	readonly origin?: 'human' | 'agent';
 	/** The creator's request ID for its start, where it gave one (MCP-1.1, D110). */
 	readonly requestId?: string;
+	/** The original creation prompt's message ID, retained for start-result lookup without replay. */
+	readonly promptId?: string;
 	readonly model?: string;
 	readonly effort?: string;
 	readonly version?: string;
@@ -525,6 +527,8 @@ export interface RunFacts {
 	readonly origin: 'human' | 'agent';
 	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1, D110). */
 	readonly requestId?: string;
+	/** The original creation prompt's message ID; no new prompt is inferred from a repeated request. */
+	readonly promptId?: string;
 	/** The model and effort this start asked for, where it asked (CLIS-1.4). */
 	readonly model?: string;
 	readonly effort?: string;
@@ -628,6 +632,7 @@ export interface LaunchRequest {
 	readonly creator?: { readonly run: RunId; readonly root: RunId; readonly label?: string };
 	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D110). */
 	readonly requestId?: string;
+	readonly promptId?: string;
 	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
 	readonly prompt?: string;
 	/** The first line of the caller's own prompt text, shown in the card's hover. */
@@ -638,6 +643,8 @@ export interface LaunchRequest {
 export interface StartOutcome {
 	readonly state: 'running' | 'failed' | 'closed';
 	readonly error?: string;
+	/** A folder created by this launch, also when its card was closed before startup settled. */
+	readonly worktreeCreated?: string;
 	/** How the creation prompt went in, where one was asked for. */
 	readonly prompt?: LaunchPlan['prompt'];
 }
