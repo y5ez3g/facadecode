@@ -132,7 +132,7 @@ NTFS file IDs as JavaScript numbers, fixed in `3229090d` and then passing five r
 passes 12 documents, 185 rules and 80 links. Not run: macOS (the test Mac was offline), real CLIs (their test
 credentials are on that Mac), Remote-SSH, WSL, containers and the minimum VS Code 1.105.
 
-The release review's test round of the same evening, at the owner's request (`feature/77-release-review`, D139-D146),
+The release review's test round of the same evening, at the owner's request (`feature/77-release-review`, D139-D147),
 each run's credentials read into that run alone and every real CLI in temporary state. Real CLIs, each starting a second
 of its kind with a first task and exchanging messages pasted and submitted, no approval asked for Facade's tools
 (`FACADE_IT_ONLY=real`), YOLO off: on Windows x64 Claude Code 2.1.316 (Haiku), Codex 0.166.0, Pi 1.4.0 and OpenCode
@@ -143,9 +143,10 @@ Claude Code 2.1.316, Codex 0.166.0 and Pi 1.4.0. They found D139 (Claude Code's 
 Code terminal without its extension installs it and waits for Enter at a welcome - with D144, the Windows journey passes
 with neither the test's own switch nor its setting, and the isolated editor got no extension. Muse Code 1.4.14, signed
 in by the owner in a temporary home (muse-spark-1.3 at low effort): with YOLO off it first set up its Windows sandbox,
-which the test cancelled, and exited; with YOLO on it ran the person's task with its MCP turned off by its own gate
-`mcp_release` - off as well in the owner's own installation - so it had no Facade tools: a limit of Muse Code, not run
-further.
+which the test cancelled, and exited; with YOLO on it ran the person's task with no Facade tools, its MCP turned off
+over the project `.mcp.json` entry - the owner reported Muse Code had worked with them, and Muse Code started on
+variants of that entry, sent nothing, showed its `mode` alone made Muse Code refuse it (D147); with D147 the journey
+passed with YOLO on.
 
 Remote-SSH passed its four scenarios from a macOS client to a Windows x64 host (26 checks), once the runner gave each
 scenario a Facade root and profiles of its own, and to a Linux x64 host (26 checks, again at the final commit), its run
@@ -177,9 +178,11 @@ passed compilation, 1101 units (6 pending), the translations (300 runtime texts,
 win32-x64 and window packages, the 11 package checks and the integration suite (40 checks in its eight editor runs, none
 failing); Linux x64 (Ubuntu, under xvfb) compilation, 1099 units (7 pending), the translations, the linux-x64 and window
 packages, the 11 package checks and the integration suite (40 checks); macOS arm64 compilation, 1100 units (6 pending),
-the translations, the darwin-arm64 and window packages, the 11 package checks and the integration suite (40 checks). Not
-run: the scenarios with a suite in a container window, a compatible editor, Remote-SSH from a Linux or Windows client,
-real CLIs other than those named on each platform.
+the translations, the darwin-arm64 and window packages, the 11 package checks and the integration suite (40 checks).
+With D147 at `a8955e68`, Windows x64 passed compilation, 1101 units (6 pending), the translations and the integration
+suite (40 checks), and Linux x64 compilation, 1099 units (7 pending) and the integration suite (40 checks); macOS was
+not run again, as D147 changes the Windows launch alone. Not run: the scenarios with a suite in a container window, a
+compatible editor, Remote-SSH from a Linux or Windows client, real CLIs other than those named on each platform.
 
 The implementer investigates concrete mechanisms and brings engineering changes with evidence to the assigned reviewer.
 A failed proof cannot be disguised as an implemented heuristic or automatic product-scope reduction. If it cannot be solved in
@@ -414,7 +417,7 @@ for review, not acceptance evidence.
 
 ## Change log
 
-- 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D146).
+- 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D147).
 - 2026-11-01: Evidence that named this release's packages by the version an earlier commit wrote names them as this release's: its version is 0.0.2 (D142).
 - 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
