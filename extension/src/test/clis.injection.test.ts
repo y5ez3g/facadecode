@@ -200,7 +200,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([without.args.includes('--settings'), without.warmUp], [false, undefined]);
 	});
 
-	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows, through cmd.exe, the project\'s .mcp.json entry instead, its references empty where unset', () => {
+	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows too, but through cmd.exe the project\'s .mcp.json entry instead, its references empty where unset and with no mode (D147)', () => {
 		const planned = plan({ cli: 'muse', tools, prompt: 'Fix the build' });
 		const references = { ELECTRON_RUN_AS_NODE: '${FACADE_ELECTRON_RUN_AS_NODE}', FACADE_RUN: '${FACADE_RUN}', FACADE_PTYD: '${FACADE_PTYD}', FACADE_AGENT: '${FACADE_AGENT}' };
 		// Optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (D107)
@@ -209,9 +209,13 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		// Each reference names a variable the CLI's environment carries; the runtime's under a name no other program reads
 		assert.deepStrictEqual([planned.env.FACADE_ELECTRON_RUN_AS_NODE, planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.FACADE_AGENT, planned.env.ELECTRON_RUN_AS_NODE], ['1', 'run-1', '/tmp/ptyd.sock', '#a1', undefined]);
 		assert.deepStrictEqual(planned.prompt?.path, 'native');
-		// On Windows its launcher goes through cmd.exe, which cannot carry the entry: it is a shared project entry there
-		const windows = museAdapter.tools!.inject({ ...tools, platform: 'win32' });
-		assert.deepStrictEqual([windows.args, windows.project[0]], [undefined, { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' }, mode: 'optional' } }]);
+		// On Windows its installed native program, which Facade starts directly, takes the entry as an argument too, as its hooks' (D147)
+		const native = museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: false });
+		assert.deepStrictEqual([native.args, native.project.map(each => each.path)], [museAdapter.tools!.inject({ ...tools, platform: 'darwin' }).args, [path.join('.agents', 'skills', 'facade', 'SKILL.md')]]);
+		// Through cmd.exe, which cannot carry it, a shared project entry - with no mode: Muse Code 1.4.14 takes a project's .mcp.json with
+		// one for a configuration error, and turns off all its MCP servers
+		const windows = museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: true });
+		assert.deepStrictEqual([windows.args, windows.project[0]], [undefined, { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } } }]);
 		assert.deepStrictEqual(windows.env, { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' });
 	});
 

@@ -40,6 +40,8 @@ export interface ToolsInput {
 	readonly runDir: string;
 	/** The platform the CLI runs on, where how it is given the tools depends on it. */
 	readonly platform?: NodeJS.Platform;
+	/** Whether its program starts through cmd.exe on Windows, which cannot carry an argument's JSON (CLIS-1.2). */
+	readonly throughCmd?: boolean;
 }
 
 /**

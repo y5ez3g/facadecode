@@ -301,7 +301,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		...input.model !== undefined ? adapter.groups.model ?? [] : [],
 		...input.effort !== undefined ? adapter.groups.effort ?? [] : []
 	], adapter.aliases);
-	let injection = input.tools ? adapter.tools?.inject({ ...input.tools, platform }) : undefined;
+	let injection = input.tools ? adapter.tools?.inject({ ...input.tools, platform, throughCmd: target.throughCmd }) : undefined;
 	let tools: PlannedLaunch['tools'] = injection ? { state: 'injected' } : { state: 'not_injected' };
 	// The tools' variables on the person's own, where a CLI's variable must keep theirs: one that cannot be read keeps theirs whole,
 	// and the CLI starts without the tools rather than without the person's configuration (CLIS-2.2)
