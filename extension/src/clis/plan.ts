@@ -197,6 +197,12 @@ export function discoverEntry(entry: CatalogEntry, destination: DestinationEnvir
 	if (found.problem !== undefined) {
 		return { entry, available: false, problem: found.problem, said: found.said, ...!entry.path ? { notInstalled: true } : {} };
 	}
+	// A line of it Facade does not support, as its installation names its version: offered as unavailable, saying how to update
+	const version = entry.adapter.refusesVersion ? installedVersionOf(entry.adapter.id, found.executable)?.version : undefined;
+	const refused = version === undefined ? undefined : entry.adapter.refusesVersion?.(version);
+	if (refused) {
+		return { entry, available: false, problem: refused.problem, said: refused.said };
+	}
 	return { entry, available: true, executable: found.executable, env };
 }
 
@@ -271,8 +277,12 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		throw new CliPlanError(found.problem, 'not_found', found.said);
 	}
 	const target = targetOf(entry, found.executable, env, platform, input.cwd);
-	// The installed version, as its installation names it: kept with the launch, and deciding a group an earlier line lacks
+	// The installed version, as its installation names it: kept with the launch; a line of it Facade does not support is not started
 	const version = installedVersionOf(adapter.id, found.executable)?.version;
+	const refused = version === undefined ? undefined : adapter.refusesVersion?.(version);
+	if (refused) {
+		throw new CliPlanError(refused.problem, 'unsupported', refused.said);
+	}
 	if (input.resume && (!input.resume.sessionId || input.resume.sessionId.includes('\0') || (!entry.custom && !adapter.groups.resume))) {
 		throw new CliPlanError(`${adapter.displayName} cannot resume this exact conversation`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
 	}
@@ -312,8 +322,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		}
 		const arguments_ = [...active?.args ?? [], ...invocation(adapter.groups, configured, {
 			yolo: input.yolo, resume: !!input.resume && !entry.custom, session: !!sessionId,
-			connect: active !== undefined && (version === undefined || adapter.connectsAt?.(version) !== false),
-			model: input.model !== undefined, effort: input.effort !== undefined, prompt: false
+			connect: active !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: false
 		}, { ...values, ...active?.values })];
 		// Compose native identity with the complete tool settings. A second --settings must not erase either integration.
 		const integration = input.sessionFile && input.sessionHook ? adapter.sessionIntegration?.({

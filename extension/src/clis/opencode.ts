@@ -169,8 +169,12 @@ export const openCodeAdapter: CliAdapter = {
 		yoloOn: ['--auto'],
 		prompt: ['--prompt', '${prompt}']
 	},
-	// --standalone is its 2.x line's: 1.x has no background service to stay away from, and refuses the option (D78, D140)
-	connectsAt: version => Number(version.split('.')[0]) >= 2,
+	// Its 1.x line, npm's opencode-ai, sends no activity reports, refuses --standalone and has an input box no reader of Facade's
+	// knows, so that no message reaches it: refused, with how to update, never started (D145)
+	refusesVersion: version => Number(version.split('.')[0]) < 2 ? {
+		problem: `OpenCode ${version} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli`,
+		said: { kind: 'opencode_1x', values: [version] }
+	} : undefined,
 	// Its interface takes no model or effort option; its configuration's model applies
 	takes: { model: false, effort: false },
 	values: () => ({}),

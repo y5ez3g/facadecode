@@ -282,6 +282,7 @@
 	"Deleted worktree \"{0}\", but Git left its folder {1} behind.": "作業ツリー \"{0}\" を削除しましたが、Git はそのフォルダー {1} を残しました。",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "このウィンドウの Facade Code の記録が破損しているため、ここではエージェントを復元できません。このウィンドウを閉じてフォルダーまたはワークスペースを開き直すか、{0} を再起動してください。",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0} は cmd.exe 経由で実行されますが、cmd.exe は UNC フォルダー {1} では実行できません。{2}.path を CLI 自身のプログラムまたは Node エントリ ポイントに設定してください",
+	"OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli": "OpenCode {0} はサポートされていません。Facade Code には OpenCode 2 以降が必要です。npm の opencode-ai を @opencode/cli に置き換えてください: npm uninstall -g opencode-ai を実行してから npm install -g @opencode/cli を実行します",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0} は Node スクリプトですが、それを実行する Node が PATH にありません",
 	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "信頼: ホームフォルダー、その親フォルダー、ファイルシステムのルートには付与しません。CLI がターミナルで確認します",
 	"Could not restore {0} pinned agents. Their cards show why.": "ピン留めされた {0} 個のエージェントを復元できませんでした。理由は各カードに表示されます。",

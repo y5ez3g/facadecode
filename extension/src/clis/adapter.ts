@@ -6,6 +6,7 @@
 // groups, vendor flags and quirks, which no setting exposes - and states its capabilities as supported, unavailable or
 // unverified with the reason, never more than the evidence holds.
 
+import type { CliSaid } from './config';
 import type { Environment } from './environment';
 import type { Capability, ToolsIntegration } from './tools';
 import type { LaunchTarget } from './executable';
@@ -186,10 +187,10 @@ export interface CliAdapter {
 	readonly command: string;
 	readonly groups: Groups;
 	/**
-	 * Whether its `connect` group applies to a run of its installed version `version` (CLIS-3.2), where an earlier line of it has no
-	 * such option. Where this is absent, or no version is known, it applies.
+	 * Why its installed version `version` is not started (CLIS-1.1), for a line of it Facade does not support: refused where new starts
+	 * are offered it and at a start alike, with how to update. Where this is absent, or no version is known, every version starts.
 	 */
-	connectsAt?(version: string): boolean;
+	refusesVersion?(version: string): { readonly problem: string; readonly said: CliSaid } | undefined;
 	/**
 	 * Other spellings its CLI takes for an option of its groups - a short form, an alias - by that option: an argument spelled so is the
 	 * same option, refused where Facade sets it and replaced where an explicit choice sets it (CLIS-1.4, 3.1).

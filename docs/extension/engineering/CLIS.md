@@ -29,7 +29,9 @@ dated observations; an old probe is not current-platform certification.
 Use this order, then custom entries in configuration order. `.enabled:false` hides a built-in from new starts, never
 stops its runs. Recompute on relevant settings/PATH changes, picker/discovery request, and immediately before launch.
 Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or modifying
-settings.
+settings. A line of a CLI Facade does not support, known by the version its installation names, is unavailable for new
+starts and refused at a start, saying how to update: OpenCode's 1.x line, a program of npm's `opencode-ai` (D145). A
+version no installation file names is started.
 
 ### 1.2 Executable and environment
 
@@ -179,7 +181,7 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
 | Antigravity | Project plugin `.agents/plugins/facade`, shared | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
 | Muse Code | Per-run `-c mcpServers.facade`; on Windows a `facade` entry merged into the project's `.mcp.json`, shared | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
-| OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` on its 2.x line - not for a program of npm's `opencode-ai`, its 1.x line, which has no background service and refuses it (D140) | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
+| OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
 | Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
 
 These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
@@ -216,8 +218,8 @@ authentication mechanism is introduced.
 Support the existing OSC 7501 adapter where verified: `working` → working; `idle|done|blocked` → not_working; `error` →
 known error; `clear`, reset or pending probe → unknown. Activity reporting is verified for a run when that run's CLI
 answers the OSC 7501 capability probe or sends valid reports, independent of CLI version; CLI-specific quirks remain
-version-scoped evidence. OpenCode reports from its 2.x line; OpenCode 1.x sends no reports, so its runs show unavailable
-activity (D78). Ignore worker reports carrying a distinct worker ID. Respond to capability probes only for
+version-scoped evidence. OpenCode reports from its 2.x line; its 1.x line, which sends no reports, is not started
+(D78, D145). Ignore worker reports carrying a distinct worker ID. Respond to capability probes only for
 protocols implemented by the PTY adapter. A run is still starting, green with its startup stage, until its CLI first
 shows its activity - a valid report or, where its screen is read, a state its reader knows - for at most 20 s from its
 process start, a reloaded window counting from that start too (D81). Past that bound, a missing reliable activity
@@ -484,6 +486,9 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-01: 1.1 and 2.3 refuse OpenCode's 1.x line with how to update, at the owner's decision, and 2.2 gives every
+  OpenCode run with Facade's tools `--standalone` again: started without it, 1.19.5 took no message (D145, superseding
+  D140).
 - 2026-11-01: 1.2 keeps Claude Code from installing its VS Code extension, whose welcome waited for Enter, at the owner's
   request (D144).
 - 2026-11-01: 2.2 gives OpenCode `--standalone` on its 2.x line alone: its 1.x line refused it and did not start (D140).
