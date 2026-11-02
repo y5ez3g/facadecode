@@ -271,6 +271,8 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		throw new CliPlanError(found.problem, 'not_found', found.said);
 	}
 	const target = targetOf(entry, found.executable, env, platform, input.cwd);
+	// The installed version, as its installation names it: kept with the launch, and deciding a group an earlier line lacks
+	const version = installedVersionOf(adapter.id, found.executable)?.version;
 	if (input.resume && (!input.resume.sessionId || input.resume.sessionId.includes('\0') || (!entry.custom && !adapter.groups.resume))) {
 		throw new CliPlanError(`${adapter.displayName} cannot resume this exact conversation`, 'unsupported', { kind: 'resume_unsupported', values: [adapter.displayName] });
 	}
@@ -310,7 +312,8 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		}
 		const arguments_ = [...active?.args ?? [], ...invocation(adapter.groups, configured, {
 			yolo: input.yolo, resume: !!input.resume && !entry.custom, session: !!sessionId,
-			connect: active !== undefined, model: input.model !== undefined, effort: input.effort !== undefined, prompt: false
+			connect: active !== undefined && (version === undefined || adapter.connectsAt?.(version) !== false),
+			model: input.model !== undefined, effort: input.effort !== undefined, prompt: false
 		}, { ...values, ...active?.values })];
 		// Compose native identity with the complete tool settings. A second --settings must not erase either integration.
 		const integration = input.sessionFile && input.sessionHook ? adapter.sessionIntegration?.({
@@ -367,7 +370,6 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	const runEnv = runEnvironment(started, input.alias, platform);
 	if (adapter.sessionIdentity && input.sessionFile) { runEnv[SESSION_FILE_VARIABLE] = input.sessionFile; }
 	Object.assign(runEnv, integration?.env);
-	const version = installedVersionOf(adapter.id, found.executable)?.version;
 	return {
 		...integration?.files ? { files: integration.files } : {},
 		cli: adapter.id,

@@ -177,7 +177,7 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
 | Antigravity | Project plugin `.agents/plugins/facade`, shared | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
 | Muse Code | Per-run `-c mcpServers.facade`; on Windows a `facade` entry merged into the project's `.mcp.json`, shared | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
-| OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
+| OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` on its 2.x line - not for a program of npm's `opencode-ai`, its 1.x line, which has no background service and refuses it (D140) | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
 | Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
 
 These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
@@ -482,6 +482,7 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-01: 2.2 gives OpenCode `--standalone` on its 2.x line alone: its 1.x line refused it and did not start (D140).
 - 2026-11-01: 3.3 keys Claude Code's trust on Windows as Claude Code 2.1.316 reads it there - the folder with `.git` at or
   above the start folder, a linked worktree's own, spelled as given - found by the release review's real-CLI run (D139).
 - 2026-11-01: From the owner-requested release review: 1.2 takes the host environment as VS Code's terminal does, without

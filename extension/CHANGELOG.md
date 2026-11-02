@@ -25,6 +25,7 @@ Agents that work together, six native CLIs, and saved conversations.
 - **Fixed on Windows.** Closing an agent, or several agents ending at once, could crash the background process that keeps agents running, which ended every agent in every window.
 - **Safer worktree deletion.** Deleting a worktree now also closes agents working in its subfolders first. On Windows, a worktree that contains a link to another folder is not deleted with a Git older than 2.54, which would delete the linked folder's files too; long paths are handled, and Facade says when Git leaves the folder behind.
 - **Claude Code on Windows starts without its trust question.** Facade now trusts the folder as Claude Code on Windows names it - the drive and folders as written, a worktree as itself - so agents no longer wait at "Do you trust this folder?" in new folders and worktrees.
+- **OpenCode 1.x starts.** OpenCode's 1.x line (npm's `opencode-ai`) is no longer given `--standalone`, an option only its 2.x line has, which made it exit at once.
 - **Agents start with a clean environment.** Agents get the environment a VS Code terminal gets, without VS Code's internal variables or those of another agent session Facade Code was opened from.
 - **Steadier after reloads.** Messages on their way when a window reloads are still delivered, or their senders are told; when the background process that keeps agents running is slow to answer, Facade waits for it instead of starting a second one; and a window keeps trying until every one of its agents shows.
 

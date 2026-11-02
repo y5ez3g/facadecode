@@ -169,6 +169,8 @@ export const openCodeAdapter: CliAdapter = {
 		yoloOn: ['--auto'],
 		prompt: ['--prompt', '${prompt}']
 	},
+	// --standalone is its 2.x line's: 1.x has no background service to stay away from, and refuses the option (D78, D140)
+	connectsAt: version => Number(version.split('.')[0]) >= 2,
 	// Its interface takes no model or effort option; its configuration's model applies
 	takes: { model: false, effort: false },
 	values: () => ({}),

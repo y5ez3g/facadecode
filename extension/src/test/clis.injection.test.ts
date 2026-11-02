@@ -249,6 +249,38 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([without.args.includes('--standalone'), without.env.OPENCODE_CONFIG_CONTENT], [false, theirs.host.OPENCODE_CONFIG_CONTENT]);
 	});
 
+	// OpenCode 1.18.34, npm's `opencode-ai`, printed its usage and exited 1 at --standalone in the release review's real-CLI run (D140)
+	test('OpenCode\'s 1.x line, known by the npm package its program is in, gets no --standalone - it has no background service - and keeps its tools; 2.x and an unknown one get it (D78)', () => {
+		const installed = (folder: string, name: string, version: string) => {
+			const pkg = path.join(temp.dir, folder, 'node_modules', ...name.split('/'));
+			program(path.join(pkg, 'bin'), 'opencode');
+			fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name, version }));
+			return path.join(pkg, 'bin', 'opencode');
+		};
+		const at = (file: string) => (input: Partial<PlanInput>) => planLaunch(catalogOf(name => name === 'facade.opencode.path' ? file : undefined), { alias: '#a1', cwd, yolo: false, cli: 'opencode', ...input }, destination);
+		const first = at(installed('one', 'opencode-ai', '1.18.34'))({ tools });
+		assert.deepStrictEqual([first.args, first.version, first.injection !== undefined, JSON.parse(first.env.OPENCODE_CONFIG_CONTENT).mcp.facade.type], [[], '1.18.34', true, 'local']);
+		const second = at(installed('two', '@opencode/cli', '2.2.4'))({ tools });
+		assert.deepStrictEqual([second.args, second.version], [['--standalone'], '2.2.4']);
+		// Another package's folder, or none: the current line's option
+		const unknown = at(installed('other', 'opencode-wrapper', '1.0.0'))({ tools });
+		assert.deepStrictEqual([unknown.args, unknown.version], [['--standalone'], undefined]);
+		assert.deepStrictEqual(plan({ cli: 'opencode', yolo: false, tools }).args, ['--standalone']);
+	});
+
+	// npm's shim on Windows, as `npm install -g @opencode/cli` writes it, read for the program it runs
+	(process.platform === 'win32' ? test : test.skip)('on Windows OpenCode\'s version is read through npm\'s shim, from the package of the program it runs', () => {
+		const prefix = path.join(temp.dir, 'npm-prefix');
+		const pkg = path.join(prefix, 'node_modules', 'opencode-ai');
+		fs.mkdirSync(path.join(pkg, 'bin'), { recursive: true });
+		fs.writeFileSync(path.join(pkg, 'bin', 'opencode.exe'), 'MZ');
+		fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: 'opencode-ai', version: '1.18.34' }));
+		const shim = path.join(prefix, 'opencode.cmd');
+		fs.writeFileSync(shim, '@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\opencode-ai\\bin\\opencode.exe"   %*\r\n');
+		const planned = planLaunch(catalogOf(name => name === 'facade.opencode.path' ? shim : undefined), { alias: '#a1', cwd, yolo: false, cli: 'opencode', tools }, { host: { ...destination.host, PATH: prefix }, platform: 'win32' });
+		assert.deepStrictEqual([planned.executable, planned.version, planned.args], [path.join(pkg, 'bin', 'opencode.exe'), '1.18.34', []]);
+	});
+
 	test('Pi\'s prompt is its message after --, except one it would read as a file to attach', () => {
 		assert.deepStrictEqual(plan({ cli: 'pi', prompt: 'Fix it' }).args.slice(-3), ['--approve', '--', 'Fix it']);
 		// Muse Code 1.4.14 refuses to start on a prompt that is one of its commands' names, even after -- (D107)

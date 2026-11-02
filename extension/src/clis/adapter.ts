@@ -186,6 +186,11 @@ export interface CliAdapter {
 	readonly command: string;
 	readonly groups: Groups;
 	/**
+	 * Whether its `connect` group applies to a run of its installed version `version` (CLIS-3.2), where an earlier line of it has no
+	 * such option. Where this is absent, or no version is known, it applies.
+	 */
+	connectsAt?(version: string): boolean;
+	/**
 	 * Other spellings its CLI takes for an option of its groups - a short form, an alias - by that option: an argument spelled so is the
 	 * same option, refused where Facade sets it and replaced where an explicit choice sets it (CLIS-1.4, 3.1).
 	 */
