@@ -69,8 +69,9 @@ const READY_MS = REAL === 'agy' ? 25_000 : 10_000;
 
 const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and do exactly this: '
 	+ '1) Call list_start_options without arguments, then with the window_id of the window you are in, to find its first location_id. '
-	+ `2) Call start_agent with name "Echo", cli "${REAL}", that window_id and location_id, and this prompt: "When a Facade message arrives, `
-	+ 'reply to its sender with send_message, the text exactly PONG, and do nothing else." '
+	// "After this one": the first task comes as a Facade message too, which a literal model would answer as well
+	+ `2) Call start_agent with name "Echo", cli "${REAL}", that window_id and location_id, and this prompt: "When the next Facade message `
+	+ 'after this one arrives, reply to its sender once with send_message, the text exactly PONG, and do nothing else." '
 	+ '3) Call send_message to Echo\'s agent_id with the text PING. '
 	+ '4) End your turn. When a Facade message with PONG reaches you, answer DONE and nothing else.';
 
