@@ -39,6 +39,8 @@ export interface MessageRecord {
 	/** For a Facade result about another operation than a message: the agent it was on, a start's or a stop's (MCP-1.3). */
 	readonly agent?: { readonly run: RunId; readonly alias?: string; readonly name?: string };
 	readonly text: string;
+	/** Machine facts for a Facade result; text remains its readable history body. Absent on older receipts and messages. */
+	readonly result?: { readonly [key: string]: unknown };
 	/** Unicode code points of `text`. */
 	readonly length: number;
 	/** The sender's request ID for this send, where it gave one: the same one again answers this record (MCP-1.1, D110). */
@@ -130,7 +132,7 @@ export interface Messages {
 	 * A Facade result about an operation other than a message - a start that completed after its accepted response (MCP-1.3): a
 	 * `result` record in `to`'s inbox, delivered with its own budget, ending quietly where it cannot be (RULES-1.7).
 	 */
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string }): MessageRecord;
+	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord;
 	/** Keeps a copy of a message this window's agent sent to another window's, for Message History; its outcome updates it. */
 	keepSent(record: MessageRecord): void;
 	/** The caller's own inbox, never another's (MCP-4.2). */

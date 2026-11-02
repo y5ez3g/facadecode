@@ -7,6 +7,7 @@
 // (MCP-1.2). Errors go back to the calling agent alone: nothing here notifies the person (RULES-1.8).
 
 import { monotonic } from '../base/clock';
+import { isJsonObject } from '../base/json';
 import { messageOf as errorText } from '../base/errors';
 import { FacadeError } from '../core/errors';
 import { HOLD_MS, RESPONSE_BUDGET_MS, STAGE_MS } from '../core/messages';
@@ -17,6 +18,8 @@ import type { StartChoices } from '../record/choices';
 import type { ServedRoute } from '../base/windowNetwork';
 import { ServedAnswer, TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import { accepted, answerOf, codedOf, Effects, errorResult, failure, Result, resultErrorOf, success } from '../schema/result';
+import { compactResult } from '../schema/compact';
+import { receiptTextOf } from './receiptText';
 import { MESSAGE_LIMIT, QUERY_ROUTE_MS, QUERY_TOOLS, ToolName, TOOLS } from '../schema/tools';
 import { ArgumentError, codePoints, ToolArguments, validateArguments } from '../schema/validate';
 import { agentOf, cliOf, Data, defined, isoOf, locationOf, messageFile, messageOf, sendFailureOf, ToolWindow } from './facts';
@@ -206,7 +209,7 @@ class ToolService {
 		this.deps.log?.(`Tool ${tool} by ${this.deps.agents.get(call.caller as RunId)?.alias ?? call.caller}: ${status}${error ? ` ${error.code} (${error.reason})` : ''} in ${Math.round(this.mono() - receivedAt)} ms`);
 		const { after } = outcome;
 		return {
-			answer: answerOf(outcome.result, outcome.headline),
+			answer: answerOf(compactResult(call.tool, outcome.result, !!(call.arguments as { details?: boolean } | undefined)?.details)),
 			...after ? {
 				delivered: () => {
 					try {
@@ -220,7 +223,7 @@ class ToolService {
 	}
 
 	private async handle(call: Received): Promise<Outcome> {
-		// Another tool protocol's call is never translated into one of this protocol (MCP-6.2, ARCHITECTURE-2.4)
+		// Only the current tool protocol is accepted, without translation or downgrade (MCP-6.2).
 		if (call.protocol !== TOOL_PROTOCOL) {
 			const theirs = typeof call.protocol === 'number' ? `tool protocol ${call.protocol}` : 'no tool protocol';
 			return { result: failure({ code: 'UNAVAILABLE', reason: 'protocol_incompatible', message: `This agent's Facade MCP server speaks ${theirs}, and its Facade Code window tool protocol ${TOOL_PROTOCOL}: the call had no effect.` }, {}) };
@@ -265,7 +268,7 @@ class ToolService {
 				let outcome: Outcome;
 				try {
 					outcome = await this.handle({
-						protocol: TOOL_PROTOCOL, caller: guest.id, tool: routed.tool, arguments: routed.arguments, callId: routed.callId,
+						protocol: routed.protocol, caller: guest.id, tool: routed.tool, arguments: routed.arguments, callId: routed.callId,
 						elapsedMs: routed.elapsedMs, receivedAt: this.mono(), guest, ...routed.inline ? { inline: true } : {}
 					});
 				} catch (err) {
@@ -435,7 +438,7 @@ class ToolService {
 	 * answer coming back as it gave it. A route that carried no answer says why, and whether the call may have acted there.
 	 */
 	private async routeCall(window: string, tool: ToolName, args: object, caller: Caller, call: Received, deadlineMs: number, inline = false): Promise<Outcome> {
-		const routed: RoutedCall = { tool, arguments: args, caller: this.guestOf(caller), callId: call.callId, elapsedMs: this.elapsed(call), ...inline ? { inline } : {} };
+		const routed: RoutedCall = { tool, arguments: args, caller: this.guestOf(caller), callId: call.callId, elapsedMs: this.elapsed(call), protocol: call.protocol, ...inline ? { inline } : {} };
 		const response = await this.deps.network!.route(window, 'call', routed, deadlineMs);
 		if (!response.ok) {
 			const unknown = response.effects === 'unknown' && !QUERY_TOOLS.has(tool);
@@ -454,12 +457,12 @@ class ToolService {
 	 * Gives the caller a Facade result about something it asked that finished later (RULES-1.7): in its terminal where it is this
 	 * window's, else in its own window, routed there; nobody else hears of it going astray.
 	 */
-	private reportTo(caller: Caller, report: { readonly callId: string; readonly agent: RunFacts; readonly text: string }): void {
+	private reportTo(caller: Caller, report: { readonly callId: string; readonly agent: RunFacts; readonly text: string; readonly result?: Data }): void {
 		if (caller.window === undefined || caller.window === this.deps.window.id) {
-			this.deps.messages.report({ to: caller.id, callId: report.callId, agent: report.agent.id, text: report.text });
+			this.deps.messages.report({ to: caller.id, callId: report.callId, agent: report.agent.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {} });
 			return;
 		}
-		const result: RoutedResult = { to: caller.id, text: report.text, callId: report.callId, agent: { run: report.agent.id, alias: report.agent.alias, name: report.agent.name } };
+		const result: RoutedResult = { to: caller.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {}, callId: report.callId, agent: { run: report.agent.id, alias: report.agent.alias, name: report.agent.name } };
 		void this.deps.network?.route(caller.window, 'result', result, STAGE_MS).then(response => {
 			if (!response.ok) {
 				this.deps.log?.(`A Facade result for ${caller.alias} could not reach its window ${caller.window}: ${response.message}`);
@@ -570,14 +573,14 @@ class ToolService {
 
 	/** A Facade result another window sends for one of this window's agents (RULES-1.7): in its inbox, and its terminal where it can be. */
 	private receiveResult(result: RoutedResult): Data {
-		if (!result || typeof result.to !== 'string' || typeof result.text !== 'string' || !this.deps.agents.get(result.to)) {
+		if (!result || typeof result.to !== 'string' || typeof result.text !== 'string' || (result.result !== undefined && !isJsonObject(result.result)) || !this.deps.agents.get(result.to)) {
 			throw new Error('The routed Facade result names no agent of this window: it had no effect.');
 		}
 		if (result.about) {
 			this.deps.messages.keepSent(result.about);
 		}
 		this.deps.messages.report({
-			to: result.to, text: result.text, ...result.callId !== undefined ? { callId: result.callId } : {},
+			to: result.to, text: result.text, ...result.result !== undefined ? { result: result.result } : {}, ...result.callId !== undefined ? { callId: result.callId } : {},
 			...result.about ? { about: result.about.id } : {}, ...result.agent ? { agentParty: result.agent } : {}
 		});
 		return { taken: true };
@@ -754,7 +757,8 @@ class ToolService {
 			const final = await this.finishStart({ ...start, answerBy: Infinity }, late);
 			const facts = this.deps.agents.get(run);
 			if (facts) {
-				this.reportTo(caller, { callId: call.callId, agent: facts, text: answerOf(final.result, final.headline).text });
+				this.reportTo(caller, { callId: call.callId, agent: facts, text: receiptTextOf(final.result, final.headline),
+					result: answerOf(compactResult('start_agent', final.result)).structured });
 			}
 		}).catch(err => this.deps.log?.(`Could not report the start of ${run} to ${caller.alias}: ${errorText(err)}`));
 		const facts = this.deps.agents.get(run);
@@ -919,6 +923,7 @@ class ToolService {
 			message: failedWith?.message,
 			obstacle: sent.obstacle,
 			deadline: status === 'pending' && record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined,
+			delivered_via: record.delivery.via,
 			effects: defined({ ...record.delivery.effects })
 		});
 		const headline = status === 'success' ? record.delivery.via === 'read' ? `Its prompt ${record.alias} was delivered through read_messages after startup.` : `Its prompt ${record.alias} was submitted to its CLI after startup.`
@@ -932,21 +937,34 @@ class ToolService {
 
 	private async listAgents(args: ToolArguments['list_agents'], caller: Caller, call: Received): Promise<Outcome> {
 		const self = this.deps.window.id;
-		if (args.window_id !== undefined && args.window_id !== self && !this.deps.network) {
-			this.checkWindow(args.window_id);
+		let selected: string | undefined;
+		let windowId = args.window_id;
+		if (args.agent !== undefined) {
+			const located = await this.locate(args.agent, caller);
+			selected = located.here?.id ?? located.there!.id;
+			const actualWindow = located.there?.window ?? self;
+			if (windowId !== undefined && windowId !== actualWindow) {
+				throw new FacadeError('INVALID', 'invalid_argument', 'The selected agent is not in window_id.');
+			}
+			windowId = actualWindow;
+		}
+		if (windowId !== undefined && windowId !== self && !this.deps.network) {
+			this.checkWindow(windowId);
 		}
 		const after = args.cursor !== undefined ? cursorAt(args.cursor) : undefined;
 		// Every window within reach, unless one is named; one that does not answer is listed apart, never an empty success (MCP-3.1)
-		const local = args.window_id === undefined || args.window_id === self ? this.agentsFor(caller, args.include_ended) : [];
+		const includeEnded = selected !== undefined || args.include_ended;
+		const local = windowId === undefined || windowId === self ? this.agentsFor(caller, includeEnded) : [];
 		const { windows: remote, unavailable } = await this.everyWindow(async other => {
-			const response = await this.deps.network!.route(other, 'agents', { caller: this.guestOf(caller), include_ended: args.include_ended }, this.queryDeadline(call));
+			const response = await this.deps.network!.route(other, 'agents', { caller: this.guestOf(caller), include_ended: includeEnded }, this.queryDeadline(call));
 			if (!response.ok) {
 				throw new Error(response.message);
 			}
 			const agents = (response.result as { readonly agents?: unknown } | undefined)?.agents;
 			return Array.isArray(agents) ? agents as Data[] : [];
-		}, args.window_id === undefined ? undefined : args.window_id);
+		}, windowId);
 		const agents = [...local, ...remote.flat()]
+			.filter(agent => selected === undefined || agent.agent_id === selected)
 			.sort((a, b) => createdOf(a) - createdOf(b) || String(a.agent_id).localeCompare(String(b.agent_id)))
 			.filter(agent => !after || createdOf(agent) > after[0] || (createdOf(agent) === after[0] && String(agent.agent_id) > after[1]));
 		const page = agents.slice(0, args.limit);
@@ -955,7 +973,8 @@ class ToolService {
 			agents: page,
 			next_cursor: agents.length > page.length && last ? cursorOf({ createdAt: createdOf(last), id: String(last.agent_id) }) : undefined,
 			complete: !unavailable.length,
-			unavailable_windows: unavailable
+			unavailable_windows: unavailable,
+			scope: caller.yolo ? 'all' : 'creation_tree', include_ended: includeEnded
 		});
 		const runs = agents;
 		const scope = caller.yolo ? 'With YOLO on, you reach every agent' : `Without YOLO, you reach the agents of your creation tree (root ${caller.root})`;
@@ -980,7 +999,8 @@ class ToolService {
 		}
 		void closing.then(late => {
 			const final = stopped(target, late);
-			this.reportTo(caller, { callId: call.callId, agent: target, text: answerOf(final.result, final.headline).text });
+			this.reportTo(caller, { callId: call.callId, agent: target, text: receiptTextOf(final.result, final.headline),
+				result: answerOf(compactResult('stop_agent', final.result)).structured });
 		}).catch(err => this.deps.log?.(`Could not report the stop of ${target.alias} to ${caller.alias}: ${errorText(err)}`));
 		return {
 			result: accepted({ agent_id: target.id, reference: referenceOf(target), process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
@@ -1124,7 +1144,7 @@ class ToolService {
 			const message = `${args.ids.length === 1 ? 'That message is not' : 'None of those messages are'} in your inbox.`;
 			return { result: failure({ code: 'NOT_FOUND', reason: 'not_found', message }, { not_found: page.missing }) };
 		}
-		const total = records.reduce((sum, record) => sum + record.length, 0);
+		const total = records.reduce((sum, record) => sum + (record.kind === 'result' && record.result ? codePoints(JSON.stringify(record.result)) : record.length), 0);
 		const ids = records.map(record => record.id);
 		const count = `${records.length} message${records.length === 1 ? '' : 's'}`;
 		let data: Data;

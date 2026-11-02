@@ -112,6 +112,10 @@ Show opens the actual run/record in this window, never a same-named replacement 
 
 **A record handed back by read_messages is delivered; reading starts no new terminal paste.**
 
+System-result records may retain structured operation facts beside their existing human-readable text. The agent gets
+the structured facts in its receipt or MCP read; Message History keeps the readable text. Ordinary message bodies and
+older text-only system results stay intact. Both representations identify the same operation and effects (MCP-1.2).
+
 read_messages without IDs returns the caller's incoming records that are not yet delivered; all:true pages all retained
 incoming records. Explicit IDs also resolve only inside the caller's inbox. Other agents' inboxes and the caller's own
 sent messages are unavailable through this tool, including in YOLO. A message has one delivery state (RULES-1.3);
@@ -182,6 +186,9 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 ## Change log
 
 - 2026-11-01: 4.1 shows a sender's copy whose result never came back as unconfirmed after its deadline (D132).
+- 2026-11-01: D139 separates structured system receipts for agents from readable Message History text, preserving
+  ordinary bodies, old records, correlation and the existing delivery handoff.
+
 - 2026-11-01: Describe competitive-analysis findings without naming individual products; message behavior is unchanged.
 - 2026-10-31: 3.1 follows RULES-1.5's completion of an already pasted owned draft after read delivery (D119).
 - 2026-10-31: 2.1 types `Act on this Facade message: ` before a message's paste for Claude Code (D108).

@@ -14,7 +14,6 @@ import { formatMessage } from '../core/messages';
 import type { Agents, CleanupResult, CliChoice, LaunchRequest, Location, RunFacts, RunId, StartOutcome } from '../core/ports';
 import { ChoiceStore } from '../record/choices';
 import { ServedAnswer, TOOL_PROTOCOL, ToolAnswer, ToolCall } from '../schema/protocol';
-import { renderFacts } from '../schema/result';
 import { codePoints } from '../schema/validate';
 import { tempDir } from './util';
 
@@ -226,10 +225,10 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return record;
 	}
 
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly text: string }): MessageRecord {
+	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
 		this.reports.push(request);
 		const base = this.recordOf({ from: 'facade', to: request.to, text: request.text, ...request.callId ? { callId: request.callId } : {} }, { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 }, 'result');
-		const record: MessageRecord = request.agent ? { ...base, agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : base;
+		const record: MessageRecord = { ...base, ...request.result ? { result: request.result } : {}, ...request.agent ? { agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : {} };
 		this.records.push(record);
 		return record;
 	}
@@ -401,31 +400,9 @@ export function setUp(): Setup {
 	return setup;
 }
 
-/** The answer's text heads the facts with a sentence, then lists exactly the structured result's fields (MCP-6.2). */
+/** Both MCP representations contain exactly the same object (MCP-6.2). */
 export function assertSameFacts(answer: ToolAnswer): void {
-	const listing = renderFacts(answer.structured).join('\n');
-	assert.ok(answer.text.endsWith(`\n\n${listing}`), `the text does not end in the structured facts:\n${answer.text}`);
-	const headline = answer.text.slice(0, answer.text.length - listing.length - 2);
-	assert.ok(headline.trim().length > 0 && !headline.includes('\n'), `the headline is one paragraph: ${JSON.stringify(headline)}`);
-	const walk = (value: unknown, key: string) => {
-		if (value === undefined) {
-			return;
-		}
-		if (key) {
-			assert.ok(listing.includes(`${key}:`), `${key} is not in the text`);
-		}
-		if (Array.isArray(value)) {
-			value.forEach(each => walk(each, ''));
-		} else if (value !== null && typeof value === 'object') {
-			Object.entries(value).forEach(([name, each]) => walk(each, name));
-		} else if (typeof value === 'string') {
-			const shown = value.includes('\n') ? value.split('\n').every(line => listing.includes(line)) : listing.includes(value) || listing.includes(JSON.stringify(value));
-			assert.ok(shown, `${JSON.stringify(value)} is not in the text`);
-		} else {
-			assert.ok(listing.includes(String(value)), `${String(value)} is not in the text`);
-		}
-	};
-	walk(answer.structured, '');
+	assert.deepStrictEqual(JSON.parse(answer.text), answer.structured);
 	assert.strictEqual(answer.isError, answer.structured.status === 'failure');
 }
 

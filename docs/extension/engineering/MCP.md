@@ -52,6 +52,20 @@ chunk large data, but no transport-frame limit becomes a total-content limit on 
 
 **Every result provides English text and equivalent structured facts without overstating effects.**
 
+Agent-facing results use one compact JSON object as both structured content and serialized text, without an additional
+narrative headline. Keep the envelope below, meaningful field names, all actual effects and useful error diagnostics.
+Public agent/message identities use their directly callable short references where known, with the full ID as a fallback;
+do not repeat alias/reference variants. Internal routing and stored records retain their complete identities. Project
+only at the caller's public result boundary, after cross-window routing and caller-side file transfer. This contract
+is tool protocol 3. All callers use this contract; earlier tool protocols fail explicitly before effects, with no
+parallel result format or automatic downgrade.
+
+Do not echo ordinary input bodies, routine character counts or requested key arrays in operation receipts. Preserve
+pending deadlines/obstacles, repeated-request facts, prompt outcomes and partial/unknown effects. List detail under
+3.1 keeps infrequent facts retrievable. Message and screen bodies are complete, inline or through the existing file
+mechanism. Explicit false, null, empty and unknown values are not removed as though they were absent. Human-facing
+history and notifications keep their own presentation; their wording is not the machine result contract (D139).
+
 ```ts
 type Result<T> = {
   status: "success" | "failure" | "accepted";
@@ -164,9 +178,10 @@ overrides honestly. Do not substitute another CLI, path or conversation.
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-Return agent_id/reference/name, window/environment, location, creator/tree, yolo, process_state, tools_state and
+Return agent_id/name, window/environment, location, creator/tree, yolo, process_state, tools_state and
 requested/observed model/effort where known. For prompt include message_id, the native or post-start path with its
 capability state, and pending/success/failure with actual input effects under RULES-1.3 and MCP-1.2.
+For a delivered post-start prompt, include `delivered_via` so terminal submission and an inbox read remain distinct.
 COLLABORATION-2.2 owns native/post-start prompt selection and budget start.
 If the process has started but prompt delivery is still pending, return that separation and later report the final
 prompt outcome to the caller with the same message ID and target run under 1.3. A successful process-start result
@@ -182,12 +197,20 @@ There is no task object, task_operation_id, completion expectation or automatic 
 
 **List current run facts within the caller's normal YOLO/creation-tree scope.**
 
-Arguments: `window_id?:string`, `include_ended?:boolean=false`, `cursor?:string`, `limit?:integer=100` (1–200).
+Arguments: `window_id?:string`, `agent?:string`, `details?:boolean=false`, `include_ended?:boolean=false`,
+`cursor?:string`, `limit?:integer=100` (1–200).
 Default searches connected windows within permitted reach: YOLO all; non-YOLO only the same creation tree, including
 siblings/ancestors/descendants. Do not return unrelated agents and then ask the caller to ignore them.
-Return ID/reference/name, window/environment/location, CLI, creator/tree, yolo, process/activity/tools/input facts,
+Facts available across compact and detailed views include ID/name, window/environment/location, CLI, creator/tree,
+yolo, process/activity/tools/input facts,
 observation time/stale flag, title and actual error/exit where present. No task summaries, delegation credentials or
 public pending-operation-query fields. Ended records never imply a live terminal.
+The default compact projection keeps actionable identity/name, window/location/path/environment, CLI, YOLO,
+process/activity/blocker, tools/input capability, observation freshness and actual error/exit. `details:true` also returns
+creation time, creator/tree, window label, CLI title and activity reason. `agent` resolves one normal agent reference,
+including a retained ended agent, and queries only its window; a conflicting window_id fails before effects. An agent
+selection excludes cursor. Unknown-activity diagnostics remain in the compact view. Without
+agent, include_ended keeps its existing meaning. Scope, completeness and pagination remain explicit in either view.
 Pagination returns next_cursor; unavailable peers are explicit and complete:false is not an empty successful lookup.
 read_messages remains limited to the caller's inbox even if list_agents can see another agent.
 
@@ -229,12 +252,12 @@ Human contact means notification handoff in the sender's window; no migration to
 All A-to-B delivery/reply/system-result errors remain with agents or end if nobody can receive them.
 
 ```json
-{"status":"success","data":{"message_id":"m-42","target":"run-b","disposition":"submitted_to_cli"},
+{"status":"success","data":{"message_id":"#m42","target":"#a2","disposition":"submitted_to_cli"},
  "effects":{"outcome":"confirmed","text_written":"full","enter_written":true}}
 ```
 
 ```json
-{"status":"accepted","data":{"message_id":"m-42","target":"run-b",
+{"status":"accepted","data":{"message_id":"#m42","target":"#a2",
  "deadline":"2026-10-28T23:00:15Z","obstacle":"input_draft"},
  "effects":{"outcome":"pending","text_written":"none","enter_written":false}}
 ```
@@ -250,13 +273,17 @@ were not pasted. all:true pages every retained incoming record. IDs accept messa
 agent references. Lookup by ID is still inside that inbox, including for YOLO. An unavailable ID reports not_found
 without exposing another recipient's record. Multiple read IDs are a query, not a multiple-recipient send.
 
-Return records oldest first: message ID, sender/recipient, time, optional reply relation, message/system kind, exact
-body and length, delivery state, how it was delivered and input effects. Once the result is handed back, every record
+Return records oldest first: message ID, sender, time, optional reply relation, message/system kind, exact
+body, delivery state, how it was delivered and input effects. Once the result is handed back, every record
 in it is delivered (RULES-1.3): its sender's result says it was delivered through read_messages. RULES-1.5 cancels
 unstarted pastes and permits only completion of an already pasted owned draft. An uncertain return may repeat the same record without starting another paste to the
 terminal. Above 8,000 combined code points, return the complete selected content in a file readable in the caller
 environment, with path/size and per-message metadata. COLLABORATION-4.2 defines transfer and expiry.
 No instructions to print, answer, escalate or follow a workflow are embedded in results.
+The compact projection omits duplicate identity spellings, the already-known recipient, routine length and delivery
+attempt counts. A system result with structured operation facts returns those as `result` instead of repeating its
+human-readable body; ordinary message bodies and old text-only system results remain exact. Large-result files carry
+the same selected machine content, with message boundaries and correlation, and are still marked delivered only at handoff.
 
 ## 5 Terminal operations
 
@@ -270,6 +297,9 @@ is successful empty output. Retained ended output is dated and not described as 
 Inverse/dim annotations may accompany an unannotated text field. Do not execute escape sequences. Include an available
 last alternate-screen frame separately from final normal output. Above 8,000 code points, return a complete readable
 temporary file under COLLABORATION-4.2 rather than truncating the requested result.
+The tool description explains `annotated`: `[[...]]` marks inverse video and `{{...}}` marks dim text;
+`last_alternate_frame` is retained alternate-screen output, separate from the current buffer. This meaning is available
+without a repeated result headline.
 
 ### 5.2 type_text and press_keys
 
@@ -331,6 +361,11 @@ which every turn of every agent pays for (D111).
 **Use one schema source for tools, descriptions and wire validation, and report incompatible protocols plainly.**
 
 Text/structured results express the same facts. No incompatible old call is silently translated into another action.
+Parsing the text as JSON yields exactly the structured object. Unsupported tool protocols, including protocol 2, fail
+explicitly before effects. Cross-window calls carry the current tool protocol without a missing-version fallback.
+A system receipt carries the same
+operation facts as an immediate result, with its message/call correlation; human-readable history text is kept
+separately. A text-only historical receipt is not parsed or guessed into structured state.
 Connection recovery reuses only actual surviving runs and unexpired work under RULES; it never replays closed-run mail.
 The bundled skill teaches the nine tools, required startup fields, optional defaults, RULES-4.3's launch/reach policy,
 normal creation trees, unique-name resolution, `#human`, own inbox, that read_messages without arguments returns the
@@ -361,6 +396,9 @@ No migration guide for already-published user skills is required: this is the fi
 - 2026-11-01: From the owner-requested release review: 1.1 retries a cross-window send whose answer was lost through the
   window holding it; 1.2 reports refusals before any effect as no effect; 3.2 answers a stop during a start with its
   actual cleanup (D131, D132).
+- 2026-11-01: D139: compact machine results with equivalent JSON/text, one current tool protocol, targeted agent
+  detail, and separate machine/human system-result representations; no change to operation or delivery effects.
+
 - 2026-11-01: Describe competitive-analysis findings without naming individual products or their implementation identifiers; API behavior is unchanged.
 - 2026-10-31: Request IDs cover concurrent calls, lost route replies and removed runs; read delivery does not orphan
   a complete Facade draft (D119).

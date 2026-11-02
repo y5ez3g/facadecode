@@ -176,7 +176,9 @@ const until = async <T>(what: string, check: () => T | undefined | false, ms = 5
 /** The facts of a transport failure as the shim reports one: an error result whose text is its message. */
 const failureOf = (result: any) => {
 	assert.strictEqual(result.isError, true);
-	assert.deepStrictEqual(result.content, [{ type: 'text', text: result.structuredContent.error.message }]);
+	assert.strictEqual(result.content.length, 1);
+	assert.strictEqual(result.content[0].type, 'text');
+	assert.deepStrictEqual(JSON.parse(result.content[0].text), result.structuredContent);
 	const { status, data, error, effects } = result.structuredContent;
 	assert.deepStrictEqual([status, data], ['failure', {}]);
 	return [error.code, error.reason, effects.outcome];

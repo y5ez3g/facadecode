@@ -29,7 +29,7 @@ export interface MessageIdPort {
 /** Where a Facade result goes when the message's sender is in another window of this computer (RULES-1.7, COLLABORATION-1.1). */
 export interface ResultRoute {
 	/** True once that window took it; false where it could not be reached, and the result then ends quietly. */
-	report(window: string, result: { readonly to: RunId; readonly about: MessageRecord; readonly text: string; readonly callId?: string }): Promise<boolean>;
+	report(window: string, result: { readonly to: RunId; readonly about: MessageRecord; readonly text: string; readonly result?: MessageRecord['result']; readonly callId?: string }): Promise<boolean>;
 }
 
 export interface MessageServiceDeps {
@@ -41,6 +41,8 @@ export interface MessageServiceDeps {
 	readonly sent?: MessageStore;
 	/** Carries results to senders in other windows; none, and such a result ends quietly. */
 	readonly results?: ResultRoute;
+	/** The API layer's machine projection of a delivery, separate from readable Message History text. */
+	readonly receipt?: (original: MessageRecord, cli?: string) => NonNullable<MessageRecord['result']>;
 	readonly ids: MessageIdPort;
 	/** Epoch milliseconds, for the times records keep. */
 	readonly clock: Clock;
@@ -302,12 +304,13 @@ export class MessageService implements Messages, Disposable {
 		}, delivery, true, request.id);
 	}
 
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string }): MessageRecord {
+	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
 		const record = this.create({
 			kind: 'result',
 			from: { run: 'facade' },
 			to: this.party(request.to),
 			text: request.text,
+			...(request.result !== undefined ? { result: request.result } : {}),
 			...(request.about !== undefined ? { about: request.about } : {}),
 			...(request.callId !== undefined ? { callId: request.callId } : {}),
 			...(request.agentParty !== undefined ? { agent: request.agentParty } : request.agent !== undefined ? { agent: this.party(request.agent) } : {})
@@ -450,10 +453,11 @@ export class MessageService implements Messages, Disposable {
 		if (original.from.run === 'facade') {
 			return;
 		}
+		const result = this.deps.receipt?.(original, this.cliOf(original.to.run));
 		if (original.fromWindow !== undefined) {
 			// Its sender is in another window: the result is that window's to give, and goes nowhere else if it cannot (RULES-1.7)
 			const results = this.deps.results;
-			void (results ? results.report(original.fromWindow, { to: original.from.run as RunId, about: original, text: resultText(original, this.cliOf(original.to.run)), ...(callId !== undefined ? { callId } : {}) }) : Promise.resolve(false))
+			void (results ? results.report(original.fromWindow, { to: original.from.run as RunId, about: original, text: resultText(original, this.cliOf(original.to.run)), ...(result !== undefined ? { result } : {}), ...(callId !== undefined ? { callId } : {}) }) : Promise.resolve(false))
 				.then(taken => {
 					if (!taken) {
 						this.deps.log.event(`The Facade result about ${original.alias} could not reach its sender's window, and ends there`);
@@ -467,6 +471,7 @@ export class MessageService implements Messages, Disposable {
 			to: original.from,
 			about: original.id,
 			text: resultText(original, this.cliOf(original.to.run)),
+			...(result !== undefined ? { result } : {}),
 			...(callId !== undefined ? { callId } : {})
 		}, PENDING, false);
 		this.handOver(record, formatResult(record));
@@ -806,7 +811,7 @@ export class MessageService implements Messages, Disposable {
 	 * A new record with its own ID (RULES-1.1) - the one `allocate` took for it, where given - written before any input and never over
 	 * another; throws where it cannot be written, unless `required` is false.
 	 */
-	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'replyTo' | 'about' | 'callId' | 'agent' | 'fromWindow' | 'requestId' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
+	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'fromWindow' | 'requestId' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
 		const given = id !== undefined ? messageIdOf(id) : undefined;
 		if (id !== undefined && (given === undefined || given !== id)) {
 			throw new Error(`${JSON.stringify(id)} is not a message ID.`);
@@ -831,6 +836,7 @@ export class MessageService implements Messages, Disposable {
 			...(fields.requestId !== undefined ? { requestId: fields.requestId } : {}),
 			...(fields.label !== undefined ? { label: fields.label } : {}),
 			text: fields.text,
+			...(fields.result !== undefined ? { result: fields.result } : {}),
 			length: [...fields.text].length,
 			delivery
 		};
@@ -1098,7 +1104,7 @@ export function formatResult(record: MessageRecord): string {
 		...(record.agent !== undefined ? [`agent ${partyText(record.agent)}`] : []),
 		...(record.callId !== undefined ? [`call ${headerText(record.callId)}`] : [])
 	];
-	return `[${fields.join(' | ')}]\n${record.text}\n[/Facade result ${record.alias}]`;
+	return `[${fields.join(' | ')}]\n${record.result ? JSON.stringify(record.result) : record.text}\n[/Facade result ${record.alias}]`;
 }
 
 /** What an accepted send came to, as its Facade result says it: the original, its target, outcome and input effects (COLLABORATION-2.2). */

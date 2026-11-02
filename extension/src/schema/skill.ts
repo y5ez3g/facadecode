@@ -29,7 +29,7 @@ Facade Code runs each agent's CLI in its own editor terminal. Its MCP server, \`
 ${TOOLS.map(tool => `\`${tool.name}\``).join(', ')}. They reach the agents of every Facade window on this computer, local and
 remote alike.
 
-Every result has a \`status\` - \`success\`, \`failure\` or \`accepted\` - the same facts as text and as structured data, and the
+Every result has a \`status\` - \`success\`, \`failure\` or \`accepted\` - the same JSON as text and as structured data, and the
 \`effects\` that actually happened. \`accepted\` means finite work continues; it is not success.
 
 ## Starting and stopping agents
@@ -44,8 +44,8 @@ Every result has a \`status\` - \`success\`, \`failure\` or \`accepted\` - the s
   prompt has its own message ID and outcome.
 - \`stop_agent\` stops one agent. Its card and terminal close at once and its process ends in the background; the agents it
   started keep running.
-- \`list_agents\` lists the agents you can reach, with their current facts; \`window_id\` limits it to one window, and
-  \`include_ended: true\` adds ended ones. A long list comes in pages with \`next_cursor\`.
+- \`list_agents\` lists compact current facts; \`details: true\` adds full metadata, and \`agent\` selects one agent, even
+  if ended. \`window_id\` limits a window; \`include_ended: true\` adds ended ones to a list. Pages use \`next_cursor\`.
 
 Each call is a new request: repeating a start can create another agent. Give \`start_agent\` and \`send_message\` a
 \`request_id\` of your own to make a retry safe: the same one again within an hour answers what the first call did instead

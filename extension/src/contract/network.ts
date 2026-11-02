@@ -46,6 +46,8 @@ export interface GuestCaller {
 
 /** A tool call routed here from the caller's window. `inline` asks for a long screen's text in the answer, not a file here. */
 export interface RoutedCall {
+	/** The originating tool protocol, validated before the routed action. */
+	readonly protocol: number;
 	readonly tool: string;
 	readonly arguments: unknown;
 	readonly caller: GuestCaller;
@@ -71,6 +73,7 @@ export interface RoutedDelivery {
 export interface RoutedResult {
 	readonly to: RunId;
 	readonly text: string;
+	readonly result?: { readonly [key: string]: unknown };
 	readonly callId?: string;
 	/** The message it reports on, as the delivering window recorded it: the sender's copy is brought up to date with it. */
 	readonly about?: MessageRecord;

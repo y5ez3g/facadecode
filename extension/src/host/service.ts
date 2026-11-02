@@ -14,6 +14,7 @@ import { ConversationFile } from '../record/conversations';
 import { WorkspacePins } from './pins';
 import { isDamagedWindowIdentity, isUnreadableWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { createToolServices } from '../contract/tools';
+import { deliveryReceipt } from '../contract/facts';
 import { AgentService } from '../core/agents';
 import { AttentionNotices } from '../core/attention';
 import type { MessageRecord } from '../core/messagePorts';
@@ -231,6 +232,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	};
 	const messages = new MessageService({
 		agents,
+		receipt: deliveryReceipt,
 		input,
 		human: contact,
 		store: new MessageFile<MessageRecord>(home),
@@ -238,7 +240,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		sent: new MessageFile<MessageRecord>(home, Date.now, path.join('messages', 'sent')),
 		results: {
 			report: async (other, result) => {
-				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.callId !== undefined ? { callId: result.callId } : {} }, STAGE_MS)
+				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.result !== undefined ? { result: result.result } : {}, ...result.callId !== undefined ? { callId: result.callId } : {} }, STAGE_MS)
 					?? Promise.resolve({ ok: false as const, reason: 'window_unavailable' as const, message: 'No network', effects: 'none' as const }));
 				return response.ok;
 			}

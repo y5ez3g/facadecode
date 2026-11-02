@@ -25,7 +25,7 @@ export interface ToolArguments {
 		readonly worktree?: { readonly branch: string; readonly base_ref: string };
 		readonly request_id?: string;
 	};
-	readonly list_agents: { readonly window_id?: string; readonly include_ended: boolean; readonly cursor?: string; readonly limit: number };
+	readonly list_agents: { readonly window_id?: string; readonly agent?: string; readonly details: boolean; readonly include_ended: boolean; readonly cursor?: string; readonly limit: number };
 	readonly stop_agent: { readonly agent: string };
 	readonly send_message: { readonly to: string; readonly text: string; readonly reply_to?: string; readonly request_id?: string };
 	readonly read_messages: { readonly ids?: readonly string[]; readonly all: boolean; readonly cursor?: string; readonly limit: number };
@@ -276,7 +276,11 @@ const CHECKS: { readonly [T in ToolName]: (value: Value, given: { readonly [key:
 			checkBody('prompt', args.prompt, problems);
 		}
 	},
-	list_agents: () => undefined,
+	list_agents: (value, _given, problems) => {
+		if (value.agent !== undefined && value.cursor !== undefined) {
+			problems.invalid.push({ field: 'cursor', problem: '`cursor` cannot be combined with a single `agent` selection.' });
+		}
+	},
 	stop_agent: () => undefined,
 	send_message: (value, _given, problems) => {
 		const text = (value as Partial<ToolArguments['send_message']>).text;

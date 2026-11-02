@@ -86,6 +86,15 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1.2, 3.1)', () => {
 
+	test('machine outcome facts do not replace the readable history body or change older receipts', () => {
+		const { history } = fakeEditor();
+		const old = record(42, { kind: 'result', from: { run: 'facade' }, to: ada, about: 'm-1', text: 'Your message was submitted to its CLI.' }, T);
+		const current = { ...old, result: { status: 'success', data: { message_id: '#m1', disposition: 'submitted_to_cli' }, effects: { outcome: 'confirmed' } } };
+		assert.strictEqual(history.recordText(current, 'en'), history.recordText(old, 'en'));
+		assert.ok(history.recordText(current, 'en').includes(old.text));
+		assert.ok(!history.recordText(current, 'en').includes('submitted_to_cli'));
+	});
+
 	test('one-to-one conversations, most recently active first; a Facade result goes with the message it reports on', () => {
 		const { history } = fakeEditor();
 		const conversations = history.conversationsOf(RECORDS);

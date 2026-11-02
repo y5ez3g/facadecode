@@ -87,7 +87,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 	});
 
 	test('the schema\'s documented defaults, and no others, are filled in', () => {
-		assert.deepStrictEqual(validateArguments('list_agents', {}), { include_ended: false, limit: 100 });
+		assert.deepStrictEqual(validateArguments('list_agents', {}), { details: false, include_ended: false, limit: 100 });
 		assert.deepStrictEqual(validateArguments('read_messages', undefined), { all: false, limit: 100 });
 		assert.deepStrictEqual(validateArguments('read_screen', { agent: '#a1' }), { agent: '#a1', lines: 50 });
 		assert.deepStrictEqual(validateArguments('type_text', { agent: '#a1', text: 'hi' }), { agent: '#a1', text: 'hi', enter: false });

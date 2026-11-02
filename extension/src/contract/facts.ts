@@ -9,7 +9,8 @@ import type { MessageRecord } from '../core/messagePorts';
 import { headerText } from '../core/messages';
 import type { CapabilityState, CliChoice, Location, RunFacts } from '../core/ports';
 import { referenceOf } from '../core/reach';
-import type { ErrorCode } from '../schema/result';
+import { accepted, failure, success, type ErrorCode } from '../schema/result';
+import { compactResult } from '../schema/compact';
 
 export type Data = { readonly [key: string]: unknown };
 
@@ -93,6 +94,7 @@ export function agentOf(run: RunFacts, window: ToolWindow, now: number, input?: 
 
 /** A message record as read_messages returns it (MCP-4.2), with its fetch state before this read; `text` left out for a file. */
 export function messageOf(record: MessageRecord, withText: boolean): Data {
+	const result = record.kind === 'result' ? record.result : undefined;
 	return defined({
 		message_id: record.id,
 		alias: record.alias,
@@ -111,7 +113,8 @@ export function messageOf(record: MessageRecord, withText: boolean): Data {
 		agent: record.agent?.run,
 		agent_reference: record.agent ? participant(record.agent) : undefined,
 		length: record.length,
-		text: withText ? record.text : undefined,
+		text: withText && !result ? record.text : undefined,
+		result: withText ? result : undefined,
 		delivery: defined({
 			status: record.delivery.status,
 			reason: record.delivery.reason,
@@ -135,6 +138,7 @@ function participant(who: MessageRecord['from'] | MessageRecord['to'] | NonNulla
 /** The messages of a long read as one file (COLLABORATION-4.2): each between headers naming it, its body exactly as it is. */
 export function messageFile(records: readonly MessageRecord[]): string {
 	return records.map(record => {
+		const body = record.kind === 'result' && record.result ? JSON.stringify(record.result) : record.text;
 		const kind = record.kind === 'result' ? 'Facade result' : 'Facade message';
 		const fields = [
 			`${kind} ${record.alias}`,
@@ -145,9 +149,9 @@ export function messageFile(records: readonly MessageRecord[]): string {
 			...record.about ? [`about ${record.about}`] : [],
 			...record.agent ? [`agent ${participant(record.agent) ?? record.agent.run}`] : [],
 			...record.callId ? [`call ${headerText(record.callId)}`] : [],
-			`${record.length} code points`
+			`${[...body].length} code points`
 		];
-		return `[${fields.join(' | ')}]\n${record.text}\n[/${kind} ${record.alias}]`;
+		return `[${fields.join(' | ')}]\n${body}\n[/${kind} ${record.alias}]`;
 	}).join('\n\n') + '\n';
 }
 
@@ -170,4 +174,17 @@ const SEND_FAILURES: { readonly [reason: string]: readonly [ErrorCode, string] }
 export function sendFailureOf(reason: string | undefined): { readonly code: ErrorCode; readonly reason: string; readonly message: string } {
 	const known = reason !== undefined ? SEND_FAILURES[reason] : undefined;
 	return known ? { code: known[0], reason: reason!, message: known[1] } : { code: 'FAILED', reason: reason ?? 'failed', message: `The message was not delivered${reason ? ` (${reason})` : ''}.` };
+}
+
+/** The same delivery facts as send_message, supplied to the core through its receipt port (MCP-1.2, 1.3). */
+export function deliveryReceipt(record: MessageRecord, cli?: string): Data {
+	const delivery = record.delivery;
+	const data = defined({ message_id: record.id, target: record.to.alias ?? (record.to.run === '@human' ? '#human' : record.to.run), reply_to: record.replyTo });
+	const effects = defined({ ...delivery.effects });
+	const error = sendFailureOf(delivery.reason);
+	const result = delivery.status === 'success'
+		? success({ ...data, disposition: delivery.via === 'read' ? 'read_messages' : record.to.run === '@human' ? 'notified' : 'submitted_to_cli' }, effects)
+		: delivery.status === 'pending' ? accepted(defined({ ...data, obstacle: delivery.reason, deadline: delivery.deadline === undefined ? undefined : isoOf(delivery.deadline) }), effects)
+			: failure({ ...error, message: delivery.reason === 'input_unknown' && cli ? `${error.message} CLI: ${cli}.` : error.message }, data, effects);
+	return compactResult('send_message', result) as unknown as Data;
 }

@@ -7,9 +7,9 @@
 
 /**
  * The tool protocol the shim and the window speak: the nine tools' names, arguments and results (MCP-6.2). Each call says it, and a
- * window of another refuses the call as `protocol_incompatible` before any effect (ARCHITECTURE-2.4), never translating it.
+ * window refuses unsupported versions as `protocol_incompatible` before effects.
  */
-export const TOOL_PROTOCOL = 2;
+export const TOOL_PROTOCOL = 3;
 
 /** One tool call from a run's CLI, as its shim received it. */
 export interface ToolCall {
