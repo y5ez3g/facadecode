@@ -135,7 +135,7 @@
 	"To: {0}": "Кому: {0}",
 	"In reply to: {0}": "В ответ на: {0}",
 	"About message: {0}": "О сообщении: {0}",
-	"Status: {0}": "Состояние: {0}",
+	"Delivery: {0}": "Доставка: {0}",
 	"Result reported in: {0}": "О результате сообщено в: {0}",
 	"Being delivered; Facade stops trying at {0}": "Доставляется; Facade прекратит попытки в {0}",
 	"Being delivered": "Доставляется",

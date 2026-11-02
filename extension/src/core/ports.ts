@@ -346,6 +346,8 @@ export interface RunMeta {
 	readonly promptId?: string;
 	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
 	readonly startCallId?: string;
+	/** Reserved final receipt, allocated before accepting this start. */
+	readonly resultMessageId?: string;
 	readonly model?: string;
 	readonly effort?: string;
 	readonly version?: string;
@@ -536,6 +538,8 @@ export interface RunFacts {
 	readonly promptId?: string;
 	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
 	readonly startCallId?: string;
+	/** Reserved final receipt, allocated before accepting this start. */
+	readonly resultMessageId?: string;
 	/** The model and effort this start asked for, where it asked (CLIS-1.4). */
 	readonly model?: string;
 	readonly effort?: string;
@@ -642,6 +646,8 @@ export interface LaunchRequest {
 	readonly promptId?: string;
 	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
 	readonly startCallId?: string;
+	/** Reserved final receipt, allocated before accepting this start. */
+	readonly resultMessageId?: string;
 	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
 	readonly prompt?: string;
 	/** The first line of the caller's own prompt text, shown in the card's hover. */

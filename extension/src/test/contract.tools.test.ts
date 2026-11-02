@@ -246,7 +246,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(worker, 'start_agent', { ...START, model: 'opus', effort: 'high' });
 			const result = resultOf(answer);
 			// In the background, the caller's tree joined from its own facts: its run and its root (RULES-4.3, LIFECYCLE-2.2)
-			assert.deepStrictEqual(s.agents.launched, [{ name: 'backend review', location: 'loc-1', cli: 'claude', model: 'opus', effort: 'high', origin: 'agent', startCallId: 'call-1', creator: { run: worker.id, root: runId(1), label: 'worker #a2' } }]);
+			assert.deepStrictEqual(s.agents.launched, [{ name: 'backend review', location: 'loc-1', cli: 'claude', model: 'opus', effort: 'high', origin: 'agent', startCallId: 'call-1', resultMessageId: 'm-1', creator: { run: worker.id, root: runId(1), label: 'worker #a2' } }]);
 						assert.strictEqual(result.status, 'success');
 			assert.deepStrictEqual(result.data, {
 				agent_id: '#a100', name: 'backend review', window_id: 'win-1', window: 'Design', environment: 'local',
@@ -318,7 +318,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.\nThen the tests.' });
 			const result = resultOf(answer);
 			// The CLI is given the message as any message goes: header, whole text, footer - the sender and window named, not the recipient
-			assert.strictEqual(s.agents.launched[0].prompt, '[Facade message #m1 | from @lead #a1 | window Design]\nReview the changes.\nThen the tests.\n[/Facade message #m1]');
+			assert.strictEqual(s.agents.launched[0].prompt, '📨 Message from lead (#a1) · #m1\nReview the changes.\nThen the tests.');
 			assert.strictEqual(s.agents.launched[0].promptLine, 'Review the changes.');
 			assert.deepStrictEqual(s.messages.prompts, [{
 				request: { id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.\nThen the tests.', callId: 'call-1', initialPrompt: { path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' } } },

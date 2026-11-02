@@ -121,10 +121,12 @@ function received(alias: string): string[] {
 
 /** Correlate a receipt inside a possibly batched terminal paste before checking its machine outcome. */
 function receiptFacts(blocks: string, about: string): any {
-	const lines = blocks.split('\n');
-	const index = lines.findIndex(line => /^\[Facade result #m\d+ \| about (#m\d+)(?: \||\])/.exec(line)?.[1] === about);
-	assert.ok(index >= 0, `No receipt about ${about}: ${blocks}`);
-	return JSON.parse(lines[index + 1]);
+	assert.ok(blocks.includes('🔔 ') && blocks.includes(about), `No receipt about ${about}: ${blocks}`);
+	const directory = path.join(process.env.FACADE_HOME!, 'extension', 'messages');
+	const records = fs.readdirSync(directory).filter(file => file.endsWith('.json')).map(file => JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8')));
+	const receipt = records.find(record => record.kind === 'result' && record.about === about.replace('#m', 'm-'));
+	assert.ok(receipt?.result, `No machine receipt for ${about}`);
+	return receipt.result;
 }
 
 async function closePublicAgent(alias: string): Promise<void> {
@@ -197,13 +199,13 @@ const NATIVE: { readonly [cli: string]: string | undefined } = { claude: '--', c
 const INPUT: { readonly [cli: string]: string } = { claude: 'claude-frame', codex: 'codex-prompt', agy: 'agy-frame', muse: 'muse-frame', opencode: 'opencode-frame', pi: 'pi-frame' };
 
 /**
- * A message block as a CLI is given it (COLLABORATION-2.1): its header, the whole text, its footer. The window's label is escaped
+ * A message block as a CLI is given it (COLLABORATION-2.1): its header and the whole text. The window's label is escaped
  * text there, its delimiters after a backslash - as in an SSH window's `app [SSH: host]`.
  */
 function block(id: string, from: string, window: string, text: string): RegExp {
 	const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	const label = window.replace(/[\\|[\]#]/g, '\\$&');
-	return new RegExp(`\\[Facade message ${escaped(id)} \\| from @[^\\]|]* ${escaped(from)} \\| window ${escaped(label)}\\]\\n${escaped(text)}\\n\\[/Facade message ${escaped(id)}\\]`);
+	return new RegExp(String.raw`📨 Message from [^\n]*\(${escaped(from)}\) · ${escaped(id)}(?: · From ${escaped(label)})?\n${escaped(text)}$`);
 }
 
 const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
@@ -351,12 +353,12 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		// Past fifteen seconds it still waits: nothing typed over the draft, and no failure for its sender
 		await new Promise(resolve => setTimeout(resolve, 18_000));
 		assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
-		assert.ok(!received(alias).some(each => each.includes(`about ${second}`)), 'its sender heard of no outcome yet');
+		assert.ok(!received(alias).some(each => each.includes(`message ${second}`)), 'its sender heard of no outcome yet');
 		// The draft goes: the message goes in at the next slot, alone, and its sender hears it was submitted
 		await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
 		await until('the waiting message in its box', () => received(childAlias).find(each => each.includes('Second message.')), 20_000);
 		assert.ok(received(childAlias).every(each => !each.includes('half-written')), 'the person\'s draft was never submitted');
-		const delivered = await until('the delivery result in the sender\'s box', () => received(alias).find(each => each.includes(`about ${second}`)), 20_000);
+		const delivered = await until('the delivery result in the sender\'s box', () => received(alias).find(each => each.includes(`message ${second}`)), 20_000);
 		assert.strictEqual(receiptFacts(delivered, second).data.disposition, 'submitted_to_cli');
 
 		// An input its reader cannot recognize: after its fifteen seconds the sender hears it failed (RULES-1.5, 1.7)
@@ -366,8 +368,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Third message.' } }
 		])).content('send_message');
 		assert.deepStrictEqual([third?.status, third?.data.obstacle], ['accepted', 'input_unknown'], JSON.stringify(third));
-		const result = await until('the failure result in the sender\'s box', () => received(alias).find(each => each.includes(`about ${third.data.message_id}`)), 40_000);
-		assert.match(result, /^\[Facade result #m\d+ \| about #m\d+/);
+		const result = await until('the failure result in the sender\'s box', () => received(alias).find(each => each.includes(`message ${third.data.message_id}`)), 40_000);
+		assert.match(result, /^🔔 .*#m\d+/);
 		assert.deepStrictEqual([receiptFacts(result, third.data.message_id).status, receiptFacts(result, third.data.message_id).error.reason], ['failure', 'input_unknown']);
 		fs.rmSync(`${RECORD}.quirks.${childAlias}`);
 
@@ -416,7 +418,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			await new Promise(resolve => setTimeout(resolve, 10_000));
 			assert.strictEqual(once(text), 1, JSON.stringify(received(childAlias)));
 			if (sent.status === 'accepted') {
-				const result = await until(`the result about ${text}`, () => received(alias).find(each => each.includes(`about ${sent.data.message_id}`)), 20_000);
+				const result = await until(`the result about ${text}`, () => received(alias).find(each => each.includes(`message ${sent.data.message_id}`)), 20_000);
 				assert.strictEqual(receiptFacts(result, sent.data.message_id).data.disposition, 'submitted_to_cli');
 			}
 			fs.rmSync(quirks, { force: true });

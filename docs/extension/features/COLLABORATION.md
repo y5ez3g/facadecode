@@ -40,22 +40,20 @@ claim ordinary-message support. A frame returned after typing is observation, no
 
 **An agent message submits its full content, with a small identity header, to the recipient's CLI.**
 
-Format (English API text):
+Format (English terminal text):
 
 ```text
-[Facade message #m42 | from @Ada #a7 | window Design | reply to #m39]
+📨 Message from Ada (#a7) · #m42
 <complete original text>
-[/Facade message #m42]
 ```
 
-The optional reply field appears only when supplied. Bodies are data: control bytes/terminal escapes are rejected by
-MCP validation; ordinary Unicode and newlines are preserved, never silently truncated. Metadata uses escaped display
-text so a name cannot forge a header. A body containing the delimiter remains literal body content, identified also by
-length in the operation record. A message is one paste followed by Enter, not one Enter per line. Where the recipient's CLI
-takes a paste alone as material rather than a request - Claude Code - the words `Act on this Facade message: ` are typed
-before the paste in the same write, so that the message is the person's own request. Competitive analysis identified
-Claude Code refusing a brief that came as a paste alone (D108). A Facade result asks for nothing and has none. No ten-message batching
-that changes per-send identity, no doorbell or reminder line, and no “fetch the body” notice in place of the message.
+A reply adds `Reply to #m39` to the header; another window adds `From Design`. Same-window delivery omits the window.
+Names are bounded single-line display text; empty names use the short ID alone. Bodies are data: control bytes and terminal
+escapes are rejected by MCP validation; ordinary Unicode, blank lines and newlines are preserved without truncation.
+There is no closing label, JSON wrapper, generic read_messages instruction or fetch-body notice. Each ordinary message is
+one paste and one submission. Native adaptation may type the notification header before pasting the body when a CLI
+requires typed context to treat pasted content as a request; it adds no extra message or model turn. Input already started
+keeps its original rendered text through reload; formatting changes never trigger a second paste.
 The header's message ID is the same across retries under RULES-1.1; MCP-6.2 teaches the receiving model to deduplicate it.
 Oversized content fails before writing with the supported limit; a caller can explicitly send a file-reference message.
 A path in such a message is just text; Facade never assumes a remote path is readable in another environment.
@@ -64,10 +62,14 @@ A path in such a message is just text; Facade never assumes a remote path is rea
 
 **System results are Facade facts; a creation prompt is an ordinary message supplied by the caller.**
 
-An asynchronous message result identifies its original message, sender/target and actual delivered/not-delivered
-outcome and effects, including delivery through read_messages; MCP-1.3 owns originating-call matching for asynchronous
-operations. Clearly label the report as a Facade result, not a reply authored by the recipient, and request no
-response. An unreachable result ends; do not notify a person, send another error to B, or resend the original content.
+A system result starts with 🔔 and reports actual facts in natural English, without JSON or a closing label. Confirmed
+delivery says `Your message #m42 has been passed on to Ada (#a7).` It references the original message, not a second visible
+receipt number. An async start/stop result uses its reserved message number under MCP-1.3. Full call IDs stay in structured
+records. Partial input, uncertain submission, process/tools/prompt distinctions and created worktrees remain explicit;
+ordinary success needs no boilerplate. Receipt delivery is separate from the operation it reports. Existing permission,
+question and sign-in notices use the same voice without changing recipients, frequency or authority.
+These are Facade facts, not replies authored by the recipient, and request no response. An unreachable result ends;
+do not notify a person, send another error to B, or resend the original content.
 Use the native interactive prompt argument that CLIS-3.2 maps for the CLI, even while it is unverified, and report its
 capability state with the prompt outcome. Without a mapping, start the CLI and automatically send the same prompt after
 process startup through ordinary message delivery. The caller does not need to compensate for CLI differences. Start
@@ -135,7 +137,8 @@ submission. No understanding or completion claim is inferred from reading.
 Use the command/picker title `Message History...`, not Chat Room. List one-to-one conversations by recent activity,
 then show source, recipient, time, body, reply relation, delivery outcome and system-result references.
 History may contain records from previous openings of this workspace within retention. Its UI does not expose a
-client-wide or cross-window management surface. It is Facade message history, not the vendor's whole CLI conversation.
+client-wide or cross-window management surface. Each record labels its own transport outcome `Delivery`; a system result
+then gives the readable operation outcome, with complete structured facts below it. It is Facade message history, not the vendor's whole CLI conversation.
 No live composer, send/replay control, group conversation or delete/hide control is added. Render message content as
 text; do not execute links or commands embedded in it.
 

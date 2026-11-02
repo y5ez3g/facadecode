@@ -99,7 +99,7 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {},
 			...request.requestId !== undefined ? { requestId: request.requestId } : {},
 			...request.promptId !== undefined ? { promptId: request.promptId } : {},
-			startCallId: request.startCallId
+			startCallId: request.startCallId, resultMessageId: request.resultMessageId
 		});
 		this.runs.set(facts.id, facts);
 		this.starts.set(facts.id, new Deferred());
@@ -160,7 +160,7 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 /** The first response a send gets, by default success. */
 export type SendResponse = Pick<SendResult, 'status' | 'reason' | 'obstacle'> & { readonly delivery?: MessageRecord['delivery'] };
 
-export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'> {
+export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'> {
 	now: () => number = Date.now;
 	readonly records: MessageRecord[] = [];
 	readonly sent: SendRequest[] = [];
@@ -199,10 +199,10 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return [...this.records, ...this.kept].find(record => record.kind === 'message' && record.from.run === from && record.requestId === requestId && record.at > this.now() - 60 * 60_000);
 	}
 
-	allocate(request: { readonly from: RunId; readonly text: string }): { readonly id: string; readonly text: string } {
+	allocate(request: { readonly from: RunId; readonly text: string; readonly party?: MessageRecord['from']; readonly label?: string }): { readonly id: string; readonly text: string } {
 		const n = ++this.n;
 		this.allocated.push(`m-${n}`);
-		return { id: `m-${n}`, text: formatMessage({ alias: `#m${n}`, from: this.who(request.from) as MessageRecord['from'], text: request.text }, 'Design') };
+		return { id: `m-${n}`, text: formatMessage({ alias: `#m${n}`, from: request.party ?? this.who(request.from) as MessageRecord['from'], text: request.text }, request.label ?? '') };
 	}
 
 	async send(request: SendRequest): Promise<SendResult> {
@@ -228,9 +228,11 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return record;
 	}
 
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
+	reserveResult(): string { return `m-${++this.n}`; }
+
+	report(request: { readonly id?: string; readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
 		this.reports.push(request);
-		const base = this.recordOf({ from: 'facade', to: request.to, text: request.text, ...request.callId ? { callId: request.callId } : {} }, { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 }, 'result');
+		const base = this.recordOf({ id: request.id, from: 'facade', to: request.to, text: request.text, ...request.callId ? { callId: request.callId } : {} }, { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 }, 'result');
 		const record: MessageRecord = { ...base, ...request.result ? { result: request.result } : {},
 			...request.agentParty ? { agent: request.agentParty } : request.agent ? { agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : {} };
 		this.records.push(record);

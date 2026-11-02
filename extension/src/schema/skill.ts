@@ -74,12 +74,11 @@ person in your window. \`@human\` also works unless a reachable agent is named h
 - Messages arrive in your terminal with sender and ID:
 
   \`\`\`text
-  [Facade message #m42 | from @lead #a1 | window Design | reply to #m40]
+  📨 Message from lead (#a1) · #m42 · From Design · Reply to #m40
   the complete text
-  [/Facade message #m42]
   \`\`\`
 
-  \`[Facade result #m43 | about #m42 | ...]\` is Facade's operation report. It requests no reply; success does not mean
+  \`🔔 Your message #m42 has been passed on to lead (#a1).\` is a delivery notice. It requests no reply; success does not mean
   the recipient finished its work.
 - \`send_message\`: complete \`text\` to one agent or \`#human\` (notifies the person). \`reply_to\` names an inbox message.
   Success means the recipient's CLI accepted it or the recipient read it through \`read_messages\`; failure gives why;
@@ -90,11 +89,12 @@ person in your window. \`@human\` also works unless a reachable agent is named h
   to read again; \`all: true\` pages retained records. Continue \`next_cursor\` with the same \`all\` and \`limit\` selection.
   A receipt in your inbox has its own ID and \`about\` relation to a sent message; read the receipt's ID, not the sent ID.
 
-Accepted operations already continue. Later results match messages by \`about\` and accepted starts/stops by \`call_id\`;
-same-request start lookups keep the original call ID. Unverified native prompt acceptance is \`unknown\`: no background
+Accepted operations already continue. Later results match messages by \`about\` and accepted starts/stops by \`result_message_id\`;
+Same-request start lookups keep this reserved receipt ID. Unverified native prompt acceptance is \`unknown\`: no background
 verification or promised later result. An empty inbox is a snapshot, not proof all work/delivery finished. Held input can
 extend a delivery deadline; its passing alone does not establish failure. Results arrive in the terminal or the caller's
-inbox. Handoff is finite and may fail if the caller is unreachable. No routine polling or particular turn ending is required.
+inbox after your turn ends. Handoff may fail if the caller is unreachable. Do not poll inboxes or screens:
+read_messages returns a snapshot, not a wait. No particular turn ending is required.
 
 ${REPEATED_MESSAGE_TEXT}
 

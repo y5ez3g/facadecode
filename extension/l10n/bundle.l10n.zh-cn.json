@@ -135,7 +135,7 @@
 	"To: {0}": "接收者: {0}",
 	"In reply to: {0}": "回复消息: {0}",
 	"About message: {0}": "相关消息: {0}",
-	"Status: {0}": "状态: {0}",
+	"Delivery: {0}": "送达情况：{0}",
 	"Result reported in: {0}": "结果报告: {0}",
 	"Being delivered; Facade stops trying at {0}": "正在投递；Facade 将在 {0} 停止尝试",
 	"Being delivered": "正在投递",

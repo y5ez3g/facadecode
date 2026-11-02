@@ -71,6 +71,7 @@ export interface RoutedDelivery {
 
 /** A Facade result for one of the receiving window's agents: about a message of its own, or another operation's outcome. */
 export interface RoutedResult {
+	readonly id?: string;
 	readonly to: RunId;
 	readonly text: string;
 	readonly result?: { readonly [key: string]: unknown };

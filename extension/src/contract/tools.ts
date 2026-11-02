@@ -90,7 +90,7 @@ export interface ToolServiceDeps {
 	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get' | 'requested'>;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'resolve'>;
 	readonly clis: StartCatalog;
-	readonly messages: Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'>;
+	readonly messages: Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'>;
 	readonly terminal: TerminalPort;
 	/** The execution environment's Facade directory, where long results are written. */
 	readonly home: string;
@@ -458,13 +458,13 @@ class ToolService {
 	 * Gives the caller a Facade result about something it asked that finished later (RULES-1.7): in its terminal where it is this
 	 * window's, else in its own window, routed there; nobody else hears of it going astray.
 	 */
-	private reportTo(caller: Caller, report: { readonly callId: string; readonly agent: RunFacts; readonly text: string; readonly result?: Data }): void {
+	private reportTo(caller: Caller, report: { readonly id: string; readonly callId: string; readonly agent: RunFacts; readonly text: string; readonly result?: Data }): void {
 		const agent = { run: report.agent.id, alias: report.agent.alias, name: report.agent.name };
 		if (caller.window === undefined || caller.window === this.deps.window.id) {
-			this.deps.messages.report({ to: caller.id, callId: report.callId, agent: report.agent.id, agentParty: agent, text: report.text, ...report.result !== undefined ? { result: report.result } : {} });
+			this.deps.messages.report({ id: report.id, to: caller.id, callId: report.callId, agent: report.agent.id, agentParty: agent, text: report.text, ...report.result !== undefined ? { result: report.result } : {} });
 			return;
 		}
-		const result: RoutedResult = { to: caller.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {}, callId: report.callId, agent };
+		const result: RoutedResult = { id: report.id, to: caller.id, text: report.text, ...report.result !== undefined ? { result: report.result } : {}, callId: report.callId, agent };
 		void this.deps.network?.route(caller.window, 'result', result, STAGE_MS).then(response => {
 			if (!response.ok) {
 				this.deps.log?.(`A Facade result for ${caller.alias} could not reach its window ${caller.window}: ${response.message}`);
@@ -575,14 +575,14 @@ class ToolService {
 
 	/** A Facade result another window sends for one of this window's agents (RULES-1.7): in its inbox, and its terminal where it can be. */
 	private receiveResult(result: RoutedResult): Data {
-		if (!result || typeof result.to !== 'string' || typeof result.text !== 'string' || (result.result !== undefined && !isJsonObject(result.result)) || !this.deps.agents.get(result.to)) {
+		if (!result || typeof result.to !== 'string' || typeof result.text !== 'string' || (result.result !== undefined && !isJsonObject(result.result)) || (result.id !== undefined && !/^m-[1-9]\d*$/.test(result.id)) || !this.deps.agents.get(result.to)) {
 			throw new Error('The routed Facade result names no agent of this window: it had no effect.');
 		}
 		if (result.about) {
 			this.deps.messages.keepSent(result.about);
 		}
 		this.deps.messages.report({
-			to: result.to, text: result.text, ...result.result !== undefined ? { result: result.result } : {}, ...result.callId !== undefined ? { callId: result.callId } : {},
+			...result.id !== undefined ? { id: result.id } : {}, to: result.to, text: result.text, ...result.result !== undefined ? { result: result.result } : {}, ...result.callId !== undefined ? { callId: result.callId } : {},
 			...result.about ? { about: result.about.id } : {}, ...result.agent ? { agentParty: result.agent } : {}
 		});
 		return { taken: true };
@@ -748,6 +748,7 @@ class ToolService {
 		// same headed message its record keeps, and the post-start path sends it under that ID (COLLABORATION-2.1, 2.2)
 		const label = this.senderOf(caller).sender?.label;
 		const prompt = args.prompt !== undefined ? this.deps.messages.allocate({ from: caller.id, text: args.prompt, party: { run: caller.id, alias: caller.alias, name: caller.name }, ...label !== undefined ? { label } : {} }) : undefined;
+		const resultMessageId = this.deps.messages.reserveResult();
 		const run = this.deps.agents.launch({
 			name: args.name,
 			location: location.id,
@@ -757,12 +758,12 @@ class ToolService {
 			...args.worktree ? { worktree: { branch: args.worktree.branch, baseRef: args.worktree.base_ref } } : {},
 			...prompt ? { promptId: prompt.id, prompt: prompt.text, promptLine: args.prompt!.split(/\r\n?|\n/).find(line => line.trim()) ?? args.prompt! } : {},
 			origin: 'agent',
-			startCallId: call.callId,
+			startCallId: call.callId, resultMessageId,
 			creator: { run: caller.id, root: caller.root, label: [caller.name, caller.alias].filter(Boolean).join(' ') },
 			...args.request_id !== undefined ? { requestId: args.request_id } : {}
 		});
 		const launched = this.deps.agents.get(run);
-		const start: Start = { run, args, caller, call, location, ...launched ? { identity: { alias: launched.alias, name: launched.name } } : {},
+		const start: Start = { resultMessageId, run, args, caller, call, location, ...launched ? { identity: { alias: launched.alias, name: launched.name } } : {},
 			...prompt ? { promptId: prompt.id } : {}, answerBy: Date.now() + this.deps.timeout() * 1000 };
 		const settled = this.deps.agents.started(run);
 		let outcome: { readonly value: StartOutcome } | undefined;
@@ -780,7 +781,7 @@ class ToolService {
 			const final = await this.finishStart({ ...start, answerBy: Infinity }, late);
 			const facts = this.deps.agents.get(run) ?? launched;
 			if (facts) {
-				this.reportTo(caller, { callId: call.callId, agent: facts, text: receiptTextOf(final.result, final.headline),
+				this.reportTo(caller, { id: resultMessageId, callId: call.callId, agent: facts, text: receiptTextOf(final.result, final.headline),
 					result: answerOf(withRecovery('start_agent', compactResult('start_agent', final.result), args)).structured });
 			}
 		}).catch(err => this.deps.log?.(`Could not report the start of ${run} to ${caller.alias}: ${errorText(err)}`));
@@ -799,7 +800,7 @@ class ToolService {
 		const present = this.deps.agents.get(facts.id);
 		const prompt = facts.promptId !== undefined ? this.originalPrompt(facts) : undefined;
 		const data = defined({ ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true,
-			...prompt ? { prompt } : {}, call_id: facts.lifecycle === 'starting' ? facts.startCallId : undefined });
+			...prompt ? { prompt } : {}, result_message_id: facts.lifecycle === 'starting' ? facts.resultMessageId : undefined, call_id: facts.lifecycle === 'starting' ? facts.startCallId : undefined });
 		const before = `Request ${args.request_id} started ${referenceOf(facts)} (${facts.id}) already, at ${isoOf(facts.createdAt)}: nothing was started again.`;
 		const effects: Effects = { outcome: 'none', agent_id: facts.id };
 		if (!present && facts.lifecycle !== 'ended') {
@@ -838,7 +839,7 @@ class ToolService {
 		}
 		if (outcome.state === 'failed') {
 			const reason = facts?.error?.source === 'worktree' ? 'worktree_failed' : 'launch_failed';
-			const message = `${shown} could not start: ${outcome.error ?? 'its launch failed.'}`;
+			const message = outcome.error ?? 'The CLI launch failed.';
 			return {
 				result: failure({ code: 'FAILED', reason, message }, this.startData(start, facts, 'failed'), effects('partial')),
 				headline: `${message} Its card stays, red, until it is closed.`
@@ -890,7 +891,9 @@ class ToolService {
 			process_state: state === 'closed' ? 'unknown' : state,
 			closed: state === 'closed' ? true : undefined,
 			call_id: state === 'starting' ? facts?.startCallId ?? start.call.callId : undefined,
+			result_message_id: state === 'starting' ? facts?.resultMessageId ?? start.resultMessageId : undefined,
 			tools_state: facts?.tools,
+			tools_reason: facts?.toolsReason,
 			requested_model: args.model,
 			requested_effort: args.effort
 		});
@@ -1044,13 +1047,14 @@ class ToolService {
 		if (cleanup) {
 			return stopped(target, cleanup.value);
 		}
+		const resultMessageId = this.deps.messages.reserveResult();
 		void closing.then(late => {
 			const final = stopped(target, late);
-			this.reportTo(caller, { callId: call.callId, agent: target, text: receiptTextOf(final.result, final.headline),
+			this.reportTo(caller, { id: resultMessageId, callId: call.callId, agent: target, text: receiptTextOf(final.result, final.headline),
 				result: answerOf(withRecovery('stop_agent', compactResult('stop_agent', final.result))).structured });
 		}).catch(err => this.deps.log?.(`Could not report the stop of ${target.alias} to ${caller.alias}: ${errorText(err)}`));
 		return {
-			result: accepted({ agent_id: target.id, reference: referenceOf(target), call_id: call.callId, closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
+			result: accepted({ agent_id: target.id, reference: referenceOf(target), result_message_id: resultMessageId, call_id: call.callId, closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
 			headline: `Closed ${shown}'s card and terminal; its process is still being ended, and that outcome is ${LATER}.`
 		};
 	}
@@ -1359,6 +1363,7 @@ class ToolService {
 }
 
 interface Start {
+	readonly resultMessageId: string;
 	readonly identity?: Pick<RunFacts, 'alias' | 'name'>;
 	readonly run: RunId;
 	readonly args: ToolArguments['start_agent'];

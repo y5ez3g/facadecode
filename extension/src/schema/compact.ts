@@ -75,7 +75,7 @@ function identity(source: Data): Data {
 		data.target = agentReference(source.target_reference) ?? (source.target === '@human' ? '#human' : source.target);
 		delete data.target_reference;
 	}
-	for (const key of ['reply_to', 'about']) {
+	for (const key of ['reply_to', 'about', 'result_message_id']) {
 		if (typeof source[key] === 'string') {
 			data[key] = messageReference(source[key]);
 		}

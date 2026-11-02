@@ -135,7 +135,7 @@
 	"To: {0}": "À : {0}",
 	"In reply to: {0}": "En réponse à : {0}",
 	"About message: {0}": "Concernant le message : {0}",
-	"Status: {0}": "État : {0}",
+	"Delivery: {0}": "Remise : {0}",
 	"Result reported in: {0}": "Résultat signalé dans : {0}",
 	"Being delivered; Facade stops trying at {0}": "Remise en cours ; Facade cessera d'essayer à {0}",
 	"Being delivered": "Remise en cours",

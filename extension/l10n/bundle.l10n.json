@@ -209,7 +209,7 @@
 	"To: {0}": "To: {0}",
 	"In reply to: {0}": "In reply to: {0}",
 	"About message: {0}": "About message: {0}",
-	"Status: {0}": "Status: {0}",
+	"Delivery: {0}": "Delivery: {0}",
 	"Result reported in: {0}": "Result reported in: {0}",
 	"Facade could not confirm that the agent received the message": "Facade could not confirm that the agent received the message",
 	"Being delivered; Facade stops trying at {0}": "Being delivered; Facade stops trying at {0}",

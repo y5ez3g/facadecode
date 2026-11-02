@@ -24,12 +24,15 @@ suite('Contract: finite continuation and originating-call correlation', () => {
 		const initial = resultOf(await s.service({ caller: lead.id, tool: 'start_agent', arguments: START, callId: 'original-call' }));
 		const fresh = createToolServices(s.deps);
 		const repeated = resultOf((await fresh.answer({ protocol: TOOL_PROTOCOL, elapsedMs: 0, caller: lead.id, tool: 'start_agent', arguments: START, callId: 'lookup-call' })).answer);
+		assert.strictEqual(initial.data.result_message_id, repeated.data.result_message_id);
+		assert.deepStrictEqual(s.messages.inbox(lead.id, { all: true, limit: 100 }).records, [], 'reserving the result does not create an inbox item');
 		assert.deepStrictEqual([initial.data.call_id, repeated.data.call_id, repeated.data.repeated], ['original-call', 'original-call', true]);
 		assert.strictEqual(s.agents.launched.length, 1);
 		const worker = s.agents.list().find(run => run.alias === initial.data.agent_id)!;
 		s.agents.settle(worker.id, { state: 'running' });
 		await waitFor(() => s.messages.reports.length === 1);
 		assert.strictEqual(s.messages.reports[0].callId, 'original-call');
+		assert.strictEqual(s.messages.records[0].alias, initial.data.result_message_id);
 	});
 
 	test('an accepted start that closes still reports its final outcome under its original identity', async () => {
@@ -43,6 +46,7 @@ suite('Contract: finite continuation and originating-call correlation', () => {
 		await waitFor(() => s.messages.reports.length === 1);
 		const result = s.messages.records.find(record => record.kind === 'result')!;
 		assert.strictEqual(result.callId, initial.data.call_id);
+		assert.strictEqual(result.alias, initial.data.result_message_id);
 		assert.strictEqual(result.result?.status, 'failure');
 		assert.strictEqual((result.result?.data as { process_state: string }).process_state, 'unknown', 'closing the card is not process-exit evidence');
 		assert.deepStrictEqual(result.result?.effects, { outcome: 'unknown', worktree_created: '/work/app.worktrees/fix' });
@@ -50,7 +54,7 @@ suite('Contract: finite continuation and originating-call correlation', () => {
 		assert.deepStrictEqual(result.result?.recovery, { action: 'inspect_effects' });
 		assert.strictEqual((result.result?.data as { agent_id: string }).agent_id, initial.data.agent_id);
 		assert.deepStrictEqual(result.agent, { run: worker.id, alias: worker.alias, name: worker.name });
-		assert.strictEqual(formatResult(result).split('\n')[0], `[Facade result ${result.alias} | agent @worker ${worker.alias} | call closed-start]`);
+		assert.strictEqual(formatResult(result).split('\n')[0], `🔔 worker (${worker.alias}) was closed before startup finished. Whether the process stopped is unknown. · ${result.alias}`);
 		assert.strictEqual(s.agents.get(worker.id), undefined);
 	});
 
@@ -62,11 +66,13 @@ suite('Contract: finite continuation and originating-call correlation', () => {
 		s.agents.closeWith = new Promise(resolve => finish = resolve);
 		const initial = resultOf(await s.service({ caller: lead.id, tool: 'stop_agent', arguments: { agent: worker.alias }, callId: 'original-stop' }));
 		assert.strictEqual(initial.status, 'accepted');
+		assert.match(initial.data.result_message_id, /^#m\d+$/);
 		assert.strictEqual(s.agents.get(worker.id), undefined);
 		finish('unconfirmed');
 		await waitFor(() => s.messages.reports.length === 1);
 		const receipt = s.messages.records.find(record => record.kind === 'result')!;
-		assert.strictEqual(formatResult(receipt).split('\n')[0], `[Facade result ${receipt.alias} | agent @worker #a2 | call original-stop]`);
+		assert.strictEqual(receipt.alias, initial.data.result_message_id);
+		assert.strictEqual(formatResult(receipt).split('\n')[0], `🔔 worker (#a2) may still be running. The card and terminal are closed. · ${receipt.alias}`);
 		const inbox = resultOf(await s.call(lead, 'read_messages'));
 		const read = inbox.data.messages[0];
 		assert.deepStrictEqual([read.agent, read.call_id, read.result.status, read.result.data.agent_id], ['#a2', initial.data.call_id, 'failure', '#a2']);
@@ -87,6 +93,7 @@ suite('Contract: finite continuation and originating-call correlation', () => {
 		const receipts = s.messages.records.filter(record => record.kind === 'result');
 		for (const initial of accepted) {
 			const receipt = receipts.find(record => record.callId === initial.data.call_id)!;
+			assert.strictEqual(receipt.alias, initial.data.result_message_id);
 			assert.strictEqual((receipt.result?.data as { agent_id: string }).agent_id, initial.data.agent_id);
 		}
 		assert.strictEqual(s.agents.launched.length, 2);

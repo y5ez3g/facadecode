@@ -122,8 +122,9 @@ own route and answer - so that it never gives up on a call Facade is still answe
 An actual continuing operation may return accepted with its run/effects; later completion returns to its initiating
 agent through a Facade system result. The accepted response and later result identify the same originating tool call
 and target run, using existing call correlation facts so concurrent calls, including calls to the same target, are
-distinguishable. Accepted start/stop results expose the original `call_id`, matched by the later system receipt; a
-same-request start lookup keeps the original ID, including after reload. The original prompt/message ID identifies
+distinguishable. Accepted start/stop results expose `result_message_id`, reserved from the existing message namespace before acceptance.
+The later receipt has that same ID. The full `call_id` stays in structured data and records; a same-request start lookup
+keeps both original IDs, including after reload. Reservation creates no inbox item and promises no durable delivery. The original prompt/message ID identifies
 prompt delivery separately. Message records retain originating-call correlation while delivery resumes after reload.
 Local and routed receipts retain the target's known name and short reference even after its card closes; rendering
 does not depend on looking up that removed target again.

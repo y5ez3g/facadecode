@@ -7,6 +7,7 @@ import { monotonic } from '../base/clock';
 import { messageOf } from '../base/errors';
 import { displayLine } from '../base/text';
 import { invalid } from './errors';
+import { deliveryText, notificationName, operationText } from './notificationText';
 import { REQUEST_MS } from './requests';
 import type { HumanContactPort, InboxPage, InboxQuery, InputEffects, InputPort, MessageRecord, Messages, SendRequest, SendResult } from './messagePorts';
 import type { Agents, CapabilityState, Clock, Disposable, LogPort, RunChange, RunFacts, RunId } from './ports';
@@ -156,18 +157,6 @@ const OBSTACLES: { readonly [state: string]: string | undefined } = { draft: 'in
 /** What holds an input for a person or its CLI, and is waited for (RULES-1.5, D106): unlike an input that cannot be read. */
 const HELD: ReadonlySet<string> = new Set(['input_draft', 'input_interaction']);
 
-/** Why delivery did not succeed, as a Facade result says it. */
-const REASONS: { readonly [reason: string]: string } = {
-	input_draft: 'a draft stayed in its input until the deadline',
-	input_interaction: 'its CLI showed a menu, sign-in or permission question until the deadline',
-	input_unknown: 'its input could not be read until the deadline',
-	partial_input: 'only part of the message went into its input',
-	submission_unconfirmed: 'its CLI did not confirm the submission',
-	timeout: 'the delivery deadline passed',
-	ended: 'the agent ended or was closed',
-	unsupported: 'Facade cannot read the message input of its CLI'
-};
-
 /**
  * Agent messages (RULES-1, COLLABORATION-2-4): every send is recorded at once with its own ID, then given to its one recipient - the
  * person in this window by notification, or a run's CLI as one paste and Enter, never over a draft or into a menu, trying every
@@ -259,7 +248,7 @@ export class MessageService implements Messages, Disposable {
 			this.deps.log.event(`Message ${record.alias} to ${target.alias} not delivered: its ordinary input is ${capability.state} (${capability.reason})`);
 			return this.failed(record, 'unsupported', NO_EFFECTS);
 		}
-		const text = formatMessage(record, request.sender?.label ?? this.deps.window.label);
+		const text = formatMessage(record, request.sender ? request.sender.label ?? request.sender.window : '');
 		// A long paste gets the time it takes, beyond the usual, at every deadline of its stage (D105, D118)
 		const extra = this.deps.input.pasteTime?.(request.to, text) ?? 0;
 		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra, start: deadline - STAGE_MS } });
@@ -292,7 +281,7 @@ export class MessageService implements Messages, Disposable {
 	allocate(request: { readonly from: RunId; readonly text: string; readonly party?: MessageRecord['from']; readonly label?: string }): { readonly id: string; readonly text: string } {
 		const n = this.deps.ids.next();
 		// The header names the sender's window: another window's, for a sender whose call was routed here (COLLABORATION-2.1)
-		return { id: `m-${n}`, text: formatMessage({ alias: `#m${n}`, from: request.party ?? this.party(request.from), text: request.text }, request.label ?? this.deps.window.label) };
+		return { id: `m-${n}`, text: formatMessage({ alias: `#m${n}`, from: request.party ?? this.party(request.from), text: request.text }, request.label ?? '') };
 	}
 
 	recordPrompt(request: Omit<SendRequest, 'elapsedMs'>, delivery: MessageRecord['delivery']): MessageRecord {
@@ -308,17 +297,29 @@ export class MessageService implements Messages, Disposable {
 		}, delivery, true, request.id);
 	}
 
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
+	reserveResult(): string { return `m-${this.deps.ids.next()}`; }
+
+	report(request: { readonly id?: string; readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string; readonly result?: MessageRecord['result'] }): MessageRecord {
+		if (request.id !== undefined) {
+			const prior = this.deps.store.list().find(record => record.id === request.id);
+			if (prior) {
+				if (prior.kind !== 'result' || prior.to.run !== request.to || prior.callId !== request.callId) {
+					throw invalid('invalid_argument', 'The reserved result ID is already in use by a different operation.');
+				}
+				return this.live.get(prior.id) ?? prior;
+			}
+		}
+
 		const record = this.create({
 			kind: 'result',
 			from: { run: 'facade' },
 			to: this.party(request.to),
-			text: request.text,
+			text: request.result && (request.agentParty || request.agent) ? operationText(request.result, request.agentParty ?? this.party(request.agent!)) : request.text,
 			...(request.result !== undefined ? { result: request.result } : {}),
 			...(request.about !== undefined ? { about: request.about } : {}),
 			...(request.callId !== undefined ? { callId: request.callId } : {}),
 			...(request.agentParty !== undefined ? { agent: request.agentParty } : request.agent !== undefined ? { agent: this.party(request.agent) } : {})
-		}, PENDING);
+		}, PENDING, true, request.id);
 		return this.handOver(record, formatResult(record));
 	}
 
@@ -371,6 +372,7 @@ export class MessageService implements Messages, Disposable {
 			if (record.to.run !== run || !wanted.has(record.id) || record.delivery.status === 'success') {
 				continue;
 			}
+			const { input: _input, ...delivery } = record.delivery;
 			const stage = [...this.stages].find(each => each.batch ? each.batch.records.includes(record.id) : each.message === record.id);
 			// An input call still under way may already have written text or Enter. A successful read does not prove no input effects.
 			const effects = stage?.submitting ? { ...UNKNOWN_EFFECTS, ...stage.written ? { text_written: stage.effects.text_written } : {} } : record.delivery.effects;
@@ -381,14 +383,14 @@ export class MessageService implements Messages, Disposable {
 					stage.batch.texts.delete(record.id);
 				}
 				this.live.delete(record.id);
-				this.save({ ...record, delivery: { ...record.delivery, status: 'success', effects, via: 'read', deliveredAt: at } });
+				this.save({ ...record, delivery: { ...delivery, status: 'success', effects, via: 'read', deliveredAt: at } });
 				this.deps.log.event(`Facade result ${record.alias} delivered to ${record.to.alias ?? record.to.run} by its read_messages`);
 				continue;
 			}
 			if (stage) {
 				// The record is delivered now. Only a paste already issued may finish its own draft; no fresh paste follows the read.
 				stage.settled = { status: 'success', effects, attempts: stage.attempts, via: 'read' };
-				this.save({ ...record, delivery: { ...record.delivery, status: 'success', effects, via: 'read', deliveredAt: at } });
+				this.save({ ...record, delivery: { ...delivery, status: 'success', effects, via: 'read', deliveredAt: at } });
 				this.deps.log.event(`${record.kind === 'result' ? 'Facade result' : 'Message'} ${record.alias} delivered to ${record.to.alias ?? record.to.run} by its read_messages`);
 				stage.resolveRead(stage.settled);
 				if (!stage.submitting && !stage.written) {
@@ -398,7 +400,7 @@ export class MessageService implements Messages, Disposable {
 			}
 			// Failed already, or left pending by a window that went: delivered now, and nobody is told again (RULES-1.7)
 			this.live.delete(record.id);
-			this.save({ ...record, delivery: { ...record.delivery, status: 'success', via: 'read', deliveredAt: at } });
+			this.save({ ...record, delivery: { ...delivery, status: 'success', via: 'read', deliveredAt: at } });
 			this.deps.log.event(`${record.kind === 'result' ? 'Facade result' : 'Message'} ${record.alias} delivered to ${record.to.alias ?? record.to.run} by its read_messages`);
 		}
 	}
@@ -681,7 +683,7 @@ export class MessageService implements Messages, Disposable {
 		if (this.mono() >= stage.deadline) {
 			return { kind: 'expired' };
 		}
-		if (input !== 'own' && !this.pasting(stage)) {
+		if (input !== 'own' && !this.pasting(stage, text(), lead)) {
 			// Not kept as maybe in its input, it is not pasted: an opening after a reload could not know not to paste it again (RULES-1.6)
 			return { kind: 'blocked', obstacle: 'input_unknown' };
 		}
@@ -729,13 +731,13 @@ export class MessageService implements Messages, Disposable {
 	 * Keeps, before its paste is issued, that the stage's text may be in its recipient's input from now on, so that no later opening of
 	 * this window pastes it again (RULES-1.6, 1.9); false where that cannot be kept.
 	 */
-	private pasting(stage: Stage): boolean {
+	private pasting(stage: Stage, text: string, lead?: string): boolean {
 		for (const id of stage.batch?.records ?? [stage.message]) {
 			const current = this.live.get(id);
 			if (!current || current.delivery.pasted) {
 				continue;
 			}
-			const marked: MessageRecord = { ...current, delivery: { ...current.delivery, pasted: true } };
+			const marked: MessageRecord = { ...current, delivery: { ...current.delivery, pasted: true, input: { text, lead, messages: [...stage.batch?.records ?? [stage.message]] } } };
 			try {
 				this.deps.store.put(marked);
 			} catch (err) {
@@ -891,12 +893,12 @@ export class MessageService implements Messages, Disposable {
 			// A deadline moved on while the input was held is the one the record states (RULES-1.5, D106)
 			const deadline = stage.heldUntil ?? current.delivery.deadline;
 			// What a later opening goes on from: the stage's start, whether its text may be in the input, as what, and its Enter (RULES-1.9)
-			const { pasted: _pasted, seen: _seen, entered: _entered, ...delivery } = current.delivery;
+			const { pasted: _pasted, seen: _seen, entered: _entered, input, ...delivery } = current.delivery;
 			this.save({
 				...current,
 				delivery: {
 					...delivery, attempts: stage.attempts, effects: written, ...deadline !== undefined ? { deadline } : {}, start: delivery.start ?? this.deps.clock.now() - (this.mono() - stage.start),
-					...stage.written || stage.submitting ? { pasted: true } : {}, ...stage.seen !== undefined ? { seen: stage.seen } : {}, ...stage.entered ? { entered: true } : {}
+					...stage.written || stage.submitting ? { pasted: true, ...input ? { input } : {} } : {}, ...stage.seen !== undefined ? { seen: stage.seen } : {}, ...stage.entered ? { entered: true } : {}
 				}
 			});
 		}
@@ -984,9 +986,11 @@ export class MessageService implements Messages, Disposable {
 	/** A delivery this window's earlier opening began, under way again within its own deadline (RULES-1.9). */
 	private goOn(record: MessageRecord, run: RunId, now: number): void {
 		const { delivery } = record;
-		const text = record.kind === 'result' ? formatResult(record) : formatMessage(record, record.label ?? this.deps.window.label);
+		const text = delivery.input?.text ?? (record.kind === 'result' ? formatResult(record) : formatMessage(record, record.fromWindow ? record.label ?? record.fromWindow : ''));
+		const lead = delivery.input ? delivery.input.lead : MESSAGE_LEAD;
+		const members = record.kind === 'result' && delivery.input ? this.deps.store.list().filter(other => delivery.input!.messages.includes(other.id) && other.delivery.status === 'pending' && other.to.run === run) : [record];
 		const extra = this.deps.input.pasteTime?.(run, text) ?? 0;
-		const stage = this.newStage(run, record.id, this.mono() - (now - delivery.start!), extra, record.kind === 'result' ? { records: [record.id], texts: new Map([[record.id, text]]) } : undefined);
+		const stage = this.newStage(run, record.id, this.mono() - (now - delivery.start!), extra, record.kind === 'result' ? { records: members.map(each => each.id), texts: new Map(members.map(each => [each.id, text])) } : undefined);
 		stage.deadline = this.mono() + (delivery.deadline! - now);
 		stage.attempts = delivery.attempts;
 		if (delivery.pasted) {
@@ -1001,13 +1005,13 @@ export class MessageService implements Messages, Disposable {
 				stage.batch.typed = text;
 			}
 		}
-		this.live.set(record.id, record);
+		for (const member of members) { this.live.set(member.id, member); }
 		this.deps.log.event(`${record.kind === 'result' ? 'Facade result' : 'Message'} ${record.alias} to ${record.to.alias ?? record.to.run} goes on after a reload until ${new Date(delivery.deadline!).toISOString()}`);
 		if (stage.batch) {
 			this.deliverResults(record, text, stage);
 			return;
 		}
-		void Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.read]).then(outcome => {
+		void Promise.race([this.stage(stage, text, lead), stage.read]).then(outcome => {
 			const final = this.finish(record.id, outcome);
 			if (final && !this.disposed) {
 				this.reportOutcome(final, undefined);
@@ -1085,54 +1089,26 @@ export function partyText(party: MessageRecord['from'] | MessageRecord['to']): s
 }
 
 /**
- * What is typed before a message's paste where its recipient's CLI takes a paste alone as material rather than a request: words of
- * the person's own that ask it to act on the message (COLLABORATION-2.1, D108). A Facade result asks for nothing, and has none.
+ * The notification prefix is typed before its remaining text is pasted where a CLI needs a typed lead (COLLABORATION-2.1).
+ * It is already part of formatMessage, so the input layer never adds a second prefix. A system result has no such lead.
  */
-export const MESSAGE_LEAD = 'Act on this Facade message: ';
+export const MESSAGE_LEAD = '📨 Message from ';
 
-/** A message as its recipient's CLI is given it: the whole text between a header and a footer naming its ID. */
+/** Full original content, introduced by one notification header. No body rewriting or visible footer. */
 export function formatMessage(record: Pick<MessageRecord, 'alias' | 'from' | 'replyTo' | 'text'>, windowLabel: string): string {
-	const fields = [
-		`Facade message ${record.alias}`,
-		`from ${partyText(record.from)}`,
-		`window ${headerText(windowLabel)}`,
-		...(record.replyTo !== undefined ? [`reply to ${aliasText(record.replyTo)}`] : [])
-	];
-	return `[${fields.join(' | ')}]\n${record.text}\n[/Facade message ${record.alias}]`;
+	return [`📨 Message from ${notificationName(record.from)} · ${record.alias}`,
+		...(windowLabel ? [`From ${headerText(windowLabel)}`] : []),
+		...(record.replyTo !== undefined ? [`Reply to ${aliasText(record.replyTo)}`] : [])].join(' · ') + `\n${record.text}`;
 }
 
-/** A Facade result as its run's CLI is given it: labeled as Facade's, about the message or agent it reports on, and its call. */
+/** A system notification identifies its own receipt only when it reports a non-message operation. */
 export function formatResult(record: MessageRecord): string {
-	const fields = [
-		`Facade result ${record.alias}`,
-		...(record.about !== undefined ? [`about ${aliasText(record.about)}`] : []),
-		...(record.agent !== undefined ? [`agent ${partyText(record.agent)}`] : []),
-		...(record.callId !== undefined ? [`call ${headerText(record.callId)}`] : [])
-	];
-	return `[${fields.join(' | ')}]\n${record.result ? JSON.stringify(record.result) : record.text}\n[/Facade result ${record.alias}]`;
+	const body = record.result && record.agent ? operationText(record.result, record.agent) : record.text;
+	const [first, ...rest] = body.split('\n');
+	return [`🔔 ${first}${record.about !== undefined ? '' : ` · ${record.alias}`}`, ...rest].join('\n');
 }
 
-/** What an accepted send came to, as its Facade result says it: the original, its target, outcome and input effects (COLLABORATION-2.2). */
-function resultText(original: MessageRecord, cli?: string): string {
-	const target = `${partyText(original.to)} (${original.to.run})`;
-	const delivery = original.delivery;
-	// An input box Facade did not recognize names the CLI and version it found, for whoever looks into it (CLIS-2.1, D89)
-	const unrecognized = delivery.reason === 'input_unknown' && cli ? `; Facade did not recognize the input box of ${cli}` : '';
-	const outcome = delivery.status === 'success'
-		? delivery.via === 'read'
-			? `Your message ${original.alias} to ${target} was delivered: the recipient read it with read_messages.`
-			: `Your message ${original.alias} to ${target} was submitted to its CLI.`
-		: `Your message ${original.alias} to ${target} was not delivered: ${REASONS[delivery.reason ?? ''] ?? delivery.reason ?? 'unknown reason'}${unrecognized} (${delivery.reason ?? 'unknown'}). Input effects: ${effectsText(delivery.effects)}.`;
-	return `${outcome} This is a Facade result, not a reply from the recipient.`;
-}
-
-function effectsText(effects: InputEffects): string {
-	if (effects.outcome === 'none') {
-		return 'none';
-	}
-	const enter = effects.enter_written === true ? 'Enter written' : effects.enter_written === false ? 'no Enter' : 'Enter unknown';
-	return `${effects.outcome} (text ${effects.text_written ?? 'unknown'}, ${enter})`;
-}
+const resultText = deliveryText;
 
 /**
  * Why a stage that ran out of time failed: what went in, if anything did - part of its text, or its text without a confirmed

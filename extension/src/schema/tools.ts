@@ -41,7 +41,7 @@ export const QUERY_ROUTE_MS = 10_000;
 export const TOOLS: readonly ToolDefinition[] = [
 	{
 		name: 'list_start_options',
-		description: 'Discover launch choices: current location and CLIs by default; scope:all for windows; window_id for locations; add location_id for CLIs, then cli for details. scope excludes explicit selections.',
+		description: 'Discover startup choices: default/current returns your launch location and CLIs. scope:all lists windows; window_id lists locations; add location_id for CLIs, then cli for model/effort and capabilities. scope excludes explicit selections.',
 		inputSchema: {
 			type: 'object',
 			properties: { scope: { type: 'string', enum: ['current', 'all'] }, window_id: ID, location_id: ID, cli: ID },
@@ -50,7 +50,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'start_agent',
-		description: 'Start a new agent in its own terminal in any Facade window. It joins your creation tree. Success confirms process startup; tools and the optional first prompt have separate outcomes. An accepted start continues and its later Facade result matches call_id.',
+		description: 'Start an agent in any window, in your creation tree. Success confirms startup; tools and prompt outcomes are separate. Accepted work continues; its receipt matches result_message_id.',
 		inputSchema: {
 			type: 'object',
 			properties: {
@@ -86,7 +86,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 	},
 	{
 		name: 'stop_agent',
-		description: 'Stop one agent: its card and terminal close at once; its children keep running. Accepted means cleanup continues, with a later result matching call_id. Unconfirmed process exit is a failure with partial effects.',
+		description: 'Stop one agent; its children keep running. Its card and terminal close at once. Accepted cleanup continues; its receipt matches result_message_id. Unconfirmed process exit fails with partial effects.',
 		inputSchema: {
 			type: 'object',
 			properties: { agent: AGENT },

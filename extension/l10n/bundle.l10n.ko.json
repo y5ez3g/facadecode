@@ -135,7 +135,7 @@
 	"To: {0}": "받는 사람: {0}",
 	"In reply to: {0}": "회신 대상: {0}",
 	"About message: {0}": "관련 메시지: {0}",
-	"Status: {0}": "상태: {0}",
+	"Delivery: {0}": "전달: {0}",
 	"Result reported in: {0}": "결과 보고: {0}",
 	"Being delivered; Facade stops trying at {0}": "전달 중(Facade는 {0}에 시도를 중지함)",
 	"Being delivered": "전달 중",

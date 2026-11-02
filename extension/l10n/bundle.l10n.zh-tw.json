@@ -135,7 +135,7 @@
 	"To: {0}": "接收者: {0}",
 	"In reply to: {0}": "回覆訊息: {0}",
 	"About message: {0}": "相關訊息: {0}",
-	"Status: {0}": "狀態: {0}",
+	"Delivery: {0}": "送達情況：{0}",
 	"Result reported in: {0}": "結果回報: {0}",
 	"Being delivered; Facade stops trying at {0}": "正在傳送；Facade 將在 {0} 停止嘗試",
 	"Being delivered": "正在傳送",

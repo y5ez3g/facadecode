@@ -28,9 +28,9 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		assert.match(started.data.agent_id, /^#a\d+$/);
 		assert.strictEqual(started.data.process_state, 'running');
 		const sent = resultOf(await s.call(lead, 'send_message', { to: '#a2', text: 'Act once.' }));
-		assert.deepStrictEqual(sent.data, { message_id: '#m1', target: '#a2', disposition: 'submitted_to_cli' });
+		assert.deepStrictEqual(sent.data, { message_id: '#m2', target: '#a2', disposition: 'submitted_to_cli' });
 		const read = resultOf(await s.call(worker, 'read_messages', { ids: [sent.data.message_id] }));
-		assert.strictEqual(read.data.messages[0].message_id, '#m1');
+		assert.strictEqual(read.data.messages[0].message_id, '#m2');
 		assert.strictEqual(read.data.messages[0].text, 'Act once.');
 		assert.strictEqual(read.data.messages[0].to, undefined);
 		const typed = resultOf(await s.call(lead, 'type_text', { agent: '#a2', text: '字🙂\n\t', enter: true }));
@@ -136,7 +136,9 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		assert.match(receipt.text, /^Started /);
 		assert.strictEqual(receipt.callId, 'launch-42');
 		assert.strictEqual((receipt.result?.data as { agent_id: string }).agent_id, initial.data.agent_id);
-		assert.ok(formatResult(receipt).includes(JSON.stringify(receipt.result)));
+		assert.ok(!formatResult(receipt).includes(JSON.stringify(receipt.result)));
+		assert.strictEqual(receipt.alias, initial.data.result_message_id);
+		assert.match(formatResult(receipt), /🔔 .*session has started/);
 		const read = await s.serve({ caller: lead.id, tool: 'read_messages', arguments: { ids: [receipt.alias] } });
 		assert.strictEqual(s.messages.delivered.length, 0);
 		const data = resultOf(read.answer).data.messages[0];

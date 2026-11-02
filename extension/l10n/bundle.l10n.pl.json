@@ -135,7 +135,7 @@
 	"To: {0}": "Do: {0}",
 	"In reply to: {0}": "W odpowiedzi na: {0}",
 	"About message: {0}": "Dotyczy wiadomości: {0}",
-	"Status: {0}": "Stan: {0}",
+	"Delivery: {0}": "Dostarczenie: {0}",
 	"Result reported in: {0}": "Wynik zgłoszono w: {0}",
 	"Being delivered; Facade stops trying at {0}": "Trwa dostarczanie; Facade przestanie próbować o {0}",
 	"Being delivered": "Trwa dostarczanie",

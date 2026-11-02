@@ -71,7 +71,7 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 		assert.deepStrictEqual(timers.map(timer => timer.ms), [ATTENTION_MS]);
 		elapse();
 		assert.deepStrictEqual(told.map(each => [each.to, each.agent]), [[LEAD, CHILD]]);
-		assert.match(told[0].text, /^@Echo #a2, which you started, is waiting for permission in its terminal \("Allow Bash\(rm -rf build\)\?"\)\. Permission is the person's to give/);
+		assert.strictEqual(told[0].text, 'Echo (#a2) is waiting for approval from the user.\nAllow Bash(rm -rf build)?');
 		// Still waiting, its report again: nothing more
 		waits(CHILD, { kind: 'permission', text: 'Allow Bash(rm -rf build)?' });
 		elapse();
@@ -102,7 +102,7 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 		waits(CHILD, { kind: 'auth' });
 		assert.deepStrictEqual(timers.map(timer => timer.stopped), [true, true, false]);
 		elapse();
-		assert.deepStrictEqual(told.map(each => /waiting for a sign-in/.test(each.text)), [true]);
+		assert.deepStrictEqual(told.map(each => /needs the user to sign in/.test(each.text)), [true]);
 	});
 
 	test('an agent the person started, or whose creator ended or is not of this window, tells nobody', () => {
@@ -134,13 +134,12 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 
 	test('a blocker is reported without directing the creator to contact the person or answer the prompt', () => {
 		const run = { name: 'Echo', alias: '#a2' };
-		assert.match(attentionText(run, { kind: 'permission' }), /Permission is the person's to give/);
-		assert.match(attentionText(run, { kind: 'question', text: 'Which branch?' }), /waiting for an answer in its terminal \("Which branch\?"\)/);
-		assert.match(attentionText(run, { kind: 'auth' }), /Only the person can sign in/);
+		assert.match(attentionText(run, { kind: 'permission' }), /waiting for approval from the user/);
+		assert.match(attentionText(run, { kind: 'question', text: 'Which branch?' }), /There's a question from Echo \(#a2\):\nWhich branch\?/);
+		assert.match(attentionText(run, { kind: 'auth' }), /needs the user to sign in/);
 		for (const kind of ['permission', 'question', 'auth'] as const) {
 			const text = attentionText(run, { kind });
 			assert.doesNotMatch(text, /send_message|#human|tell them|tell the person|press_keys|type_text/);
-			assert.match(text, /does not request human contact or authorize answering the prompt; follow the person's task instructions/);
 		}
 	});
 });

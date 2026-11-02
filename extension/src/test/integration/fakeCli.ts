@@ -81,14 +81,15 @@ if (prompt >= 0 && args[prompt + 1] !== undefined) {
 /** The built-in it stands in for, whose input it draws as that CLI does, for that CLI's reader (CLIS-2.1): Claude Code by default. */
 const as = process.env.FACADE_IT_AS ?? (process.env.FACADE_IT_SCREEN === 'muse' ? 'muse' : 'claude');
 
-/** A row of its input as it draws it: its text, with SGR sequences, and the column the cursor stands at where it is on that row. */
+/** A row of its input, including SGR and the cursor-save sequence at its actual input position. */
 interface Row {
 	readonly text: string;
-	readonly cursor?: number;
 }
 
 const dim = (text: string) => `\x1b[2m${text}\x1b[22m`;
 const inverse = (text: string) => `\x1b[7m${text}\x1b[27m`;
+// Let the terminal measure Unicode cells, including emoji and combining marks. A code-point count is not a cursor column.
+const SAVE_CURSOR = '\x1b7';
 
 /**
  * Its input as each built-in draws its own, `shown` its draft or nothing (CLIS-2.1): Claude Code's frame with a dim placeholder;
@@ -98,25 +99,24 @@ const inverse = (text: string) => `\x1b[7m${text}\x1b[27m`;
  */
 function inputRows(width: number, shown: string): Row[] {
 	const rule = '─'.repeat(width);
-	const length = [...shown].length;
 	// A footer is one physical row, even under macOS's long temporary directory or a deep workspace path.
 	// Letting it wrap overwrites the following row and no longer represents the CLI's input layout.
 	const footer = (text: string) => [...text].slice(0, width).join('');
 	switch (as) {
 		case 'codex':
-			return [{ text: `› ${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: '' }, { text: footer(`  gpt-fake max · ${process.cwd()}`) }, { text: '  ? for shortcuts' }];
+			return [{ text: `› ${shown}${SAVE_CURSOR}${shown ? '' : dim(PLACEHOLDER)}` }, { text: '' }, { text: footer(`  gpt-fake max · ${process.cwd()}`) }, { text: '  ? for shortcuts' }];
 		case 'agy':
-			return [{ text: rule }, { text: shown ? `> ${shown}` : '>', cursor: 2 + length }, { text: rule }, { text: '? for shortcuts' }];
+			return [{ text: rule }, { text: `> ${shown}${SAVE_CURSOR}` }, { text: rule }, { text: '? for shortcuts' }];
 		case 'muse': {
 			const label = '── Voice input (⌥ + v to start) ';
-			return [{ text: `${label}${'─'.repeat(Math.max(2, width - [...label].length))}` }, { text: shown ? `❯ ${shown}` : '❯', cursor: 2 + length }, { text: rule }, { text: footer(`  muse-spark-1.3 · minimal · ${process.cwd()}`) }];
+			return [{ text: `${label}${'─'.repeat(Math.max(2, width - [...label].length))}` }, { text: `❯ ${shown}${SAVE_CURSOR}` }, { text: rule }, { text: footer(`  muse-spark-1.3 · minimal · ${process.cwd()}`) }];
 		}
 		case 'pi':
-			return [{ text: rule }, { text: `${shown}${inverse(' ')}`, cursor: length }, { text: rule }, { text: footer(process.cwd()) }, { text: '↑0 ↓0 0.0%/131k (auto)' }];
+			return [{ text: rule }, { text: `${shown}${SAVE_CURSOR}${inverse(' ')}` }, { text: rule }, { text: footer(process.cwd()) }, { text: '↑0 ↓0 0.0%/131k (auto)' }];
 		case 'opencode':
-			return [{ text: '  ┃' }, { text: `  ┃  ${shown || 'Ask anything… "Fix broken tests"'}`, cursor: 5 + length }, { text: '  ┃' }, { text: '  ┃  Build · qwen3.8-flash' }, { text: `  ╹${'▀'.repeat(Math.max(2, width - 3))}` }];
+			return [{ text: '  ┃' }, { text: `  ┃  ${shown}${SAVE_CURSOR}${shown ? '' : 'Ask anything… "Fix broken tests"'}` }, { text: '  ┃' }, { text: '  ┃  Build · qwen3.8-flash' }, { text: `  ╹${'▀'.repeat(Math.max(2, width - 3))}` }];
 		default:
-			return [{ text: rule }, { text: `❯${NBSP}${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: rule }];
+			return [{ text: rule }, { text: `❯${NBSP}${shown}${SAVE_CURSOR}${shown ? '' : dim(PLACEHOLDER)}` }, { text: rule }];
 	}
 }
 
@@ -164,7 +164,7 @@ function draw(): void {
 	const shown = pasted.includes('\n') || [...draft].length > width - 6 ? `${typed}${collapsed}` : draft;
 	const input: Row[] = panel
 		// Antigravity's MCP panel in place of its input: its server ready once it was started
-		? [{ text: 'MCP Servers' }, { text: '>  ✓ facade_facade  Tools: list_agents', cursor: 0 }, { text: 'Keyboard: esc Exit' }]
+		? [{ text: 'MCP Servers' }, { text: `${SAVE_CURSOR}>  ✓ facade_facade  Tools: list_agents` }, { text: 'Keyboard: esc Exit' }]
 		: inputRows(width, shown);
 	const body = lines.flatMap(line => line.match(new RegExp(`.{1,${width}}`, 'gu')) ?? ['']).slice(-(height - input.length));
 	const out = ['\x1b[?2026h', '\x1b[H\x1b[2J'];
@@ -172,8 +172,7 @@ function draw(): void {
 	const top = height - input.length;
 	body.forEach((line, at) => out.push(`\x1b[${top - body.length + at + 1};1H${line}`));
 	input.forEach((row, at) => out.push(`\x1b[${top + at + 1};1H${row.text}`));
-	const at = input.findIndex(row => row.cursor !== undefined);
-	out.push(`\x1b[${top + at + 1};${input[at].cursor! + 1}H`);
+	out.push('\x1b8');
 	out.push('\x1b[?2026l');
 	process.stdout.write(out.join(''));
 }

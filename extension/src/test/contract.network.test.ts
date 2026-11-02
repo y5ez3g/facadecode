@@ -481,11 +481,14 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const served = await services.serve({
 				from: 'win-2', op: 'call', deadlineMs: 130_000,
 				args: { protocol: TOOL_PROTOCOL, tool: 'start_agent', arguments: { name: 'child', window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }, caller: guest, callId: 'c-10', elapsedMs: 0 }
-			}) as { result: { status: string; data: { agent_id: string } } };
+			}) as { result: { status: string; data: { agent_id: string; result_message_id: string } } };
 			assert.strictEqual(served.result.status, 'accepted');
+			assert.match(served.result.data.result_message_id, /^m-\d+$/);
+			assert.deepStrictEqual(s.messages.records, [], 'a reservation is not a fake inbox item in either window');
 			const child = served.result.data.agent_id;
 			s.agents.settle(child, { state: 'running' });
 			await waitFor(() => network.routed.length > 0);
+			assert.strictEqual(network.routed[0].args.id, served.result.data.result_message_id);
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs, each.args.to, each.args.callId, each.args.agent]), [['win-2', 'result', 15_000, runId(30), 'c-10', { run: child, alias: s.agents.get(child)!.alias, name: 'child' }]]);
 			assert.match(network.routed[0].args.text, /^Started @child #a\d+ \(run-[0-9a-f]+\) with claude/);
 			assert.deepStrictEqual(s.messages.reports, []);

@@ -197,7 +197,7 @@ const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
 suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 	const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once', promptId: 'm-7', startCallId: 'original-call' } as const;
+	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once', promptId: 'm-7', startCallId: 'original-call', resultMessageId: 'm-8' } as const;
 
 	for (const end of ['close', 'exit', 'failed'] as const) {
 		test(`${end}: the first request survives removal and reload without restoring a closed pair`, async () => {
@@ -223,6 +223,7 @@ suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.id, id);
 			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.promptId, 'm-7');
 			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.startCallId, 'original-call');
+			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.resultMessageId, 'm-8');
 			reload.advance(60 * 60_000);
 			assert.strictEqual(reload.agents.requested(creator, request.requestId), undefined);
 			assert.strictEqual(reload.retained.size, 0, 'expired metadata is removed');
@@ -239,6 +240,7 @@ suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 		reload.retained.set(id, saved);
 		await reload.agents.restore();
 		assert.strictEqual(reload.agents.requested(creator, request.requestId)?.lifecycle, 'starting');
+		assert.strictEqual(reload.agents.requested(creator, request.requestId)?.resultMessageId, 'm-8');
 		assert.deepStrictEqual([reload.agents.list(), reload.execution.spawned], [[], []]);
 		await world.agents.close(id);
 		await world.agents.started(id);
