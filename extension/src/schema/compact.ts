@@ -84,7 +84,10 @@ function identity(source: Data): Data {
 }
 
 function agentView(source: Data, details: boolean): Data {
-	const data = identity(source);
+	let data = identity(source);
+	if (!details && isJsonObject(data.message_input) && data.message_input.state === 'supported') {
+		data = { ...data, message_input: without(data.message_input, ['reason']) };
+	}
 	return details ? data : without(data, ['window', 'creator', 'root', 'created_at', 'title', ...(source.activity === 'unknown' ? [] : ['activity_reason'])]);
 }
 

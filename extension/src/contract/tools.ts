@@ -997,9 +997,10 @@ class ToolService {
 		if (windowId !== undefined && windowId !== self && !this.deps.network) {
 			this.checkWindow(windowId);
 		}
-		const after = args.cursor !== undefined ? cursorAt(args.cursor) : undefined;
 		// Every window within reach, unless one is named; one that does not answer is listed apart, never an empty success (MCP-3.1)
 		const includeEnded = selected !== undefined || args.include_ended;
+		const selection = JSON.stringify([windowId ?? null, includeEnded, caller.id, caller.yolo, caller.root, selected ?? null]);
+		const after = args.cursor !== undefined ? cursorAt(args.cursor, selection) : undefined;
 		const local = windowId === undefined || windowId === self ? this.agentsFor(caller, includeEnded) : [];
 		const { windows: remote, unavailable } = await this.everyWindow(async other => {
 			const response = await this.deps.network!.route(other, 'agents', { caller: this.guestOf(caller), include_ended: includeEnded }, this.queryDeadline(call));
@@ -1011,13 +1012,13 @@ class ToolService {
 		}, windowId);
 		const agents = [...local, ...remote.flat()]
 			.filter(agent => selected === undefined || agent.agent_id === selected)
-			.sort((a, b) => createdOf(a) - createdOf(b) || String(a.agent_id).localeCompare(String(b.agent_id)))
+			.sort((a, b) => createdOf(a) - createdOf(b) || (String(a.agent_id) < String(b.agent_id) ? -1 : String(a.agent_id) > String(b.agent_id) ? 1 : 0))
 			.filter(agent => !after || createdOf(agent) > after[0] || (createdOf(agent) === after[0] && String(agent.agent_id) > after[1]));
 		const page = agents.slice(0, args.limit);
 		const last = page[page.length - 1];
 		const data = defined({
 			agents: page,
-			next_cursor: agents.length > page.length && last ? cursorOf({ createdAt: createdOf(last), id: String(last.agent_id) }) : undefined,
+			next_cursor: agents.length > page.length && last ? cursorOf({ createdAt: createdOf(last), id: String(last.agent_id) }, selection) : undefined,
 			complete: !unavailable.length,
 			unavailable_windows: unavailable,
 			scope: caller.yolo ? 'all' : 'creation_tree', include_ended: includeEnded
@@ -1482,8 +1483,8 @@ function stopped(target: RunFacts, cleanup: Awaited<ReturnType<Agents['close']>>
 
 
 /** A list_agents page's cursor: where the next page starts, opaque to the caller. */
-function cursorOf(run: { readonly createdAt: number; readonly id: string }): string {
-	return Buffer.from(JSON.stringify([run.createdAt, run.id])).toString('base64url');
+function cursorOf(run: { readonly createdAt: number; readonly id: string }, selection: string): string {
+	return Buffer.from(JSON.stringify([run.createdAt, run.id, selection])).toString('base64url');
 }
 
 /** When an agent of a list was started, from its `created_at`: the order list_agents pages in across windows. */
@@ -1492,14 +1493,14 @@ function createdOf(agent: Data): number {
 	return Number.isFinite(at) ? at : 0;
 }
 
-function cursorAt(cursor: string): readonly [number, string] {
+function cursorAt(cursor: string, selection: string): readonly [number, string] {
 	try {
 		const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-		if (Array.isArray(parsed) && parsed.length === 2 && typeof parsed[0] === 'number' && typeof parsed[1] === 'string') {
+		if (Array.isArray(parsed) && parsed.length === 3 && typeof parsed[0] === 'number' && Number.isFinite(parsed[0]) && typeof parsed[1] === 'string' && parsed[1] && parsed[2] === selection) {
 			return [parsed[0], parsed[1]];
 		}
 	} catch {
 		// Not one of ours
 	}
-	throw new ArgumentError('list_agents', { missing: [], invalid: [{ field: 'cursor', problem: '`cursor` is not a next_cursor that list_agents returned.' }] });
+	throw new ArgumentError('list_agents', { missing: [], invalid: [{ field: 'cursor', problem: '`cursor` must be a next_cursor for the same window, include_ended and caller scope.' }] });
 }

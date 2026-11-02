@@ -240,6 +240,11 @@ including a retained ended agent, and queries only its window; a conflicting win
 selection excludes cursor. Unknown-activity diagnostics remain in the compact view. Without
 agent, include_ended keeps its existing meaning. Scope, completeness and pagination remain explicit in either view.
 Pagination returns next_cursor; unavailable peers are explicit and complete:false is not an empty successful lookup.
+The cursor binds window_id, include_ended and the caller's reach; changing them fails explicitly. Pages describe a
+changing list ordered by creation time and ID, not an atomic snapshot. Known supported input reasons may be omitted
+from compact rows; unavailable/unverified reasons remain, and details returns the complete capability facts.
+state_observed_at is the source state-episode timestamp where available; observed_at is query time. Reload and queries
+do not freshen source observations. stale reflects a lost current execution connection, not the age of an observation.
 read_messages remains limited to the caller's inbox even if list_agents can see another agent.
 
 ### 3.2 stop_agent

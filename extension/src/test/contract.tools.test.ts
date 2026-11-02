@@ -511,7 +511,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			};
 			const agents = resultOf(await s.call(lead, 'list_agents')).data.agents as { agent_id: string; message_input: unknown }[];
 			assert.deepStrictEqual(agents.filter(each => [lead.alias, helper.alias].includes(each.agent_id)).map(each => each.message_input), [
-				{ state: 'supported', reason: 'claude-frame reads Claude Code\'s input by its layout.' },
+				{ state: 'supported' },
 				{ state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI.' }
 			]);
 		});
@@ -539,6 +539,16 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 				cursor = page.data.next_cursor;
 			} while (cursor);
 			assert.deepStrictEqual(seen, ['#a1', '#a2', '#a3', '#a4', '#a10', '#a11', '#a12', '#a13', '#a14']);
+			const first = resultOf(await s.call(stranger, 'list_agents', { limit: 2 }));
+			for (const selection of [{ include_ended: true }, { window_id: 'win-1' }]) {
+				const changed = resultOf(await s.call(stranger, 'list_agents', { cursor: first.data.next_cursor, ...selection }));
+				assert.strictEqual(changed.error?.reason, 'invalid_argument');
+			}
+			const next = resultOf(await s.call(stranger, 'list_agents', { cursor: first.data.next_cursor, limit: 1, details: true }));
+			assert.deepStrictEqual(next.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a3']);
+			const ended = resultOf(await s.call(stranger, 'list_agents', { limit: 2, window_id: 'win-1', include_ended: true }));
+			const selected = resultOf(await s.call(stranger, 'list_agents', { cursor: ended.data.next_cursor, window_id: 'win-1', include_ended: true, agent: '#a3' }));
+			assert.strictEqual(selected.error?.reason, 'invalid_argument', 'targeting an agent changes selection even in the same window');
 			const bad = resultOf(await s.call(stranger, 'list_agents', { cursor: 'nonsense' }));
 			assert.deepStrictEqual([bad.error?.reason, bad.data.invalid[0].field], ['invalid_argument', 'cursor']);
 		});

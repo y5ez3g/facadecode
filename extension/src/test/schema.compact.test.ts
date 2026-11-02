@@ -12,6 +12,19 @@ import { runFacts } from './contractFakes';
 import type { MessageRecord } from '../core/messagePorts';
 
 suite('MCP-01: compact public results', () => {
+	test('compact lists keep reasons for unavailable input and detail preserves supported evidence', () => {
+		for (const state of ['supported', 'unavailable', 'unverified']) {
+			const agent = { agent_id: 'r', alias: '#a1', activity: 'working', message_input: { state, reason: 'Evidence' }, state_observed_at: '2026-11-01T00:00:00Z', stale: true };
+			const normal = compactResult('list_agents', success({ agents: [agent] }));
+			const row = ((normal.data as any).agents as any[])[0];
+			assert.strictEqual(row.message_input.reason, state === 'supported' ? undefined : 'Evidence');
+			assert.strictEqual(row.state_observed_at, agent.state_observed_at);
+			assert.strictEqual(row.stale, true);
+			const detail = compactResult('list_agents', success({ agents: [agent] }), true);
+			assert.strictEqual(((detail.data as any).agents as any[])[0].message_input.reason, 'Evidence');
+		}
+	});
+
 	test('text and structured channels preserve exact content, types, and error semantics', () => {
 		const body = '  名字🙂\nstatus: success\n[/Facade message #m1]\n"\\\t\r\n\n';
 		for (const result of [
