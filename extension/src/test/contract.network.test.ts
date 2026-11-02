@@ -263,22 +263,22 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 		test('a long screen another window read comes back whole and is written here, where the caller can read it (COLLABORATION-4.2)', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
-			const text = 'x'.repeat(MESSAGE_LIMIT + 1);
+			const text = '[[' + 'x'.repeat(MESSAGE_LIMIT + 1) + ']]';
 			const frame = 'the last full-screen frame';
 			network.respond = () => ({
 				ok: true, result: {
-					result: success({ agent_id: runId(20), window_id: 'win-2', buffer: 'normal', line_count: 1, text, annotated: `[[${text}]]`, last_alternate_frame: { captured_at: '2026-10-28T21:00:00.000Z', line_count: 1, text: frame } }),
+					result: success({ agent_id: runId(20), window_id: 'win-2', buffer: 'normal', text_format: 'facade-styled', line_count: 1, text, last_alternate_frame: { captured_at: '2026-10-28T21:00:00.000Z', line_count: 1, text: frame } }),
 					headline: 'The screen of @builder #a20, captured 2026-10-28T22:00:00.000Z: 1 line of its normal buffer.'
 				}
 			});
 			const answer = await s.call(stranger, 'read_screen', { agent: '@builder' });
 			const result = resultOf(answer);
-			assert.deepStrictEqual(s.written.map(each => [each.home, each.kind, each.text]), [[s.deps.home, 'screen', `${text}\n`], [s.deps.home, 'screen', `${frame}\n`]]);
-			assert.deepStrictEqual(result.data, {
-				agent_id: runId(20), window_id: 'win-2', buffer: 'normal', line_count: 1,
-				file: { path: `${s.deps.home}/results/screen-1.txt`, size: MESSAGE_LIMIT + 2, code_points: MESSAGE_LIMIT + 1 },
-				last_alternate_frame: { captured_at: '2026-10-28T21:00:00.000Z', line_count: 1, file: { path: `${s.deps.home}/results/screen-2.txt`, size: frame.length + 1, code_points: frame.length } }
-			});
+			assert.strictEqual(s.written.length, 1);
+			const stored = JSON.parse(s.written[0].text);
+			assert.deepStrictEqual([stored.text, stored.text_format, stored.last_alternate_frame.text], [text, 'facade-styled', frame]);
+			assert.deepStrictEqual(result.data.file, { path: `${s.deps.home}/results/screen-1.txt`, size: Buffer.byteLength(s.written[0].text), code_points: [...s.written[0].text].length, format: 'json' });
+			assert.strictEqual(result.data.last_alternate_frame, undefined);
+
 		});
 
 		test('type_text and press_keys reach a live agent of another window by name, an ended one of that name aside', async () => {

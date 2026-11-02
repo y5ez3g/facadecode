@@ -2,6 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { tailStyles } from '../base/screenStyle';
 import type { IPty } from 'node-pty';
 import { InputReading, inputScreenOf, readInput } from './composer';
 import { InputEffect, InputQueue } from './input';
@@ -196,6 +197,7 @@ export class Run {
 	private title = '';
 	private lastOutput: number | undefined;
 	private exited: RunExit | undefined;
+	private endedAt: number | undefined;
 	/** Set as node-pty reports the exit, before what it wrote last is drawn: from then on its PID is never signalled. */
 	private reaped = false;
 	/** The exit code node-pty reported: on Windows, where a program never started, the system's error. */
@@ -316,6 +318,7 @@ export class Run {
 	/** It ended with `exit`: its input ends, and its claimant and every waiter for its exit are told. */
 	private ended(exit: RunExit): void {
 		this.queue.end();
+		this.endedAt = Date.now();
 		this.exited = exit;
 		this.holders.clear();
 		this.listener?.exit(exit);
@@ -554,10 +557,10 @@ export class Run {
 		const frame = screen.buffer === 'normal' ? this.frame : undefined;
 		return {
 			...screen,
-			capturedAt: Date.now(),
+			capturedAt: this.endedAt ?? Date.now(),
 			...(this.lastOutput !== undefined ? { lastOutput: this.lastOutput } : {}),
 			exited: !!this.exited,
-			...(frame ? { frame: { lines: frame.lines.slice(-count), text: frame.text.slice(-count), capturedAt: frame.capturedAt } } : {})
+			...(frame ? { frame: { lines: frame.lines.slice(-count), text: frame.text.slice(-count), styles: tailStyles(frame.text, frame.styles, count), capturedAt: frame.capturedAt } } : {})
 		};
 	}
 
@@ -575,8 +578,8 @@ export class Run {
 
 	/** Keeps the alternate screen as it stands as the last frame its program drew there. */
 	private keepFrame(): void {
-		const { lines, text } = readScreen(this.terminal as never, MOST_SCREEN_LINES, 'alternate');
-		this.frame = { lines, text, capturedAt: Date.now() };
+		const { lines, text, styles } = readScreen(this.terminal as never, MOST_SCREEN_LINES, 'alternate');
+		this.frame = { lines, text, styles, capturedAt: Date.now() };
 	}
 
 	/** Ends what is left of it: ptyd itself is going, or a window forgot it. */

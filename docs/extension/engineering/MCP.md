@@ -331,12 +331,15 @@ the same selected machine content, with message boundaries and correlation, and 
 Required `agent:string`; optional `lines:integer=50` (1–2000). Enforce normal tree reach.
 Return run/window, observation time, process state, stale flag, buffer mode and logical lines/text. Empty live output
 is successful empty output. Retained ended output is dated and not described as live.
-Inverse/dim annotations may accompany an unannotated text field. Do not execute escape sequences. Include an available
-last alternate-screen frame separately from final normal output. Above 8,000 code points, return a complete readable
-temporary file under COLLABORATION-4.2 rather than truncating the requested result.
-The tool description explains `annotated`: `[[...]]` marks inverse video and `{{...}}` marks dim text;
-`last_alternate_frame` is retained alternate-screen output, separate from the current buffer. This meaning is available
-without a repeated result headline.
+The single `text` body uses `text_format:"facade-styled"`: `[[...]]` marks inverse video and `{{...}}` marks dim text;
+both together nest as `[[{{...}}]]`. A backslash escapes each literal backslash, bracket or brace in the source text,
+so literal marker-like content remains unambiguous. Removing style marks and decoding these escapes restores the exact
+rendered text, including spaces and Unicode. Cues come directly from terminal cells; the model need not count character
+offsets to locate a highlight. A surviving older runtime that supplies no cues explicitly reports `styles_unavailable:true`;
+absence of evidence never invents unstyled output. New launches use the current runtime. Do not execute escape sequences.
+An available `last_alternate_frame` uses the same text format with its own observation time, separate
+from current output. Above 8,000 code points in the complete serialized screen result, return a complete UTF-8 JSON
+file under COLLABORATION-4.2, preserving the same body, cues and metadata without truncation.
 
 ### 5.2 type_text and press_keys
 

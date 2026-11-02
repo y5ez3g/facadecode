@@ -13,15 +13,16 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 10;
+export const PTYD_PROTOCOL = 11;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
  * through those ptyds, and starts none there (ARCHITECTURE-2.4). None is ever dropped. 8, of 0.0.1, is 9 without `spawn`'s
- * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. New requests go to neither.
+ * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. 10 lacks 11's screen style ranges and stable final-screen time. New runs go to none of these.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8, 9];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10];
 
+import type { ScreenStyle } from '../base/screenStyle';
 import type { OwnerClaim } from '../base/ownership';
 import { isJsonObject } from '../base/json';
 import type { InputReading } from './composer';
@@ -112,6 +113,7 @@ export type Termination = 'terminated' | 'already_exited' | 'unconfirmed' | 'fai
 export interface ScreenFrame {
 	readonly lines: readonly string[];
 	readonly text: readonly string[];
+	readonly styles?: readonly ScreenStyle[];
 	/** When the program left the alternate screen, or ended on it. */
 	readonly capturedAt: number;
 }
@@ -122,6 +124,7 @@ export interface ScreenRead {
 	readonly lines: readonly string[];
 	/** The same lines as plain text. */
 	readonly text: readonly string[];
+	readonly styles?: readonly ScreenStyle[];
 	readonly buffer: 'normal' | 'alternate';
 	/** Whether the buffer holds lines with something on them above those read. */
 	readonly older: boolean;

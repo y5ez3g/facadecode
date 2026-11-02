@@ -15,6 +15,18 @@ async function drawn(data: string, options: { readonly cols?: number; readonly r
 
 suite('ptyd screen: a run\'s rendered text as read_screen returns it (MCP-5.1)', () => {
 
+	test('style offsets round-trip Unicode, wrapped lines and literal marker text without duplicating the body', async () => {
+		const terminal = await drawn('[[literal]]\r\n字🙂 e\u0301 \x1b[2;7m选项🙂\x1b[0m end', { cols: 12 });
+		const screen = readScreen(terminal, 50);
+		const text = screen.text.join('\n');
+		assert.strictEqual(text, '[[literal]]\n字🙂 e\u0301 选项🙂 end');
+		assert.deepStrictEqual(screen.styles?.map(style => ({ ...style, text: [...text].slice(style.start, style.end).join('') })),
+			[{ start: 18, end: 21, inverse: true, dim: true, text: '选项🙂' }]);
+		const tail = readScreen(terminal, 1);
+		assert.strictEqual(tail.styles?.[0].start, 6);
+		terminal.dispose();
+	});
+
 	test('lines top to bottom, the spaces they end in cut, inverse video marked [[...]] and dim text {{...}}; the plain text without marks', async () => {
 		const terminal = await drawn('first\r\n\x1b[7mpicked\x1b[0m item\r\n\x1b[2mhint\x1b[0m   \r\n');
 		const screen = readScreen(terminal, 50);

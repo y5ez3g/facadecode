@@ -338,7 +338,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		assert.deepStrictEqual([sent.effects.outcome, sent.effects.text_written, sent.effects.enter_written, sent.data.disposition], ['confirmed', 'full', true, 'submitted_to_cli']);
 		const message = sent.data.message_id as string;
 		assert.ok(received(childAlias).some(each => block(message, alias, window, 'Hello from your creator.\nTwo lines, one message.').test(each)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
-		assert.ok(JSON.stringify(first.content('read_screen', 1)).includes(`[/Facade message ${message}]`), 'its screen shows the message block');
+		assert.ok(JSON.stringify(first.content('read_screen', 1)).includes(message), 'its screen shows the message block');
 
 		const waiting = first.content('send_message', 1);
 		assert.strictEqual(waiting?.status, 'accepted', JSON.stringify(waiting));
@@ -467,13 +467,13 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			'its CLI runs in the other window\'s folder and environment');
 		// Its first task and the message, each whole, on its screen as this window reads it
 		const first = JSON.stringify(ran.content('read_screen'));
-		assert.ok(first.includes('Help from afar.') && first.includes(`[/Facade message ${started.data.prompt.message_id}]`), first);
+		assert.ok(first.includes('Help from afar.') && first.includes(started.data.prompt.message_id), first);
 
 		const sent = ran.content('send_message');
 		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
 		assert.deepStrictEqual([sent.effects.text_written, sent.effects.enter_written, sent.data.window_id], ['full', true, peer.window_id]);
 		const screen = JSON.stringify(ran.content('read_screen', 1));
-		assert.ok(screen.includes('Hello across windows.') && screen.includes(`[/Facade message ${sent.data.message_id}]`), screen);
+		assert.ok(screen.includes('Hello across windows.') && screen.includes(sent.data.message_id), screen);
 		if (!PEER_ELSEWHERE) {
 			const launch = argsOf(childAlias);
 			assert.strictEqual(launch.cwd, location.path, 'its CLI runs in the other window\'s folder');

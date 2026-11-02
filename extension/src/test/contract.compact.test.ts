@@ -91,10 +91,12 @@ suite('Contract: current-protocol compact results through the real tool boundary
 	test('a retained screen preserves exact text, selection cues and capture state in both channels', async () => {
 		const lead = runFacts(1, { yolo: true });
 		s.agents.add(lead, runFacts(2, { lifecycle: 'ended' }));
-		s.terminal.screen = { text: ['字🙂', 'selected'], lines: ['字🙂', '[[selected]]'], capturedAt: 1234, exited: true, buffer: 'normal', older: false, trimmed: false };
+		s.terminal.screen = { text: ['字🙂', 'selected'], lines: ['字🙂', '[[selected]]'], styles: [{ start: 3, end: 11, inverse: true }], capturedAt: 1234, exited: true, buffer: 'normal', older: false, trimmed: false };
 		const result = resultOf(await s.call(lead, 'read_screen', { agent: '#a2' }));
-		assert.strictEqual(result.data.text, '字🙂\nselected');
-		assert.strictEqual(result.data.annotated, '字🙂\n[[selected]]');
+		assert.strictEqual(result.data.text, '字🙂\n[[selected]]');
+		assert.strictEqual(result.data.annotated, undefined);
+		assert.strictEqual(result.data.styles, undefined);
+		assert.strictEqual(result.data.text_format, 'facade-styled');
 		assert.strictEqual(result.data.stale, true);
 		assert.strictEqual(result.data.observed_at, new Date(1234).toISOString());
 		assert.strictEqual(result.data.agent_id, '#a2');

@@ -807,10 +807,25 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 	});
 
 	suite('read_screen', () => {
+		test('large Unicode screens and historical frames keep reversible text, cues and observation times in one JSON file', async () => {
+			const { lead, worker } = team(s);
+			const text = `🐱e\u0301 中文 [[literal]]\n${'x'.repeat(8_100)}`;
+			const styles = [{ start: 0, end: 3, inverse: true as const, dim: true as const }];
+			const frame = { text: ['旧菜单 🐱'], lines: ['[[旧菜单 🐱]]'], styles: [{ start: 0, end: 5, inverse: true as const }], capturedAt: 1_000 };
+			s.terminal.screen = { text: text.split('\n'), lines: text.split('\n'), styles, buffer: 'normal', older: false, trimmed: false, capturedAt: 2_000, exited: false, frame };
+			const result = resultOf(await s.call(lead, 'read_screen', { agent: worker.alias }));
+			const stored = JSON.parse(s.written[0].text);
+			assert.strictEqual(stored.agent_id, worker.alias);
+			assert.strictEqual(stored.reference, undefined);
+			assert.deepStrictEqual([stored.text, stored.text_format, stored.observed_at], ['[[{{🐱e\u0301}}]] 中文 \\[\\[literal\\]\\]\n' + 'x'.repeat(8_100), 'facade-styled', new Date(2_000).toISOString()]);
+			assert.deepStrictEqual(stored.last_alternate_frame, { text: '[[旧菜单 🐱]]', captured_at: new Date(1_000).toISOString(), line_count: 1 });
+			assert.strictEqual(stored.styles, undefined);
+			assert.deepStrictEqual([result.data.text, result.data.styles, result.data.last_alternate_frame, result.data.file.format], [undefined, undefined, undefined, 'json']);
+		});
 
-		const screen = { lines: ['❯ [[hello]]', '  {{working}}'], text: ['❯ hello', '  working'], buffer: 'normal' as const, older: true, trimmed: false, capturedAt: Date.UTC(2026, 9, 28, 22), exited: false };
+		const screen = { lines: ['❯ [[hello]]', '  {{working}}'], text: ['❯ hello', '  working'], styles: [{ start: 2, end: 7, inverse: true as const }, { start: 10, end: 17, dim: true as const }], buffer: 'normal' as const, older: true, trimmed: false, capturedAt: Date.UTC(2026, 9, 28, 22), exited: false };
 
-		test('returns the logical lines of a reachable agent, observed when, with annotations alongside', async () => {
+		test('returns one body with readable style cues, logical lines and observation time', async () => {
 			const { lead, helper } = team(s);
 			s.terminal.screen = screen;
 			const answer = await s.call(lead, 'read_screen', { agent: '@helper', lines: 20 });
@@ -819,7 +834,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(result.data, {
 				agent_id: helper.alias, window_id: 'win-1', observed_at: '2026-10-28T22:00:00.000Z', process_state: 'running', stale: false,
 				buffer: 'normal', line_count: 2, older_lines: true, trimmed: false,
-				text: '❯ hello\n  working', annotated: '❯ [[hello]]\n  {{working}}'
+				text: '❯ [[hello]]\n  {{working}}', text_format: 'facade-styled'
 			});
 		});
 
@@ -837,21 +852,23 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 		test('the last alternate-screen frame comes apart from the final normal output, inline or in a file of its own', async () => {
 			const { lead } = team(s);
 			s.agents.add(runFacts(5, { name: 'tui', root: lead.id, lifecycle: 'ended' }));
-			const frame = { lines: ['[[> menu]]', 'item'], text: ['> menu', 'item'], capturedAt: Date.UTC(2026, 9, 28, 21, 58) };
-			s.terminal.screen = { ...screen, lines: ['$ exited'], text: ['$ exited'], exited: true, frame };
+			const frame = { lines: ['[[> menu]]', 'item'], text: ['> menu', 'item'], styles: [{ start: 0, end: 6, inverse: true as const }], capturedAt: Date.UTC(2026, 9, 28, 21, 58) };
+			s.terminal.screen = { ...screen, lines: ['$ exited'], text: ['$ exited'], styles: [], exited: true, frame };
 			const answer = await s.call(lead, 'read_screen', { agent: '#a5' });
 			const result = resultOf(answer);
-			assert.deepStrictEqual([result.data.text, result.data.last_alternate_frame], ['$ exited', { captured_at: '2026-10-28T21:58:00.000Z', line_count: 2, text: '> menu\nitem', annotated: '[[> menu]]\nitem' }]);
+			assert.deepStrictEqual([result.data.text, result.data.last_alternate_frame], ['$ exited', { captured_at: '2026-10-28T21:58:00.000Z', line_count: 2, text: '[[> menu]]\nitem' }]);
 			const long = Array.from({ length: 150 }, (_, i) => `${i} ${'y'.repeat(60)}`);
 			s.terminal.screen = { ...screen, frame: { lines: long, text: long, capturedAt: frame.capturedAt } };
 			const filed = resultOf(await s.call(lead, 'read_screen', { agent: '#a2' }));
-			assert.deepStrictEqual(s.written.map(each => [each.kind, each.text]), [['screen', '❯ hello\n  working\n'], ['screen', `${long.join('\n')}\n`]]);
-			assert.deepStrictEqual([filed.data.text, filed.data.last_alternate_frame.text, filed.data.last_alternate_frame.file.path], [undefined, undefined, `${s.deps.home}/results/screen-2.txt`]);
+			assert.strictEqual(s.written.length, 1);
+			assert.strictEqual(JSON.parse(s.written[0].text).text, '❯ [[hello]]\n  {{working}}');
+			assert.deepStrictEqual([filed.data.text, filed.data.last_alternate_frame, filed.data.file.format], [undefined, undefined, 'json']);
+			assert.strictEqual(JSON.parse(s.written[0].text).last_alternate_frame.text, long.join('\n'));
 		});
 
 		test('empty live output is a successful empty read', async () => {
 			const { lead } = team(s);
-			s.terminal.screen = { ...screen, lines: [], text: [], older: false };
+			s.terminal.screen = { ...screen, lines: [], text: [], styles: [], older: false };
 			const result = resultOf(await s.call(lead, 'read_screen', { agent: '#a2' }));
 			assert.deepStrictEqual([result.status, result.data.text, result.data.line_count], ['success', '', 0]);
 		});
@@ -859,9 +876,10 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 		test('above 8,000 code points the complete screen goes in a file', async () => {
 			const { lead } = team(s);
 			const lines = Array.from({ length: 200 }, (_, i) => `${i} ${'x'.repeat(60)}`);
-			s.terminal.screen = { ...screen, lines, text: lines };
+			s.terminal.screen = { ...screen, lines, text: lines, styles: [] };
 			const result = resultOf(await s.call(lead, 'read_screen', { agent: '#a2', lines: 200 }));
-			assert.deepStrictEqual([s.written[0].kind, s.written[0].text], ['screen', `${lines.join('\n')}\n`]);
+			assert.deepStrictEqual([s.written[0].kind, JSON.parse(s.written[0].text).text], ['screen', lines.join('\n')]);
+			assert.strictEqual(JSON.parse(s.written[0].text).text_format, 'facade-styled');
 			assert.strictEqual(result.data.text, undefined);
 			assert.deepStrictEqual(result.data.file.path, `${s.deps.home}/results/screen-1.txt`);
 		});
