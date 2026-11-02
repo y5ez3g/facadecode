@@ -255,7 +255,12 @@ If remote cleanup is unreachable, record the pending outcome and reconcile the o
 a proven remote exit or kill an unrelated process. The pending close is recorded beside the window's runs, under its
 ownership claim, so that a reload ends that run rather than showing it again (D131). A window starts its ptyd only
 where none is there - no socket, or on POSIX one nothing listens on; a ptyd slow to take a connection, as a busy Windows
-pipe can be, is waited for and never replaced, as a second ptyd would leave every run of the first unclaimed (D133). Do not add expiring security leases or automatic process killing on
+pipe can be, is waited for and never replaced, as a second ptyd would leave every run of the first unclaimed (D133).
+A run is there as soon as its start is asked for; the supervisor creates one run's program at a time, in the order the
+starts were asked, each start's ten-second wait for its program counting from its turn: on Windows node-pty creates a
+program on the supervisor's own thread, and a check of a new command line can hold that thread for most of a second.
+Until its turn a run is listed, claimed and closable and keeps its details, size and the person's input; it takes no
+automated input, and one closed meanwhile ends with no program ever created (D146). Do not add expiring security leases or automatic process killing on
 temporary disconnection; RULES-4.1's five minutes after the owning extension host disconnects is the only timed cleanup. Native preparation jobs are not owned by this cleanup.
 
 ### 2.4 Journals, pressure and upgrades
@@ -502,6 +507,8 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-11-01: 2.3 creates one run's program at a time, in the order asked, at the owner's request: starts asked together on
+  Windows held the supervisor for all of their program creations, and some never started (D146).
 - 2026-11-01: From the owner-requested release review: 1.1 keeps each window component start's socket and entry its
   own and drops entries of gone windows; 2.2 answers an unreadable window record, re-sends a refused terminal claim and
   keeps no ledger entry for a window without folders; 2.3 records an unconfirmed close and starts a ptyd only where none
