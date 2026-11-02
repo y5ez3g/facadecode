@@ -522,6 +522,17 @@ checks (one platform skip), 70 measurement assertions, packaging and 11 package 
 now occupies 4861 bytes, two more than the snapshot above. Evidence remains local in `extension/build/mcp-review-window/`.
 This does not repair unrelated user-installed skills or replace a conflicting project skill owned by another setup.
 
+The same owner review exposed Antigravity 1.4.12's initial accept-edits hint being read as a draft. Isolated native
+captures reproduced it at 120 and 60 columns, and in plan mode. After the reader fix, all three initial hints read
+usable; typed text and the identical hint pasted with the cursor returned to its beginning remain drafts. Twelve
+recorded screens cover these cases and clearing the input. No input was submitted and no model was called in those
+captures. Compilation, 113 focused checks (one platform skip), packaging and 11 package checks passed. The merged
+remote cross-window journey also passed: six checks, four unrelated journeys skipped. The missing
+repository `.agents/` ignore was restored; generated files were neither staged nor deleted. For the owner's local
+test setup, the old project skill was backed up byte-for-byte under `extension/build/mcp-review-window/old-skill/`
+and replaced with the current generated skill. Product protection of unknown conflicting files remains unchanged;
+this local repair is not an automatic migration or a claim that existing processes acquired tools after startup.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**

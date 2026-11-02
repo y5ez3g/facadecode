@@ -151,6 +151,12 @@ a tab as four (D118). Codex 0.166.0 draws a status at the right
 end of its hints row, `⚠ 1 warning · f2 to view`, alone there while a draft hides the hints, when `-c` overrides run it
 outside its background server: Facade starts it with `--no-daemon`, and its reader takes that row either way.
 
+Antigravity's accept-edits and plan modes draw a colored, non-dim initial placeholder. Recognize its exact mode
+sentence (or the CLI's width-truncated prefix ending in `...`) only inside its one-line frame with the empty-input
+`? for shortcuts` footer and the cursor at the input start. The same words typed or pasted by a person hide that
+footer hint and remain a draft, even with the cursor moved back to the start. Color or matching words alone never
+prove the input empty (D157).
+
 Each reader also reports a draft as it is drawn, so that a delivery knows its own (RULES-1.6): its rows' text, or the
 placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N lines]` counting the lines after the
 first, Antigravity's `[Pasted text #1 +N lines]` and Pi's `[paste #1 +N lines]` counting every line, Codex's and Muse

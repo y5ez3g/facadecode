@@ -4,6 +4,9 @@ node_modules
 npm-debug.log
 *.tsbuildinfo
 
+# Native agent integration files are local runtime state (ARCHITECTURE-4.1).
+.agents/
+
 # IDE application bundles are emitted beside ide/.
 /VSCode-*/
 /facade-darwin-*.dmg
