@@ -23,7 +23,7 @@ import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
 import type * as HostClisModule from '../host/clis';
 import type * as SettingsModule from '../host/settings';
 import { instructionsFor } from '../schema/instructions';
-import { FACADE_SKILL } from '../schema/skill';
+import { FACADE_SKILL, SKILL_DESCRIPTION } from '../schema/skill';
 import { TOOLS } from '../schema/tools';
 import { tempDir } from './util';
 import { withModules } from './withModules';
@@ -789,6 +789,13 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 });
 
 suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
+
+	test('the generated skill has parseable YAML metadata and preserves its complete description', () => {
+		const { load } = require('js-yaml') as { load(source: string): unknown };
+		const metadata = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(FACADE_SKILL);
+		assert.ok(metadata, 'native loaders require frontmatter delimiters');
+		assert.deepStrictEqual(load(metadata[1]), { name: 'facade', description: SKILL_DESCRIPTION });
+	});
 
 	test('the skill teaches the nine tools, startup fields, reach, references, own inbox and finite delivery, and gives the repeated-message sentences verbatim', () => {
 		const verbatim = 'The same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo work for '

@@ -1226,7 +1226,8 @@ class ToolService {
 			data = defined({ file: { path: file.path, size: file.size, code_points: total }, messages: records.map(record => messageOf(record, false)), next_cursor: page.nextCursor, not_found: missing });
 			headline = `${count} from your inbox, oldest first. Their ${total} code points are more than ${MESSAGE_LIMIT.toLocaleString('en-US')}, so their complete text is in the file ${file.path} (${file.size} bytes); their details follow.`;
 		} else {
-			data = defined({ messages: records.map(record => messageOf(record, true)), next_cursor: page.nextCursor, not_found: missing });
+			data = defined({ messages: records.map(record => messageOf(record, true)), next_cursor: page.nextCursor, not_found: missing,
+				notice: !records.length ? 'New messages are delivered automatically, including after this turn ends. This read does not wait for them.' : undefined });
 			headline = records.length ? `${count} from your inbox, oldest first.` : 'No incoming messages match this read.';
 		}
 		if (missing) {

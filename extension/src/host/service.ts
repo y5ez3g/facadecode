@@ -363,6 +363,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		// without the system clipboard; compiled out of the shipped extension
 		...typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [
 			vscode.commands.registerCommand('facade.screen', (run: string, lines = 40) => execution.readScreen(run, lines)),
+			vscode.commands.registerCommand('facade.testPaste', (run: string, text: string, lead?: string) => execution.typeText(run, text, false, lead)),
 			vscode.commands.registerCommand('facade.messageInput', async (run: string, own?: string, lead?: string) => {
 				await agents.warmedUp(run);
 				return input.inspect(run, own, lead);

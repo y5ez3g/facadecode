@@ -106,7 +106,10 @@ suite('Contract: finite continuation and originating-call correlation', () => {
 		assert.strictEqual(started.data.call_id, undefined);
 		assert.strictEqual(s.messages.reports.length, 0);
 		const read = resultOf(await s.call(lead, 'read_messages'));
-		assert.deepStrictEqual(read.data, { messages: [] });
+		assert.deepStrictEqual(read.data.messages, []);
+		assert.match(read.data.notice, /delivered automatically/);
+		assert.match(read.data.notice, /does not wait/);
+		assert.ok(!/must|should|end your|complete|retry/i.test(read.data.notice), 'a delivery fact, not a workflow or completion claim');
 		assert.strictEqual(read.recovery, undefined);
 	});
 });

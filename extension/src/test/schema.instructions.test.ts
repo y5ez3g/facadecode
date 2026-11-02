@@ -25,6 +25,8 @@ suite('Run-private initialization instructions (MCP-6.2)', () => {
 	test('a tool loaded alone retains delivery, raw-input and retry boundaries', () => {
 		const tool = (name: string) => TOOLS.find(tool => tool.name === name)!;
 		assert.match(tool('read_messages').description, /handoff delivers them/);
+		assert.match(tool('read_messages').description, /does not wait/);
+		assert.match(tool('read_messages').description, /do not poll/);
 		assert.match(tool('send_message').description, /not a reply or task completion/);
 		for (const name of ['type_text', 'press_keys']) { assert.match(tool(name).description, /draft protection/); }
 		for (const name of ['start_agent', 'send_message']) {

@@ -18,7 +18,7 @@ export const SKILL_DESCRIPTION = 'How the Facade Code tools work: start and stop
 /** The skill's SKILL.md, as each CLI that takes a skill is given it (CLIS-2.2). */
 export const FACADE_SKILL = `---
 name: facade
-description: ${SKILL_DESCRIPTION}
+description: ${JSON.stringify(SKILL_DESCRIPTION)}
 ---
 
 # Facade Code tools

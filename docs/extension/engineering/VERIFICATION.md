@@ -32,6 +32,12 @@ editor/client/server version; CLI and model when relevant; local/SSH/WSL/contain
 command/procedure; observed result; assertion/log/screenshot path; pass/fail/blocked/not-run; known limitations. Store
 results with the tested build or handoff, without credentials or full private conversations. Screenshots are
 needed for visual/focus claims; traces for process/delivery/lifetime claims. Historical source claims stay historical.
+MCP polish compares fixed whole journeys against a frozen build, recording UTF-8 context/result bytes, calls, effects,
+duplicates, false conclusions and recovery choices. Bytes are not token counts. Deterministic contract faults, native
+clients with controlled providers and real-model choices are separate evidence classes. Keep all attempts and denominators;
+small repeated model samples establish observations, not universal reliability. Timing in fakes is harness timing only.
+The reproducible `extension/scripts/measure-mcp.mjs` harness checks the same scenarios against a chosen compiled tree;
+baseline failures remain in its report rather than being omitted to improve a size comparison.
 
 ### 1.3 Required gates for an implementation milestone
 
@@ -280,6 +286,7 @@ passes.
 | M33 | Route connection/queue time, exhausted budgets, lost/malformed/late replies, pure queries versus delivery-confirming inbox reads, and retries after target disappearance | One remaining budget through hops; no request forwarded after expiry; none/unknown/partial remain truthful; original target/request identity preserved; no automatic replay; MCP-1.1–1.3 |
 | M34 | Initialize, tools/list, a tool loaded alone, optional skill and native private-context hooks | Launch identity and delivery semantics reach the model without mandatory skill reads; titles/annotations preserve names, arguments and approval behavior; compare each context layer in UTF-8 bytes and retain real-model evidence limits; MCP-6.1–6.2 |
 | M35 | Concurrent operations on one agent, routing, reload, rename/close, expired originals and lost receipt delivery | Existing IDs and explicit operation/route facts remain searchable without message bodies in logs; localized summaries never guess missing records; receipt transport and operation outcomes remain separate; COLLABORATION-3.2, ARCHITECTURE-3.3 |
+| M36 | Fixed discovery/start/message, long screen, pagination, uncertain input, lost reply and accepted-result journeys before/after polish | Report text/structured/context bytes separately, extra calls and actual effects; zero duplicate writes/starts or false completion in deterministic scenarios; retain all native/model attempts and platform limits; VERIFICATION-1.2 |
 
 Native lifecycle probes use the isolated editor driver, record the actual CLI PID and native session ID, and compare
 both across reload and reopening. Ending that test-owned process after window closure can exercise exact restoration
@@ -438,6 +445,64 @@ The split MCP polish items 05–11 commits additionally compiled independently a
 
 Not rerun on this snapshot: native Windows/Linux, Remote-SSH, WSL, containers, minimum-supported editor, or actual-model
 collaboration for Codex/Antigravity/Muse. Earlier release-review evidence remains tied to its own source. No real Qwen probe ran.
+
+#### MCP polish items 12–15 local evidence, 2026-11-02
+
+Items 12, 13 and 14 are independently committed as `98f80275`, `358654b4` and `de5e3bda`. Item 15 adds the reproducible
+`npm run measure:mcp` harness, opt-in native interpretation probes and an empty-inbox delivery fact. The local,
+uncommitted measurement record in `docs/extension/audit/mcp-polish-2026-11-02.json` identifies the tested source,
+frozen pre-item-12 build, individual native attempts and their failures. Raw logs and isolated profiles remain local under
+`extension/build/mcp1215/` and `extension/build/mcp0511/`.
+
+On macOS 27.2 arm64, Node 24.21.0 and official VS Code 1.144.0: compilation, the darwin-arm64 0.0.2 and window packages,
+11 package checks, 1201 unit tests (6 platform skips), localization (305 runtime and 64 manifest strings, 12 locales)
+and the specification audit passed. The full isolated editor suite passed its 40 assertions, six reload/workspace
+conversions, six immediate reopens, and actual 300091 ms grace expiry followed by exact pinned-session restoration.
+The final native-probe-only Pi startup guard was compiled and rechecked separately; shipped production behavior did
+not change after these gates.
+
+The same 19 deterministic journeys make 30 calls before and after: 65/70 assertions pass in the frozen build and
+70/70 after. Four previously incorrect cross-window outcomes and the new empty-inbox fact account for the difference.
+No duplicate effects or false completion occur in the tested scenarios. Text result bytes increase from 259548 to
+260149, preserving failure facts and the delivery notice; structured results have the same size, counted separately.
+Complete output files remain 36632 bytes. Tool names and argument schemas are unchanged. The configured outer timeout
+has 50 seconds beyond the maximum operation wait plus route allowance; this does not guarantee arbitrary network delay.
+
+Initialization/tools/skill are 1110/7709/4859 UTF-8 bytes, compared with 1482/6939/6197 before. All three layers together
+shrink by 940 bytes (6.4%), but initialization plus tools without the optional skill grows by 398 bytes. This is a
+tradeoff for titles, truthful metadata and local tool semantics, not a claim that every client's model context shrinks.
+Native clients can load, omit, transform or repeat these layers; whole-request model token costs were not measured.
+
+Claude Code with native Sonnet passed three independent collaboration runs before the empty-inbox clarification and
+one afterwards. In the latter session it also answered all six hypothetical outcome questions correctly in three
+sequential trials; these are interpretation observations, not independent network-fault experiments. Two earlier quiz
+attempts failed before any answer because the test used raw terminal input for a large paste; the corrected probe uses
+the product's terminal-mode-aware paste and verifies its complete draft. The test command is absent from the shipped bundle.
+
+Kimi K2.6 failures remain explicit: OpenCode passed one then failed one repeated run, both before and after the
+empty-inbox clarification, by exceeding the unchanged two-read inbox budget. Its actual transcript contains the
+delivery notice, and its stored instructions contain the no-poll guidance. Pi first exceeded that budget; after the
+clarification it received CONTEXT but ended with a thinking-only stop without the required PING tool call. Successful
+delivery is not model execution. The product neither suppresses valid reads nor forces turn endings or hidden retries.
+
+On the same production build, OpenCode with OpenRouter Sonnet 5.5 passed three consecutive runs. Pi with that model
+passed two runs; its next fresh-profile attempt submitted before native fd setup finished and therefore made no model
+call. That harness failure is retained separately; after the probe waited for Pi's session tools after startup, three
+consecutive fresh-profile runs passed. Codex, Antigravity and Muse each passed a final native-client run
+with controlled providers; Muse used YOLO on. These do not certify their independent model reasoning.
+
+The six native lifecycle results remain those of MCP polish item 11. No new Windows/Linux, Remote-SSH, WSL, container, minimum-editor
+or actual-model Codex/Antigravity/Muse support claim is made. Small model samples, including successful controls, do
+not establish universal reliability or erase the failed Kimi observations.
+
+Owner manual review on 2026-11-02 found that the skill description's unquoted colon made its frontmatter invalid YAML.
+Earlier successful MCP/model journeys therefore did not prove that the optional skill loaded. The generator now quotes
+the complete description; a YAML parser regression check preserves the parsed name and full description. Pi 1.4.0's
+actual `loadSkillsFromDir`, run only on an isolated temporary directory, rejected the old file (zero skills, the same
+parse error as the screenshot) and accepted the corrected file (one skill, no diagnostics). Compilation, 55 focused
+checks (one platform skip), 70 measurement assertions, packaging and 11 package checks passed after the fix. The skill
+now occupies 4861 bytes, two more than the snapshot above. Evidence remains local in `extension/build/mcp-review-window/`.
+This does not repair unrelated user-installed skills or replace a conflicting project skill owned by another setup.
 
 ### 4.3 Review output
 

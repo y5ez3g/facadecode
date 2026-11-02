@@ -6,7 +6,7 @@ of its sequence of owner-tested additive steps, carried from the Facade Dots spe
 ## Reproducible checks
 
 Run `python3 -I -B docs/extension/audit/check_spec.py` from the repository root.
-The [saved result](review-2026-10-31-mcp-merge.json) records the latest outcome and local-link count.
+The command reports the current outcome and local-link count. Generated review results are kept locally and are not committed.
 
 | Check | Scope |
 | --- | --- |

@@ -15,3 +15,7 @@ npm-debug.log
 /deb/
 /setup/
 /screenshot.ps1
+
+# Generated extension review reports stay local; audit scripts and specifications are tracked.
+/docs/extension/audit/review-*.json
+/docs/extension/audit/mcp-polish-*.json

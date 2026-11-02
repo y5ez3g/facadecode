@@ -325,6 +325,9 @@ unstarted pastes and permits only completion of an already pasted owned draft. A
 terminal. Above 8,000 combined code points, return the complete selected content in a file readable in the caller
 environment, with path/size and per-message metadata. COLLABORATION-4.2 defines transfer and expiry.
 An empty result describes only this read's snapshot. A next_cursor continues the same all/default selection and limit.
+The tool's own description states that this is not a wait operation and that automatic delivery needs no polling.
+An empty snapshot includes a short factual notice that messages are delivered automatically, including after a turn
+ends; it neither promises a pending task will finish nor asks the model to end its turn.
 No instructions to poll, end a turn, print, answer, escalate or follow a workflow are embedded in results.
 The compact projection omits duplicate identity spellings, the already-known recipient, routine length and delivery
 attempt counts. A system result with structured operation facts returns those as `result` instead of repeating its
@@ -424,6 +427,8 @@ work for that same message. A new send call has a new ID, even if its text match
 message is a separate kind of information, not another copy of that message's instruction.”
 This is model-side handling of transport duplicates, not a Facade deduplication database or an exactly-once guarantee.
 The skill does not prescribe project workflow, mandatory replies or escalation to a person.
+Its frontmatter is valid YAML with string name/description fields. Quote descriptions so punctuation such as a colon
+cannot become YAML structure; verify native skill loading separately from an MCP connection or successful tool call.
 Initialization owns private launch facts and cross-tool delivery/reach semantics; each tool's description and parameters
 own its use, effects and success/retry boundaries; the skill provides cross-tool examples and occasional reference.
 Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's

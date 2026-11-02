@@ -119,6 +119,15 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 			return card;
 		}, 60_000);
 		const terminal = await until('its terminal', () => vscode.window.terminals.find(each => each.name.startsWith(first.name)), 30_000);
+		if (REAL === 'pi') {
+			// Pi mounts its editor before downloading managed fd/rg, but refuses Enter until startup finishes.
+			// Its session MCP connection follows that setup. Do not mistake an editable composer for readiness.
+			await until('Pi startup and its session tools', async () => {
+				const lines = (await vscode.commands.executeCommand<string>('facade.diagnostics')).split('\n');
+				const at = lines.findIndex(line => line.startsWith('- ') && line.includes(first.runId));
+				return at >= 0 && lines[at + 1]?.includes('; tools available;') ? true : undefined;
+			}, 60_000);
+		}
 		// A fixed startup sleep can send the first task into onboarding or before the composer exists.
 		await until('the CLI input to be usable', async () => await vscode.commands.executeCommand('facade.messageInput', first.runId) === 'usable' ? true : undefined, 60_000);
 		// Claude folds a long one-line paste into an attachment without a size. A visible lead and counted multi-line body
@@ -174,8 +183,49 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 			}
 			assert.ok(own.filter(each => each.tool === 'start_agent' && each.status !== 'failure').length <= 1, `${card.name} started more than one agent`);
 		}
+		console.log(`Native collaboration calls: ${JSON.stringify(calls.map(({ tool, by, status }) => ({ tool, by, status })))}`);
+		if (process.env.FACADE_IT_REAL_DECISIONS === '1') { await decisionProbe(first, terminal); }
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: second.runId });
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: first.runId });
 	}
 });
+
+/** Real-model interpretation of hypothetical outcomes, not proof of actual network-fault recovery. No scenario action is executed. */
+async function decisionProbe(parent: Card, terminal: vscode.Terminal): Promise<void> {
+	const expected = { lost_keyed_send: 'repeat_original_request', expired_key: 'inspect_effects', partial_input: 'inspect_effects', accepted_start: 'await_result', delivery_receipt: 'delivery_only', incomplete_agents: 'unknown' };
+	const before = toolCalls().length;
+	const results: unknown[] = [];
+	for (let trial = 1; trial <= 3; trial++) {
+		await until('the parent input before the decision probe', async () => await vscode.commands.executeCommand('facade.messageInput', parent.runId) === 'usable' ? true : undefined, 30_000);
+		const prefix = `FACADE_DECISIONS_${trial} `;
+		const lead = REAL === 'claude' ? 'Facade decision check. ' : undefined;
+		const task = (lead ?? '') + 'This is a synthetic Facade interpretation test. Do not perform any of the hypothetical actions. '
+			+ 'Send exactly one send_message to #human: text begins with ' + JSON.stringify(prefix) + ' followed by a JSON object. '
+			+ 'Choose each value from repeat_original_request, inspect_effects, await_result, delivery_only, task_complete, retry_new_request, unknown, absent. '
+			+ '\nlost_keyed_send: a send in the original window lost its reply; effects unknown; original request_id was chosen 30 seconds ago; which option retrieves that exact operation without creating a new one? '
+			+ '\nexpired_key: the same case but the original request_id is two hours old; how do you avoid repeating uncertain effects? '
+			+ '\npartial_input: type_text returned partial input and uncertain Enter; what is the safe next step? '
+			+ '\naccepted_start: startup is accepted with a reserved result_message_id; choose the option that needs no new start or polling. '
+			+ '\ndelivery_receipt: a notice says a message has been passed on; what does that prove? '
+			+ '\nincomplete_agents: list_agents has no target but complete:false and an unavailable window; is the target absent or unknown? '
+			+ '\nUse exactly those six keys. End your turn after sending the test answer.';
+		const input = lead ? task : task.replaceAll('\n', ' ');
+		// A large raw sendText can be read as multiple native inputs. Use the production terminal-mode-aware paste,
+		// through a command compiled out of the shipped extension, then verify the entire draft before Enter.
+		const pasted = await vscode.commands.executeCommand<{ outcome: string }>('facade.testPaste', parent.runId, lead ? input.slice(lead.length) : input, lead);
+		assert.strictEqual(pasted?.outcome, 'applied');
+		await until('the complete decision probe draft', async () => await vscode.commands.executeCommand('facade.messageInput', parent.runId, input, lead) === 'own' ? true : undefined, 30_000);
+		terminal.sendText('\r', false);
+		const answer = await until('the model decision report', () => messages().find(record => record.from.run === parent.runId && record.to.run === '@human' && record.text.startsWith(prefix)), 90_000);
+		const decisions: unknown = JSON.parse(answer.text.slice(prefix.length));
+		results.push({ trial, decisions });
+		console.log(`Model decision probe: ${JSON.stringify({ trial, decisions })}`);
+		assert.deepStrictEqual(decisions, expected, 'the first wrong answer fails; no success-only resampling');
+		await new Promise(resolve => setTimeout(resolve, 2_000));
+	}
+	const extra = toolCalls().slice(before);
+	assert.ok(extra.every(call => call.tool === 'send_message'), 'hypothetical actions are never executed');
+	assert.strictEqual(extra.length, 3, 'one report per trial, no polling or duplicate reports');
+	console.log(`Model decision summary: ${JSON.stringify({ evidence: 'hypothetical outcomes; three sequential trials in the same native session, not independent fault-injection runs', results })}`);
+}

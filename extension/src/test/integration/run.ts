@@ -80,6 +80,7 @@ async function main(): Promise<void> {
 	// YOLO is off for the real journey, unless FACADE_IT_REAL_YOLO=on: Muse Code, whose approvals have no rule for one server's tools,
 	// asks before each of Facade's with YOLO off, and on Windows first sets up its sandbox, which a new home has not
 	const realYolo = process.env.FACADE_IT_REAL_YOLO === 'on';
+	const modelDecisions = process.env.FACADE_IT_REAL_DECISIONS === '1';
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	// A prepared temporary home may be used directly, or copied from an isolated state template.
 	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
@@ -317,7 +318,7 @@ async function main(): Promise<void> {
 		try {
 			// The other built-ins not installed: the real one is the one New Agent preselects
 			const others = Object.fromEntries(BUILT_INS.filter(each => each !== cli).map(each => [`facade.${each.segment}.path`, path.join(root, `unavailable-${each.id}`)]));
-			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, [`facade.${cli.segment}.launch`]: { arguments: realArgs }, 'facade.yolo': realYolo, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
+			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...modelDecisions ? { FACADE_IT_REAL_DECISIONS: '1' } : {}, ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, [`facade.${cli.segment}.launch`]: { arguments: realArgs }, 'facade.yolo': realYolo, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
 		} finally {
 			if (cli.id === 'claude') {
 				untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root);

@@ -129,7 +129,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 		name: 'read_messages',
 		title: 'Read messages',
 		annotations: { readOnlyHint: false },
-		description: 'Read your own incoming messages: by default those not yet delivered; handoff delivers them. ids selects records to read again; all:true pages retained records. Continue next_cursor with the same all/limit. Empty describes this snapshot only; system results request no reply.',
+		description: 'Read your own inbox snapshot; this does not wait. Default: not yet delivered; handoff delivers them. ids rereads records; all:true pages retained records; continue next_cursor with the same all/limit. New messages arrive automatically, even after your turn ends: do not poll. Empty proves nothing about pending work; system results request no reply.',
 		inputSchema: {
 			type: 'object',
 			properties: {
