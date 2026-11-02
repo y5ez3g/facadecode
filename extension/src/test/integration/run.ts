@@ -217,15 +217,26 @@ async function main(): Promise<void> {
 				const before = lines().find(line => line.phase === 'folder');
 				if (!before) { throw new Error(`Could not pin before closing: ${JSON.stringify(lines())}`); }
 				const closeBy = Date.now() + 20_000;
-				while ((!lines().some(line => line.phase === 'closed') || (process.platform !== 'darwin' && editor.exitCode === null)) && Date.now() < closeBy) { await new Promise(resolve => setTimeout(resolve, 200)); }
-				// macOS can keep the application process after its last window closes; its extension host must have stopped.
-				if (!lines().some(line => line.phase === 'closed') || (process.platform !== 'darwin' && editor.exitCode === null)) { throw new Error('The isolated window did not close.'); }
+				// Closed once the window's extension host has ended, its extensions deactivated, and on Windows and Linux its application;
+				// macOS can keep the application process after its last window closes
+				const closed = () => {
+					const line = lines().find(each => each.phase === 'closed');
+					return !!line && !alive(Number(line.host)) && (process.platform === 'darwin' || editor.exitCode !== null);
+				};
+				while (!closed() && Date.now() < closeBy) { await new Promise(resolve => setTimeout(resolve, 200)); }
+				if (!closed()) { throw new Error('The isolated window did not close.'); }
 				if (expiry) {
 					const closedAt = Date.now();
 					const expiresBy = closedAt + 330_000;
 					while (alive(Number(before.pid)) && Date.now() < expiresBy) { await new Promise(resolve => setTimeout(resolve, 500)); }
 					if (alive(Number(before.pid)) || Date.now() - closedAt < 280_000) { throw new Error('The closed window did not keep and then end its process at the five-minute grace period.'); }
 					console.log(`  ✔ ${cli.id}: the closed window's process ended after ${Date.now() - closedAt} ms, using the production grace period`);
+				}
+				// That application takes a second start's window, and while it still lists the closing window it reloads that one - it keeps
+				// one extension development window for the same extensions - and no window comes back, in one run of a few. It is ended
+				// first, as Windows and Linux end it with their last window.
+				if (process.platform === 'darwin') {
+					await endEditors([editor]);
 				}
 				editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 					`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
