@@ -92,7 +92,7 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.strictEqual(targetOf('agy', home, env).withheld, undefined);
 	});
 
-	test('Claude Code keys its trust on the repository\'s main checkout - from a linked worktree and a folder inside it too - and on the folder itself outside a repository', () => {
+	test('on macOS and Linux Claude Code keys its trust on the repository\'s main checkout - from a linked worktree and a folder inside it too - and on the folder itself outside a repository', () => {
 		const main = path.join(temp.dir, 'main');
 		fs.mkdirSync(main);
 		git(main, 'init', '-q', '-b', 'main');
@@ -113,6 +113,31 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		// A junction on Windows, which needs no administrator; a link elsewhere
 		fs.symlinkSync(worktree, link, 'junction');
 		assert.strictEqual(claudeProjectKey(link, 'darwin'), main);
+	});
+
+	// As Claude Code 2.1.316 on Windows wrote and read its trust in a temporary configuration: a key spelled otherwise, or its main
+	// checkout's for a linked worktree, left its trust question in the way of the run (D139)
+	(process.platform === 'win32' ? test : test.skip)('on Windows Claude Code keys its trust on the folder with .git at or above the run\'s - a linked worktree\'s own - spelled as the run is given it', () => {
+		const main = path.join(temp.dir, 'Main');
+		fs.mkdirSync(path.join(main, 'sub'), { recursive: true });
+		git(main, 'init', '-q', '-b', 'main');
+		git(main, 'commit', '-q', '--allow-empty', '-m', 'first');
+		const worktree = path.join(temp.dir, 'Main.worktrees', 'feature');
+		git(main, 'worktree', 'add', '-q', '-b', 'feature', worktree);
+		fs.mkdirSync(path.join(worktree, 'src'));
+		const lower = (folder: string) => folder.replace(/^[A-Z]:/, drive => drive.toLowerCase());
+		const slashed = (folder: string) => folder.split(path.sep).join('/');
+		// The drive as VS Code writes it, and folders as the path names them: kept
+		assert.strictEqual(claudeProjectKey(lower(main), 'win32'), slashed(lower(main)));
+		assert.strictEqual(claudeProjectKey(main.toUpperCase(), 'win32'), slashed(main.toUpperCase()));
+		assert.strictEqual(claudeProjectKey(lower(path.join(main, 'sub')), 'win32'), slashed(lower(main)));
+		// A linked worktree and a folder inside it: the worktree, never its main checkout
+		assert.strictEqual(claudeProjectKey(lower(worktree), 'win32'), slashed(lower(worktree)));
+		assert.strictEqual(claudeProjectKey(path.join(worktree, 'src'), 'win32'), slashed(worktree));
+		// Outside a repository the folder itself; given with forward slashes, the same key
+		assert.strictEqual(claudeProjectKey(lower(cwd), 'win32'), slashed(lower(cwd)));
+		assert.strictEqual(claudeProjectKey(slashed(lower(main)), 'win32'), slashed(lower(main)));
+		assert.deepStrictEqual(targetOf('claude', lower(worktree), env, 'win32').keys, ['projects', slashed(lower(worktree)), 'hasTrustDialogAccepted']);
 	});
 
 	test('the entry is merged into the file as it is written - its indentation, line endings and byte order mark - and every other byte kept', () => {

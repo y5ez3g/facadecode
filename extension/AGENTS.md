@@ -71,7 +71,10 @@ it, and `FACADE_IT_KEEP=1` keeps what a run left. Linux runs it under `xvfb-run 
 
 `npm run test:remote` runs the journeys over Remote-SSH to a host: `FACADE_IT_SSH_CONFIG` and `FACADE_IT_SSH_HOST` name
 it, and `FACADE_IT_REMOTE_EXTENSION` the extension's folder there, built with `npm run compile`, `npm run bundle` and
-`node scripts/build-it.mjs`. `FACADE_IT_ONLY=ssh`, `ssh-ssh`, `local-ssh` or `ssh-local` runs one scenario.
+`node scripts/build-it.mjs`. `FACADE_IT_CONTAINER`, an image with Node, Git and a user `node` such as `node:24`, runs
+them on Linux in a container of the local Docker too, its windows attached as Dev Containers attaches. The run's root
+is one path on every computer, under `/tmp` unless `FACADE_IT_REMOTE_ROOT` names another, such as `/var/tmp`.
+`FACADE_IT_ONLY=ssh`, `ssh-ssh`, `local-ssh` or `ssh-local` runs one scenario.
 
 `node scripts/capture-inputs.mjs <cli>` records a built-in's input box as text is typed and pasted, never submitted, and
 checks the input readers against it; run it once a CLI updates, and keep its screens in `build/captures` as recorded cases.

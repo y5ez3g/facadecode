@@ -408,7 +408,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
-- 2026-11-01: D140 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.
+- 2026-11-01: D149 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.
 
 - 2026-11-01: From the owner-requested release review: 1.4 tries a starting run's input as unknown; 1.5 joins results
   that come together into one paste; 1.9 continues a reloaded window's deliveries within their deadlines (D132).

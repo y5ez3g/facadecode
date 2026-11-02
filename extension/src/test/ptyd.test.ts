@@ -473,6 +473,67 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	// Twenty starts asked within seconds on Windows held ptyd for all their program creations at once - 0.2-1 s each - and the wait of
+	// the last for its program ran out behind the others: "did not start within 10 seconds" (D146)
+	test('programs are created in turn: a run\'s once the one asked before it has its own, the run there meanwhile - listed, its conversation running, its details, size and input kept - and none created once it was closed (D146)', async () => {
+		const events: string[] = [];
+		const consoles: { readonly cols: number; readonly rows: number; written: string }[] = [];
+		// Consoles whose programs start when the test lets them, as node-pty's do on Windows once their output is connected
+		const gates: (() => void)[] = [];
+		const consoleOf = (_file: string, _args: string[], options: { readonly cols: number; readonly rows: number }) => {
+			const id = consoles.push({ cols: options.cols, rows: options.rows, written: '' });
+			events.push(`made ${id}`);
+			const pty = { pid: 0, onData() {}, onExit() {}, kill() {}, write(data: string) { consoles[id - 1].written += data; }, resize() {}, pause() {}, resume() {} };
+			gates[id] = () => { pty.pid = 1000 + id; events.push(`started ${id}`); };
+			return pty;
+		};
+		const begin = async (id: number) => (await until(`console ${id}`, () => gates[id]))();
+		const Server = withModules({ 'node-pty': { spawn: consoleOf } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const lined = new Server(pipe('lined'));
+		assert.strictEqual(await lined.listen(), true);
+		try {
+			const open = async (generation: number) => {
+				const client = await PtydClient.connect(pipe('lined'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `lined-${generation}` });
+				return client;
+			};
+			const client = await open(1);
+			const conversation = { name: 'resumed', cli: 'claude', environment: 'local', sessionId: 's-1' };
+			const a = spawn(client, 'a', IDLE);
+			const b = spawn(client, 'b', IDLE, { meta: conversation });
+			const c = spawn(client, 'c', IDLE);
+			await until('the first console', () => consoles.length === 1);
+			// While a's program starts, b and c wait their turn: they are there, b's conversation running, and each takes what a window gives it
+			await assert.rejects(spawn(client, 'b2', IDLE, { meta: conversation }), /This conversation is already running in Facade/);
+			assert.deepStrictEqual(await client.request('conversations', {}), [{ environment: 'local', cli: 'claude', sessionId: 's-1' }]);
+			assert.deepStrictEqual((await client.request('list', { owner: 'w1' })).map(run => [run.run, run.pid]), [['a', 0], ['b', 0], ['c', 0]]);
+			await client.request('setMeta', { run: 'b', meta: { ...conversation, name: 'renamed' } });
+			await client.request('resize', { run: 'b', cols: 100, rows: 40 });
+			await client.request('input', { run: 'b', data: 'typed early' });
+			// c, closed, ends with no program ever created for it
+			assert.strictEqual(await client.request('terminate', { run: 'c', graceMs: 0 }), 'terminated');
+			await begin(1);
+			await begin(2);
+			const [first, second] = [await a, await b];
+			assert.deepStrictEqual([first.pid, second.pid, second.meta.name, consoles[1].cols, consoles[1].rows, consoles[1].written], [1001, 1002, 'renamed', 100, 40, 'typed early']);
+			await assert.rejects(c, /closed before its turn to start came/);
+			assert.deepStrictEqual(events, ['made 1', 'started 1', 'made 2', 'started 2']);
+			// One whose window lost its workspace while it waited is still started, as it was before: the newer activation finds it
+			const d = spawn(client, 'd', IDLE);
+			const e = spawn(client, 'e', IDLE);
+			await until('the console of d', () => consoles.length === 3);
+			const newer = await open(2);
+			await begin(3);
+			await begin(4);
+			await Promise.allSettled([d, e]);
+			assert.deepStrictEqual((await newer.request('list', { owner: 'w1' })).map(run => [run.run, run.pid]), [['a', 1001], ['b', 1002], ['d', 1003], ['e', 1004]]);
+			assert.deepStrictEqual(events.slice(4), ['made 3', 'started 3', 'made 4', 'started 4']);
+		} finally {
+			lined.close();
+		}
+	});
+
 	test('endWindow requires current ownership and ends only that workspace', async () => {
 		const mine = await connect();
 		await spawn(mine, 'm1', IDLE);

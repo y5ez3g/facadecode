@@ -187,10 +187,10 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 
 ## Change log
 
-- 2026-11-01: D140 keeps unverified native prompt acceptance unconfirmed in machine results and readable history.
+- 2026-11-01: D149 keeps unverified native prompt acceptance unconfirmed in machine results and readable history.
 
 - 2026-11-01: 4.1 shows a sender's copy whose result never came back as unconfirmed after its deadline (D132).
-- 2026-11-01: D139 separates structured system receipts for agents from readable Message History text, preserving
+- 2026-11-01: D148 separates structured system receipts for agents from readable Message History text, preserving
   ordinary bodies, old records, correlation and the existing delivery handoff.
 
 - 2026-11-01: Describe competitive-analysis findings without naming individual products; message behavior is unchanged.

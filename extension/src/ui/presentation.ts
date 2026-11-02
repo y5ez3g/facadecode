@@ -82,6 +82,8 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs through cmd.exe, which cannot be given its path safely; set {1}.path to the CLI's own program or Node entry point", a, b);
 		// {0} is the program, {1} the folder - a network share's or a WSL distribution's, starting with \\ - {2} the setting
 		case 'cmd_unc_folder': return vscode.l10n.t("{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point", a, b, c);
+		// {0} is the installed version of OpenCode, such as 1.19.5; the commands are npm's, to be kept as they are
+		case 'opencode_1x': return vscode.l10n.t("OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli", a);
 		// {0} is the script, such as a package's cli.js
 		case 'node_missing': return vscode.l10n.t("{0} is a Node script, and Node is not on the PATH to run it", a);
 		case 'yolo_type': return vscode.l10n.t("facade.yolo must be true or false; received {0}", a);

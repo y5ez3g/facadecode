@@ -99,6 +99,19 @@ suite('Window registry: the open windows of this computer and its alias counters
 		assert.strictEqual(speaksOurs(entry(1, { protocol: WINDOW_NETWORK_PROTOCOL - 1 })), false);
 	});
 
+	// An update from 0.0.1 gave its first new agent #a1 while 0.0.1's #a1 still ran, as 0.0.1 counted in agent-aliases.json (D141)
+	test('alias numbers move past those the environment\'s own counter gave - 0.0.1\'s - of each kind; one it cannot read gives none', () => {
+		fs.writeFileSync(path.join(home.dir, 'agent-aliases.json'), '{"last":2}\n');
+		assert.deepStrictEqual(allocateNumbers(home.dir, 'agent', 16), { first: 3, count: 16 });
+		assert.deepStrictEqual(allocateNumbers(home.dir, 'agent', 1), { first: 19, count: 1 });
+		fs.writeFileSync(path.join(home.dir, 'message-aliases.json'), '{"last":5}\n');
+		assert.deepStrictEqual(allocateNumbers(home.dir, 'message', 2, 1), { first: 6, count: 2 });
+		// Never a count from nothing: an unreadable counter of an earlier build is an error, and the computer's counter is left as it was
+		fs.writeFileSync(path.join(home.dir, 'agent-aliases.json'), 'not a counter');
+		assert.throws(() => allocateNumbers(home.dir, 'agent', 1), /agent-aliases\.json does not hold a number/);
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(home.dir, 'client-agent-numbers.json'), 'utf8')), { last: 19 });
+	});
+
 	test('alias numbers: gapless within a take, never given twice across takes, each kind its own counter, and past `floor`', () => {
 		assert.deepStrictEqual(allocateNumbers(home.dir, 'agent', 3), { first: 1, count: 3 });
 		assert.deepStrictEqual(allocateNumbers(home.dir, 'agent', 2), { first: 4, count: 2 });

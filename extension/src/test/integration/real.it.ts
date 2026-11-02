@@ -3,8 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 // Real agents of one built-in working together through Facade (VERIFICATION G3, J12, M02, D90). It runs only where FACADE_IT_REAL
-// names the CLI - `FACADE_IT_ONLY=real` - as each run signs in and uses an account's usage. YOLO is off: the agent the person starts
-// uses Facade's tools with no approval, starts a second agent of the same CLI with a first task and messages it, and the second
+// names the CLI - `FACADE_IT_ONLY=real` - as each run signs in and uses an account's usage. YOLO is off - on where FACADE_IT_REAL_YOLO
+// says so, for a CLI with no rule for one server's tools - and the agent the person starts uses Facade's tools with no approval, starts a second agent of the same CLI with a first task and messages it, and the second
 // answers through Facade's tools. Every message is pasted whole into its recipient's input box and seen submitted (RULES-1.4,
 // COLLABORATION-2.1). What the models did is checked too (D117): each message sent once, one agent started, and no tool called
 // over and over while an answer is awaited, as the tools' instructions ask - the answer comes as a paste.
@@ -17,6 +17,7 @@ import type { MessageRecord } from '../../core/messagePorts';
 import type { Card, PanelState } from '../../webview/protocol';
 
 const REAL = process.env.FACADE_IT_REAL;
+const YOLO = process.env.FACADE_IT_REAL_YOLO === 'on' ? 'on' : 'off';
 
 async function state(): Promise<PanelState> {
 	return await vscode.commands.executeCommand<PanelState>('facade.state');
@@ -69,8 +70,9 @@ const READY_MS = REAL === 'agy' ? 25_000 : 10_000;
 
 const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and do exactly this: '
 	+ '1) Call list_start_options without arguments, then with the window_id of the window you are in, to find its first location_id. '
-	+ `2) Call start_agent with name "Echo", cli "${REAL}", that window_id and location_id, and this prompt: "When a Facade message arrives, `
-	+ 'reply to its sender with send_message, the text exactly PONG, and do nothing else." '
+	// "After this one": the first task comes as a Facade message too, which a literal model would answer as well
+	+ `2) Call start_agent with name "Echo", cli "${REAL}", that window_id and location_id, and this prompt: "When the next Facade message `
+	+ 'after this one arrives, reply to its sender once with send_message, the text exactly PONG, and do nothing else." '
 	+ '3) Call send_message to Echo\'s agent_id with the text PING. '
 	+ '4) End your turn. When a Facade message with PONG reaches you, answer DONE and nothing else.';
 
@@ -80,7 +82,7 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined, 30_000);
 	});
 
-	test('with YOLO off, an agent starts another with a first task and messages it, and the other answers it, each message pasted and submitted', async function () {
+	test(`with YOLO ${YOLO}, an agent starts another with a first task and messages it, and the other answers it, each message pasted and submitted`, async function () {
 		this.timeout(600_000);
 		try {
 			await journey();

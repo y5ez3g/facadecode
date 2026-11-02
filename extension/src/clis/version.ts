@@ -8,6 +8,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { launchTarget } from './executable';
 
 /** A version as an installation names it: digits and dots, and an optional pre-release or build tail. */
 const VERSION = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
@@ -53,6 +54,23 @@ export function installedVersionOf(cli: string, executable: string): { readonly 
 			} catch {
 				return undefined;
 			}
+		}
+		case 'opencode': {
+			// npm's package of its line, the program in its `bin/`: `opencode-ai` for 1.x, which is refused, `@opencode/cli` for 2.x (D78,
+			// D145); on Windows npm's shim is read for the program it runs
+			const program = /\.cmd$/i.test(real) ? launchTarget(real, 'win32').executable : real;
+			for (let dir = path.dirname(program), up = 0; up < 2; dir = path.dirname(dir), up++) {
+				const file = path.join(dir, 'package.json');
+				try {
+					const { name, version } = JSON.parse(fs.readFileSync(file, 'utf8')) as { readonly name?: unknown; readonly version?: unknown };
+					if (name === 'opencode-ai' || name === '@opencode/cli') {
+						return typeof version === 'string' && VERSION.test(version) ? { version, source: file } : undefined;
+					}
+				} catch {
+					// Not this folder
+				}
+			}
+			return undefined;
 		}
 		default:
 			return undefined;

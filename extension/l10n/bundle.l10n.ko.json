@@ -282,6 +282,7 @@
 	"Deleted worktree \"{0}\", but Git left its folder {1} behind.": "작업 트리 \"{0}\"을(를) 삭제했지만 Git이 폴더 {1}을(를) 남겨 두었습니다.",
 	"This window's Facade Code record is damaged, so its agents cannot be restored here. Close this window and open its folder or workspace again, or restart {0}.": "이 창의 Facade Code 기록이 손상되어 여기에서 에이전트를 복원할 수 없습니다. 이 창을 닫고 폴더 또는 작업 영역을 다시 열거나 {0}을(를) 다시 시작하세요.",
 	"{0} runs through cmd.exe, which cannot run in the UNC folder {1}; set {2}.path to the CLI's own program or Node entry point": "{0}은(는) cmd.exe를 통해 실행되지만 cmd.exe는 UNC 폴더 {1}에서 실행할 수 없습니다. {2}.path를 CLI 자체 프로그램 또는 Node 진입점으로 설정하세요",
+	"OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli": "OpenCode {0}은(는) 지원되지 않습니다. Facade Code에는 OpenCode 2 이상이 필요합니다. npm의 opencode-ai를 @opencode/cli로 바꾸세요. 먼저 npm uninstall -g opencode-ai 명령을 실행한 다음 npm install -g @opencode/cli 명령을 실행하세요",
 	"{0} is a Node script, and Node is not on the PATH to run it": "{0}은(는) Node 스크립트이지만 이를 실행할 Node가 PATH에 없습니다",
 	"Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal": "신뢰: 홈 폴더, 상위 폴더 또는 파일 시스템 루트에는 부여하지 않습니다. CLI가 터미널에서 확인합니다",
 	"Could not restore {0} pinned agents. Their cards show why.": "고정된 에이전트 {0}개를 복원할 수 없습니다. 각 카드에 이유가 표시됩니다.",

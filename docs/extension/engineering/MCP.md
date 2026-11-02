@@ -64,7 +64,7 @@ Do not echo ordinary input bodies, routine character counts or requested key arr
 pending deadlines/obstacles, repeated-request facts, prompt outcomes and partial/unknown effects. List detail under
 3.1 keeps infrequent facts retrievable. Message and screen bodies are complete, inline or through the existing file
 mechanism. Explicit false, null, empty and unknown values are not removed as though they were absent. Human-facing
-history and notifications keep their own presentation; their wording is not the machine result contract (D139).
+history and notifications keep their own presentation; their wording is not the machine result contract (D148).
 
 ```ts
 type Result<T> = {
@@ -419,18 +419,18 @@ No migration guide for already-published user skills is required: this is the fi
 
 ## Change log
 
-- 2026-11-01: D142 exposes original-call correlation for continuing starts/stops and preserves it through message
+- 2026-11-01: D151 exposes original-call correlation for continuing starts/stops and preserves it through message
   reloads; async and inbox guidance distinguishes continuation, uncertainty, final receipts and empty snapshots.
 
-- 2026-11-01: D141 permits compact recovery facts based on actual effects, retaining diagnostics and original request identity.
+- 2026-11-01: D150 permits compact recovery facts based on actual effects, retaining diagnostics and original request identity.
 
-- 2026-11-01: D140 makes native prompt uncertainty and unconfirmed termination explicit, preserves prompt outcomes on
+- 2026-11-01: D149 makes native prompt uncertainty and unconfirmed termination explicit, preserves prompt outcomes on
   repeated starts, and unifies process/tool field names under tool protocol 4.
 
 - 2026-11-01: From the owner-requested release review: 1.1 retries a cross-window send whose answer was lost through the
   window holding it; 1.2 reports refusals before any effect as no effect; 3.2 answers a stop during a start with its
   actual cleanup (D131, D132).
-- 2026-11-01: D139: compact machine results with equivalent JSON/text, one current tool protocol, targeted agent
+- 2026-11-01: D148: compact machine results with equivalent JSON/text, one current tool protocol, targeted agent
   detail, and separate machine/human system-result representations; no change to operation or delivery effects.
 
 - 2026-11-01: Describe competitive-analysis findings without naming individual products or their implementation identifiers; API behavior is unchanged.

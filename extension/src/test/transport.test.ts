@@ -101,10 +101,12 @@ interface Asked {
 class FakePtyd {
 
 	readonly asked: Asked[] = [];
+	/** The hellos answered, which `helloDelayMs` puts off, as a ptyd busy starting CLIs does. */
+	answeredHellos = 0;
 	private readonly sockets = new Set<net.Socket>();
 	private readonly server: net.Server;
 
-	constructor(readonly socketPath: string, private readonly protocol = PTYD_PROTOCOL) {
+	constructor(readonly socketPath: string, private readonly protocol = PTYD_PROTOCOL, private readonly helloDelayMs = 0) {
 		this.server = net.createServer(socket => {
 			this.sockets.add(socket);
 			socket.on('close', () => this.sockets.delete(socket));
@@ -112,7 +114,12 @@ class FakePtyd {
 			socket.on('data', lineReader(line => {
 				const request = JSON.parse(line) as Omit<Asked, 'socket'>;
 				if (request.method === 'hello') {
-					this.reply(socket, { id: request.id, result: { protocol: this.protocol, pid: process.pid } });
+					setTimeout(() => {
+						if (!socket.destroyed) {
+							this.reply(socket, { id: request.id, result: { protocol: this.protocol, pid: process.pid } });
+							this.answeredHellos++;
+						}
+					}, this.helloDelayMs);
 				}
 				this.asked.push({ ...request, socket });
 			}, () => socket.destroy()));
@@ -140,6 +147,11 @@ class FakePtyd {
 
 	refuse(call: Asked, error: string, reason?: string, effects?: 'none' | 'unknown'): void {
 		this.reply(call.socket, { id: call.id, error, ...reason ? { reason } : {}, ...effects ? { effects } : {} });
+	}
+
+	/** The connections open now. */
+	get open(): number {
+		return this.sockets.size;
 	}
 
 	/** Every connection dropped, as ptyd going away or a window that claimed the run going mid-call. */
@@ -206,8 +218,8 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		fs.rmSync(socketDir, { recursive: true, force: true });
 	});
 
-	const ptyd = async (protocol?: number) => {
-		const fake = new FakePtyd(socketPath, protocol);
+	const ptyd = async (protocol?: number, helloDelayMs?: number) => {
+		const fake = new FakePtyd(socketPath, protocol, helloDelayMs);
 		fakes.push(fake);
 		await fake.listen();
 		return fake;
@@ -395,6 +407,27 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		fake.answer(fake.calls()[0], answerOf('still answered'));
 		assert.strictEqual((await answer).content[0].text, 'still answered');
 		assert.strictEqual(await exited, 0);
+	});
+
+	// Twenty agents started at once on Windows: ptyd answered shims' hellos past two seconds, and each given up then told its window
+	// the run's tools went (RULES-3.1) - "its Facade tools stopped" on cards whose tools worked at their next call
+	test('a hello answered late fails the call waiting at its two seconds, with no effect, and keeps the connection for the next call', async () => {
+		const fake = await ptyd(undefined, 2_600);
+		const link = linkOf('run-10');
+		const started = performance.now();
+		const failed = await link.call({ tool: 'list_agents', arguments: {}, callId: '1' }, performance.now()).then(() => undefined, err => err);
+		assert.ok(failed instanceof CallFailed);
+		assert.deepStrictEqual([failed.code, failed.reason, failed.outcome], ['UNAVAILABLE', 'window_unavailable', 'none']);
+		assert.match(failed.message, /did not answer within 2000 ms\. It had no effect\.$/);
+		assert.ok(performance.now() - started < 2_500, 'the call failed at its two seconds');
+		// The hello answered later: the same connection, said hello once, carries the next call
+		await until('the late hello answered', () => fake.answeredHellos === 1);
+		assert.strictEqual(fake.open, 1);
+		const next = link.call({ tool: 'list_agents', arguments: {}, callId: '2' }, performance.now());
+		const call = await until('the next call', () => fake.calls()[0]);
+		fake.answer(call, answerOf('kept'));
+		assert.strictEqual(((await next) as ToolAnswer).text, 'kept');
+		assert.deepStrictEqual([fake.hellos().length, fake.open], [1, 1]);
 	});
 
 	test('a call longer than ptyd reads as one line is never sent: it had no effect, and the connection goes on', async () => {

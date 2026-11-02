@@ -222,6 +222,13 @@ export class PtydServer {
 	private readonly calls = new Map<number, PendingCall>();
 	/** Runs claimed by an attach not answered yet: their calls wait, for the window to know the run is its first (RULES-4.1). */
 	private readonly attaching = new Set<Run>();
+	/**
+	 * Where the next run's program waits its turn to be created (D146): once the program of the run asked before it was created, or
+	 * failed to be. On Windows node-pty creates a program on this thread, and a check of a new command line - Microsoft Defender's
+	 * of a CLI's own, measured at 0.2-1 s each - holds it meanwhile: starts asked together held it for all of theirs, nothing else
+	 * heard, and the wait of each for its program ran out behind the others. The runs themselves are there as they are asked for.
+	 */
+	private startLine: Promise<void> = Promise.resolve();
 	private nextCall = 1;
 
 	/** `speaks` is the protocol it answers hello with: its own, or for a test the earlier one it stands for. */
@@ -455,8 +462,9 @@ export class PtydServer {
 					throw new Error('This conversation is already running in Facade.');
 				}
 				this.seen.add(spawn.run);
-				const run = new Run(spawn);
-				// Claimed before its program starts: its window hears everything it writes from the first byte on
+				const run = new Run(spawn, { later: true });
+				// There and claimed before its program starts: its window hears everything it writes from the first byte on, and may give it
+				// its details, its size, input or its close while it waits its turn (D146)
 				this.runs.set(run.id, run);
 				this.claim(run, connection);
 				run.onExit(exit => {
@@ -467,7 +475,11 @@ export class PtydServer {
 					this.scheduleIdleExit();
 				});
 				try {
-					await run.started();
+					// Its program created in its turn, the wait for it counting from there; none where it was closed meanwhile
+					await this.inLine(async () => {
+						run.spawn();
+						await run.started();
+					});
 				} catch (err) {
 					// A program that never started is no run: the spawn fails, as it did when node-pty threw at once, and its claim goes too
 					this.drop(run);
@@ -612,6 +624,13 @@ export class PtydServer {
 		if (run.hasExited) {
 			this.drop(run);
 		}
+	}
+
+	/** Runs `start` once every start asked before it has its program, or failed to (D146). */
+	private inLine<T>(start: () => Promise<T>): Promise<T> {
+		const turn = this.startLine.then(start);
+		this.startLine = turn.then(() => undefined, () => undefined);
+		return turn;
 	}
 
 	/** Lets go of a run no window shows again: ended, and removed. Its calls waiting for a window are refused. */

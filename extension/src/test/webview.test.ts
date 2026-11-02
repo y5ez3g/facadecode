@@ -22,8 +22,8 @@ suite('The agent panel in Chromium', function () {
 	let call: (method: string, params?: object) => Promise<any>;
 	let evaluate: (expression: string) => Promise<any>;
 	const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-	const until = async (check: () => boolean | Promise<boolean>) => {
-		const deadline = Date.now() + 8_000;
+	const until = async (check: () => boolean | Promise<boolean>, ms = 8_000) => {
+		const deadline = Date.now() + ms;
 		while (!await check()) {
 			if (Date.now() > deadline) { throw new Error('Chromium did not become ready'); }
 			await wait(30);
@@ -76,6 +76,9 @@ suite('The agent panel in Chromium', function () {
 		redraw();`;
 	suiteSetup(async function () {
 		if (!executable) { this.skip(); return; }
+		// A browser's cold start on a busy computer can take longer than the page's own checks wait: on a CI Windows runner more than
+		// eight seconds, in one run of many
+		this.timeout(75_000);
 		const root = path.resolve(__dirname, '../../..');
 		const source = fs.readFileSync(path.join(root, 'src/webview/panel.ts'), 'utf8');
 		const hooks = `\n(window as any).panel = { page, render: (next: PanelState) => { state = next; render(); } };`;
@@ -83,10 +86,17 @@ suite('The agent panel in Chromium', function () {
 		[shipped, tested] = await Promise.all([bundle(false), bundle(true)]);
 		css = fs.readFileSync(path.join(root, 'media/panel.css'), 'utf8');
 		profile = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-panel-'));
-		child = spawn(executable, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--disable-background-networking', '--disable-extensions', '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: 'ignore' });
-		// Chromium makes the file before it writes the port in it: read once the port is there
+		child = spawn(executable, ['--headless=new', '--remote-debugging-port=0', `--user-data-dir=${profile}`, '--disable-background-networking', '--disable-extensions', '--no-first-run', '--no-default-browser-check', 'about:blank'], { stdio: ['ignore', 'ignore', 'pipe'] });
+		// What it said last, for a start that fails
+		let said = '';
+		child.stderr?.on('data', chunk => { said = `${said}${chunk}`.slice(-2_000); });
+		// Chromium makes the file before it writes the port in it: read once the port is there, or it has ended
 		const portOf = () => fs.existsSync(path.join(profile, 'DevToolsActivePort')) ? fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0] : '';
-		await until(() => /^\d+$/.test(portOf()));
+		await until(() => /^\d+$/.test(portOf()) || child.exitCode !== null || child.signalCode !== null, 60_000).catch(() => undefined);
+		if (!/^\d+$/.test(portOf())) {
+			const ended = child.exitCode !== null || child.signalCode !== null ? `it ended (${child.exitCode ?? child.signalCode})` : 'it is still running';
+			throw new Error(`Chromium did not become ready within 60 seconds: ${ended}; it said: ${said.trim() || 'nothing'}`);
+		}
 		const port = portOf();
 		const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json() as { type: string; webSocketDebuggerUrl: string }[];
 		socket = new WebSocket(pages.find(page => page.type === 'page')!.webSocketDebuggerUrl);

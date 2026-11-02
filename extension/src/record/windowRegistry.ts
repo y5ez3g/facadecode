@@ -9,7 +9,7 @@ import { replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
 import { withFileLock } from '../base/lock';
 import { Allocation, DirectoryAgent, isDirectoryAgent, WINDOW_NETWORK_PROTOCOL } from '../base/windowNetwork';
-import { takeNumbers } from './counter';
+import { lastOf, takeNumbers } from './counter';
 
 /** One open window as its window component registers it on this computer (ARCHITECTURE-2.1, 3.1). */
 export interface RegisteredWindow {
@@ -162,5 +162,11 @@ export function allocateNumbers(home: string, kind: 'agent' | 'message', count: 
 	if (!Number.isSafeInteger(count) || count < 1 || count > 1000) {
 		throw new Error('Numbers are taken from 1 to 1000 at a time.');
 	}
-	return { first: takeNumbers(path.join(home, `client-${kind}-numbers.json`), count, `${kind} number`, () => floor), count };
+	// Past the numbers this home's own environment counter gave as well: 0.0.1 counted its agents there, and they may still run
+	// after the update (RULES-2.2, D141)
+	const environment = path.join(home, ENVIRONMENT_COUNTERS[kind]);
+	return { first: takeNumbers(path.join(home, `client-${kind}-numbers.json`), count, `${kind} number`, () => Math.max(floor, lastOf(environment, `${kind} number`))), count };
 }
+
+/** The counters of one execution environment beside this computer's, by kind: 0.0.1's, and a window's out of its component's reach. */
+const ENVIRONMENT_COUNTERS = { agent: 'agent-aliases.json', message: 'message-aliases.json' } as const;
