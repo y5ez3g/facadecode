@@ -24,8 +24,8 @@ export function takeNumbers(file: string, count: number, name: string, floor: ()
 	});
 }
 
-/** The number the counter in `file` gave last: none before the first. */
-function lastOf(file: string, name: string): number {
+/** The number the counter in `file` gave last: none before the first, or where there is no such counter. */
+export function lastOf(file: string, name: string): number {
 	let text: string;
 	try {
 		text = fs.readFileSync(file, 'utf8');
