@@ -276,7 +276,11 @@ passes.
 | M29 | Notifications with blank/long/duplicate names, Unicode and literal boundary text; parallel accepted operations; routed duplicate result after reload; a receipt batch partially submitted before reload | Approved 📨/🔔 English templates, complete original bodies, no terminal JSON/footer; reserved result_message_id matches the final result without a fake inbox item; frozen input is not reformatted or pasted twice; success/unknown/partial, input, prompt, process and worktree facts stay distinguishable; COLLABORATION-2.1–2.2, MCP-1.3 |
 | M30 | Human/agent creation, two runs in one directory, a newly created worktree, creator closure, no prompt, shim reconnect and restored conversation | Each launch's own identity, creator address, actual location and initial message remain available through private instructions; shared files contain no personalized context; no welcome turn, mandatory report or replay; MCP-6.2 |
 | M31 | Current and retained terminal frames, inverse/dim together, blank cursor, literal marker characters, Unicode/combining text and large local/routed output | One reversible styled body with exact text and cues; one complete JSON file uses the same representation; historical frames keep their own time; unavailable source cues explicit; compare payload cost and real-model interpretation without changing raw input; MCP-5.1–5.2 |
+| M32 | All six native clients: injection, first task, complete notification/receipt, one-call discovery, screen interpretation, reload and exact restoration | Version/platform/provider recorded separately for native input, controlled-provider and real-model checks; a fake CLI or an unauthenticated launch is no model-support claim; isolated state only, with missing login/platform evidence explicit; VERIFICATION-2.1 |
 
+Native lifecycle probes use the isolated editor driver, record the actual CLI PID and native session ID, and compare
+both across reload and reopening. Ending that test-owned process after window closure can exercise exact restoration
+without waiting for the grace timer; this is recorded as forced process exit, never as evidence of the five-minute policy.
 
 
 ### 3.3 Files, safety and presentation
@@ -408,6 +412,30 @@ Not rerun for this merge: real-model/C4 journeys, native Windows or Linux, Remot
 or the minimum supported editor. Earlier platform results remain evidence for their own snapshots. The local passes
 do not certify those platforms or close their release gates.
 
+#### MCP-05–11 local evidence, 2026-11-01
+
+The MCP polish snapshot over merge `cd80cac0` includes release-review head `29b73c2d`. The local source manifest and
+logs stay in `extension/build/mcp0511/`; the before-MCP-12 source fingerprints are in `extension/build/mcp1215/baseline.json`.
+These are build-specific results, not a certification of every native platform.
+
+| Check | Observed result |
+| --- | --- |
+| Compile, production bundle/package, package checks, localization and spec audit | PASS: darwin-arm64 0.0.2; 11 package checks; 300 runtime and 64 manifest strings in 12 locales; 12 normative documents, 185 rules and 80 links |
+| Unit suite | PASS: 1185 tests, 6 platform-specific skips; `unit-merged-final.json` |
+| Official VS Code 1.144.0, isolated profiles and fake CLIs | PASS: 40 editor assertions across six built-ins, a custom CLI and two windows, six reload/workspace-conversion checks, six immediate-reopen checks; actual 300190 ms grace expiry then exact session restoration; `integration-merged-fixed.log` |
+| Native input captures on macOS 27.2 arm64 | PASS: Claude Code 2.1.316, Codex 0.166.0, Antigravity 1.4.12, Muse Code 1.4.14-R7309.1, OpenCode 2.1.4 and Pi 1.4.0; long/Unicode inputs and approved message/receipt headers |
+| Native reload, workspace conversion, immediate reopen and exact session restoration | PASS for all six versions above on the merged build; real process and session IDs recorded, a fresh response token checked after resume; `real-lifecycle-<cli>-merged-final.log` |
+| Real-model collaboration | Claude Code with its signed-in model, OpenCode and Pi with OpenRouter kimi-k2.6 passed before the remote merge: one-call discovery, child context, initial task and message round-trip; `real-claude-complete.log`, `real-opencode-final.log`, `real-pi-exact-match.log` |
+| Native CLI with controlled provider | Codex passed `real-codex-exact.log` before the merge; Antigravity and Muse passed `real-<cli>-merged-final.log` after it. These prove actual CLI/tool/context transport and effects, not independent model reasoning |
+
+Muse's collaboration probe used YOLO on; with YOLO off its native approval appeared as CLIS-2.2 specifies. No product
+approval bypass was added. The other collaboration probes used YOLO off. Native forced supervisor exit exercises exact
+restoration; only the separately timed fake-CLI grace run proves the five-minute policy. All editor/CLI state was isolated.
+The split MCP-05–11 commits additionally compiled independently and passed their affected focused suites.
+
+Not rerun on this snapshot: native Windows/Linux, Remote-SSH, WSL, containers, minimum-supported editor, or actual-model
+collaboration for Codex/Antigravity/Muse. Earlier release-review evidence remains tied to its own source. No real Qwen probe ran.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**
@@ -430,7 +458,7 @@ for review, not acceptance evidence.
 
 - 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D147).
 - 2026-11-01: Evidence that named this release's packages by the version an earlier commit wrote names them as this release's: its version is 0.0.2 (D142).
-- 2026-11-01: Added MCP polish scenarios through MCP-10 (D152).
+- 2026-11-01: M27–M32 cover MCP discovery, source time, readable notifications, private initial context, single-body screens and separate native evidence (D152).
 - 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
 - 2026-11-01: U13 covers the panel status, stable-name and responsive-location decisions D127/D128.

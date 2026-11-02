@@ -277,6 +277,8 @@ Closing a run does not replay its mail on a later run. Changing protocol does no
 new deliveries.
 
 Bound output buffers at 8 MiB per run and 32 MiB per window; headless scrollback is 10,000 logical lines / 8 MiB.
+The headless terminal reflows the cursor's line with the text during resize. Narrowing and restoring a window must
+keep the cursor attached to its logical input position; an input reader must not compensate by guessing past a frame.
 Report unavailable earlier scrollback instead of truncating a requested current result silently. Keep current screen/UI
 usable during output flood using ordinary backpressure and snapshots. A transport buffer limit is not a total direct-
 input limit. Real disk/memory/storage exhaustion fails the requesting operation; there is no product cap of 100 agents

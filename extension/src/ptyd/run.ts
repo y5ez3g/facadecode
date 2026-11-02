@@ -239,7 +239,8 @@ export class Run {
 		this.screenReader = screenReaderOf(params.screenStatus);
 		const { Terminal } = loadXterm();
 		const { SerializeAddon } = loadSerialize();
-		const terminal = this.terminal = new Terminal({ cols: params.cols, rows: params.rows, scrollback: scrollbackRows(params.cols), allowProposedApi: true });
+		const terminal = this.terminal = new Terminal({ cols: params.cols, rows: params.rows, scrollback: scrollbackRows(params.cols), allowProposedApi: true,
+			reflowCursorLine: true });
 		this.serializer = new SerializeAddon();
 		terminal.loadAddon(this.serializer as never);
 		// Characters as wide as the window's terminal draws them, by Unicode 11: an emoji takes two cells

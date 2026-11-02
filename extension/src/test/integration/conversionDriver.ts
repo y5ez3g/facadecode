@@ -15,6 +15,21 @@ import type { PanelState } from '../../webview/protocol';
 const OUT = process.env.FACADE_IT_CONVERSION!;
 const RECORD = process.env.FACADE_IT_RECORD!;
 const REOPEN = process.env.FACADE_IT_REOPEN === '1';
+const NATIVE = process.env.FACADE_IT_NATIVE;
+
+/** A native process is observed from this isolated window's launch log, never from the owner's process list. */
+function pidOf(alias: string): number | undefined {
+	if (!NATIVE) { return fs.existsSync(`${RECORD}.${alias}`) ? Number(fs.readFileSync(`${RECORD}.${alias}`, 'utf8').trim()) : undefined; }
+	const dir = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
+	const logs = fs.existsSync(dir) ? fs.readdirSync(dir).map(key => path.join(dir, key, 'agents.log')).filter(file => fs.existsSync(file)) : [];
+	for (const file of logs) {
+		for (const line of fs.readFileSync(file, 'utf8').split('\n').reverse()) {
+			const match = / Started (#a\d+) \([^)]*\) pid (\d+):/.exec(line);
+			if (match?.[1] === alias) { return Number(match[2]); }
+		}
+	}
+	return undefined;
+}
 
 function write(line: object): void {
 	fs.appendFileSync(OUT, `${JSON.stringify(line)}\n`);
@@ -36,6 +51,22 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 		}
 		await new Promise(resolve => setTimeout(resolve, 200));
 	}
+}
+
+/** Finish a native turn before closing: a preallocated ID alone is not a persisted conversation. */
+async function nativeTurn(runId: string, name: string): Promise<void> {
+	await until('native CLI input', async () => await vscode.commands.executeCommand('facade.messageInput', runId) === 'usable' ? true : undefined, 60_000);
+	const terminal = await until('its native terminal', async () => vscode.window.terminals.find(each => each.name.startsWith(name)));
+	const answer = `READY_${Date.now().toString(36).toUpperCase()}`;
+	const prompt = `Reply with exactly ${answer}. Do not use tools.`;
+	terminal.sendText(prompt, false);
+	await until('the native probe draft', async () => await vscode.commands.executeCommand('facade.messageInput', runId, prompt) === 'own' ? true : undefined);
+	terminal.sendText('\r', false);
+	await until('the native answer and empty input', async () => {
+		const screen = await vscode.commands.executeCommand<{ text: string[] }>('facade.screen', runId, 500);
+		return screen?.text.some(line => new RegExp(`^\\s*[^\\p{L}\\p{N}]*${answer}\\s*$`, 'u').test(line))
+			&& await vscode.commands.executeCommand('facade.messageInput', runId) === 'usable' ? true : undefined;
+	}, 60_000);
 }
 
 /** Observe the saved card before revealing its terminal, then let the deferred native Pin follow that activation. */
@@ -66,17 +97,25 @@ export async function activate(): Promise<void> {
 				return undefined;
 			});
 			const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
-			const pid = await until('the fake CLI to start', async () => fs.existsSync(`${RECORD}.${alias}`) ? Number(fs.readFileSync(`${RECORD}.${alias}`, 'utf8').trim()) : undefined);
+			const pid = await until('the CLI to start', async () => pidOf(alias));
 			// Its terminal open, as a person sees it before adding a folder: one the restart beat to opening tells the editor no
 			// process, which leaves its tab beside the new one, as Facade retires no tab it cannot tell from another's (ARCHITECTURE-2.2)
-			const terminal = await until('its terminal', async () => vscode.window.terminals.find(each => each.name === card.name));
+			const terminal = await until('its terminal', async () => vscode.window.terminals.find(each => each.name.startsWith(card.name)));
 			let opened = false;
 			void Promise.resolve(terminal.processId).then(() => { opened = true; }, () => { opened = true; });
 			await until('its terminal to open', async () => opened || undefined);
-			await until('its native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
+			if (NATIVE) {
+				await nativeTurn(card.runId, card.name);
+			}
+			await until('its native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined, NATIVE ? 60_000 : 20_000);
 			await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 			await pinState(card.runId, true);
-			const session = JSON.parse(fs.readFileSync(path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`), 'utf8')).session_id;
+			const session = await until('the persisted native session ID', async () => {
+				try {
+					const id: unknown = JSON.parse(fs.readFileSync(path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`), 'utf8')).session_id;
+					return typeof id === 'string' && id ? id : undefined;
+				} catch { return undefined; }
+			}, NATIVE ? 60_000 : 20_000);
 			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session });
 			// Reload tears down this host, which may cancel its command promise after the window accepted the request.
 			void vscode.commands.executeCommand(REOPEN ? 'workbench.action.closeWindow' : 'workbench.action.reloadWindow').then(undefined, () => undefined);
@@ -85,8 +124,9 @@ export async function activate(): Promise<void> {
 		if (REOPEN) {
 			const card = await until('the reopened pinned agent', async () => (await state()).cards.find(each => each.pinned));
 			await pinState(card.runId, true);
+			if (NATIVE) { await nativeTurn(card.runId, card.name); }
 			const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
-			const pid = await until('the restored CLI process', async () => fs.existsSync(`${RECORD}.${alias}`) ? Number(fs.readFileSync(`${RECORD}.${alias}`, 'utf8').trim()) : undefined);
+			const pid = await until('the restored CLI process', async () => pidOf(alias));
 			const sessionFile = path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`);
 			const session = await until('the restored native session identity', async () => {
 				try { return JSON.parse(fs.readFileSync(sessionFile, 'utf8')).session_id as string | undefined; } catch { return undefined; }
@@ -119,7 +159,9 @@ export async function activate(): Promise<void> {
 		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => each.name === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: vscode.window.terminals.map(each => each.name) });
 	} catch (err) {
-		write({ phase: 'error', error: String(err) });
+		const screens = await state().then(current => Promise.all(current.cards.map(async card => ({ name: card.name,
+			text: await vscode.commands.executeCommand('facade.screen', card.runId, 500) }))), () => []);
+		write({ phase: 'error', error: String(err), screens });
 	}
 }
 

@@ -70,20 +70,25 @@ async function main(): Promise<void> {
 	const realPath = process.env.FACADE_IT_REAL_PATH ?? (realCli === 'claude' ? process.env.FACADE_IT_CLAUDE : undefined);
 	const realConfig = process.env.FACADE_IT_CLAUDE_CONFIG;
 	const realEnv = JSON.parse(process.env.FACADE_IT_REAL_ENV ?? '{}') as { [name: string]: string };
+	const realArgs: unknown = JSON.parse(process.env.FACADE_IT_REAL_ARGS ?? '[]');
+	if (!Array.isArray(realArgs) || realArgs.some(arg => typeof arg !== 'string')) {
+		throw new Error('FACADE_IT_REAL_ARGS must be a JSON array of CLI arguments.');
+	}
+	const nativeLifecycle = only === 'real-lifecycle';
+	const realState = process.env.FACADE_IT_REAL_STATE;
 	const realHome = process.env.FACADE_IT_REAL_HOME === 'keep';
 	// YOLO is off for the real journey, unless FACADE_IT_REAL_YOLO=on: Muse Code, whose approvals have no rule for one server's tools,
 	// asks before each of Facade's with YOLO off, and on Windows first sets up its sandbox, which a new home has not
 	const realYolo = process.env.FACADE_IT_REAL_YOLO === 'on';
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
-	// FACADE_IT_REAL_AGENTS_HOME may name a temporary home a real CLI was set up in for testing - Antigravity's first-run setup and
-	// sign-in done there - for the agents' terminals, never a person's
-	const prepared = only === 'real' ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
-	if (only === 'real') {
+	// A prepared temporary home may be used directly, or copied from an isolated state template.
+	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
+	if (only === 'real' || nativeLifecycle) {
 		probeEnvironment(realEnv, realHome, realConfig);
 		probeEnvironment(passed, realHome);
-		if (prepared !== undefined) {
-			assertTemporaryState(prepared, 'FACADE_IT_REAL_AGENTS_HOME');
-		}
+		if (prepared !== undefined) { assertTemporaryState(prepared, 'FACADE_IT_REAL_AGENTS_HOME'); }
+		if (realState) { assertTemporaryState(realState, 'FACADE_IT_REAL_STATE'); }
+		if (prepared && realState) { throw new Error('Choose a prepared home or a state template, not both.'); }
 	}
 	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
 	sanitizedEnvironment();
@@ -100,16 +105,14 @@ async function main(): Promise<void> {
 	fs.mkdirSync(claudeConfig);
 	const home = path.join(root, 'home');
 	fs.mkdirSync(home);
-	// The home folder agents' terminals see, where a CLI such as Antigravity keeps the folders it trusts: the suite's own, or the one
-	// the real journey was given. Only the terminals' environment names it, as a person's terminal settings could; the editor keeps
-	// its own HOME.
+	// Only terminal configuration points to this temporary CLI home; the editor keeps its own HOME.
 	const agentsHome = prepared ?? path.join(root, 'agents-home');
+	fs.mkdirSync(agentsHome, { recursive: true });
+	if ((only === 'real' || nativeLifecycle) && realState) { fs.cpSync(realState, agentsHome, { recursive: true }); }
+	// Antigravity merges trust into its existing temporary settings (D103).
 	fs.mkdirSync(path.join(agentsHome, '.gemini', 'antigravity-cli'), { recursive: true });
-	// Antigravity's settings as it leaves them once it has run there: Facade merges its trust into a file the CLI made, and makes none (D103)
 	const agySettingsFile = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
-	if (!fs.existsSync(agySettingsFile)) {
-		fs.writeFileSync(agySettingsFile, '{}\n');
-	}
+	if (!fs.existsSync(agySettingsFile)) { fs.writeFileSync(agySettingsFile, '{}\n'); }
 
 	/** What agents' terminals are given - the suite's home folder, and `more` - by the editor's terminal settings. */
 	const isolatedStorage = { XDG_CONFIG_HOME: path.join(agentsHome, '.config'), XDG_DATA_HOME: path.join(agentsHome, '.local', 'share'), XDG_CACHE_HOME: path.join(agentsHome, '.cache'), XDG_STATE_HOME: path.join(agentsHome, '.local', 'state') };
@@ -183,7 +186,9 @@ async function main(): Promise<void> {
 		for (const dir of [solo, second, path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])) }));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
+			...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])),
+			...(nativeLifecycle ? { [`facade.${cli.segment}.path`]: realPath, [`facade.${cli.segment}.launch`]: { arguments: realArgs }, 'facade.yolo': false, ...terminalEnv(realEnv) } : {}) }));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'conversionDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
@@ -200,16 +205,18 @@ async function main(): Promise<void> {
 			child.stderr?.on('data', append);
 			child.on('error', append);
 		};
+		const editorEnv = { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out,
+			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
 			stdio: ['ignore', 'pipe', 'pipe'],
-			env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', CLAUDE_CONFIG_DIR: claudeConfig }
+			env: editorEnv
 		});
 		capture(editor);
 		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
 		const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
 		try {
-			const end = Date.now() + 90_000;
+			const end = Date.now() + (nativeLifecycle ? 180_000 : 90_000);
 			while (Date.now() < end && !lines().some(line => line.phase === (reopening ? 'folder' : 'workspace') || line.phase === 'error')) {
 				await new Promise(resolve => setTimeout(resolve, 500));
 			}
@@ -222,24 +229,25 @@ async function main(): Promise<void> {
 				if (!lines().some(line => line.phase === 'closed') || (process.platform !== 'darwin' && editor.exitCode === null)) { throw new Error('The isolated window did not close.'); }
 				if (expiry) {
 					const closedAt = Date.now();
+					if (nativeLifecycle) { endMatching(path.join(facade, 'extension', 'ptyd')); }
 					const expiresBy = closedAt + 330_000;
 					while (alive(Number(before.pid)) && Date.now() < expiresBy) { await new Promise(resolve => setTimeout(resolve, 500)); }
-					if (alive(Number(before.pid)) || Date.now() - closedAt < 280_000) { throw new Error('The closed window did not keep and then end its process at the five-minute grace period.'); }
-					console.log(`  ✔ ${cli.id}: the closed window's process ended after ${Date.now() - closedAt} ms, using the production grace period`);
+					if (alive(Number(before.pid)) || (!nativeLifecycle && Date.now() - closedAt < 280_000)) { throw new Error('The closed window did not end its process as expected.'); }
+					console.log(`  ✔ ${cli.id}: the closed window's process ended after ${Date.now() - closedAt} ms, ${nativeLifecycle ? 'forced exit of the isolated supervisor (not a grace-timer test)' : 'using the production grace period'}`);
 				}
 				editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 					`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
-					stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_REOPEN: '1', CLAUDE_CONFIG_DIR: claudeConfig }
+					stdio: ['ignore', 'pipe', 'pipe'], env: editorEnv
 				});
 				capture(editor);
-				const reopenBy = Date.now() + 45_000;
+				const reopenBy = Date.now() + (nativeLifecycle ? 150_000 : 45_000);
 				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
 				const after = lines().find(line => line.phase === 'reopened');
 				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid : after.runId !== before.runId || after.pid !== before.pid)
 					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))) {
 					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
 				}
-				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after expiry restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
+				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after process exit restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
 				return;
 			}
 			const said = lines();
@@ -309,7 +317,7 @@ async function main(): Promise<void> {
 		try {
 			// The other built-ins not installed: the real one is the one New Agent preselects
 			const others = Object.fromEntries(BUILT_INS.filter(each => each !== cli).map(each => [`facade.${each.segment}.path`, path.join(root, `unavailable-${each.id}`)]));
-			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, 'facade.yolo': realYolo, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
+			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, [`facade.${cli.segment}.launch`]: { arguments: realArgs }, 'facade.yolo': realYolo, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
 		} finally {
 			if (cli.id === 'claude') {
 				untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root);
@@ -353,6 +361,17 @@ async function main(): Promise<void> {
 		// Never unasked: it signs in and uses an account's usage
 		if (only === 'real') {
 			await real();
+		}
+		if (nativeLifecycle) {
+			const cli = BUILT_INS.find(each => each.id === realCli);
+			if (!cli || !realPath) { throw new Error('real-lifecycle requires a built-in CLI and FACADE_IT_REAL_PATH.'); }
+			try {
+				await conversion(cli);
+				await conversion(cli, true);
+				await conversion(cli, true, true);
+			} finally {
+				if (cli.id === 'claude') { untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root); }
+			}
 		}
 	} finally {
 		if (keep) {
