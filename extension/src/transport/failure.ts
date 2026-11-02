@@ -4,6 +4,7 @@
 
 import type { ToolAnswer } from '../schema/protocol';
 import { answerOf, failure } from '../schema/result';
+import { withRecovery } from '../schema/recovery';
 
 /** The MCP-1.2 error codes a transport failure can have. */
 export type FailureCode = 'INVALID' | 'NOT_FOUND' | 'UNAVAILABLE' | 'FAILED';
@@ -12,8 +13,8 @@ export type FailureCode = 'INVALID' | 'NOT_FOUND' | 'UNAVAILABLE' | 'FAILED';
  * The answer of a call no tool answered: it was not carried to the window, or the window's answer did not come back (MCP-1.2).
  * Both channels retain its diagnostic and effects; `unknown` where the call may have reached the window and acted.
  */
-export function failureAnswer(code: FailureCode, reason: string, message: string, outcome: 'none' | 'unknown'): ToolAnswer {
-	return answerOf(failure({ code, reason, message }, {}, { outcome }));
+export function failureAnswer(code: FailureCode, reason: string, message: string, outcome: 'none' | 'unknown', call?: { readonly tool: string; readonly arguments: unknown }): ToolAnswer {
+	return answerOf(withRecovery(call?.tool ?? '', failure({ code, reason, message }, {}, { outcome }), call?.arguments));
 }
 
 /** Whether `value` is a tool call's answer as a window gives it. */

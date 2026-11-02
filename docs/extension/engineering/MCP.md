@@ -75,6 +75,7 @@ type Result<T> = {
     reason: string;
     message: string;
   };
+  recovery?: { action: string; check?: { tool: string; arguments: object }; request_id?: string; condition?: "within_original_hour" };
   effects: {
     outcome: "none" | "confirmed" | "partial" | "unknown" | "pending";
     text_written?: "none" | "partial" | "full" | "unknown";
@@ -101,8 +102,14 @@ RULES-1.5. A reader that does not recognize the input box leaves it untouched; t
 A request refused before it reached its effect reports no effect: a routed message the destination refuses before
 recording it - its agent gone or out of reach - is `NOT_FOUND`, and direct text or keys that never reached the terminal's
 runtime are `UNAVAILABLE` (D132).
-CLI/Git/transport errors retain their actual useful diagnostic. Error results do not instruct agents how to organize,
-retry or escalate work. Agent-operation errors never create an automatic human notification.
+CLI/Git/transport errors retain their actual useful diagnostic. Exceptional results may include compact `recovery`
+facts: an `action` naming correction, target/capability/blocker inspection, effect inspection, original-request reuse,
+reconnection or tool update; an optional read-only `check` names an existing tool and its arguments. Only original-request
+reuse includes `request_id` and `condition: within_original_hour`; it never restarts that hour. Partial/unknown effects
+never authorize automatic input replay, replacement starts, worktree deletion or escalation. A final failed request
+remains failed when retrieved with the same ID; a deliberate new effect requires a new request after addressing its cause.
+Normal success has no recovery object. Prompt-level failure/uncertainty keeps its recovery alongside that prompt.
+A closed target has no invented state/screen check. These are API mechanics, not instructions to organize or escalate work. Agent-operation errors never create an automatic human notification.
 
 ### 1.3 Waits, progress and async completion
 
@@ -402,6 +409,8 @@ No migration guide for already-published user skills is required: this is the fi
 [Verification](VERIFICATION.md) records tests actually run; this contract does not assert them passed.
 
 ## Change log
+
+- 2026-11-01: D141 permits compact recovery facts based on actual effects, retaining diagnostics and original request identity.
 
 - 2026-11-01: D140 makes native prompt uncertainty and unconfirmed termination explicit, preserves prompt outcomes on
   repeated starts, and unifies process/tool field names under tool protocol 4.

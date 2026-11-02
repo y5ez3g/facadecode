@@ -301,7 +301,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 				delivery: { status: 'unknown', effects: { outcome: 'unknown' }, attempts: 0, via: 'launch', reason: 'submission_unconfirmed' }
 			}]);
 			assert.deepStrictEqual(s.messages.sent, []);
-			assert.deepStrictEqual(result.data.prompt, { message_id: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' }, status: 'unknown', effects: { outcome: 'unknown' } });
+			assert.deepStrictEqual(result.data.prompt, { message_id: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' }, status: 'unknown', effects: { outcome: 'unknown' }, recovery: { action: 'inspect_effects', check: { tool: 'read_screen', arguments: { agent: '#a100' } } } });
 			assert.strictEqual(result.status, 'success');
 		});
 
@@ -322,7 +322,8 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([result.status, result.effects], ['success', { outcome: 'confirmed' }]);
 			assert.deepStrictEqual(result.data.prompt, {
 				message_id: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' },
-				status: 'failure', reason: 'unexpected_error', message: 'EACCES: permission denied', effects: { outcome: 'unknown' }
+				status: 'failure', reason: 'unexpected_error', message: 'EACCES: permission denied', effects: { outcome: 'unknown' },
+				recovery: { action: 'inspect_effects', check: { tool: 'read_screen', arguments: { agent: '#a100' } } }
 			});
 		});
 

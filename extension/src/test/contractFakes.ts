@@ -409,7 +409,7 @@ export function assertSameFacts(answer: ToolAnswer): void {
 }
 
 /** The structured result of an answer, its facts checked to be the same as its text. */
-export function resultOf(answer: ToolAnswer): { status: string; data: any; error?: { code: string; reason: string; message: string }; effects: any } { // eslint-disable-line @typescript-eslint/no-explicit-any
+export function resultOf(answer: ToolAnswer): { status: string; data: any; error?: { code: string; reason: string; message: string }; effects: any; recovery?: import('../schema/result').Recovery } { // eslint-disable-line @typescript-eslint/no-explicit-any
 	assertSameFacts(answer);
 	return answer.structured as never;
 }

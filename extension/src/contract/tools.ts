@@ -19,6 +19,7 @@ import type { ServedRoute } from '../base/windowNetwork';
 import { ServedAnswer, TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import { accepted, answerOf, codedOf, Effects, errorResult, failure, Result, resultErrorOf, success } from '../schema/result';
 import { compactResult } from '../schema/compact';
+import { withRecovery } from '../schema/recovery';
 import { receiptTextOf } from './receiptText';
 import { MESSAGE_LIMIT, QUERY_ROUTE_MS, QUERY_TOOLS, ToolName, TOOLS } from '../schema/tools';
 import { ArgumentError, codePoints, ToolArguments, validateArguments } from '../schema/validate';
@@ -209,7 +210,7 @@ class ToolService {
 		this.deps.log?.(`Tool ${tool} by ${this.deps.agents.get(call.caller as RunId)?.alias ?? call.caller}: ${status}${error ? ` ${error.code} (${error.reason})` : ''} in ${Math.round(this.mono() - receivedAt)} ms`);
 		const { after } = outcome;
 		return {
-			answer: answerOf(compactResult(call.tool, outcome.result, !!(call.arguments as { details?: boolean } | undefined)?.details)),
+			answer: answerOf(withRecovery(call.tool, compactResult(call.tool, outcome.result, !!(call.arguments as { details?: boolean } | undefined)?.details), call.arguments)),
 			...after ? {
 				delivered: () => {
 					try {
@@ -758,7 +759,7 @@ class ToolService {
 			const facts = this.deps.agents.get(run);
 			if (facts) {
 				this.reportTo(caller, { callId: call.callId, agent: facts, text: receiptTextOf(final.result, final.headline),
-					result: answerOf(compactResult('start_agent', final.result)).structured });
+					result: answerOf(withRecovery('start_agent', compactResult('start_agent', final.result), args)).structured });
 			}
 		}).catch(err => this.deps.log?.(`Could not report the start of ${run} to ${caller.alias}: ${errorText(err)}`));
 		const facts = this.deps.agents.get(run);
@@ -1021,7 +1022,7 @@ class ToolService {
 		void closing.then(late => {
 			const final = stopped(target, late);
 			this.reportTo(caller, { callId: call.callId, agent: target, text: receiptTextOf(final.result, final.headline),
-				result: answerOf(compactResult('stop_agent', final.result)).structured });
+				result: answerOf(withRecovery('stop_agent', compactResult('stop_agent', final.result))).structured });
 		}).catch(err => this.deps.log?.(`Could not report the stop of ${target.alias} to ${caller.alias}: ${errorText(err)}`));
 		return {
 			result: accepted({ agent_id: target.id, reference: referenceOf(target), closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),

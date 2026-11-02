@@ -27,12 +27,21 @@ export interface ResultError {
 	readonly message: string;
 }
 
+/** Optional API recovery facts, never an automatic action or a team workflow (MCP-1.2). */
+export interface Recovery {
+	readonly action: 'correct_arguments' | 'resolve_target' | 'check_capability' | 'resolve_blocker' | 'inspect_effects' | 'repeat_original_request' | 'reconnect' | 'update_tools';
+	readonly check?: { readonly tool: 'list_agents' | 'read_screen' | 'list_start_options'; readonly arguments: { readonly [key: string]: unknown } };
+	readonly request_id?: string;
+	readonly condition?: 'within_original_hour';
+}
+
 /** MCP-1.2's envelope. `accepted` is finite work continuing - neither success nor failure. */
 export interface Result<T = unknown> {
 	readonly status: 'success' | 'failure' | 'accepted';
 	readonly data: T;
 	readonly error?: ResultError;
 	readonly effects: Effects;
+	readonly recovery?: Recovery;
 }
 
 export const NO_EFFECTS: Effects = { outcome: 'none' };

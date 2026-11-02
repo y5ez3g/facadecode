@@ -11,6 +11,7 @@ import type { CapabilityState, CliChoice, Location, RunFacts } from '../core/por
 import { referenceOf } from '../core/reach';
 import { accepted, failure, success, type ErrorCode } from '../schema/result';
 import { compactResult } from '../schema/compact';
+import { withRecovery } from '../schema/recovery';
 
 export type Data = { readonly [key: string]: unknown };
 
@@ -186,5 +187,5 @@ export function deliveryReceipt(record: MessageRecord, cli?: string): Data {
 		? success({ ...data, disposition: delivery.via === 'read' ? 'read_messages' : record.to.run === '@human' ? 'notified' : 'submitted_to_cli' }, effects)
 		: delivery.status === 'pending' ? accepted(defined({ ...data, obstacle: delivery.reason, deadline: delivery.deadline === undefined ? undefined : isoOf(delivery.deadline) }), effects)
 			: failure({ ...error, message: delivery.reason === 'input_unknown' && cli ? `${error.message} CLI: ${cli}.` : error.message }, data, effects);
-	return compactResult('send_message', result) as unknown as Data;
+	return withRecovery('send_message', compactResult('send_message', result)) as unknown as Data;
 }

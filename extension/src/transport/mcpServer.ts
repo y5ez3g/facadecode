@@ -186,11 +186,11 @@ export class McpShim {
 			answer = await this.options.link.call(call, readAt);
 		} catch (err) {
 			if (err instanceof CallFailed) {
-				return failureAnswer(err.code, err.reason, err.message, err.outcome);
+				return failureAnswer(err.code, err.reason, err.message, err.outcome, call);
 			}
-			return failureAnswer('UNAVAILABLE', 'window_unavailable', `The call was not carried to a Facade Code window: ${err instanceof Error ? err.message : String(err)}. Whether it took effect is not known.`, 'unknown');
+			return failureAnswer('UNAVAILABLE', 'window_unavailable', `The call was not carried to a Facade Code window: ${err instanceof Error ? err.message : String(err)}. Whether it took effect is not known.`, 'unknown', call);
 		}
 		return isToolAnswer(answer) ? answer
-			: failureAnswer('UNAVAILABLE', 'protocol_incompatible', 'The Facade Code window answered in a form this MCP server cannot read: the call may have taken effect.', 'unknown');
+			: failureAnswer('UNAVAILABLE', 'protocol_incompatible', 'The Facade Code window answered in a form this MCP server cannot read: the call may have taken effect.', 'unknown', call);
 	}
 }
