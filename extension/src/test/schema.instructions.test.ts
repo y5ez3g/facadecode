@@ -11,7 +11,7 @@ suite('Run-private initialization instructions (MCP-6.2)', () => {
 		kind: 'checkout', branch: 'feature/input', isMain: false, folders: [{ name: 'app' }] };
 
 	test('metadata distinguishes pure queries from inbox acknowledgment and keeps mutations conservative', () => {
-		assert.deepStrictEqual(TOOLS.filter(tool => tool.annotations.readOnlyHint).map(tool => tool.name), ['list_start_options', 'list_agents', 'read_screen']);
+		assert.deepStrictEqual(TOOLS.filter(tool => tool.annotations.readOnlyHint).map(tool => tool.name), ['list_agents', 'read_screen']);
 		for (const tool of TOOLS) {
 			assert.ok(tool.title.length > 0 && !tool.title.includes('_'));
 			if (!tool.annotations.readOnlyHint) {
@@ -35,11 +35,13 @@ suite('Run-private initialization instructions (MCP-6.2)', () => {
 	});
 
 	test('names the creator, worktree and initial message in readable English without turning contact into a reporting duty', () => {
-		const context = launchContextText({ creator: { id: '#a1', label: 'Ben #a1' }, window: 'Backend', location, initialMessage: '#m42' });
+		const context = launchContextText({ creator: { id: '#a1', label: 'Ben #a1' }, window: 'Backend', windowId: 'win-2', locationId: 'loc-7', logFile: '/state/events.jsonl', location, initialMessage: '#m42' });
 		assert.match(context, /^Your creator is Ben \(#a1\)\./);
 		assert.ok(context.includes('"feature/input" worktree for "app"'));
 		assert.ok(context.includes('window "Backend" (ssh-remote+backend)'));
 		assert.ok(context.includes(location.path));
+		assert.ok(context.includes('window_id="win-2", location_id="loc-7"'));
+		assert.ok(context.includes('Facade history log (ssh-remote+backend): "/state/events.jsonl"'));
 		assert.ok(context.includes('not the current shell directory'));
 		assert.ok(context.includes('initial message is #m42'));
 		assert.ok(context.includes('use send_message with to="#a1"'));

@@ -130,6 +130,7 @@ function setUp(options: {
 	const shims: RunId[] = [];
 	const shimInputs: { run: RunId; facts: RunFacts; location: Location }[] = [];
 	const log: string[] = [];
+	const events: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
 	let next = 0;
 	let alias = 0;
 	let now = 10_000;
@@ -182,7 +183,7 @@ function setUp(options: {
 		retained: { list: () => [...retained.values()], put: run => retained.set(run.id, run), remove: run => retained.delete(run) },
 		aliases: { next: () => `#a${++alias}` },
 		clock: { now: () => ++now },
-		log: { event: text => log.push(text) },
+		log: { event: text => log.push(text), fact: (event, fields) => events.push({ event, fields }) },
 		lifetime: { onDidClose: closes.event },
 		yolo: () => true,
 		...(options.tools ? { tools: (run: RunId, facts: RunFacts, location: Location) => {
@@ -196,10 +197,33 @@ function setUp(options: {
 	});
 	const changes: RunChange[] = [];
 	agents.onDidChange(change => changes.push(change));
-	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, shimInputs, log, changes, created, plans, advance: (ms: number) => { now += ms; } };
+	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, shimInputs, log, events, changes, created, plans, advance: (ms: number) => { now += ms; } };
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+
+
+suite('Structured lifecycle facts', () => {
+	for (const outcome of ['exit', 'failed', 'close'] as const) {
+		test(`${outcome} correlates the requested settings without logging prompt text`, async () => {
+			const world = setUp();
+			if (outcome === 'failed') { world.execution.spawnError = new Error('Spawn unavailable'); }
+			const id = world.agents.launch({ name: 'Example', location: 'loc-1', cli: 'claude', origin: 'human', model: 'example-model', effort: 'high', prompt: 'PRIVATE PROMPT' });
+			await world.agents.started(id);
+			if (outcome === 'exit') { world.execution.exits.fire({ run: id, code: 0, interruptVerified: false }); }
+			if (outcome === 'close') { world.execution.cleanup = 'failed'; await world.agents.close(id); }
+			const request = world.events.find(each => each.event === 'agent_start_requested')!;
+			assert.deepStrictEqual([request.fields.agent_id, request.fields.requested_model, request.fields.requested_effort], [id, 'example-model', 'high']);
+			assert.strictEqual(world.events.some(each => each.event === 'agent_started'), outcome !== 'failed');
+			const last = world.events.at(-1)!;
+			assert.strictEqual(last.fields.agent_id, id);
+			assert.strictEqual(last.event, { exit: 'agent_exited', failed: 'agent_start_failed', close: 'agent_closed' }[outcome]);
+			if (outcome === 'close') { assert.strictEqual(last.fields.cleanup, 'failed', 'closing the pair is not confirmed process termination'); }
+			assert.ok(!JSON.stringify(world.events).includes('PRIVATE PROMPT'));
+			world.agents.dispose();
+		});
+	}
+});
 
 suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 	const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';

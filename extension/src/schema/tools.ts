@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The nine tools of the Facade MCP server (MCP-1.1), in their order: the one source of their names, descriptions and argument
+// The eight tools of the Facade MCP server (MCP-1.1), in their order: the one source of their names, descriptions and argument
 // shapes, which the shim lists and the window validates against (MCP-6.2). Every shape has a type and none a `oneOf`, so that
 // every model provider takes the list (D102).
 
@@ -23,7 +23,7 @@ export interface ToolDefinition {
 	readonly inputSchema: ArgumentSchema;
 }
 
-export type ToolName = 'list_start_options' | 'start_agent' | 'list_agents' | 'stop_agent' | 'send_message' | 'read_messages' | 'read_screen' | 'type_text' | 'press_keys';
+export type ToolName = 'start_agent' | 'list_agents' | 'stop_agent' | 'send_message' | 'read_messages' | 'read_screen' | 'type_text' | 'press_keys';
 
 const ID = { type: 'string', minLength: 1 } as const;
 const AGENT = { ...ID, description: 'The agent: its ID, `#aN`, unique `@name`, or name with its ID.' } as const;
@@ -36,26 +36,15 @@ const REQUEST = { type: 'string', minLength: 1, maxLength: 200, description: 'Op
 export const MESSAGE_LIMIT = 8000;
 
 /** Bounded queries. read_messages acknowledges delivery only after handoff, so this is not the metadata's read-only set. */
-export const QUERY_TOOLS: ReadonlySet<string> = new Set<ToolName>(['list_start_options', 'list_agents', 'read_messages', 'read_screen']);
+export const QUERY_TOOLS: ReadonlySet<string> = new Set<ToolName>(['list_agents', 'read_messages', 'read_screen']);
 
 /** These tools never change agent or message state, even if their answer is lost after handoff. */
-export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set<ToolName>(['list_start_options', 'list_agents', 'read_screen']);
+export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set<ToolName>(['list_agents', 'read_screen']);
 
 /** How long a query's route waits for a window's answer before it reports the window unavailable (MCP-1.3). */
 export const QUERY_ROUTE_MS = 10_000;
 
 export const TOOLS: readonly ToolDefinition[] = [
-	{
-		name: 'list_start_options',
-		title: 'Agent launch options',
-		annotations: { readOnlyHint: true, openWorldHint: false },
-		description: 'Discover startup choices: default/current returns your launch location and CLIs. scope:all lists windows; window_id lists locations; add location_id for CLIs, then cli for model/effort and capabilities. scope excludes explicit selections.',
-		inputSchema: {
-			type: 'object',
-			properties: { scope: { type: 'string', enum: ['current', 'all'] }, window_id: ID, location_id: ID, cli: ID },
-			additionalProperties: false
-		}
-	},
 	{
 		name: 'start_agent',
 		title: 'Start an agent',
@@ -68,7 +57,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 				name: { type: 'string', description: 'Its display name: names may repeat or be empty; its ID tells it apart.' },
 				window_id: ID,
 				location_id: ID,
-				cli: { ...ID, description: 'A CLI ID that list_start_options lists for the location.' },
+				cli: { ...ID, description: 'A CLI ID listed under the destination window by list_agents.' },
 				model: { ...ID, description: 'Optional; omit it to use the launch configuration and the CLI default.' },
 				effort: { ...ID, description: 'Optional; omit it to use the launch configuration and the CLI default.' },
 				prompt: { ...ID, maxLength: MESSAGE_LIMIT, description: 'Optional first message.' },
@@ -89,10 +78,10 @@ export const TOOLS: readonly ToolDefinition[] = [
 		name: 'list_agents',
 		title: 'List agents',
 		annotations: { readOnlyHint: true, openWorldHint: false },
-		description: 'List reachable agents: YOLO sees all, otherwise your creation tree. Compact current facts by default; details:true adds full metadata. agent selects one agent, including a retained ended one. window_id limits the window; include_ended adds ended agents to a list.',
+		description: 'Snapshot open windows (including empty ones), folders/worktrees, available CLIs and reachable agents. CLI rows without location_ids apply to all listed destinations. YOLO sees all agents, otherwise your creation tree. window_id/location_id narrow the scope; agent selects one retained/current agent; details adds metadata. Counts cover responding windows, not just this page; continue next_cursor with the same filters/limit.',
 		inputSchema: {
 			type: 'object',
-			properties: { window_id: ID, agent: AGENT, details: { type: 'boolean', default: false }, include_ended: { type: 'boolean', default: false }, cursor: CURSOR, limit: LIMIT },
+			properties: { window_id: ID, location_id: ID, agent: AGENT, details: { type: 'boolean', default: false }, cursor: CURSOR, limit: LIMIT },
 			additionalProperties: false
 		}
 	},

@@ -9,7 +9,7 @@
 import { isJsonObject } from './json';
 
 /** The window components' network protocol, raised whenever a message between them changes shape. */
-export const WINDOW_NETWORK_PROTOCOL = 1;
+export const WINDOW_NETWORK_PROTOCOL = 2;
 
 /** The workspace extension asks its window component: this window's network address and every open window's agents. */
 export const WINDOW_DIRECTORY_COMMAND = 'facade.window.directory';

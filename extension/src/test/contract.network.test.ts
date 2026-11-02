@@ -3,14 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { locationOf } from '../contract/facts';
 import type { GuestCaller } from '../contract/network';
 import { createToolServices, ToolServices } from '../contract/tools';
 import type { MessageRecord } from '../core/messagePorts';
 import { TOOL_PROTOCOL } from '../schema/protocol';
 import { accepted, failure, success } from '../schema/result';
 import { MESSAGE_LIMIT } from '../schema/tools';
-import { FakeNetwork, remoteAgent, resultOf, runFacts, runId, Setup, setUp } from './contractFakes';
+import { FakeNetwork, remoteSnapshot, remoteAgent, resultOf, runFacts, runId, Setup, setUp } from './contractFakes';
 import { waitFor } from './util';
 
 /** A root the person started, YOLO off, with a child and a grandchild, and an unrelated YOLO root. */
@@ -38,7 +37,7 @@ function recordOf(id: string, from: string, to: string, delivery: MessageRecord[
 
 const DELIVERED: MessageRecord['delivery'] = { status: 'success', effects: { outcome: 'confirmed', text_written: 'full', enter_written: true }, attempts: 1, via: 'terminal', deliveredAt: 4100 };
 
-suite('Contract: the nine tools across the windows of this computer (COLLABORATION-1.1, MCP-2 to 5)', () => {
+suite('Contract: the eight tools across the windows of this computer (COLLABORATION-1.1, MCP-2 to 5)', () => {
 
 	let s: Setup;
 	let network: FakeNetwork;
@@ -56,8 +55,8 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 		network.window(2, 'Backend', [remoteAgent(20)]);
 		for (const body of [undefined, {}, { agents: 'empty', locations: 'empty' }]) {
 			network.respond = () => ({ ok: true, result: body });
-			for (const tool of ['list_start_options', 'list_agents'] as const) {
-				const result = resultOf(await s.call(stranger, tool, tool === 'list_start_options' ? { scope: 'all' } : {}));
+			for (const tool of ['list_agents'] as const) {
+				const result = resultOf(await s.call(stranger, tool, {}));
 				assert.strictEqual(result.data.complete, false);
 				assert.strictEqual(result.data.unavailable_windows[0].reason, 'invalid_response');
 				assert.strictEqual(result.effects.outcome, 'none');
@@ -77,85 +76,67 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 		assert.strictEqual(network.routed.length, 2);
 	});
 
-	suite('list_start_options', () => {
-
-		test('default discovery stays on the caller worktree even if the window directory is unavailable', async () => {
-			const { lead } = team(s);
-			s.agents.add({ ...lead, location: 'loc-wt' });
-			network.directoryError = new Error('No remote window directory');
-			const result = resultOf(await s.call(lead, 'list_start_options'));
-			assert.strictEqual(result.status, 'success');
-			assert.strictEqual(result.data.location_id, 'loc-wt');
-			assert.ok(result.data.clis.length > 0);
-			assert.deepStrictEqual(network.routed, []);
-		});
-
-		test('without a window: this window first, each other one that answers, and those that do not listed apart - never an empty success', async () => {
+	suite('window discovery in list_agents', () => {
+		test('empty remote windows remain launch destinations, and unavailable windows remain explicit', async () => {
 			const { lead } = team(s);
 			network.window(2, 'Backend', [], 'ssh-remote+box');
 			network.window(3, 'Docs');
 			network.unavailable = [{ window: 'win-4', label: 'Newer build', reason: 'protocol_incompatible' }];
-			const backend = { window_id: 'win-2', label: 'Backend', environment: 'ssh-remote+box', available: true, locations: [{ location_id: 'loc-9', label: 'api' }] };
-			network.respond = route => route.window === 'win-2'
-				? { ok: true, result: backend }
-				: { ok: false, reason: 'timeout', message: 'The Facade window win-3 did not answer within 10 seconds: the request may have taken effect there.', effects: 'unknown' };
-			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
-			assert.strictEqual(result.status, 'success');
+			const backend = remoteSnapshot('win-2', [], { folders: [{ name: 'api', uri: 'file:///srv/api', path: '/srv/api' }],
+				locations: [{ location_id: 'loc-9', label: 'api', path: '/srv/api' }], clis: [{ cli: 'codex', available: true }],
+				counts: { folders: 1, locations: 1, worktrees: 0, agents: 0 } });
+			network.respond = route => route.window === 'win-2' ? { ok: true, result: backend }
+				: { ok: false, reason: 'timeout', message: 'The window did not answer.', effects: 'unknown' };
+			const result = resultOf(await s.call(lead, 'list_agents'));
 			assert.deepStrictEqual(result.data.windows.map((each: { window_id: string }) => each.window_id), ['win-1', 'win-2']);
-			assert.deepStrictEqual(result.data.windows[1], backend);
+			assert.deepStrictEqual(result.data.windows[1], backend.window);
+			assert.deepStrictEqual(result.data.counts, { known_windows: 4, responding_windows: 2, folders: 2, locations: 3, worktrees: 1, agents: 3 });
 			assert.strictEqual(result.data.complete, false);
-			assert.deepStrictEqual(result.data.unavailable_windows, [
-				{ window_id: 'win-4', label: 'Newer build', reason: 'protocol_incompatible' },
-				{ window_id: 'win-3', label: 'Docs', reason: 'timeout', message: 'The Facade window win-3 did not answer within 10 seconds: the request may have taken effect there.' }
-			]);
-			// Each other window asked once, within what is left of the query's ten seconds
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args, each.deadlineMs]), [['win-2', 'summary', {}, 9_993], ['win-3', 'summary', {}, 9_993]]);
+			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { reason: string }) => each.reason), ['protocol_incompatible', 'timeout']);
+			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'agents', 9993], ['win-3', 'agents', 9993]]);
 		});
 
-		test('the other windows that cannot be listed at all are one unavailable entry, and this window is still listed', async () => {
+		test('an unreadable directory preserves local facts and explicitly marks unknown windows', async () => {
 			const { lead } = team(s);
-			network.directoryError = new Error('the Facade Code Window Component did not list the open windows');
-			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
-			assert.deepStrictEqual([result.data.windows.map((each: { window_id: string }) => each.window_id), result.data.complete], [['win-1'], false]);
-			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { window_id: string; reason: string }) => [each.window_id, each.reason]), [['*', 'window_unavailable']]);
-			assert.deepStrictEqual(network.routed, []);
+			network.directoryError = new Error('No window directory');
+			const result = resultOf(await s.call(lead, 'list_agents'));
+			assert.strictEqual(result.data.windows[0].window_id, 'win-1');
+			assert.ok(result.data.windows[0].clis.length);
+			assert.strictEqual(result.data.complete, false);
+			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { window_id: string }) => each.window_id), ['*']);
+			assert.strictEqual(network.routed.length, 0);
 		});
 
-		test('another window\'s locations and CLIs are asked of that window, for the caller as its own window knows it', async () => {
+		test('a selected remote location is queried at its owner without guessing local CLIs', async () => {
 			const { lead } = team(s);
 			network.window(2, 'Backend');
-			network.respond = () => ({ ok: true, result: { result: success({ window_id: 'win-2', label: 'Backend', locations: [], complete: true }), headline: 'Window Backend has 0 working locations.' } });
-			const answer = await s.call(lead, 'list_start_options', { window_id: 'win-2' });
-			const result = resultOf(answer);
-			assert.deepStrictEqual([result.status, result.data.window_id, result.data.locations], ['success', 'win-2', []]);
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'call', 9_993]]);
-			const routed = network.routed[0].args;
-			assert.strictEqual(routed.protocol, TOOL_PROTOCOL);
-			assert.deepStrictEqual([routed.tool, routed.arguments.window_id, routed.callId, routed.elapsedMs, routed.inline], ['list_start_options', 'win-2', 'call-1', 7, undefined]);
-			assert.deepStrictEqual(routed.caller, { id: lead.id, alias: '#a1', name: 'lead', root: lead.id, yolo: false, window: 'win-1', windowLabel: 'Design' });
+			network.respond = () => ({ ok: true, result: { result: success({ windows: [remoteSnapshot('win-2').window], agents: [], complete: true }) } });
+			const result = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', location_id: 'loc-9' }));
+			assert.strictEqual(result.data.windows.length, 1);
+			assert.strictEqual(result.data.windows[0].window_id, 'win-2');
+			assert.strictEqual(network.routed[0].args.arguments.location_id, 'loc-9');
+			assert.strictEqual(network.routed[0].args.caller.id, lead.id);
+			assert.strictEqual(network.routed[0].op, 'call');
 		});
+	});
 
-		test('a window no component lists is not found, before anything is routed - for a start as for a query', async () => {
-			const { lead } = team(s);
-			network.window(3, 'Docs');
-			const query = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-2' }));
-			assert.deepStrictEqual([query.error?.code, query.error?.reason], ['NOT_FOUND', 'not_found']);
-			const start = resultOf(await s.call(lead, 'start_agent', { name: 'child', window_id: 'win-2', location_id: 'loc-1', cli: 'claude' }));
-			assert.deepStrictEqual([start.error?.code, start.error?.reason, start.effects], ['NOT_FOUND', 'not_found', { outcome: 'none' }]);
-			assert.deepStrictEqual([network.routed.length, s.agents.launched.length], [0, 0]);
-			// Where the list itself cannot be read, the route is tried and says why
-			network.directoryError = new Error('no component');
-			network.respond = () => ({ ok: false, reason: 'window_unavailable', message: 'The Facade Code Window Component could not carry the request.', effects: 'none' });
-			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-2' })).error?.reason, 'window_unavailable');
-		});
-
-		test('a window that cannot be reached for a query fails with why, and the query had no effect', async () => {
-			const { lead } = team(s);
+	test('selected remote locations preserve known absence and cursor errors through the actual destination contract', async () => {
+		const { lead } = team(s);
+		const other = setUp();
+		try {
+			other.deps.window = { id: 'win-2', label: 'Backend', environment: 'local' };
+			const remote = createToolServices(other.deps);
 			network.window(2, 'Backend');
-			network.respond = () => ({ ok: false, reason: 'protocol_incompatible', message: 'The Facade window win-2 runs another version of Facade Code.', effects: 'unknown' });
-			const result = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-2', location_id: 'loc-9' }));
-			assert.deepStrictEqual([result.error?.code, result.error?.reason, result.effects, result.data], ['UNAVAILABLE', 'protocol_incompatible', { outcome: 'none' }, { window_id: 'win-2' }]);
-		});
+			network.respond = async route => ({ ok: true, result: await remote.serve({ from: 'win-1', op: route.op, args: route.args, deadlineMs: route.deadlineMs }) });
+			const absent = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', location_id: 'gone' }));
+			assert.deepStrictEqual([absent.error?.code, absent.error?.reason, absent.effects.outcome], ['NOT_FOUND', 'not_found', 'none']);
+			const invalid = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', cursor: 'bad' }));
+			assert.strictEqual(invalid.error?.reason, 'invalid_argument');
+			const first = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', limit: 1 }));
+			const next = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', limit: 1, cursor: first.data.next_cursor }));
+			assert.deepStrictEqual([...first.data.windows[0].locations, ...next.data.windows[0].locations].map(each => each.location_id), ['loc-1', 'loc-wt']);
+			assert.deepStrictEqual(next.data.agents, []);
+		} finally { other.dispose(); }
 	});
 
 	suite('start_agent', () => {
@@ -182,12 +163,12 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.window(2, 'Backend');
 			const early = { agent_id: runId(20), alias: '#a20', name: 'builder', window_id: 'win-2', created_at: new Date(1000).toISOString() };
 			const late = { agent_id: runId(21), alias: '#a21', name: 'tester', window_id: 'win-2', created_at: new Date(1500).toISOString() };
-			network.respond = () => ({ ok: true, result: { agents: [late, early] } });
+			network.respond = () => ({ ok: true, result: remoteSnapshot('win-2', [late, early]) });
 			const first = resultOf(await s.call(stranger, 'list_agents', { limit: 2 }));
 			assert.deepStrictEqual(first.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a20', '#a1']);
 			assert.deepStrictEqual([first.data.complete, first.data.unavailable_windows], [true, []]);
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args, each.deadlineMs]), [
-				['win-2', 'agents', { caller: { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' }, include_ended: false }, 9_993]
+				['win-2', 'agents', { caller: { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' }, details: false }, 9_993]
 			]);
 			const second = resultOf(await s.call(stranger, 'list_agents', { limit: 2, cursor: first.data.next_cursor }));
 			assert.deepStrictEqual(second.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a2', '#a3']);
@@ -199,7 +180,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const { stranger } = team(s);
 			network.window(2, 'Backend');
 			network.window(3, 'Docs');
-			network.respond = route => ({ ok: true, result: { agents: [{ agent_id: runId(10 * Number(route.window.slice(4))), alias: `#a${route.window.slice(4)}0`, created_at: new Date(0).toISOString() }] } });
+			network.respond = route => ({ ok: true, result: { result: success({ windows: [remoteSnapshot(route.window).window], agents: [{ agent_id: runId(10 * Number(route.window.slice(4))), window_id: route.window, alias: `#a${route.window.slice(4)}0`, created_at: new Date(0).toISOString() }] }) } });
 			const here = resultOf(await s.call(stranger, 'list_agents', { window_id: 'win-1' }));
 			assert.deepStrictEqual([here.data.agents.map((each: { agent_id: string }) => each.agent_id), network.routed.length], [['#a1', '#a2', '#a3', '#a4'], 0]);
 			const there = resultOf(await s.call(stranger, 'list_agents', { window_id: 'win-3' }));
@@ -582,25 +563,21 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.strictEqual(s.messages.records.length, 1);
 		});
 
-		test('this window\'s agents and summary as other windows ask for them: within the guest\'s reach, ended ones on request', async () => {
+		test('this window\'s agents and window facts as other windows ask for them: within the guest\'s reach, ended ones on request', async () => {
 			const { lead } = team(s);
 			s.agents.add(runFacts(6, { name: 'gone', root: lead.id, lifecycle: 'ended' }));
 			const inTree = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { root: lead.id }) } }) as { agents: { alias: string; window_id: string; created_at: string }[] };
 			assert.deepStrictEqual(inTree.agents.map(each => each.alias), ['#a1', '#a2', '#a3']);
 			assert.deepStrictEqual([inTree.agents[0].window_id, inTree.agents[0].created_at], ['win-1', new Date(1001).toISOString()]);
-			const withEnded = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { root: lead.id }), include_ended: true } }) as { agents: { alias: string }[] };
-			assert.deepStrictEqual(withEnded.agents.map(each => each.alias), ['#a1', '#a2', '#a3', '#a6']);
+			const withEnded = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { root: lead.id }), agent: runId(6) } }) as { agents: { alias: string }[] };
+			assert.deepStrictEqual(withEnded.agents.map(each => each.alias), ['#a6']);
 			const yolo = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { yolo: true }) } }) as { agents: { alias: string }[] };
 			assert.deepStrictEqual(yolo.agents.map(each => each.alias), ['#a1', '#a2', '#a3', '#a4']);
 			await assert.rejects(services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: {} }), /names no caller/);
-			assert.deepStrictEqual(await services.serve({ from: 'win-2', op: 'summary', deadlineMs: 9_000, args: {} }), {
-				window_id: 'win-1', label: 'Design', environment: 'local', available: true, locations: s.locations.map(each => locationOf(each, false))
-			});
-			// A window with no folder is listed too, as one nobody can start an agent in (MCP-2.1)
+			// A folderless window is still in the topology, with no invented destination.
 			s.locations = [];
-			assert.deepStrictEqual(await services.serve({ from: 'win-2', op: 'summary', deadlineMs: 9_000, args: {} }), {
-				window_id: 'win-1', label: 'Design', environment: 'local', available: false, reason: 'No folder is open in this window, so no agent can start in it.', locations: []
-			});
+			const empty = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9000, args: { caller: guestOf(30) } }) as { window: { locations: unknown[]; clis: unknown[] }; agents: unknown[] };
+			assert.deepStrictEqual([empty.window.locations, empty.window.clis, empty.agents], [[], [], []]);
 			await assert.rejects(services.serve({ from: 'win-2', op: 'unknown', deadlineMs: 9_000, args: {} }), /serves no "unknown"/);
 		});
 	});

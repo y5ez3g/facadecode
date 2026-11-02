@@ -622,6 +622,8 @@ export interface Clock {
 }
 
 export interface LogPort {
+	/** Structured diagnostic facts only; callers never include prompts, terminal output or complete environments. */
+	fact?(event: string, fields: Readonly<Record<string, unknown>>): void;
 	/** One line of the agents log: UTC, safe references, no secrets or message text (ARCHITECTURE-3.3). */
 	event(text: string): void;
 }

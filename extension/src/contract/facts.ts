@@ -7,7 +7,7 @@
 
 import type { MessageRecord } from '../core/messagePorts';
 import { headerText } from '../core/messages';
-import type { CapabilityState, CliChoice, Location, RunFacts } from '../core/ports';
+import type { CapabilityState, CliChoice, CliChoices, Location, RunFacts } from '../core/ports';
 import { referenceOf } from '../core/reach';
 import { accepted, failure, success, type ErrorCode } from '../schema/result';
 import { compactResult } from '../schema/compact';
@@ -20,6 +20,26 @@ export interface ToolWindow {
 	readonly id: string;
 	readonly label: string;
 	readonly environment: string;
+}
+
+/** What a CLI's adapter states for a location (the Show Agent Launch facts of `clis/describe.ts`); any it lacks is unverified. */
+export interface CliFacts {
+	readonly cli: string;
+	readonly takes?: { readonly model: boolean; readonly effort: boolean };
+	readonly activity?: CapabilityState;
+	readonly session?: CapabilityState;
+	/** Its native initial-prompt argument where it maps one, and how far that is verified (CLIS-3.2). */
+	readonly initialPrompt?: { readonly mapping?: readonly string[]; readonly capability: CapabilityState };
+	/** The input adapter that reads its ordinary-message input, and whether it is verified for the version found (CLIS-2.1). */
+	readonly input?: { readonly adapter?: string; readonly capability: CapabilityState };
+	readonly version?: { readonly version: string; readonly source: string };
+}
+
+/** The CLI catalog of a location (`host/clis.ts`). */
+export interface StartCatalog {
+	list(location: Location, details?: boolean): Promise<CliChoices & { readonly launches?: readonly CliFacts[] }>;
+	/** Each CLI's facts there now, launched with `yolo`. */
+	describe(location: Location, yolo: boolean): { readonly launches: readonly CliFacts[] };
 }
 
 export function isoOf(ms: number): string {
@@ -75,6 +95,8 @@ export function agentOf(run: RunFacts, window: ToolWindow, now: number, input?: 
 		location_id: run.location,
 		cwd: run.cwd,
 		cli: run.cli,
+		requested_model: run.model,
+		requested_effort: run.effort,
 		creator: run.creator ?? (run.origin === 'human' ? '#human' : undefined),
 		root: run.root,
 		yolo: run.yolo,

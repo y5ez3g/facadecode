@@ -269,7 +269,7 @@ passes.
 
 | ID | Scenario | Expected observation / owner |
 | --- | --- | --- |
-| M01 | Query destination with zero agents; open window with no folder; disconnected runtime; missing/unknown catalogs | Include the folderless window with zero locations; selecting it returns an empty catalog and launch has no effects; distinguish known absence from unavailable windows; no invented CLI/model; MCP-2.1 |
+| M01 | List current state with empty/folderless windows, multiple folders/worktrees, location-specific CLIs, invalid configuration and unreachable windows; target one agent | One snapshot supplies launch/communication destinations and current CLI availability, counts cover responding scope, unavailable is not empty, retained ended state is targeted only and does not scan CLIs; MCP-2.1, 3.1 |
 | M02 | Omit name/window/location/CLI; omit model/effort; pass unsupported field/type | Required fields fail together before effects; omitted model/effort add no per-call override under CLIS-1.4; optional request_id on start/send alone; no permissions/task fields |
 | M03 | Create across windows/remotes, plain folder or external-created checkout; native/post-start prompt still pending after process success | Actual destination, creator's tree and background focus; YOLO per RULES-4.3; separate process and delivery results; pending prompt later returns its outcome with the same message ID/target under MCP-2.3; native path invents no Enter effect |
 | M04 | Send full multiline content while recipient working; busy queue observable/unobservable | One full paste + Enter; success without waiting; no unsupported queued claim |
@@ -305,6 +305,7 @@ passes.
 | M34 | Initialize, tools/list, a tool loaded alone, optional skill and native private-context hooks | Launch identity and delivery semantics reach the model without mandatory skill reads; titles/annotations preserve names, arguments and approval behavior; compare each context layer in UTF-8 bytes and retain real-model evidence limits; MCP-6.1–6.2 |
 | M35 | Concurrent operations on one agent, routing, reload, rename/close, expired originals and lost receipt delivery | Existing IDs and explicit operation/route facts remain searchable without message bodies in logs; localized summaries never guess missing records; receipt transport and operation outcomes remain separate; COLLABORATION-3.2, ARCHITECTURE-3.3 |
 | M36 | Fixed discovery/start/message, long screen, pagination, uncertain input, lost reply and accepted-result journeys before/after polish | Report text/structured/context bytes separately, extra calls and actual effects; zero duplicate writes/starts or false completion in deterministic scenarios; retain all native/model attempts and platform limits; VERIFICATION-1.2 |
+| M37 | Launch with defaults or explicit model/effort; inspect structured history, rotation and failures | Requested settings are distinct from effective native settings; request/start/failure/exit share IDs without prompts or argv, bounded JSONL history is readable with ordinary file tools, no model catalog or removed discovery MCP; CLIS-1.4, ARCHITECTURE-3.3 |
 
 Native lifecycle probes use the isolated editor driver, record the actual CLI PID and native session ID, and compare
 both across reload and reopening. Ending that test-owned process after window closure can exercise exact restoration

@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import { FacadeError } from '../core/errors';
 import { TOOL_PROTOCOL } from '../schema/protocol';
 import { MESSAGE_LIMIT } from '../schema/tools';
-import { assertSameFacts, FACTS, resultOf, runFacts, runId, Setup, setUp, WORKTREE } from './contractFakes';
+import { assertSameFacts, resultOf, runFacts, runId, Setup, setUp, WORKTREE } from './contractFakes';
 import { waitFor } from './util';
 
 /** A root the person started, YOLO off, with a child, a grandchild, and an unrelated YOLO root. */
@@ -98,7 +98,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 
 		test('a window_id other than this window\'s is not found where no other window is known', async () => {
 			const { lead } = team(s);
-			for (const [tool, args] of [['list_start_options', { window_id: 'win-2' }], ['list_agents', { window_id: 'win-2' }], ['start_agent', { ...START, window_id: 'win-2' }]] as const) {
+			for (const [tool, args] of [['list_agents', { window_id: 'win-2' }], ['start_agent', { ...START, window_id: 'win-2' }]] as const) {
 				const result = resultOf(await s.call(lead, tool, args));
 				assert.deepStrictEqual([result.error?.code, result.error?.reason], ['NOT_FOUND', 'not_found'], tool);
 			}
@@ -106,136 +106,78 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 		});
 	});
 
-	suite('list_start_options', () => {
-
-		test('scope all: open windows, locations and availability, with completeness', async () => {
+	suite('current discovery through list_agents', () => {
+		test('one snapshot contains folders, worktrees, coalesced CLIs and counts in reach', async () => {
 			const { lead } = team(s);
-			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
+			s.agents.add({ ...lead, model: 'opus', effort: 'high' });
+			const result = resultOf(await s.call(lead, 'list_agents'));
 			assert.strictEqual(result.status, 'success');
-			assert.deepStrictEqual(result.data, {
-				scope: 'all',
-				windows: [{
-					window_id: 'win-1', label: 'Design', environment: 'local', available: true,
-					locations: [{ location_id: 'loc-1', label: 'app', path: '/work/app' }, { location_id: 'loc-wt', label: 'fix', path: '/work/app.worktrees/fix' }]
-				}],
-				complete: true,
-				unavailable_windows: []
-			});
+			assert.deepStrictEqual(result.data.counts, { known_windows: 1, responding_windows: 1, folders: 1, locations: 2, worktrees: 1, agents: 3 });
+			const window = result.data.windows[0];
+			assert.deepStrictEqual(window.folders, s.locations[0].folders.map(({ name, uri, path }) => ({ name, uri, path })));
+			assert.deepStrictEqual(window.locations.map((each: { location_id: string }) => each.location_id), ['loc-1', 'loc-wt']);
+			assert.deepStrictEqual(window.clis.map((each: { cli: string; available: boolean }) => [each.cli, each.available]), [['claude', true], ['codex', true], ['qwen', false]]);
+			assert.ok(window.clis.every((each: { location_ids?: string[] }) => each.location_ids === undefined));
+			assert.deepStrictEqual(window.clis[0].overrides, { model: true, effort: true });
+			assert.deepStrictEqual([result.data.agents[0].requested_model, result.data.agents[0].requested_effort], ['opus', 'high']);
+			assert.strictEqual(window.history_log.path, s.deps.historyLog);
 			assert.deepStrictEqual(result.effects, { outcome: 'none' });
 		});
 
-		test('a window with no folder is listed with no location and cannot start an agent', async () => {
+		test('a folderless window remains visible, with zero launch locations', async () => {
 			const { lead } = team(s);
 			s.locations = [];
-			const result = resultOf(await s.call(lead, 'list_start_options', { scope: 'all' }));
-			assert.strictEqual(result.data.windows[0].available, false);
-			assert.match(result.data.windows[0].reason, /No folder is open/);
-			assert.deepStrictEqual(result.data.windows[0].locations, []);
+			s.deps.locations.snapshot = () => ({ folders: [], locations: [], pending: false });
+			const result = resultOf(await s.call(lead, 'list_agents'));
+			assert.deepStrictEqual([result.data.windows[0].locations, result.data.windows[0].clis, result.data.counts.folders], [[], [], 0]);
+			assert.strictEqual(result.data.windows[0].clis_queried, false);
+			assert.strictEqual(result.data.complete, true);
 		});
 
-		test('with window_id the location catalog; with location_id its CLIs; with cli its choices and capabilities', async () => {
+		test('location-specific CLI availability is never presented as window-wide', async () => {
 			const { lead } = team(s);
-			const locations = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1' }));
-			assert.deepStrictEqual(locations.data.locations[0], { location_id: 'loc-1', label: 'app', path: '/work/app', environment: 'local', kind: 'checkout', folder: 'app', opened: true, branch: 'main', main: true, git: 'ok' });
-			assert.strictEqual(locations.data.complete, true);
-			const clis = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1' }));
-			assert.deepStrictEqual(clis.data.clis.map((each: { cli: string; available: boolean }) => [each.cli, each.available]), [['claude', true], ['codex', true], ['qwen', false]]);
-			assert.strictEqual(clis.data.clis[2].problem, 'qwen was not found on PATH.');
-			s.choices.remember('local', 'claude', { model: 'sonnet' });
-			s.choices.remember('local', 'claude', { model: 'opus', effort: 'high' });
-			const cli = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }));
-			assert.deepStrictEqual(cli.data.model.values, ['opus', 'sonnet']);
-			assert.deepStrictEqual([cli.data.model.source, cli.data.model.status, cli.data.model.takes], ['previous_starts', 'partial', true]);
-			assert.deepStrictEqual(cli.data.effort.values, ['high']);
-			assert.deepStrictEqual([cli.data.cli.version, cli.data.cli.version_source], ['2.1.314', undefined]);
-			const capabilities = cli.data.capabilities;
-			// No exact sessions in this product: Resume and Pin come in a later step
-			assert.deepStrictEqual(Object.keys(capabilities), ['activity', 'message_input', 'screen', 'direct_input', 'initial_prompt']);
-			assert.strictEqual(capabilities.activity.state, 'supported');
-			assert.deepStrictEqual(capabilities.message_input, { state: 'supported', reason: 'claude-frame reads its input by its layout.', adapter: 'claude-frame' });
-			assert.deepStrictEqual([capabilities.screen.state, capabilities.direct_input.state], ['supported', 'supported']);
-			assert.deepStrictEqual(capabilities.initial_prompt, { state: 'unverified', reason: 'A positional prompt argument, not yet verified.', path: 'native' });
-			for (const each of Object.values(capabilities) as { reason: string }[]) {
-				assert.ok(each.reason.length > 0);
-			}
+			const list = s.deps.clis.list;
+			s.deps.clis.list = async location => ({ ...await list(location), clis: [{ id: 'claude', displayName: 'Claude Code', available: location.id === 'loc-1' }] });
+			const rows = resultOf(await s.call(lead, 'list_agents')).data.windows[0].clis;
+			assert.deepStrictEqual(rows.map((each: { available: boolean; location_ids: string[] }) => [each.available, each.location_ids]), [[true, ['loc-1']], [false, ['loc-wt']]]);
+			const selected = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-wt' }));
+			assert.strictEqual(selected.data.windows[0].clis.length, 1);
+			assert.deepStrictEqual(selected.data.windows[0].counts, { folders: 1, locations: 1, worktrees: 1, agents: 0 });
 		});
 
-		test('default discovery gives the caller location and launchable CLIs in one call', async () => {
-			const { lead } = team(s);
-			for (const args of [{}, { scope: 'current' }]) {
-				const result = resultOf(await s.call(lead, 'list_start_options', args));
-				assert.strictEqual(result.status, 'success');
-				assert.deepStrictEqual([result.data.scope, result.data.window_id, result.data.location_id, result.data.location.path], ['current', 'win-1', lead.location, lead.cwd]);
-				assert.ok(result.data.clis.some((cli: { cli: string; available: boolean }) => cli.cli === 'claude' && cli.available));
-				assert.strictEqual(result.data.windows, undefined);
-				assert.deepStrictEqual(result.effects, { outcome: 'none' });
-			}
-		});
-
-		test('current discovery never substitutes another location and scope cannot mix with explicit destinations', async () => {
-			const { lead } = team(s);
-			for (const args of [{ scope: 'all', window_id: 'win-1' }, { scope: 'current', location_id: 'loc-1' }, { scope: 'current', cli: 'claude' }]) {
-				const result = resultOf(await s.call(lead, 'list_start_options', args));
-				assert.deepStrictEqual([result.error?.reason, result.data.invalid[0].field], ['invalid_argument', 'scope']);
-			}
-			s.locations = s.locations.filter(location => location.id !== lead.location);
-			const missing = resultOf(await s.call(lead, 'list_start_options'));
-			assert.strictEqual(missing.error?.reason, 'not_found');
-			assert.deepStrictEqual(missing.effects, { outcome: 'none' });
-		});
-
-		test('a malformed custom catalog reports its configuration error while keeping valid built-ins available', async () => {
+		test('a malformed custom catalog keeps valid built-ins, while failed scans are explicitly partial', async () => {
 			const { lead } = team(s);
 			const list = s.deps.clis.list;
 			const problems = [{ setting: 'facade.custom', problem: 'facade.custom must be an object; received array' }];
 			s.deps.clis.list = async location => ({ ...await list(location), problems });
-			const result = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1' }));
-			assert.deepStrictEqual(result.data.problems, problems);
-			assert.ok(result.data.clis.some((each: { cli: string; available: boolean }) => each.cli === 'claude' && each.available));
+			const result = resultOf(await s.call(lead, 'list_agents'));
+			assert.deepStrictEqual(result.data.windows[0].problems, problems);
+			assert.ok(result.data.windows[0].clis[0].available);
+			s.deps.clis.list = async location => { if (location.id === 'loc-wt') { throw new Error('Directory unreadable'); } return list(location); };
+			const partial = resultOf(await s.call(lead, 'list_agents'));
+			assert.strictEqual(partial.data.complete, false);
+			assert.strictEqual(partial.data.windows[0].unavailable_locations[0].location_id, 'loc-wt');
+			assert.deepStrictEqual(partial.data.windows[0].clis[0].location_ids, ['loc-1']);
 		});
 
-		test('a CLI that takes no effort says so; one without adapter facts is unverified, never assumed', async () => {
+		test('no model catalog: overrides are adapter facts and details add current capabilities', async () => {
 			const { lead } = team(s);
-			const codex = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'codex' }));
-			assert.deepStrictEqual(codex.data.effort, { takes: false, values: [], source: 'adapter', status: 'complete', reason: 'Codex takes no explicit effort.' });
-			assert.strictEqual(codex.data.capabilities.activity.state, 'unverified');
-			assert.deepStrictEqual(codex.data.capabilities.initial_prompt, { state: 'unavailable', reason: 'It maps no prompt argument.', path: 'post_start' });
-			const qwen = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'qwen' }));
-			assert.deepStrictEqual([qwen.data.capabilities.activity.state, qwen.data.capabilities.initial_prompt.state, qwen.data.model.takes], ['unverified', 'unverified', undefined]);
+			const window = resultOf(await s.call(lead, 'list_agents', { details: true })).data.windows[0];
+			assert.deepStrictEqual(window.clis[1].overrides, { model: true, effort: false });
+			assert.strictEqual(window.clis[0].version, '2.1.314');
+			assert.strictEqual(window.clis[0].message_input.state, 'supported');
+			assert.strictEqual(window.clis[0].model, undefined);
+			s.deps.clis.describe = () => { throw new Error('Unreadable adapter'); };
+			const unknown = resultOf(await s.call(lead, 'list_agents')).data.windows[0].clis;
+			assert.deepStrictEqual(unknown[0].overrides, { model: 'unknown', effort: 'unknown' });
 		});
 
-		test('message input is what the CLI\'s reader states, whatever its version (D89): supported with its reader; without one, unavailable and messages fail with unsupported', async () => {
+		test('a location needs its window; invalid selections and the removed discovery tool fail without effects', async () => {
 			const { lead } = team(s);
-			const read = { state: 'supported' as const, reason: 'claude-frame reads Claude Code\'s input by its layout.' };
-			s.deps.clis = {
-				list: s.deps.clis.list,
-				describe: () => ({ launches: [{ ...FACTS[0], version: { version: '9.9.9', source: 'a version never recorded' }, input: { adapter: 'claude-frame', capability: read } }, { ...FACTS[1], input: undefined }, FACTS[2]] })
-			};
-			const claude = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }));
-			assert.deepStrictEqual(claude.data.capabilities.message_input, { ...read, adapter: 'claude-frame' });
-			const codex = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'codex' }));
-			assert.strictEqual(codex.data.capabilities.message_input.state, 'unavailable');
-			assert.match(codex.data.capabilities.message_input.reason, /fails with unsupported; type_text still works/);
-		});
-
-		test('where the adapter\'s facts cannot be read, its capabilities are unverified with that reason', async () => {
-			const { lead } = team(s);
-			s.deps.clis = { list: s.deps.clis.list, describe: () => { throw new Error('PATH unreadable'); } };
-			const result = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }));
-			assert.strictEqual(result.data.capabilities.activity.state, 'unverified');
-			assert.match(result.data.capabilities.activity.reason, /PATH unreadable/);
-			assert.strictEqual(result.data.capabilities.session, undefined);
-			assert.strictEqual(result.data.model.takes, undefined);
-		});
-
-		test('a subordinate selection names its parent, and an unknown location or CLI is not found', async () => {
-			const { lead } = team(s);
-			const noWindow = resultOf(await s.call(lead, 'list_start_options', { location_id: 'loc-1' }));
+			const noWindow = resultOf(await s.call(lead, 'list_agents', { location_id: 'loc-1' }));
 			assert.deepStrictEqual([noWindow.error?.reason, noWindow.data.missing], ['missing_argument', ['window_id']]);
-			const noLocation = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', cli: 'claude' }));
-			assert.deepStrictEqual(noLocation.data.missing, ['location_id']);
-			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-9' })).error?.reason, 'not_found');
-			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'kimi' })).error?.reason, 'not_found');
+			assert.strictEqual(resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-9' })).error?.reason, 'not_found');
+			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options')).error?.reason, 'unsupported');
 		});
 	});
 
@@ -256,7 +198,6 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(result.effects, { outcome: 'confirmed' });
 			assert.strictEqual(answer.isError, false);
 			// The explicit choices of a start that reached running are offered later
-			assert.deepStrictEqual(s.choices.list('local', 'claude'), { model: ['opus'], effort: ['high'] });
 		});
 
 		test('a request ID given again by the same caller answers the agent its first start started, starting nothing; another caller\'s is its own (D110)', async () => {
@@ -447,7 +388,6 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(result.effects, { outcome: 'partial' });
 			assert.strictEqual(result.data.process_state, 'failed');
 			assert.strictEqual(answer.isError, true);
-			assert.deepStrictEqual(s.choices.list('local', 'claude'), { model: [], effort: [] });
 		});
 
 		test('nothing is accepted where the location, CLI, name or a requested choice cannot be used', async () => {
@@ -516,12 +456,12 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			]);
 		});
 
-		test('ended agents only with include_ended, with their retained error and exit, never as live', async () => {
+		test('ended agents only by targeted lookup, with their retained error and exit, never as live', async () => {
 			const { lead } = team(s);
 			s.agents.add(runFacts(5, { name: 'crashed', root: lead.id, lifecycle: 'ended', end: { kind: 'abnormal', code: 1, at: Date.UTC(2026, 9, 28, 21) }, error: { reason: 'Exited with code 1', source: 'exit', at: Date.UTC(2026, 9, 28, 21) } }));
 			const live = resultOf(await s.call(lead, 'list_agents'));
 			assert.ok(!live.data.agents.some((each: { agent_id: string }) => each.agent_id === '#a5'));
-			const ended = resultOf(await s.call(lead, 'list_agents', { include_ended: true }));
+			const ended = resultOf(await s.call(lead, 'list_agents', { agent: '#a5' }));
 			const crashed = ended.data.agents.find((each: { agent_id: string }) => each.agent_id === '#a5');
 			assert.deepStrictEqual([crashed.process_state, crashed.pid, crashed.exit, crashed.error.reason], ['ended', undefined, { kind: 'abnormal', code: 1, at: '2026-10-28T21:00:00.000Z' }, 'Exited with code 1']);
 		});
@@ -544,10 +484,10 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 				const changed = resultOf(await s.call(stranger, 'list_agents', { cursor: first.data.next_cursor, ...selection }));
 				assert.strictEqual(changed.error?.reason, 'invalid_argument');
 			}
-			const next = resultOf(await s.call(stranger, 'list_agents', { cursor: first.data.next_cursor, limit: 1, details: true }));
-			assert.deepStrictEqual(next.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a3']);
-			const ended = resultOf(await s.call(stranger, 'list_agents', { limit: 2, window_id: 'win-1', include_ended: true }));
-			const selected = resultOf(await s.call(stranger, 'list_agents', { cursor: ended.data.next_cursor, window_id: 'win-1', include_ended: true, agent: '#a3' }));
+			const next = resultOf(await s.call(stranger, 'list_agents', { cursor: first.data.next_cursor, limit: 2, details: true }));
+			assert.deepStrictEqual(next.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a3', '#a4']);
+			const ended = resultOf(await s.call(stranger, 'list_agents', { limit: 2, window_id: 'win-1' }));
+			const selected = resultOf(await s.call(stranger, 'list_agents', { cursor: ended.data.next_cursor, window_id: 'win-1', agent: '#a3' }));
 			assert.strictEqual(selected.error?.reason, 'invalid_argument', 'targeting an agent changes selection even in the same window');
 			const bad = resultOf(await s.call(stranger, 'list_agents', { cursor: 'nonsense' }));
 			assert.deepStrictEqual([bad.error?.reason, bad.data.invalid[0].field], ['invalid_argument', 'cursor']);

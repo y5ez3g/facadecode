@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { AgentLog, AGENTS_LOG } from '../record/log';
+import { AgentLog, AGENTS_LOG, EVENTS_LOG } from '../record/log';
 import { cutNextWriteShort, replaceFsFunction, tempDir } from './util';
 import { withModules } from './withModules';
 
@@ -81,5 +81,60 @@ suite('Show Agents Log (ARCHITECTURE-3.3)', () => {
 		} finally {
 			temp.remove();
 		}
+	});
+});
+
+suite('Structured history is bounded, readable JSONL and never controls operations', () => {
+	test('timestamps and escaped newlines survive round-trip; retention applies to rotations too', () => {
+		const temp = tempDir('fc-history-log-');
+		try {
+			const now = Date.parse('2026-11-02T12:00:00Z');
+			const old = JSON.stringify({ at: '2026-09-01T12:00:00Z', event: 'old' }) + '\n';
+			const recent = JSON.stringify({ at: '2026-11-01T12:00:00Z', event: 'recent' }) + '\n';
+			const file = path.join(temp.dir, EVENTS_LOG);
+			fs.writeFileSync(file, old + recent);
+			fs.writeFileSync(`${file}.1`, old + recent);
+			const log = new AgentLog(temp.dir, () => now);
+			log.fact('agent_start_requested', { agent_id: 'run-1', requested_model: 'provider/model', path: '/work/a\nb' });
+			const rows = fs.readFileSync(file, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+			assert.deepStrictEqual(rows.map(each => each.event), ['recent', 'agent_start_requested']);
+			assert.deepStrictEqual([rows[1].at, rows[1].path], ['2026-11-02T12:00:00.000Z', '/work/a\nb']);
+			assert.strictEqual(fs.readFileSync(`${file}.1`, 'utf8'), recent);
+		} finally { temp.remove(); }
+	});
+
+	test('rotation retains at most three bounded files and preserves complete event records', () => {
+		const temp = tempDir('fc-history-rotate-');
+		try {
+			const log = new AgentLog(temp.dir);
+			for (let i = 0; i < 13; i++) { log.fact('scan', { sequence: i, padding: 'x'.repeat(1024 * 1024) }); }
+			const files = fs.readdirSync(temp.dir).filter(file => file.startsWith(EVENTS_LOG));
+			assert.deepStrictEqual(files.sort(), [EVENTS_LOG, `${EVENTS_LOG}.1`, `${EVENTS_LOG}.2`]);
+			const sequences = files.flatMap(file => {
+				assert.ok(fs.statSync(path.join(temp.dir, file)).size <= 4 * 1024 * 1024);
+				return fs.readFileSync(path.join(temp.dir, file), 'utf8').trim().split('\n').map(line => JSON.parse(line).sequence);
+			});
+			assert.deepStrictEqual(sequences.sort((a, b) => a - b), [6, 7, 8, 9, 10, 11, 12]);
+		} finally { temp.remove(); }
+	});
+
+	test('unwritable storage cannot turn a completed operation into a failure', () => {
+		const temp = tempDir('fc-history-unwritable-');
+		try {
+			const log = new AgentLog(temp.dir);
+			fs.mkdirSync(log.eventsFile);
+			assert.doesNotThrow(() => log.fact('agent_started', { agent_id: 'run-1' }));
+		} finally { temp.remove(); }
+	});
+
+	test('an oversized event records its omission rather than growing beyond the file bound', () => {
+		const temp = tempDir('fc-history-large-');
+		try {
+			const log = new AgentLog(temp.dir);
+			log.fact('cli_scan', { padding: 'x'.repeat(4 * 1024 * 1024) });
+			const text = fs.readFileSync(log.eventsFile, 'utf8');
+			assert.ok(text.length < 1024);
+			assert.deepStrictEqual([JSON.parse(text).event, JSON.parse(text).original_event], ['event_omitted', 'cli_scan']);
+		} finally { temp.remove(); }
 	});
 });

@@ -166,9 +166,9 @@ suite('Window network: window components register and carry requests between win
 		});
 		await a.start();
 		await b.start();
-		const response = await a.route({ to: b.window, op: 'agents', args: { include_ended: true }, deadlineMs: 5_000 });
-		assert.deepStrictEqual(response, { ok: true, result: { agents: [AGENT], echoed: { include_ended: true } } });
-		assert.deepStrictEqual(served.map(({ deadlineMs: _, ...rest }) => rest), [{ from: a.window, op: 'agents', args: { include_ended: true } }]);
+		const response = await a.route({ to: b.window, op: 'agents', args: { details: true }, deadlineMs: 5_000 });
+		assert.deepStrictEqual(response, { ok: true, result: { agents: [AGENT], echoed: { details: true } } });
+		assert.deepStrictEqual(served.map(({ deadlineMs: _, ...rest }) => rest), [{ from: a.window, op: 'agents', args: { details: true } }]);
 		assert.ok(served[0].deadlineMs > 0 && served[0].deadlineMs < 5_000, 'connecting spends the original budget');
 		// The connection is kept and used again, answers matched to their requests
 		const [first, second] = await Promise.all([

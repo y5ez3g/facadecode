@@ -16,12 +16,8 @@ export function compactResult(tool: string, result: Result, details = false): Re
 	switch (tool) {
 		case 'list_agents':
 			if (Array.isArray(data.agents)) {
-				data = { ...without(data, ['agents']), agents: data.agents.map(agent => isJsonObject(agent) ? agentView(agent, details) : agent) };
-			}
-			break;
-		case 'list_start_options':
-			if (isJsonObject(data.location) && data.location.location_id === data.location_id) {
-				data = { ...data, location: without(data.location, ['location_id']) };
+				data = { ...without(data, ['agents', 'windows']), ...Array.isArray(data.windows) ? { windows: data.windows } : {},
+					agents: data.agents.map(agent => isJsonObject(agent) ? agentView(agent, details) : agent) };
 			}
 			break;
 		case 'start_agent':

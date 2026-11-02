@@ -718,6 +718,25 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 	teardown(() => temp.remove());
 
 	const clis = (log: string[] = []) => new HostClis({ read: name => settings[name], destination: () => destination, home, log: line => log.push(line) });
+
+	test('one current scan provides availability and override facts, logging only changes without launch arguments', async () => {
+		let composed = 0;
+		const host = new Proxy(destination.host as { [name: string]: string }, { ownKeys: target => { composed++; return Reflect.ownKeys(target); } });
+		const events: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
+		const catalog = new HostClis({ read: name => settings[name], destination: () => ({ ...destination, host }), home,
+			fact: (event, fields) => events.push({ event, fields }) });
+		const first = await catalog.list(location);
+		assert.strictEqual(composed, first.clis.length, 'availability and capabilities reuse the same discovery');
+		assert.ok(first.launches.find(each => each.cli === 'claude')?.takes?.model);
+		await catalog.list(location);
+		assert.strictEqual(events.length, 1, 'unchanged observations do not flood history');
+		settings['facade.codex.enabled'] = false;
+		const changed = await catalog.list(location);
+		assert.ok(!changed.clis.some(each => each.id === 'codex'));
+		assert.strictEqual(events.length, 2);
+		assert.strictEqual(events[1].event, 'cli_scan');
+		assert.ok(!JSON.stringify(events).includes('environment'), 'the environment values are never copied to scan history');
+	});
 	const request = (cli: string, run: string, extra: Partial<PlanRequest> = {}): PlanRequest => ({ run, alias: '#a1', name: 'n', cli, location, yolo: true, tools: SERVER, ...extra });
 
 	test('orchestration is on by default, off where the setting is false, and off for a value that is no boolean, said; the timeout is 1-3600 seconds, 120 otherwise, said', () => {
@@ -833,7 +852,7 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 		assert.deepStrictEqual(load(metadata[1]), { name: 'facade', description: SKILL_DESCRIPTION });
 	});
 
-	test('the skill teaches the nine tools, startup fields, reach, references, own inbox and finite delivery, and gives the repeated-message sentences verbatim', () => {
+	test('the skill teaches the eight tools, startup fields, reach, references, own inbox and finite delivery, and gives the repeated-message sentences verbatim', () => {
 		const verbatim = 'The same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo work for '
 			+ 'that same message. A new send call has a new ID, even if its text matches. A Facade system result about a message is a '
 			+ 'separate kind of information, not another copy of that message\'s instruction.';

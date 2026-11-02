@@ -86,7 +86,7 @@ fails that capability clearly and retains usable existing records.
 `host` implements editor/environment ports, with terminal adaptation and the PTY client together under `host/execution`;
 `webview` has no extension or Node imports; `ptyd` owns terminal/process/effect state, including screen reading, key
 encoding and input-box readers. `schema` owns the one source of MCP tool definitions, wire types, validators, the
-result envelope and the bundled skill; `contract` implements the nine tools on core ports; `transport` owns the run's
+result envelope and the bundled skill; `contract` implements the eight tools on core ports; `transport` owns the run's
 shim, its MCP stdio server and its link to the supervisor; `client` owns the window components' registry, sockets and
 routing without `vscode`. Only extension entrypoints, `host` and `ui` import `vscode`.
 
@@ -301,7 +301,7 @@ own ptyd. Upgrade/reload behavior must be verified with in-flight work.
 | Store | Contents |
 | --- | --- |
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - each open window's routing ID, label, environment, socket, protocol and process start - and the client-wide alias counters `client-agent-numbers.json` and `client-message-numbers.json` |
-| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, per-run launch files, the injection record (CLIS-2.2), message records, previously successful model/effort choices location metadata, Facade conversation names/locations, and each window's closes ptyd has not confirmed (`workspaces/<key>/closing.json`, 2.3) |
+| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Process/screens/effects, per-run launch files, the injection record (CLIS-2.2), message records, structured diagnostic history, location metadata, Facade conversation names/locations, and each window's closes ptyd has not confirmed (`workspaces/<key>/closing.json`, 2.3) |
 | Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs (D70), its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged (D131) |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
 | Vendor CLI store | Its own conversations, credentials and settings |
@@ -337,12 +337,24 @@ credentials and sensitive environment values. Full message text belongs to delib
 transport logs. Correlation IDs connect UI/MCP/supervisor observations. Retain 30-day diagnostics subject to the
 capacity policy; ptyd's own log stays within 2 MiB, keeping its newest 512 KiB of whole lines (D136). No telemetry
 service is introduced by this refactor. Each tool call is logged with its tool, its caller's
-alias, its status and error code and how long it took, never its arguments (D117).
+alias, its status and error code and how long it took, never complete argument objects (D117). Explicit requested CLI,
+model, effort and destination are launch facts; prompts, terminal bodies, full argv and environment values are excluded.
 Existing call/request IDs and short agent/message references connect dispatch, route, answer, accepted work and final
 receipt. Start/stop receipts preserve their operation and execution window across routing and persistence. Message log
 entries record identity and meaningful delivery/effect transitions, not repeated unchanged attempts or message bodies.
 Copy Diagnostics labels its window/environment scope: a local log is not a complete distributed trace. No second
 operation ID, telemetry service, new retention period or background history scan is introduced.
+
+Structured history uses `events.jsonl` beside the workspace's agents log. Records carry UTC `at`, event name,
+window/environment and existing agent/call/request IDs where applicable. Window attach/detach is distinguished from
+proven closure. Location catalogs and changed CLI scans are recorded at activation and existing location/configuration
+notifications, with unchanged scan results coalesced. Queries and startup still read current facts. Agent launch requests,
+process starts, failed starts, exits and cleanup outcomes retain requested settings without claiming native model
+acceptance. MCP results cover requests rejected before an agent exists. No prompts or complete argument objects enter
+these records. History is read with ordinary file tools; it is not an MCP query or an aggregate model/effort catalog.
+The private launch context and each window snapshot supply the absolute path and execution environment. A remote path
+is never advertised as a local file. On activation, prune entries older than 30 days; writes stay bounded to three 4 MiB files (current, `.1`, `.2`). An oversized
+event becomes an explicit omission record. Diagnostic write failure cannot fail a business operation; lock contention does not wait.
 
 An empty agents log opens with `No agent events yet`, with no information toast.
 
@@ -513,6 +525,8 @@ what was tested and what remains. Task assignments, pauses and discussion author
 See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this design.
 
 ## Change log
+
+- 2026-11-02: Record bounded JSONL lifecycle/scan history for ordinary file reads; current discovery moves to list_agents (D163).
 
 - 2026-11-01: 2.3 creates one run's program at a time, in the order asked, at the owner's request: starts asked together on
   Windows held the supervisor for all of their program creations, and some never started (D146).

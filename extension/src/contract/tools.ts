@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The window's answers to the nine tools (MCP-2 to 5), for one window (M3): each call's arguments validated whole before any
+// The window's answers to the eight tools (MCP-2 to 5), for one window (M3): each call's arguments validated whole before any
 // effect, its target resolved once within the caller's reach (RULES-2.3, 4.3), and an answer that states what actually happened
 // (MCP-1.2). Errors go back to the calling agent alone: nothing here notifies the person (RULES-1.8).
 
@@ -13,9 +13,9 @@ import { messageOf as errorText } from '../base/errors';
 import { FacadeError } from '../core/errors';
 import { HOLD_MS, RESPONSE_BUDGET_MS, STAGE_MS } from '../core/messages';
 import type { InputPort, MessageRecord, Messages, SendResult } from '../core/messagePorts';
-import type { Agents, CapabilityState, CliChoice, CliChoices, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
+import type { Agents, CliChoice, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
 import { reaches, referenceOf, resolveAgent, ResolveOptions, trailingId } from '../core/reach';
-import type { StartChoices } from '../record/choices';
+import { isWindowSnapshot, snapshotPage, WindowSnapshot, windowSnapshot } from './snapshot';
 import type { RouteResponse, ServedRoute } from '../base/windowNetwork';
 import { ServedAnswer, TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import { accepted, answerOf, codedOf, Effects, errorResult, failure, Result, resultErrorOf, success } from '../schema/result';
@@ -25,10 +25,10 @@ import { withRecovery } from '../schema/recovery';
 import { receiptTextOf } from './receiptText';
 import { MESSAGE_LIMIT, QUERY_ROUTE_MS, QUERY_TOOLS, READ_ONLY_TOOLS, ToolName, TOOLS } from '../schema/tools';
 import { ArgumentError, codePoints, ToolArguments, validateArguments } from '../schema/validate';
-import { agentOf, cliOf, Data, defined, isoOf, locationOf, messageFile, messageOf, sendFailureOf, ToolWindow } from './facts';
+import { agentOf, CliFacts, StartCatalog, Data, defined, isoOf, messageFile, messageOf, sendFailureOf, ToolWindow } from './facts';
 import { GuestCaller, isGuestCaller, NetworkPort, Reachable, reachableOf, RoutedCall, RoutedDelivery, RoutedResult } from './network';
 
-export type { ToolWindow } from './facts';
+export type { ToolWindow, CliFacts, StartCatalog } from './facts';
 
 /** Keep the route's reason independent of whether an operation may already have acted. */
 function routeError(response: Extract<RouteResponse, { ok: false }>): FacadeError {
@@ -70,26 +70,6 @@ export interface TerminalPort {
 	pressKeys(run: RunId, keys: readonly string[]): Promise<InputOutcome>;
 }
 
-/** What a CLI's adapter states for a location (the Show Agent Launch facts of `clis/describe.ts`); any it lacks is unverified. */
-export interface CliFacts {
-	readonly cli: string;
-	readonly takes?: { readonly model: boolean; readonly effort: boolean };
-	readonly activity?: CapabilityState;
-	readonly session?: CapabilityState;
-	/** Its native initial-prompt argument where it maps one, and how far that is verified (CLIS-3.2). */
-	readonly initialPrompt?: { readonly mapping?: readonly string[]; readonly capability: CapabilityState };
-	/** The input adapter that reads its ordinary-message input, and whether it is verified for the version found (CLIS-2.1). */
-	readonly input?: { readonly adapter?: string; readonly capability: CapabilityState };
-	readonly version?: { readonly version: string; readonly source: string };
-}
-
-/** The CLI catalog of a location (`host/clis.ts`). */
-export interface StartCatalog {
-	list(location: Location): Promise<CliChoices>;
-	/** Each CLI's facts there now, launched with `yolo`. */
-	describe(location: Location, yolo: boolean): { readonly launches: readonly CliFacts[] };
-}
-
 /** Writes a long read result as a file readable by the caller (COLLABORATION-4.2): `record/results.ts`. */
 export type ResultWriter = (home: string, kind: 'messages' | 'screen', text: string, messageIds?: readonly string[]) =>
 	{ readonly path: string; readonly size: number } | Promise<{ readonly path: string; readonly size: number }>;
@@ -104,11 +84,8 @@ export interface ToolServiceDeps {
 	/** The execution environment's Facade directory, where long results are written. */
 	readonly home: string;
 	readonly writeResult: ResultWriter;
-	/** The explicit models and efforts of earlier starts (`record/choices.ts`). */
-	readonly choices: {
-		list(environment: string, cli: string): StartChoices;
-		remember(environment: string, cli: string, choice: { readonly model?: string; readonly effort?: string }): void;
-	};
+	/** Structured event log in this execution environment, for on-demand history. */
+	readonly historyLog?: string;
 	/** `facade.collaboration.waitSeconds`, in seconds: how long a start or stop is waited for before it is answered `accepted` (MCP-1.3). */
 	readonly timeout: () => number;
 	/** The destination's `facade.yolo`, which a start would launch with (RULES-4.3). */
@@ -127,6 +104,7 @@ export interface ToolServiceDeps {
 	readonly monotonic?: () => number;
 	/** A line for Show Agents Log: no message text (ARCHITECTURE-3.3). */
 	readonly log?: (text: string) => void;
+	readonly recordEvent?: (event: string, fields: Readonly<Record<string, unknown>>) => void;
 }
 
 /** How long from the shim's ingress a call of a caller not known yet waits for the window's runs to be found again (RULES-1.2). */
@@ -193,7 +171,6 @@ class ToolService {
 	/** Overlapping keyed calls share the first invocation; durable retries are answered by run/message metadata. */
 	private readonly pendingRequests = new Map<string, Promise<Outcome>>();
 	private readonly handlers: { readonly [T in ToolName]: Handler<T> } = {
-		list_start_options: (args, caller, call) => this.listStartOptions(args, caller, call),
 		start_agent: (args, caller, call) => this.startAgent(args, caller, call),
 		list_agents: (args, caller, call) => this.listAgents(args, caller, call),
 		stop_agent: (args, caller, call) => this.stopAgent(args, caller, call),
@@ -223,6 +200,16 @@ class ToolService {
 			call_id: call.callId, request_id: request, window: this.deps.window.id, target_window: data.window_id,
 			agent: data.agent_id ?? data.target, message: data.message_id, result_message: data.result_message_id, effects: projected.effects.outcome
 		})}`);
+		const requested = isJsonObject(call.arguments) ? call.arguments : {};
+		const field = (key: string) => typeof requested[key] === 'string' && codePoints(requested[key]) <= 200 ? requested[key] : undefined;
+		this.deps.recordEvent?.('tool_result', defined({
+			tool, caller: call.caller, call_id: call.callId, request_id: request, status,
+			target_window: data.window_id ?? field('window_id'), agent_id: data.agent_id ?? data.target,
+			message_id: data.message_id, result_message_id: data.result_message_id,
+			effects: projected.effects.outcome, reason: error?.reason, code: error?.code,
+			...(tool === 'start_agent' ? { cli: field('cli'), location_id: field('location_id'),
+				requested_model: field('model'), requested_effort: field('effort'), reason_text: error?.message } : {})
+		}));
 		const { after } = outcome;
 		return {
 			answer: answerOf(projected),
@@ -292,13 +279,12 @@ class ToolService {
 				}
 				return { result: outcome.result, ...outcome.headline !== undefined ? { headline: outcome.headline } : {} };
 			}
-			case 'summary':
-				return this.summary();
 			case 'agents': {
 				if (!isGuestCaller(args?.caller)) {
 					throw new Error('The routed agent list names no caller.');
 				}
-				return { agents: this.agentsFor(args!.caller as GuestCaller, args!.include_ended === true) };
+				return this.localSnapshot(args!.caller as GuestCaller, typeof args!.agent === 'string' ? args!.agent : undefined,
+					typeof args!.location_id === 'string' ? args!.location_id : undefined, args!.details === true);
 			}
 			case 'deliver':
 				return this.deliver(args as unknown as RoutedDelivery, route.from);
@@ -534,19 +520,13 @@ class ToolService {
 		return { windows: answers.filter((each): each is { window: typeof others[number]; value: Awaited<T> } => !!each).map(each => each.value as T), unavailable };
 	}
 
-	/** This window as list_start_options lists it (MCP-2.1): an empty one too, which no agent can start in. */
-	private summary(): Data {
-		const { window } = this.deps;
-		const catalog = this.deps.locations.snapshot();
-		const empty = !catalog.locations.length;
-		return defined({
-			window_id: window.id,
-			label: window.label,
-			environment: window.environment,
-			available: !empty,
-			reason: empty ? 'No folder is open in this window, so no agent can start in it.' : undefined,
-			locations: catalog.locations.map(each => locationOf(each, false))
-		});
+	private async localSnapshot(caller: Caller, selected?: string, locationId?: string, details = false): Promise<{ window: WindowSnapshot; agents: Data[] }> {
+		if (locationId !== undefined) { this.location(locationId); }
+		const agents = this.agentsFor(caller, selected !== undefined)
+			.filter(agent => (selected === undefined || agent.agent_id === selected) && (locationId === undefined || agent.location_id === locationId));
+		return { agents, window: await windowSnapshot({ window: this.deps.window, catalog: this.deps.locations.snapshot(), clis: this.deps.clis,
+			yolo: this.deps.yolo(), now: () => this.now(), agentCount: agents.length, location: locationId ?? (selected !== undefined ? String(agents[0]?.location_id ?? '') : undefined), targeted: selected !== undefined, details,
+			logFile: this.deps.historyLog }) };
 	}
 
 	/** This window's agents that `caller` reaches, as list_agents describes them (MCP-3.1). */
@@ -633,91 +613,6 @@ class ToolService {
 
 	// -----------------------------------------------------------------------------------------------------------------------
 	// Discover and start (MCP-2)
-
-	private async listStartOptions(args: ToolArguments['list_start_options'], caller: Caller, call: Received): Promise<Outcome> {
-		const selected = args.window_id !== undefined || args.location_id !== undefined || args.cli !== undefined;
-		if (args.scope !== undefined && selected) {
-			throw new ArgumentError('list_start_options', { missing: [], invalid: [{ field: 'scope', problem: '`scope` cannot accompany window_id, location_id or cli.' }] });
-		}
-		if (!selected && args.scope !== 'all') {
-			// The real caller's registered launch location; not a guessed cwd or the person's last choice.
-			const run = this.deps.agents.get(caller.id);
-			if (!run || caller.window !== undefined && caller.window !== this.deps.window.id) {
-				throw new FacadeError('UNAVAILABLE', 'location_unavailable', 'The caller\'s launch location is not available in this window.');
-			}
-			const location = this.location(run.location);
-			const { clis, problems } = await this.deps.clis.list(location);
-			return { result: success({
-				scope: 'current', window_id: this.deps.window.id, label: this.deps.window.label, environment: this.deps.window.environment,
-				location_id: location.id, location: locationOf(location, true), clis: clis.map(cliOf),
-				problems: problems.map(({ setting, problem }) => ({ setting, problem })), complete: !this.deps.locations.snapshot().pending
-			}) };
-		}
-		// A subordinate selection names its parent: nothing is chosen for the caller (MCP-2.1)
-		const missing = [
-			...(args.location_id !== undefined || args.cli !== undefined) && args.window_id === undefined ? ['window_id'] : [],
-			...args.cli !== undefined && args.location_id === undefined ? ['location_id'] : []
-		];
-		if (missing.length) {
-			throw new ArgumentError('list_start_options', { missing, invalid: [{ field: missing[missing.length - 1], problem: 'A location is listed within its window, and a CLI within its location.' }] });
-		}
-		const { window } = this.deps;
-		const catalog = this.deps.locations.snapshot();
-		const count = (n: number, what: string) => `${n} ${what}${n === 1 ? '' : 's'}`;
-		if (args.window_id === undefined) {
-			// Every open window, an empty one too; one that does not answer in time is listed apart, never left out (MCP-2.1)
-			const { windows, unavailable } = await this.everyWindow(async other => {
-				const response = await this.deps.network!.route(other, 'summary', {}, this.queryDeadline(call));
-				if (!response.ok) {
-					throw routeError(response);
-				}
-				if (!isJsonObject(response.result) || response.result.window_id !== other || !Array.isArray(response.result.locations)) {
-					throw new FacadeError('FAILED', 'invalid_response', `The Facade window ${other} returned an unreadable location list.`);
-				}
-				return response.result;
-			});
-			const all = [this.summary(), ...windows];
-			return {
-				result: success({ scope: 'all', windows: all, complete: !unavailable.length, unavailable_windows: unavailable }),
-				headline: `${count(all.length, 'open window')} you can start agents in or look into${unavailable.length ? `; ${count(unavailable.length, 'more window')} did not answer and ${unavailable.length === 1 ? 'is' : 'are'} listed in unavailable_windows` : ''}.`
-			};
-		}
-		if (args.window_id !== window.id && this.deps.network) {
-			await this.knownWindow(args.window_id);
-			return this.routeCall(args.window_id, 'list_start_options', args, caller, call, this.queryDeadline(call));
-		}
-		this.checkWindow(args.window_id);
-		if (args.location_id === undefined) {
-			// While Git is still read, checkouts may follow the folders listed: the catalog is not complete yet (MCP-2.1, WORKTREES-1.1)
-			return {
-				result: success({ window_id: window.id, label: window.label, environment: window.environment, locations: catalog.locations.map(each => locationOf(each, true)), complete: !catalog.pending }),
-				headline: `Window ${window.label} has ${count(catalog.locations.length, 'working location')}.${catalog.pending ? ' Git is still being read, so more checkouts may follow.' : ''}`
-			};
-		}
-		const location = this.location(args.location_id);
-		const { clis: choices, problems } = await this.deps.clis.list(location);
-		if (args.cli === undefined) {
-			return {
-				result: success({ window_id: window.id, location_id: location.id, location: locationOf(location, true), clis: choices.map(cliOf), problems: problems.map(({ setting, problem }) => ({ setting, problem })) }),
-				headline: `${count(choices.length, 'CLI')} at ${location.path}, ${choices.filter(each => each.available).length} of them able to start now.`
-			};
-		}
-		const choice = cliChoiceOf(choices, args.cli, location);
-		const { facts, problem } = this.cliFacts(location, choice.id);
-		const previous = this.deps.choices.list(location.environment, choice.id);
-		return {
-			result: success({
-				window_id: window.id,
-				location_id: location.id,
-				// The version its capabilities are stated for: an untested version is not taken for a tested one (MCP-2.1)
-				cli: defined({ ...cliOf(choice), version: facts?.version?.version }),
-				model: choiceCatalog('model', facts?.takes?.model, previous.model, choice.displayName),
-				effort: choiceCatalog('effort', facts?.takes?.effort, previous.effort, choice.displayName),
-				capabilities: capabilitiesOf(facts, problem)
-			}),
-			headline: `${choice.displayName} at ${location.path}: the models and efforts that started it before (a partial list), and what Facade can do with it.`
-		};
-	}
 
 	private cliFacts(location: Location, cli: string): { readonly facts?: CliFacts; readonly problem?: string } {
 		try {
@@ -843,9 +738,6 @@ class ToolService {
 		const created = outcome.worktreeCreated ?? (args.worktree && facts && facts.location !== args.location_id ? facts.cwd : undefined);
 		const effects = (outcome: Effects['outcome']): Effects => defined({ outcome, agent_id: run, worktree_created: created });
 		if (outcome.state === 'running') {
-			if (facts) {
-				this.rememberChoices(facts, args);
-			}
 			const prompt = args.prompt !== undefined ? await this.startPrompt(start, args.prompt, outcome) : undefined;
 			const data = { ...this.startData(start, facts, 'running'), ...prompt ? { prompt: prompt.data } : {} };
 			return {
@@ -913,18 +805,6 @@ class ToolService {
 			requested_model: args.model,
 			requested_effort: args.effort
 		});
-	}
-
-	/** The explicit model and effort of a start whose process started: offered as choices later (MCP-2.1). */
-	private rememberChoices(facts: RunFacts, args: ToolArguments['start_agent']): void {
-		if (args.model === undefined && args.effort === undefined) {
-			return;
-		}
-		try {
-			this.deps.choices.remember(facts.environment, args.cli, { ...args.model !== undefined ? { model: args.model } : {}, ...args.effort !== undefined ? { effort: args.effort } : {} });
-		} catch (err) {
-			this.deps.log?.(`Could not remember the model and effort ${facts.alias} started with: ${errorText(err)}`);
-		}
 	}
 
 	/**
@@ -1008,49 +888,42 @@ class ToolService {
 			const located = await this.locate(args.agent, caller);
 			selected = located.here?.id ?? located.there!.id;
 			const actualWindow = located.there?.window ?? self;
-			if (windowId !== undefined && windowId !== actualWindow) {
-				throw new FacadeError('INVALID', 'invalid_argument', 'The selected agent is not in window_id.');
-			}
+			if (windowId !== undefined && windowId !== actualWindow) { throw new FacadeError('INVALID', 'invalid_argument', 'The selected agent is not in window_id.'); }
 			windowId = actualWindow;
 		}
-		if (windowId !== undefined && windowId !== self && !this.deps.network) {
-			this.checkWindow(windowId);
+		if (windowId !== undefined && windowId !== self) {
+			if (!this.deps.network) { this.checkWindow(windowId); }
+			await this.knownWindow(windowId);
+			// A selected destination validates its own filters. Preserve not-found/invalid errors across the route,
+			// instead of turning a removed location into an unavailable window in a global snapshot.
+			return this.routeCall(windowId, 'list_agents', defined({ ...args, window_id: windowId, agent: selected }), caller, call, this.queryDeadline(call));
 		}
-		// Every window within reach, unless one is named; one that does not answer is listed apart, never an empty success (MCP-3.1)
-		const includeEnded = selected !== undefined || args.include_ended;
-		const selection = JSON.stringify([windowId ?? null, includeEnded, caller.id, caller.yolo, caller.root, selected ?? null]);
-		const after = args.cursor !== undefined ? cursorAt(args.cursor, selection) : undefined;
-		const local = windowId === undefined || windowId === self ? this.agentsFor(caller, includeEnded) : [];
+		const selection = JSON.stringify([windowId ?? null, args.location_id ?? null, args.limit, caller.id, caller.yolo, caller.root, selected ?? null]);
+		const local = windowId === undefined || windowId === self ? await this.localSnapshot(caller, selected, args.location_id, args.details) : undefined;
 		const { windows: remote, unavailable } = await this.everyWindow(async other => {
-			const response = await this.deps.network!.route(other, 'agents', { caller: this.guestOf(caller), include_ended: includeEnded }, this.queryDeadline(call));
-			if (!response.ok) {
-				throw routeError(response);
+			const response = await this.deps.network!.route(other, 'agents', defined({ caller: this.guestOf(caller), agent: selected,
+				location_id: args.location_id, details: args.details }), this.queryDeadline(call));
+			if (!response.ok) { throw routeError(response); }
+			const result = response.result;
+			if (!isJsonObject(result) || !isWindowSnapshot(result.window, other) || !Array.isArray(result.agents)
+				|| !result.agents.every(agent => isJsonObject(agent) && typeof agent.agent_id === 'string' && agent.window_id === other)) {
+				throw new FacadeError('FAILED', 'invalid_response', `The Facade window ${other} returned an unreadable snapshot.`);
 			}
-			const agents = (response.result as { readonly agents?: unknown } | undefined)?.agents;
-			if (!Array.isArray(agents) || !agents.every(agent => isJsonObject(agent) && typeof agent.agent_id === 'string')) {
-				throw new FacadeError('FAILED', 'invalid_response', `The Facade window ${other} returned an unreadable agent list.`);
-			}
-			return agents as Data[];
+			return { window: result.window, agents: result.agents as Data[] };
 		}, windowId);
-		const agents = [...local, ...remote.flat()]
-			.filter(agent => selected === undefined || agent.agent_id === selected)
-			.sort((a, b) => createdOf(a) - createdOf(b) || (String(a.agent_id) < String(b.agent_id) ? -1 : String(a.agent_id) > String(b.agent_id) ? 1 : 0))
-			.filter(agent => !after || createdOf(agent) > after[0] || (createdOf(agent) === after[0] && String(agent.agent_id) > after[1]));
-		const page = agents.slice(0, args.limit);
-		const last = page[page.length - 1];
-		const data = defined({
-			agents: page,
-			next_cursor: agents.length > page.length && last ? cursorOf({ createdAt: createdOf(last), id: String(last.agent_id) }, selection) : undefined,
-			complete: !unavailable.length,
-			unavailable_windows: unavailable,
-			scope: caller.yolo ? 'all' : 'creation_tree', include_ended: includeEnded
-		});
-		const runs = agents;
-		const scope = caller.yolo ? 'With YOLO on, you reach every agent' : `Without YOLO, you reach the agents of your creation tree (root ${caller.root})`;
-		return {
-			result: success(data),
-			headline: `${page.length} agent${page.length === 1 ? '' : 's'}${runs.length > page.length ? ` of ${runs.length}` : ''}. ${scope}.${args.include_ended ? '' : ' Ended agents are left out.'}`
-		};
+		const snapshots = [...local ? [local] : [], ...remote];
+		const agents = snapshots.flatMap(each => each.agents).filter(agent => selected === undefined || agent.agent_id === selected);
+		if (selected !== undefined && args.location_id !== undefined && !unavailable.length && !agents.length) {
+			throw new FacadeError('INVALID', 'invalid_argument', 'The selected agent is not in location_id.');
+		}
+		const windows = snapshots.map(each => each.window);
+		const page = snapshotPage(windows, agents, args.limit, selection, args.cursor);
+		const complete = !unavailable.length && windows.every(window => window.complete);
+		const sum = (key: 'folders' | 'locations' | 'worktrees') => windows.reduce((total, window) => total + window.counts[key], 0);
+		return { result: success({ ...page, counts: { known_windows: windows.length + unavailable.filter(each => each.window_id !== '*').length,
+			responding_windows: windows.length, folders: sum('folders'), locations: sum('locations'), worktrees: sum('worktrees'), agents: agents.length },
+			complete, unavailable_windows: unavailable, scope: caller.yolo ? 'all' : 'creation_tree' }),
+			headline: `${windows.length} responding window${windows.length === 1 ? '' : 's'}, ${agents.length} agent${agents.length === 1 ? '' : 's'} within your reach.${complete ? '' : ' Some current facts are unavailable.'}` };
 	}
 
 	private async stopAgent(args: ToolArguments['stop_agent'], caller: Caller, call: Received): Promise<Outcome> {
@@ -1390,38 +1263,6 @@ function cliChoiceOf(choices: readonly CliChoice[], cli: string, location: Locat
 	return choice;
 }
 
-/** A model or effort catalog (MCP-2.1, CLIS-1.4): earlier successful values, partial, never a made-up complete list. */
-function choiceCatalog(kind: 'model' | 'effort', takes: boolean | undefined, values: readonly string[], cli: string): Data {
-	if (takes === false) {
-		return { takes: false, values: [], source: 'adapter', status: 'complete', reason: `${cli} takes no explicit ${kind}.` };
-	}
-	return defined({
-		takes,
-		values: [...values],
-		source: 'previous_starts',
-		status: 'partial',
-		reason: `Explicit values that started ${cli} before in this environment, most recent first. It may take others, and an earlier one may no longer work.`
-	});
-}
-
-/** What Facade can do with a CLI (MCP-2.1): each capability as its adapter stands behind it, unverified where nothing does. */
-function capabilitiesOf(facts: CliFacts | undefined, problem: string | undefined): Data {
-	const unverified = (what: string): CapabilityState => ({ state: 'unverified', reason: problem ? `${what} ${problem}` : what });
-	const stated = (capability: CapabilityState | undefined, otherwise: CapabilityState) => capability ? { state: capability.state, reason: capability.reason } : otherwise;
-	return {
-		activity: stated(facts?.activity, unverified('Its activity reporting is not known.')),
-		// As a start here now would have it: verified only for the exact version found (CLIS-2.1)
-		message_input: facts?.input
-			? defined({ state: facts.input.capability.state, reason: facts.input.capability.reason, adapter: facts.input.adapter })
-			: { state: 'unavailable', reason: 'Facade cannot read its message input, so a message to it fails with unsupported; type_text still works.' },
-		screen: { state: 'supported', reason: 'Facade\'s terminal renders the screen of any CLI for read_screen.' },
-		direct_input: { state: 'supported', reason: 'type_text and press_keys write to the terminal input of any CLI.' },
-		// A declared mapping is used even while unverified; without one the prompt follows startup as a message (COLLABORATION-2.2)
-		initial_prompt: facts?.initialPrompt
-			? { state: facts.initialPrompt.capability.state, reason: facts.initialPrompt.capability.reason, path: facts.initialPrompt.mapping ? 'native' : 'post_start' }
-			: unverified('No native prompt argument is known for it; a start prompt goes as the first message after startup.')
-	};
-}
 
 /** A message's recipient as an answer names it: `#human`, or its reference as its record keeps it. */
 function shownOf(party: MessageRecord['to']): string {
@@ -1483,28 +1324,4 @@ function stopped(target: RunFacts, cleanup: Awaited<ReturnType<Agents['close']>>
 		case 'failed':
 			return { result: failure({ code: 'FAILED', reason: 'cleanup_failed', message: `${shown}'s card and terminal closed, but its process could not be ended.` }, data('unknown'), { outcome: 'partial', agent_id: target.id }) };
 	}
-}
-
-
-/** A list_agents page's cursor: where the next page starts, opaque to the caller. */
-function cursorOf(run: { readonly createdAt: number; readonly id: string }, selection: string): string {
-	return Buffer.from(JSON.stringify([run.createdAt, run.id, selection])).toString('base64url');
-}
-
-/** When an agent of a list was started, from its `created_at`: the order list_agents pages in across windows. */
-function createdOf(agent: Data): number {
-	const at = typeof agent.created_at === 'string' ? Date.parse(agent.created_at) : NaN;
-	return Number.isFinite(at) ? at : 0;
-}
-
-function cursorAt(cursor: string, selection: string): readonly [number, string] {
-	try {
-		const parsed: unknown = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-		if (Array.isArray(parsed) && parsed.length === 3 && typeof parsed[0] === 'number' && Number.isFinite(parsed[0]) && typeof parsed[1] === 'string' && parsed[1] && parsed[2] === selection) {
-			return [parsed[0], parsed[1]];
-		}
-	} catch {
-		// Not one of ours
-	}
-	throw new ArgumentError('list_agents', { missing: [], invalid: [{ field: 'cursor', problem: '`cursor` must be a next_cursor for the same window, include_ended and caller scope.' }] });
 }

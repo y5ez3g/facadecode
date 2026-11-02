@@ -210,7 +210,7 @@ function block(id: string, from: string, window: string, text: string): RegExp {
 	return new RegExp(String.raw`📨 Message from [^\n]*\(${escaped(from)}\) · ${escaped(id)}(?: · From ${escaped(label)})?\n${escaped(text)}$`);
 }
 
-const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
+const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
 // A custom CLI starts exactly as configured and has no MCP injection; its launch is checked by journey.it.ts.
 (!PEER && BUILT_IN_ADAPTERS.some(adapter => adapter.id === CLI) ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J12, M02, M03, M07, M15, M17)`, () => {
@@ -227,11 +227,13 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
 		assert.strictEqual(initialize?.serverInfo?.name, 'facade');
 		assert.ok(initialize?.instructions?.includes(alias), 'the instructions name the agent');
-		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), NINE);
+		assert.ok(initialize?.instructions?.includes('Launch IDs: window_id='));
+		assert.ok(initialize?.instructions?.includes('Facade history log ('));
+		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), EIGHT);
 
 		const window = vscode.workspace.name!;
 		const ran = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.window_id', location: 'data.location_id' } },
+			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Reviewer', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Review the README.' }, save: { child: 'data.agent_id' } },
 			{ tool: 'list_agents', arguments: { details: true } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', wait: 30_000 },
@@ -241,9 +243,12 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			// Keys sent is not a redraw barrier: wait for the CLI to consume Ctrl+U and paint its now-empty input.
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', untilAbsent: 'typed by its creator' }
 		]);
-		const options = ran.content('list_start_options');
+		const options = ran.content('list_agents');
 		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
-		assert.strictEqual(options.data.label, window);
+		assert.strictEqual(options.data.windows[0].label, window);
+		const logFile = options.data.windows[0].history_log.path as string;
+		const events = () => fs.readFileSync(logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+		for (const event of ['window_attached', 'locations_scanned', 'cli_scan']) { assert.ok(events().some(each => each.event === event), event); }
 
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
@@ -260,6 +265,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		}
 		const child = started.data.agent_id as string;
 		const childAlias = started.data.agent_id as string;
+		for (const event of ['agent_start_requested', 'agent_started']) { assert.ok(events().some(each => each.event === event && each.alias === childAlias), event); }
+		assert.ok(!fs.readFileSync(logFile, 'utf8').includes('Review the README.'), 'history excludes prompt bodies');
 		// The prompt is the caller's message as any message goes: its header, the whole text and its footer (COLLABORATION-2.1)
 		const prompt = new RegExp(`^${block(started.data.prompt.message_id, alias, window, 'Review the README.').source}$`);
 		if (native) {
@@ -274,7 +281,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const childCard = (await state()).cards.find(each => each.alias === child);
 		assert.ok(childCard, 'the child has a card in this window');
 		assert.ok(childCard.tooltip.includes(`Started by ${card.name} ${alias}`), childCard.tooltip.join(' | '));
-		const listed = ran.content('list_agents')?.data.agents as { agent_id: string; creator?: string; root: string }[];
+		const listed = ran.content('list_agents', 1)?.data.agents as { agent_id: string; creator?: string; root: string }[];
 		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.creator, each.root]), [[card.runId, card.runId]], 'the child joins its creator\'s tree');
 
 		assert.ok(JSON.stringify(ran.content('read_screen')).includes('Review the README.'), 'its screen is read, its first task on it');
@@ -300,7 +307,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		for (const each of [alias, childAlias]) {
 			assert.match(diagnostics, inputLine(each), diagnostics);
 		}
-		for (const tool of ['list_start_options', 'start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
+		for (const tool of ['start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
 			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms; `, 'm'), `${tool} is logged`);
 		}
 		assert.ok(!diagnostics.includes(os.homedir()), 'the home folder is written ~');
@@ -318,7 +325,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const { card, alias } = await personAgent();
 		const window = vscode.workspace.name!;
 		const first = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.window_id', location: 'data.location_id' } },
+			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Listener', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } },
 			// Its box is drawn, its first task taken: an ordinary message can go in now (RULES-1.4)
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 },
@@ -403,7 +410,7 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		this.timeout(120_000);
 		const { card, alias } = await personAgent();
 		const first = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.window_id', location: 'data.location_id' } },
+			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Slow', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 }
 		]);
@@ -441,10 +448,12 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const { alias } = await personAgent();
 		const window = vscode.workspace.name!;
 		// Listed and available: a window that is still starting is listed as unavailable
-		const found = await script(alias, [{ tool: 'list_start_options', arguments: { scope: 'all' }, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
-		const options = found.content('list_start_options');
-		const peer = (options?.data.windows as { window_id: string; label: string; environment: string; locations: { location_id: string; path: string }[] }[]).find(each => each.label === PEER);
+		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
+		const options = found.content('list_agents');
+		const peer = (options?.data.windows as { window_id: string; label: string; environment: string; counts: { agents: number }; clis: { cli: string; available: boolean }[]; locations: { location_id: string; path: string }[] }[]).find(each => each.label === PEER);
 		assert.ok(peer, `the other window is listed: ${JSON.stringify(options)}`);
+		assert.strictEqual(peer.counts.agents, 0, 'an empty window remains a launch destination');
+		assert.ok(peer.clis.some(each => each.cli === 'claude' && each.available), 'the destination supplies its own CLI availability');
 		const location = peer.locations.find(each => each.path === PEER_DIR) ?? peer.locations[0];
 		assert.ok(location, JSON.stringify(peer));
 

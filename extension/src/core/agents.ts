@@ -128,7 +128,7 @@ export class AgentService implements Agents, Disposable {
 			execution.onDidReport(report => this.reported(report)),
 			execution.onDidExit(exit => this.exited(exit)),
 			deps.locations.onDidRemove(removal => this.locationsRemoved(removal)),
-			deps.lifetime.onDidClose(() => void execution.endWindow())
+			deps.lifetime.onDidClose(() => { deps.log.fact?.('window_closed', {}); void execution.endWindow(); })
 		);
 		if (execution.onDidIdentify) {
 			this.subscriptions.push(execution.onDidIdentify(({ run, sessionId, cwd }) => this.identified(run, sessionId, cwd)));
@@ -493,8 +493,15 @@ export class AgentService implements Agents, Disposable {
 		if (options.pin) { this.deps.execution.pinTab?.(id, true); }
 		this.emit({ run: id, kind: 'added' });
 		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]${byAgent ? ` for agent ${byAgent.run}` : ''}`);
+		this.recordFact('agent_start_requested', facts);
 		void this.start(run, request, location, options).catch(err => this.deps.log.event(`The start of ${run.facts.alias} failed unexpectedly: ${messageOf(err)}`)).finally(settle);
 		return id;
+	}
+
+	private recordFact(event: string, facts: RunFacts, extra: Readonly<Record<string, unknown>> = {}): void {
+		this.deps.log.fact?.(event, { agent_id: facts.id, alias: facts.alias, cli: facts.cli, location_id: facts.location,
+			path: facts.cwd, origin: facts.origin, creator: facts.creator, request_id: facts.requestId, call_id: facts.startCallId,
+			requested_model: facts.model, requested_effort: facts.effort, ...extra });
 	}
 
 	private async start(run: Run, request: LaunchRequest, source: Location, options: StartOptions): Promise<void> {
@@ -579,6 +586,7 @@ export class AgentService implements Agents, Disposable {
 				this.deps.history.remember(run.facts.location, run.facts.cli);
 			}
 			// The arguments may hold a prompt or a credential: never logged (ARCHITECTURE-3.3, CLIS-4.2)
+			this.recordFact('agent_started', run.facts, { pid: started.pid, started_at: new Date(started.startedAt).toISOString() });
 			this.deps.log.event(`Started ${run.facts.alias} (${plan.cli}) pid ${started.pid}: ${plan.executable} with ${plan.args.length} argument${plan.args.length === 1 ? '' : 's'}`);
 		} catch (err) {
 			this.fail(run, messageOf(err), 'launch', err);
@@ -629,6 +637,7 @@ export class AgentService implements Agents, Disposable {
 		this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, source, at, ...effects } }, 'lifecycle');
 		this.deps.execution.note(run.facts.id, reason);
 		this.deps.log.event(`Could not start ${run.facts.alias}: ${english}`);
+		this.recordFact('agent_start_failed', run.facts, { source, reason: english });
 		if (run.facts.origin === 'human' && !this.restoring.has(run.facts.id)) {
 			// An agent's start reports its failure to that agent, never as the person's popup (RULES-1.8)
 			this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' });
@@ -671,11 +680,13 @@ export class AgentService implements Agents, Disposable {
 		}
 		if (run.facts.lifecycle === 'ended') {
 			this.deps.log.event(`Closed ${run.facts.alias}`);
+			this.recordFact('agent_closed', run.facts, { cleanup: 'already_ended' });
 			return 'already_ended';
 		}
 		if (run.facts.pid === undefined && !run.spawning) {
 			// Closed before its process was asked for: it never starts (WORKTREES-2.5)
 			this.deps.log.event(`Closed ${run.facts.alias} before its process started`);
+			this.recordFact('agent_closed', run.facts, { cleanup: 'not_started' });
 			return 'not_started';
 		}
 		// A process asked for may be starting now: ended as it starts, the close answers how that went - never that none started, for a
@@ -685,6 +696,7 @@ export class AgentService implements Agents, Disposable {
 			return 'failed' as const;
 		});
 		this.deps.log.event(`Closed ${run.facts.alias}: ${result}`);
+		this.recordFact('agent_closed', run.facts, { cleanup: result });
 		return result;
 	}
 
@@ -1059,6 +1071,7 @@ export class AgentService implements Agents, Disposable {
 			this.deps.execution.removePair(exit.run);
 			this.emit({ run: exit.run, kind: 'removed', cause: 'exit' });
 			this.deps.log.event(`${run.facts.alias} exited${exit.code !== undefined ? ` with code ${exit.code}` : ''}`);
+			this.recordFact('agent_exited', run.facts, { code: exit.code, signal: exit.signal });
 			return;
 		}
 		const at = this.deps.clock.now();
@@ -1070,6 +1083,7 @@ export class AgentService implements Agents, Disposable {
 			error: { reason: how, source: 'exit', at }
 		}, 'lifecycle');
 		this.deps.log.event(`${run.facts.alias} ${how.toLowerCase()}`);
+		this.recordFact('agent_exited', run.facts, { code: exit.code, signal: exit.signal });
 	}
 
 	private locationsRemoved(removal: LocationRemoval): void {

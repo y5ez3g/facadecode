@@ -283,7 +283,7 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		}
 	});
 
-	test('the handshake: the client\'s protocol version where the shim speaks it, else the newest; the nine tools in order; ping; notifications unanswered; unknown methods and unreadable lines refused', async () => {
+	test('the handshake: the client\'s protocol version where the shim speaks it, else the newest; the eight tools in order; ping; notifications unanswered; unknown methods and unreadable lines refused', async () => {
 		const shim = shimOf('run-1', { [SHIM_PTYD]: path.join(socketDir, 'nothing.sock') });
 		const init = await shim.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
 		assert.deepStrictEqual(init.result, {
@@ -305,7 +305,7 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		assert.strictEqual(shim.messages.length, before + 1);
 		const listed = (await shim.request('tools/list', {})).result;
 		assert.deepStrictEqual(listed.tools.map((tool: { name: string }) => tool.name), [
-			'list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'
+			'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'
 		]);
 		// No pagination: the whole list, and nothing else
 		// Each given to the model directly where a CLI otherwise loads tools on demand, as Antigravity does (CLIS-2.2)

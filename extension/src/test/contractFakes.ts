@@ -6,13 +6,13 @@
 
 import * as assert from 'assert';
 import type { Directory, DirectoryAgent, DirectoryWindow, RouteResponse } from '../base/windowNetwork';
+import type { Data } from '../contract/facts';
 import type { NetworkPort, RouteOp } from '../contract/network';
 import { createToolService, CliFacts, InputOutcome, ScreenSnapshot, TerminalPort, ToolServiceDeps } from '../contract/tools';
 import { FacadeError } from '../core/errors';
 import type { InboxPage, InboxQuery, MessageRecord, Messages, SendRequest, SendResult } from '../core/messagePorts';
 import { formatMessage } from '../core/messages';
 import type { Agents, CleanupResult, CliChoice, LaunchRequest, Location, RunFacts, RunId, StartOutcome } from '../core/ports';
-import { ChoiceStore } from '../record/choices';
 import { ServedAnswer, TOOL_PROTOCOL, ToolAnswer, ToolCall } from '../schema/protocol';
 import { codePoints } from '../schema/validate';
 import { tempDir } from './util';
@@ -343,7 +343,6 @@ export interface Setup {
 	readonly agents: FakeAgents;
 	readonly messages: FakeMessages;
 	readonly terminal: FakeTerminal;
-	readonly choices: ChoiceStore;
 	readonly written: { readonly home: string; readonly kind: 'messages' | 'screen'; readonly text: string; readonly ids?: readonly string[] }[];
 	readonly log: string[];
 	readonly dispose: () => void;
@@ -358,7 +357,6 @@ export function setUp(): Setup {
 	const messages = new FakeMessages(agents);
 	const terminal = new FakeTerminal();
 	const temp = tempDir('facade-code-contract-');
-	const choices = new ChoiceStore(temp.dir);
 	const written: Setup['written'][number][] = [];
 	const log: string[] = [];
 	let calls = 0;
@@ -380,7 +378,7 @@ export function setUp(): Setup {
 			written.push({ home, kind, text, ...ids ? { ids } : {} });
 			return { path: `${home}/results/${kind}-${written.length}.txt`, size: Buffer.byteLength(text) };
 		},
-		choices,
+		historyLog: `${temp.dir}/events.jsonl`,
 		timeout: () => setup.timeout,
 		yolo: () => true,
 		clock: { now: () => Date.UTC(2026, 9, 28, 22, 0, 0) },
@@ -401,7 +399,7 @@ export function setUp(): Setup {
 		service: (call: TestCall, receivedAt?: number) => handedBack(serve(call, receivedAt)),
 		call: (caller: RunFacts | RunId, tool: string, args?: unknown) =>
 			handedBack(serve({ caller: typeof caller === 'string' ? caller : caller.id, tool, arguments: args, elapsedMs: 7 })),
-		agents, messages, terminal, choices, written, log, deps,
+		agents, messages, terminal, written, log, deps,
 		dispose: temp.remove
 	});
 	return setup;
@@ -464,4 +462,10 @@ export class FakeNetwork implements NetworkPort {
 		this.routed.push(route);
 		return this.respond(route);
 	}
+}
+
+/** Complete remote response, including a window with no agents. */
+export function remoteSnapshot(windowId: string, agents: readonly Data[] = [], extra: Data = {}) {
+	return { window: { window_id: windowId, label: 'Backend', environment: 'ssh-remote+box',
+		folders: [], locations: [], clis: [], counts: { folders: 0, locations: 0, worktrees: 0, agents: agents.length }, complete: true, ...extra }, agents };
 }

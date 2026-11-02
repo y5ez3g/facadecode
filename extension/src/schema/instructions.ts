@@ -12,6 +12,9 @@ import { displayLine } from '../base/text';
 export function launchContextText(context: {
 	readonly creator: { readonly id: string; readonly label?: string };
 	readonly window: string;
+	readonly windowId?: string;
+	readonly locationId?: string;
+	readonly logFile?: string;
 	readonly location: { readonly path: string; readonly label: string; readonly environment: string; readonly kind: string;
 		readonly branch?: string; readonly isMain?: boolean; readonly folders: readonly { readonly name: string }[] };
 	readonly initialMessage?: string;
@@ -28,6 +31,8 @@ export function launchContextText(context: {
 		`Your creator is ${who}.`,
 		`Your session started in the ${place}, in window ${quote(context.window)} (${location.environment}).`,
 		`Launch path: ${quote(location.path)}. This describes the launch location, not the current shell directory.`,
+		...(context.windowId && context.locationId ? [`Launch IDs: window_id=${quote(context.windowId)}, location_id=${quote(context.locationId)}.`] : []),
+		...(context.logFile ? [`Facade history log (${location.environment}): ${quote(context.logFile)}. Read with normal file tools when past launch facts are needed.`] : []),
 		...(context.initialMessage ? [`Your initial message is ${context.initialMessage}.`] : []),
 		`To contact your creator, use send_message with to=${quote(creator.id)}.`
 	].join('\n');

@@ -64,7 +64,7 @@ function toolCalls(): { readonly at: number; readonly tool: string; readonly by:
 }
 
 /** How often an agent may call a tool that only looks, in the whole journey: more is polling for what a paste brings (D117). */
-const LOOKS = { list_start_options: 1, read_messages: 2, list_agents: 3, read_screen: 2 } as const;
+const LOOKS = { read_messages: 2, list_agents: 4, read_screen: 2 } as const;
 
 /** Stop a real model's failed journey promptly instead of paying for minutes of repetitive queries. */
 function assertLookBudget(): void {
@@ -79,7 +79,7 @@ function assertLookBudget(): void {
 
 const TASK_LEAD = 'This is a test of Facade Code. ';
 const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n'
-	+ '1) Call list_start_options without arguments to get your window_id, location_id and available CLIs.\n'
+	+ '1) Call list_agents without arguments to get current windows, locations, available CLIs and agents.\n'
 	+ `2) Call start_agent with name "Echo", cli "${REAL}", that window_id and location_id, and this prompt: "Use your Facade initialization context to send your creator one message: `
 	+ 'CONTEXT followed by your creator address, your own Facade short ID, and your initial message ID, separated by single spaces. '
 	+ 'Then, only when a message whose entire body is PING arrives, reply to its sender with send_message, the text exactly PONG. Do nothing else."\n'

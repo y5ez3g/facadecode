@@ -37,6 +37,7 @@ export interface HostClisOptions {
 	readonly destination?: (location: Location | undefined) => DestinationEnvironment;
 	/** Where a diagnostic goes: a folder trusted or not (CLIS-3.3), the Facade tools' files. */
 	readonly log?: (line: string) => void;
+	readonly fact?: (event: string, fields: Readonly<Record<string, unknown>>) => void;
 	/** This execution environment's Facade directory, where runs' launch files go (ARCHITECTURE-3.1). */
 	readonly home?: string;
 }
@@ -59,12 +60,15 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	private readonly destination: (location: Location | undefined) => DestinationEnvironment;
 	private readonly log: (line: string) => void;
 	private readonly home: string;
+	private readonly scans = new Map<string, string>();
+	private readonly fact: HostClisOptions['fact'];
 
 	constructor(options: HostClisOptions = {}) {
 		this.read = options.read ?? readSetting;
 		this.destination = options.destination ?? destinationOf;
 		this.log = options.log ?? (() => undefined);
 		this.home = options.home ?? facadeHome();
+		this.fact = options.fact;
 	}
 
 	/**
@@ -85,22 +89,19 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	 */
 	describe(location: Location, _yolo: boolean): { readonly launches: readonly CliFacts[] } {
 		const destination = this.destination(location);
+		return { launches: discover(catalogOf(this.read), destination, location.path).map(found => this.factsOf(found, destination, location, true)) };
+	}
+
+	private factsOf({ entry, executable, env }: ReturnType<typeof discover>[number], destination: DestinationEnvironment, location: Location, details: boolean): CliFacts {
+		const { adapter } = entry;
+		const version = details && executable ? installedVersionOf(adapter.id, executable) : undefined;
+		const target = executable && env ? targetOf(entry, executable, env, destination.platform, location.path) : undefined;
 		return {
-			launches: discover(catalogOf(this.read), destination, location.path).map(({ entry, executable, env }): CliFacts => {
-				const { adapter } = entry;
-				const version = executable ? installedVersionOf(adapter.id, executable) : undefined;
-				// As a start here would go: a choice whose arguments cmd.exe cannot carry is not offered where the CLI runs through it
-				const target = executable && env ? targetOf(entry, executable, env, destination.platform, location.path) : undefined;
-				return {
-					cli: adapter.id,
-					takes: takesThrough(adapter, target?.throughCmd ?? false, location.path, destination.platform),
-					...adapter.initialPrompt ? { initialPrompt: { ...adapter.groups.prompt ? { mapping: adapter.groups.prompt } : {}, capability: adapter.initialPrompt } } : {},
-					// A CLI whose first task waits for what its start types: the prompt goes after it, as its first message (COLLABORATION-2.2)
-					...!adapter.initialPrompt && adapter.promptAfterStart ? { initialPrompt: { capability: { state: 'unavailable' as const, reason: adapter.promptAfterStart } } } : {},
-					input: inputOf(adapter),
-					...version ? { version } : {}
-				};
-			})
+			cli: adapter.id,
+			takes: takesThrough(adapter, target?.throughCmd ?? false, location.path, destination.platform),
+			...adapter.initialPrompt ? { initialPrompt: { ...adapter.groups.prompt ? { mapping: adapter.groups.prompt } : {}, capability: adapter.initialPrompt } } : {},
+			...!adapter.initialPrompt && adapter.promptAfterStart ? { initialPrompt: { capability: { state: 'unavailable' as const, reason: adapter.promptAfterStart } } } : {},
+			input: inputOf(adapter), ...version ? { version } : {}
 		};
 	}
 
@@ -129,9 +130,11 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	 * The built-ins new starts are offered in CLIS-1.1 order - a turned-off one hidden - then the custom CLIs, for `location`; and the
 	 * errors of `facade.custom` no CLI stands for (CLIS-3.4).
 	 */
-	async list(location: Location): Promise<CliChoices> {
+	async list(location: Location, details = false): Promise<CliChoices & { readonly launches: readonly CliFacts[] }> {
 		const catalog = catalogOf(this.read);
-		const clis = discover(catalog, this.destination(location), location.path).map(({ entry, available, problem, said, notInstalled }): CliChoice => ({
+		const destination = this.destination(location);
+		const found = discover(catalog, destination, location.path);
+		const clis = found.map(({ entry, available, problem, said, notInstalled }): CliChoice => ({
 			id: entry.adapter.id,
 			displayName: entry.adapter.displayName,
 			available,
@@ -139,7 +142,13 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 			...said ? { said } : {},
 			...notInstalled ? { notInstalled } : {}
 		}));
-		return { clis, problems: catalog.problems.map(each => ({ setting: CUSTOM_SETTING, problem: each.text, said: each.said })) };
+		const problems = catalog.problems.map(each => ({ setting: CUSTOM_SETTING, problem: each.text, said: each.said }));
+		const fields = { location_id: location.id, path: location.path,
+			clis: clis.map(({ id, available, problem }) => ({ cli: id, available, problem })),
+			problems: problems.map(({ setting, problem }) => ({ setting, problem })) };
+		const signature = JSON.stringify(fields);
+		if (signature !== this.scans.get(location.id)) { this.scans.set(location.id, signature); this.fact?.('cli_scan', fields); }
+		return { clis, problems, launches: found.map(each => this.factsOf(each, destination, location, details)) };
 	}
 
 	/**

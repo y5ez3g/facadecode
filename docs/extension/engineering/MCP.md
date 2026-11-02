@@ -5,7 +5,7 @@ Layer 4. Protocol **5** defines the target contract. [Rules](../RULES.md) owns e
 
 | Group | Decides |
 | --- | --- |
-| 1 Common contract | Nine tools, outcomes, waits and validation |
+| 1 Common contract | Eight tools, outcomes, waits and validation |
 | 2 Discover and start | Startup choices, required identity/location and optional prompt |
 | 3 Inspect and stop | Scoped agent lists and single-agent stop |
 | 4 Messages and history | One recipient, result reports and own inbox |
@@ -16,9 +16,9 @@ Layer 4. Protocol **5** defines the target contract. [Rules](../RULES.md) owns e
 
 ### 1.1 Tools and validation
 
-**Expose nine English tool contracts; validate complete arguments before effects.**
+**Expose eight English tool contracts; validate complete arguments before effects.**
 
-Tools in order: `list_start_options`, `start_agent`, `list_agents`, `stop_agent`, `send_message`,
+Tools in order: `start_agent`, `list_agents`, `stop_agent`, `send_message`,
 `read_messages`, `read_screen`, `type_text`, `press_keys`.
 Do not expose get_operation, cancel_message, rename, independent worktree creation/deletion or batch stop.
 
@@ -149,31 +149,19 @@ describe a continuing call; it does not produce progress popups.
 
 ## 2 Discover and start
 
-### 2.1 list_start_options
+### 2.1 Launch context and history
 
-**Query startup choices without side effects, including open windows that have no agents.**
+**Current launch destinations and CLI availability are part of list_agents; historical facts are read from logs.**
 
-Arguments, optional: `scope:"current"|"all"`, `window_id:string`, `location_id:string`, `cli:string`.
-With no arguments or scope current, return the caller's registered launch location, window/environment and available
-CLI choices in one query, without waiting for other windows. This is not the terminal's later cwd or the person's
-last selection. A missing or removed launch location fails explicitly; never choose another location. The snapshot
-includes catalog completeness and configuration problems, and startup revalidates the chosen destination.
-Scope all lists every open Facade window on this client computer: window IDs/labels, environments when
-present, location summaries and availability. Scope excludes explicit window/location/CLI selections.
-With window_id, list the shared WORKTREES-1.2 location catalog. With
-location_id, list its installed CLIs and any catalog configuration problems, each naming its setting. A malformed
-custom catalog must not silently appear empty; valid built-ins remain available. With cli, include model/effort choices and actual operation capabilities. A
-subordinate selection must identify its parent; do not silently choose a window/location. A window without a folder
-has zero locations and cannot start an agent. Known absence differs from an unreachable runtime; include complete and
-unavailable_windows where applicable.
+There is no separate startup-discovery tool. MCP-3.1 returns empty windows too, their folders and worktrees, and compact
+CLI availability scoped to actual locations. An agent's startup context supplies its own window/location IDs and the
+absolute diagnostic-history path in its execution environment. Existing IDs can be used without another discovery call.
+The execution-time checks of start_agent remain authoritative; a snapshot reserves nothing.
 
-Model/effort catalogs contain previously successful values and any reliable local vendor catalog, with source and
-complete/partial/unknown status. Omitting a startup value adds no per-call override; CLIS-1.4 owns precedence over
-the CLI's native defaults. Do not advertise a stale hardcoded list as complete or require a made-up not_applicable
-object. Capabilities include activity, ordinary message input (whether the CLI has an input reader, with the version
-Facade found), screen/input and native initial prompt. Report supported/unavailable/unverified with the reason.
-Window/location discovery is not restricted to places already containing the caller's tree. Existing-agent data is
-scoped under RULES-4.3. Selection is revalidated at start, without reservations.
+CLIS-1.4 owns model/effort values. Facade logs requested settings and actual startup results under ARCHITECTURE-3.3;
+it does not aggregate model histories, count model successes or mirror native transcripts. The skill explains how to
+filter recent structured log events, when native history is useful, and how to inspect a CLI's own model/effort controls
+when a new choice is needed. Defaults and already specified values require no exploratory launch or history query.
 
 ### 2.2 start_agent arguments
 
@@ -202,7 +190,7 @@ the caller cannot pass permissions/yolo to choose a mode. No unattended override
 ```
 
 For new-worktree creation, add for example `"worktree":{"branch":"review-api","base_ref":"HEAD"}`.
-Previously successful models/efforts are choices, not an exhaustive allowlist where the CLI accepts literal overrides.
+Historical requested models/efforts are observations, not an exhaustive allowlist or proof of native acceptance.
 Omitting either field leaves the CLI's native defaults in control under CLIS-1.4. Report ignored/rejected requested
 overrides honestly. Do not substitute another CLI, path or conversation.
 
@@ -233,29 +221,35 @@ There is no task object, task_operation_id, completion expectation or automatic 
 
 ### 3.1 list_agents
 
-**List current run facts within the caller's normal YOLO/creation-tree scope.**
+**One query returns current windows, launch locations, CLI availability and agents within the caller's reach.**
 
-Arguments: `window_id?:string`, `agent?:string`, `details?:boolean=false`, `include_ended?:boolean=false`,
-`cursor?:string`, `limit?:integer=100` (1–200).
-Default searches connected windows within permitted reach: YOLO all; non-YOLO only the same creation tree, including
-siblings/ancestors/descendants. Do not return unrelated agents and then ask the caller to ignore them.
-Facts available across compact and detailed views include ID/name, window/environment/location, CLI, creator/tree,
-yolo, process/activity/tools/input facts,
-observation time/stale flag, title and actual error/exit where present. No task summaries, delegation credentials or
-public pending-operation-query fields. Ended records never imply a live terminal.
-The default compact projection keeps actionable identity/name, window/location/path/environment, CLI, YOLO,
-process/activity/blocker, tools/input capability, observation freshness and actual error/exit. `details:true` also returns
-creation time, creator/tree, window label, CLI title and activity reason. `agent` resolves one normal agent reference,
-including a retained ended agent, and queries only its window; a conflicting window_id fails before effects. An agent
-selection excludes cursor. Unknown-activity diagnostics remain in the compact view. Without
-agent, include_ended keeps its existing meaning. Scope, completeness and pagination remain explicit in either view.
-Pagination returns next_cursor; unavailable peers are explicit and complete:false is not an empty successful lookup.
-The cursor binds window_id, include_ended and the caller's reach; changing them fails explicitly. Pages describe a
-changing list ordered by creation time and ID, not an atomic snapshot. Known supported input reasons may be omitted
-from compact rows; unavailable/unverified reasons remain, and details returns the complete capability facts.
-state_observed_at is the source state-episode timestamp where available; observed_at is query time. Reload and queries
-do not freshen source observations. stale reflects a lost current execution connection, not the age of an observation.
-read_messages remains limited to the caller's inbox even if list_agents can see another agent.
+Arguments: `window_id?:string`, `location_id?:string`, `agent?:string`, `details?:boolean=false`,
+`cursor?:string`, `limit?:integer=100` (1–200). A location filter requires its window. A single-agent selection excludes
+cursor; conflicting window/location filters fail explicitly. Default agent rows exclude ended records; targeted lookup
+can return a retained terminal outcome for recovery. Bulk ended-agent history is read from logs instead.
+
+Return `windows`, compact `agents`, `counts`, `complete`, `unavailable_windows` and `next_cursor` when paged.
+Every responding window is represented, including windows without agents or folders. Its record contains ID, label,
+environment, folders, locations, CLI choices, counts and source observation time. Count folders as workspace folders,
+worktrees as non-main checkouts, and agents within the caller's reach. Deduplicate locations and agents rather than
+nesting copies beneath every associated folder. Main checkout and plain-folder locations remain launchable locations.
+Window CLI rows contain ID, name, availability and explicit model/effort override support. Equal choices across all
+locations are represented once; a differing choice names the exact location IDs it applies to. No model catalog or
+historical usage statistics are returned. Configuration problems and an incomplete Git catalog remain explicit.
+
+Unreachable windows are not empty: retain their identity and reason, with their counts unknown. Aggregate counts are
+for responding windows and the caller's scope, never an implied complete machine census. YOLO permits every agent;
+otherwise only the creation tree is visible. Window/location/CLI discovery is not restricted to that tree.
+Agent rows include callable ID, name, window/location/path, CLI, requested_model/requested_effort where recorded,
+process/activity/blocker, tools/input facts, actual error/exit and observation freshness. Requested settings do not claim
+the native CLI's current effective model. details:true adds creator/tree, creation time, window label, title and activity
+reason. Unknown-activity and failed-input reasons remain visible in compact rows. A targeted lookup reads only that
+agent's window and avoids unrelated CLI discovery.
+
+Agents and locations page with the same opaque cursor, bound to selection, limit and reach. Counts describe the whole matched
+scope, not the page. Pages observe changing state, not an atomic distributed snapshot. `complete` describes response
+and catalog coverage, independently of pagination. state_observed_at comes from the source state episode; observed_at
+is observation time. Reload/query never freshens source activity. Disconnection, not age alone, determines stale.
 
 ### 3.2 stop_agent
 
@@ -419,7 +413,7 @@ A system receipt carries the same
 operation facts as an immediate result, with its message/call correlation; human-readable history text is kept
 separately. A text-only historical receipt is not parsed or guessed into structured state.
 Connection recovery reuses only actual surviving runs and unexpired work under RULES; it never replays closed-run mail.
-The bundled skill teaches the nine tools, required startup fields, optional defaults, RULES-4.3's launch/reach policy,
+The bundled skill teaches the eight tools, required startup fields, optional defaults, RULES-4.3's launch/reach policy,
 normal creation trees, unique-name resolution, `#human`, own inbox, that read_messages without arguments returns the
 messages not yet received and that all:true returns every retained one, and finite delivery. It explicitly tells the
 model: “The same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo
@@ -432,10 +426,10 @@ cannot become YAML structure; verify native skill loading separately from an MCP
 Initialization owns private launch facts and cross-tool delivery/reach semantics; each tool's description and parameters
 own its use, effects and success/retry boundaries; the skill provides cross-tool examples and occasional reference.
 Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
-lack of draft protection, and bounded optional request-ID reuse. The skill does not duplicate the nine argument schemas.
+lack of draft protection, and bounded optional request-ID reuse. The skill does not duplicate the eight argument schemas.
 Tools publish standard human-readable titles and conservative annotations under the
 [MCP tool schema](https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations).
-Only list_start_options, list_agents and read_screen are read-only business-state queries. read_messages acknowledges
+Only list_agents and read_screen are read-only business-state queries. read_messages acknowledges
 delivery. Optional request IDs do not make start/send unconditionally idempotent. Mutating tools retain conservative
 destructive/open-world defaults; annotations are hints, never permissions or a reason to change native approval behavior.
 Tool names, argument schemas and the native private-context paths stay identical across presentation changes.
@@ -474,6 +468,8 @@ No migration guide for already-published user skills is required: this is the fi
 [Verification](VERIFICATION.md) records tests actually run; this contract does not assert them passed.
 
 ## Change log
+
+- 2026-11-02: Consolidate current window/location/CLI discovery in list_agents, remove list_start_options and model-history catalogs, and use structured event logs for history.
 
 - 2026-11-01: D151 exposes original-call correlation for continuing starts/stops and preserves it through message
   reloads; async and inbox guidance distinguishes continuation, uncertainty, final receipts and empty snapshots.

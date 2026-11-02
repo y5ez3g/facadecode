@@ -49,9 +49,10 @@ async function journey(name, run) {
 for (const location of ['loc-1', 'loc-wt']) {
 	await journey(`discover-and-start:${location}`, async ({ s, caller, call, check }) => {
 		s.agents.add({ ...caller, location });
-		const discovered = await call('list_start_options', {});
-		const started = await call('start_agent', { name: 'worker', window_id: discovered.data.window_id, location_id: discovered.data.location_id, cli: 'claude', request_id: 'one-start', prompt: 'Check the input. 中文 📨' });
-		check('one discovery at the registered location', discovered.data.location_id === location);
+		const discovered = await call('list_agents', {});
+		const destination = discovered.data.windows[0];
+		const started = await call('start_agent', { name: 'worker', window_id: destination.window_id, location_id: location, cli: 'claude', request_id: 'one-start', prompt: 'Check the input. 中文 📨' });
+		check('one discovery at the registered location', destination.locations.some(each => each.location_id === location));
 		check('one launch and one complete initial message', started.status === 'success' && s.agents.launched.length === 1 && s.messages.records[0].text === 'Check the input. 中文 📨');
 	});
 }
@@ -106,8 +107,8 @@ await journey('lost-send-then-target-absent', async ({ s, call, check }) => {
 await journey('malformed-window-list', async ({ s, call, check }) => {
 	const network = s.deps.network = new FakeNetwork(); network.window(2, 'Backend');
 	network.respond = () => ({ ok: true, result: {} });
-	for (const tool of ['list_agents', 'list_start_options']) {
-		const result = await call(tool, tool === 'list_start_options' ? { scope: 'all' } : {});
+	for (const tool of ['list_agents']) {
+		const result = await call(tool, {});
 		check(`${tool}: no invented empty complete window`, result.data.complete === false && result.data.unavailable_windows[0].reason === 'invalid_response');
 	}
 });
@@ -140,7 +141,7 @@ await journey('accepted-start-and-original-receipt', async ({ s, call, check }) 
 	check('one final receipt with original call identity', s.messages.records.length === 1 && s.messages.records[0].alias === accepted.data.result_message_id && s.messages.records[0].callId === accepted.data.call_id);
 });
 
-const dynamic = launchContextText({ creator: { id: '#a1', label: 'Ben #a1' }, window: 'Backend', location: { path: '/work/app.worktrees/feature-input', label: 'feature/input', branch: 'feature/input', kind: 'checkout', environment: 'local', folders: [{ name: 'app' }] }, initialMessage: '#m42' });
+const dynamic = launchContextText({ creator: { id: '#a1', label: 'Ben #a1' }, window: 'Backend', windowId: 'win-example', locationId: 'loc-example', logFile: '/state/workspaces/example/events.jsonl', location: { path: '/work/app.worktrees/feature-input', label: 'feature/input', branch: 'feature/input', kind: 'checkout', environment: 'local', folders: [{ name: 'app' }] }, initialMessage: '#m42' });
 const sources = ['schema/tools.js', 'schema/instructions.js', 'schema/skill.js', 'contract/tools.js', 'schema/recovery.js', 'test/contractFakes.js'];
 const result = {
 	format: 1, at: new Date().toISOString(), node: process.version, platform: `${process.platform}-${process.arch}`, compiled,

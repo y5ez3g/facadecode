@@ -103,9 +103,11 @@ than silently changing modes.
 
 **The CLI owns model/effort defaults and saved session state; Facade passes only explicit current overrides.**
 
-Startup discovery includes previously successful model/effort values for that CLI/environment plus any reliable native
-catalog, labeled complete/partial/unknown with its source. Past success is a useful choice, not a promise of current
-availability or an exhaustive allowlist. Do not invent model IDs or require not_applicable placeholder objects.
+Current CLI availability and explicit override support are returned by list_agents for the actual destination.
+Facade records requested model/effort and process-start outcomes as structured diagnostic events. Historical values
+are neither defaults nor an exhaustive allowlist. Actual model selections, available models/efforts and model responses
+remain in the native CLI's own controls/history; Facade maintains no model-choice catalog or success statistics.
+An omitted value is unknown to Facade unless the native CLI separately reports it. Do not invent model IDs.
 An explicit model or effort in a `start_agent` call is passed through the CLI's own option for this launch only. An
 omitted field adds no override: the CLI's native default or saved session state applies. The call's explicit choice
 takes precedence over the matching mapped option in `.launch.arguments`; remove that configured option and its value, in
@@ -504,6 +506,8 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
+
+- 2026-11-02: Replace model-choice catalogs with requested settings in startup logs and current override support in list_agents.
 
 - 2026-11-02: Empty current titles clear stale card text after live updates and reattachment; native title formatting remains the CLI's choice.
 - 2026-11-02: The CLI's actual terminal title takes precedence over a status report's title, preserving its native decorations (D160).

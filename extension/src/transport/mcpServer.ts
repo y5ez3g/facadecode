@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The MCP server of one run's shim (MCP-6.1): JSON-RPC 2.0 requests of the run's CLI, each answered once. It lists the nine tools
+// The MCP server of one run's shim (MCP-6.1): JSON-RPC 2.0 requests of the run's CLI, each answered once. It lists the eight tools
 // (MCP-1.1) and carries each tool call to the window that owns the run; the window validates and acts, and its answer returns as
 // MCP returns a result - English text and the same facts structured (MCP-1.2).
 

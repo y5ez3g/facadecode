@@ -130,7 +130,8 @@ automatic child report. Explicit model/effort in this call takes precedence unde
 
 **Agents can query open windows, valid locations and available CLIs before starting an agent.**
 
-The catalog includes installed CLIs in the destination environment and previously successful model/effort choices.
+The current snapshot includes windows, folders/worktrees and CLI availability in the destination environment.
+Past requested model/effort choices and startup outcomes are available in diagnostic logs.
 Unknown choices are labeled unknown; omitting model/effort leaves the CLI's native defaults in control under CLIS-1.4.
 No side effect or reservation occurs during discovery. Existing-agent queries and operations obey the caller's
 YOLO/creation-tree scope.

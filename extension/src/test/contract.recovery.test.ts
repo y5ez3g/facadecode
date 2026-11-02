@@ -60,7 +60,7 @@ suite('Contract: recovery preserves effects and existing operations', () => {
 	});
 
 	test('lost pure queries have no state effects; an inbox read can acknowledge delivery', () => {
-		for (const tool of ['list_start_options', 'list_agents', 'read_screen', 'read_messages']) {
+		for (const tool of ['list_agents', 'read_screen', 'read_messages']) {
 			const result = resultOf(failureAnswer('UNAVAILABLE', 'timeout', 'Reply lost.', 'unknown', { tool, arguments: {} }));
 			assert.strictEqual(result.effects.outcome, tool === 'read_messages' ? 'unknown' : 'none');
 		}

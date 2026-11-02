@@ -14,9 +14,7 @@ import type { RunFacts, RunId } from '../core/ports';
 export type RouteOp =
 	/** A tool call for that window's agents or locations, made there for a caller of this one: start, stop, screen and input. */
 	| 'call'
-	/** That window as list_start_options lists it, with its working locations (MCP-2.1). */
-	| 'summary'
-	/** That window's agents as list_agents lists them, within the caller's reach (MCP-3.1). */
+	/** That window's current locations, CLI availability and agents as list_agents lists them, within the caller's reach (MCP-3.1). */
 	| 'agents'
 	/** A message for one of its agents, delivered there under that window's input rules (RULES-1.4, 1.5). */
 	| 'deliver'

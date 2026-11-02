@@ -19,7 +19,7 @@ rule bodies and [Decisions](DECISIONS.md); historical task records and review fi
 | 3 Features | [COLLABORATION](features/COLLABORATION.md) | Cross-window agent operations, messages, human contact and Message History |
 | 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, window components, processes, data, packaging and working safeguards |
 | 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, input readers, Facade tool files, capability evidence and trust |
-| 4 Engineering | [MCP](engineering/MCP.md) | The nine agent tools, results, waits, injection and protocol |
+| 4 Engineering | [MCP](engineering/MCP.md) | The eight agent tools, results, waits, injection and protocol |
 | 4 Verification | [VERIFICATION](engineering/VERIFICATION.md) | G1, G2, G3 and G5, required journeys/scale and actual evidence |
 
 Read Product, then Experience for the whole product in plain terms. Shared Rules defines cross-feature behavior. Lower
@@ -43,7 +43,7 @@ deleted behavior must change its expectation; it is not evidence that the delete
 The Facade Code extension is committed in additive steps, and each commit carries only the specification its step needs.
 This is the subset for the owner-tested steps so far. Step 1 shipped Claude Code and Codex with the whole user interface
 that serves them, as the 0.0.1 preview; Antigravity, Muse Code, OpenCode and Pi join them at the same level (D77). Step 2
-adds agents that work together, with every built-in CLI: the nine MCP tools, messages and their results, contact with the
+adds agents that work together, with every built-in CLI: the eight MCP tools, messages and their results, contact with the
 person, Message History, and control of agents in every Facade window on this computer, local and remote alike. The integrated steps also include panel display filters, built-in launch settings, Show Agent Launch, Show Agents Log
 custom CLIs, and Resume with linked Pin/Unpin. Every rule keeps its final number.
 

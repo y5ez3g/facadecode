@@ -72,7 +72,7 @@ suite('MCP-01: compact public results', () => {
 
 	test('lists keep blockers, unknown-state diagnostics, completeness and cursors; full detail restores infrequent facts', () => {
 		const agent = agentOf(runFacts(12, { name: '', activity: 'unknown', activityReason: 'No activity report', blocker: { kind: 'permission', text: 'Allow this?' } }), { id: 'w', label: 'Workspace', environment: 'local' }, 10);
-		const source = success({ agents: [agent], complete: false, unavailable_windows: [{ window_id: 'offline' }], next_cursor: 'opaque' });
+		const source = success({ windows: [{ window_id: 'w', locations: [] }], agents: [agent], complete: false, unavailable_windows: [{ window_id: 'offline' }], next_cursor: 'opaque' });
 		const compact = compactResult('list_agents', source).data as { agents: Record<string, unknown>[]; complete: boolean; next_cursor: string };
 		assert.strictEqual(compact.agents[0].agent_id, '#a12');
 		assert.strictEqual(compact.agents[0].name, '');
@@ -83,6 +83,9 @@ suite('MCP-01: compact public results', () => {
 		assert.strictEqual(compact.agents[0].yolo, false);
 		assert.strictEqual(compact.complete, false);
 		assert.strictEqual(compact.next_cursor, 'opaque');
+		const text = JSON.stringify(compact);
+		assert.ok(text.indexOf('"complete"') < text.indexOf('"windows"'), 'coverage precedes potentially long topology rows');
+		assert.ok(text.indexOf('"next_cursor"') < text.indexOf('"agents"'), 'a folded list must not look like the last page');
 		const full = compactResult('list_agents', source, true).data as { agents: Record<string, unknown>[] };
 		assert.strictEqual(full.agents[0].creator, agent.creator);
 		assert.strictEqual(full.agents[0].created_at, agent.created_at);
