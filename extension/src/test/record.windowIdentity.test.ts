@@ -43,7 +43,7 @@ suite('Record: local window handover identity', () => {
 	test('missing, malformed and stale-session command replies cannot authorize handover', () => {
 		const token = windowToken(temp.dir);
 		// The component's version, where it names it (D116)
-		assert.ok(isWindowIdentity({ version: 1, token, session: 'now', component: '0.2.0' }, 'now'));
+		assert.ok(isWindowIdentity({ version: 1, token, session: 'now', component: '0.0.2' }, 'now'));
 		assert.ok(!isWindowIdentity({ version: 1, token, session: 'now', component: '' }, 'now'));
 		assert.ok(!isWindowIdentity({ version: 1, token, session: 'now', component: 2 }, 'now'));
 		for (const reply of [undefined, null, [], { version: 1, token }, { version: 2, token, session: 'now' },
