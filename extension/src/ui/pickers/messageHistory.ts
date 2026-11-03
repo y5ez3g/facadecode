@@ -123,20 +123,20 @@ export function recordText(record: MessageRecord, language: string, results: rea
 function outcomeOf(record: MessageRecord, language: string): string {
 	const { delivery } = record;
 	if (delivery.status === 'unknown') {
-		return vscode.l10n.t("Facade could not confirm that the agent received the message");
+		return vscode.l10n.t("Could not confirm that the agent received the message");
 	}
 	if (delivery.status === 'pending') {
 		return delivery.deadline !== undefined
 			// {0} is the time of day Facade gives up
-			? vscode.l10n.t("Being delivered; Facade stops trying at {0}", new Intl.DateTimeFormat(language, { timeStyle: 'medium' }).format(delivery.deadline))
+			? vscode.l10n.t("Delivering; Facade stops trying at {0}", new Intl.DateTimeFormat(language, { timeStyle: 'medium' }).format(delivery.deadline))
 			: vscode.l10n.t("Being delivered");
 	}
 	if (delivery.status === 'success') {
 		switch (delivery.via) {
-			case 'notification': return vscode.l10n.t("Shown to you as a notification");
+			case 'notification': return vscode.l10n.t("Delivered as a notification");
 			case 'read': return vscode.l10n.t("Delivered when the agent checked its messages");
 			case 'launch': return vscode.l10n.t("Delivered as the agent's first task");
-			default: return record.to.run === '@human' ? vscode.l10n.t("Shown to you as a notification") : vscode.l10n.t("Delivered to the agent");
+			default: return record.to.run === '@human' ? vscode.l10n.t("Delivered as a notification") : vscode.l10n.t("Delivered to the agent");
 		}
 	}
 	// {0} is why, in a lowercase phrase such as "the time limit was reached"
@@ -146,16 +146,16 @@ function outcomeOf(record: MessageRecord, language: string): string {
 /** Why a message was not delivered, in plain words. */
 function failureOf(reason: string | undefined): string {
 	switch (reason) {
-		case 'input_draft': return vscode.l10n.t("there was unsent text in the agent's input box");
-		case 'input_interaction': return vscode.l10n.t("the agent was waiting for an answer, permission or sign-in");
-		case 'input_unknown': return vscode.l10n.t("Facade could not tell if the agent was ready for input");
-		case 'partial_input': return vscode.l10n.t("only part of the message reached the agent's input box");
-		case 'submission_unconfirmed': return vscode.l10n.t("Facade could not confirm that the agent received the message");
-		case 'timeout': return vscode.l10n.t("the time limit was reached");
+		case 'input_draft': return vscode.l10n.t("the terminal contained an unsent draft");
+		case 'input_interaction': return vscode.l10n.t("the agent was waiting for an answer, permission, or sign-in");
+		case 'input_unknown': return vscode.l10n.t("Facade could not determine if the agent was ready for input");
+		case 'partial_input': return vscode.l10n.t("only part of the message reached the terminal");
+		case 'submission_unconfirmed': return vscode.l10n.t("Could not confirm that the agent received the message");
+		case 'timeout': return vscode.l10n.t("delivery timed out");
 		case 'ended': return vscode.l10n.t("the agent was no longer running");
-		case 'unsupported': return vscode.l10n.t("Facade cannot type messages into the agent's CLI");
-		case 'window_unavailable': return vscode.l10n.t("the agent's window could not be reached");
-		default: return vscode.l10n.t("the reason is not known");
+		case 'unsupported': return vscode.l10n.t("Facade cannot type messages into the agent's terminal");
+		case 'window_unavailable': return vscode.l10n.t("agent window could not be reached");
+		default: return vscode.l10n.t("unknown reason");
 	}
 }
 

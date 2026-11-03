@@ -217,10 +217,9 @@ export class PanelModel implements Disposable {
 		const folderPrefix = location ? folderPrefixOf(location, catalog) : undefined;
 		const qualified = location ? locationLabel(location, catalog) : label;
 		const environment = facts.environment !== 'local' ? this.deps.environmentLabel?.(facts.environment) ?? facts.environment : undefined;
-		// A fact a line (PANEL-1.5, D74): where it works, then its folder - the home folder as ~, not on Windows - which the editor's
-		// tooltip then never breaks mid-line
-		const full = `${[qualified, environment].filter(Boolean).join(' · ')}\n${homeRelative(location?.path ?? facts.cwd)}`;
-		return { label, ...(folderPrefix ? { folderPrefix } : {}), qualified, full };
+		// Keep location context and path separate so hover labels never parse user-provided newlines (PANEL-1.5).
+		const context = [qualified, environment].filter(Boolean).join(' · ');
+		return { label, ...(folderPrefix ? { folderPrefix } : {}), qualified, context, path: homeRelative(location?.path ?? facts.cwd) };
 	}
 
 	private changed(change: RunChange): void {

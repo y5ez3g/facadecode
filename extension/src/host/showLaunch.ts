@@ -40,7 +40,7 @@ function shownArgs(args: readonly string[]): string {
 function sandboxText(sandbox: SandboxFact, launch: LaunchDescription): string {
 	switch (sandbox.state) {
 		// {0} is the CLI's options that turn it on, such as --sandbox workspace-write
-		case 'on': return sandbox.by ? vscode.l10n.t("Sandbox: on, by {0}", shownArgs(sandbox.by)) : vscode.l10n.t("Sandbox: on, by Facade's settings for the run");
+		case 'on': return sandbox.by ? vscode.l10n.t("Sandbox: on, by {0}", shownArgs(sandbox.by)) : vscode.l10n.t("Sandbox: on, by Facade settings");
 		// {0} is the CLI's options that turn it off
 		case 'off': return vscode.l10n.t("Sandbox: off, by {0}", shownArgs(sandbox.by));
 		case 'native': return vscode.l10n.t("Sandbox: as the CLI's own configuration sets it");
@@ -70,8 +70,8 @@ function sourceText(source: EnvironmentSource, launch: LaunchDescription): strin
 		case 'profile': return vscode.l10n.t("the env of the default terminal profile {0}", JSON.stringify(launch.environment.profile ?? ''));
 		case 'launch': return `${launch.setting}.launch.environment`;
 		// {0} is the CLI's name
-		case 'adapter': return vscode.l10n.t("the {0} adapter", launch.displayName);
-		case 'run': return vscode.l10n.t("every agent run");
+		case 'adapter': return vscode.l10n.t("the {0} integration", launch.displayName);
+		case 'run': return vscode.l10n.t("all agents");
 	}
 }
 
@@ -81,17 +81,17 @@ function sourceText(source: EnvironmentSource, launch: LaunchDescription): strin
  */
 function trustText(trust: LaunchTrust): string {
 	if (trust.kind === 'unknown') {
-		return vscode.l10n.t("Trust: none given by Facade; a custom CLI that asks about the folder asks in its terminal");
+		return vscode.l10n.t("Trust: not granted by Facade; a custom CLI that prompts for folder trust asks in its terminal");
 	}
 	if (trust.kind === 'file') {
 		if (trust.target.withheld) {
-			return vscode.l10n.t("Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal");
+			return vscode.l10n.t("Trust: none provided for home folder, parents, or filesystem root; CLI prompts in its terminal");
 		}
 		// {0} is the entry, as JSON; {1} the CLI's file
-		return vscode.l10n.t("Trust: {0} merged into {1} before each start, as the CLI writes it when its trust question is accepted; a file that cannot be read is left as it is, and the CLI asks in its terminal", JSON.stringify(trustEntryJson(trust.target)), trust.target.file);
+		return vscode.l10n.t("Trust: {0} merged into {1} before each start; unreadable files are preserved and the CLI prompts in its terminal", JSON.stringify(trustEntryJson(trust.target)), trust.target.file);
 	}
 	// {0} is the CLI's options that trust the folder
-	return trust.args.length ? vscode.l10n.t("Trust: for this launch alone, by {0}", shownArgs(trust.args)) : vscode.l10n.t("Trust: none given; the CLI asks no trust question");
+	return trust.args.length ? vscode.l10n.t("Trust: for this launch alone, by {0}", shownArgs(trust.args)) : vscode.l10n.t("Trust: none required; the CLI does not prompt for trust");
 }
 
 /** One CLI's section of the document. */
@@ -102,7 +102,7 @@ function launchSection(launch: LaunchDescription, yoloProblem: string | undefine
 		// {0} is the CLI's setting, such as facade.claude
 		add(vscode.l10n.t("Status: off; {0}.enabled is false, so New Agent does not offer it", launch.setting));
 	} else if (launch.problems.length) {
-		add(vscode.l10n.t("Status: cannot start until its configuration errors are fixed"));
+		add(vscode.l10n.t("Status: cannot start until configuration errors are fixed"));
 	} else if ('missing' in launch.program) {
 		// {0} is why
 		add(vscode.l10n.t("Status: cannot start: {0}", reasonText(launch.program.said, launch.program.missing)));
@@ -119,17 +119,17 @@ function launchSection(launch: LaunchDescription, yoloProblem: string | undefine
 		add(launch.program.configured
 			// {0} is the program; {1} its setting; {2} the path configured there
 			? vscode.l10n.t("Executable: {0} (from {1}.path {2})", launch.program.file, launch.setting, JSON.stringify(launch.program.configured))
-			: vscode.l10n.t("Executable: {0} (found on the PATH of this environment)", launch.program.file));
+			: vscode.l10n.t("Executable: {0} (found on PATH)", launch.program.file));
 		if (launch.program.script !== undefined) {
 			add(vscode.l10n.t("Node script: {0}", launch.program.script));
 		}
 		if (launch.program.throughCmd) {
-			add(vscode.l10n.t("Runs through cmd.exe: arguments cmd.exe would read as its own are refused"));
+			add(vscode.l10n.t("Runs via cmd.exe: arguments interpreted by cmd.exe are rejected"));
 		}
 	} else if ('missing' in launch.program) {
 		add(vscode.l10n.t("Executable: not found: {0}", reasonText(launch.program.said, launch.program.missing)));
 	} else {
-		add(vscode.l10n.t("Executable: not resolved until its configuration errors are fixed"));
+		add(vscode.l10n.t("Executable: unresolved until configuration errors are fixed"));
 	}
 	add(vscode.l10n.t("Working directory: {0}", launch.cwd));
 	// {0} is the layers, joined by arrows
@@ -148,7 +148,7 @@ function launchSection(launch: LaunchDescription, yoloProblem: string | undefine
 			add(`  ${vscode.l10n.t("(none)")}`);
 		}
 	} else {
-		add(vscode.l10n.t("Arguments: none: this CLI cannot start here as configured"));
+		add(vscode.l10n.t("Arguments: none; CLI cannot start with current configuration"));
 	}
 	if (yoloProblem === undefined) {
 		add(launch.yolo === undefined
@@ -182,12 +182,12 @@ export function launchDocument(input: LaunchDocumentInput): string {
 	const { yolo, location } = input;
 	if (input.gone !== undefined) {
 		// {0} is the working location's name
-		return `${vscode.l10n.t("The working location {0} is no longer available in this window. Run Show Agent Launch again to choose another.", input.gone)}\n`;
+		return `${vscode.l10n.t("Working location {0} is no longer available. Run Show Agent Launch again to choose another.", input.gone)}\n`;
 	}
 	const yoloProblem = yolo.problem !== undefined ? reasonText({ kind: 'yolo_type', values: [yolo.received] }, yolo.problem) : undefined;
 	const lines: string[] = [];
 	if (!location) {
-		lines.push(vscode.l10n.t("Show Agent Launch: no folder is open, so there is no working location to start an agent in. Open a folder to see each CLI's launch there."));
+		lines.push(vscode.l10n.t("No folder is open. Open a folder to view agent launch details."));
 	} else {
 		// {0} is the working location's name
 		lines.push(vscode.l10n.t("Agent launch in {0}", location.label));
@@ -198,14 +198,14 @@ export function launchDocument(input: LaunchDocumentInput): string {
 			: vscode.l10n.t("Working location: {0} ({1})", location.path, location.environment));
 	}
 	// {0} is the date and time, such as 2026-10-30 21:15:00
-	lines.push(vscode.l10n.t("Computed {0} UTC without starting any CLI: the launch a new start would use now, not an observation of a running process. Secret values are shown as <redacted>.", input.now.toISOString().replace('T', ' ').slice(0, 19)));
+	lines.push(vscode.l10n.t("Computed at {0} UTC without starting any CLI. This shows the configuration a new agent would use now, not an observation of a running process. Secret values are <redacted>.", input.now.toISOString().replace('T', ' ').slice(0, 19)));
 	lines.push(yoloProblem !== undefined
 		// {0} is what is wrong with the setting
-		? vscode.l10n.t("YOLO: {0}. No agent starts until it is fixed.", yoloProblem)
+		? vscode.l10n.t("YOLO: {0}. No agent can start until resolved.", yoloProblem)
 		// {0} is the setting, facade.yolo
 		: yolo.value
-			? vscode.l10n.t("YOLO: on, from {0}; it applies to agents started from now on", YOLO_SETTING)
-			: vscode.l10n.t("YOLO: off, from {0}; it applies to agents started from now on", YOLO_SETTING));
+			? vscode.l10n.t("YOLO: on, from {0}; applies to newly started agents", YOLO_SETTING)
+			: vscode.l10n.t("YOLO: off, from {0}; applies to newly started agents", YOLO_SETTING));
 	if (input.problems.length) {
 		lines.push(vscode.l10n.t("Configuration errors:"));
 		input.problems.forEach(problem => lines.push(`  - ${reasonText(problem.said, redactedText(problem.text))}`));

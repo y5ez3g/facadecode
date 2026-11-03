@@ -213,6 +213,10 @@ rejected several of them. Their old implementation/tests must follow the current
 
 | D164 | Owner authorized all findings from the panel status review on 2026-11-02. Preserve the four dot meanings and CLI title content. A blocked report without a known kind remains blocked; idle does not promise usable input. Show injected tools that have not connected without inferring failure from elapsed time. Screen-derived status requires complete recognized layout evidence, real soft-wrap boundaries and native marker styling; reset or an unrecognized completed screen revokes it. Preserve complete bounded title/reason text for hover and cut previews only between graphemes. Follow OSC 7501 whole-record replacement, including omitted/empty titles; unknown-state reports are ignored as the protocol requires, correcting the audit suspicion. New runs use updated ptyd behavior; an upgrade does not kill existing runs. Native/platform claims remain limited to recorded evidence | RULES-3.2; PANEL-1.4, 1.5; CLIS-2.3; ARCHITECTURE-2.4; VERIFICATION-1.2 |
 
+| D165 | Owner authorized the non-image copy review on 2026-11-02 after pulling current main, with translations completed directly by the implementing agent. Apply the agreed English strings and the choice-taking Show Agent Launch... command title; preserve D164 status evidence and all dynamic values. Use concise, objective prose and natural translations in all 11 locales. The review’s short-copy target does not impose a new runtime truncation limit. Screenshot IA proposals, including Resume layout alternatives, are a separate pending decision | UX-1.3, 2.4, 3.1; PANEL-1.1; CLIS-4.1 |
+
+| D166 | Owner completed the 14-screenshot walkthrough and authorized implementation. Keep card/menu layouts and single-line Resume/Go to Agent. Folder filters show count then parent path. Name creation substeps explicitly, including standalone folder selection. Every hover fact uses a localized Label: value, including Agent and time/creator lines. Both human worktree entries use their actual source checkout HEAD; standalone uses the selected workspace folder rather than substituting main, and accepting its branch input creates directly, with no confirmation or Change Base. Other refs use ordinary Git; existing programmatic base_ref contracts remain. The removed confirmation page supersedes its path-shortening proposal | PANEL-1.5, 2.3; LIFECYCLE-1.1, 1.3; WORKTREES-2.1, 4.3 |
+
 D14–16 added mechanisms the latest review explicitly rejects; their prior code or tests are not reasons to restore them.
 
 D38–D53 follow the owner's 2026-10-28 instruction that the product contain only what the specification requires, using
@@ -284,6 +288,10 @@ proven platform limitations instead of silently weakening a product promise. The
 full spec revision; it does not authorize publication or unrelated source changes.
 
 ## Change log
+
+- 2026-11-02: D166 records the owner's screenshot decisions, uniform hover labels and simplified human worktree creation.
+
+- 2026-11-02: D165 records the authorized copy and translation implementation, separately from screenshot IA proposals.
 
 - 2026-11-02: D164 records the owner-authorized status review fixes and protocol correction.
 

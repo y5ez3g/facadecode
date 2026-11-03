@@ -43,27 +43,27 @@ export function deliveryText(original: MessageRecord, cli?: string): string {
 	const reason = delivery.reason;
 	const untouched = delivery.effects.outcome === 'none';
 	if (reason === 'window_unavailable') {
-		return untouched ? `Your message ${original.alias} couldn't be sent to ${who}. The destination window couldn't be reached. Nothing was entered.`
-			: `I couldn't get a reply from the destination window, so I can't confirm whether your message ${original.alias} reached ${who}.`
+		return untouched ? `Your message ${original.alias} could not be sent to ${who}. The destination window could not be reached. Nothing was entered.`
+			: `Could not get a reply from the destination window; cannot confirm whether your message ${original.alias} reached ${who}.`
 				+ (delivery.effects.text_written === 'partial' || delivery.effects.text_written === 'full' || delivery.effects.enter_written === true ? ` ${inputEffectText(delivery.effects)}` : '');
 	}
 	if (reason === 'not_found' && untouched) {
-		return `Your message ${original.alias} couldn't be sent. ${who} is no longer available in the destination window.`;
+		return `Your message ${original.alias} could not be sent. ${who} is no longer available in the destination window.`;
 	}
 	if (reason === 'input_draft' && untouched) {
-		return `Your message ${original.alias} couldn't be sent to ${who}. There was already a draft in the terminal, and it was left untouched.`;
+		return `Your message ${original.alias} could not be sent to ${who}. An existing draft in the terminal was left untouched.`;
 	}
-	const explanation = reason === 'ended' ? 'The session ended.'
+	const explanation = reason === 'ended' ? 'The agent process ended.'
 		: reason === 'timeout' ? 'The delivery deadline passed.'
 		: reason === 'unsupported' ? 'This CLI does not support message delivery.'
-			: reason === 'input_unknown' ? `Facade couldn't recognize ${cli ? displayLine(cli, 160) + "'s" : 'the'} input box.`
+			: reason === 'input_unknown' ? `Facade could not recognize ${cli ? displayLine(cli, 160) + "'s" : 'the'} terminal input.`
 				: reason === 'input_interaction' ? 'A question or menu is open in the terminal.'
 					: reason === 'input_draft' ? 'The terminal contains a draft.'
 						: reason === 'submission_unconfirmed' ? 'The CLI has not confirmed submission.'
 							: reason === 'partial_input' ? 'Input stopped before the message was complete.'
 								: reason === 'window_unavailable' ? 'The destination window could not be reached.'
 									: `Delivery did not finish${reason ? ` (${displayLine(reason, 160)})` : ''}.`;
-	return `Delivery of your message ${original.alias} to ${who} ${untouched ? 'failed' : "couldn't be confirmed"}. ${explanation} ${inputEffectText(delivery.effects)}`;
+	return `Delivery of your message ${original.alias} to ${who} ${untouched ? 'failed' : 'could not be confirmed'}. ${explanation} ${inputEffectText(delivery.effects)}`;
 }
 
 /** Final start/stop facts in the same voice as a delivery notice. Internal IDs stay in structured records. */
@@ -75,13 +75,13 @@ export function operationText(result: Data, party: NonNullable<MessageRecord['ag
 	if (data.cleanup !== undefined) {
 		lines.push(data.cleanup === 'terminated' ? `${who} has stopped.`
 			: data.cleanup === 'already_ended' || data.cleanup === 'already_exited' ? `${who} had already stopped. The card and terminal are closed.`
-				: data.cleanup === 'not_started' ? `${who} was closed before its process started. It won't be started.`
-					: data.cleanup === 'failed' ? `Facade couldn't stop ${who}. The card and terminal are closed, but the process may still be running.`
+				: data.cleanup === 'not_started' ? `${who} was closed before its process started. It will not be started.`
+					: data.cleanup === 'failed' ? `Facade could not stop ${who}. The card and terminal are closed, but the process may still be running.`
 						: `${who} may still be running. The card and terminal are closed.`);
 	} else {
-		lines.push(data.process_state === 'running' ? `${who}'s session has started.`
+		lines.push(data.process_state === 'running' ? `${who} has started.`
 			: data.closed === true ? `${who} was closed before startup finished. Whether the process stopped is unknown.`
-				: `${who}'s session couldn't be started.`);
+				: `${who} could not be started.`);
 		if (data.tools_state === 'connecting') { lines.push('Its Facade tools are still connecting.'); }
 		if (data.tools_state === 'unavailable' || data.tools_state === 'not_injected') {
 			lines.push(`Its Facade tools are unavailable.${data.tools_reason ? ` ${diagnostic(data.tools_reason)}` : ''}`);
@@ -98,15 +98,15 @@ export function operationText(result: Data, party: NonNullable<MessageRecord['ag
 				lines.push(`Your initial message ${id} is still being delivered. Its outcome will be reported separately.`);
 				if (prompt.obstacle === 'input_draft') { lines.push('There is already a draft in the terminal; it will be left untouched.'); }
 				else if (prompt.obstacle === 'input_interaction') { lines.push('A question or menu is open in the terminal.'); }
-				else if (prompt.obstacle === 'input_unknown') { lines.push("Facade hasn't recognized the input box yet."); }
+				else if (prompt.obstacle === 'input_unknown') { lines.push("Facade has not recognized the terminal input yet."); }
 				else if (prompt.obstacle) { lines.push(`Delivery is waiting: ${diagnostic(prompt.obstacle)}.`); }
 			} else if (prompt.path === 'native' && input.outcome === 'confirmed') {
-				lines.push(`Your initial message ${id} was supplied at launch, but its delivery record couldn't be saved.`);
+				lines.push(`Your initial message ${id} was supplied at launch, but its delivery record could not be saved.`);
 			} else if (prompt.path === 'native' && input.outcome === 'unknown') {
-				lines.push(`Your initial message ${id} was supplied at launch, but acceptance couldn't be confirmed. It hasn't been sent again.`);
+				lines.push(`Your initial message ${id} was supplied at launch, but acceptance could not be confirmed. It has not been sent again.`);
 			} else {
-				lines.push(input.outcome === 'none' ? `Your initial message ${id} couldn't be delivered. ${inputEffectText(input)}`
-					: `Delivery of your initial message ${id} couldn't be confirmed. ${inputEffectText(input)}`);
+				lines.push(input.outcome === 'none' ? `Your initial message ${id} could not be delivered. ${inputEffectText(input)}`
+					: `Delivery of your initial message ${id} could not be confirmed. ${inputEffectText(input)}`);
 			}
 			if (prompt.message) { lines.push(diagnostic(prompt.message)); }
 		}

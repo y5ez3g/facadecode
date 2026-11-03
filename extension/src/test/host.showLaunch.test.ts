@@ -28,7 +28,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 	const header = [
 		'Agent launch in main',
 		'Working location: /repo',
-		'Computed 2026-10-31 01:02:03 UTC without starting any CLI: the launch a new start would use now, not an observation of a running process. Secret values are shown as <redacted>.'
+		'Computed at 2026-10-31 01:02:03 UTC without starting any CLI. This shows the configuration a new agent would use now, not an observation of a running process. Secret values are <redacted>.'
 	];
 
 	test('nothing, as the Command Palette gives, or null, asks the person; { location_id } alone names a location; anything else fails without a guess', () => {
@@ -46,15 +46,15 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 		const text = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: false }, launches: [codex()], entries: [], problems: [], now });
 		assert.deepStrictEqual(text.split('\n'), [
 			...header,
-			'YOLO: off, from facade.yolo; it applies to agents started from now on',
+			'YOLO: off, from facade.yolo; applies to newly started agents',
 			'',
 			'Codex (codex, facade.codex)',
 			'  Status: available',
-			'  Executable: /bin/codex (found on the PATH of this environment)',
+			'  Executable: /bin/codex (found on PATH)',
 			'  Working directory: /repo',
-			'  Environment layers, lowest precedence first: the extension host\'s environment → facade.codex.launch.environment → every agent run',
+			'  Environment layers, lowest precedence first: the extension host\'s environment → facade.codex.launch.environment → all agents',
 			'    OPENAI_API_KEY=<redacted> (facade.codex.launch.environment)',
-			'    ELECTRON_RUN_AS_NODE removed (every agent run)',
+			'    ELECTRON_RUN_AS_NODE removed (all agents)',
 			'  Arguments, in order:',
 			'    --sandbox',
 			'    workspace-write',
@@ -71,7 +71,7 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 	test('withheld folder trust is shown as not granted, with no claim that a file entry will be written', () => {
 		const launch = codex({ trust: { kind: 'file', target: { file: '/home/ada/.claude.json', keys: ['projects', '/home/ada', 'hasTrustDialogAccepted'], entry: { value: true }, folder: '/home/ada', withheld: 'the home folder covers all projects' } } });
 		const text = launchDocument({ location: { label: 'home', path: '/home/ada' }, yolo: { value: false }, launches: [launch], entries: [], problems: [], now });
-		assert.match(text, /Trust: none given for the home folder, its parents or a filesystem root; the CLI asks in its terminal/);
+		assert.match(text, /Trust: none provided for home folder, parents, or filesystem root; CLI prompts in its terminal/);
 		assert.ok(!text.includes('merged into'));
 	});
 
@@ -86,18 +86,18 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 		const unsafe = sections(codex({ planProblem: { text: 'refused', said: { kind: 'cmd_unsafe_setting', values: ['codex.cmd', 'facade.codex.launch.arguments', '1', '"!"', 'facade.codex'] } }, args: undefined, trust: undefined }));
 		assert.deepStrictEqual([off[1], off.find(line => line.startsWith('  Arguments')), wrong.slice(1, 5), missing.slice(1, 3), unsafe[1]], [
 			'  Status: off; facade.codex.enabled is false, so New Agent does not offer it',
-			'  Arguments: none: this CLI cannot start here as configured',
+			'  Arguments: none; CLI cannot start with current configuration',
 			[
-				'  Status: cannot start until its configuration errors are fixed',
+				'  Status: cannot start until configuration errors are fixed',
 				'  Configuration errors:',
 				'    - facade.codex.launch.arguments must be an array of strings; received object',
-				'  Executable: not resolved until its configuration errors are fixed'
+				'  Executable: unresolved until configuration errors are fixed'
 			],
 			[
-				'  Status: cannot start: codex was not found on the PATH of a terminal in /repo, and facade.codex.path does not name its location',
-				'  Executable: not found: codex was not found on the PATH of a terminal in /repo, and facade.codex.path does not name its location'
+				'  Status: cannot start: codex was not found on PATH in /repo, and facade.codex.path is not configured',
+				'  Executable: not found: codex was not found on PATH in /repo, and facade.codex.path is not configured'
 			],
-			'  Status: cannot start: codex.cmd runs through cmd.exe, which cannot be given facade.codex.launch.arguments[1] safely, as that argument contains "!"; set facade.codex.path to the CLI\'s own program or Node entry point'
+			'  Status: cannot start: codex.cmd runs via cmd.exe, which cannot safely accept facade.codex.launch.arguments[1] containing "!"; set facade.codex.path to the CLI executable or Node entry point'
 		]);
 		assert.strictEqual(launchDocument({ location: { label: 'main', path: '/repo', environment: 'SSH: build' }, yolo: { value: true }, launches: [], entries: [], problems: [], now }).split('\n')[1], 'Working location: /repo (SSH: build)');
 	});
@@ -117,13 +117,13 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			'  YOLO: not applied; a custom CLI starts exactly as configured',
 			'  Sandbox: unknown; Facade does not read a custom CLI\'s configuration',
 			'  Approvals: unknown; Facade does not read a custom CLI\'s configuration',
-			'  Trust: none given by Facade; a custom CLI that asks about the folder asks in its terminal',
+			'  Trust: not granted by Facade; a custom CLI that prompts for folder trust asks in its terminal',
 			''
 		]);
 		const problems = [{ text: 'facade.custom must be an object of custom CLIs by ID; received array', said: { kind: 'custom_type', values: ['facade.custom', 'array'] } }];
 		const wrong = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: true }, launches: [], entries: [], problems, now }).split('\n');
 		assert.deepStrictEqual(wrong.slice(3, 6), [
-			'YOLO: on, from facade.yolo; it applies to agents started from now on',
+			'YOLO: on, from facade.yolo; applies to newly started agents',
 			'Configuration errors:',
 			'  - facade.custom must be an object of custom CLIs by ID; received array'
 		]);
@@ -146,12 +146,12 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 			noFolder.split('\n').slice(3),
 			launchDocument({ gone: 'shop · login-fix', yolo: { value: true }, launches: [], entries: [], problems: [], now })
 		], [
-			'YOLO: facade.yolo must be true or false; received "yes". No agent starts until it is fixed.',
+			'YOLO: facade.yolo must be true or false; received "yes". No agent can start until resolved.',
 			['  Arguments: not shown until facade.yolo is fixed'],
 			['', 'Codex (codex, facade.codex)', '  Status: off; facade.codex.enabled is false, so New Agent does not offer it', '  Configuration errors: none',
 				'', 'Pi (pi, facade.pi)', '  Configuration errors:', '    - facade.pi.enabled must be true or false; received string', ''],
-			'The working location shop · login-fix is no longer available in this window. Run Show Agent Launch again to choose another.\n'
+			'Working location shop · login-fix is no longer available. Run Show Agent Launch again to choose another.\n'
 		]);
-		assert.strictEqual(noFolder.split('\n')[0], 'Show Agent Launch: no folder is open, so there is no working location to start an agent in. Open a folder to see each CLI\'s launch there.');
+		assert.strictEqual(noFolder.split('\n')[0], "No folder is open. Open a folder to view agent launch details.");
 	});
 });

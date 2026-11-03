@@ -318,13 +318,13 @@ without waiting for the grace timer; this is recorded as forced process exit, ne
 
 | ID | Scenario | Expected observation / owner |
 | --- | --- | --- |
-| W01 | Native Git creation, selected checkout/base, occupied destination, invalid branch | Source labels name the selected checkout's branch rather than a subfolder; fixed sibling path and current native Git result; no overwrite; WORKTREES-2 |
+| W01 | Human creation from opened main/linked checkout, subfolder and detached HEAD; branch validation, Copy Path, Back/Escape; programmatic explicit base | Both human entries use their actual source HEAD; standalone accepts a valid branch directly without confirmation/base editing, New Agent waits for CLI choice; title, source and destination previews remain accurate, including after Back; no creation on typing/cancel; programmatic explicit bases still work; fixed sibling destination and no overwrite; WORKTREES-2, 4.3 |
 | W02 | Request worktree without Git/repository/commit; ordinary folder launch | Creation reports actual prerequisite; no initialization/initial commit/advice flow; ordinary agent still launches |
 | W03 | Native copy/link/preparation delayed or failed; close creation before CLI spawn | Existing recognized worktree permits CLI without waiting; canceled launch does not spawn; no Facade setup job monitor/retry |
 | W04 | Delete Worktree on clean, dirty, locked, detached and nesting worktrees with agents; an assumed-unchanged or skipped edit; an agent that does not end; a file written as its agents end | Clean: agents close and end, then `git worktree remove` without `--force`, branch kept; dirty or locked: refused untouched; detached: confirmation says it has no branch; no other deletion, discard confirmation or stop-with-delete entrypoints; WORKTREES-3.2 |
 | W05 | Actually remove workspace folder or externally delete worktree with agents | Immediately close affected pair(s), background cleanup; other locations continue |
 | W06 | Remote temporarily disconnected or Git read fails while location was known | Do not mistake unavailable observation for actual location deletion; no cleanup from that alone |
-| U01 | Narrow/high contrast/reduced motion/non-English/keyboard/screen reader | UX/PANEL checks, no invented completion/extra badges |
+| U01 | Narrow/high contrast/reduced motion/non-English/keyboard/screen reader; same-named filter folders; full card hover; creation substep navigation | UX/PANEL checks; folder count then parent path without changing filtering; uniform localized Label: value hover fields preserve complete text and source clocks; explicit substep titles; no invented completion/extra badges |
 | U02 | Old-page action/reply, unrelated state change before a current-page action, agent rename while menu open | PANEL-3.1 generation isolation and current-target validation; no wrong target or required per-action expected revision |
 | U03 | Human operation error, agent operation error, failed message return, explicit `#human` | Error to initiator; no agent message fallback to human; explicit contact shown in related window even when terminal visible |
 | U04 | Empty filtered panel; a person's start outside the filter; missing Git | Filter remains unchanged; new card follows normal data/order and only matching entries display; no launch-default change |
@@ -634,6 +634,8 @@ for review, not acceptance evidence.
 | 4.1, 4.3 | Handoff, spec-amendment log and independent review |
 
 ## Change log
+
+- 2026-11-02: Added D166 coverage for folder disambiguation, labeled hover, creation titles and direct HEAD-based standalone creation.
 
 - 2026-11-02: Added U14 and recorded panel status regression, native rendering and protocol-conformance evidence with platform limits (D164).
 

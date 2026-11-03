@@ -168,7 +168,7 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			assert.match(text, /^- @Cy #a3 .*\n {2}ended; tools available; input reader none$/m);
 			assert.match(text, /^Agents log, its last 200 lines\n2026-10-31T11:00:00\.000Z line 51 in ~\/app\n/m);
 			assert.ok(text.endsWith('line 250 in ~/app\n') && !text.includes(dir), 'the log\'s end, the home folder written ~');
-			assert.deepStrictEqual(notices, ["Facade's diagnostics are copied. They include your agents' screens, which can show code or keys: read them before you share them."]);
+			assert.deepStrictEqual(notices, ["Facade diagnostics copied. They include agent screens, which may contain sensitive code or keys; review before sharing."]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}

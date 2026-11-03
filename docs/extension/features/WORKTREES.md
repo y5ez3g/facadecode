@@ -63,32 +63,27 @@ validation and configured branch prefix. Unknown repository/commit fails rather 
 acceptance has no effect. In New Agent, choosing the CLI accepts creation and opens the card/terminal immediately;
 errors belong to that launch's initiator.
 
-The standalone view-menu flow selects a workspace folder when needed and uses that repository's main checkout,
-falling back to its first checkout when there is no main checkout. It asks for a branch, then shows branch, base and
-destination before Create Worktree; Change Base... permits an explicit commit, branch or tag. Cancel creates nothing.
-It creates no agent and does not change successful-launch history. The Command Palette does not expose this entry.
-Its branch input uses LIFECYCLE-1.3's placeholder and source prompt, including an explicit base when one was chosen.
+The standalone view-menu flow selects a workspace folder when needed, titled `New Worktree · Select Folder`.
+Its source is the checkout containing that selected folder, including an opened linked worktree or a checkout
+subfolder; never substitute the repository's main checkout. An unavailable source reports the prerequisite rather
+than guessing another checkout. The branch input is titled `New Worktree` and uses LIFECYCLE-1.3's placeholder
+and source prompt. Accepting a valid branch name immediately creates from that source's HEAD. There is no separate
+confirmation page or Change Base control. Typing, checking and cancellation before acceptance create nothing.
+Standalone creation creates no agent and does not change successful-launch history. The Command Palette does not
+expose this entry. Other starting refs are prepared through ordinary Git tools; 1.2 discovers their worktrees.
 
-Both entries preview a valid plan as `{displayPath} (base: {sourceRef})`. Display paths have a 40-grapheme budget:
-first use `~` for the home directory on macOS/Linux, then elide intermediate directories, then shorten long directory
-names in the middle while retaining their beginning and end. Windows keeps its path syntax and root indication.
-Only display text is shortened; creation and copying always use the complete absolute destination. A native Copy Path
-button has tooltip `Copy Path ({fullPath})` and only copies the complete destination. It is available only for the
-current validated input; editing, checking, invalid input and cancellation remove access to an earlier plan's path.
-The standalone confirmation page offers the same button without adding another confirmation step.
-
-For an implicit default HEAD, show the known source branch, or `HEAD` when detached. An explicit branch, tag, commit or
-`HEAD` retains its actual ref text, even when it resolves to the same commit as another ref. Initial and validated
-prompts follow this same source-label rule. A display label does not change the resolved creation commit.
-
-The standalone confirmation placeholder is `Confirm worktree details or change base`; its Create Worktree item keeps
-the full destination as description and uses `Branch {branch} · Base: {base} ({shortCommit})` as detail.
-Change Base... describes `Commit, branch, or tag to start from`. Its input uses
-`Commit, branch, or tag (e.g. HEAD)`, prompt `Base ref for {branch}`, and required-value message
-`Enter a commit, branch, or tag.`
+Both human entries preview a valid plan in the branch input as `{displayPath} (base: {sourceRef})`. Display paths have
+a 40-grapheme budget: first use `~` for the home directory on macOS/Linux, then elide intermediate directories, then
+shorten long directory names in the middle while retaining their beginning and end. Windows keeps its path syntax
+and root indication. Only display text is shortened; creation and copying always use the complete absolute destination.
+A native Copy Path button has tooltip `Copy Path ({fullPath})` and only copies the complete destination. It is available
+only for the current validated input; editing, checking, invalid input and cancellation remove access to an earlier
+plan's path. For the default HEAD, show the known source branch, or `HEAD` when detached. A display label does not
+change the resolved creation commit. Uncommitted edits are not copied as a checkout snapshot.
 
 Agent creation supplies its location, branch and base_ref through start_agent (MCP-2.2); there is no separate
-create-worktree MCP tool. Uncommitted edits are not automatically copied as a checkout snapshot.
+create-worktree MCP tool. The structured command in 4.3 also retains its explicit base_ref argument. The human UI's
+HEAD-only scope does not remove either existing programmatic base-ref contract.
 
 ### 2.2 Destination and creation effects
 
@@ -225,9 +220,8 @@ environment setup completed. New Agent's contextual creation keeps its launch se
 Retired location commands have no hidden registrations. There is no delete command. Existing locations remain usable
 without requesting a new worktree.
 
-Both creation entries use the same reference input in `ui/pickers/location.ts`: branch-prefix lookup, required-value
-messages, asynchronous planning, validated-plan reuse and Back/Escape handling. The standalone base-edit step uses the
-same planner. The preview formatter and Copy Path action are shared too. Each entry owns its surrounding steps and
+Both human creation entries use the same branch input in `ui/pickers/location.ts`: branch-prefix lookup, required-value
+messages, asynchronous HEAD planning, validated-plan reuse and Back/Escape handling. The preview formatter and Copy Path action are shared too. Each entry owns its surrounding steps and
 final creation acceptance.
 
 ## Checks
@@ -242,6 +236,9 @@ final creation acceptance.
 Evidence: [Verification](../engineering/VERIFICATION.md). Git tests use disposable repositories.
 
 ## Change log
+
+- 2026-11-02: Both human creation entries use their actual source HEAD; standalone branch acceptance creates directly,
+  with no confirmation/base-edit page. Added its folder-step title; programmatic base-ref contracts remain (D166).
 
 - 2026-11-01: From the owner-requested release review: 3.2 closes the agents of a worktree's subfolders, refuses a
   worktree holding a folder link where Git would delete through it, and says when Git leaves the folder; 4.2 runs the

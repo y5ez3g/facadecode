@@ -2,7 +2,9 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as path from 'path';
 import * as vscode from 'vscode';
+import { homeRelative } from '../../base/files';
 import { messageOf } from '../../base/errors';
 import type { Catalog, Location, LocationPort, LogPort, WorkspaceFolderInfo } from '../../core/ports';
 import type { PanelFilter } from '../../webview/protocol';
@@ -81,7 +83,7 @@ export function filterItems(model: Model, catalog: Catalog): Item[] {
 		}
 		const holdsFilter = current?.kind === 'location' && listed.some(each => each.filter.id === current.id) && locationsIn(catalog, folder).length > 1;
 		const does = listed.length > 1 || holdsFilter ? { folder } : { filter: whole };
-		return [{ label: plainText(folder.name), description: agentCountText(model.count(whole)), iconPath: folderIconOf(catalog, folder), ...does }];
+		return [{ label: plainText(folder.name), description: `${agentCountText(model.count(whole))} · ${plainText(homeRelative(path.dirname(folder.path)))}`, iconPath: folderIconOf(catalog, folder), ...does }];
 	});
 	return stepOf({ label: vscode.l10n.t("All Locations"), description: agentCountText(model.count(undefined)), iconPath: new vscode.ThemeIcon('list-flat'), filter: 'all' }, [...folders, ...lost]);
 }

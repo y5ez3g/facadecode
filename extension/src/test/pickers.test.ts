@@ -168,7 +168,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 
 	test('shared worktree input copies only the current validated destination without accepting, including out-of-order checks and cancel', async () => {
 		const { Flow } = load<typeof import('../ui/pickers/stepping')>(require.resolve('../ui/pickers/stepping'));
-		const { askWorktreeRef } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+		const { askWorktreeBranch } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
 		const checks = new Map<string, (plan: Awaited<ReturnType<WorktreePort['plan']>>) => void>();
 		const port: WorktreePort = {
 			availability: async () => ({ available: true }),
@@ -178,7 +178,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		};
 		const flow = new Flow();
 		let accepted = false;
-		const result = askWorktreeRef(flow, port, MAIN, { kind: 'branch', title: 'New Agent', back: true }).then(value => { accepted = true; return value; });
+		const result = askWorktreeBranch(flow, port, MAIN, { title: 'New Agent', back: true }).then(value => { accepted = true; return value; });
 		const input = ui.current!;
 		const planFor = (branch: string) => ({ source: MAIN.id, branch, baseRef: 'HEAD', baseCommit: 'abc', destination: `/work/long-parent-folder/repo.worktrees/${branch}` });
 		const type = async (value: string) => { input.type(value); await new Promise(resolve => setTimeout(resolve, 170)); };
@@ -210,7 +210,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 
 	test('LIFECYCLE-1.3: a branch input that starts with git.branchPrefix alone says nothing of it until the person types; the prefix alone names no branch', async () => {
 		const { Flow } = load<typeof import('../ui/pickers/stepping')>(require.resolve('../ui/pickers/stepping'));
-		const { askWorktreeRef } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+		const { askWorktreeBranch } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
 		ui.branchPrefix = 'feat/';
 		const planned: string[] = [];
 		const port: WorktreePort = {
@@ -219,7 +219,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			create: async () => { throw new Error('input must not create'); },
 			remove: async () => undefined
 		};
-		const result = askWorktreeRef(new Flow(), port, MAIN, { kind: 'branch', title: 'New Agent', back: true });
+		const result = askWorktreeBranch(new Flow(), port, MAIN, { title: 'New Agent', back: true });
 		const input = ui.current!;
 		await new Promise(resolve => setTimeout(resolve, 200));
 		const opened = [input.value, input.prompt, input.validationMessage, [...planned]];
@@ -474,7 +474,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const backed = ui.current!.item('Change Name...').description;
 			ui.current!.hide();
 			await done;
-			assert.deepStrictEqual([opened, empty, emptyLabel, renamed, backed, launched, selected], [['text', 'New Agent', 'Ada', undefined, undefined], undefined, ['New Agent ·  · main', ''], 'human', 'human', [], []]);
+			assert.deepStrictEqual([opened, empty, emptyLabel, renamed, backed, launched, selected], [['text', 'New Agent · Change Name', 'Ada', undefined, undefined], undefined, ['New Agent ·  · main', ''], 'human', 'human', [], []]);
 		});
 
 		test('LIFECYCLE-1.3, D63: a lone plain folder is said as a label, never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
@@ -515,7 +515,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.accept('Change Working Location...');
 			await settle();
 			// A folder that opened a repository's main checkout shows as one, a plain folder as a folder
-			const folders = [ui.current!.placeholder, ui.current!.labels(), ui.current!.activeItems.map(item => item.label), ui.current!.items.map(item => (item.iconPath as { id: string } | undefined)?.id), ui.current!.items.map(item => item.description)];
+			const folders = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.activeItems.map(item => item.label), ui.current!.items.map(item => (item.iconPath as { id: string } | undefined)?.id), ui.current!.items.map(item => item.description)];
 			ui.current!.accept('docs');
 			await settle();
 			// docs has one location: that step is skipped, the CLI step again for it
@@ -524,7 +524,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await settle();
 			ui.current!.accept('shop');
 			await settle();
-			const locations = [ui.current!.placeholder, ui.current!.labels(), ui.current!.items.map(item => item.description)];
+			const locations = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), ui.current!.items.map(item => item.description)];
 			ui.current!.back();
 			await settle();
 			const backToFolders = ui.current!.activeItems.map(item => item.label);
@@ -536,9 +536,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([said, folders, there, locations, backToFolders, kept, launched], [
 				['New Agent · Ada · shop · main', 'shop · main', undefined],
 				// Each folder's name, then the folder that holds it
-				['Select a folder', ['shop', 'docs', '', 'Add Folder to Workspace...'], ['shop'], ['repo', 'folder', undefined, 'add'], ['/', '/', undefined, undefined]],
+				['New Agent · Select Folder', 'Select a folder', ['shop', 'docs', '', 'Add Folder to Workspace...'], ['shop'], ['repo', 'folder', undefined, 'add'], ['/', '/', undefined, undefined]],
 				['docs · guide', undefined, [MAIN.id, GUIDE.id]],
-				['Select a branch or worktree', ['main', 'login-fix', '', 'New Worktree...'], ['/main', '/login-fix', undefined, 'from main']],
+				['New Agent · Working Location', 'Select a branch or worktree', ['main', 'login-fix', '', 'New Worktree...'], ['/main', '/login-fix', undefined, 'from main']],
 				['shop'],
 				'docs · guide',
 				[]
@@ -606,7 +606,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.accept('New Worktree...');
 			await settle();
 			const box = ui.current!;
-			const branchInput = [box.kind, box.value, box.placeholder, box.prompt];
+			const branchInput = [box.kind, box.title, box.value, box.placeholder, box.prompt];
 			box.type('  ');
 			const empty = box.validationMessage;
 			box.type('feat/bad name');
@@ -621,7 +621,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([step, branchInput, empty, refused, chosen, planned, created, launched], [
 				[['main', 'app', 'login-fix', '', 'New Worktree...'], ['app'], 'from main'],
-				['text', 'feat/', 'Branch name', 'Starts from main'],
+				['text', 'New Agent · New Worktree', 'feat/', 'Branch name', 'Starts from main'],
 				'Enter a branch name.',
 				['\'feat/bad name\' is not a valid branch name.', false],
 				['New Agent · Ada · feat/login (new)', 'New worktree feat/login from main'],
@@ -731,7 +731,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([unavailable, device, git], [
 				'/main has no commits yet.',
-				'"nul" is a name Windows keeps for a device, so a folder cannot have it.',
+				'"nul" is a reserved device name on Windows.',
 				'Git could not read /main: fatal: bad object'
 			]);
 		});
@@ -810,7 +810,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await settle();
 			ui.current!.press(0, ui.current!.items[0].buttons![0]);
 			await settle();
-			const back = [ui.current!.placeholder, ui.current!.labels(), [...ui.updates]];
+			const back = [ui.current!.title, ui.current!.placeholder, ui.current!.labels(), [...ui.updates]];
 			ui.current!.press(1, ui.current!.items[1].buttons![0]);
 			await settle();
 			ui.answer = 'Remove';
@@ -830,7 +830,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '2 associated agents will be closed.' }, 'Remove'], over: undefined },
 					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '2 associated agents will be closed.' }, 'Remove'], over: undefined }
 				],
-				['Select a folder', ['shop', 'docs', '', 'Add Folder to Workspace...'], []],
+				['New Agent · Select Folder', 'Select a folder', ['shop', 'docs', '', 'Add Folder to Workspace...'], []],
 				[[1, 1]],
 				['Select a branch or worktree', ['main', 'login-fix', '', 'New Worktree...']],
 				'main',
@@ -971,7 +971,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			worktreeProblemText({ problem: { kind: 'worktree_left', name: 'feat', folder: 'C:\\repo.worktrees\\feat' } }, 'English')
 		], [
 			'Cannot delete worktree "feat": it contains a link to another folder (node_modules\\dep), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.',
-			'Deleted worktree "feat", but Git left its folder C:\\repo.worktrees\\feat behind.'
+			'Deleted worktree "feat", but folder C:\\repo.worktrees\\feat was left behind.'
 		]);
 	});
 
@@ -1154,6 +1154,16 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual(item.filter, missing, 'display escaping never changes the saved filter');
 		});
 
+		test('D166: same-name folders keep their selection targets and show count before their distinct parent paths', () => {
+			const { filterItems } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
+			const folders = [SHOP, DOCS].map((folder, index) => ({ ...folder, name: 'app', path: `/projects/team-${index}/app`, uri: `file:///projects/team-${index}/app` }));
+			const locations = folders.map((folder, index) => ({ ...GUIDE, id: `loc-${index}`, folders: [folder] }));
+			const items = filterItems({ count: () => 1, currentFilter: () => undefined }, { folders, locations, pending: false }).filter(item => item.label === 'app');
+			assert.deepStrictEqual(items.map(item => [item.label, item.description, item.filter]), folders.map((folder, index) => [
+				'app', `1 agent · /projects/team-${index}`, { kind: 'folder', id: folder.uri, label: 'app' }
+			]));
+		});
+
 		const counts: Record<string, number> = { all: 5, [MAIN.id]: 2, [LOGIN.id]: 1, [GUIDE.id]: 2, [SHOP.uri]: 3, [DOCS.uri]: 2 };
 		const modelWith = (current?: PanelFilter, more: Record<string, number> = {}) => {
 			const set: (PanelFilter | undefined)[] = [];
@@ -1192,14 +1202,14 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				show(filterItems(modelWith().model, { locations: [], folders: [], pending: false })),
 				show(filterItems(modelWith(undefined, { all: 3, [GUIDE.id]: 0, [DOCS.uri]: 0 }).model, two))
 			], [
-				['All Locations (5 agents)', '----', 'shop (3 agents)', 'docs (2 agents)'],
+				['All Locations (5 agents)', '----', 'shop (3 agents · /)', 'docs (2 agents · /)'],
 				['all', '', 'step', 'folder'],
 				['All Worktrees (3 agents)', '----', 'main (2 agents)', 'login-fix (1 agent)'],
 				['All Worktrees (3 agents)', '----', 'main (2 agents)', 'login-fix (1 agent)'],
 				['All Worktrees (5 agents)', '----', 'main (2 agents)', 'login-fix (1 agent)'],
 				['All Locations (5 agents)', '----', 'guide (2 agents)'],
 				['All Locations (5 agents)'],
-				['All Locations (3 agents)', '----', 'shop (3 agents)']
+				['All Locations (3 agents)', '----', 'shop (3 agents · /)']
 			]);
 		});
 
@@ -1214,10 +1224,10 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				show(filterItems(guide, two)),
 				does(filterItems(guide, two))
 			], [
-				['All Locations (1 agent)', '----', 'shop (1 agent)'],
+				['All Locations (1 agent)', '----', 'shop (1 agent · /)'],
 				['all', '', 'step'],
 				['All Worktrees (1 agent)', '----', 'login-fix (1 agent)'],
-				['All Locations (2 agents)', '----', 'docs (2 agents)'],
+				['All Locations (2 agents)', '----', 'docs (2 agents · /)'],
 				['all', '', 'folder']
 			]);
 		});
@@ -1487,11 +1497,12 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
 				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`,
-				toolsUnavailable: (problem?: string) => `Can't work with other agents: ${problem}`, startedBy: (creator: string) => `Started by ${creator}`,
+				agent: (value: string) => `Agent: ${value}`, title: (value: string) => `Title: ${value}`, prompt: (value: string) => `Prompt: ${value}`, status: (value: string) => `Status: ${value}`, reason: (value: string) => `Reason: ${value}`, tools: (value: string) => `Tools: ${value}`, location: (value: string) => `Location: ${value}`, path: (value: string) => `Path: ${value}`,
+				toolsUnavailable: (problem?: string) => `Can't work with other agents: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`,
 				exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
 			};
 			const done = goToAgent({
-				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }) },
 				agents: { onDidChange: changed.event as never },
 				words,
 				media: { path: '/extension/media' } as never,
@@ -1539,10 +1550,18 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by ${creator}`
+				agent: (value: string) => `Agent: ${value}`,
+				title: (value: string) => `Title: ${value}`,
+				prompt: (value: string) => `Prompt: ${value}`,
+				status: (value: string) => `Status: ${value}`,
+				reason: (value: string) => `Reason: ${value}`,
+				tools: (value: string) => `Tools: ${value}`,
+				location: (value: string) => `Location: ${value}`,
+				path: (value: string) => `Path: ${value}`,
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
 			};
 			const done = goToAgent({
-				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
+				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }) },
 				agents: { onDidChange: changed.event },
 				words,
 				media: { path: '/extension/media' } as never,
@@ -1572,10 +1591,18 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const words = {
 				worktreeFailure: (reason: string) => reason,
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by ${creator}`
+				agent: (value: string) => `Agent: ${value}`,
+				title: (value: string) => `Title: ${value}`,
+				prompt: (value: string) => `Prompt: ${value}`,
+				status: (value: string) => `Status: ${value}`,
+				reason: (value: string) => `Reason: ${value}`,
+				tools: (value: string) => `Tools: ${value}`,
+				location: (value: string) => `Location: ${value}`,
+				path: (value: string) => `Path: ${value}`,
+				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
 			};
 			const done = goToAgent({
-				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', full: 'main' }) },
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }) },
 				agents: { onDidChange: new TestEmitter<void>().event as never },
 				words,
 				media: { path: '/extension/media' } as never,

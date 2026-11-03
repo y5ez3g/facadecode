@@ -626,9 +626,9 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		await settle();
 		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, awaitingActivity: true });
 		assert.deepStrictEqual([world.agents.get(id)?.lifecycle, world.agents.get(id)?.awaitingActivity, world.agents.get(id)?.activityReason], ['running', true, undefined]);
-		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, reason: 'The CLI has not reported its activity' });
+		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, reason: "CLI has not reported activity" });
 		const facts = world.agents.get(id)!;
-		assert.deepStrictEqual(['awaitingActivity' in facts, facts.activityReason], [false, 'The CLI has not reported its activity']);
+		assert.deepStrictEqual(['awaitingActivity' in facts, facts.activityReason], [false, "CLI has not reported activity"]);
 	});
 
 	test('confirmed location removal closes the agents there; other locations continue (W05, RULES-2.4)', async () => {

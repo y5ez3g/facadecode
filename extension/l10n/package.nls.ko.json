@@ -35,7 +35,7 @@
 	"config.collaboration.waitSeconds": "에이전트가 다른 에이전트의 시작 또는 중지를 기다리는 시간(초)입니다. 이 시간이 지나면 에이전트는 나중에 메시지로 결과를 받습니다.",
 	"command.filter": "작업 위치별 필터링...",
 	"command.clearFilter": "필터 지우기",
-	"command.showAgentLaunch": "Agent 시작 구성 표시",
+	"command.showAgentLaunch": "Agent 시작 구성 표시...",
 	"command.showAgentsLog": "Agent 로그 표시",
 	"command.filterByLocation": "이 작업 위치로 필터링",
 	"command.filterByFolder": "이 폴더로 필터링",

@@ -31,7 +31,7 @@ location item's description shows the full current working location, including `
 for a proposed worktree, and its environment when that is not this machine (D67). The name item's description shows the
 full current name. These items edit the values; they are not the only place the current choices appear. A person can
 accept the suggested name or leave it empty; an empty name keeps its title segment (`New Agent ·  · main`). Change Name
-prefills the current name without a custom prompt; the editor supplies the Enter/Escape instructions.
+uses the title `New Agent · Change Name` and prefills the current name without a custom prompt; the editor supplies the Enter/Escape instructions.
 Invalid configuration shows its reason. With no usable CLI, `Configure Agents...` has the detail
 `Install a supported CLI in this environment, or configure its path.` With no folder, use PANEL-1.2's
 Open Folder prerequisite picker and its wording instead of the CLI step.
@@ -63,6 +63,10 @@ and adds New Worktree when its check completes. When nothing can be chosen - one
 folder without Git - the picker shows the location as a label, not as an action that does nothing. Retain
 Back/selections; Escape cancels the launch. A proposed new branch/location is only created when the person accepts a
 CLI. There is no Git initialization or initial-commit path.
+
+The creation substeps use `New Agent · Select Folder`, `New Agent · Working Location`, and
+`New Agent · New Worktree` as titles. A plain folder is still a working location. The main CLI picker retains
+1.1's name/location context. Titles do not add steps or change Back/Escape behavior.
 
 The folder step uses `Select a folder`. The repository location step uses `Select a branch or worktree`, without a
 folder-name suffix. A location picker without a checkout uses `Select a working location`.
@@ -287,6 +291,8 @@ integration evidence, not a fact established by this document.
 See [Verification](../engineering/VERIFICATION.md). Runtime results remain unverified.
 
 ## Change log
+
+- 2026-11-02: Added owner-approved creation substep titles while retaining the main picker and deferred worktree creation (D166).
 
 - 2026-11-02: D161 keeps both agent pickers on one line, gives name/title their separate priorities, retains equal fields, and generates missing names only on manual Resume.
 - 2026-11-02: Keep terminal tab logos visible across themes and restoration through contributed native icons (D159).

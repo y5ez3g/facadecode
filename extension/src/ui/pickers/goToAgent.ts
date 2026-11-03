@@ -46,7 +46,7 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	const close: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Close Agent") };
 	const picker = vscode.window.createQuickPick<Item>();
 	picker.title = vscode.l10n.t("Go to Agent");
-	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location or ID");
+	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location, or ID");
 	picker.matchOnDescription = true;
 	const itemOf = (facts: RunFacts): Item => {
 		const item: Item = {

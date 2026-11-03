@@ -49,6 +49,14 @@ export interface UiDeps {
 /** The words a card is said in, in the window's language (PANEL-1.4). */
 function cardWords(): CardWords {
 	return {
+		agent: value => vscode.l10n.t("Agent: {0}", value),
+		title: value => vscode.l10n.t("Title: {0}", value),
+		prompt: value => vscode.l10n.t("Prompt: {0}", value),
+		status: value => vscode.l10n.t("Status: {0}", value),
+		reason: value => vscode.l10n.t("Reason: {0}", value),
+		tools: value => vscode.l10n.t("Tools: {0}", value),
+		location: value => vscode.l10n.t("Location: {0}", value),
+		path: value => vscode.l10n.t("Path: {0}", value),
 		worktreeFailure: withWorktreeEffects,
 		pinned: vscode.l10n.t("Pinned"),
 		starting: vscode.l10n.t("Starting"),
@@ -77,16 +85,16 @@ function cardWords(): CardWords {
 			? vscode.l10n.t("Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file")
 			: problem === 'conflict' && file
 				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
-				? vscode.l10n.t("Cannot work with other agents: move or rename {0} in this folder", file)
+				? vscode.l10n.t("Cannot work with other agents: move or rename {0}", file)
 				: problem === 'variable' && file
 					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
-					? vscode.l10n.t("Cannot work with other agents: Facade could not read your {0} setting", file)
+					? vscode.l10n.t("Cannot work with other agents: could not read {0}", file)
 					: problem === 'disconnected'
 						// The agent's CLI stopped the Facade tools it had started with, or they ended on their own
 						? vscode.l10n.t("Cannot work with other agents: its Facade tools stopped")
-						: vscode.l10n.t("Cannot work with other agents: Facade could not create the files it needs"),
+						: vscode.l10n.t("Cannot work with other agents: could not create files"),
 		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
-		startedBy: creator => vscode.l10n.t("Started by {0}", creator),
+		startedBy: creator => vscode.l10n.t("Started by: {0}", creator),
 		locale: vscode.env.language
 	};
 }

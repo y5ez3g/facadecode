@@ -96,7 +96,7 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 
 		const [warning] = editor.notices;
 		assert.deepStrictEqual([warning.kind, warning.actions], ['warning', ['Show Window Component']]);
-		assert.match(warning.text, /needs its Window Component on this computer.*Agents that are already running keep running\./);
+		assert.match(warning.text, /requires its Window Component.*Active agents continue running\./);
 		warning.answer('Show Window Component');
 		await tick();
 		assert.deepStrictEqual(editor.executed, ['extension.open']);

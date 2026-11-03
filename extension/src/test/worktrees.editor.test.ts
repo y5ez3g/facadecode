@@ -192,22 +192,25 @@ const quiet = { event: () => undefined };
 
 suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () => {
 
-	test('Copy Path in the standalone confirmation copies the full destination without creating or leaving the step', async () => {
+	test('standalone branch preview copies the full path without creating, and cancellation leaves no worktree', async () => {
 		const editor = fakeEditor();
 		const worktrees = fakeWorktrees();
 		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
 		const running = editor.handlers.get('facade.newWorktree')!();
 		const branch = await editor.next();
-		branch.value = 'me/feat'; branch.accepted.fire();
-		const confirm = await editor.next();
-		const copy = confirm.buttons.find(button => (button as { tooltip?: string }).tooltip?.startsWith('Copy Path ('));
+		branch.value = 'me/feat'; branch.changed.fire(branch.value);
+		await new Promise(resolve => setTimeout(resolve, 180));
+		const copy = branch.buttons.find(button => (button as { tooltip?: string }).tooltip?.startsWith('Copy Path ('));
 		assert.ok(copy);
-		confirm.button.fire(copy); await settled();
+		assert.match(branch.prompt!, /feat \(base: main\)$/);
+		branch.button.fire(copy); await settled();
 		assert.deepStrictEqual(editor.clipboard, ['/w/repo.worktrees/feat']);
-		assert.strictEqual(confirm.hidden, false);
+		assert.strictEqual(branch.hidden, false);
 		assert.strictEqual(worktrees.calls.some(call => call[0] === 'create'), false);
-		confirm.hide(); await running;
+		branch.hide(); await running;
+		assert.strictEqual(worktrees.calls.some(call => call[0] === 'create'), false);
 	});
+
 
 	test('{location_id, branch} creates at once from that location\'s HEAD and answers what was made; no notification', async () => {
 		const editor = fakeEditor();
@@ -253,14 +256,14 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 	test('a failure goes to the person with what it actually left, kept', async () => {
 		const editor = fakeEditor();
 		const errors: string[] = [];
-		const worktrees = fakeWorktrees({ create: async () => { throw new editor.ports.WorktreeError('Git could not create the worktree: fatal: disk full.', 'creation_failed', { branchCreated: true, destinationCreated: '/w/repo.worktrees/feat' }); } });
+		const worktrees = fakeWorktrees({ create: async () => { throw new editor.ports.WorktreeError('Git reported: fatal: disk full.', 'creation_failed', { branchCreated: true, destinationCreated: '/w/repo.worktrees/feat' }); } });
 		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: text => errors.push(text), log: quiet });
 
 		assert.strictEqual(await editor.handlers.get('facade.newWorktree')!({ location_id: REPO.id, branch: 'feat', base_ref: 'main' }), undefined);
-		assert.deepStrictEqual(errors, ['Could not create worktree: Git could not create the worktree: fatal: disk full. Branch feat and folder /w/repo.worktrees/feat were created and kept.']);
+		assert.deepStrictEqual(errors, ['Could not create worktree: Git reported: fatal: disk full. Branch feat and folder /w/repo.worktrees/feat were created and kept.']);
 	});
 
-	test('without arguments in a window of one folder: no folder step; the branch, prefilled with git.branchPrefix and planned as it is typed, then branch, base and destination shown before anything is made', async () => {
+	test('without arguments in a window of one folder: no folder step; the branch, prefilled with git.branchPrefix and planned as it is typed, Enter creates directly from HEAD after validation', async () => {
 		const editor = fakeEditor();
 		const worktrees = fakeWorktrees();
 		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
@@ -273,13 +276,8 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		assert.match(branch.validationMessage ?? '', /Git rejects "me\/a\.\.b"/);
 		branch.value = 'me/feat';
 		branch.accepted.fire();
-		const confirm = await editor.next();
-
-		assert.deepStrictEqual(confirm.items.map(item => item.label), ['Create Worktree', 'Change Base...']);
-		assert.ok(!worktrees.calls.some(call => call[0] === 'create'));
-		confirm.activeItems = [confirm.items[0]];
-		confirm.accepted.fire();
 		assert.deepStrictEqual(await running, { location_id: MADE.id, destination: MADE.path, branch: 'me/feat' });
+		assert.strictEqual(editor.shown.length, 1, 'no confirmation or base picker');
 		assert.deepStrictEqual(worktrees.calls.filter(call => call[0] === 'create'), [['create', 'me/feat', 'HEAD', '/w/repo.worktrees/feat']]);
 	});
 
@@ -322,47 +320,50 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		(await editor.next()).choose('repo');
 		(await editor.next()).hide();
 		assert.strictEqual(await atBranch, undefined);
-		const atConfirm = editor.handlers.get('facade.newWorktree')!();
-		(await editor.next()).choose('repo');
-		const branch = await editor.next();
-		branch.value = 'me/feat';
-		branch.accepted.fire();
-		(await editor.next()).hide();
 
-		assert.strictEqual(await atConfirm, undefined);
 		assert.deepStrictEqual([worktrees.calls.filter(call => call[0] === 'create'), errors], [[], []]);
 	});
 
-	test('WORKTREES-2.1: a folder\'s repository is its source by its main checkout, whatever checkout comes first; the base can be changed before anything is made', async () => {
+	test('standalone creation uses the opened main, linked, subfolder or detached checkout, never a different main checkout', async () => {
+		for (const target of [REPO, { ...LINKED, opened: true },
+			{ ...LINKED, id: 'loc-sub', path: LINKED.path + '/src', uri: LINKED.uri + '/src', opened: true },
+			{ ...LINKED, branch: undefined, detached: true, opened: true }]) {
+			const editor = fakeEditor();
+			const worktrees = fakeWorktrees();
+			const folder = folderAt(0, target.path);
+			const source = { ...target, folders: [folder] };
+			const other = { ...(target.id === REPO.id ? LINKED : REPO), folders: [folder], opened: true };
+			editor.commands.registerWorktreeCommands({ locations: catalogOf([folder], other, source), worktrees, agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
+			const running = editor.handlers.get('facade.newWorktree')!();
+			const branch = await editor.next();
+			assert.strictEqual(branch.prompt, `Starts from ${source.branch ?? 'HEAD'}`);
+			branch.value = 'me/feat'; branch.accepted.fire();
+			await running;
+			assert.strictEqual(editor.shown.length, 1);
+			assert.deepStrictEqual(worktrees.calls, [['availability', source.id], ['plan', source.id, 'me/feat', undefined], ['create', 'me/feat', 'HEAD', '/w/repo.worktrees/feat']]);
+		}
+	});
+
+	test('a missing opened location is not replaced with an associated checkout', async () => {
 		const editor = fakeEditor();
 		const worktrees = fakeWorktrees();
-		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], LINKED, REPO), worktrees, agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
-		const running = editor.handlers.get('facade.newWorktree')!();
-		const branch = await editor.next();
-		const first = [branch.items.length, branch.value, branch.buttons.length];
-		branch.value = 'me/feat';
-		branch.accepted.fire();
-		let confirm = await editor.next();
-		confirm.activeItems = [confirm.items[1]];
-		confirm.accepted.fire();
-		const base = await editor.next();
-		const offered = [base.value, base.buttons.length];
-		base.value = 'release/1';
-		base.accepted.fire();
-		confirm = await editor.next();
-		const changed = confirm.items[1].description;
-		confirm.button.fire(confirm.buttons[0]);
-		const branchAgain = await editor.next();
-		const sourcePrompt = branchAgain.prompt;
-		branchAgain.accepted.fire();
-		confirm = await editor.next();
-		confirm.activeItems = [confirm.items[0]];
-		confirm.accepted.fire();
-		await running;
-
-		assert.deepStrictEqual([first, offered, changed, sourcePrompt, confirm.hidden], [[0, 'me/', 0], ['HEAD', 1], 'release/1', 'Starts from release/1', true]);
-		assert.deepStrictEqual(worktrees.calls, [['availability', REPO.id], ['plan', REPO.id, 'me/feat', undefined], ['plan', REPO.id, 'me/feat', 'release/1'], ['plan', REPO.id, 'me/feat', 'release/1'], ['create', 'me/feat', 'release/1', '/w/repo.worktrees/feat']]);
+		const errors: string[] = [];
+		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], LINKED), worktrees, agents: NO_AGENTS, notifyError: text => errors.push(text), log: quiet });
+		assert.strictEqual(await editor.handlers.get('facade.newWorktree')!(), undefined);
+		assert.strictEqual(editor.shown.length, 0);
+		assert.strictEqual(errors.length, 1);
+		assert.deepStrictEqual(worktrees.calls, []);
 	});
+
+	test('the structured command still accepts an explicit base ref', async () => {
+		const editor = fakeEditor();
+		const worktrees = fakeWorktrees();
+		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
+		await editor.handlers.get('facade.newWorktree')!({ location_id: REPO.id, branch: 'me/feat', base_ref: 'release/v1' });
+		assert.deepStrictEqual(worktrees.calls, [['plan', REPO.id, 'me/feat', 'release/v1'], ['create', 'me/feat', 'release/v1', '/w/repo.worktrees/feat']]);
+		assert.strictEqual(editor.shown.length, 0);
+	});
+
 
 	test('WORKTREES-2.1: one folder that is no Git repository ends New Worktree at once with why, the folder said with ~, and asks nothing', async () => {
 		const editor = fakeEditor();
@@ -387,7 +388,7 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		await running;
 
 		assert.deepStrictEqual(shown, {
-			title: 'New Worktree', placeholder: 'Select a folder', back: 0, active: 'repo',
+			title: 'New Worktree · Select Folder', placeholder: 'Select a folder', back: 0, active: 'repo',
 			items: [
 				['repo', '/w', undefined, 'repo', ['Remove Folder from Workspace']],
 				['notes', process.platform === 'win32' ? os.homedir() : '~', undefined, 'folder', ['Remove Folder from Workspace']],
@@ -480,7 +481,7 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		await editor.handlers.get('facade.newWorktree')!();
 		await editor.handlers.get('facade.newWorktree')!({ location_id: REPO.id, branch: 'feat' });
 
-		assert.deepStrictEqual(errors, ['New Worktree is unavailable: This editor\'s Git extension cannot create worktrees.', 'Could not create worktree: This editor\'s Git extension cannot create worktrees.']);
+		assert.deepStrictEqual(errors, ['New Worktree is unavailable: Git extension cannot create worktrees.', 'Could not create worktree: Git extension cannot create worktrees.']);
 	});
 });
 
