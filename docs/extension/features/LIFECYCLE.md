@@ -137,10 +137,12 @@ copy button copies `@name #aN` without a toast; there is no Copy Agent Reference
 
 Human New shows the terminal; agent creation preserves focus. Card/Go to Agent reveals the same terminal without
 launching another. The tab shows only the agent name beside the CLI's theme-appropriate logo; custom CLIs use a terminal
-icon (D130). Built-in tab logos use contributed native icons, with their brand colors and theme foreground for monochrome
+icon (D130). While its card's dot is green a spinner's frame turns between the logo and the name, as Codex draws its own,
+for every CLI; reduced motion keeps one frame still (D185). Built-in tab logos use contributed native icons, with their brand colors and theme foreground for monochrome
 marks. They remain recognizable in light, dark and high-contrast themes, including after a theme change or terminal
 restoration (D159). This uses the public icon API; it does not patch editor styles or change the person's theme.
-CLI titles and status remain in PANEL-1.4's second line, never appended to the tab name. Do not add a name
+CLI titles and other status remain in PANEL-1.4's second line, never appended to the tab name; the spinner's frames are
+never taken for a rename. Do not add a name
 length limit or change the editor's tab-width settings. Native tab renames synchronize the complete display name when
 valid, without removing text that resembles a CLI title. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
@@ -243,8 +245,11 @@ sync follows `tabGroups` pin changes on that agent's tab. Facade-to-native sync 
 `workbench.action.pinEditor` or `workbench.action.unpinEditor` command when that agent's tab next becomes the active
 editor, never stealing focus or revealing a tab just to pin it (ARCHITECTURE-1.2). Ordinary files and external
 terminals do not become agents. Match the terminal/run exactly without relying on names or stealing focus.
-The adapter must identify and resume the exact session. If a CLI changes that session, update the Pin only after its
-new identity is known; never substitute a folder's latest conversation.
+The adapter must identify and resume the exact session. A run whose CLI does can be pinned from its start: a conversation
+Facade resumed is saved already (D180), and a new one can be pinned before its CLI names it - before its first message for
+CLIs that name it then. Such a Pin takes the conversation the CLI names; a window opened before that starts a new
+conversation of the same CLI with the Pin's name and location in its place (D182). If a CLI changes that session, update
+the Pin only after its new identity is known; never substitute a folder's latest conversation.
 Keep the run's link to its saved Pin through a session switch even when saving the new identity fails. Report that failure;
 reattachment reconciles the linked Pin before restoration, so a stale saved key cannot start a second, old conversation.
 Pin and Unpin are acknowledged only after durable storage succeeds. If a normal exit cannot remove its Pin, retain an ended
@@ -303,6 +308,9 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 
 ## Change log
 
+- 2026-11-02: 2.2 turns a spinner between the logo and the name on a busy agent's tab (D185).
+- 2026-11-02: 3.4 lets a resumed conversation be pinned from its start (D180), and a new agent before its CLI names its
+  conversation, the Pin taking the one it names or restoring a new one until then (D182).
 - 2026-11-02: 3.1 closes a live agent whose tab the person closed by itself without asking, and asks only for tabs closed
   together with others (D172); 2.2 keeps a click's release whole where the editor could not measure it (D170) and records
   that a dropped file needs Shift (D171); 2.1 drops Copy Agent Reference for Go to Agent's copy button (D174); 3.2 reads

@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { MessageRecord } from '../../core/messagePorts';
 import type { Card, PanelState } from '../../webview/protocol';
+import { unspun } from '../../base/tabSpinner';
 
 const REAL = process.env.FACADE_IT_REAL;
 const YOLO = process.env.FACADE_IT_REAL_YOLO === 'on' ? 'on' : 'off';
@@ -118,7 +119,7 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 			}
 			return card;
 		}, 60_000);
-		const terminal = await until('its terminal', () => vscode.window.terminals.find(each => each.name.startsWith(first.name)), 30_000);
+		const terminal = await until('its terminal', () => vscode.window.terminals.find(each => unspun(each.name).startsWith(first.name)), 30_000);
 		if (REAL === 'pi') {
 			// Pi mounts its editor before downloading managed fd/rg, but refuses Enter until startup finishes.
 			// Its session MCP connection follows that setup. Do not mistake an editable composer for readiness.

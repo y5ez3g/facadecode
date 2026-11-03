@@ -2,7 +2,9 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { titleText } from '../base/text';
 import type { Catalog, Location, RunFacts, ToolsProblem, WorktreeCreationEffects } from '../core/ports';
+import { dotOf } from '../core/status';
 import type { AvatarColor, Card, CardMenu } from '../webview/protocol';
 
 /** The words a card is said in, in the person's language. */
@@ -85,45 +87,40 @@ export interface CardStatus {
 }
 
 /**
- * What is known of a run, in RULES-3.2's precedence and PANEL-1.4's second-line priority: an unresolved error is red with its
- * reason; a native blocker is yellow with its kind and the CLI's words, red beside unknown activity; startup - until its CLI
- * first shows its activity (CLIS-2.3, D81) - is green with its stage. Work is green and reliable idle grey, showing the CLI title
- * or a fallback; without reliable activity the dot is red and the second line says why. Never a completion claim.
+ * What a card says of its run (RULES-3.2, PANEL-1.4, D183, D184): its dot by {@link dotOf}; its second line the last message sent
+ * to it - before any, its CLI title's words, else its startup stage or state - unless the dot is red, when it says why, or the CLI
+ * waits for the person, when it says what for. The state in words is the hover's. Never a completion claim.
  */
 export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
+	const dot = dotOf(facts);
 	if (facts.error || facts.lifecycle === 'ended') {
 		const reason = errorReasonOf(facts, words);
 		const text = words.error(reason);
-		return { dot: 'error', stateText: text, line: text };
+		return { dot, stateText: text, line: text };
 	}
 	if (facts.blocker) {
 		const kind = facts.blocker.kind === 'permission' ? words.needsPermission : facts.blocker.kind === 'auth' ? words.needsSignIn
 			: facts.blocker.kind === 'question' ? words.hasQuestion : words.needsAttention;
 		const detail = facts.blocker.text?.trim();
 		const said = detail && detail !== kind ? `${kind} · ${detail}` : kind;
-		if ((facts.reporting && facts.activity !== 'unknown') || facts.lifecycle === 'starting' || facts.awaitingActivity) {
-			return { dot: 'blocked', stateText: kind, line: said, ...detail && detail !== kind ? { reason: detail } : {} };
-		}
-		// Unknown activity stays red; the blocker leads and the status explanation is kept (PANEL-1.4)
-		const unknown = facts.activityReason?.trim() || words.activityUnavailable;
-		return { dot: 'error', stateText: words.activityUnavailable, line: `${said} · ${unknown}`, reason: said };
+		return { dot, stateText: kind, line: said, ...detail && detail !== kind ? { reason: detail } : {} };
 	}
-	// Facade tools that could not be given come before the startup stage and the title: the agent works on without them (PANEL-1.4)
-	const tools = facts.tools === 'unavailable' ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile) : undefined;
-	if (facts.lifecycle === 'starting' || facts.awaitingActivity) {
-		return { dot: 'working', stateText: words.starting, line: tools ?? (facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName)) };
+	// Facade tools it cannot use, or a start that did not become ready: red, the second line saying why (D183)
+	if (dot === 'error') {
+		const why = facts.tools === 'unavailable' ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile)
+			: facts.tools === 'connecting' ? words.toolsConnecting : facts.activityReason?.trim() || words.activityUnavailable;
+		return { dot, stateText: why, line: why };
 	}
-	const connection = tools ?? (facts.tools === 'connecting' ? words.toolsConnecting : undefined);
-	// An agent another agent started is described by its first task until its CLI gives a title (PANEL-1.4)
-	const described = facts.title || facts.promptLine;
-	if (facts.reporting && facts.activity === 'working') {
-		return { dot: 'working', stateText: words.working, line: connection ?? (described || words.working) };
-	}
-	if (facts.reporting && facts.activity === 'not_working') {
-		return { dot: 'idle', stateText: words.notWorking, line: connection ?? (described || words.notWorking) };
-	}
-	const reason = facts.activityReason?.trim() || words.activityUnavailable;
-	return { dot: 'error', stateText: words.activityUnavailable, line: reason === words.activityUnavailable ? reason : `${words.activityUnavailable} · ${reason}`, ...(reason !== words.activityUnavailable ? { reason } : {}) };
+	const starting = facts.lifecycle === 'starting' || !!facts.awaitingActivity;
+	const working = facts.lifecycle === 'running' && facts.reporting && facts.activity === 'working';
+	const idle = facts.reporting && facts.activity === 'not_working';
+	const stateText = working ? words.working : starting ? words.starting : idle ? words.notWorking : words.activityUnavailable;
+	const reason = !working && !starting && !idle ? facts.activityReason?.trim() : undefined;
+	// The last message sent to it - the task it was started with being the first - else its CLI's title without the state symbol
+	// before its words (D184)
+	const conversation = facts.said || facts.promptLine || titleText(facts.title);
+	const fallback = working ? words.working : starting ? (facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName)) : stateText;
+	return { dot, stateText, line: conversation || fallback, ...reason && reason !== stateText ? { reason } : {} };
 }
 
 /** Why a run is in error: an abnormal exit in the person's words, from how it ended (RULES-3.3); any other reason as it was given. */

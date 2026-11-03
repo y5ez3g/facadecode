@@ -11,6 +11,8 @@ import * as vscode from 'vscode';
 import { piSessionFolderName } from '../../clis/history/pi';
 import { SUGGESTED_NAMES } from '../../core/names';
 import type { PanelState } from '../../webview/protocol';
+import { unspun } from '../../base/tabSpinner';
+import { titleText } from '../../base/text';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 const CLI = process.env.FACADE_IT_CLI ?? 'claude';
@@ -138,7 +140,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 
 	test('New Agent with the preselected CLI creates the card and terminal at once, and its CLI runs in the folder', async () => {
 		const card = await newCard();
-		const terminal = vscode.window.terminals.find(each => each.name === card.name);
+		const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
 		assert.ok(terminal, 'its editor terminal shows only the agent name');
 		const alias = card.tooltip.join(' ').match(/#a\d+/)?.[0];
 		assert.ok(alias, 'the card shows its short ID');
@@ -183,26 +185,30 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
 		}
 		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
-		// its screen showed its empty input: the dot says not working (CLIS-2.3, D80). Until then it was starting, never red (D81)
+		// its screen showed its empty input: the card says not working, without a dot (CLIS-2.3, D80, D183). Until then it was
+		// starting, never red (D81)
 		const dots = new Set([card.dot]);
 		const reported = await until('its idle report', async () => {
 			const now = (await state()).cards.find(each => each.runId === card.runId);
 			if (now) {
 				dots.add(now.dot);
 			}
-			return now?.dot === 'idle' ? now : undefined;
+			return now?.stateText === 'Idle' ? now : undefined;
 		});
-		assert.strictEqual(reported.dot, 'idle');
+		assert.strictEqual(reported.dot, 'none');
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
 			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
-			await until('the CLI title in the panel', async () => (await state()).cards.find(each => each.runId === card.runId)?.line === title ? true : undefined);
+			// Before any message, the second line says the title's words, the state symbol before them left out; the hover keeps the
+			// title as the CLI set it (PANEL-1.4, D160, D184)
+			await until('the CLI title in the hover', async () => (await state()).cards.find(each => each.runId === card.runId)?.tooltip.some(line => line.includes(title)) ? true : undefined);
 			// The activity report follows the OSC title in the same write cycle; it must not replace it a moment later.
 			await new Promise(resolve => setTimeout(resolve, 250));
-			assert.strictEqual((await state()).cards.find(each => each.runId === card.runId)?.line, title);
-			assert.strictEqual(terminal.name, card.name, 'CLI titles never change the native terminal name');
+			const shown = (await state()).cards.find(each => each.runId === card.runId);
+			assert.deepStrictEqual([shown?.line, shown?.tooltip.some(line => line.includes(title))], [titleText(title), true]);
+			assert.strictEqual(unspun(terminal.name), card.name, 'CLI titles never change the native terminal name');
 			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
-				.some(tab => tab.input instanceof vscode.TabInputTerminal && tab.label === card.name) ? true : undefined);
+				.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name) ? true : undefined);
 		}
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
@@ -262,12 +268,12 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		await until('the native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined);
 		await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 		await until('the pinned card', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
-		await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label.startsWith(card.name) && tab.isPinned) ? true : undefined).catch(error => {
+		await until('the pinned native tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && tab.isPinned) ? true : undefined).catch(error => {
 			console.error('Native Pin state', JSON.stringify({ terminal: vscode.window.activeTerminal?.name, tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
 			throw error;
 		});
 		await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
-		await until('the unpinned card and tab', async () => !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => tab.label.startsWith(card.name) && !tab.isPinned) ? true : undefined);
+		await until('the unpinned card and tab', async () => !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && !tab.isPinned) ? true : undefined);
 		// A native action saves the same restoration intent.
 		await vscode.commands.executeCommand('workbench.action.pinEditor');
 		await until('the card following a native Pin', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);

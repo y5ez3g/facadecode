@@ -6,7 +6,7 @@ import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
 import type { CardMenu, PanelFilter, PanelState } from '../webview/protocol';
 import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel } from './cardView';
-import { arranged, atEnd, moved, PanelPrefs, withNew } from './order';
+import { arranged, atEnd, atStart, moved, PanelPrefs, withNew } from './order';
 
 /** Reported text and activity reach the page at most this often; lifecycle changes and errors go at once (PANEL-3.1, UX-5.2). */
 export const REPORT_COALESCE_MS = 300;
@@ -57,7 +57,7 @@ export interface SelectedAgent {
 	readonly run: RunId;
 	readonly ended: boolean;
 	readonly pinned?: boolean;
-	readonly resumable?: boolean;
+	readonly pinnable?: boolean;
 }
 
 /**
@@ -212,8 +212,8 @@ export class PanelModel implements Disposable {
 	private changed(change: RunChange): void {
 		const pin = this.deps.agents.get(change.run)?.pin;
 		if (change.kind !== 'removed' && this.pinByRun.get(change.run) !== pin) {
-			// Pinned or unpinned, it goes last in the area it enters (PANEL-2.1, D173)
-			this.setOrder(atEnd(this.order, change.run));
+			// Pinned, it goes last among the Pins; unpinned, first among the other cards, just below the Pins it left (PANEL-2.1, D181)
+			this.setOrder(pin ? atEnd(this.order, change.run) : atStart(this.order, change.run));
 		}
 		if (change.kind === 'removed') { this.pinByRun.delete(change.run); } else { this.pinByRun.set(change.run, pin); }
 		if (change.kind === 'added') {
@@ -338,7 +338,7 @@ export class PanelModel implements Disposable {
 			const facts = byId.get(id)!;
 			const withinArea = (other: string) => visible(other) && !!byId.get(other)?.pin === !!facts.pin;
 			const menu: CardMenu = {
-				...(facts.resumable && !facts.pin ? { pin: true } : {}),
+				...(facts.pinnable && !facts.pin ? { pin: true } : {}),
 				...(facts.pin ? { unpin: true } : {}),
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
 				moveDown: moved(ids, id, 1, withinArea) !== undefined
@@ -360,7 +360,7 @@ export class PanelModel implements Disposable {
 				capabilities: { remote: this.deps.remote },
 				...(exited.length ? { exited } : {})
 			},
-			...(selected ? { selection: { run: selected.id, ended: selected.lifecycle === 'ended', ...(selected.pin ? { pinned: true } : {}), ...(selected.resumable ? { resumable: true } : {}) } } : {})
+			...(selected ? { selection: { run: selected.id, ended: selected.lifecycle === 'ended', ...(selected.pin ? { pinned: true } : {}), ...(selected.pinnable ? { pinnable: true } : {}) } } : {})
 		};
 	}
 

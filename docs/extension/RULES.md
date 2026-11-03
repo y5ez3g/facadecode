@@ -269,15 +269,18 @@ missing source time stays absent. Lost execution connections mark retained activ
 
 ### 3.2 The dot says only what is known
 
-**Starting or working is green, idle is grey, a native blocker is yellow, and an error or unavailable reliable status is red.**
+**Busy is green and a problem is red; anything else shows no dot.**
 
-An unresolved error takes precedence. Without such an error, observed work/startup is green - startup lasting until the
-CLI first shows its activity, within CLIS-2.3's bound. Observed not-working with no blocker is grey; native permission,
-answer and sign-in blockers are yellow; a reported blocker without a recognized kind stays a generic blocker, never idle.
-Unknown activity remains red, including beside a known blocker, and the second
-line explains the unavailable status. Grey requires reliable idle evidence; it never stands for an unknown state (D127).
+Green and breathing while the agent is busy: starting - until its CLI first shows its activity and its injected Facade
+tools connect, within CLIS-2.3's bound - or working. Red where something is wrong: a failed launch, an abnormal exit, a
+lost connection to its process, an error its CLI reported, Facade tools it cannot use - injected tools that failed or went
+away - or a start not ready within its bound. Red comes before green; a native permission, answer or sign-in question
+waiting for the person shows no dot whatever else holds, as the second line says it (PANEL-1.4). Idle, a reported blocker
+without a recognized kind and unknown activity show no dot either; the hover and accessible label say which (D183). A
+blocker stays a blocker, never idle; idle still requires reliable evidence. Work that stops is shown so a second later, as
+a CLI between two steps does not blink; a blocker or a problem is shown at once.
 A quiet screen or an unrecognized working indicator does not prove idle. Screen evidence is invalidated by a full reset
-or an unrecognized completed layout; incomplete synchronized drawing supplies no new observation. A turn ending becomes grey without a notification or a task-completion claim. Recovery clears only the
+or an unrecognized completed layout; incomplete synchronized drawing supplies no new observation. A turn ending removes the dot without a notification or a task-completion claim. Recovery clears only the
 corresponding error. Reduced motion removes breathing, never the accessible state description.
 
 ### 3.3 Exit classification is independent of who caused it
@@ -326,7 +329,8 @@ exception.
 
 **Resume and Pin restore the exact conversation, original location in a new run.**
 
-Pin stores the conversation key, original location, name and order. Keep the conversation/location
+Pin stores the conversation key - none yet for an agent pinned before its CLI named one (LIFECYCLE-3.4, D182) - original
+location, name and order. Keep the conversation/location
 association for non-pinned Facade conversations too; short-lived message cleanup must not erase it. No copied account
 credentials. Use current CLI startup configuration and 4.3's YOLO rule for the new run. The CLI restores its native model/effort unless current launch arguments override it; Facade does not maintain a second saved model/effort configuration to restore.
 Existing processes keep their actual plan.
@@ -406,7 +410,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 | --- | --- |
 | 1.1–1.10 | One recipient; response/attempt budgets; delivery by terminal, native prompt or read_messages; one delivery state; stable duplicate IDs; drafts and unrecognized input boxes untouched; no human fallback; closure |
 | 2.1–2.4 | Client network across local and remote windows, unique run IDs, duplicate names, `#human` and `@human`, tree survival, remote paths, folder/worktree removal |
-| 3.1–3.4 | Work green, idle grey, native blockers yellow, errors/unknown red, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
+| 3.1–3.4 | Work green, errors red, no dot otherwise, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
 
@@ -414,6 +418,10 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
+- 2026-11-02: 3.2 keeps two dots: green while an agent starts or works, red for a problem - an error, Facade tools it cannot
+  use or a start not ready within its bound - and none otherwise; startup waits for the tools, and work that stops shows so a
+  second later (D183).
+- 2026-11-02: 4.2 lets a Pin wait for its conversation's key, where its agent was pinned before its CLI named one (D182).
 - 2026-11-02: Retain blockers with unknown kinds and invalidate lost screen evidence without guessing idle (D164).
 
 - 2026-11-01: D149 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.

@@ -227,9 +227,9 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		badges.push(view.badge);
 		assert.deepStrictEqual([badges, selected, view.description, contexts], [
 			[{ value: 2, tooltip: '2 agents' }, { value: 1, tooltip: '1 agent' }, undefined],
-			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedPinned': false, 'facade.agentSelectedResumable': false, 'facade.filtered': true }],
+			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': true }],
 			undefined,
-			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedResumable': false, 'facade.filtered': false }
+			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': false }
 		]);
 	});
 

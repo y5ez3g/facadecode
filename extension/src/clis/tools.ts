@@ -118,6 +118,11 @@ export const SHIM_FILE = 'shim.js';
 export const FACADE_SKILL_SIGNATURE = 'How the Facade Code tools work';
 /** How the description of every plugin manifest Facade has written begins. */
 const FACADE_PLUGIN_SIGNATURE = 'The Facade Code tools';
+/**
+ * How the Facade Code IDE's own agent extension describes the `facade` skill it writes into a folder - for Codex, Muse Code and
+ * Antigravity alike - which Facade treats as its own too (D186).
+ */
+const IDE_SKILL_SIGNATURE = 'Coordinate Facade Code agents through MCP tools';
 /** The line a skill Facade writes into a folder ends with, naming the Facade version that wrote it. */
 const SKILL_VERSION_MARK = /<!-- Facade Code (\d+(?:\.\d+)*) writes this file\b/;
 
@@ -152,17 +157,18 @@ export function isFacadeServer(value: unknown): boolean {
 }
 
 /**
- * Whether `text`, the content of `file`, is what a Facade wrote there - of any version, from any Facade directory - rather than the
- * person's own (CLIS-2.2, D179): its skill by its name and description, the plugin's manifest by its name and description, its MCP
- * configuration and hooks by Facade's server alone, the shim. Content of the same name that is not recognizably Facade's is the
- * person's, and stays.
+ * Whether `text`, the content of `file`, is what a Facade wrote there - of any version, from any Facade directory, or the Facade
+ * Code IDE's (D186) - rather than the person's own (CLIS-2.2, D179): its skill by its name and description, the plugin's manifest
+ * by its name and description - the IDE's by its name alone - its MCP configuration and hooks by Facade's server alone, the shim.
+ * Content of the same name that is not recognizably Facade's is the person's, and stays.
  */
 export function isFacadeContent(file: string, text: string): boolean {
 	const name = path.basename(file);
 	if (name === 'SKILL.md') {
 		const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? '';
 		const field = (key: string) => new RegExp(`^${key}:[ \\t]*(.*)$`, 'm').exec(front)?.[1].trim().replace(/^"(.*)"$/, '$1');
-		return field('name') === SERVER_NAME && !!field('description')?.startsWith(FACADE_SKILL_SIGNATURE);
+		const description = field('description');
+		return field('name') === SERVER_NAME && !!description && [FACADE_SKILL_SIGNATURE, IDE_SKILL_SIGNATURE].some(signature => description.startsWith(signature));
 	}
 	let value: unknown;
 	try {
@@ -176,7 +182,9 @@ export function isFacadeContent(file: string, text: string): boolean {
 	const keys = Object.keys(value);
 	switch (name) {
 		case 'plugin.json':
-			return value.name === SERVER_NAME && typeof value.description === 'string' && value.description.startsWith(FACADE_PLUGIN_SIGNATURE);
+			// The IDE's Antigravity plugin is named and nothing more (D186)
+			return value.name === SERVER_NAME && (keys.join() === 'name'
+				|| typeof value.description === 'string' && value.description.startsWith(FACADE_PLUGIN_SIGNATURE));
 		case 'mcp_config.json':
 			return keys.length === 1 && isJsonObject(value.mcpServers) && Object.keys(value.mcpServers).join() === SERVER_NAME
 				&& isFacadeServer(value.mcpServers[SERVER_NAME]);

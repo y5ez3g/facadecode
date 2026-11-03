@@ -407,11 +407,11 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		await tick();
 		assert.deepStrictEqual([model.state().cardCount, model.state().cards.length, model.state().cards[0].name, model.state().cards[99].name], [100, 100, 'Agent 1', 'Agent 100']);
 	});
-	test('U05, PANEL-2.1: Pins come first in their kept order; a new Pin goes last among the Pins, an Unpin last below them; Move Up/Down stays within its area; the order survives a new model (D173)', async () => {
+	test('U05, PANEL-2.1: Pins come first in their kept order; a new Pin goes last among the Pins, an Unpin first below them; Move Up/Down stays within its area; the order survives a new model (D173, D181)', async () => {
 		agents.saved = ['pin-a'];
-		agents.add(run(1, { resumable: true, pin: 'pin-a' }));
-		agents.add(run(2, { resumable: true }));
-		agents.add(run(3, { resumable: false }));
+		agents.add(run(1, { resumable: true, pinnable: true, pin: 'pin-a' }));
+		agents.add(run(2, { resumable: true, pinnable: true }));
+		agents.add(run(3, { resumable: false, pinnable: false }));
 		let model = make();
 		await tick();
 		const restored = names(model.state());
@@ -439,16 +439,16 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 			[['Agent 1', 'Agent 2', 'Agent 3'], true, true],
 			[true, false, false, false],
 			['Agent 2', 'Agent 1', 'Agent 3'],
-			['Agent 2', 'Agent 3', 'Agent 1'],
-			{ run: id(2), ended: false, pinned: true, resumable: true },
-			['Agent 2', 'Agent 3', 'Agent 1'],
+			['Agent 2', 'Agent 1', 'Agent 3'],
+			{ run: id(2), ended: false, pinned: true, pinnable: true },
+			['Agent 2', 'Agent 1', 'Agent 3'],
 			['pin-b']
 		]);
 	});
 
 	test('PANEL-2.1: a hidden Pin keeps its slot as a shown one moves past it; Pins restored on a new window keep their saved order', async () => {
 		agents.saved = ['pin-a', 'pin-b', 'pin-c'];
-		agents.add(run(1, { resumable: true, pin: 'pin-c' }));
+		agents.add(run(1, { resumable: true, pinnable: true, pin: 'pin-c' }));
 		agents.add(run(2, { pin: 'pin-a', location: GUIDE.id }));
 		agents.add(run(3, { pin: 'pin-b' }));
 		const model = make();

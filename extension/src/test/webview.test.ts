@@ -135,10 +135,10 @@ suite('The agent panel in Chromium', function () {
 	test('a card keeps its element, face and dot through every change of what it says; its dot, second line, label and hover are the host\'s (PANEL-1.4, 1.5, 3.2)', async () => {
 		assert.deepStrictEqual(await evaluate(`(() => {
 			const card = document.querySelector('.agent'), dot = card.querySelector('.dot'), face = card.querySelector('.face');
-			agents[0] = newCard(1, { dot: 'idle', stateText: 'Idle', line: 'Fix the login', label: 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', tooltip: ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle'] });
+			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle', line: 'Fix the login', label: 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', tooltip: ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle'] });
 			redraw({ revision: 2 });
 			return [card === document.querySelector('.agent'), dot === card.querySelector('.dot'), face === card.querySelector('.face'), dot.className, dot.title, card.querySelector('.title').textContent, card.getAttribute('aria-label'), card.title.split('\\n')];
-		})()`), [true, true, true, 'dot not-working', 'Idle', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle', 'Started: now', 'project · /project']]);
+		})()`), [true, true, true, 'dot none', 'Idle', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle', 'Started: now', 'project · /project']]);
 	});
 
 	test('PANEL-1.5: a card\'s hover says how long ago it started, then its location and window', async () => {
@@ -170,16 +170,17 @@ suite('The agent panel in Chromium', function () {
 		]);
 	});
 
-	test('J05: green work breathes; grey idle, yellow blockers and red error/unknown are still, each named in its hover (RULES-3.2, D127)', async () => {
+	test('J05: green work breathes and a red error is still; idle, a blocker and unknown activity show no dot, each named in its card\'s hover (RULES-3.2, D183)', async () => {
 		await evaluate(`document.documentElement.style.cssText = '--vscode-charts-green:#00ff00;--vscode-descriptionForeground:#888888;--vscode-charts-yellow:#ffff00;--vscode-charts-red:#ff0000;--vscode-sideBar-background:#202020';`);
-		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'idle', stateText: 'Idle' }), newCard(3, { dot: 'blocked', stateText: 'Needs permission', line: 'Needs permission · Run tests?' }), newCard(4, { dot: 'error', stateText: 'Activity unavailable', line: 'Activity unavailable · This CLI reports no activity' })]`);
-		await deliver({ type: 'state', state: { revision: 2, loading: false, cards, cardCount: 4, capabilities: { remote: false } } });
-		const seen = await evaluate(`(() => { return [...document.querySelectorAll('.agent')].map(card => { const dot = card.querySelector('.dot'), style = getComputedStyle(dot); const paint = style.backgroundImage.match(/rgba?\\([^)]+\\)/)?.[0] ?? style.backgroundColor; return [dot.className, dot.title, paint, getComputedStyle(dot, '::after').animationName, style.boxShadow.includes('inset')]; }); })()`);
+		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'none', stateText: 'Idle' }), newCard(3, { dot: 'none', stateText: 'Needs permission', line: 'Needs permission · Run tests?' }), newCard(4, { dot: 'none', stateText: 'Activity unavailable', line: 'Activity unavailable · This CLI reports no activity' }), newCard(5, { dot: 'error', stateText: 'Error: Exited with code 2' })]`);
+		await deliver({ type: 'state', state: { revision: 2, loading: false, cards, cardCount: 5, capabilities: { remote: false } } });
+		const seen = await evaluate(`(() => { return [...document.querySelectorAll('.agent')].map(card => { const dot = card.querySelector('.dot'), style = getComputedStyle(dot); const paint = style.backgroundImage.match(/rgba?\\([^)]+\\)/)?.[0] ?? style.backgroundColor; return [dot.className, style.display === 'none' ? 'hidden' : paint, getComputedStyle(dot, '::after').animationName, style.boxShadow.includes('inset')]; }); })()`);
 		assert.deepStrictEqual(seen, [
-			['dot working', 'Working', 'rgb(0, 255, 0)', 'facade-breathe', false],
-			['dot not-working', 'Idle', 'rgb(136, 136, 136)', 'none', false],
-			['dot blocked', 'Needs permission', 'rgb(255, 255, 0)', 'none', false],
-			['dot error', 'Activity unavailable', 'rgb(255, 0, 0)', 'none', false]
+			['dot working', 'rgb(0, 255, 0)', 'facade-breathe', false],
+			['dot none', 'hidden', 'none', false],
+			['dot none', 'hidden', 'none', false],
+			['dot none', 'hidden', 'none', false],
+			['dot error', 'rgb(255, 0, 0)', 'none', false]
 		]);
 		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
@@ -248,7 +249,7 @@ suite('The agent panel in Chromium', function () {
 
 	test('PANEL-1.5, LIFECYCLE-3.1: an agent with an empty name is said by its #aN when its state changes', async () => {
 		await evaluate(`agents[0] = newCard(1, { name: '' }); redraw()`);
-		await evaluate(`agents[0] = newCard(1, { name: '', dot: 'idle', stateText: 'Idle' }); redraw()`);
+		await evaluate(`agents[0] = newCard(1, { name: '', dot: 'none', stateText: 'Idle' }); redraw()`);
 		assert.strictEqual(await evaluate(`document.querySelector('[role="status"]').textContent`), '#a1: Idle');
 	});
 
@@ -263,9 +264,9 @@ suite('The agent panel in Chromium', function () {
 	test('a state change is said politely, once, in a live region; a repeated state says nothing new (PANEL-1.5)', async () => {
 		const said = await evaluate(`(() => {
 			const status = document.querySelector('[role=status]');
-			agents[0] = newCard(1, { dot: 'idle', stateText: 'Idle' }); agents[1] = newCard(2, { dot: 'error', stateText: 'Error: Exited with code 2' }); redraw({ revision: 2 });
+			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle' }); agents[1] = newCard(2, { dot: 'error', stateText: 'Error: Exited with code 2' }); redraw({ revision: 2 });
 			const first = status.textContent;
-			agents[0] = newCard(1, { dot: 'idle', stateText: 'Idle', line: 'Another line' }); redraw({ revision: 3 });
+			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle', line: 'Another line' }); redraw({ revision: 3 });
 			return [status.getAttribute('aria-live'), first, status.textContent];
 		})()`);
 		assert.deepStrictEqual(said, ['polite', 'Agent 1: Idle. Agent 2: Error: Exited with code 2', 'Agent 1: Idle. Agent 2: Error: Exited with code 2']);
@@ -405,8 +406,8 @@ suite('The agent panel in Chromium', function () {
 				const longLocation = { folderPrefix: 'facadecode-extension-workspace', label: 'feature/128-panel-location-layout', full: 'facadecode-extension-workspace · feature/128-panel-location-layout' };
 				agents = [
 					newCard(1, { name: 'Ada', location: { folderPrefix: 'api', label: longLocation.label, full: 'api · ' + longLocation.label }, line: '✳ Improving the panel layout' }),
-					newCard(2, { name: 'Moss', dot: 'idle', stateText: 'Idle', location: { folderPrefix: longLocation.folderPrefix, label: 'main', full: longLocation.folderPrefix + ' · main' }, line: 'Ready for input' }),
-					newCard(3, { name: 'Luna', dot: 'blocked', stateText: 'Needs permission', location: { folderPrefix: 'api', label: 'main', full: 'api · main' }, line: 'Needs permission · Run tests?' }),
+					newCard(2, { name: 'Moss', dot: 'none', stateText: 'Idle', location: { folderPrefix: longLocation.folderPrefix, label: 'main', full: longLocation.folderPrefix + ' · main' }, line: 'Ready for input' }),
+					newCard(3, { name: 'Luna', dot: 'none', stateText: 'Needs permission', location: { folderPrefix: 'api', label: 'main', full: 'api · main' }, line: 'Needs permission · Run tests?' }),
 					newCard(4, { name: 'Nova', dot: 'error', stateText: 'Error: Connection lost', location: { folderPrefix: 'web', label: 'main', full: 'web · main' }, line: 'Error: Connection lost' }),
 					newCard(5, { name: 'Authentication middleware helper', pinned: true, location: longLocation, line: 'OC | Update the login flow' }),
 					newCard(6, { name: '小林 👩🏽‍💻', pinned: true, location: { folderPrefix: '项目文件夹', label: 'feature/128-界面与工作区布局', full: '项目文件夹 · feature/128-界面与工作区布局' }, line: '正在调整工作区显示' })
@@ -424,13 +425,14 @@ suite('The agent panel in Chromium', function () {
 							const n = name.getBoundingClientRect(), p = place.getBoundingClientRect(), t = top.getBoundingClientRect();
 							return { gap: p.left - n.right, over: p.right - t.right, folder: place.querySelector('.folder').textContent, separator: place.querySelector('.bullet').textContent, tree: place.querySelector('.tree').textContent, hidden: getComputedStyle(place.querySelector('.folder')).display === 'none' };
 						});
-						return { rows, overflow: document.documentElement.scrollWidth > window.innerWidth, errors: window.errors, colours: [...document.querySelectorAll('.dot')].slice(0, 4).map(dot => getComputedStyle(dot).backgroundColor) };
+						return { rows, overflow: document.documentElement.scrollWidth > window.innerWidth, errors: window.errors, colours: [...document.querySelectorAll('.dot')].slice(0, 4).map(dot => getComputedStyle(dot).display === 'none' ? 'none' : getComputedStyle(dot).backgroundColor) };
 					})()`);
 					const context = `${theme.name}, ${width}px, zoom ${zoom}: ${JSON.stringify(result)}`;
 					assert.ok(result.rows.every((row: { gap: number; over: number; folder: string; separator: string; tree: string; hidden: boolean }) => row.gap >= 5.5 && row.over <= 1 && row.folder && row.tree && row.separator === ' · ' && !row.hidden), context);
 					assert.strictEqual(result.overflow, false, context);
 					assert.deepStrictEqual(result.errors, [], context);
-					assert.strictEqual(new Set(result.colours).size, 4, context);
+					// Work green and an error red, apart; idle and a blocker without a dot (D183)
+					assert.deepStrictEqual([result.colours[1], result.colours[2], new Set([result.colours[0], result.colours[3], 'none']).size], ['none', 'none', 3], context);
 					if (capture && zoom === 0 && (width === 260 || width === 420)) {
 						const shot = await call('Page.captureScreenshot', { format: 'png' });
 						fs.writeFileSync(path.join(capture, `${theme.name}-${width}.png`), Buffer.from(shot.result.data, 'base64'));

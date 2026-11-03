@@ -49,6 +49,8 @@ class FakeExecution implements ExecutionPort {
 	elsewhere: ConversationKey[] = [];
 	async conversations(): Promise<readonly ConversationKey[]> { return this.elsewhere; }
 	pinTab(run: RunId, pinned: boolean): void { this.pinnedTabs.push({ run, pinned }); }
+	readonly spins: { run: RunId; busy: boolean }[] = [];
+	spin(run: RunId, busy: boolean): void { this.spins.push({ run, busy }); }
 	failSpawnFor?: (plan: LaunchPlan) => boolean;
 	readonly transfers = new Emitter<void>();
 	readonly toolConnections = new Emitter<RunId>();
@@ -77,7 +79,7 @@ class FakeExecution implements ExecutionPort {
 			throw this.spawnError;
 		}
 		this.spawned.push({ run, plan, meta });
-		if (plan.exactResume && plan.sessionId) { this.identities.fire({ run, sessionId: plan.sessionId }); }
+		if (this.namesAtSpawn && plan.exactResume && plan.sessionId) { this.identities.fire({ run, sessionId: plan.sessionId }); }
 		return { pid: 4242, startedAt: 1000 };
 	}
 	async attach(live: LiveRun, facts: PairFacts): Promise<void> { this.pairs.set(live.run, facts); }
@@ -87,6 +89,8 @@ class FakeExecution implements ExecutionPort {
 	reopen(run: RunId): void { this.reopened.push(run); }
 	rename(run: RunId, name: string): void { const pair = this.pairs.get(run); if (pair) { this.pairs.set(run, { ...pair, name }); } }
 	readonly metas = new Map<RunId, RunMeta>();
+	/** Whether a started CLI names its session at once; a real one does at its first turn. */
+	namesAtSpawn = true;
 	setMeta(run: RunId, meta: RunMeta): void { this.metas.set(run, meta); }
 	async live(): Promise<readonly LiveRun[]> { return this.liveRuns; }
 	async endWindow(): Promise<void> { this.endedWindow = true; }
@@ -1127,6 +1131,116 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.deepStrictEqual(world.errors.map(error => error.text), ['Could not restore Ada: claude is not installed in this environment.']);
 	});
 
+	test('D180: a resumed conversation can be pinned from its start, before its CLI names it, and still can after a reload; a new one waits for its CLI', async () => {
+		const world = setUp({ sessions: true });
+		world.execution.namesAtSpawn = false;
+		const resumed = world.agents.resume(ENTRY, { reveal: false }) as RunId;
+		const fresh = world.agents.launch({ name: 'New', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		const meta = world.execution.spawned.find(each => each.run === resumed)!.meta;
+		const before = [world.agents.get(resumed)?.resumable, world.agents.get(fresh)?.resumable, meta.resumable];
+		world.agents.pin(resumed);
+		const pinned = world.pins().map(pin => pin.conversation.sessionId);
+		// Across a reload its record says so, before its CLI has said anything
+		const reload = setUp({ sessions: true });
+		reload.execution.liveRuns = [{ run: resumed, claimedElsewhere: false, pid: 4242, startedAt: 1000, meta }];
+		await reload.agents.restore();
+		assert.deepStrictEqual([before, pinned, reload.agents.get(resumed)?.resumable], [[true, false, true], ['sess-1'], true]);
+	});
+
+	test('D182: an agent can be pinned before its CLI names a conversation, from the panel or its tab; the Pin takes the one named, and a window opened before that starts a new one with the same CLI, name and location', async () => {
+		const world = setUp();
+		world.execution.namesAtSpawn = false;
+		const [fresh, unnamed, other] = [['Fresh', 'claude'], ['Unnamed', 'claude'], ['Other', 'codex']].map(([name, cli]) => world.agents.launch({ name, location: 'loc-1', cli, origin: 'human' }));
+		await settle();
+		const before = [fresh, unnamed, other].map(id => [world.agents.get(id)?.resumable, world.agents.get(id)?.pinnable]);
+		world.agents.pin(fresh);
+		world.execution.tabPins.fire({ run: unnamed, pinned: true });
+		world.execution.tabPins.fire({ run: other, pinned: true });
+		assert.throws(() => world.agents.pin(other), /cannot resume/, 'a CLI that cannot name its conversation still cannot be pinned');
+		const unbound = world.pins().map(pin => [pin.name, pin.conversation.cli, pin.conversation.environment, pin.conversation.sessionId, pin.cwd]);
+		world.execution.identities.fire({ run: fresh, sessionId: 'named-1' });
+		const bound = world.pins().map(pin => pin.conversation.sessionId);
+		// The window closes before Unnamed's CLI names one: the next opening starts a new conversation in its place
+		const reopened = setUp();
+		reopened.execution.namesAtSpawn = false;
+		for (const pin of world.pins()) {
+			(reopened.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save(pin);
+		}
+		await reopened.agents.restorePins();
+		await settle();
+		const plans = reopened.plans.map(plan => [plan.name, plan.cli, plan.location.id, plan.resume ? plan.resume.sessionId : 'new']).sort();
+		const restored = reopened.agents.list().find(run => run.name === 'Unnamed')!;
+		reopened.execution.identities.fire({ run: restored.id, sessionId: 'named-2' });
+		assert.deepStrictEqual([before, unbound, bound, world.execution.pinnedTabs.filter(each => each.run === other), plans, restored.pin, reopened.pins().map(pin => [pin.name, pin.conversation.sessionId])], [
+			[[false, true], [false, true], [false, undefined]],
+			[['Fresh', 'claude', 'local', undefined, '/work/app'], ['Unnamed', 'claude', 'local', undefined, '/work/app']],
+			['named-1', undefined],
+			[{ run: other, pinned: false }],
+			[['Fresh', 'claude', 'loc-1', 'named-1'], ['Unnamed', 'claude', 'loc-1', 'new']],
+			world.pins()[1].id,
+			[['Fresh', 'named-1'], ['Unnamed', 'named-2']]
+		]);
+	});
+
+	test('D182: a Pin made before its CLI named a conversation is held by its own card alone - a reload or a running conversation does not start it twice - and Close removes it', async () => {
+		const world = setUp();
+		world.execution.namesAtSpawn = false;
+		const run = world.agents.launch({ name: 'Early', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.agents.pin(run);
+		const meta = world.execution.metas.get(run)!;
+		const reload = setUp();
+		(reload.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save(world.pins()[0]);
+		reload.execution.liveRuns = [{ run, claimedElsewhere: false, pid: 4242, startedAt: 1000, meta }];
+		reload.execution.elsewhere = [{ environment: 'local', cli: 'claude', sessionId: 'unrelated' }];
+		await reload.agents.restore();
+		await reload.agents.restorePins();
+		const after = [reload.agents.list().map(each => [each.id, each.pin, each.pinnable]), reload.plans.length];
+		await reload.agents.close(run);
+		assert.deepStrictEqual([after, reload.pins()], [[[[run, world.pins()[0].id, true]], 0], []]);
+	});
+
+	test('D184: the last message sent to a run is kept - an empty one is none, a title never replaces it - with its process across a reload', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Line', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		const report = (title: string) => world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title });
+		const said: (string | undefined)[] = [];
+		const seen = () => said.push(world.agents.get(id)?.said);
+		report('✳ Claude Code'); seen();
+		world.agents.said(id, '  fix the\nlogin   bug  '); seen();
+		report('⠂ Fixing the login bug'); seen();
+		world.agents.said(id, '/clear'); seen();
+		world.agents.said(id, '   '); seen();
+		const meta = world.execution.metas.get(id)!;
+		const reload = setUp();
+		reload.execution.liveRuns = [{ run: id, claimedElsewhere: false, pid: 4242, startedAt: 1000, meta }];
+		await reload.agents.restore();
+		reload.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, title: '✳ Something else' });
+		assert.deepStrictEqual([said, meta.said, reload.agents.get(id)?.said], [
+			[undefined, 'fix the login bug', 'fix the login bug', '/clear', '/clear'], '/clear', '/clear'
+		]);
+	});
+
+	test('D185: a run\'s tab spins while its dot is green - starting or working - and stops once it is idle, waits for the person or is red', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Spin', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		const report = (more: Partial<ActivityReport>) => world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: '', ...more });
+		report({ activity: 'unknown', reporting: false, awaitingActivity: true });
+		report({ activity: 'not_working' });
+		report({ activity: 'working' });
+		report({ activity: 'working', blocker: { kind: 'permission' } });
+		report({ activity: 'working' });
+		report({ activity: 'not_working', notReady: true });
+		report({ activity: 'not_working' });
+		world.execution.exits.fire({ run: id, code: 3, interruptVerified: false });
+		// Accepted, it starts green; this test's execution reports nothing at its start, as a window's does at once, so it stops until
+		// the first report here
+		assert.deepStrictEqual(world.execution.spins.filter(each => each.run === id).map(each => each.busy), [true, false, true, false, true, false, true, false]);
+	});
+
 	test('a conversation has one Pin: pinning a card whose CLI resumed a pinned conversation takes that Pin last among the Pins, and a pinned card switching to it replaces it - Unpin then leaves none to restore (RULES-4.2, LIFECYCLE-3.4, PANEL-2.1, D173)', async () => {
 		const world = setUp();
 		const store = (world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore;
@@ -1163,7 +1277,7 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.strictEqual(world.pins()[0].conversation.sessionId, 'after-clear');
 	});
 
-	test('native home/new temporarily disables Pin, preserves the saved intent, and a confirmed switch moves its ID and cwd together', async () => {
+	test('native home/new preserves the saved intent - pinning again keeps the one Pin (D182) - and a confirmed switch moves its ID and cwd together', async () => {
 		const world = setUp();
 		const run = world.agents.resume(ENTRY, { reveal: false }) as RunId;
 		await settle();
@@ -1173,7 +1287,8 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.strictEqual(world.agents.get(run)?.resumable, false);
 		assert.strictEqual(world.agents.get(run)?.pin, before.id);
 		assert.deepStrictEqual(world.pins()[0], before);
-		assert.throws(() => world.agents.pin(run), /cannot resume/);
+		world.agents.pin(run);
+		assert.deepStrictEqual(world.pins(), [before]);
 		assert.strictEqual(world.execution.metas.get(run)?.exactResume, true, 'reload must keep watching even before the new conversation exists');
 		world.execution.identities.fire({ run, sessionId: 'new-native-session', cwd: '/work/app/pkg' });
 		assert.deepStrictEqual([world.pins()[0].conversation.sessionId, world.pins()[0].cwd, world.agents.get(run)?.resumable], ['new-native-session', '/work/app/pkg', true]);

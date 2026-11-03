@@ -42,7 +42,7 @@ export const CONTEXT = {
 	agentSelected: 'facade.agentSelected',
 	agentSelectedEnded: 'facade.agentSelectedEnded',
 	agentSelectedPinned: 'facade.agentSelectedPinned',
-	agentSelectedResumable: 'facade.agentSelectedResumable',
+	agentSelectedPinnable: 'facade.agentSelectedPinnable',
 	filtered: 'facade.filtered'
 } as const;
 

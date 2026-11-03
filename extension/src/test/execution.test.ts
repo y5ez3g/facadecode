@@ -17,6 +17,7 @@ import { PtydServer } from '../ptyd/server';
 import { programEnv } from './ptydPlace';
 import { nextOwnerClaim } from '../record/ownership';
 import { TestEmitter, withModules } from './withModules';
+import { unspun } from '../base/tabSpinner';
 
 /** A terminal as the stand-in editor makes it: what it was created with, and what was done to it. */
 interface FakeTerminal {
@@ -227,8 +228,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 
 	/** A window's execution port; `startupMs`, how long its runs are still starting while their CLIs show no activity. */
-	const portOf = (startupMs?: number) => {
-		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined, ...startupMs !== undefined ? { startupMs } : {} });
+	const portOf = (startupMs?: number, readBeforeEnterMs?: number) => {
+		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined,
+			...startupMs !== undefined ? { startupMs } : {}, ...readBeforeEnterMs !== undefined ? { readBeforeEnterMs } : {} });
 		ports.push(port);
 		return port;
 	};
@@ -377,12 +379,71 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', observedAt: reports[reports.length - 1].observedAt, reporting: true, title: '✳ Claude Code' });
 		// Its probe answered, it was still starting until it reported: never unknown with a reason meanwhile
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity && !report.reason), JSON.stringify(reports));
+		// CLI titles never reach the tab: it says the agent's name alone (D130)
 		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'CLI reports never emit tab names');
 		config['terminal.integrated.tabs.separator'] = ' / ';
 		configChanged.fire({ affectsConfiguration: section => section === 'terminal.integrated.tabs.separator' });
 		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'tab separators no longer affect the name');
+		// The spinner turns where its card's dot is green, as the core says (D185)
+		port.spin('run-3', true);
 		port.rename('run-3', 'Grace');
+		port.spin('run-3', false);
+		assert.ok(terminals[0].names.includes('⠋ Ada') && terminals[0].names.includes('⠋ Grace'), JSON.stringify(terminals[0].names));
 		assert.strictEqual(terminals[0].names.at(-1), 'Grace');
+	});
+
+	test('D183: a run whose Facade tools were injected is still starting after its CLI reports, until they connect or its bound passes; work that stops is told a second later', async () => {
+		// A bound a slow runner's process start and first report fit in well, as its tools never connect here
+		const port = portOf(6_000);
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		port.openPair(facts('run-tools'), { reveal: false });
+		open(terminals[0]);
+		// It reports idle at once, works when typed to, and is idle again when typed to once more
+		const program = `process.stdin.setRawMode(true); let n = 0; const say = state => process.stdout.write('\\x1b]7501;state=' + state + '\\x1b\\\\');
+		process.stdout.write('\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => { if (d.toString().includes('7501;?:')) { say('idle'); } else { say(++n % 2 ? 'working' : 'idle'); } }); setInterval(() => {}, 1000);`;
+		await port.spawn('run-tools', { ...plan(program), tools: { state: 'injected' } }, meta('run-tools'));
+		await until('its idle report', () => reports.some(report => report.activity === 'not_working'));
+		const idle = reports.find(report => report.activity === 'not_working')!;
+		assert.strictEqual(idle.awaitingActivity, true, `its tools not connected yet, it is still starting: ${JSON.stringify(reports)}`);
+		// Past its bound with its tools still not connected, it did not start properly
+		const late = await until('its bound', () => reports.find(report => report.notReady), 12_000);
+		assert.deepStrictEqual([late.activity, late.awaitingActivity], ['not_working', undefined]);
+		terminals[0].options.pty.handleInput!('w');
+		await until('its work', () => reports.at(-1)?.activity === 'working');
+		const stopped = performance.now();
+		terminals[0].options.pty.handleInput!('i');
+		await until('its stop, told', () => reports.at(-1)?.activity === 'not_working', 4_000);
+		assert.ok(performance.now() - stopped >= 900, `told ${Math.round(performance.now() - stopped)} ms after it stopped`);
+	});
+
+	test('D184: an Enter the person types over a draft goes in after the text typed before it, and once the CLI took the draft its text is told; an empty Enter, a line break in a paste or a run without an input reader tells nothing', async () => {
+		// The reading before an Enter given time a slow runner needs: a reading that comes too late would tell nothing
+		const port = portOf(undefined, 5_000);
+		const submitted: { run: RunId; text: string }[] = [];
+		port.onDidSubmit(each => submitted.push(each));
+		port.openPair(facts('run-said'), { reveal: false });
+		open(terminals[0]);
+		// A CLI that draws Claude Code's input frame: its draft, the cursor after it, cleared by an Enter; what it got, in order, kept
+		const program = `process.stdin.setRawMode(true); let draft = '', got = '';
+		const draw = () => { const rule = '─'.repeat(process.stdout.columns || 80); process.stdout.write('\\x1b[?2026h\\x1b[H\\x1b[2J' + rule + '\\r\\n❯\\u00a0' + draft + '\\x1b7\\r\\n' + rule + '\\r\\n' + JSON.stringify(got) + '\\x1b8\\x1b[?2026l'); };
+		process.stdin.on('data', data => { for (const c of data.toString()) { got += c; if (c === '\\r') { draft = ''; } else if (c === '\\x7f') { draft = draft.slice(0, -1); } else if (c >= ' ') { draft += c; } } draw(); });
+		draw(); setInterval(() => {}, 1000);`;
+		await port.spawn('run-said', { ...plan(program), input: { adapter: 'claude-frame', capability: { state: 'supported', reason: 'the test draws Claude Code\'s input frame' } } }, meta('run-said'));
+		const pty = terminals[0].options.pty;
+		const got = async () => (await port.readScreen('run-said', 10)).text.join('\n');
+		await until('its empty input', async () => (await port.inspectInput('run-said', 'claude-frame')).state === 'usable');
+		pty.handleInput!('fix the login bug');
+		await until('its draft', async () => (await port.inspectInput('run-said', 'claude-frame')).state === 'draft');
+		pty.handleInput!('\r');
+		pty.handleInput!('next');
+		await until('the draft told', () => submitted.length > 0);
+		await until('what it got, in order', async () => (await got()).includes(JSON.stringify('fix the login bug\rnext')));
+		pty.handleInput!('\x7f\x7f\x7f\x7f\r');
+		pty.handleInput!('\x1b[200~one\rtwo\x1b[201~');
+		await until('the paste drawn', async () => (await port.inspectInput('run-said', 'claude-frame')).draft?.includes('two'));
+		await new Promise(resolve => setTimeout(resolve, 600));
+		assert.deepStrictEqual(submitted, [{ run: 'run-said', text: 'fix the login bug' }]);
 	});
 
 	test('terminal decorations survive later plain reports, decoration-only updates and reattachment (CLIS-2.3, D160)', async () => {
@@ -518,10 +579,10 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(told, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true, title: '' }]);
 		const over = await until('its startup over', () => told.find(report => !report.awaitingActivity), 6_000);
 		assert.ok(performance.now() - before >= BOUND - 50, 'not before its bound');
-		assert.deepStrictEqual(over, { run: 'run-40', activity: 'unknown', reporting: false, reason: "CLI has not reported activity", title: '' });
+		assert.deepStrictEqual(over, { run: 'run-40', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", title: '' });
 		// Reloaded past it: unknown at once, its startup not begun again
 		const last = await reload(next);
-		assert.deepStrictEqual(last.told, [{ run: 'run-40', activity: 'unknown', reporting: false, reason: "CLI has not reported activity", title: '' }]);
+		assert.deepStrictEqual(last.told, [{ run: 'run-40', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", title: '' }]);
 		assert.strictEqual(await last.next.terminate('run-40'), 'terminated');
 	});
 
@@ -536,7 +597,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await port.spawn('run-41', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); setInterval(() => {}, 1000);`), meta('run-41'));
 		await until('its probe answered', () => reports.some(report => report.reporting));
 		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 10_000);
-		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, reason: "Waiting for first CLI activity report", title: '' }, JSON.stringify(reports));
+		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, notReady: true, reason: "Waiting for first CLI activity report", title: '' }, JSON.stringify(reports));
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity), JSON.stringify(reports));
 		assert.strictEqual(reports.at(-2)?.reporting, true);
 	});
@@ -730,7 +791,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('the loss told', () => heard.some(each => each.report.disconnected));
 		port.rename('run-42', 'Grace');
 		const back = await until('the run claimed again', () => heard.find(each => !each.report.disconnected && heard.indexOf(each) > heard.findIndex(lost => lost.report.disconnected)), 10_000);
-		assert.deepStrictEqual(back, { report: { run: 'run-42', activity: 'unknown', reporting: false, reason: "CLI has not reported activity", title: '' }, connections: 2 });
+		assert.deepStrictEqual(back, { report: { run: 'run-42', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", title: '' }, connections: 2 });
 		assert.strictEqual(await port.terminate('run-42'), 'terminated');
 	});
 
@@ -756,7 +817,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('the CLI title reported', () => reports.some(report => report.run === run && report.title === 'Fixing tests'));
 		await until('its screen', () => screenOf(terminal).includes('ready'));
 		shows(terminal);
-		assert.strictEqual(terminal.name, name);
+		assert.strictEqual(unspun(terminal.name), name);
 		return terminal;
 	};
 
@@ -765,9 +826,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const renames = renamesOf(port);
 		const terminal = await agentTitled(port, 'run-r');
 		titled(terminal, 'Grace Hopper');
-		assert.deepStrictEqual([renames, terminal.pending], [[{ run: 'run-r', name: 'Grace Hopper' }], ['Grace Hopper']]);
+		assert.deepStrictEqual([renames, terminal.pending.map(unspun)], [[{ run: 'run-r', name: 'Grace Hopper' }], ['Grace Hopper']]);
 		shows(terminal);
-		assert.deepStrictEqual([renames.length, terminal.name], [1, 'Grace Hopper'], 'its own name shown is no rename');
+		assert.deepStrictEqual([renames.length, unspun(terminal.name)], [1, 'Grace Hopper'], 'its own name shown is no rename');
 	});
 
 	test('a person renaming a tab back to the name it had renames the agent back: a name the tab already showed is no echo (LIFECYCLE-2.2)', async () => {
@@ -788,7 +849,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const terminal = await agentTitled(port, 'run-s');
 		titled(terminal, 'Lin | Fixing tests');
 		shows(terminal);
-		assert.strictEqual(terminal.name, 'Lin | Fixing tests', 'the former separator and current CLI title are literal name text');
+		assert.strictEqual(unspun(terminal.name), 'Lin | Fixing tests', 'the former separator and current CLI title are literal name text');
 		// The CLI changes its title twice, but the tab and the stored name stay stable.
 		const names = [...terminal.names];
 		terminal.options.pty.handleInput!('Writing docs');
@@ -796,10 +857,10 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		terminal.options.pty.handleInput!('Reading');
 		await until('the next title reported', () => reports.some(report => report.title === 'Reading'));
 		assert.deepStrictEqual(terminal.names, names);
-		assert.strictEqual(terminal.name, 'Lin | Fixing tests');
+		assert.strictEqual(unspun(terminal.name), 'Lin | Fixing tests');
 		titled(terminal, 'Kim | Writing docs');
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-s', name: 'Lin | Fixing tests' }, { run: 'run-s', name: 'Kim | Writing docs' }], 'Kim | Writing docs']);
+		assert.deepStrictEqual([renames, unspun(terminal.name)], [[{ run: 'run-s', name: 'Lin | Fixing tests' }, { run: 'run-s', name: 'Kim | Writing docs' }], 'Kim | Writing docs']);
 	});
 
 	test('a tab accepts human, empty and Unicode labels, keeping the whole entered name without a CLI title (LIFECYCLE-2.1, 2.2)', async () => {
@@ -809,7 +870,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		for (const typed of ['human', '   ', '@Human | Fixing tests', ' Ada ', '检查长名字与location协调 16 🧑🏽‍💻']) {
 			titled(terminal, typed);
 			shows(terminal);
-			assert.strictEqual(terminal.name, typed.trim(), typed);
+			assert.strictEqual(unspun(terminal.name), typed.trim(), typed);
 		}
 		assert.deepStrictEqual(renames.map(each => each.name), ['human', '   ', '@Human | Fixing tests', ' Ada ', '检查长名字与location协调 16 🧑🏽‍💻']);
 	});
@@ -821,10 +882,10 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		port.rename('run-late', 'Grace');
 		port.rename('run-late', 'Lin');
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[], 'Lin']);
+		assert.deepStrictEqual([renames, unspun(terminal.name)], [[], 'Lin']);
 		titled(terminal, 'Grace');
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-late', name: 'Grace' }], 'Grace']);
+		assert.deepStrictEqual([renames, unspun(terminal.name)], [[{ run: 'run-late', name: 'Grace' }], 'Grace']);
 	});
 
 	test('the editor naming a tab by the name its terminal was created with - once it opens, and again as it is relaunched - is no rename: the tab gets its name back at once; after the agent was renamed, a person naming the tab so renames it (LIFECYCLE-2.2)', async () => {
@@ -839,7 +900,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('its screen', () => screenOf(terminal).includes('ready'));
 		shows(terminal);
 		resets(terminal);
-		assert.deepStrictEqual([renames, terminal.pending], [[], ['Grace']]);
+		assert.deepStrictEqual([renames, terminal.pending.map(unspun)], [[], ['Grace']]);
 		shows(terminal);
 		// Relaunched, VS Code closes and opens the same pseudoterminal again, then names the tab by the name it was created with
 		terminal.options.pty.close();
@@ -847,12 +908,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		shows(terminal);
 		resets(terminal);
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[], 'Grace']);
+		assert.deepStrictEqual([renames, unspun(terminal.name)], [[], 'Grace']);
 		port.rename('run-t', 'Lin');
 		shows(terminal);
 		titled(terminal, 'Ada');
 		shows(terminal);
-		assert.deepStrictEqual([renames, terminal.name], [[{ run: 'run-t', name: 'Ada' }], 'Ada']);
+		assert.deepStrictEqual([renames, unspun(terminal.name)], [[{ run: 'run-t', name: 'Ada' }], 'Ada']);
 	});
 
 	test('two agents of one name and title: a person\'s rename of either tab renames that agent alone, by its own terminal (LIFECYCLE-2.2)', async () => {
@@ -860,12 +921,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const renames = renamesOf(port);
 		const first = await agentTitled(port, 'run-a');
 		const second = await agentTitled(port, 'run-b');
-		assert.strictEqual(first.name, second.name);
+		assert.strictEqual(unspun(first.name), unspun(second.name));
 		titled(second, 'Grace');
 		shows(second);
 		titled(first, 'Lin');
 		shows(first);
-		assert.deepStrictEqual([renames, first.name, second.name], [[{ run: 'run-b', name: 'Grace' }, { run: 'run-a', name: 'Lin' }], 'Lin', 'Grace']);
+		assert.deepStrictEqual([renames, unspun(first.name), unspun(second.name)], [[{ run: 'run-b', name: 'Grace' }, { run: 'run-a', name: 'Lin' }], 'Lin', 'Grace']);
 	});
 
 	test('a terminal renamed with no tab change to say so - moved into the panel, it has no tab - is found renamed as the runs are checked (LIFECYCLE-2.2)', async () => {
@@ -1066,7 +1127,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const attaching = reloaded.attach(live[0], facts('run-8')).then(() => { attached = true; });
 		await until('the restored native terminal', () => terminals.length > count);
 		const terminal = terminals[terminals.length - 1];
-		assert.strictEqual(terminal.name, 'Ada', 'a restored background tab has only the agent name even before its pseudoterminal opens');
+		assert.strictEqual(unspun(terminal.name), 'Ada', 'a restored background tab has only the agent name even before its pseudoterminal opens');
 		assert.strictEqual(attached, false, 'restoring the next editor waits for this terminal to open');
 		open(terminal);
 		await attaching;

@@ -76,7 +76,7 @@ language's natural grammar while preserving placeholders, product names and the 
 | Hover | `list.hoverBackground` |
 | Selection | `list.activeSelectionBackground`, `list.activeSelectionForeground` even after panel loses focus |
 | Keyboard focus | 1 px `list.focusOutline` inside row; none on the card a context menu is open on (D175) |
-| Work / idle / blocker / error | `charts.green` / `descriptionForeground` / `charts.yellow` / `charts.red` |
+| Busy / problem dot | `charts.green` / `charts.red`; no dot for anything else (D183) |
 | Status meaning and unknown evidence | RULES-3.2; second-line wording is PANEL-1.4 |
 | Controls | `button.*`, `input.*`, `inputValidation.*`, `scrollbarSlider.*` |
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
@@ -150,7 +150,7 @@ run and are validated against current state, without falling back to the selecti
 | --- | --- | --- | --- |
 | `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
 | `history` | Resume Agent... | Always; panel/empty state | LIFECYCLE-3.2 |
-| `pinAgent` | Pin Agent | Exact resumable unpinned conversation; card | LIFECYCLE-3.4 |
+| `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too (D182); card | LIFECYCLE-3.4 |
 | `unpinAgent` | Unpin Agent | Pinned record; card | LIFECYCLE-3.4 |
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
@@ -185,7 +185,7 @@ every argument, appear in no palette or menu and are not a public API.
 
 Test commands `state`, `selectRow` (selects a card by run ID) and `probe` are registered only in test mode and excluded
 from production manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected`
-identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded`, `agentSelectedPinned`, `agentSelectedResumable` and `filtered` reflect current state.
+identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded`, `agentSelectedPinned`, `agentSelectedPinnable` and `filtered` reflect current state.
 
 ## 4 Settings
 
@@ -273,6 +273,7 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 
 ## Change log
 
+- 2026-11-02: 2.1 keeps the green busy and red problem dots alone (D183); 3.2's `agentSelectedResumable` is `agentSelectedPinnable` (D182).
 - 2026-11-02: 3.1 removes Copy Agent Reference, Message History..., Clear Filter and Copy Diagnostics, and 3.2 the card's
   Filter by This Location and Filter by This Folder, at the owner's request (D174); 2.1 and 2.3 leave the card a context
   menu is open on unframed (D175).
