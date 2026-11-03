@@ -122,7 +122,7 @@ Show opens the actual run/record in this window, never a same-named replacement 
 **A record handed back by read_messages is delivered; reading starts no new terminal paste.**
 
 System-result records may retain structured operation facts beside their existing human-readable text. The agent gets
-the structured facts in its receipt or MCP read; Message History keeps the readable text. Ordinary message bodies and
+the structured facts in its receipt or MCP read; the record keeps the readable text. Ordinary message bodies and
 older text-only system results stay intact. Both representations identify the same operation and effects (MCP-1.2).
 
 read_messages without IDs returns the caller's incoming records that are not yet delivered; all:true pages all retained
@@ -135,19 +135,19 @@ that reached its deadline undelivered and is read later becomes delivered; its s
 and receives no second one. An uncertain return can expose a record again with the same ID without another terminal
 submission. No understanding or completion claim is inferred from reading.
 
-### 3.2 Message history documents
+### 3.2 Message records
 
-**Message History is a read-only record of messages involving this window's agents.**
+**Facade keeps a read-only record of the messages involving this window's agents; the person opens one from its notification.**
 
-Use the command/picker title `Message History...`, not Chat Room. List one-to-one conversations by recent activity,
-then show source, recipient, time, body, reply relation, delivery outcome and system-result references.
-History may contain records from previous openings of this workspace within retention. Its UI does not expose a
-client-wide or cross-window management surface. Each record labels its own transport outcome `Delivery`; a system result
-then gives the readable operation outcome, with complete structured facts below it. It is Facade message history, not the vendor's whole CLI conversation.
+There is no Message History command or other browsing view (D174). A message to the person opens from its notification
+(2.3) as a read-only document of that record: source, recipient, time, body, reply relation, delivery outcome and
+system-result references. Records from previous openings of this workspace remain within retention. Each record labels
+its own transport outcome `Delivery`; a system result then gives the readable operation outcome, with complete structured
+facts below it. It is Facade's record of a message, not the vendor's whole CLI conversation.
 No live composer, send/replay control, group conversation or delete/hide control is added. Render message content as
 text; do not execute links or commands embedded in it.
 Start/stop results retain the operation name and execution window explicitly, with the target's recorded short identity;
-history labels the operation and agent without inferring them from prose. Full call/request IDs and route fields belong
+a record labels the operation and agent without inferring them from prose. Full call/request IDs and route fields belong
 below the original body in localized Technical details, together with the unchanged operation result. A reserved receipt
 ID is not a fabricated record. Missing/expired original messages keep their references without invented content.
 
@@ -192,13 +192,15 @@ Do not add protected-storage or authentication protocols to this generated-conte
 | --- | --- |
 | 1.1–1.2 | Local/remote reach under RULES-4.3 across this computer's windows, direct text/keys with drafts and multiline content |
 | 2.1–2.4 | Full CLI acceptance, repeated message IDs, native and post-start prompt, truthful result author, `#human` notification, no human message fallback |
-| 3.1–3.3 | Own inbox only, one delivery state, reading cancels unstarted pastes and reports delivery, owned-draft completion under RULES-1.5, window-local Message History, thirty-day automatic cleanup |
+| 3.1–3.3 | Own inbox only, one delivery state, reading cancels unstarted pastes and reports delivery, owned-draft completion under RULES-1.5, window-local records, a message to the person opened from its notification, thirty-day automatic cleanup |
 | 4.1–4.2 | Recipient-owned record with a sender copy, natural sender-close handling, no replay, complete readable cross-environment files and expiry |
 
 Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remains unverified.
 
 ## Change log
 
+- 2026-11-02: 3.2 removes the Message History command at the owner's request; a message to the person still opens from its
+  notification (D174).
 - 2026-11-01: D149 keeps unverified native prompt acceptance unconfirmed in machine results and readable history.
 
 - 2026-11-01: 4.1 shows a sender's copy whose result never came back as unconfirmed after its deadline (D132).

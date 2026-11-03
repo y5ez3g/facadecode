@@ -13,7 +13,7 @@ import { fileURLToPath } from 'url';
 import type { Environment } from '../environment';
 import { homeOf } from '../executable';
 import { SESSION_ID } from '../identity';
-import { inScope, titleOf } from './scope';
+import { Scope, titleOf } from './scope';
 import { openReadOnly } from './sqlite';
 import type { Candidate, Found, VendorStore } from './store';
 
@@ -48,10 +48,10 @@ function foldersOf(uris: unknown): string[] {
 }
 
 /**
- * The conversations of the store at `dir` in `directories` or a folder below them: one its own agents began - a subagent's, with a
+ * The conversations of the store at `dir` in `scope` or a folder below it: one its own agents began - a subagent's, with a
  * parent - not listed, as Antigravity lists none either, nor one whose file it dropped. Each is read whole from its row.
  */
-export function antigravityCandidates(dir: string, directories: readonly string[]): Candidate[] {
+export function antigravityCandidates(dir: string, scope: Scope): Candidate[] {
 	const summaries = path.join(dir, 'conversation_summaries.db');
 	const db = openReadOnly(summaries);
 	if (!db) {
@@ -74,7 +74,7 @@ export function antigravityCandidates(dir: string, directories: readonly string[
 		}
 		// This native set is sorted and loses the original cwd when --add-dir is used. Keep the alternatives, never guess.
 		const folders = [...new Set(foldersOf(row.uris))];
-		const choices = folders.filter(folder => inScope(folder, directories));
+		const choices = folders.filter(folder => scope.includes(folder));
 		const cwd = choices[0];
 		if (cwd === undefined) {
 			continue;

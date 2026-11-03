@@ -18,7 +18,7 @@ import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconc
 import { sessionDirOf, sessionFileOf } from '../clis/identity';
 import { CliPlanError, DestinationEnvironment, discoverEntry, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
 import { INPUT_ADAPTERS } from '../ptyd/composer';
-import { McpServer, ProjectWrite, runDirOf, ToolsInput } from '../clis/tools';
+import { laterVersion, markedSkill, McpServer, ProjectWrite, runDirOf, skillVersionOf, ToolsInput } from '../clis/tools';
 import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
 import type * as HostClisModule from '../host/clis';
 import type * as SettingsModule from '../host/settings';
@@ -641,6 +641,84 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.match(textOf(mcp)!, /"facade": \{\r\n {12}"command": "node"/);
 		releaseProject(record, 'run-c');
 		assert.ok(fs.readFileSync(mcp).equals(Buffer.from(original, 'utf8')));
+	});
+
+	/** A skill as a Facade of some version writes it: its name and description, and its mark where it has one. */
+	const facadeSkill = (text: string, version?: string) => {
+		const skill = `---\nname: facade\ndescription: "How the Facade Code tools work: ${text}."\n---\n# Facade Code tools\n${text}\n`;
+		return version ? markedSkill(skill, version) : skill;
+	};
+	const placed = (file: string, text: string) => {
+		fs.mkdirSync(path.dirname(file), { recursive: true });
+		fs.writeFileSync(file, text);
+	};
+
+	test('D179: a skill another Facade wrote - another version, another Facade directory, unrecorded here - is brought up to date and goes with the last run; one changed since is brought up to date too', () => {
+		placed(skillFile(), facadeSkill('older words'));
+		const wanted = facadeSkill('current words', '0.0.3');
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, [skill(wanted)]), undefined);
+		const replaced = fs.readFileSync(skillFile(), 'utf8');
+		fs.writeFileSync(skillFile(), wanted.replace('current words', 'words edited by hand'));
+		assert.strictEqual(acquireProject(record, 'run-b', cwd, [skill(wanted)]), undefined);
+		const again = fs.readFileSync(skillFile(), 'utf8');
+		assert.deepStrictEqual([releaseProject(record, 'run-a'), releaseProject(record, 'run-b')], [[], []]);
+		assert.deepStrictEqual([replaced, again, fs.existsSync(skillFile())], [wanted, wanted, false]);
+	});
+
+	test('D179: a skill a later Facade marked stands - no conflict, nothing recorded - and stays after the last run; the marks compare as numbers', () => {
+		const later = facadeSkill('later words', '0.0.10');
+		placed(skillFile(), later);
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, [skill(facadeSkill('current words', '0.0.9'))]), undefined);
+		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
+		assert.strictEqual(fs.readFileSync(skillFile(), 'utf8'), later);
+		assert.deepStrictEqual([skillVersionOf(later), skillVersionOf(facadeSkill('unmarked')), laterVersion('0.0.10', '0.0.9'), laterVersion('0.1', '0.1.0'), laterVersion('1.0.0', '0.9.9')], ['0.0.10', undefined, true, false, true]);
+		// The skill Facade ships carries what names it as Facade's, before its mark and after it
+		const shipped = markedSkill(FACADE_SKILL, '0.0.3');
+		placed(skillFile(), shipped.replace('0.0.3', '0.0.2'));
+		assert.strictEqual(acquireProject(record, 'run-b', cwd, [skill(shipped)]), undefined);
+		assert.strictEqual(fs.readFileSync(skillFile(), 'utf8'), shipped);
+	});
+
+	test('D179: a skill of the person\'s own named facade - another description - stays a conflict, and so does a plugin of theirs', () => {
+		placed(skillFile(), '---\nname: facade\ndescription: "My notes on the facade pattern."\n---\nNotes\n');
+		assert.match(acquireProject(record, 'run-a', cwd, [skill(facadeSkill('current words', '0.0.3'))]) ?? '', /already exists with other content/);
+		const manifest = path.join(cwd, '.agents', 'plugins', 'facade', 'plugin.json');
+		placed(manifest, JSON.stringify({ name: 'facade', description: 'My own facade plugin.' }));
+		assert.match(acquireProject(record, 'run-a', cwd, [{ kind: 'file', path: path.join('.agents', 'plugins', 'facade', 'plugin.json'), content: '{"name":"facade","description":"The Facade Code tools: start agents."}\n' }]) ?? '', /already exists with other content/);
+		assert.strictEqual(fs.existsSync(record), false, 'nothing recorded');
+	});
+
+	test('D179: Antigravity\'s plugin another installation left - its server a shim gone with it - is brought up to date file by file, and goes with the last run', () => {
+		const plugin = path.join('.agents', 'plugins', 'facade');
+		const old = (name: string, value: unknown) => placed(path.join(cwd, plugin, name), `${JSON.stringify(value, undefined, 2)}\n`);
+		old('plugin.json', { name: 'facade', description: 'The Facade Code tools: start agents, send and read messages, and read or type into agent terminals.' });
+		old('mcp_config.json', { mcpServers: { facade: { command: '/old/node', args: ['/tmp/gone/x/facade.facadecode-0.0.2/dist/shim.js'], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
+		old('hooks.json', { facade: { PreInvocation: [{ type: 'command', command: "ELECTRON_RUN_AS_NODE=1 '/old/node' '/tmp/gone/x/facade.facadecode-0.0.2/dist/shim.js' '--antigravity-context'" }] } });
+		placed(path.join(cwd, plugin, 'skills', 'facade', 'SKILL.md'), facadeSkill('older words'));
+		const writes: ProjectWrite[] = [
+			{ kind: 'file', path: path.join(plugin, 'plugin.json'), content: `${JSON.stringify({ name: 'facade', description: 'The Facade Code tools: current.' }, undefined, 2)}\n` },
+			{ kind: 'file', path: path.join(plugin, 'mcp_config.json'), content: `${JSON.stringify({ mcpServers: { facade: { command: '/new/node', args: ['/new/dist/shim.js'], env: {} } } }, undefined, 2)}\n` },
+			{ kind: 'file', path: path.join(plugin, 'hooks.json'), content: `${JSON.stringify({ facade: { PreInvocation: [{ type: 'command', command: "'/new/node' '/new/dist/shim.js' '--antigravity-context'" }] } }, undefined, 2)}\n` },
+			{ kind: 'file', path: path.join(plugin, 'skills', 'facade', 'SKILL.md'), content: facadeSkill('current words', '0.0.3') }
+		];
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, writes), undefined);
+		const now = writes.map(write => fs.readFileSync(path.join(cwd, write.path), 'utf8'));
+		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
+		assert.deepStrictEqual([now, writes.map(write => fs.existsSync(path.join(cwd, write.path)))], [writes.map(write => write.kind === 'file' ? write.content : ''), [false, false, false, false]]);
+	});
+
+	test('D179: a facade server another installation left in .mcp.json is brought up to date beside the person\'s own servers, and taken out alone after the last run; a facade server of theirs stays a conflict', () => {
+		const file = path.join(cwd, '.mcp.json');
+		const theirs = { mine: { command: 'my-server' } };
+		fs.writeFileSync(file, `${JSON.stringify({ mcpServers: { ...theirs, facade: { command: 'node', args: ['C:\\Users\\ada\\old\\dist\\shim.js'] } } }, undefined, 2)}\n`);
+		const value = { command: 'node', args: ['/new/dist/shim.js'], env: {} };
+		const entry: ProjectWrite = { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value };
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, [entry]), undefined);
+		const during = JSON.parse(fs.readFileSync(file, 'utf8'));
+		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
+		assert.deepStrictEqual([during.mcpServers, JSON.parse(fs.readFileSync(file, 'utf8'))], [{ ...theirs, facade: value }, { mcpServers: theirs }]);
+		fs.writeFileSync(file, `${JSON.stringify({ mcpServers: { facade: { command: 'my-facade-server' } } }, undefined, 2)}\n`);
+		assert.match(acquireProject(record, 'run-b', cwd, [entry]) ?? '', /already names another facade server/);
 	});
 
 	test('reconcile releases the references of runs no longer alive, keeps those of runs that are, and a run planned moments ago counts as alive', () => {

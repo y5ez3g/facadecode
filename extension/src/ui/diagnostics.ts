@@ -5,25 +5,25 @@
 import type { CliChoice, RunFacts } from '../core/ports';
 import { referenceOf } from './cardView';
 
-/** How many of a live agent's last screen rows, and of the agents log's last lines, Copy Diagnostics copies (ARCHITECTURE-3.3). */
+/** How many of a live agent's last screen rows, and of the agents log's last lines, the diagnostics report holds (ARCHITECTURE-3.3). */
 export const SCREEN_ROWS = 12;
 export const LOG_LINES = 200;
 
-/** A built-in CLI as Copy Diagnostics names it: whether it can start, its version as its installation says it, its input reader. */
+/** A built-in CLI as the diagnostics report names it: whether it can start, its version as its installation says it, its input reader. */
 export interface DiagnosedCli {
 	readonly choice: CliChoice;
 	readonly version?: string;
 	readonly input?: string;
 }
 
-/** An agent of this window as Copy Diagnostics names it: its facts, what its input reader reads now, its last screen rows. */
+/** An agent of this window as the diagnostics report names it: its facts, what its input reader reads now, its last screen rows. */
 export interface DiagnosedAgent {
 	readonly facts: RunFacts;
 	readonly input?: string;
 	readonly screen?: readonly string[];
 }
 
-/** What Copy Diagnostics copies, gathered (ARCHITECTURE-3.3, D116). */
+/** What the diagnostics report holds, gathered (ARCHITECTURE-3.3, D116). */
 export interface Diagnostics {
 	readonly at: number;
 	/** The extension's, its window component's and the editor's versions, the platform and the remote kind, each as one part. */
@@ -86,7 +86,7 @@ function withHomeAsTilde(text: string, home: string, platform: NodeJS.Platform):
 }
 
 /**
- * The text Copy Diagnostics puts on the clipboard (ARCHITECTURE-3.3, D116): in English, as the agents log is, with the home folder
+ * The diagnostics report as text (ARCHITECTURE-3.3, D116, D174): in English, as the agents log is, with the home folder
  * written `~`. Nothing in it is sent anywhere.
  */
 export function diagnosticsText(diagnostics: Diagnostics, platform: NodeJS.Platform = process.platform): string {

@@ -59,7 +59,7 @@ export class AgentActions {
 		}
 	}
 
-	/** Copies `@name #aN`, with no toast (LIFECYCLE-2.1). */
+	/** Copies `@name #aN`, with no toast: Go to Agent's item button (LIFECYCLE-2.1). */
 	async copyReference(run: RunId): Promise<void> {
 		const facts = this.deps.agents.get(run);
 		if (facts) {
@@ -115,8 +115,8 @@ export class AgentActions {
 }
 
 /**
- * The commands about one agent (UX-3.1, 3.2): Go to Agent, Rename, Copy Agent Reference, Close Agent, and the card's menu - its
- * filters and Clear Filter among them (PANEL-2.2, 2.3).
+ * The commands about one agent (UX-3.1, 3.2): Go to Agent, Pin and Unpin, Rename, Close Agent, and the card's menu - Move Up and
+ * Move Down among them (PANEL-2.2).
  */
 export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActions, flows: { readonly goToAgent: () => Promise<void> }): vscode.Disposable[] {
 	const { model, agents } = deps;
@@ -125,18 +125,11 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 		const run = targetOf(arg, model, agents, palette);
 		return run === undefined ? undefined : does(run);
 	});
-	const filterTo = (run: RunId, kind: 'location' | 'folder') => {
-		const filter = model.filterFor(run, kind);
-		if (filter) {
-			model.setFilter(filter);
-		}
-	};
 	return [
 		vscode.commands.registerCommand(COMMANDS.showActiveAgents, () => flows.goToAgent()),
 		on(COMMANDS.pinAgent, true, run => actions.pin(run, true)),
 		on(COMMANDS.unpinAgent, true, run => actions.pin(run, false)),
 		on(COMMANDS.renameAgent, true, run => actions.rename(run)),
-		on(COMMANDS.copyAgentReference, true, run => actions.copyReference(run)),
 		on(COMMANDS.closeAgent, true, run => actions.close(run)),
 		// Notification navigation: the exact run it names, never another (UX-3.2)
 		vscode.commands.registerCommand(COMMANDS.revealAgent, (arg?: unknown) => {
@@ -147,10 +140,6 @@ export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActi
 			return run === undefined ? false : actions.reveal(run);
 		}),
 		on(COMMANDS.moveUp, false, run => model.move(run, -1)),
-		on(COMMANDS.moveDown, false, run => model.move(run, 1)),
-		on(COMMANDS.filterByLocation, false, run => filterTo(run, 'location')),
-		on(COMMANDS.filterByFolder, false, run => filterTo(run, 'folder')),
-		// From a card's menu, the empty panel or the Command Palette: whichever card it was opened on, the filter goes (PANEL-2.3)
-		vscode.commands.registerCommand(COMMANDS.clearFilter, () => model.setFilter(undefined))
+		on(COMMANDS.moveDown, false, run => model.move(run, 1))
 	];
 }

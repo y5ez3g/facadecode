@@ -32,7 +32,7 @@ function diagnostics(more: Partial<Diagnostics> = {}): Diagnostics {
 	};
 }
 
-suite('Copy Diagnostics: what it copies (ARCHITECTURE-3.3, D116)', () => {
+suite('The diagnostics report: what it holds (ARCHITECTURE-3.3, D116)', () => {
 	test('catalog configuration errors remain visible even if a malformed catalog yields no custom entries', () => {
 		const text = diagnosticsText(diagnostics({ clis: { where: '/repo', each: [], problems: [{ setting: 'facade.custom', problem: 'facade.custom must be an object; received array' }] } }));
 		assert.match(text, /Configuration error \(facade.custom\): facade.custom must be an object; received array/);
@@ -117,21 +117,16 @@ suite('Copy Diagnostics: what it copies (ARCHITECTURE-3.3, D116)', () => {
 	});
 });
 
-suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
-	test('it gathers each part, a screen or input that fails or does not answer said so, and puts the text on the clipboard with a notice of what it holds', async function () {
+suite('The diagnostics report the integration suite reads (ARCHITECTURE-3.3, D174)', () => {
+	test('it gathers each part, a screen or input that fails or does not answer said so', async function () {
 		this.timeout(20_000);
-		const handlers = new Map<string, () => Promise<void>>();
-		const clipboard: string[] = [];
-		const notices: string[] = [];
 		const api = {
 			l10n: { t: (text: string) => text },
-			env: { appName: 'Visual Studio Code', remoteName: undefined, clipboard: { writeText: async (text: string) => void clipboard.push(text) } },
+			env: { appName: 'Visual Studio Code', remoteName: undefined },
 			version: '1.143.0',
-			extensions: { getExtension: (id: string) => id === 'facade.facadecode-window' ? { packageJSON: { version: '0.0.2' } } : undefined },
-			commands: { registerCommand: (id: string, handler: () => Promise<void>) => { handlers.set(id, handler); return { dispose: () => undefined }; } },
-			window: { showInformationMessage: async (text: string) => void notices.push(text) }
+			extensions: { getExtension: (id: string) => id === 'facade.facadecode-window' ? { packageJSON: { version: '0.0.2' } } : undefined }
 		};
-		const { registerDiagnostics } = withModules({ vscode: api })<typeof import('../host/diagnostics')>(require.resolve('../host/diagnostics'));
+		const { diagnosticsOf } = withModules({ vscode: api })<typeof import('../host/diagnostics')>(require.resolve('../host/diagnostics'));
 		const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'facade-diagnostics-'));
 		try {
 			const logFile = path.join(dir, 'agents.log');
@@ -140,14 +135,14 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			const bo = run({ id: 'run-00000000000000000000000000000002', alias: '#a2', name: 'Bo' });
 			const ended = run({ id: 'run-00000000000000000000000000000003', alias: '#a3', name: 'Cy', lifecycle: 'ended' });
 			const location = { id: 'loc-1', path: `${dir}/app`, uri: 'file:///app', environment: 'local', label: 'main', folders: [], kind: 'checkout', opened: true, git: 'ok' } as unknown as Location;
-			registerDiagnostics({
+			const text = await diagnosticsOf({
 				agents: { list: () => [ada, bo, ended] },
 				locations: { snapshot: () => ({ locations: [location], folders: [], pending: false }) },
 				clis: {
 					list: async () => ({ clis: [{ id: 'claude', displayName: 'Claude Code', available: true }], problems: [] }),
 					describe: () => ({ launches: [{ cli: 'claude', takes: { model: true, effort: true }, input: { adapter: 'claude-frame', capability: { state: 'supported', reason: '' } }, version: { version: '2.1.316', source: '' } }] }),
 					collaborationEnabled: () => true
-				} as unknown as Parameters<typeof registerDiagnostics>[0]['clis'],
+				} as unknown as Parameters<typeof diagnosticsOf>[0]['clis'],
 				readScreen: async id => {
 					if (id === bo.id) {
 						throw new Error('ptyd is not running');
@@ -159,8 +154,6 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 				version: '0.0.2',
 				home: dir
 			});
-			await handlers.get('facade.copyDiagnostics')!();
-			const [text] = clipboard;
 			assert.match(text, /^Facade Code 0\.0\.2; window component 0\.0\.2; Visual Studio Code 1\.143\.0; \w+ \w+; local$/m);
 			assert.match(text, /^CLIs for ~\/app\n- Claude Code \(claude\): 2\.1\.316; input reader claude-frame$/m);
 			assert.match(text, /^ {2}running, working; tools available; input reader claude-frame, reads usable\n {2}\| │ >\n {2}\| ╰──╯$/m);
@@ -168,21 +161,17 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			assert.match(text, /^- @Cy #a3 .*\n {2}ended; tools available; input reader none$/m);
 			assert.match(text, /^Agents log, its last 200 lines\n2026-10-31T11:00:00\.000Z line 51 in ~\/app\n/m);
 			assert.ok(text.endsWith('line 250 in ~/app\n') && !text.includes(dir), 'the log\'s end, the home folder written ~');
-			assert.deepStrictEqual(notices, ["Facade's diagnostics are copied. They include your agents' screens, which can show code or keys: read them before you share them."]);
 		} finally {
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
 	test('in a remote window the window component is named by the version it answered with, which that extension host sees no other way (D116)', async () => {
-		const copied: string[] = [];
-		const remoteApi = (handlers: Map<string, () => Promise<void>>) => ({
+		const remoteApi = {
 			l10n: { t: (text: string) => text },
-			env: { appName: 'Visual Studio Code', remoteName: 'ssh-remote', clipboard: { writeText: async (text: string) => void copied.push(text) } },
+			env: { appName: 'Visual Studio Code', remoteName: 'ssh-remote' },
 			version: '1.143.0',
-			extensions: { getExtension: () => undefined },
-			commands: { registerCommand: (id: string, handler: () => Promise<void>) => { handlers.set(id, handler); return { dispose: () => undefined }; } },
-			window: { showInformationMessage: async () => undefined }
-		});
+			extensions: { getExtension: () => undefined }
+		};
 		const deps = {
 			agents: { list: () => [] }, locations: { snapshot: () => ({ locations: [], folders: [], pending: false }) },
 			clis: { list: async () => [], describe: () => ({ launches: [] }), collaborationEnabled: () => false } as never,
@@ -190,12 +179,10 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			inspect: async () => 'usable', logFile: path.join(os.tmpdir(), 'facade-no-such-agents.log'), version: '0.0.2', home: '/home/ada'
 		};
 		for (const [component, named] of [['0.0.2', 'window component 0.0.2'], [undefined, 'window component out of sight of this extension host']] as const) {
-			const handlers = new Map<string, () => Promise<void>>();
-			const { registerDiagnostics } = withModules({ vscode: remoteApi(handlers) })<typeof import('../host/diagnostics')>(require.resolve('../host/diagnostics'));
-			registerDiagnostics({ ...deps, ...component ? { component } : {} });
-			await handlers.get('facade.copyDiagnostics')!();
-			assert.ok(copied[copied.length - 1].split('\n').find(line => line.includes('window component'))!.includes(`; ${named}; `), copied[copied.length - 1].split('\n').find(line => line.includes('window component'))!);
-			assert.match(copied[copied.length - 1], /; remote ssh-remote\n/);
+			const { diagnosticsOf } = withModules({ vscode: remoteApi })<typeof import('../host/diagnostics')>(require.resolve('../host/diagnostics'));
+			const text = await diagnosticsOf({ ...deps, ...component ? { component } : {} });
+			assert.ok(text.split('\n').find(line => line.includes('window component'))!.includes(`; ${named}; `), text.split('\n').find(line => line.includes('window component'))!);
+			assert.match(text, /; remote ssh-remote\n/);
 		}
 	});
 });

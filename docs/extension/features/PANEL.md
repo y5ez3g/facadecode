@@ -22,7 +22,7 @@ card loading. Title actions in order: Filter by Working Location (`filter`, fill
 (Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
 The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Configure Agents... in a separate group. Message History..., Go to Agent..., Show Agent Launch and Show Agents Log
+Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log
 are Command Palette entries, not view-menu items (D83, D129). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
@@ -58,7 +58,7 @@ automatically launch an agent. This prerequisite step does not ask the person to
 | Card | Minimum 44 px tall; padding 8 px top/bottom/left, 9 px right; 4 px corners |
 | Avatar | 28 px circle, 8 px before text, 1 px theme border |
 | First line | Name 13 px; location 12 px aligned at end; 6 px gaps |
-| Pin | 14 px icon box after the name, 4 px from it; adds no card height |
+| Pin | 14 px icon box 4 px after the name as shown, its ellipsis included (D176); adds no card height |
 | Second line | 12 px, quieter, single line with ellipsis |
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
@@ -71,7 +71,8 @@ outside a folder and still show its actual location. Confirmed location removal 
 temporarily disconnected location is retained. Reserve the Pin's measured width and spacing when present, then let
 name and location share the first line's remaining width: a short one
 stays whole and the other uses the remaining room. Only when both exceed their shares does the line divide about 60%
-to the name and 40% to location; 40% is not a location cap (D128, superseding D72). A long name ellipsizes at the end.
+to the name and 40% to location; 40% is not a location cap (D128, superseding D72). A long name ellipsizes at the end, its
+width that of the text it shows as drawn, so that a Pin follows the ellipsis as closely as it follows a whole name (D176).
 Location keeps its `folder · worktree` structure: each long component ellipsizes in the middle, between whole graphemes,
 keeping its beginning and end where they fit. A short component stays whole; when both are long, the worktree receives
 about two thirds of their text space. The separator remains and the folder is never hidden just because it is long.
@@ -128,9 +129,11 @@ announcements are polite, coalesced, and do not repeatedly announce spinner/prog
 
 ### 2.1 Order and selection
 
-**The list is a manually reorderable stack with Pins first; state changes do not move cards.**
+**The list is two manually reorderable queues, Pins first; state changes do not move cards.**
 
-A new card goes first, whether a person or an agent started it, below the Pin area. Pin moves it to the very top; Unpin moves it first below the Pin area.
+A card goes last in the area it enters (D173): a new card, whether a person or an agent started it, last in the ordinary
+area; Pin moves it last among the Pins; Unpin moves it last in the ordinary area. A new card the person started, which
+is selected, scrolls into view; one an agent started does not move the list.
 Move Up/Down works within both the Pin and ordinary areas; hidden cards retain their relative positions. Persist Pin
 order by Pin ID so restoration keeps it. Explicit close removes a card immediately; no stopping card remains.
 There are no batch actions or automatic creation-tree grouping.
@@ -142,8 +145,8 @@ background starts do not change selection. Keyboard focus and selection are inde
 
 **A card uses a flat native context menu with only actions meaningful to its current record.**
 
-Groups: Rename / Pin or Unpin / Copy Agent Reference; Move Up/Down; Filter by This Location / Filter by This Folder / Clear Filter;
-Close Agent for starting, live and retained-ended records. Enable actions by actual availability; name editing need
+Groups: Rename / Pin or Unpin; Move Up/Down; Close Agent for starting, live and retained-ended records. It has no copy or
+filter entries (D174). Enable actions by actual availability; name editing need
 not wait for CLI readiness. There is no worktree deletion or bulk selection action. LIFECYCLE-3.1 owns the shared close
 action. No menu outside a card, not even the webview's default Cut/Copy/Paste. Context targets its stable run ID,
 revalidated against current host state under 3.1, never the selected row by fallback. Palette targeting follows UX-3.1.
@@ -162,10 +165,10 @@ first item showing every card: All Worktrees, or All Locations outside Git. A fi
 lists stays choosable, last in the first step. The current filter, or in the first step its folder, is initially
 highlighted. Back returns to the first step; Escape leaves the filter unchanged. The view description names the
 filter; the icon fills.
-Persist environment-qualified location/folder association in workspace state. Clear on Clear Filter, the first
-step's first item or confirmed location removal, never on a failed Git read. A launch does not change the filter;
-every new agent enters the normal list data and is displayed only when it matches. Per-card filters appear only when
-they would change the visible set. Ordinary folders use “location,” not an implication that Git/worktrees are required.
+Persist environment-qualified location/folder association in workspace state. Clear on the filtered empty state's Clear
+Filter, the first step's first item or confirmed location removal, never on a failed Git read. A launch does not change the filter;
+every new agent enters the normal list data and is displayed only when it matches. A card's menu offers no filter
+(D174). Ordinary folders use “location,” not an implication that Git/worktrees are required.
 
 ## 3 Technical design
 
@@ -266,6 +269,10 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
+- 2026-11-02: 2.1 puts a card last in the area it enters - new and unpinned cards last among the others, a new Pin last
+  among the Pins - and scrolls a new card the person started into view (D173); 2.2 and 2.3 remove the card's Copy Agent
+  Reference, Filter by This Location, Filter by This Folder and Clear Filter, and 1.1 Message History... (D174); 1.3 fits a
+  long name to the text it shows, so a Pin follows its ellipsis at 4 px (D176).
 - 2026-11-01: 1.4 says when an agent's Facade tools went away (D136).
 - 2026-11-01: Describe the competitive-analysis rationale without naming individual products; hover behavior is unchanged.
 - 2026-11-01: Removed Message History... from the view's More Actions menu at the owner's request; its Command

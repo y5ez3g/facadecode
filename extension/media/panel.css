@@ -144,19 +144,15 @@ body.facade-modern {
 	outline-offset: -1px;
 }
 
-/* The card a menu was opened on, framed while the menu is up as VS Code's lists frame it; over the dotted edge of the agent chosen,
-   in a high contrast theme. A card is never a Tab stop, so no other frame is the keyboard's (UX-2.3). */
-/* The keyboard's card, outlined as VS Code's focused list row where the keys put it there, never by the pointer's click (UX-2.3) */
+/*
+ * The keyboard's card, outlined as VS Code's focused list row where the keys put it there, never by the pointer's click; the card a
+ * menu is opened on gets no frame (UX-2.3, D175).
+ */
 #list .item:focus {
 	outline: none;
 }
 
 #list .item:focus-visible {
-	outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
-	outline-offset: -1px;
-}
-
-body.vscode-context-menu-visible #list .item.menu-target {
 	outline: 1px solid var(--vscode-list-focusOutline, var(--vscode-focusBorder));
 	outline-offset: -1px;
 }
@@ -579,14 +575,14 @@ body.vscode-reduce-motion .item.closing {
 
 /* ---- High contrast: edges, not fills ---- */
 
-/* The agent chosen, edged in dots as VS Code's lists edge their selection: a solid frame is the menu's */
+/* The agent chosen, edged in dots as VS Code's lists edge their selection: a solid frame is the keyboard's */
 body.vscode-high-contrast .item.selected,
 body.vscode-high-contrast-light .item.selected {
 	outline: 1px dotted var(--vscode-contrastActiveBorder);
 	outline-offset: -1px;
 }
 
-/* Not over the frame of the card a menu is open on: VS Code's lists dash no framed row */
+/* Not while a menu is open: the card it was opened on stays unframed (D175) */
 body.vscode-high-contrast:not(.vscode-context-menu-visible) .item:hover:not(.selected),
 body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:hover:not(.selected) {
 	outline: 1px dashed var(--vscode-contrastActiveBorder);

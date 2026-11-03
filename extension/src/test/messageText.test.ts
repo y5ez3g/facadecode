@@ -35,25 +35,14 @@ const RECORDS: readonly MessageRecord[] = [
 	record(8, { from: ada, to: cy, delivery: { status: 'success', effects: { outcome: 'confirmed' }, attempts: 1, via: 'launch', deliveredAt: T - 3_000 } }, T - 3_000)
 ];
 
-/** The editor, as far as Message History and the person's notifications use it. */
+/** The editor, as far as the person's notifications and the message they open use it. */
 function fakeEditor(overrides: { readonly openTextDocument?: () => Promise<unknown> } = {}) {
 	const none = { dispose: () => undefined };
-	const listeners = <T>() => {
-		const set = new Set<(value: T) => void>();
-		return { add: (listener: (value: T) => void) => { set.add(listener); return { dispose: () => set.delete(listener) }; }, fire: (value: T) => set.forEach(listener => listener(value)) };
-	};
 	const providers = new Map<string, { provideTextDocumentContent(uri: unknown): string }>();
 	const commands = new Map<string, (...args: unknown[]) => unknown>();
 	const notifications: { text: string; items: string[] }[] = [];
 	const opened: { uri: { scheme: string; path: string; query: string }; text: string }[] = [];
 	let choice: string | undefined;
-	const accepts = listeners<void>();
-	const hides = listeners<void>();
-	const picker = {
-		title: '', placeholder: '', matchOnDescription: false, matchOnDetail: false, items: [] as { label: string; description?: string; detail?: string }[], activeItems: [] as unknown[],
-		onDidAccept: accepts.add, onDidHide: hides.add, show: () => undefined, hide: () => hides.fire(), dispose: () => undefined,
-		accept: (index: number) => { picker.activeItems = [picker.items[index]]; accepts.fire(); }
-	};
 	const vscode = {
 		l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, at) => String(args[Number(at)])) },
 		env: { language: 'en' },
@@ -61,7 +50,6 @@ function fakeEditor(overrides: { readonly openTextDocument?: () => Promise<unkno
 		EventEmitter: class { event = () => none; fire() { /* no open editor */ } dispose() { /* none */ } },
 		ThemeIcon: class { constructor(readonly id: string) { } },
 		window: {
-			createQuickPick: () => picker,
 			showInformationMessage: (text: string, ...items: string[]) => { notifications.push({ text, items }); return Promise.resolve(choice); },
 			showTextDocument: async () => undefined
 		},
@@ -74,17 +62,16 @@ function fakeEditor(overrides: { readonly openTextDocument?: () => Promise<unkno
 	};
 	const load = withModules({ vscode });
 	return {
-		picker, commands, notifications, opened, revealed: [] as string[],
+		commands, notifications, opened, revealed: [] as string[],
 		choose: (value: string | undefined) => { choice = value; },
-		history: load<typeof import('../ui/pickers/messageHistory')>(require.resolve('../ui/pickers/messageHistory')),
-		host: load<typeof import('../host/messageHistory')>(require.resolve('../host/messageHistory')),
+		history: load<typeof import('../ui/messageText')>(require.resolve('../ui/messageText')),
 		contact: load<typeof import('../host/contact')>(require.resolve('../host/contact'))
 	};
 }
 
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
-suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1.2, 3.1)', () => {
+suite('A message as the person opens it, and contact with the person (COLLABORATION-2.3, 3.2; UX-1.2)', () => {
 
 	test('an operation receipt shows the recorded action/target and keeps long identity below the unchanged body', () => {
 		const { history } = fakeEditor();
@@ -120,74 +107,23 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		assert.ok(history.recordText(current, 'en').includes('submitted_to_cli'));
 	});
 
-	test('one-to-one conversations, most recently active first; a Facade result goes with the message it reports on', () => {
-		const { history } = fakeEditor();
-		const conversations = history.conversationsOf(RECORDS);
-		assert.deepStrictEqual(conversations.map(each => [history.conversationTitle(each), each.records.map(record => record.id)]), [
-			['Cy #a3 ↔ Facade', ['m-5']],
-			['Cy #a3 ↔ You', ['m-4']],
-			['Ada #a1 ↔ Bob #a2', ['m-1', 'm-2', 'm-3']],
-			['Ada #a1 ↔ Cy #a3', ['m-6', 'm-7', 'm-8']]
-		]);
-	});
-
 	test('one delivery state says how each message reached its agent: its CLI took it, the agent checked its messages, or it was its first task (COLLABORATION-3.1)', () => {
 		const { history } = fakeEditor();
-		const conversation = history.conversationsOf(RECORDS).find(each => each.records.some(record => record.id === 'm-7'))!;
-		const text = history.conversationText(conversation, 'en');
-		assert.ok(text.includes('#m7 · ') && text.includes('Delivery: Delivered when the agent checked its messages\n'), text);
-		assert.ok(text.includes('Delivery: Delivered as the agent\'s first task\n'), text);
-		assert.ok(text.includes('Delivery: Delivered to the agent\n'), text);
+		const text = (id: string) => history.recordText(RECORDS.find(each => each.id === id)!, 'en');
+		assert.ok(text('m-7').startsWith('#m7 · ') && text('m-7').includes('Delivery: Delivered when the agent checked its messages\n'), text('m-7'));
+		assert.ok(text('m-8').includes('Delivery: Delivered as the agent\'s first task\n'), text('m-8'));
+		assert.ok(text('m-6').includes('Delivery: Delivered to the agent\n'), text('m-6'));
 	});
 
-	test('a conversation\'s document: source, recipient, time, reply, outcome and Facade results, then the text as text, its command links inert', () => {
+	test('a message\'s document: source, recipient, time, reply, outcome and Facade results, then the text as text, its command links inert', () => {
 		const { history } = fakeEditor();
-		const conversation = history.conversationsOf(RECORDS).find(each => each.records.length === 3)!;
-		const text = history.conversationText(conversation, 'en');
 		const time = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'medium' }).format(T + 1_000);
-		assert.ok(text.startsWith('Message History: Ada #a1 ↔ Bob #a2\nRead-only. Messages are shown as they were sent; links in them cannot run editor commands.\n'), text);
-		assert.ok(text.includes(`#m1 · ${time}\nFrom: Ada #a1\nTo: Bob #a2\nDelivery: Delivered to the agent\nResult reported in: #m3\n\nSee [docs](command​:workbench.action.quit) now.\n`), text);
-		assert.ok(text.includes('From: Bob #a2\nTo: Ada #a1\nIn reply to: #m1\nDelivery: Not delivered: there was unsent text in the agent\'s input box\n'), text);
-		assert.ok(text.includes('From: Facade\nTo: Ada #a1\nAbout message: #m1\nDelivery: Delivered to the agent\n'), text);
+		const [first, reply, result] = ['m-1', 'm-2', 'm-3'].map(id => RECORDS.find(each => each.id === id)!);
+		const text = history.recordText(first, 'en', ['#m3']);
+		assert.ok(text.startsWith(`#m1 · ${time}\nFrom: Ada #a1\nTo: Bob #a2\nDelivery: Delivered to the agent\nResult reported in: #m3\n\nSee [docs](command\u200b:workbench.action.quit) now.\n`), text);
+		assert.ok(history.recordText(reply, 'en').includes('From: Bob #a2\nTo: Ada #a1\nIn reply to: #m1\nDelivery: Not delivered: there was unsent text in the agent\'s input box\n'));
+		assert.ok(history.recordText(result, 'en').includes('From: Facade\nTo: Ada #a1\nAbout message: #m1\nDelivery: Delivered to the agent\n'));
 		assert.ok(!text.includes('command:'), text);
-	});
-
-	test('Message History... is one native picker: conversations by recent activity; choosing one opens its read-only document', async () => {
-		const editor = fakeEditor();
-		const disposables = editor.host.registerMessageHistory({ messages: { history: () => RECORDS, onDidRecord: () => ({ dispose: () => undefined }) }, language: 'en' });
-		assert.deepStrictEqual([...editor.commands.keys()], ['facade.messageHistory']);
-		const done = editor.commands.get('facade.messageHistory')!() as Promise<void>;
-		assert.deepStrictEqual([editor.picker.title, editor.picker.items.map(item => [item.label, item.description])], ['Message History', [
-			['Cy #a3 ↔ Facade', '1 message'], ['Cy #a3 ↔ You', '1 message'], ['Ada #a1 ↔ Bob #a2', '3 messages'], ['Ada #a1 ↔ Cy #a3', '3 messages']
-		]]);
-		editor.picker.accept(2);
-		await done;
-		await flush();
-		assert.deepStrictEqual(editor.opened.map(each => [each.uri.scheme, each.uri.path, each.uri.query]), [['facade-message-history', '/Ada #a1 ↔ Bob #a2', `${A} ${B}`]]);
-		assert.ok(editor.opened[0].text.includes('Result reported in: #m3'));
-		disposables.forEach(each => each.dispose());
-	});
-
-	test('an agent\'s name or words holding $(...) are shown as written, not as the theme icon the editor would draw (PANEL-3.2)', async () => {
-		const editor = fakeEditor();
-		const records = [record(1, { from: { ...ada, name: '$(rocket) Ada' }, to: bob, text: 'Run $(debug-start) now' }, T)];
-		const disposables = editor.host.registerMessageHistory({ messages: { history: () => records, onDidRecord: () => ({ dispose: () => undefined }) }, language: 'en' });
-		const done = editor.commands.get('facade.messageHistory')!() as Promise<void>;
-		const [item] = editor.picker.items;
-		const shown = [item.label, (item.detail ?? '').split(' · ').pop()];
-		editor.picker.accept(0);
-		await done;
-		disposables.forEach(each => each.dispose());
-		assert.deepStrictEqual(shown, ['\\$(rocket) Ada #a1 ↔ Bob #a2', 'Run \\$(debug-start) now']);
-	});
-
-	test('with no records the picker says so, and offers nothing to send or delete', async () => {
-		const editor = fakeEditor();
-		editor.host.registerMessageHistory({ messages: { history: () => [], onDidRecord: () => ({ dispose: () => undefined }) }, language: 'en' });
-		const done = editor.commands.get('facade.messageHistory')!() as Promise<void>;
-		assert.deepStrictEqual([editor.picker.items, editor.picker.placeholder], [[], 'No messages in this window yet']);
-		editor.picker.hide();
-		await done;
 	});
 
 	test('#human: an information notification naming the source with the first line of its message, at most 300 code points; Open Message opens the whole message', async () => {

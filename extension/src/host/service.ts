@@ -41,13 +41,12 @@ import { agentAliases, AliasPool, ClientNetwork, LOCAL_POOL, networkAddress, pub
 import { registerAgentsLog } from './agentsLog';
 import { HostClis } from './clis';
 import { WindowContact } from './contact';
-import { diagnosticsOf, DiagnosticsDeps, registerDiagnostics } from './diagnostics';
+import { diagnosticsOf, DiagnosticsDeps } from './diagnostics';
 import { WorkspaceLaunchHistory } from './history';
 import { WindowHuman } from './human';
 import { OrdinaryInput } from './input';
 import { createLocationService, createWorktreeService } from './locations/index';
 import { editorEnvironment } from './editorEnvironment';
-import { registerMessageHistory } from './messageHistory';
 import { readSetting, waitSeconds, yolo } from './settings';
 import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch } from './showLaunch';
@@ -168,7 +167,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		shimScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'shim.js').fsPath
 	});
 	const worktrees = createWorktreeService(locations, log);
-	const clis = new HostClis({ log: line => log.event(line), fact: (event, fields) => log.fact?.(event, fields), home });
+	const clis = new HostClis({ log: line => log.event(line), fact: (event, fields) => log.fact?.(event, fields), home, version: String(context.extension.packageJSON.version) });
 	// This window on the client network, through its local component: without it, the tools reach this window alone (COLLABORATION-1.1)
 	const address = await networkAddress(session);
 	const network = address !== undefined ? new ClientNetwork(address, session) : undefined;
@@ -350,6 +349,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		home: os.homedir()
 	};
 	const disposables: vscode.Disposable[] = [
+		human,
 		locations.onDidChange(scanLocations),
 		vscode.workspace.onDidChangeConfiguration(event => {
 			if (event.affectsConfiguration('facade') || event.affectsConfiguration('terminal.integrated')) { scanLocations(); }
@@ -379,9 +379,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		registerShowLaunch(clis, locations, log, identity.remote),
 		registerAgentsLog(agentLog.file),
 		contact,
-		...registerMessageHistory({ messages }),
-		...registerDiagnostics(diagnostics),
-		// The integration suite's own: what an agent's terminal shows, for a journey's diagnostics, and what Copy Diagnostics would copy,
+		// The integration suite's own: what an agent's terminal shows, for a journey's diagnostics, and the diagnostics report,
 		// without the system clipboard; compiled out of the shipped extension
 		...typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [
 			vscode.commands.registerCommand('facade.screen', (run: string, lines = 40) => execution.readScreen(run, lines)),

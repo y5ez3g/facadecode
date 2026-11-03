@@ -48,6 +48,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let closed: string[];
 	let cleanup: CleanupResult | 'already_ended';
 	let did: string[];
+	let pinned: string[];
 	let activate: TestEmitter<string | undefined>;
 	let disposables: { dispose(): void }[];
 	/** What the locations' next read is; Quick Picks made; how many times the window's histories were opened. */
@@ -58,7 +59,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	const run = (id: string, arg?: unknown) => handlers.get(id)!(arg);
 
 	setup(async () => {
-		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; did = [];
+		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; did = []; pinned = [];
 		refreshing = Promise.resolve(); pickers = []; opened = 0;
 		cleanup = 'terminated';
 		activate = new TestEmitter();
@@ -83,7 +84,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const runs = new Map([[RUN, FACTS]]);
 		disposables = registerUi({
 			agents: {
-				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: () => {}, unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
+				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: id => void pinned.push(id), unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
 			launch: () => RUN,
 				close: async id => { closed.push(id); runs.delete(id); return cleanup; }, rename: () => undefined
 			},
@@ -109,23 +110,23 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	teardown(() => disposables.forEach(each => each.dispose()));
 
 	test('UX-3.1: from the Command Palette a command is about the selected run, kept as a file comes in front; a context-only command is about the card it was opened on alone', async () => {
-		await run('facade.copyAgentReference');
-		const nothingSelected = [...clipboard];
+		await run('facade.pinAgent');
+		const nothingSelected = [...pinned];
 		activate.fire(RUN);
 		await settle();
-		await run('facade.copyAgentReference');
+		await run('facade.pinAgent');
 		activate.fire(undefined);
 		await settle();
 		// The card stays selected as a file comes in front, and the palette's command is still about it
-		await run('facade.copyAgentReference');
+		await run('facade.pinAgent');
 		run('facade.moveUp');
-		assert.deepStrictEqual([nothingSelected, clipboard], [[], ['@Ada Lovelace #a3', '@Ada Lovelace #a3']]);
+		assert.deepStrictEqual([nothingSelected, pinned], [[], [RUN, RUN]]);
 	});
 
 	test('a card\'s menu names its run: a run gone does nothing; another shape fails without a guess', async () => {
-		await run('facade.copyAgentReference', { run_id: `run-${'9'.padStart(32, '0')}` });
-		await run('facade.copyAgentReference', { webview: 'facade.agents', webviewSection: 'agent', run_id: RUN, preventDefaultContextMenuItems: true });
-		assert.deepStrictEqual(clipboard, ['@Ada Lovelace #a3']);
+		await run('facade.pinAgent', { run_id: `run-${'9'.padStart(32, '0')}` });
+		await run('facade.pinAgent', { webview: 'facade.agents', webviewSection: 'agent', run_id: RUN, preventDefaultContextMenuItems: true });
+		assert.deepStrictEqual(pinned, [RUN]);
 		for (const bad of [{ run: RUN }, { run_id: 3 }, 'run', null]) {
 			assert.throws(() => run('facade.closeAgent', bad), /run_id/, JSON.stringify(bad));
 		}

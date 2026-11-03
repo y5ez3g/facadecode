@@ -69,6 +69,38 @@ suite('ptyd: a run\'s screen and its numbered output meet once (ARCHITECTURE-2.3
 		});
 	}
 
+	test('a screen drawn anew keeps what its program set that the serializer leaves out: the mouse encoding, a hidden cursor, the kitty keyboard flags and win32 input (D178)', async () => {
+		const { run, output } = runOf();
+		try {
+			output('prompt> \x1b[?1002h\x1b[?1006h\x1b[?25l\x1b[>1u\x1b[>9u\x1b[?9001h');
+			const { screen } = await run.snapshot();
+			// As the editor's terminal draws it after a reload: from a reset terminal
+			const terminal = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
+			let modes: unknown[];
+			try {
+				terminal.write(`\x1bc${screen}`);
+				await new Promise<void>(resolve => terminal.write('', resolve));
+				const core = (terminal as unknown as { _core: { coreMouseService: { activeEncoding: string }; coreService: { isCursorHidden: boolean } } })._core;
+				modes = [terminal.modes.mouseTrackingMode, core.coreMouseService.activeEncoding, core.coreService.isCursorHidden];
+			} finally {
+				terminal.dispose();
+			}
+			assert.deepStrictEqual(modes, ['drag', 'SGR', true]);
+			assert.ok(screen.endsWith('\x1b[?1006h\x1b[?25l\x1b[>1u\x1b[>9u\x1b[?9001h'), JSON.stringify(screen.slice(-60)));
+			// Set back by its program, or by a full reset, none of them is written
+			output('\x1b[?1006l\x1b[?25h\x1b[<2u\x1b[?9001l');
+			const reset = (await run.snapshot()).screen;
+			output('\x1b[?1016h\x1b[?25l\x1b[>3u\x1bc');
+			const full = (await run.snapshot()).screen;
+			for (const each of [reset, full]) {
+				// eslint-disable-next-line no-control-regex
+				assert.ok(!/\x1b\[\?(1006h|1016h|25l|9001h)|\x1b\[>\d+u/.test(each), JSON.stringify(each.slice(-60)));
+			}
+		} finally {
+			run.dispose();
+		}
+	});
+
 	test('its exit is told once what it wrote last is drawn, with a Ctrl+C typed just before as evidence', async () => {
 		const { run, output, end } = runOf();
 		const told: unknown[] = [];

@@ -79,7 +79,6 @@ function setUp(options: { readonly results?: ResultRoute | false; readonly sent?
 	const messages = store();
 	const copies = store();
 	const log: string[] = [];
-	const recorded: MessageRecord[] = [];
 	let n = 0;
 	const service = new MessageService({
 		agents: { get: run => runs.get(run), onDidChange },
@@ -96,8 +95,7 @@ function setUp(options: { readonly results?: ResultRoute | false; readonly sent?
 		workspace: 'ws-1',
 		log: { event: text => log.push(text) }
 	});
-	service.onDidRecord(record => recorded.push(record));
-	return { service, runs, input, reported, messages, copies, log, recorded };
+	return { service, runs, input, reported, messages, copies, log };
 }
 
 suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)', () => {
@@ -166,7 +164,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 	});
 
 	test('history shows this window\'s messages and the copies of those it sent to other windows, each once, oldest first', async () => {
-		const { service, copies, recorded } = setUp();
+		const { service, copies } = setUp();
 		await settled(service.send({ from: A, to: B, text: 'Local one.', elapsedMs: 0 }));
 		const there = (id: string, at: number): MessageRecord => ({
 			id, alias: `#m${id.slice(2)}`, kind: 'message', from: { run: A, alias: '#a1', name: 'Ada' }, to: { run: GUEST, alias: '#a9', name: 'Gus' },
@@ -181,8 +179,6 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		service.keepSent({ ...there('m-7', Date.now() + 1), delivery: { status: 'failure', reason: 'input_draft', effects: { outcome: 'none' }, attempts: 5 } });
 		assert.deepStrictEqual(service.history().find(record => record.id === 'm-7')?.delivery.status, 'failure');
 		assert.deepStrictEqual([...copies.records.keys()].sort(), ['m-1', 'm-7']);
-		// Each copy kept is told, as Message History follows what is recorded
-		assert.deepStrictEqual(recorded.filter(record => record.window === 'win-2').map(record => record.id), ['m-7', 'm-1', 'm-7']);
 	});
 
 	test('a copy whose outcome never came back is shown unconfirmed once its deadline passed, kept as it is for a retry to ask its window (COLLABORATION-3.2, D119)', () => {
@@ -202,9 +198,9 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 	});
 
 	test('without a store of copies a copy is not kept, and nothing fails', async () => {
-		const { service, recorded } = setUp({ sent: false });
+		const { service } = setUp({ sent: false });
 		service.keepSent({ id: 'm-7', alias: '#m7', kind: 'message', from: { run: A }, to: { run: GUEST }, window: 'win-2', environment: 'local', at: 1, text: 'x', length: 1, delivery: { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 } });
-		assert.deepStrictEqual([service.history(), recorded], [[], []]);
+		assert.deepStrictEqual(service.history(), []);
 	});
 
 	test('a creation prompt another window\'s agent gave natively is recorded as that agent\'s, with its window', async () => {

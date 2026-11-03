@@ -14,7 +14,7 @@ export interface InputEffects {
 	readonly enter_written?: boolean | null;
 }
 
-/** One message or Facade result, as kept for its recipient's inbox and Message History (COLLABORATION-4.1). */
+/** One message or Facade result, as kept for its recipient's inbox and its window's records (COLLABORATION-4.1). */
 export interface MessageRecord {
 	/** `m-42`; its alias `#m42` is unique and never reassigned (RULES-1.1). */
 	readonly id: string;
@@ -28,7 +28,7 @@ export interface MessageRecord {
 	readonly environment: string;
 	/** The window of its sender where that is another window of this computer: its Facade result goes back there (RULES-1.7). */
 	readonly fromWindow?: string;
-	/** The workspace whose Message History shows it, across reloads and later openings (COLLABORATION-3.2). */
+	/** The workspace whose records keep it, across reloads and later openings (COLLABORATION-3.2). */
 	readonly workspace?: string;
 	readonly at: number;
 	readonly replyTo?: string;
@@ -135,7 +135,7 @@ export interface InboxPage {
 	readonly missing: readonly string[];
 }
 
-/** The message service the tool service and Message History use. */
+/** The message service the tool service uses. */
 export interface Messages {
 	/** The first message sent by this caller with this request ID within the last hour, including routed sends. */
 	findRequest(from: RunId, requestId: string): MessageRecord | undefined;
@@ -156,7 +156,7 @@ export interface Messages {
 	 * `result` record in `to`'s inbox, delivered with its own budget, ending quietly where it cannot be (RULES-1.7).
 	 */
 	report(request: ResultReport): MessageRecord;
-	/** Keeps a copy of a message this window's agent sent to another window's, for Message History; its outcome updates it. */
+	/** Keeps a copy of a message this window's agent sent to another window's, as its record here; its outcome updates it. */
 	keepSent(record: MessageRecord): void;
 	/** The caller's own inbox, never another's (MCP-4.2). */
 	inbox(run: RunId, query: InboxQuery): InboxPage;
@@ -167,9 +167,8 @@ export interface Messages {
 	 * delivered, and its sender, told of the failure already, is not told again.
 	 */
 	markDelivered(run: RunId, ids: readonly string[]): void;
-	/** The records involving this window's runs, for Message History (COLLABORATION-3.2). */
+	/** The records involving this window's runs (COLLABORATION-3.2). */
 	history(): readonly MessageRecord[];
-	readonly onDidRecord: (listener: (record: MessageRecord) => void) => { dispose(): void };
 }
 
 /** A run's ordinary message input (CLIS-2.1, RULES-1.4): only a `supported` capability is ever typed into. */

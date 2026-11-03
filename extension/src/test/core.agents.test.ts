@@ -136,7 +136,7 @@ function setUp(options: {
 	let now = 10_000;
 	const agents = new AgentService({
 		conversations: { get: key => conversations.get(key.sessionId), put: (key, meta) => conversations.set(key.sessionId, meta) },
-		pinStore: { list: () => pins, save: pin => { pins = pins.some(each => each.id === pin.id) ? pins.map(each => each.id === pin.id ? pin : each) : [pin, ...pins]; },
+		pinStore: { list: () => pins, save: pin => { pins = pins.some(each => each.id === pin.id) ? pins.map(each => each.id === pin.id ? pin : each) : [...pins, pin]; },
 			remove: id => { pins = pins.filter(pin => pin.id !== id); }, reorder: ids => { pins = ids.map(id => pins.find(pin => pin.id === id)!).filter(Boolean); } },
 		newPinId: () => `pin-${++pinId}`,
 		execution,
@@ -1127,7 +1127,7 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.deepStrictEqual(world.errors.map(error => error.text), ['Could not restore Ada: claude is not installed in this environment.']);
 	});
 
-	test('a conversation has one Pin: pinning a card whose CLI resumed a pinned conversation takes that Pin to the very top, and a pinned card switching to it replaces it - Unpin then leaves none to restore (RULES-4.2, LIFECYCLE-3.4, PANEL-2.1)', async () => {
+	test('a conversation has one Pin: pinning a card whose CLI resumed a pinned conversation takes that Pin last among the Pins, and a pinned card switching to it replaces it - Unpin then leaves none to restore (RULES-4.2, LIFECYCLE-3.4, PANEL-2.1, D173)', async () => {
 		const world = setUp();
 		const store = (world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore;
 		const save = (pin: Pin) => store.save(pin);
@@ -1138,7 +1138,7 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		// Its CLI's own resume picks the pinned conversation; the person pins the card, from its menu or its tab
 		world.execution.identities.fire({ run: id, sessionId: 'k' });
 		world.agents.pin(id);
-		assert.deepStrictEqual([world.pins().map(pin => [pin.id, pin.name]), world.agents.get(id)?.pin], [[['pin-k', 'New'], ['pin-top', 'Top']], 'pin-k']);
+		assert.deepStrictEqual([world.pins().map(pin => [pin.id, pin.name]), world.agents.get(id)?.pin], [[['pin-top', 'Top'], ['pin-k', 'New']], 'pin-k']);
 		world.agents.unpin(id);
 		store.remove('pin-top');
 		assert.deepStrictEqual(world.pins(), []);

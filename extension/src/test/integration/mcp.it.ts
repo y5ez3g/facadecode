@@ -197,7 +197,7 @@ function assertTools(alias: string): void {
 
 /** How a creation prompt goes in for this CLI (COLLABORATION-2.2): natively, the option before it, or after startup for Antigravity. */
 const NATIVE: { readonly [cli: string]: string | undefined } = { claude: '--', codex: '--', muse: '--', pi: '--', opencode: '--prompt', agy: undefined };
-/** The reader of each built-in's input (CLIS-2.1), as Copy Diagnostics names it. */
+/** The reader of each built-in's input (CLIS-2.1), as the diagnostics report names it. */
 const INPUT: { readonly [cli: string]: string } = { claude: 'claude-frame', codex: 'codex-prompt', agy: 'agy-frame', muse: 'muse-frame', opencode: 'opencode-frame', pi: 'pi-frame' };
 
 /**
@@ -292,7 +292,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.ok(JSON.stringify(ran.content('read_screen', 2)).includes('Review the README.'), 'the completed screen keeps its earlier output');
 		assert.ok(!JSON.stringify(ran.content('read_screen', 2)).includes('typed by its creator'), 'Ctrl+U cleared it');
 
-		// What Copy Diagnostics copies, with both agents running (ARCHITECTURE-3.3, D116, D117): the versions, each agent with what its
+		// What the diagnostics report holds, with both agents running (ARCHITECTURE-3.3, D116, D117): the versions, each agent with what its
 		// input reads and its last rows, and the log with each tool call, the home folder written ~
 		const inputLine = (each: string) => new RegExp(`^- @\\S+ ${each} run-\\w+: .*\\n {2}running, .*; tools available; input reader ${INPUT[CLI]}, reads usable\\n {2}\\| `, 'm');
 		let diagnostics = '';

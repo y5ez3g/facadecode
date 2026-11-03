@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { displayLine } from '../base/text';
 import type { HumanContactPort, MessageRecord } from '../core/messagePorts';
-import { recordText, sideName } from '../ui/pickers/messageHistory';
+import { recordText, sideName } from '../ui/messageText';
 import { notificationText } from './notify';
 
 const SCHEME = 'facade-message';

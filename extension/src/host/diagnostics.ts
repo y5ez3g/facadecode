@@ -11,8 +11,6 @@ import { DiagnosedAgent, Diagnostics, diagnosticsText, LOG_LINES, SCREEN_ROWS } 
 import type { HostClis } from './clis';
 import { WINDOW_COMPONENT } from './windowComponent';
 
-export const COPY_DIAGNOSTICS_COMMAND = 'facade.copyDiagnostics';
-
 /** How long an agent's screen or input reader is waited for: one that does not answer is said not to. */
 const READ_MS = 3_000;
 /** How much of the agents log's end is read for its last lines. */
@@ -74,7 +72,7 @@ async function agentOf(deps: DiagnosticsDeps, facts: RunFacts): Promise<Diagnose
 	return { facts, input, screen: typeof screen === 'string' ? [screen] : screen.text };
 }
 
-/** Everything Copy Diagnostics copies, gathered now (ARCHITECTURE-3.3, D116). */
+/** Everything the diagnostics report holds, gathered now: the integration suite's `facade.diagnostics` (ARCHITECTURE-3.3, D116, D174). */
 export async function diagnosticsOf(deps: DiagnosticsDeps): Promise<string> {
 	const component: unknown = deps.component ?? vscode.extensions.getExtension(WINDOW_COMPONENT)?.packageJSON?.version;
 	const location = deps.locations.snapshot().locations[0];
@@ -107,12 +105,4 @@ export async function diagnosticsOf(deps: DiagnosticsDeps): Promise<string> {
 		log: logTail(deps.logFile),
 		home: deps.home
 	});
-}
-
-/** Copy Diagnostics (UX-3.1): the text on the clipboard, and a notification that says what it holds. */
-export function registerDiagnostics(deps: DiagnosticsDeps): vscode.Disposable[] {
-	return [vscode.commands.registerCommand(COPY_DIAGNOSTICS_COMMAND, async () => {
-		await vscode.env.clipboard.writeText(await diagnosticsOf(deps));
-		void vscode.window.showInformationMessage(vscode.l10n.t("Facade's diagnostics are copied. They include your agents' screens, which can show code or keys: read them before you share them."));
-	})];
 }

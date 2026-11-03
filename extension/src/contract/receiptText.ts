@@ -5,7 +5,7 @@
 import { renderFacts } from '../base/readableFacts';
 import type { Result } from '../schema/result';
 
-/** Readable text stored for Message History; never an MCP answer or protocol adapter. */
+/** Readable text stored with a record; never an MCP answer or protocol adapter. */
 export function receiptTextOf(result: Result, headline?: string): string {
 	return `${headline ?? headlineOf(result)}\n\n${renderFacts(result).join('\n')}`;
 }

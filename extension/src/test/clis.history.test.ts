@@ -9,6 +9,7 @@ import { pathToFileURL } from 'url';
 import { BATCH, MOST_READS_PER_BATCH, VendorHistory } from '../clis/history';
 import { claudeProjectFolderName } from '../clis/history/claude';
 import { piCandidates, piSessionDirectory, piSessionFolderName } from '../clis/history/pi';
+import { Scope } from '../clis/history/scope';
 import { tempDir } from './util';
 
 // Fixtures in the store formats these readers were written against: they test Facade's readers, not what a current CLI writes,
@@ -67,7 +68,7 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 			fs.mkdirSync(path.join(sessions, piSessionFolderName(cwd)), { recursive: true });
 			fs.writeFileSync(path.join(sessions, piSessionFolderName(cwd), `${id(1)}.jsonl`), '{}\n');
 		}
-		const listed = piCandidates(sessions, [repo]).map(candidate => path.basename(path.dirname(candidate.file))).sort();
+		const listed = piCandidates(sessions, new Scope([repo])).map(candidate => path.basename(path.dirname(candidate.file))).sort();
 		// The sibling sharing a prefix is a candidate, read and left out by its header; elsewhere is not read
 		assert.deepStrictEqual(listed, [repo, path.join(repo, 'pkg'), `${repo}-other`].map(piSessionFolderName).sort());
 	});

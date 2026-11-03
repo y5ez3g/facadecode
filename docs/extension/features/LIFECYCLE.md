@@ -123,8 +123,8 @@ identity `#human`; an agent uses its own run ID, including when named `human`. A
 Human creation provides an editable random name, a short machine word such as `Bolt` or
 `Pixel`; agent creation supplies its own `name` under MCP-2.2. A name is not a filesystem path, branch or shell argument
 template. CLI titles, activity and task progress never rename the agent; the creation name stays until the person
-explicitly renames it (D127). Rename uses a native Input Box and changes no run/session/location identity. Copy Agent Reference copies
-`@name #aN` without a toast. APIs accept an exact ID or an unambiguous name under RULES-2.3, which also decides
+explicitly renames it (D127). Rename uses a native Input Box and changes no run/session/location identity. Go to Agent's
+copy button copies `@name #aN` without a toast; there is no Copy Agent Reference command (D174). APIs accept an exact ID or an unambiguous name under RULES-2.3, which also decides
 `#human` and `@human`. The name plus ID is descriptive; stale display text must not redirect the run.
 
 ### 2.2 Terminal placement and focus
@@ -141,6 +141,12 @@ length limit or change the editor's tab-width settings. Native tab renames synch
 valid, without removing text that resembles a CLI title. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
 as an alternative.
+An agent's terminal passes the person's input to its CLI as typed, except a mouse report the editor could not measure.
+The editor reports a click's release after it opens a clicked link, and a link opened over an editor terminal takes the
+terminal out of the page first: the release then has no position (`ESC[<0;NaN;NaNm`), which a CLI shows as typed text.
+Such a release takes the position of the report before it, its press; one with none before it is left out (D170).
+A file dropped onto an agent's terminal gives it its path only with Shift held, as the editor requires of every terminal in
+the editor area; an extension cannot change that (D171).
 
 ### 2.3 Finding an agent
 
@@ -170,11 +176,14 @@ answers how that start's cleanup ended. A close ptyd has not confirmed is record
 than showing it again (D131). No worktree/files/history deletion is
 attached. Closing an agent does not close the agents it started. Unsolicited exits follow RULES-3.3.
 
-Closing a live agent's terminal tab, alone or together with other editors (Close All, Close Others, Close Saved), first
-asks once in a modal warning for every tab closed together: `Close {0}?` or `Close {0} agents?`, with `Close Agent` or
-`Close Agents`, the detail saying their processes will end. Cancel keeps the agents running and opens their terminals
-again with their current screens. `terminal.integrated.confirmOnKill` set to `never` or `panel` closes without asking, as
-the editor does for its own terminals. A starting or ended agent's tab closes it without asking. The editor cannot be
+Closing a live agent's terminal tab by itself - its close button, Close in its menu, a middle click or Close Editor -
+closes the agent at once, as Close Agent does (D172). A tab the editor closes together with other editor tabs (Close All,
+Close Others, Close to the Right, Close Saved, closing its group) first asks once in a modal warning for every live agent
+closed together: `Close {0}?` or `Close {0} agents?`, with `Close Agent` or `Close Agents`, the detail saying their
+processes will end. Cancel keeps the agents running and opens their terminals again with their current screens. The
+editor does not say what closed a tab: one is closed by itself when no other tab closes within 100 ms of it, so a Close
+Others that has only that agent's tab to close counts as closing it by itself. `terminal.integrated.confirmOnKill` set to
+`never` or `panel` closes without asking, as the editor does for its own terminals. A starting or ended agent's tab closes it without asking. The editor cannot be
 stopped from closing the tab itself, so the question follows the close. Messages name an agent with an empty name by its
 `#aN`. A tab close whose Unpin cannot be saved keeps the agent, opens its terminal again and tells the person (D131).
 
@@ -185,7 +194,9 @@ stopped from closing the tab itself, so the question follows the close. Messages
 Open from panel, empty state or Command Palette; the picker shows at once, busy while the window's locations and
 running conversations are read (D135). Read only list metadata, recent activity first, paginated in batches
 of 100; search continues beyond the first page. Reuse already read metadata during the picker session rather than
-rescanning every log on each page or keystroke. Prefer vendor discovery; do not build a new conversation store.
+rescanning every log on each page or keystroke. Reading the histories keeps the window's agents responsive: the stores are
+read together, each folder's real path is resolved once per reading rather than per conversation, and no long synchronous
+read holds the extension host that draws their terminals (D177). Prefer vendor discovery; do not build a new conversation store.
 There is no 30-day age cutoff. A scan limit must not silently make older matching history permanently unreachable.
 Deduplicate by environment/CLI/session ID. Each conversation uses the same single-line native presentation as Go to
 Agent: its CLI icon and prominent conversation title, then quieter activity time, original location and saved Facade
@@ -288,6 +299,10 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 
 ## Change log
 
+- 2026-11-02: 3.1 closes a live agent whose tab the person closed by itself without asking, and asks only for tabs closed
+  together with others (D172); 2.2 keeps a click's release whole where the editor could not measure it (D170) and records
+  that a dropped file needs Shift (D171); 2.1 drops Copy Agent Reference for Go to Agent's copy button (D174); 3.2 reads
+  the histories without holding the extension host (D177).
 - 2026-11-02: D161 keeps both agent pickers on one line, gives name/title their separate priorities, retains equal fields, and generates missing names only on manual Resume.
 - 2026-11-02: Keep terminal tab logos visible across themes and restoration through contributed native icons (D159).
 

@@ -995,7 +995,7 @@ class ToolService {
 
 	/**
 	 * A message to another window's agent (COLLABORATION-1.1, RULES-1.1-1.7): its ID taken here, delivered there within what is left
-	 * of the two seconds, a copy kept here for Message History, and its later outcome coming back here as a Facade result.
+	 * of the two seconds, a copy of its record kept here, and its later outcome coming back here as a Facade result.
 	 */
 	private async sendThere(args: ToolArguments['send_message'], caller: Caller, call: Received, target: Reachable): Promise<Outcome> {
 		let replyTo: string | undefined;

@@ -15,10 +15,8 @@ export const COMMANDS = {
 	unpinAgent: 'facade.unpinAgent',
 	showActiveAgents: 'facade.showActiveAgents',
 	renameAgent: 'facade.renameAgent',
-	copyAgentReference: 'facade.copyAgentReference',
 	closeAgent: 'facade.closeAgent',
 	filter: 'facade.filter',
-	clearFilter: 'facade.clearFilter',
 	configureAgents: 'facade.configureAgents',
 	/** Registered by the host, which has the CLIs' launch and the agents log (CLIS-4.1, ARCHITECTURE-3.3). */
 	showAgentLaunch: 'facade.showAgentLaunch',
@@ -26,8 +24,6 @@ export const COMMANDS = {
 	newWorktree: 'facade.newWorktree',
 	moveUp: 'facade.moveUp',
 	moveDown: 'facade.moveDown',
-	filterByLocation: 'facade.filterByLocation',
-	filterByFolder: 'facade.filterByFolder',
 	/** Filter by Working Location as its title button shows it while a filter is on: filled (UX-3.2). */
 	filterOn: 'facade.filterOn',
 	revealAgent: 'facade.revealAgent'

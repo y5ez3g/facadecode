@@ -81,19 +81,25 @@ export class PanelPrefs {
 	}
 }
 
-// The panel's manual stack (PANEL-2.1): state changes never move a card; only a new card, and Move Up/Down, do.
+// The panel's two queues, Pins first (PANEL-2.1, D173): state changes never move a card; a card goes last in the area it enters - a
+// new or unpinned card among the others, a new Pin among the Pins - and Move Up/Down moves it.
 
-/** The stack with `run` first, where a new card goes (PANEL-2.1); one already in it stays where it is. */
+/** The stack with `run` last, where a new card goes (PANEL-2.1, D173); one already in it stays where it is. */
 export function withNew(order: readonly string[], run: string): string[] {
-	return order.includes(run) ? [...order] : [run, ...order];
+	return order.includes(run) ? [...order] : [...order, run];
 }
 
-/** The runs of `present` in the stack's order; any the stack does not know yet go first, newest first as `present` lists them. */
+/** The stack with `run` moved last: where a card goes as it leaves the Pins, or enters them (PANEL-2.1, D173). */
+export function atEnd(order: readonly string[], run: string): string[] {
+	return [...order.filter(each => each !== run), run];
+}
+
+/** The runs of `present` in the stack's order; any the stack does not know yet go last, oldest first as `present` lists them. */
 export function arranged(order: readonly string[], present: readonly string[]): string[] {
 	const known = new Set(present);
 	const placed = order.filter(run => known.has(run));
 	const listed = new Set(placed);
-	return [...present.filter(run => !listed.has(run)), ...placed];
+	return [...placed, ...present.filter(run => !listed.has(run))];
 }
 
 /**

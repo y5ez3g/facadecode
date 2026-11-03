@@ -167,7 +167,7 @@ reload rather than to install the component (D133).
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
 component rejects a request from a different session. Its answer names the component's own version too, which a remote
-extension host cannot see otherwise, for Copy Diagnostics (3.3, D116). Each activation records its key and folders under that identity in
+extension host cannot see otherwise, for the diagnostics report (3.3, D116). Each activation records its key and folders under that identity in
 the execution Facade directory. The same window that retains its original first folder takes that key and the current
 window's saved state - order, locations and choices - even if the destination workspace has stale state. Another window
 does not inherit it merely by opening the same folders or copying a workspace file. The execution environment keeps one atomic exact-workspace-URI ledger, including each owner's current URI. Resolution
@@ -232,7 +232,10 @@ This rule is a proof obligation, not a claim that every supported editor already
 **The execution owner keeps process/screen facts and serializes input independently of the visible card.**
 
 Keep process/run identity, screen snapshot/output sequence and actual input effects across extension-host reload.
-Attach without duplicating output; retain a dated final screen after exit where available.
+Attach without duplicating output; retain a dated final screen after exit where available. A screen snapshot carries the
+terminal modes its program set, so that a terminal drawing it anew behaves as before: besides the serializer's own, the
+mouse encoding, a hidden cursor, the kitty keyboard flags of the screen it is on and win32 input mode, each followed through
+the program's resets (D178).
 Propagate RULES-1.5's remaining message budget to the input owner; internal hops cannot restart it.
 Do not compare independent host wall clocks as if synchronized. Check whether input can still start before writing.
 Uncertain effects stay uncertain; ordinary-message retries follow RULES-1.6's single paste and owned-draft Enter.
@@ -342,7 +345,7 @@ model, effort and destination are launch facts; prompts, terminal bodies, full a
 Existing call/request IDs and short agent/message references connect dispatch, route, answer, accepted work and final
 receipt. Start/stop receipts preserve their operation and execution window across routing and persistence. Message log
 entries record identity and meaningful delivery/effect transitions, not repeated unchanged attempts or message bodies.
-Copy Diagnostics labels its window/environment scope: a local log is not a complete distributed trace. No second
+The diagnostics report labels its window/environment scope: a local log is not a complete distributed trace. No second
 operation ID, telemetry service, new retention period or background history scan is introduced.
 
 Structured history uses `events.jsonl` beside the workspace's agents log. Records carry UTC `at`, event name,
@@ -358,14 +361,13 @@ event becomes an explicit omission record. Diagnostic write failure cannot fail 
 
 An empty agents log opens with `No agent events yet`, with no information toast.
 
-Copy Diagnostics puts on the clipboard, in English as the log is, what a report of a problem needs, and sends nothing
-anywhere: the extension's, its window component's and the editor's versions, the platform and the remote kind; each
+The diagnostics report, which only the integration suite's `facade.diagnostics` produces since Copy Diagnostics was
+removed (D174), holds in English, as the log is, what a report of a problem needs, and sends nothing anywhere: the extension's, its window component's and the editor's versions, the platform and the remote kind; each
 built-in CLI for the window's first location - its version as its installation says it and its input reader, or why it
 cannot start; this window's agents - CLI and version, lifecycle, activity and since when, tools, and what their input
 reader reads now - with each live one's last twelve screen rows; and the agents log's last two hundred lines. The home
 folder is written `~`, whatever the case or separators a path spells it with, as VS Code lowercases a Windows drive
-letter (D135). Its notification says that screens can show code and keys, and to look the text over before
-sharing it (D116).
+letter (D135).
 
 ## 4 Repository and delivery
 
@@ -526,6 +528,10 @@ See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this d
 
 ## Change log
 
+- 2026-11-02: 2.3 carries the terminal modes the serializer leaves out across a reattach - the mouse encoding first, whose
+  loss stopped scrolling and selection after a reload (D178).
+- 2026-11-02: 3.3 removes the Copy Diagnostics command at the owner's request; its report remains the integration suite's
+  (D174).
 - 2026-11-02: Record bounded JSONL lifecycle/scan history for ordinary file reads; current discovery moves to list_agents (D163).
 
 - 2026-11-01: 2.3 creates one run's program at a time, in the order asked, at the owner's request: starts asked together on

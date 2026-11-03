@@ -39,11 +39,11 @@ export interface MessageServiceDeps {
 	readonly input: InputPort;
 	readonly human: HumanContactPort;
 	readonly store: MessageStore;
-	/** Copies of messages this window's agents sent to other windows' agents, for Message History (COLLABORATION-3.2). */
+	/** Copies of messages this window's agents sent to other windows' agents: their records here (COLLABORATION-3.2). */
 	readonly sent?: MessageStore;
 	/** Carries results to senders in other windows; none, and such a result ends quietly. */
 	readonly results?: ResultRoute;
-	/** The API layer's machine projection of a delivery, separate from readable Message History text. */
+	/** The API layer's machine projection of a delivery, separate from a record's readable text. */
 	readonly receipt?: (original: MessageRecord, cli?: string) => NonNullable<MessageRecord['result']>;
 	readonly ids: MessageIdPort;
 	/** Epoch milliseconds, for the times records keep. */
@@ -51,7 +51,7 @@ export interface MessageServiceDeps {
 	/** This window: its ID, which records keep, and its label, which the message header shows (COLLABORATION-2.1). */
 	readonly window: { readonly id: string; readonly label: string };
 	readonly environment: string;
-	/** The workspace whose Message History shows this window's records, across reloads and later openings (COLLABORATION-3.2). */
+	/** The workspace whose records these are, across reloads and later openings (COLLABORATION-3.2). */
 	readonly workspace: string;
 	readonly log: LogPort;
 	/** The clock attempt slots and deadlines are held on: this process's monotonic one (ARCHITECTURE-2.3). */
@@ -166,7 +166,6 @@ const HELD: ReadonlySet<string> = new Set(['input_draft', 'input_interaction']);
  * with its own budget, and ends quietly where it cannot. Attempts for one terminal never run side by side.
  */
 export class MessageService implements Messages, Disposable {
-	private readonly listeners = new Set<(record: MessageRecord) => void>();
 	private readonly subscriptions: Disposable[] = [];
 	/** Records whose delivery is under way here: the current version of each, ahead of what was read from the store. */
 	private readonly live = new Map<string, MessageRecord>();
@@ -180,11 +179,6 @@ export class MessageService implements Messages, Disposable {
 	private readonly mono: () => number;
 	private readonly wait: (ms: number, signal: AbortSignal) => Promise<void>;
 	private disposed = false;
-
-	readonly onDidRecord = (listener: (record: MessageRecord) => void): Disposable => {
-		this.listeners.add(listener);
-		return { dispose: () => this.listeners.delete(listener) };
-	};
 
 	constructor(private readonly deps: MessageServiceDeps) {
 		this.mono = deps.monotonic ?? monotonic;
@@ -207,7 +201,6 @@ export class MessageService implements Messages, Disposable {
 		for (const subscription of this.subscriptions) {
 			subscription.dispose();
 		}
-		this.listeners.clear();
 	}
 
 	async send(request: SendRequest): Promise<SendResult> {
@@ -338,7 +331,6 @@ export class MessageService implements Messages, Disposable {
 			this.deps.log.event(`Could not keep a copy of message ${record.alias}: ${messageOf(err)}`);
 		}
 		if (!before || messageTrace(before) !== messageTrace(record)) { this.deps.log.event(messageTrace(record)); }
-		this.emit(record);
 	}
 
 	inbox(run: RunId, query: InboxQuery): InboxPage {
@@ -867,7 +859,6 @@ export class MessageService implements Messages, Disposable {
 			this.live.set(record.id, record);
 		}
 		this.deps.log.event(messageTrace(record));
-		this.emit(record);
 		return record;
 	}
 
@@ -892,7 +883,6 @@ export class MessageService implements Messages, Disposable {
 				this.deps.log.event(`Could not record message ${record.alias}: ${messageOf(err)}`);
 			}
 			if (!before || messageTrace(before) !== messageTrace(record)) { this.deps.log.event(messageTrace(record)); }
-			this.emit(record);
 		}
 		return record;
 	}
@@ -1067,16 +1057,6 @@ export class MessageService implements Messages, Disposable {
 		return facts ? { run, alias: facts.alias, name: facts.name } : { run };
 	}
 
-	/** Tells each listener - Message History - of `record`; one that fails stops no delivery, nor any listener after it. */
-	private emit(record: MessageRecord): void {
-		for (const listener of [...this.listeners]) {
-			try {
-				listener(record);
-			} catch (err) {
-				this.deps.log.event(`Could not show message ${record.alias} where it is listed: ${messageOf(err)}`);
-			}
-		}
-	}
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------

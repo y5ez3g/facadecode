@@ -69,7 +69,7 @@ suite('The agent panel in Chromium', function () {
 	const CARDS = `
 		window.newCard = (i, more = {}) => ({ runId: 'run-' + i, selected: false, name: 'Agent ' + i, alias: '#a' + i, avatar: { file: 'avatar-claude.png' },
 			location: { label: 'project', full: 'project · /project' }, dot: 'working', stateText: 'Working', line: 'Step one', tooltip: ['Agent ' + i + ' · #a' + i + ' · Claude Code', 'Working'],
-			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false, filterLocation: false, filterFolder: false, clearFilter: false }, ...more });
+			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false }, ...more });
 		window.stateOf = (cards, more = {}) => ({ revision: 1, loading: false, cards, cardCount: cards.length, capabilities: { remote: false }, ...more });
 		window.agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1));
 		window.redraw = (more = {}) => panel.render(stateOf(agents, more));
@@ -190,7 +190,7 @@ suite('The agent panel in Chromium', function () {
 
 	test('CLI words in the card, accessible label and hover are literal text, never HTML or command links (PANEL-3.2)', async () => {
 		const text = '[Review](command:test.run) <a href="command:test.run">Review</a>';
-		assert.deepStrictEqual(await evaluate(`(() => { agents = [newCard(1, { name: ${JSON.stringify(text)}, line: ${JSON.stringify(text)}, label: ${JSON.stringify(text)}, tooltip: [${JSON.stringify(text)}] })]; redraw({ revision: 2 }); const card = document.querySelector('.agent'); return [card.querySelector('.name').textContent, card.querySelector('.title').textContent, card.title.includes(${JSON.stringify(text)}), card.getAttribute('aria-label'), card.querySelectorAll('a').length]; })()`), [text, text, true, text, 0]);
+		assert.deepStrictEqual(await evaluate(`(() => { agents = [newCard(1, { name: ${JSON.stringify(text)}, line: ${JSON.stringify(text)}, label: ${JSON.stringify(text)}, tooltip: [${JSON.stringify(text)}] })]; redraw({ revision: 2 }); const card = document.querySelector('.agent'); const name = card.querySelector('.name').textContent; return [name === ${JSON.stringify(text)} || name.endsWith('…') && ${JSON.stringify(text)}.startsWith(name.slice(0, -1)), card.querySelector('.title').textContent, card.title.includes(${JSON.stringify(text)}), card.getAttribute('aria-label'), card.querySelectorAll('a').length]; })()`), [true, text, true, text, 0]);
 	});
 
 	test('working dots breathe without per-frame style recalculation, and both reduced-motion settings leave them still', async () => {
@@ -284,7 +284,7 @@ suite('The agent panel in Chromium', function () {
 			const facts = [...document.querySelectorAll('.agent')].map(card => {
 				const line = card.querySelector('.line.top').getBoundingClientRect().width, place = card.querySelector('.place'), name = card.querySelector('.name');
 				const folder = place.querySelector('.folder').textContent, tree = place.querySelector('.tree').textContent;
-				return { over40: place.getBoundingClientRect().width / line > 0.4, nameCut: name.scrollWidth > name.clientWidth + 1, folder, tree, hover: card.title };
+				return { over40: place.getBoundingClientRect().width / line > 0.4, nameCut: name.textContent.endsWith('…'), folder, tree, hover: card.title };
 			});
 			document.body.style.width = '';
 			return facts;
@@ -333,7 +333,10 @@ suite('The agent panel in Chromium', function () {
 			{ name: 'Ada', folder: 'a-very-long-workspace-folder-name', tree: 'main' },
 			{ name: '', folder: '👩🏽‍💻Café-工作目录-👨‍👩‍👧‍👦', tree: 'feature/42-开发-👩🏽‍💻-Café-👨‍👩‍👧‍👦' },
 			{ name: 'Ada', tree: 'feature/128-a-location-without-a-folder-prefix' },
-			{ name: 'Ada', folder: 'api', tree: 'main' }
+			{ name: 'Ada', folder: 'api', tree: 'main' },
+			// A long name cut before its Pin, in Latin and CJK letters: the Pin follows its ellipsis as closely as a whole name (D176)
+			{ name: 'facadecode 扩展面板状态与卡片布局', folder: 'facadecode', tree: 'feature/78-mcp-polish' },
+			{ name: 'Refactor the authentication middleware for sessions', tree: 'main' }
 		];
 		for (const font of ['-apple-system, sans-serif', 'serif', 'monospace']) {
 			await evaluate(`document.documentElement.style.setProperty('--vscode-font-family', ${JSON.stringify(font)})`);
@@ -345,12 +348,13 @@ suite('The agent panel in Chromium', function () {
 					return [...document.querySelectorAll('.agent')].map(card => {
 						const top = card.querySelector('.top'), name = card.querySelector('.name'), pin = card.querySelector('.pin'), place = card.querySelector('.place'), folder = place.querySelector('.folder'), bullet = place.querySelector('.bullet'), tree = place.querySelector('.tree');
 						const visible = el => { const range = document.createRange(); range.selectNodeContents(el); const text = range.getBoundingClientRect(), box = el.getBoundingClientRect(); return { left: Math.max(text.left, box.left), right: Math.min(text.right, box.right) }; };
-						return { text: place.textContent, pinned: !!pin, pinGap: pin ? pin.getBoundingClientRect().left - name.getBoundingClientRect().right : 4, locationGap: place.getBoundingClientRect().left - (pin ?? name).getBoundingClientRect().right, beforeDot: folder ? bullet.getBoundingClientRect().left - visible(folder).right : 0, afterDot: bullet ? visible(tree).left - visible(bullet).right : 0, rightSlack: top.getBoundingClientRect().right - visible(tree).right, full: card.title.includes(agents.find(agent => agent.runId === card.dataset.run).location.full) };
+						return { text: place.textContent, pinned: !!pin, pinGap: pin ? pin.getBoundingClientRect().left - name.getBoundingClientRect().right : 4, textGap: pin && name.textContent ? pin.getBoundingClientRect().left - visible(name).right : 4, nameFits: name.scrollWidth <= name.clientWidth + 1, locationGap: place.getBoundingClientRect().left - (pin ?? name).getBoundingClientRect().right, beforeDot: folder ? bullet.getBoundingClientRect().left - visible(folder).right : 0, afterDot: bullet ? visible(tree).left - visible(bullet).right : 0, rightSlack: top.getBoundingClientRect().right - visible(tree).right, full: card.title.includes(agents.find(agent => agent.runId === card.dataset.run).location.full) };
 					});
 				})()`);
 				for (const row of rows) {
 					const context = `${font}, ${width}px: ${JSON.stringify(row)}`;
-					assert.ok(Math.abs(row.pinGap - 4) <= 0.1 && row.locationGap >= 5.9, context);
+					// The name is cut to what it shows, never overflowing a box the browser would ellipsize short of its end (D176)
+					assert.ok(Math.abs(row.pinGap - 4) <= 0.1 && row.nameFits && row.textGap >= 3.9 && row.textGap <= 5.1 && row.locationGap >= 5.9, context);
 					assert.ok(row.beforeDot >= -0.1 && row.beforeDot <= 1.1, context);
 					assert.ok(row.afterDot >= -0.1 && row.afterDot <= 1.1, context);
 					assert.ok(row.rightSlack >= -0.1 && row.rightSlack <= 1.1, context);
@@ -474,11 +478,47 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves, its filters where they change what is shown, Clear Filter while filtered; Rename, Copy and Close always', async () => {
-		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true, filterLocation: true, filterFolder: false, clearFilter: true } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 2).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
-			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, webviewFilterLocation: true, webviewFiltered: true, preventDefaultContextMenuItems: true },
+	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; Rename and Close always', async () => {
+		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 2).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
+			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
 			{ webviewSection: 'agent', run_id: 'run-2', preventDefaultContextMenuItems: true }
 		]);
+	});
+
+	test('UX-2.3, D175: the card a context menu is open on gets no frame', async () => {
+		const seen = await evaluate(`(() => {
+			document.documentElement.style.setProperty('--vscode-focusBorder', '#0078d4');
+			agents = [newCard(1), newCard(2)]; redraw({ revision: 2 });
+			const [card] = document.querySelectorAll('.agent');
+			card.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, button: 2 }));
+			document.body.classList.add('vscode-context-menu-visible');
+			const framed = getComputedStyle(card).outlineStyle;
+			document.body.classList.remove('vscode-context-menu-visible');
+			document.documentElement.style.removeProperty('--vscode-focusBorder');
+			return framed;
+		})()`);
+		assert.strictEqual(seen, 'none');
+	});
+
+	test('PANEL-2.1, D173: a new card goes last; the one the person started, selected, scrolls into view once it has opened, and an agent\'s leaves the list where it is', async () => {
+		const seen = await evaluate(`(async () => {
+			const root = document.scrollingElement ?? document.documentElement;
+			agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1)); redraw({ revision: 2 });
+			root.scrollTop = 0;
+			// An agent's start, which selects nothing
+			agents = [...agents, newCard(31)]; redraw({ revision: 3 });
+			await new Promise(resolve => setTimeout(resolve, 500));
+			const stayed = root.scrollTop;
+			// The person's start, selected
+			agents = [...agents, newCard(32, { selected: true })]; redraw({ revision: 4 });
+			await new Promise(resolve => setTimeout(resolve, 500));
+			const box = document.querySelector('[data-run="run-32"]').getBoundingClientRect();
+			const shown = box.top >= 0 && box.bottom <= innerHeight + 1;
+			const last = [...document.querySelectorAll('.agent')].at(-1).dataset.run;
+			agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1)); redraw({ revision: 5 });
+			return [stayed, shown, last];
+		})()`);
+		assert.deepStrictEqual(seen, [0, true, 'run-32']);
 	});
 
 	test('U02: a click posts the page\'s generation, an action ID no other page has and the card\'s run - no expected revision; a failed open gives the highlight back to the selected card', async () => {

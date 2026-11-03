@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { Environment } from '../environment';
+import type { Scope } from './scope';
 
 /** A file of a vendor store that may hold a conversation of the scope: listed with its last change, not yet read. */
 export interface Candidate {
@@ -32,8 +33,8 @@ export interface VendorStore {
 	readonly cli: string;
 	/** The store's folder, as the CLI's launches in `directory` with `env` find it (CLIS-1.2). */
 	dirOf(env: Environment, directory: string, args?: readonly string[]): string;
-	/** What in the store at `dir` may keep a conversation of `directories` or a folder below them: listed with its last change. */
-	candidates(dir: string, directories: readonly string[]): Candidate[];
+	/** What in the store at `dir` may keep a conversation of `scope` - its directories or a folder below them: listed with its last change. */
+	candidates(dir: string, scope: Scope): Candidate[];
 	/** Register additional files before reading them so their creation, removal or changes invalidate cached metadata. */
 	read(candidate: Candidate, dependOn?: (file: string) => void): Promise<Found | undefined>;
 }

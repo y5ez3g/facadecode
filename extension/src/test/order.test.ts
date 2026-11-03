@@ -3,16 +3,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { arranged, moved, withNew } from '../ui/order';
+import { arranged, atEnd, moved, withNew } from '../ui/order';
 
-suite('The panel\'s manual stack (PANEL-2.1, U05)', () => {
+suite('The panel\'s two queues (PANEL-2.1, D173, U05)', () => {
 
-	test('a new card goes first; one already in the stack keeps its place, whatever its state', () => {
-		assert.deepStrictEqual([withNew(['b', 'a'], 'c'), withNew(['b', 'a'], 'a')], [['c', 'b', 'a'], ['b', 'a']]);
+	test('a new card goes last; one already in the stack keeps its place, whatever its state; Pin and Unpin move a card last', () => {
+		assert.deepStrictEqual([withNew(['a', 'b'], 'c'), withNew(['a', 'b'], 'a'), atEnd(['a', 'b', 'c'], 'a'), atEnd(['a', 'b'], 'b'), atEnd(['a'], 'n')],
+			[['a', 'b', 'c'], ['a', 'b'], ['b', 'c', 'a'], ['a', 'b'], ['a', 'n']]);
 	});
 
-	test('the stack arranges the runs present, those it does not know first, and drops those gone', () => {
-		assert.deepStrictEqual(arranged(['b', 'gone', 'a'], ['new2', 'new1', 'a', 'b']), ['new2', 'new1', 'b', 'a']);
+	test('the stack arranges the runs present, those it does not know last, oldest first, and drops those gone', () => {
+		assert.deepStrictEqual(arranged(['b', 'gone', 'a'], ['a', 'b', 'new1', 'new2']), ['b', 'a', 'new1', 'new2']);
 	});
 
 	test('Move Up/Down trades places with the next card; with a filter, the next shown one, hidden cards keeping their slots; nothing moves past an end', () => {

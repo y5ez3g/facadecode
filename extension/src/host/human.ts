@@ -9,23 +9,42 @@ import { COMMANDS } from '../ui/catalog';
 import { configureAgentsLabel, launchFailureText } from '../ui/presentation';
 import { notificationText } from './notify';
 
-/** Tabs the editor closes together - Close All, Close Others - arrive as separate closes within this; they are asked about once. */
+/**
+ * Tabs the editor closes together - Close All, Close Others - arrive as separate closes within this; they are asked about once. A
+ * live agent's tab with no other tab closing within this of it was closed by itself, which closes the agent without asking.
+ */
 const CLOSE_BATCH_MS = 100;
 
 /**
  * The person in this window (RULES-1.8, UX-1.2): native error notifications for human-operation errors and known failures with
  * no responsible agent, offering only Show or Configure Agents - the same page as the command of that name. Dismissal changes nothing.
  */
-export class WindowHuman implements HumanPort {
+export class WindowHuman implements HumanPort, vscode.Disposable {
 	/** The agents whose tabs closed together, gathered before they are asked about. */
 	private closing: { readonly agents: { readonly run: RunId; readonly label: string }[]; readonly answer: Promise<boolean> } | undefined;
+	/** When the editor's tabs of any kind closed lately, one time for each: what tells a tab closed by itself (D172). */
+	private closedTabs: number[] = [];
+	private readonly tabs: vscode.Disposable;
 
-	constructor(private readonly show: (run: RunId) => Promise<unknown>) { }
+	constructor(private readonly show: (run: RunId) => Promise<unknown>) {
+		this.tabs = vscode.window.tabGroups.onDidChangeTabs(event => {
+			if (event.closed.length) {
+				const now = Date.now();
+				this.closedTabs = [...this.closedTabs.filter(at => now - at <= 2 * CLOSE_BATCH_MS), ...event.closed.map(() => now)];
+			}
+		});
+	}
+
+	dispose(): void {
+		this.tabs.dispose();
+	}
 
 	/**
-	 * Whether the person confirms ending live agents whose tabs they closed (LIFECYCLE-3.1): one modal warning for tabs closed together.
-	 * As the editor asks before terminating an editor terminal's processes, `terminal.integrated.confirmOnKill` set to `never` or `panel`
-	 * ends them without asking.
+	 * Whether the person confirms ending live agents whose tabs closed (LIFECYCLE-3.1). A tab the person closed by itself - its close
+	 * button, Close, Close Editor - ends its agent without asking (D172); tabs the editor closed together, an agent's with other tabs,
+	 * are asked about once, in one modal warning. The editor does not say what closed a tab: one is closed by itself when no other tab
+	 * closes within CLOSE_BATCH_MS of it. As the editor asks before terminating an editor terminal's processes,
+	 * `terminal.integrated.confirmOnKill` set to `never` or `panel` ends them without asking.
 	 */
 	confirmClose(agent: { readonly run: RunId; readonly label: string }): Promise<boolean> {
 		const setting = vscode.workspace.getConfiguration('terminal.integrated').get<unknown>('confirmOnKill') ?? 'editor';
@@ -37,9 +56,13 @@ export class WindowHuman implements HumanPort {
 			return this.closing.answer;
 		}
 		const agents = [agent];
+		const since = Date.now() - CLOSE_BATCH_MS;
 		const answer = new Promise<void>(resolve => setTimeout(resolve, CLOSE_BATCH_MS)).then(() => {
 			// Tabs closed while the question is up are asked about next
 			this.closing = undefined;
+			if (agents.length === 1 && this.closedTabs.filter(at => at >= since).length <= 1) {
+				return true;
+			}
 			return this.askClose(agents);
 		});
 		this.closing = { agents, answer };

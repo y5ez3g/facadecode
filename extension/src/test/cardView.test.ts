@@ -43,7 +43,7 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 }
 
 const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', full: 'shop · main\n/app' };
-const menu = { moveUp: false, moveDown: true, filterLocation: false, filterFolder: false, clearFilter: false };
+const menu = { moveUp: false, moveDown: true };
 
 suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () => {
 

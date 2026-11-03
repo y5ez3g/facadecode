@@ -143,7 +143,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(2));
 		model.select(id(1));
 		await tick();
-		assert.deepStrictEqual([states.length - before, names(model.state()), model.state().revision > states[before - 1].revision], [1, ['Agent 2', 'Agent 1'], true]);
+		assert.deepStrictEqual([states.length - before, names(model.state()), model.state().revision > states[before - 1].revision], [1, ['Agent 1', 'Agent 2'], true]);
 	});
 
 	test('a CLI\'s reported text and activity reach the page at most once per 300 ms; lifecycle changes and errors go at once', async () => {
@@ -174,7 +174,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([leading, held, trailing, line, sent() - first, model.state().cards[0].dot], [1, 1, 2, 'Three', 3, 'error']);
 	});
 
-	test('U05: the badge counts every card - starting, failed and filtered out alike; a new card goes first; the order is kept in workspace storage', async () => {
+	test('U05: the badge counts every card - starting, failed and filtered out alike; a new card goes last; the order is kept in workspace storage (D173)', async () => {
 		let model = make();
 		agents.add(run(1, { lifecycle: 'starting', phase: 'launching_cli' }));
 		agents.add(run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }));
@@ -185,7 +185,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		await tick();
 		const filtered = [model.state().cardCount, names(model.state())];
 		model.setFilter(undefined);
-		assert.ok(model.move(id(1), -1));
+		assert.ok(model.move(id(1), 1));
 		await tick();
 		const moved = names(model.state());
 		model.dispose();
@@ -195,11 +195,11 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(4));
 		await tick();
 		assert.deepStrictEqual([counted, filtered, moved, reloaded, names(model.state())], [
-			[3, ['Agent 3', 'Agent 2', 'Agent 1']],
-			[3, ['Agent 2', 'Agent 1']],
-			['Agent 3', 'Agent 1', 'Agent 2'],
-			['Agent 3', 'Agent 1', 'Agent 2'],
-			['Agent 4', 'Agent 3', 'Agent 1', 'Agent 2']
+			[3, ['Agent 1', 'Agent 2', 'Agent 3']],
+			[3, ['Agent 1', 'Agent 2']],
+			['Agent 2', 'Agent 1', 'Agent 3'],
+			['Agent 2', 'Agent 1', 'Agent 3'],
+			['Agent 2', 'Agent 1', 'Agent 3', 'Agent 4']
 		]);
 	});
 
@@ -210,12 +210,12 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(3));
 		await tick();
 		const menus = model.state().cards.map(card => [card.name, card.menu.moveUp, card.menu.moveDown]);
-		assert.ok(model.move(id(1), -1));
-		assert.ok(model.move(id(1), -1));
-		assert.ok(!model.move(id(1), -1), 'the top card does not move up');
-		assert.ok(model.move(id(3), 1));
+		assert.ok(model.move(id(3), -1));
+		assert.ok(model.move(id(3), -1));
+		assert.ok(!model.move(id(3), -1), 'the top card does not move up');
+		assert.ok(model.move(id(1), 1));
 		await tick();
-		assert.deepStrictEqual([menus, names(model.state())], [[['Agent 3', false, true], ['Agent 2', true, true], ['Agent 1', true, false]], ['Agent 1', 'Agent 2', 'Agent 3']]);
+		assert.deepStrictEqual([menus, names(model.state())], [[['Agent 1', false, true], ['Agent 2', true, true], ['Agent 3', true, false]], ['Agent 3', 'Agent 2', 'Agent 1']]);
 	});
 
 	test('with a filter, Move Up/Down passes the next shown card, hidden ones keeping their slots (PANEL-2.1, 2.3)', async () => {
@@ -227,12 +227,12 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		model.setFilter({ kind: 'location', id: MAIN.id, label: 'main' });
 		await tick();
 		const menus = model.state().cards.map(card => [card.name, card.menu.moveUp, card.menu.moveDown]);
-		assert.ok(model.move(id(1), -1));
-		assert.ok(!model.move(id(1), -1));
+		assert.ok(model.move(id(3), -1));
+		assert.ok(!model.move(id(3), -1));
 		assert.ok(!model.move(id(2), 1), 'a hidden card does not move');
 		model.setFilter(undefined);
 		await tick();
-		assert.deepStrictEqual([menus, names(model.state())], [[['Agent 3', false, true], ['Agent 1', true, false]], ['Agent 1', 'Agent 2', 'Agent 3']]);
+		assert.deepStrictEqual([menus, names(model.state())], [[['Agent 1', false, true], ['Agent 3', true, false]], ['Agent 3', 'Agent 2', 'Agent 1']]);
 	});
 
 	test('U04: no launch, catalog change or failed Git read clears the filter; it persists, and only a confirmed removal of its location or folder clears it (PANEL-2.3)', async () => {
@@ -288,32 +288,20 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([removed, folderGone, kept, storage.values.get('facade.panel.filter')], [undefined, undefined, { kind: 'location', id: 'loc-unlisted', label: 'unlisted' }, { kind: 'location', id: 'loc-unlisted', label: 'unlisted' }]);
 	});
 
-	test('a card\'s own filters appear only where they change what is shown, Clear Filter while filtered; the view names the filter by its location\'s current label (PANEL-2.2, 2.3)', async () => {
+	test('the view names a filter by its folder\'s name, or by its location\'s current label (PANEL-2.3)', async () => {
 		const model = make();
 		agents.add(run(1));
 		agents.add(run(2, { location: LOGIN.id }));
 		agents.add(run(3, { location: GUIDE.id }));
 		await tick();
-		const menuOf = (n: number) => { const { filterLocation, filterFolder, clearFilter } = model.state().cards.find(card => card.runId === id(n))!.menu; return { filterLocation, filterFolder, clearFilter }; };
-		const all = [menuOf(1), menuOf(3)];
-		model.setFilter(model.filterFor(id(1), 'folder'));
+		model.setFilter({ kind: 'folder', id: SHOP.uri, label: 'stale' });
 		await tick();
-		const inFolder = [menuOf(1), model.state().filter?.label];
-		model.setFilter(model.filterFor(id(1), 'location'));
+		const inFolder = model.state().filter?.label;
+		model.setFilter({ kind: 'location', id: MAIN.id, label: 'stale' });
 		locations.catalog = { locations: [GUIDE, LOGIN], folders: [SHOP, DOCS], pending: false };
 		locations.changed.fire();
 		await tick();
-		assert.deepStrictEqual([all, inFolder, menuOf(1), model.state().filter?.label], [
-			[{ filterLocation: true, filterFolder: true, clearFilter: false }, { filterLocation: true, filterFolder: true, clearFilter: false }],
-			[{ filterLocation: true, filterFolder: false, clearFilter: true }, 'shop'],
-			{ filterLocation: false, filterFolder: true, clearFilter: true },
-			'shop · main'
-		]);
-		// One folder: no folder filter is offered, as Filter by Working Location has none to highlight
-		locations.catalog = { locations: [MAIN, LOGIN], folders: [SHOP], pending: false };
-		locations.changed.fire();
-		await tick();
-		assert.deepStrictEqual(menuOf(1), { filterLocation: false, filterFolder: false, clearFilter: true });
+		assert.deepStrictEqual([inFolder, model.state().filter?.label], ['shop', 'shop · main']);
 	});
 
 	test('selection follows the last active owned terminal, survives a file in front and goes with its run; a background start leaves it; a failed launch stays selected (PANEL-2.1)', async () => {
@@ -368,7 +356,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(2, { location: MAIN.id, cwd: MAIN.path }));
 		await tick();
 		assert.deepStrictEqual(model.state().cards.map(card => card.location), [
-			{ label: 'main', folderPrefix: 'shop', full: 'shop · main\n/main' }, { label: 'docs', full: 'docs\n/docs' }
+			{ label: 'docs', full: 'docs\n/docs' }, { label: 'main', folderPrefix: 'shop', full: 'shop · main\n/main' }
 		]);
 	});
 
@@ -408,9 +396,9 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 			agents.add(run(n));
 		}
 		await tick();
-		assert.deepStrictEqual([model.state().cardCount, model.state().cards.length, model.state().cards[0].name, model.state().cards[99].name], [100, 100, 'Agent 100', 'Agent 1']);
+		assert.deepStrictEqual([model.state().cardCount, model.state().cards.length, model.state().cards[0].name, model.state().cards[99].name], [100, 100, 'Agent 1', 'Agent 100']);
 	});
-	test('U05, PANEL-2.1: Pins come first in their kept order; a new Pin goes to the very top, an Unpin first below the Pins; Move Up/Down stays within its area; the order survives a new model', async () => {
+	test('U05, PANEL-2.1: Pins come first in their kept order; a new Pin goes last among the Pins, an Unpin last below them; Move Up/Down stays within its area; the order survives a new model (D173)', async () => {
 		agents.saved = ['pin-a'];
 		agents.add(run(1, { resumable: true, pin: 'pin-a' }));
 		agents.add(run(2, { resumable: true }));
@@ -419,11 +407,11 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		await tick();
 		const restored = names(model.state());
 		const flags = model.state().cards.map(card => [card.name, !!card.pinned, !!card.menu.pin, !!card.menu.unpin]);
-		agents.saved = ['pin-b', 'pin-a'];
+		agents.saved = ['pin-a', 'pin-b'];
 		agents.update(id(2), { pin: 'pin-b' }, 'lifecycle');
 		await tick();
-		const pinned = [names(model.state()), model.state().cards[0].pinned, model.state().cards[0].label.includes('Pinned')];
-		const moves = [model.move(id(1), -1), model.move(id(1), -1), model.move(id(2), 1), model.move(id(3), -1)];
+		const pinned = [names(model.state()), model.state().cards[1].pinned, model.state().cards[1].label.includes('Pinned')];
+		const moves = [model.move(id(2), -1), model.move(id(2), -1), model.move(id(1), 1), model.move(id(3), -1)];
 		await tick();
 		const moved = names(model.state());
 		agents.saved = ['pin-b'];
@@ -437,14 +425,14 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		model = make();
 		await tick();
 		assert.deepStrictEqual([restored, flags, pinned, moves, moved, unpinned, front, names(model.state()), agents.saved], [
-			['Agent 1', 'Agent 3', 'Agent 2'],
-			[['Agent 1', true, false, true], ['Agent 3', false, false, false], ['Agent 2', false, true, false]],
-			[['Agent 2', 'Agent 1', 'Agent 3'], true, true],
-			[true, false, false, false],
 			['Agent 1', 'Agent 2', 'Agent 3'],
+			[['Agent 1', true, false, true], ['Agent 2', false, true, false], ['Agent 3', false, false, false]],
+			[['Agent 1', 'Agent 2', 'Agent 3'], true, true],
+			[true, false, false, false],
 			['Agent 2', 'Agent 1', 'Agent 3'],
+			['Agent 2', 'Agent 3', 'Agent 1'],
 			{ run: id(2), ended: false, pinned: true, resumable: true },
-			['Agent 2', 'Agent 1', 'Agent 3'],
+			['Agent 2', 'Agent 3', 'Agent 1'],
 			['pin-b']
 		]);
 	});
