@@ -86,7 +86,7 @@ interface Source {
  * (WORKTREES-4.1). `plan` validates and proposes without effects; `create` makes what was planned, one creation at a time per
  * destination folder, confirms it with Git and reports actual partial effects without rolling anything back (WORKTREES-2.2, 4.2).
  * Facade never initializes a repository or makes a first commit (WORKTREES-2.3). `remove` deletes a linked worktree the person
- * chose, never one with changes Git has not committed (WORKTREES-3.2, D73).
+ * chose, never one with changes Git has not committed (WORKTREES-3.2).
  */
 export class WorktreeService implements WorktreePort {
 	private readonly creating = new Map<string, Promise<unknown>>();
@@ -179,7 +179,7 @@ export class WorktreeService implements WorktreePort {
 	}
 
 	/**
-	 * Deletes the linked worktree `id` (WORKTREES-3.2, D73), with the Git and in the environment its creation would use. Only a
+	 * Deletes the linked worktree `id` (WORKTREES-3.2), with the Git and in the environment its creation would use. Only a
 	 * registered worktree other than the main one, whose root it is and with no workspace folder in it, as Git and the window say now.
 	 * Refused with nothing touched where it is locked, holds another worktree, has a change Git lists - not committed, or untracked - or
 	 * holds a link to a folder this Git would delete through; else out of the catalog while `closeAgents` closes its agents - true once

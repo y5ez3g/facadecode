@@ -10,7 +10,7 @@ import { submittedDraft, taken, TypedEnters } from '../host/execution/submission
 import type * as AgentPtyModule from '../host/execution/agentPty';
 import { TestEmitter, withModules } from './withModules';
 
-suite('What the person submits in an agent\'s terminal, for its card\'s second line (PANEL-1.4, D184)', () => {
+suite('What the person submits in an agent\'s terminal, for its card\'s second line (PANEL-1.4)', () => {
 
 	test('an Enter typed alone or as the kitty protocol reports it submits; one inside a paste, across chunks too, or Alt+Enter does not', () => {
 		const enters = new TypedEnters();
@@ -31,16 +31,16 @@ suite('What the person submits in an agent\'s terminal, for its card\'s second l
 		], ['fix the login bug', undefined, undefined, undefined, undefined, undefined, undefined]);
 	});
 
-	test('the CLI took it once its input is empty, shows a menu or question, or another draft; not while it keeps the text or more after it', async () => {
+	test('CLIS-2.1: the CLI took it once its input is empty or shows a menu or question; not while it keeps the text, more after it or another draft', async () => {
 		const reading = (state: InputReading['state'], draft?: string): InputReading => ({ state, evidence: 'test', ...draft !== undefined ? { draft } : {} });
 		const waits: number[] = [];
 		const wait = async (ms: number) => { waits.push(ms); };
 		const read = (...readings: (InputReading | undefined)[]) => async () => readings.shift();
-		assert.strictEqual(await taken('/clear', read(reading('draft', '/clear'), reading('usable')), wait, [1, 2, 3]), true);
-		assert.strictEqual(await taken('/model', read(reading('interaction')), wait, [1]), true, 'a menu the Enter opened');
-		assert.strictEqual(await taken('one', read(reading('unknown'), reading('draft', 'next one')), wait, [1, 2]), true, 'the person typing anew');
-		assert.strictEqual(await taken('one\ntwo', read(reading('draft', 'one two'), reading('draft', 'one two three')), wait, [1, 2]), false, 'a line break and more typed');
-		assert.strictEqual(await taken('one', read(undefined), wait, [1, 2]), false, 'its input could not be read any more');
+		assert.strictEqual(await taken(read(reading('draft', '/clear'), reading('usable')), wait, [1, 2, 3]), true);
+		assert.strictEqual(await taken(read(reading('interaction')), wait, [1]), true, 'a menu the Enter opened');
+		assert.strictEqual(await taken(read(reading('unknown'), reading('draft', 'next one')), wait, [1, 2]), false, 'another draft records nothing');
+		assert.strictEqual(await taken(read(reading('draft', 'one two'), reading('draft', 'one two three')), wait, [1, 2]), false, 'a line break and more typed');
+		assert.strictEqual(await taken(read(undefined), wait, [1, 2]), false, 'its input could not be read any more');
 		assert.deepStrictEqual(waits, [1, 2, 1, 1, 2, 1, 2, 1]);
 	});
 
@@ -52,7 +52,7 @@ suite('What the person submits in an agent\'s terminal, for its card\'s second l
 	});
 });
 
-suite('An agent\'s tab spins while it works (LIFECYCLE-2.2, D185)', () => {
+suite('An agent\'s tab spins while it works (LIFECYCLE-2.2)', () => {
 	// Every terminal made is disposed, a test that failed too: its spinner's timer would keep the process alive
 	const made: { dispose(): void }[] = [];
 	teardown(() => { made.splice(0).forEach(each => each.dispose()); });

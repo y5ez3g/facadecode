@@ -138,7 +138,7 @@ export class WindowTerminals implements vscode.Disposable {
 			let retired = false;
 			for (const [title, group] of groups) {
 				if (!group.every(run => runs.has(run) && owner.runs.has(run))) { continue; }
-				// A working agent's tab title has a spinner's frame before its name, a tick apart from one to the next (D185)
+				// A working agent's tab title has a spinner's frame before its name, a tick apart from one to the next (LIFECYCLE-2.2)
 				const old = found.filter(each => unspun(each.name) === title && unspun(each.terminal.name) === title && eligible(each.terminal)
 					&& vscode.window.terminals.includes(each.terminal) && !(each.pid !== undefined && each.pid > 0));
 				// Unknown PIDs do not shrink an ambiguous group into an apparently exact one.

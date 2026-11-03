@@ -142,7 +142,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		assert.deepStrictEqual([[...messages.records.keys()], input.submitted.map(each => each.run)], [['m-50'], [B]]);
 	});
 
-	test('an input box Facade never recognized fails at the deadline, the result naming the CLI and the version it found (D89)', async () => {
+	test('an input box Facade never recognized fails at the deadline, the result naming the CLI and the version it found (CLIS-2.1)', async () => {
 		const { service, input, reported } = setUp();
 		input.states.set(B, ['unknown']);
 		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }));
@@ -181,7 +181,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		assert.deepStrictEqual([...copies.records.keys()].sort(), ['m-1', 'm-7']);
 	});
 
-	test('a copy whose outcome never came back is shown unconfirmed once its deadline passed, kept as it is for a retry to ask its window (COLLABORATION-3.2, D119)', () => {
+	test('a copy whose outcome never came back is shown unconfirmed once its deadline passed, kept as it is for a retry to ask its window (COLLABORATION-3.2, RULES-1.5)', () => {
 		const { service, copies } = setUp();
 		const at = Date.now();
 		const copy: MessageRecord = {

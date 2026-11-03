@@ -112,7 +112,7 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 		assert.deepStrictEqual(activityOf(undefined), { activity: 'unknown', reporting: false, unknown: 'not_reporting' });
 	});
 
-	test('the CLI\'s actual terminal title wins over a plain report title; a missing terminal title falls back without stripping symbols (CLIS-2.3, D160)', () => {
+	test('the CLI\'s actual terminal title wins over a plain report title; a missing terminal title falls back without stripping symbols (CLIS-2.3)', () => {
 		assert.deepStrictEqual([
 			cliTitle({ reported: 'Fixing the tests', terminal: '✳ Something else' }),
 			cliTitle({ reported: '', terminal: '⠐ Refactoring parser' }),
@@ -126,7 +126,7 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 		], ['✳ Something else', '⠐ Refactoring parser', '✳ ★ Release v2 — notes!', 'evil', 'evil', 'Fallback title', 'Fallback title', undefined, undefined]);
 	});
 
-	test('every CLI keeps visible decorations and titles naming the CLI, folder or agent, alone or joined (CLIS-2.3, D126)', () => {
+	test('every CLI keeps visible decorations and titles naming the CLI, folder or agent, alone or joined (CLIS-2.3)', () => {
 		for (const title of [
 			'⠐ Refactoring parser', '✳ Claude Code', '✳ ★ Release v2 — notes!', 'claude - shop-app',
 			'Codex', 'codex - shop-app', 'π - shop-app', 'π - Fix login - shop-app', 'pi',
@@ -140,7 +140,7 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 		}
 	});
 
-	test('OpenCode keeps the title it sets, including generic titles; a report remains the fallback when no terminal title exists (CLIS-2.3, D160)', () => {
+	test('OpenCode keeps the title it sets, including generic titles; a report remains the fallback when no terminal title exists (CLIS-2.3)', () => {
 		const placeholder = 'New session - 2026-10-31T03:29:22.759Z';
 		assert.deepStrictEqual([
 			cliTitle({ reported: placeholder, terminal: 'OpenCode' }),

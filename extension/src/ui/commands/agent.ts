@@ -3,13 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { messageOf } from '../../base/errors';
 import { FacadeError, invalid } from '../../core/errors';
 import { labelOf, normalizeName } from '../../core/names';
 import type { Agents, ExecutionPort, HumanPort, RunId } from '../../core/ports';
-import { referenceOf } from '../cardView';
+import { referenceOf } from '../../core/reach';
 import { COMMANDS } from '../catalog';
 import { PanelModel } from '../model';
+import { reasonOf } from '../presentation';
 import { BACK, Flow } from '../pickers/stepping';
 
 export interface AgentCommandDeps {
@@ -54,8 +54,11 @@ export class AgentActions {
 		try {
 			if (pinned) { this.deps.agents.pin(run); } else { this.deps.agents.unpin(run); }
 		} catch (err) {
-			this.deps.notifyError(pinned ? vscode.l10n.t("Could not pin {0}: {1}", labelOf(facts), messageOf(err))
-				: vscode.l10n.t("Could not unpin {0}: {1}", labelOf(facts), messageOf(err)), {});
+			// Closed meanwhile: nothing is left to pin, and no run's ID is said
+			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
+				this.deps.notifyError(pinned ? vscode.l10n.t("Could not pin {0}: {1}", labelOf(facts), reasonOf(err))
+					: vscode.l10n.t("Could not unpin {0}: {1}", labelOf(facts), reasonOf(err)), {});
+			}
 		}
 	}
 
@@ -82,7 +85,7 @@ export class AgentActions {
 			}
 		} catch (err) {
 			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(vscode.l10n.t("Could not close {0}: {1}", labelOf(facts), messageOf(err)), {});
+				this.deps.notifyError(vscode.l10n.t("Could not close {0}: {1}", labelOf(facts), reasonOf(err)), {});
 			}
 		}
 	}
@@ -108,7 +111,7 @@ export class AgentActions {
 		} catch (err) {
 			// Closed while its name was being typed: nothing is left to rename
 			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(vscode.l10n.t("Could not rename {0}: {1}", labelOf(facts), messageOf(err)), {});
+				this.deps.notifyError(vscode.l10n.t("Could not rename {0}: {1}", labelOf(facts), reasonOf(err)), {});
 			}
 		}
 	}

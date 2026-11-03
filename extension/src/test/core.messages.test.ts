@@ -267,7 +267,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		const answer = service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, callId: 'call-7' });
 		const result = await settled(answer);
 		assert.ok(Date.now() - start <= 2_000, `answered after ${Date.now() - start} ms`);
-		// A draft holds the input: the deadline moves on to ten minutes from the start (RULES-1.5, D106)
+		// A draft holds the input: the deadline moves on to ten minutes from the start (RULES-1.5)
 		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.status, result.record.delivery.deadline], ['accepted', 'input_draft', 'pending', start + 600_000]);
 		assert.deepStrictEqual(result.record.delivery.effects, { outcome: 'pending', text_written: 'none', enter_written: false });
 		await sleep(15_000);
@@ -290,14 +290,14 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.strictEqual(inbox[0].text, `Your message #m1 has been passed on to Bob (#a2).`);
 		const toA = input.submitted.filter(each => each.run === A);
 		assert.deepStrictEqual(toA.map(each => [each.at - start, each.text.split('\n')[0]]), [[3_000, '🔔 Your message #m1 has been passed on to Bob (#a2).']]);
-		// A message goes with the words that ask its CLI to act on it; a Facade result asks for nothing and has none (D108)
+		// A message goes with the words that ask its CLI to act on it; a Facade result asks for nothing and has none (COLLABORATION-2.1)
 		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).map(each => each.lead), toA.map(each => each.lead)], [[MESSAGE_LEAD], [undefined]]);
 		assert.deepStrictEqual([inbox[0].delivery.status, inbox[0].delivery.via], ['success', 'terminal']);
 		// B's inbox has the message alone; the result is not B's
 		assert.deepStrictEqual(service.inbox(B, { all: true, limit: 100 }).records.map(record => record.id), ['m-1']);
 	});
 
-	test('a draft throughout is waited for, a slot every three seconds for ten minutes, nothing typed, then failure with no effects (D106)', async () => {
+	test('a draft throughout is waited for, a slot every three seconds for ten minutes, nothing typed, then failure with no effects (RULES-1.4)', async () => {
 		const { service, input } = setUp();
 		input.states.set(B, ['draft']);
 		const start = Date.now();
@@ -323,7 +323,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		// Unknown: the fifteen seconds, counted from the request's arrival 1.5 s before
 		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.deadline], ['accepted', 'input_unknown', start + 13_500]);
 		await sleep(2_000);
-		// The CLI's own menu holds the input: the deadline moves on to ten minutes from that arrival, whatever it shows after (D106)
+		// The CLI's own menu holds the input: the deadline moves on to ten minutes from that arrival, whatever it shows after (RULES-1.4)
 		assert.deepStrictEqual([service.history().find(record => record.id === 'm-1')!.delivery.deadline], [start + 598_500]);
 		await sleep(600_000);
 		const slots = since(start, input.inspected.filter(each => each.run === B).map(each => each.at));
@@ -418,7 +418,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(original.delivery, { status: 'failure', reason: 'partial_input', effects: { outcome: 'partial', text_written: 'partial', enter_written: false }, deadline: original.at + 15_000, attempts: 5 });
 	});
 
-	test('an unconfirmed submission is never pasted again: an input empty after its Enter confirms it at the next slot (RULES-1.6, D104)', async () => {
+	test('an unconfirmed submission is never pasted again: an input empty after its Enter confirms it at the next slot (RULES-1.6)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);
 		const start = Date.now();
@@ -433,7 +433,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.strictEqual(input.entered.length, 0);
 	});
 
-	test('the message\'s own draft, left by an Enter that was not taken, gets Enter again and only Enter; another draft over it is never typed over (D104)', async () => {
+	test('the message\'s own draft, left by an Enter that was not taken, gets Enter again and only Enter; another draft over it is never typed over (RULES-1.3)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);
 		input.states.set(B, ['usable', 'own']);
@@ -442,7 +442,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		await sleep(5_000);
 		assert.deepStrictEqual([input.submitted.filter(each => each.run === B).length, input.entered.map(each => each.at - start)], [1, [3_000]]);
 		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.delivery.status, 'success');
-		// Someone added to its draft: no Enter, no paste, and the draft waited for, as any draft is, up to ten minutes (RULES-1.4, D106)
+		// Someone added to its draft: no Enter, no paste, and the draft waited for, as any draft is, up to ten minutes (RULES-1.4)
 		const other = setUp();
 		other.input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }]);
 		other.input.states.set(B, ['usable', 'draft']);
@@ -457,7 +457,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.deadline! - begun], ['failure', 'submission_unconfirmed', 600_000]);
 	});
 
-	test('a paste whose draft never showed is not pasted again, even into an empty input: it may still show (D104)', async () => {
+	test('a paste whose draft never showed is not pasted again, even into an empty input: it may still show (RULES-1.3)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }]);
 		input.shown.set(B, [false]);
@@ -470,7 +470,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.delivery.status, 'success');
 	});
 
-	test('a paste whose answer was lost is never confirmed by an empty input after it: no Enter of it went, and it is not typed again (D104, D118)', async () => {
+	test('a paste whose answer was lost is never confirmed by an empty input after it: no Enter of it went, and it is not typed again (RULES-1.3, RULES-1.5)', async () => {
 		const { service, input } = setUp();
 		input.throws.set(B, [new Error('ptyd lost'), undefined]);
 		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
@@ -532,7 +532,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.strictEqual(part.service.history().find(record => record.id === 'm-1')!.delivery.reason, 'partial_input');
 	});
 
-	test('a later Enter is only over the draft its paste showed as - its placeholder, its number too - which every later look is given (D118)', async () => {
+	test('a later Enter is only over the draft its paste showed as - its placeholder, its number too - which every later look is given (RULES-1.5)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: true }]);
 		input.states.set(B, ['usable', 'own']);
@@ -542,7 +542,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(input.entered.map(each => each.seen), ['[Pasted text #1 +1 lines]']);
 	});
 
-	test('a paste that may still show holds its terminal: no other message is pasted with it until its delivery ends (RULES-1.10, D118)', async () => {
+	test('a paste that may still show holds its terminal: no other message is pasted with it until its delivery ends (RULES-1.10)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }, CONFIRMED]);
 		input.shown.set(B, [false, true]);
@@ -560,7 +560,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(['m-1', 'm-2'].map(id => service.history().find(record => record.id === id)!.delivery.status), ['failure', 'success']);
 	});
 
-	test('a long paste is given the time it takes at its deadline, on top of the fifteen seconds (D105, D118)', async () => {
+	test('a long paste is given the time it takes at its deadline, on top of the fifteen seconds (CLIS-2.1)', async () => {
 		const { service, input } = setUp();
 		input.extraMs = 4_000;
 		input.states.set(B, ['unknown']);
@@ -574,7 +574,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual([failed.delivery.status, failed.delivery.reason, failed.delivery.attempts], ['failure', 'input_unknown', 7]);
 	});
 
-	test('a Facade result joins others only with a whole stage\'s time before them; otherwise it is its own, its budget its own (RULES-1.5, D115, D118)', async () => {
+	test('a Facade result joins others only with a whole stage\'s time before them; otherwise it is its own, its budget its own (RULES-1.5, RULES-1.7)', async () => {
 		const { service, input } = setUp();
 		input.states.set(A, [...Array(6).fill('unknown'), 'usable']);
 		const start = Date.now();
@@ -588,7 +588,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(pastes.map(each => [each.at - start, /First/.test(each.text), /Second/.test(each.text)]), [[16_000, false, true]]);
 	});
 
-	test('a paste of results that typed nothing leaves them gathering: one that comes meanwhile goes in the same paste (D115, D118)', async () => {
+	test('a paste of results that typed nothing leaves them gathering: one that comes meanwhile goes in the same paste (RULES-1.7, RULES-1.5)', async () => {
 		const { service, input } = setUp();
 		input.states.set(A, ['draft', 'usable']);
 		input.effects.set(A, [{ outcome: 'none', text_written: 'none', enter_written: false }, CONFIRMED]);
@@ -601,13 +601,13 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(service.inbox(A, { all: true, limit: 10 }).records.map(each => each.delivery.status), ['success', 'success']);
 	});
 
-	test('a send keeps its request ID with its record, for a retry to find it (D110, D118)', async () => {
+	test('a send keeps its request ID with its record, for a retry to find it (RULES-1.1, RULES-1.5)', async () => {
 		const { service } = setUp();
 		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, requestId: 'ask-1' }));
 		assert.strictEqual(service.history().find(record => record.id === 'm-1')!.requestId, 'ask-1');
 	});
 
-	test('a native question over the message\'s own draft holds the input: waited for, and the draft gets Enter once it closes (D106)', async () => {
+	test('a native question over the message\'s own draft holds the input: waited for, and the draft gets Enter once it closes (RULES-1.4)', async () => {
 		const { service, input } = setUp();
 		input.effects.set(B, [{ outcome: 'unknown', text_written: 'full', enter_written: false }]);
 		input.states.set(B, ['usable', ...Array(30).fill('interaction'), 'own']);
@@ -626,7 +626,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		const start = Date.now();
 		await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
 		await sleep(610_000);
-		// B took it at 3 s; A's result stage starts then, and its draft holds A's input: a slot every 3 s until 10 min on (D106)
+		// B took it at 3 s; A's result stage starts then, and its draft holds A's input: a slot every 3 s until 10 min on (RULES-1.4)
 		const slots = since(start, input.inspected.filter(each => each.run === A).map(each => each.at));
 		assert.deepStrictEqual([slots.length, slots[0], slots[1], slots.at(-1)], [200, 3_000, 6_000, 600_000]);
 		// The result that never reached A's terminal waits in A's inbox for its own read (COLLABORATION-3.1)
@@ -672,7 +672,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		service.dispose();
 	});
 
-	test('Facade results that come together - those of three sends that end with their recipient - go in one paste, the clock moving between them (D115)', async () => {
+	test('Facade results that come together - those of three sends that end with their recipient - go in one paste, the clock moving between them (RULES-1.7)', async () => {
 		// Each record written takes a millisecond: results made one after another are never at the same instant
 		const { service, input, close } = setUp({ createMs: 1 });
 		input.states.set(B, ['draft']);
@@ -690,7 +690,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.ok(results.every(each => each.delivery.deadline! - each.at >= 15_000), results.map(each => each.delivery.deadline! - each.at).join(', '));
 	});
 
-	test('a result that comes just after a read delivered the one waiting before it is never left behind with it: it goes in a paste of its own (D115, COLLABORATION-3.1)', async () => {
+	test('a result that comes just after a read delivered the one waiting before it is never left behind with it: it goes in a paste of its own (RULES-1.7, COLLABORATION-3.1)', async () => {
 		const { service, input } = setUp();
 		input.states.set(A, ['draft', 'usable']);
 		input.submitMs = 500;
@@ -706,7 +706,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(service.inbox(A, { all: true, limit: 10 }).records.map(each => [each.id, each.delivery.status, each.delivery.via]), [[first.id, 'success', 'read'], [second.id, 'success', 'terminal']]);
 	});
 
-	test('Facade results that come while none of them is typed go to their sender in one paste, one turn of its model (D115)', async () => {
+	test('Facade results that come while none of them is typed go to their sender in one paste, one turn of its model (RULES-1.7)', async () => {
 		const { service, input } = setUp();
 		input.states.set(B, ['draft', 'draft', 'usable']);
 		input.states.set(A, ['draft', 'draft', 'usable']);
@@ -725,7 +725,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.strictEqual(input.submitted.filter(each => each.run === A).length, 2);
 	});
 
-	test('a result its sender reads while it waits with others is left out of their paste (D115)', async () => {
+	test('a result its sender reads while it waits with others is left out of their paste (RULES-1.7)', async () => {
 		const { service, input } = setUp();
 		input.states.set(B, ['draft', 'draft', 'usable']);
 		input.states.set(A, ['draft', 'draft', 'usable']);
@@ -742,7 +742,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(results.map(each => each.delivery.via), ['terminal', 'read']);
 	});
 
-	test('results their sender reads, all of them, before their paste are never typed; a result joining others keeps their deadline (D115)', async () => {
+	test('results their sender reads, all of them, before their paste are never typed; a result joining others keeps their deadline (RULES-1.7)', async () => {
 		const { service, input } = setUp();
 		input.states.set(B, ['draft', 'draft', 'usable']);
 		input.states.set(A, ['draft', 'draft', 'usable']);
@@ -1004,7 +1004,7 @@ suite('Agent messages: inbox, one delivery state and history (COLLABORATION-3, M
 		assert.deepStrictEqual(result.map(each => [each.kind, each.about, each.text]), [['result', 'm-1', `Your message #m1 has been passed on to Bob (#a2).`]]);
 	});
 
-	test('a paste under way as its window reloads is never pasted again after it: kept as maybe in the input before it was issued, it only waits for its own draft (RULES-1.6, D104)', async () => {
+	test('a paste under way as its window reloads is never pasted again after it: kept as maybe in the input before it was issued, it only waits for its own draft (RULES-1.6)', async () => {
 		const { service, input, stored, reload } = setUp();
 		input.submitMs = 60_000;
 		const start = Date.now();

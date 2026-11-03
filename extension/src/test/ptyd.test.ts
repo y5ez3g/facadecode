@@ -242,6 +242,44 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	test('the tool calls of a run a ptyd of an earlier protocol holds reach the window that joined it, which answers them: none waits without end (ARCHITECTURE-2.4, MCP-6.1)', async function () {
+		this.timeout(20_000);
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-home-'));
+		const protocol = EARLIER_PROTOCOLS[EARLIER_PROTOCOLS.length - 1];
+		const earlierSocket = ptydSocketPath(home, protocol);
+		const earlier = new PtydServer(earlierSocket, () => undefined, undefined, protocol);
+		assert.strictEqual(await earlier.listen(), true);
+		const refused = { text: 'protocol_incompatible', structured: { status: 'failure', error: { code: 'UNAVAILABLE', reason: 'protocol_incompatible' }, effects: { outcome: 'none' } }, isError: true };
+		const heard: unknown[] = [];
+		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined,
+			connected: client => client.onCall(event => { heard.push(event.call); void client.request('answer', { id: event.id, answer: refused }); }) });
+		let shim: net.Socket | undefined;
+		try {
+			const before = (await PtydClient.join(earlierSocket, protocol))!;
+			await before.request('claim', { owner: 'w1', generation: 1, token: 'before' });
+			await spawn(before, 'run-kept', IDLE);
+			before.dispose();
+			// The reloaded window shows the run through that ptyd, which makes it the run's window there
+			await (await hold.client(protocol)).request('attach', { run: 'run-kept' });
+			// The run's shim, as the build before the update made it, calls a tool
+			const connection = shim = net.connect(earlierSocket);
+			await new Promise(resolve => connection.once('connect', resolve));
+			const answers: { id: number; result?: unknown; error?: string }[] = [];
+			connection.setEncoding('utf8');
+			connection.on('data', lineReader(line => answers.push(JSON.parse(line)), err => { throw err; }));
+			connection.write(`${JSON.stringify({ id: 1, method: 'hello', params: { protocol, role: 'shim', run: 'run-kept' } })}\n`);
+			connection.write(`${JSON.stringify({ id: 2, method: 'call', params: { protocol: 2, caller: 'run-kept', tool: 'send_message', arguments: { to: '#a1', text: 'hi' }, callId: 'c-1', elapsedMs: 0 } })}\n`);
+			const answered = await until('the call answered', () => answers.find(each => each.id === 2));
+			assert.deepStrictEqual([heard.length, (heard[0] as { callId?: string }).callId, answered.result], [1, 'c-1', refused]);
+		} finally {
+			shim?.destroy();
+			await hold.client(protocol).then(client => client.request('terminate', { run: 'run-kept', graceMs: 50 })).catch(() => undefined);
+			hold.dispose();
+			earlier.close();
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test('a ptyd of an earlier protocol that takes a connection and answers nothing is not taken for gone - its runs would be told ended - but asked again, each time in bounded time (ARCHITECTURE-2.4)', async function () {
 		this.timeout(20_000);
 		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-home-'));
@@ -474,8 +512,8 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	});
 
 	// Twenty starts asked within seconds on Windows held ptyd for all their program creations at once - 0.2-1 s each - and the wait of
-	// the last for its program ran out behind the others: "did not start within 10 seconds" (D146)
-	test('programs are created in turn: a run\'s once the one asked before it has its own, the run there meanwhile - listed, its conversation running, its details, size and input kept - and none created once it was closed (D146)', async () => {
+	// the last for its program ran out behind the others: "did not start within 10 seconds" (ARCHITECTURE-2.3)
+	test('programs are created in turn: a run\'s once the one asked before it has its own, the run there meanwhile - listed, its conversation running, its details, size and input kept - and none created once it was closed (ARCHITECTURE-2.3)', async () => {
 		const events: string[] = [];
 		const consoles: { readonly cols: number; readonly rows: number; written: string }[] = [];
 		// Consoles whose programs start when the test lets them, as node-pty's do on Windows once their output is connected
@@ -609,7 +647,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		]);
 	});
 
-	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3, D80)', async function () {
+	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3)', async function () {
 		this.timeout(10_000);
 		const client = await connect();
 		const input = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;

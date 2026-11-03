@@ -48,7 +48,7 @@ export interface SpawnParams {
 	/** What the window keeps of the agent with its run, to show it again after a reload. Plain JSON. */
 	readonly meta: { readonly [key: string]: unknown };
 	/**
-	 * The screen reader that reads the run's status from its screen while its program reports nothing (CLIS-2.3, D80), by its ID
+	 * The screen reader that reads the run's status from its screen while its program reports nothing (CLIS-2.3), by its ID
 	 * in `screenStatus.ts`; none for a program that is read by its reports alone. An ID this ptyd knows no reader by reads nothing.
 	 */
 	readonly screenStatus?: string;
@@ -188,9 +188,9 @@ export interface Requests {
 	read: { params: { readonly run: string; readonly lines: number }; result: ScreenRead };
 	/**
 	 * Pastes `text` - bracketed where the program turned that mode on - or presses Enter where asked, in turn with other automated
-	 * input: never both in one request, an Enter going in one of its own once the CLI can have read the text (MCP-5.2, D113); a ptyd
+	 * input: never both in one request, an Enter going in one of its own once the CLI can have read the text (MCP-5.2); a ptyd
 	 * of protocol 9 still took both. `lead`, where given, is typed before the paste in the same write: words of the person's own ahead
-	 * of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1, D108). A ptyd from
+	 * of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1). A ptyd from
 	 * before it takes no lead and pastes the text alone.
 	 */
 	type: { params: { readonly run: string; readonly text: string; readonly enter: boolean; readonly lead?: string }; result: InputEffect };

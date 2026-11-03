@@ -74,7 +74,7 @@ suite('MCP reliability: retries through the real delivery service', () => {
 		}
 	});
 
-	test('a retry after a lost cross-window reply asks the window that holds its message, though its agent closed and another took its name elsewhere (MCP-1.1, D119)', async () => {
+	test('a retry after a lost cross-window reply asks the window that holds its message, though its agent closed and another took its name elsewhere (MCP-1.1)', async () => {
 		const a = setUp(), b = setUp(), c = setUp();
 		b.deps.window = { id: 'win-2', label: 'Receiver', environment: 'test' };
 		c.deps.window = { id: 'win-3', label: 'Elsewhere', environment: 'test' };

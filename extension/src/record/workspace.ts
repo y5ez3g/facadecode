@@ -13,7 +13,7 @@ import { facadeHome } from './paths';
 /**
  * A workspace's folder in the execution environment's Facade directory (ARCHITECTURE-3.1): keyed by the workspace's URI, so
  * every window of the same workspace shares it and finds its runs again after a reload. The key is the one the workspace kept
- * where it has one (ARCHITECTURE-2.2, D65): a folder window that became a multi-root workspace keeps the folder's.
+ * where it has one (ARCHITECTURE-2.2): a folder window that became a multi-root workspace keeps the folder's.
  */
 /** A workspace key as `workspaceRecord` makes it. */
 const WORKSPACE_KEY = /^[0-9a-f]{16}$/;
@@ -132,7 +132,7 @@ export function keepWorkspaceUri(workspaceUri: string, record: WorkspaceRecord, 
 /** How long a window's handover record is kept in the execution environment. */
 const WINDOW_RECORD_MS = 30 * 24 * 60 * 60_000;
 
-/** What a window said of the runs it claims (ARCHITECTURE-2.2, D70): their workspace key and the folders it had then. */
+/** What a window said of the runs it claims (ARCHITECTURE-2.2): their workspace key and the folders it had then. */
 /** The identity comes from the local window component, including when the execution component runs remotely. */
 function windowFile(home: string, window: string): string {
 	return path.join(home, 'windows', `${crypto.createHash('sha256').update(window).digest('hex').slice(0, 16)}.json`);
@@ -140,7 +140,7 @@ function windowFile(home: string, window: string): string {
 
 /**
  * The workspace key this window claimed its runs under before its extensions restarted - a folder window becoming a multi-root
- * workspace, or Save Workspace As, without carrying the extension's workspace state (D70) - where it still has
+ * workspace, or Save Workspace As, without carrying the extension's workspace state (ARCHITECTURE-2.2) - where it still has
  * the folder it had first then. None in a window that said nothing yet, or whose folders are others now.
  */
 function windowKey(state: WorkspaceUris, window: string, folders: readonly string[], home: string, workspaceUri?: string): string | undefined {

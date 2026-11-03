@@ -50,7 +50,7 @@ export interface PlanInput {
 }
 
 /**
- * How a launch trusts its folder (CLIS-3.3, D62): a native file entry, or an override already in its arguments - these, none for a
+ * How a launch trusts its folder (CLIS-3.3): a native file entry, or an override already in its arguments - these, none for a
  * CLI that asks no trust question; for a custom CLI, nothing Facade knows of: it starts as configured, and asks in its terminal
  * where it asks (CLIS-3.4).
  */
@@ -84,7 +84,7 @@ export interface PlannedLaunch {
 	readonly input: { readonly adapter?: string; readonly capability: Capability };
 	/** The files the run's launch needs written before it starts, where the tools are injected (CLIS-2.2). */
 	readonly injection?: Injection;
-	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3). */
 	readonly screenStatus?: string;
 	/** What its start types before its first turn, where the tools are injected and its adapter needs it (COLLABORATION-2.2). */
 	readonly warmUp?: WarmUp;
@@ -98,7 +98,7 @@ export class CliPlanError extends Error {
 }
 
 /**
- * How `prompt` goes in (COLLABORATION-2.2, D49): natively where the adapter maps a prompt argument that can carry it - used while
+ * How `prompt` goes in (COLLABORATION-2.2): natively where the adapter maps a prompt argument that can carry it - used while
  * unverified, its state reported - else as the first message after the process starts.
  */
 function promptOf(adapter: CliAdapter, prompt: string, throughCmd: boolean): { readonly path: 'native' | 'post_start'; readonly capability: Capability } {
@@ -206,6 +206,11 @@ export function discoverEntry(entry: CatalogEntry, destination: DestinationEnvir
 	return { entry, available: true, executable: found.executable, env };
 }
 
+/** Why a built-in turned off by its `.enabled` setting is not newly started; its runs go on (CLIS-1.1, RULES-4.4). */
+export function turnedOffError(adapter: Pick<CliAdapter, 'displayName' | 'setting'>): CliPlanError {
+	return new CliPlanError(`${adapter.displayName} is turned off by ${adapter.setting}.enabled`, 'unavailable', { kind: 'cli_disabled', values: [adapter.displayName, adapter.setting] });
+}
+
 /** The catalog for a destination folder, as new starts are offered it (CLIS-1.1): the enabled built-ins in their order, then the custom CLIs. */
 export function discover(catalog: Catalog, destination: DestinationEnvironment, cwd: string): readonly Discovered[] {
 	return catalog.entries.filter(entry => entry.enabled).map(entry => discoverEntry(entry, destination, cwd));
@@ -260,12 +265,13 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		const custom = catalog.problems.length
 			? `; custom CLIs are configured in ${CUSTOM_SETTING}, which has errors: ${catalog.problems.map(each => each.text).join('; ')}`
 			: `, and custom CLIs are configured in ${CUSTOM_SETTING}`;
-		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}${custom}`, 'not_found');
+		throw new CliPlanError(`No CLI ${JSON.stringify(input.cli)} is configured; the built-ins are ${ids.slice(0, -1).join(', ')} and ${ids.at(-1)}${custom}`, 'not_found',
+			{ kind: 'cli_not_configured', values: [JSON.stringify(input.cli)] });
 	}
 	const { adapter } = entry;
 	// A turned-off CLI is not newly started; its runs go on (CLIS-1.1, RULES-4.4)
 	if (!entry.enabled) {
-		throw new CliPlanError(`${adapter.displayName} is turned off by ${adapter.setting}.enabled`, 'unavailable', { kind: 'cli_disabled', values: [adapter.displayName, adapter.setting] });
+		throw turnedOffError(adapter);
 	}
 	if (entry.problems.length) {
 		throw new CliPlanError(entry.problems.map(each => each.text).join('; '), 'configuration_invalid', entry.problems[0].said);

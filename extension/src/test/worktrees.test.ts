@@ -258,7 +258,7 @@ suite('Worktrees: native creation from a selected checkout (WORKTREES-2, 4.1-4.3
 		assert.deepStrictEqual(made.map(each => path.basename(each.path)), ['team-x', 'team-x-1']);
 	});
 
-	suite('deleting a linked worktree (WORKTREES-3.2, D73)', () => {
+	suite('deleting a linked worktree (WORKTREES-3.2)', () => {
 
 		/**
 		 * What `remove` came to - `fulfilled`, or its reason and problem - and whether it asked to close the agents first; `ended`, what

@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The mouse reports a terminal types for a program that asked for them, whole where the terminal could not measure one
-// (LIFECYCLE-2.2, D170). VS Code's terminal gives a click to a link before it reports the button's release, measuring the
+// (LIFECYCLE-2.2). VS Code's terminal gives a click to a link before it reports the button's release, measuring the
 // terminal for that report. A link that opens over an editor terminal - a file, or the browser for a localhost link - takes
 // the terminal out of the page first, and the release goes as `ESC [ < 0 ; NaN ; NaN m`: a CLI reads its end as typed text
 // ("aN;NaNm"). Such a release keeps the position of the report before it - the press of the same click, measured while

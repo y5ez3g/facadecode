@@ -15,7 +15,7 @@ import type { SessionIntegration, SessionIntegrationInput } from './identity';
 
 /**
  * The argument groups of an invocation, in the order an adapter gives them (CLIS-3.2): the MCP connection, the CLI's own run
- * settings, the YOLO mapping, model, effort, the trust in the folder for this launch alone (CLIS-3.3, D62), and last a positional
+ * settings, the YOLO mapping, model, effort, the trust in the folder for this launch alone (CLIS-3.3), and last a positional
  * initial prompt, after the end of the options. Configured extra arguments keep their literal values before that prompt.
  */
 export const GROUP_ORDER = ['resume', 'connect', 'quiet', 'yoloOn', 'yoloOff', 'model', 'effort', 'trust', 'session', 'extra', 'prompt'] as const;
@@ -204,7 +204,7 @@ export interface CliAdapter {
 	readonly tools?: ToolsIntegration;
 	/** The reader of its ordinary-message input (CLIS-2.1); none, and no message is typed into it. */
 	readonly input?: InputReader;
-	/** How far its native initial prompt argument is verified (COLLABORATION-2.2, D49), where its `prompt` group maps one. */
+	/** How far its native initial prompt argument is verified (COLLABORATION-2.2), where its `prompt` group maps one. */
 	readonly initialPrompt?: Capability;
 	/** Why `prompt` cannot be its native initial prompt argument, where it cannot - it then goes in after startup. */
 	promptProblem?(prompt: string): string | undefined;
@@ -220,7 +220,7 @@ export interface CliAdapter {
 	/** What its launch must change in the environment, for a quirk of the CLI's own (CLIS-1.2). */
 	adjustEnvironment?(env: { [name: string]: string }, platform: NodeJS.Platform): void;
 	/**
-	 * Where it keeps trust in folders in a file of its own (CLIS-3.3, D62): its file and its entry for the folder `cwd` a launch starts
+	 * Where it keeps trust in folders in a file of its own (CLIS-3.3): its file and its entry for the folder `cwd` a launch starts
 	 * in, found with the environment `env` the launch starts with, as the CLI finds them.
 	 */
 	trustTarget?(cwd: string, env: Environment, platform: NodeJS.Platform): TrustTarget;
@@ -231,7 +231,7 @@ export interface CliAdapter {
 	launchTarget?(file: string, platform: NodeJS.Platform, env: Environment, cwd: string): LaunchTarget | undefined;
 	/**
 	 * The screen reader ptyd reads its status with while it sends no OSC 7501 reports, by its ID in `ptyd/screenStatus.ts`: Muse
-	 * Code's, which sends none on Windows (CLIS-2.3, D80). Its own reports, where it sends them, always take precedence.
+	 * Code's, which sends none on Windows (CLIS-2.3). Its own reports, where it sends them, always take precedence.
 	 */
 	readonly screenStatus?: 'muse';
 	/** Its sandbox for a launch with this YOLO on this platform, as Show Agent Launch says it (CLIS-1.3, 4.1). */

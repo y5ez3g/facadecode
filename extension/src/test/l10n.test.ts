@@ -187,6 +187,11 @@ suite('Localization: the words each language has for Facade\'s things (UX-2.4)',
 		assert.deepStrictEqual(wrong, []);
 	});
 
+	test('Chinese writes that English word as Agent, capitalized, in titles and sentences alike - never agent - its IDs and code kept as they are (UX-2.4)', () => {
+		const wrong = (['zh-cn', 'zh-tw'] as const).flatMap(locale => textsOf(locale).filter(text => /(?<![A-Za-z0-9_])agents?(?![A-Za-z0-9_])/.test(words(text.text)))).map(shown);
+		assert.deepStrictEqual(wrong, []);
+	});
+
 	test('a worktree is called by its language\'s word for it exactly where the English says worktree; IDs and file names kept as they are', () => {
 		const wrong: string[] = [];
 		for (const locale of LOCALES) {

@@ -1,4 +1,4 @@
-// Native terminal rendering regression for LIFECYCLE-2.2/D159. Run after compile and package.
+// Native terminal rendering regression for LIFECYCLE-2.2 (VERIFICATION U15). Run after compile and package.
 // Only the test's own temporary editor is controlled; no CLI process or owner profile is used.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';

@@ -58,7 +58,7 @@ export interface MessageServiceDeps {
 	readonly monotonic?: () => number;
 	/** Waits `ms`, rejecting as soon as `signal` aborts. */
 	readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
-	/** A message its recipient's CLI took from its input: what that agent's card says on its second line (PANEL-1.4, D184). */
+	/** A message its recipient's CLI took from its input: what that agent's card says on its second line (PANEL-1.4). */
 	readonly said?: (run: RunId, text: string) => void;
 }
 
@@ -67,16 +67,16 @@ export const RESPONSE_BUDGET_MS = 2_000;
 /** Each delivery stage - the message, then any Facade result - tries every three seconds for fifteen (RULES-1.5). */
 export const STAGE_MS = 15_000;
 export const SLOT_MS = 3_000;
-/** How long from its start a stage waits for an input that another draft or a native question holds (RULES-1.5, D106). */
+/** How long from its start a stage waits for an input that another draft or a native question holds (RULES-1.5). */
 export const HOLD_MS = 10 * 60_000;
 /**
  * Facade results this close together came together - those of sends that ended with their recipient - and go in one paste, the
- * later ones keeping their whole stage (D115).
+ * later ones keeping their whole stage (RULES-1.7).
  */
 const TOGETHER_MS = 50;
 
 /**
- * Facade results on their way to one run's terminal (RULES-1.7, D115): those that come while none of them is typed yet go in one
+ * Facade results on their way to one run's terminal (RULES-1.7): those that come while none of them is typed yet go in one
  * paste, a single turn of its model; once typing begins, its text is fixed, and the next result starts another.
  */
 interface ResultBatch {
@@ -116,10 +116,10 @@ interface Stage {
 	readonly start: number;
 	/**
 	 * Its deadline on this process's monotonic clock: fifteen seconds from its start and the time a paste of its text takes beyond the
-	 * usual (D105, D118), moved on to ten minutes from its start while the input is held (RULES-1.5, D106).
+	 * usual (CLIS-2.1), moved on to ten minutes from its start while the input is held (RULES-1.5).
 	 */
 	deadline: number;
-	/** The time a paste of its text takes beyond the usual, which every deadline of it gives (D118). */
+	/** The time a paste of its text takes beyond the usual, which every deadline of it gives (RULES-1.5). */
 	extra: number;
 	/** Its outcome where something other than an attempt settled it: the recipient's read_messages delivered the record meanwhile. */
 	settled?: Outcome;
@@ -132,17 +132,17 @@ interface Stage {
 	effects: InputEffects;
 	/** Whether an attempt is pasting now: cut off by the deadline or a close, what it wrote is not known. */
 	submitting: boolean;
-	/** Whether its text went into the input whole: from then on it is never typed again (RULES-1.6, D104). */
+	/** Whether its text went into the input whole: from then on it is never typed again (RULES-1.6). */
 	written: boolean;
-	/** The draft the input showed its text as, its own and alone: a later Enter needs the same, its paste's number too (D118). */
+	/** The draft the input showed its text as, its own and alone: a later Enter needs the same, its paste's number too (RULES-1.5). */
 	seen?: string;
 	/** Whether an Enter of this stage went in after its text. */
 	entered: boolean;
 	/** Whether an attempt confirmed its submission: it is ending, and its text is its CLI's (RULES-1.3). */
 	confirmed?: true;
-	/** Epoch ms its deadline moved on to, while another draft or a native question held the input (RULES-1.5, D106). */
+	/** Epoch ms its deadline moved on to, while another draft or a native question held the input (RULES-1.5). */
 	heldUntil?: number;
-	/** The Facade results it types in one paste, where it delivers results; `message` is the first of them (D115). */
+	/** The Facade results it types in one paste, where it delivers results; `message` is the first of them (RULES-1.7). */
 	readonly batch?: ResultBatch;
 }
 
@@ -150,14 +150,14 @@ const NO_EFFECTS: InputEffects = { outcome: 'none', text_written: 'none', enter_
 /** A delivery not yet tried: nothing written so far (MCP-4.1's accepted effects). */
 const PENDING: MessageRecord['delivery'] = { status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, attempts: 0 };
 const UNKNOWN_EFFECTS: InputEffects = { outcome: 'unknown', text_written: 'unknown', enter_written: null };
-/** A paste whose answer was lost: what went in is not known, but its Enter, a write of its own after it, never went (D118). */
+/** A paste whose answer was lost: what went in is not known, but its Enter, a write of its own after it, never went (RULES-1.5). */
 const PASTE_UNKNOWN: InputEffects = { outcome: 'unknown', text_written: 'unknown', enter_written: false };
 /** A submission whose input emptied after its Enter, at that attempt or a later one (RULES-1.3). */
 const CONFIRMED: InputEffects = { outcome: 'confirmed', text_written: 'full', enter_written: true };
 
 /** The obstacle an input that is not usable is, as a delivery reports it. */
 const OBSTACLES: { readonly [state: string]: string | undefined } = { draft: 'input_draft', interaction: 'input_interaction', unknown: 'input_unknown' };
-/** What holds an input for a person or its CLI, and is waited for (RULES-1.5, D106): unlike an input that cannot be read. */
+/** What holds an input for a person or its CLI, and is waited for (RULES-1.5): unlike an input that cannot be read. */
 const HELD: ReadonlySet<string> = new Set(['input_draft', 'input_interaction']);
 
 /**
@@ -245,7 +245,7 @@ export class MessageService implements Messages, Disposable {
 			return this.failed(record, 'unsupported', NO_EFFECTS);
 		}
 		const text = formatMessage(record, request.sender ? request.sender.label ?? request.sender.window : '');
-		// A long paste gets the time it takes, beyond the usual, at every deadline of its stage (D105, D118)
+		// A long paste gets the time it takes, beyond the usual, at every deadline of its stage (CLIS-2.1)
 		const extra = this.deps.input.pasteTime?.(request.to, text) ?? 0;
 		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra, start: deadline - STAGE_MS } });
 		const stage = this.newStage(request.to, pending.id, start, extra);
@@ -377,7 +377,7 @@ export class MessageService implements Messages, Disposable {
 			// An input call still under way may already have written text or Enter. A successful read does not prove no input effects.
 			const effects = stage?.submitting ? { ...UNKNOWN_EFFECTS, ...stage.written ? { text_written: stage.effects.text_written } : {} } : record.delivery.effects;
 			if (stage?.batch && stage.batch.records.length > 1) {
-				// One of the results going in one paste: delivered by the read, and left out of it where its typing has not begun (D115)
+				// One of the results going in one paste: delivered by the read, and left out of it where its typing has not begun (RULES-1.7)
 				stage.batch.records.splice(stage.batch.records.indexOf(record.id), 1);
 				if (stage.batch.typed === undefined) {
 					stage.batch.texts.delete(record.id);
@@ -497,11 +497,11 @@ export class MessageService implements Messages, Disposable {
 		}
 		const start = this.mono();
 		// A result's own budget is never cut short: it joins only results with a whole stage's time still before them, or that came
-		// together with it, and never a paste a read has delivered already, which ends at its next slot (RULES-1.5, D115, D118)
+		// together with it, and never a paste a read has delivered already, which ends at its next slot (RULES-1.5, RULES-1.7)
 		const open = [...this.stages].find(each => each.target === run && each.batch !== undefined && each.batch.typed === undefined && !each.stop.signal.aborted
 			&& !each.settled && each.deadline - start >= STAGE_MS + each.extra - TOGETHER_MS);
 		if (open?.batch) {
-			// Typed with the results already waiting for this terminal, one turn of its model for them all, by their deadline (D115)
+			// Typed with the results already waiting for this terminal, one turn of its model for them all, by their deadline (RULES-1.7)
 			open.batch.records.push(record.id);
 			open.batch.texts.set(record.id, text);
 			const extra = this.deps.input.pasteTime?.(run, open.batch.records.map(id => open.batch!.texts.get(id)!).join('\n\n')) ?? 0;
@@ -523,7 +523,7 @@ export class MessageService implements Messages, Disposable {
 		return this.deliverResults(pending, text, this.newStage(run, record.id, start, extra, { records: [record.id], texts: new Map([[record.id, text]]) }));
 	}
 
-	/** Runs the stage of a paste of Facade results, `record` the first, and records its outcome for each (RULES-1.7, D115). */
+	/** Runs the stage of a paste of Facade results, `record` the first, and records its outcome for each (RULES-1.7). */
 	private deliverResults(record: MessageRecord, text: string, stage: Stage): MessageRecord {
 		const batch = stage.batch!;
 		const typed = () => batch.typed ??= batch.records.map(id => batch.texts.get(id)!).join('\n\n');
@@ -605,7 +605,7 @@ export class MessageService implements Messages, Disposable {
 				} else if (attempt.kind === 'blocked') {
 					stage.obstacle = attempt.obstacle;
 					if (HELD.has(attempt.obstacle) && stage.deadline < start + HOLD_MS + stage.extra) {
-						// Another draft or the CLI's own question: waited for, up to ten minutes from the start (RULES-1.5, D106)
+						// Another draft or the CLI's own question: waited for, up to ten minutes from the start (RULES-1.5)
 						stage.deadline = start + HOLD_MS + stage.extra;
 						stage.heldUntil = this.deps.clock.now() + (stage.deadline - this.mono());
 					}
@@ -636,11 +636,11 @@ export class MessageService implements Messages, Disposable {
 
 	/**
 	 * One attempt, in its terminal's turn: nothing once the run ended or the deadline passed while it waited (RULES-1.5, 1.10). Its
-	 * text, once written whole, is never typed again (RULES-1.6, D104): the message's own draft gets Enter, an input that empties after
+	 * text, once written whole, is never typed again (RULES-1.6): the message's own draft gets Enter, an input that empties after
 	 * an Enter of the stage confirms it, and anything else is waited on.
 	 */
 	private async attempt(stage: Stage, typed: string | (() => string), lead: string | undefined, cutoff: AbortSignal): Promise<Attempt> {
-		// A batch's text is fixed once its typing begins, and is the same at every attempt after (D115)
+		// A batch's text is fixed once its typing begins, and is the same at every attempt after (RULES-1.7)
 		const text = () => typeof typed === 'string' ? typed : typed();
 		if (!this.usable(stage)) {
 			return { kind: 'ended' };
@@ -676,7 +676,7 @@ export class MessageService implements Messages, Disposable {
 		} else if (input !== 'usable') {
 			return { kind: 'blocked', obstacle: OBSTACLES[input] ?? 'input_unknown' };
 		} else if ([...this.stages].some(other => other !== stage && other.target === stage.target && (other.written || other.submitting) && !other.confirmed && !other.stop.signal.aborted)) {
-			// Another delivery's text may be in the input still, drawn late: nothing is pasted with it (RULES-1.10, D118)
+			// Another delivery's text may be in the input still, drawn late: nothing is pasted with it (RULES-1.10)
 			return { kind: 'blocked', obstacle: 'input_draft' };
 		}
 		if (!this.usable(stage)) {
@@ -708,7 +708,7 @@ export class MessageService implements Messages, Disposable {
 				stage.seen = submission.draft;
 			}
 			if (!stage.written && stage.batch) {
-				// Nothing typed: the results go on gathering, and one read meanwhile is left out (D115)
+				// Nothing typed: the results go on gathering, and one read meanwhile is left out (RULES-1.7)
 				stage.batch.typed = undefined;
 			}
 			return { kind: 'submitted', effects: submission.effects };
@@ -841,7 +841,7 @@ export class MessageService implements Messages, Disposable {
 			...(fields.callId !== undefined ? { callId: fields.callId } : {}),
 			...(fields.agent !== undefined ? { agent: fields.agent } : {}),
 			...(fields.operation !== undefined ? { operation: fields.operation } : {}),
-			// A retry with the same request ID finds it, in this window or the sender's (MCP-1.1, D110)
+			// A retry with the same request ID finds it, in this window or the sender's (MCP-1.1)
 			...(fields.requestId !== undefined ? { requestId: fields.requestId } : {}),
 			...(fields.initialPrompt !== undefined ? { initialPrompt: fields.initialPrompt } : {}),
 			...(fields.label !== undefined ? { label: fields.label } : {}),
@@ -894,7 +894,7 @@ export class MessageService implements Messages, Disposable {
 		const current = this.live.get(id);
 		if (current && !this.disposed) {
 			const written = stage.effects.outcome === 'none' ? current.delivery.effects : { ...stage.effects, outcome: 'pending' as const };
-			// A deadline moved on while the input was held is the one the record states (RULES-1.5, D106)
+			// A deadline moved on while the input was held is the one the record states (RULES-1.5)
 			const deadline = stage.heldUntil ?? current.delivery.deadline;
 			// What a later opening goes on from: the stage's start, whether its text may be in the input, as what, and its Enter (RULES-1.9)
 			const { pasted: _pasted, seen: _seen, entered: _entered, input, ...delivery } = current.delivery;
@@ -998,7 +998,7 @@ export class MessageService implements Messages, Disposable {
 		stage.deadline = this.mono() + (delivery.deadline! - now);
 		stage.attempts = delivery.attempts;
 		if (delivery.pasted) {
-			// What went in is not known here: never pasted again, its own draft alone given Enter (RULES-1.6, D104, D118)
+			// What went in is not known here: never pasted again, its own draft alone given Enter (RULES-1.6)
 			stage.written = true;
 			stage.effects = uncertain(delivery);
 			stage.entered = delivery.entered === true;

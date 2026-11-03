@@ -147,9 +147,9 @@ const openCodeTools: ToolsIntegration = {
 };
 
 /**
- * OpenCode in its own UI, its 2.x line (CLIS-1.3, D78). YOLO on: `--auto`, which answers each of its permission questions for the
+ * OpenCode in its own UI, its 2.x line (CLIS-1.3, CLIS-2.3). YOLO on: `--auto`, which answers each of its permission questions for the
  * run - its `--yolo` and `--dangerously-skip-permissions` are the same switch - while a rule its configuration denies still holds.
- * YOLO off: its own permission configuration, whose defaults allow every tool (D79). It has no sandbox and asks no trust question,
+ * YOLO off: its own permission configuration, whose defaults allow every tool (CLIS-1.3). It has no sandbox and asks no trust question,
  * so a launch is given none (CLIS-3.3). From 2.x it reports by OSC 7501 itself - its own record, and one for each session with the
  * session's `id`, which is not the run's (CLIS-2.3); 1.x sends no reports. npm's shim starts its native program (CLIS-1.2).
  */
@@ -170,7 +170,7 @@ export const openCodeAdapter: CliAdapter = {
 		prompt: ['--prompt', '${prompt}']
 	},
 	// Its 1.x line, npm's opencode-ai, sends no activity reports, refuses --standalone and has an input box no reader of Facade's
-	// knows, so that no message reaches it: refused, with how to update, never started (D145)
+	// knows, so that no message reaches it: refused, with how to update, never started (CLIS-1.1)
 	refusesVersion: version => Number(version.split('.')[0]) < 2 ? {
 		problem: `OpenCode ${version} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli`,
 		said: { kind: 'opencode_1x', values: [version] }
@@ -185,7 +185,7 @@ export const openCodeAdapter: CliAdapter = {
 	// Its input, recorded on macOS with OpenCode 2.1.4 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'opencode-frame', evidence: 'its input box, on its start screen and in a session: empty or its placeholder, a typed, pasted, long-paste, history or slash-command draft, while working, and gone behind its permission question and command palette' },
 	sandbox: () => ({ state: 'none' }),
-	// Its own permission configuration, whose defaults allow every tool, where YOLO is off (D79)
+	// Its own permission configuration, whose defaults allow every tool, where YOLO is off (CLIS-1.3)
 	approvals: yolo => yolo ? { state: 'bypassed', by: ['--auto'] } : { state: 'native' },
 	interruptExit: sigintExit
 };

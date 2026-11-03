@@ -223,7 +223,7 @@ export class PtydServer {
 	/** Runs claimed by an attach not answered yet: their calls wait, for the window to know the run is its first (RULES-4.1). */
 	private readonly attaching = new Set<Run>();
 	/**
-	 * Where the next run's program waits its turn to be created (D146): once the program of the run asked before it was created, or
+	 * Where the next run's program waits its turn to be created (ARCHITECTURE-2.3): once the program of the run asked before it was created, or
 	 * failed to be. On Windows node-pty creates a program on this thread, and a check of a new command line - Microsoft Defender's
 	 * of a CLI's own, measured at 0.2-1 s each - holds it meanwhile: starts asked together held it for all of theirs, nothing else
 	 * heard, and the wait of each for its program ran out behind the others. The runs themselves are there as they are asked for.
@@ -464,7 +464,7 @@ export class PtydServer {
 				this.seen.add(spawn.run);
 				const run = new Run(spawn, { later: true });
 				// There and claimed before its program starts: its window hears everything it writes from the first byte on, and may give it
-				// its details, its size, input or its close while it waits its turn (D146)
+				// its details, its size, input or its close while it waits its turn (ARCHITECTURE-2.3)
 				this.runs.set(run.id, run);
 				this.claim(run, connection);
 				run.onExit(exit => {
@@ -542,7 +542,7 @@ export class PtydServer {
 					throw new Error('Text to type must be a string.');
 				}
 				// A paste's end and an Enter read together may lose the Enter, as Claude Code does: its Enter goes in a request of its own,
-				// once the CLI can have read the text (MCP-5.2, D113)
+				// once the CLI can have read the text (MCP-5.2)
 				if (text && enter) {
 					throw new Error('Text and its Enter are typed in two requests: the Enter once the CLI can have read the text.');
 				}
@@ -626,7 +626,7 @@ export class PtydServer {
 		}
 	}
 
-	/** Runs `start` once every start asked before it has its program, or failed to (D146). */
+	/** Runs `start` once every start asked before it has its program, or failed to (ARCHITECTURE-2.3). */
 	private inLine<T>(start: () => Promise<T>): Promise<T> {
 		const turn = this.startLine.then(start);
 		this.startLine = turn.then(() => undefined, () => undefined);

@@ -110,7 +110,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 		}
 	});
 
-	test('every advertised shape has a type and none is a union, so that every model provider takes the tools (D102)', () => {
+	test('every advertised shape has a type and none is a union, so that every model provider takes the tools (MCP-1.1)', () => {
 		// Gemini refuses a whole tool list over one value without a type, and OpenCode sends unions as JSON text (T3 Code #21655)
 		for (const tool of TOOLS) {
 			for (const [where, schema] of schemasOf(tool.inputSchema as unknown as Schema, tool.name)) {
@@ -122,7 +122,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 		}
 	});
 
-	test('a text whose beginning the caller\'s CLI cut off - Antigravity\'s mark of it first - is refused before any effect (D113)', () => {
+	test('a text whose beginning the caller\'s CLI cut off - Antigravity\'s mark of it first - is refused before any effect (MCP-4.1)', () => {
 		const cut = `[Earlier output truncated]\n\n${'x'.repeat(100)}`;
 		for (const [tool, args, field] of [
 			['send_message', { to: 'a', text: cut }, 'text'],
@@ -137,7 +137,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 		assert.strictEqual(validateArguments('send_message', { to: 'a', text: `It said [Earlier output truncated] there.` }).text, 'It said [Earlier output truncated] there.');
 	});
 
-	test('a list takes one item alone, or the list written as JSON text, as some CLIs send one (D102)', () => {
+	test('a list takes one item alone, or the list written as JSON text, as some CLIs send one (MCP-1.1)', () => {
 		assert.deepStrictEqual(validateArguments('read_messages', { ids: '["m-1","#m2"]' }).ids, ['m-1', '#m2']);
 		assert.deepStrictEqual(validateArguments('read_messages', { ids: ' [ "m-1" ] ' }).ids, ['m-1']);
 		assert.deepStrictEqual(validateArguments('press_keys', { agent: 'a', keys: '["Escape","Enter"]' }).keys, ['Escape', 'Enter']);
@@ -149,7 +149,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 		assert.deepStrictEqual(fields(refusal(() => validateArguments('press_keys', { agent: 'a', keys: '["Enter","F1"]' }))), ['keys[1]', 'keys']);
 	});
 
-	test('start_agent: a name is any label, even empty (O22); models, efforts and branches are not blank, and a prompt is a message body', () => {
+	test('start_agent: a name is any label, even empty (LIFECYCLE-2.1); models, efforts and branches are not blank, and a prompt is a message body', () => {
 		const base = { name: 'n', window_id: 'w', location_id: 'l', cli: 'c' };
 		for (const name of ['', '   ', 'human']) {
 			assert.strictEqual(validateArguments('start_agent', { ...base, name }).name, name);

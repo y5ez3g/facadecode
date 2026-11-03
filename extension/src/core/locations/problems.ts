@@ -46,7 +46,7 @@ export type WorktreeProblem =
 	/** The editor reported `path`, but Git could not be read to confirm it (`detail`), or does not list it (no `detail`). */
 	| { readonly kind: 'creation_unconfirmed'; readonly path: string; readonly detail?: string }
 	| { readonly kind: 'created_elsewhere'; readonly path: string }
-	/** Deletion (WORKTREES-3.2, D73): `name` is no linked worktree, or a workspace folder is in it. */
+	/** Deletion (WORKTREES-3.2): `name` is no linked worktree, or a workspace folder is in it. */
 	| { readonly kind: 'not_deletable'; readonly name: string }
 	/** Git lists a change that is not committed, or an untracked file, in the worktree `name`: nothing was touched. */
 	| { readonly kind: 'worktree_changed'; readonly name: string }

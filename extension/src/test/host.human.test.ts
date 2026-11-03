@@ -43,7 +43,21 @@ suite('Host: the person in this window (RULES-1.8, UX-1.2)', () => {
 		]);
 	});
 
-	test('LIFECYCLE-3.1, D172: a live agent\'s tab closed by itself closes it without a question; with other tabs, the agents are asked about once', async () => {
+	test('LIFECYCLE-3.1, 3.4: a Pin that cannot be saved is said as a failed pin, an Unpin as a failed unpin', () => {
+		const shown: string[] = [];
+		const vscodeApi = {
+			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, i: string) => String(args[Number(i)])) },
+			window: { showErrorMessage: (text: string) => { shown.push(text); return Promise.resolve(undefined); }, tabGroups: { onDidChangeTabs: () => ({ dispose: () => undefined }) } },
+			commands: { executeCommand: async () => undefined }
+		};
+		const { WindowHuman } = withModules({ vscode: vscodeApi })<typeof import('../host/human')>(require.resolve('../host/human'));
+		const human = new WindowHuman(async () => undefined);
+		human.failed({ kind: 'pin', name: 'Ada', reason: 'disk full' }, {});
+		human.failed({ kind: 'unpin', name: 'Ada', reason: 'disk full' }, {});
+		assert.deepStrictEqual(shown, ['Could not pin Ada: disk full', 'Could not unpin Ada: disk full']);
+	});
+
+	test('LIFECYCLE-3.1: a live agent\'s tab closed by itself closes it without a question; with other tabs, the agents are asked about once', async () => {
 		const asked: { message: string; detail: string }[] = [];
 		let answer: string | undefined = 'Close Agent';
 		let confirmOnKill: string | undefined;

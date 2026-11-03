@@ -265,6 +265,8 @@ export interface EarlierEvents {
 	readonly ownerLost: () => void;
 	/** Whether the window has requests through the ptyd of `protocol` under way - closing a run - for which it is not let go. */
 	readonly busy?: (protocol: number) => boolean;
+	/** Each joined, as it claims this window's runs there: the window hears and answers their tool calls on it (ARCHITECTURE-2.4, MCP-6.1). */
+	readonly connected?: (client: PtydClient) => void;
 }
 
 /**
@@ -381,6 +383,9 @@ export class EarlierPtyds {
 			if (!runs) {
 				throw new PtydGone(`The ptyd of protocol ${protocol} holds no run of this window.`);
 			}
+			// Its runs' tool calls come to the window that claims them, from the claim on: each is answered, an older tool protocol's
+			// refused with no effect, and none waits without end (ARCHITECTURE-2.4)
+			this.events.connected?.(client);
 			await within(client.request('claim', this.claim));
 			if (this.disposed) {
 				throw new PtydNotSent('The window is closing.');

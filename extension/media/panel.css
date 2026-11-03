@@ -227,15 +227,16 @@ body.facade-modern {
 }
 
 /*
- * A card is one node under the pointer, its dot apart with a hover of its own (PANEL-1.4, 1.5). Crossing from one of a card's parts
- * to another clears the editor's tooltip and sets the same one again, which macOS then rarely shows (electron/electron#49843). The
- * card itself takes every click and menu, so none of its parts needs the pointer.
+ * A card is one node under the pointer, its dot and its Pin apart with a hover of their own (PANEL-1.3, 1.4, 1.5). Crossing from one
+ * of a card's parts to another clears the editor's tooltip and sets the same one again, which macOS then rarely shows
+ * (electron/electron#49843). The card itself takes every click and menu, its dot's and Pin's coming up to it.
  */
 .item.agent * {
 	pointer-events: none;
 }
 
-.item.agent .dot {
+.item.agent .dot,
+.item.agent .pin {
 	pointer-events: auto;
 }
 
@@ -309,8 +310,8 @@ body.facade-modern {
 
 /*
  * What is known of the agent, on its avatar's corner as a chat app's presence, cut out of the row so that it reads on any background
- * (RULES-3.2): green and breathing for work, red and still for an error, and none for anything else - startup, idle, a native
- * blocker or unknown activity, which the hover says (D183).
+ * (RULES-3.2): green and breathing while it starts or works, red and still for an error, and none for anything else - idle, a native
+ * blocker or unknown activity, which the hover says.
  */
 .dot {
 	position: absolute;

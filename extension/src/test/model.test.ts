@@ -183,7 +183,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([leading, held, trailing, line, sent() - first, model.state().cards[0].dot], [1, 1, 2, 'Three', 3, 'error']);
 	});
 
-	test('U05: the badge counts every card - starting, failed and filtered out alike; a new card goes last; the order is kept in workspace storage (D173)', async () => {
+	test('U05: the badge counts every card - starting, failed and filtered out alike; a new card goes last; the order is kept in workspace storage (PANEL-2.1)', async () => {
 		let model = make();
 		agents.add(run(1, { lifecycle: 'starting', phase: 'launching_cli' }));
 		agents.add(run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }));
@@ -357,7 +357,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		]);
 	});
 
-	test('D66: a plain folder\'s location, named that folder already, says its name once in a multi-folder window - no `docs · docs`', async () => {
+	test('PANEL-1.3: a plain folder\'s location, named that folder already, says its name once in a multi-folder window - no `docs · docs`', async () => {
 		const plain = { ...location('loc-docs', 'docs', DOCS), kind: 'folder' as const };
 		locations.catalog = { locations: [MAIN, plain], folders: [SHOP, DOCS], pending: false };
 		const model = make();
@@ -407,7 +407,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		await tick();
 		assert.deepStrictEqual([model.state().cardCount, model.state().cards.length, model.state().cards[0].name, model.state().cards[99].name], [100, 100, 'Agent 1', 'Agent 100']);
 	});
-	test('U05, PANEL-2.1: Pins come first in their kept order; a new Pin goes last among the Pins, an Unpin first below them; Move Up/Down stays within its area; the order survives a new model (D173, D181)', async () => {
+	test('U05, PANEL-2.1: Pins come first in their kept order; a new Pin goes last among the Pins, an Unpin first below them; Move Up/Down stays within its area; the order survives a new model (PANEL-2.1)', async () => {
 		agents.saved = ['pin-a'];
 		agents.add(run(1, { resumable: true, pinnable: true, pin: 'pin-a' }));
 		agents.add(run(2, { resumable: true, pinnable: true }));
@@ -464,7 +464,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 
 });
 
-suite('New Agent from the filtered empty panel (PANEL-1.2, LIFECYCLE-1.2, D59)', () => {
+suite('New Agent from the filtered empty panel (PANEL-1.2, LIFECYCLE-1.2)', () => {
 	test('starts at the filtered location, or a filtered folder\'s own location, else its first; without a filter, or once the location is gone, wherever New Agent would', () => {
 		const shopRoot: Location = { ...location('loc-shop', 'shop', SHOP), uri: SHOP.uri, path: SHOP.path };
 		const all = [MAIN, LOGIN, GUIDE, shopRoot];

@@ -13,17 +13,13 @@ together. This file routes work on the extension in `extension/`; the repository
 4. Follow the current user instructions for assignments, model choices, pauses and authorization. Documentation
    cleanup does not resume a paused implementation task.
 
-The extension is built in incremental steps. Each step is a complete product of its own scope; code, tests and translations
-of a later step are not added ahead of it. [README.md](README.md) says which step the code is at.
-
 ## 2 The specification
 
-**Only `../docs/extension/` defines the extension's active product. Its status is a normative implementation target, not a
-runtime certification.**
+**Only `../docs/extension/` defines the extension's product. It is the authority: where the code disagrees with it, the
+code is fixed, or the owning rule is amended first. It is not a runtime certification.**
 
 The [specification index](../docs/extension/README.md) lists its layers and each document's responsibility. Product constrains
 experience and shared rules; those constrain features and UX; engineering implements their contracts.
-[Decisions](../docs/extension/DECISIONS.md) records owner calibration and deductions; it does not override normative files.
 Verification results accompany the tested build or handoff.
 
 ## 3 Write and change a rule
@@ -33,8 +29,10 @@ Verification results accompany the tested build or handoff.
   Keep present tense. Use exact cases/values in lower layers; include a reason where it helps.
 - Separate the target from evidence: “not run,” “historical claim,” “failed” and “passed” have different meanings.
   Never make a document match a code defect just to call the work complete.
-- Amend the owning rule first, record the reason, update dependent schemas/scenarios/references, then implement.
-  Preserve owner-calibrated decisions. Never weaken a requirement to hide an implementation gap.
+- Amend the owning rule first, with its reason in the rule where it helps, then dependent schemas/scenarios/references,
+  then implement. The specification keeps no change log or decision log; git history records how it changed. Code
+  comments and test titles cite rules by `DOCUMENT-n.m`. Preserve the owner's decisions. Never weaken a requirement to
+  hide an implementation gap.
 
 ## 4 Engineering safeguards
 

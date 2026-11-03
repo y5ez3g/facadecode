@@ -132,7 +132,7 @@ suite('Locations: one catalog per window (WORKTREES-1.2; VERIFICATION J03)', () 
 		assert.strictEqual(stale.pending, false);
 	});
 
-	test('one rule says which worktree may be deleted, by canonical keys: a linked one no workspace folder opened or is in (WORKTREES-3.2, D73)', () => {
+	test('one rule says which worktree may be deleted, by canonical keys: a linked one no workspace folder opened or is in (WORKTREES-3.2)', () => {
 		const linked = { id: 'loc-l', path: '/Work/App.worktrees/Fix', uri: 'file:///Work/App.worktrees/Fix', environment: 'local', label: 'fix', kind: 'checkout', isMain: false, opened: false, git: 'ok', folders: [] } as unknown as Location;
 		// A case-folding file system: the opened folder names the worktree in other letters
 		const keyOf = (path: string) => path.toLowerCase();

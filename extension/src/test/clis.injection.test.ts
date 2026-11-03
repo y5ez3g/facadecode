@@ -139,7 +139,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([planned.injection!.project, planned.injection!.env, planned.env.FACADE_RUN], [[], {}, undefined]);
 	});
 
-	test('with YOLO off, Facade\'s own tools still never ask for approval, while the CLI keeps its own approvals and sandbox (CLIS-1.3, D90)', () => {
+	test('with YOLO off, Facade\'s own tools still never ask for approval, while the CLI keeps its own approvals and sandbox (CLIS-1.3, CLIS-2.2)', () => {
 		const claude = plan({ cli: 'claude', yolo: false, tools });
 		assert.ok(claude.args.includes('--allowedTools') && claude.args[claude.args.indexOf('--allowedTools') + 1] === 'mcp__facade', claude.args.join(' '));
 		assert.ok(!claude.args.includes('--dangerously-skip-permissions'));
@@ -160,7 +160,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
 			'-c', 'mcp_servers.facade.tool_timeout_sec=3660',
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
-			// Its first turn waits for a server that starts slowly, as T3 Code found it must (D101)
+			// Its first turn waits for a server that starts slowly, as T3 Code found it must (CLIS-2.2)
 			'-c', 'mcp_optional_startup_grace_ms=10000',
 			'-c', 'check_for_update_on_startup=false',
 			'--no-daemon'
@@ -211,7 +211,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		}
 	});
 
-	test('Pi reuses only a loaded identical skill, and restores its private copy after the project file disappears (D158)', async () => {
+	test('Pi reuses only a loaded identical skill, and restores its private copy after the project file disappears (CLIS-2.2)', async () => {
 		const planned = plan({ cli: 'pi', tools });
 		for (const file of planned.injection!.runFiles) {
 			fs.mkdirSync(path.dirname(file.path), { recursive: true });
@@ -277,16 +277,16 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([without.args.includes('--settings'), without.warmUp], [false, undefined]);
 	});
 
-	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows too, but through cmd.exe the project\'s .mcp.json entry instead, its references empty where unset and with no mode (D147)', () => {
+	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows too, but through cmd.exe the project\'s .mcp.json entry instead, its references empty where unset and with no mode (CLIS-2.2)', () => {
 		const planned = plan({ cli: 'muse', tools, prompt: 'Fix the build' });
 		const references = { ELECTRON_RUN_AS_NODE: '${FACADE_ELECTRON_RUN_AS_NODE}', FACADE_RUN: '${FACADE_RUN}', FACADE_PTYD: '${FACADE_PTYD}', FACADE_AGENT: '${FACADE_AGENT}' };
-		// Optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (D107)
+		// Optional: Muse Code fails a whole run over a required server that does not start, and requires one by default (CLIS-2.2)
 		assert.deepStrictEqual(planned.args, ['-c', `mcpServers.facade=${JSON.stringify({ command: SERVER.command, args: SERVER.args, env: references, mode: 'optional' })}`, '--disable-approval', '--disable-sandbox', '--trust-workspace', '--', 'Fix the build']);
 		assert.deepStrictEqual(planned.injection!.project, [{ kind: 'file', path: path.join('.agents', 'skills', 'facade', 'SKILL.md'), content: FACADE_SKILL }]);
 		// Each reference names a variable the CLI's environment carries; the runtime's under a name no other program reads
 		assert.deepStrictEqual([planned.env.FACADE_ELECTRON_RUN_AS_NODE, planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.FACADE_AGENT, planned.env.ELECTRON_RUN_AS_NODE], ['1', 'run-1', '/tmp/ptyd.sock', '#a1', undefined]);
 		assert.deepStrictEqual(planned.prompt?.path, 'native');
-		// On Windows its installed native program, which Facade starts directly, takes the entry as an argument too, as its hooks' (D147)
+		// On Windows its installed native program, which Facade starts directly, takes the entry as an argument too, as its hooks' (CLIS-2.2)
 		const native = museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: false });
 		assert.deepStrictEqual([native.args, native.project.map(each => each.path)], [museAdapter.tools!.inject({ ...tools, platform: 'darwin' }).args, [path.join('.agents', 'skills', 'facade', 'SKILL.md')]]);
 		// Through cmd.exe, which cannot carry it, a shared project entry - with no mode: Muse Code 1.4.14 takes a project's .mcp.json with
@@ -331,8 +331,8 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	});
 
 	// OpenCode 1.18.34, npm's `opencode-ai`, printed its usage and exited 1 at --standalone in the release review's real-CLI run, and
-	// 1.19.5 started without it took no message: the owner decided its 1.x line is refused, saying how to update (D145)
-	test('OpenCode\'s 1.x line, known by the npm package its program is in, is refused where new starts are offered it and at a start, saying how to update; 2.x and an unknown one start with --standalone (D145)', () => {
+	// 1.19.5 started without it took no message: the owner decided its 1.x line is refused, saying how to update (CLIS-1.1)
+	test('OpenCode\'s 1.x line, known by the npm package its program is in, is refused where new starts are offered it and at a start, saying how to update; 2.x and an unknown one start with --standalone (CLIS-1.1)', () => {
 		const installed = (folder: string, name: string, version: string) => {
 			const pkg = path.join(temp.dir, folder, 'node_modules', ...name.split('/'));
 			program(path.join(pkg, 'bin'), 'opencode');
@@ -362,7 +362,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	});
 
 	// npm's shims on Windows, as `npm install -g` writes them, read for the program each runs
-	(process.platform === 'win32' ? test : test.skip)('on Windows OpenCode\'s version is read through npm\'s shim, from the package of the program it runs: 1.x is refused, 2.x starts as its program (D145)', () => {
+	(process.platform === 'win32' ? test : test.skip)('on Windows OpenCode\'s version is read through npm\'s shim, from the package of the program it runs: 1.x is refused, 2.x starts as its program (CLIS-1.1)', () => {
 		const prefix = path.join(temp.dir, 'npm-prefix');
 		const shimOf = (name: string, version: string) => {
 			const pkg = path.join(prefix, 'node_modules', ...name.split('/'));
@@ -383,7 +383,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 
 	test('Pi\'s prompt is its message after --, except one it would read as a file to attach', () => {
 		assert.deepStrictEqual(plan({ cli: 'pi', prompt: 'Fix it' }).args.slice(-3), ['--approve', '--', 'Fix it']);
-		// Muse Code 1.4.14 refuses to start on a prompt that is one of its commands' names, even after -- (D107)
+		// Muse Code 1.4.14 refuses to start on a prompt that is one of its commands' names, even after -- (CLIS-2.2)
 		for (const [prompt, path] of [['login', 'post_start'], ['session-message', 'post_start'], ['Login', 'native'], ['fix the login flow', 'native']] as const) {
 			assert.strictEqual(plan({ cli: 'muse', prompt }).prompt?.path, path, prompt);
 		}
@@ -463,7 +463,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([neither.model, neither.effort], [undefined, undefined]);
 	});
 
-	test('the message input is read by each CLI\'s reader whatever its version; there is no version list (CLIS-2.1, D89)', () => {
+	test('the message input is read by each CLI\'s reader whatever its version; there is no version list (CLIS-2.1)', () => {
 		assert.deepStrictEqual(inputOf(claudeAdapter), { adapter: 'claude-frame', capability: { state: 'supported', reason: inputOf(claudeAdapter).capability.reason } });
 		assert.deepStrictEqual(inputOf(codexAdapter).adapter, 'codex-prompt');
 		// Every built-in has a reader ptyd has, recorded on its screens
@@ -528,7 +528,7 @@ suite('CLIs: through cmd.exe, the tools never stop a CLI that can start (MCP-6.1
 	});
 });
 
-suite('CLIs: the native initial prompt (CLIS-3.2, COLLABORATION-2.2, D49)', () => {
+suite('CLIs: the native initial prompt (CLIS-3.2, COLLABORATION-2.2)', () => {
 	let temp: ReturnType<typeof tempDir>;
 	let destination: DestinationEnvironment;
 	let cwd: string;
@@ -653,7 +653,7 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		fs.writeFileSync(file, text);
 	};
 
-	test('D179: a skill another Facade wrote - another version, another Facade directory, unrecorded here - is brought up to date and goes with the last run; one changed since is brought up to date too', () => {
+	test('CLIS-2.2: a skill another Facade wrote - another version, another Facade directory, unrecorded here - is brought up to date and goes with the last run; one changed since is brought up to date too', () => {
 		placed(skillFile(), facadeSkill('older words'));
 		const wanted = facadeSkill('current words', '0.0.3');
 		assert.strictEqual(acquireProject(record, 'run-a', cwd, [skill(wanted)]), undefined);
@@ -665,7 +665,7 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.deepStrictEqual([replaced, again, fs.existsSync(skillFile())], [wanted, wanted, false]);
 	});
 
-	test('D179: a skill a later Facade marked stands - no conflict, nothing recorded - and stays after the last run; the marks compare as numbers', () => {
+	test('CLIS-2.2: a skill a later Facade marked stands - no conflict, nothing recorded - and stays after the last run; the marks compare as numbers', () => {
 		const later = facadeSkill('later words', '0.0.10');
 		placed(skillFile(), later);
 		assert.strictEqual(acquireProject(record, 'run-a', cwd, [skill(facadeSkill('current words', '0.0.9'))]), undefined);
@@ -679,7 +679,7 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.strictEqual(fs.readFileSync(skillFile(), 'utf8'), shipped);
 	});
 
-	test('D179: a skill of the person\'s own named facade - another description - stays a conflict, and so does a plugin of theirs', () => {
+	test('CLIS-2.2: a skill of the person\'s own named facade - another description - stays a conflict, and so does a plugin of theirs', () => {
 		placed(skillFile(), '---\nname: facade\ndescription: "My notes on the facade pattern."\n---\nNotes\n');
 		assert.match(acquireProject(record, 'run-a', cwd, [skill(facadeSkill('current words', '0.0.3'))]) ?? '', /already exists with other content/);
 		const manifest = path.join(cwd, '.agents', 'plugins', 'facade', 'plugin.json');
@@ -688,7 +688,7 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.strictEqual(fs.existsSync(record), false, 'nothing recorded');
 	});
 
-	test('D179: Antigravity\'s plugin another installation left - its server a shim gone with it - is brought up to date file by file, and goes with the last run', () => {
+	test('CLIS-2.2: Antigravity\'s plugin another installation left - its server a shim gone with it - is brought up to date file by file, and goes with the last run', () => {
 		const plugin = path.join('.agents', 'plugins', 'facade');
 		const old = (name: string, value: unknown) => placed(path.join(cwd, plugin, name), `${JSON.stringify(value, undefined, 2)}\n`);
 		old('plugin.json', { name: 'facade', description: 'The Facade Code tools: start agents, send and read messages, and read or type into agent terminals.' });
@@ -707,7 +707,7 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.deepStrictEqual([now, writes.map(write => fs.existsSync(path.join(cwd, write.path)))], [writes.map(write => write.kind === 'file' ? write.content : ''), [false, false, false, false]]);
 	});
 
-	test('D186: the facade skill and Antigravity plugin the Facade Code IDE wrote are Facade\'s too: brought up to date, and gone with the last run', () => {
+	test('CLIS-2.2: the facade skill and Antigravity plugin the Facade Code IDE wrote are Facade\'s too: brought up to date, and gone with the last run', () => {
 		// As the IDE's agent extension writes them, from Facade Code.app
 		const ideSkill = '---\nname: facade\ndescription: "Coordinate Facade Code agents through MCP tools. Use for delegation, messages, [facade] notices, and inspecting or answering an agent\'s CLI."\n---\n\n# Facade\n';
 		const ideServer = { command: '/Applications/Facade Code.app/Contents/Frameworks/Facade Code Helper (Plugin).app/Contents/MacOS/Facade Code Helper (Plugin)', args: ['/Applications/Facade Code.app/Contents/Resources/app/extensions/facade-agents/dist/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } };
@@ -730,7 +730,7 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.strictEqual(isFacadeContent('plugin.json', JSON.stringify({ name: 'facade', version: '1.0.0' })), false);
 	});
 
-	test('D179: a facade server another installation left in .mcp.json is brought up to date beside the person\'s own servers, and taken out alone after the last run; a facade server of theirs stays a conflict', () => {
+	test('CLIS-2.2: a facade server another installation left in .mcp.json is brought up to date beside the person\'s own servers, and taken out alone after the last run; a facade server of theirs stays a conflict', () => {
 		const file = path.join(cwd, '.mcp.json');
 		const theirs = { mine: { command: 'my-server' } };
 		fs.writeFileSync(file, `${JSON.stringify({ mcpServers: { ...theirs, facade: { command: 'node', args: ['C:\\Users\\ada\\old\\dist\\shim.js'] } } }, undefined, 2)}\n`);
@@ -801,7 +801,7 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 	};
 	const load = withModules({ vscode });
 	const { HostClis } = load<typeof HostClisModule>(require.resolve('../host/clis'));
-	const { readWaitSeconds, waitSeconds } = load<typeof SettingsModule>(require.resolve('../host/settings'));
+	const { readWaitSeconds, waitSeconds, yolo } = load<typeof SettingsModule>(require.resolve('../host/settings'));
 
 	setup(() => {
 		temp = tempDir('fc-host-');
@@ -912,6 +912,37 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		assert.strictEqual(clis().resumeProblem('codex', location), 'This CLI cannot resume conversations here.');
 	});
 
+	test('CLIS-4.1: Show Agent Launch\'s CLIs carry their session tracking always and the Facade tools while collaboration is on, as a start of that moment is given them', () => {
+		const planner = new HostClis({ read: name => settings[name], destination: () => destination, home,
+			server: run => ({ command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } }) });
+		const claudeOf = () => planner.describeLaunch(location, false).launches.find(each => each.cli === 'claude')!;
+		const on = claudeOf();
+		settings['facade.collaboration.enabled'] = false;
+		const off = claudeOf();
+		assert.deepStrictEqual([on.args!.includes('--mcp-config'), on.args!.includes('--session-id'), off.args!.includes('--mcp-config'), off.args!.includes('--session-id')], [true, true, false, true]);
+		assert.ok(!fs.existsSync(path.join(home, 'runs')), 'nothing is written for it');
+	});
+
+	test('UX-2.4: a start of a CLI no longer configured fails with Facade\'s reason in the person\'s words', async () => {
+		await assert.rejects(clis().plan(request('gone-cli', 'run-1')), (err: Error & { said?: unknown }) => JSON.stringify(err.said) === JSON.stringify({ kind: 'cli_not_configured', values: ['"gone-cli"'] }));
+	});
+
+	test('UX-4.1: facade.yolo is true by default; one neither true nor false refuses the launch before any effect, configuration_invalid, naming the setting in the person\'s words too', () => {
+		assert.strictEqual(yolo(), true);
+		settings['facade.yolo'] = false;
+		assert.strictEqual(yolo(), false);
+		settings['facade.yolo'] = 'yes';
+		const refused = (() => { try { yolo(); } catch (err) { return err as { code?: string; reason?: string; message?: string; said?: unknown }; } return assert.fail('a value was given'); })();
+		assert.deepStrictEqual([refused.code, refused.reason, refused.message, refused.said], ['UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"', { kind: 'yolo_type', values: ['"yes"'] }]);
+	});
+
+	test('a built-in its setting turns off is said to be turned off by it, as its planned start says; an enabled, custom or unknown CLI is not (CLIS-1.1)', async () => {
+		settings['facade.codex.enabled'] = false;
+		const planner = clis();
+		assert.deepStrictEqual([planner.turnedOff('codex'), planner.turnedOff('claude'), planner.turnedOff('nope')], ['Codex is turned off by facade.codex.enabled', undefined, undefined]);
+		await assert.rejects(planner.plan(request('codex', 'run-1')), (err: Error) => err.message === planner.turnedOff('codex'));
+	});
+
 	test('a window opening while runs live - its reconcile - keeps their session hooks: their conversations go on being recorded (CLIS-2.4)', async () => {
 		const planner = clis();
 		const claude = await planner.plan(request('claude', 'run-1'));
@@ -970,8 +1001,8 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 		}
 	});
 
-	test('what every turn of every agent pays for stays within its budget: the tool list, the instructions and the skill (MCP-6.1, D111)', () => {
-		// Standard human titles/annotations add up to 800 bytes (D154); bootstrap and optional reference budgets shrink.
+	test('what every turn of every agent pays for stays within its budget: the tool list, the instructions and the skill (MCP-6.1)', () => {
+		// Standard human titles/annotations add up to 800 bytes (MCP-6.1); bootstrap and optional reference budgets shrink.
 		const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
 		assert.ok(bytes(JSON.stringify(TOOLS)) <= 7_800, `the tool list is ${bytes(JSON.stringify(TOOLS))} bytes`);
 		assert.ok(bytes(instructionsFor('#a999')) <= 1_200, `the instructions are ${bytes(instructionsFor('#a999'))} bytes`);

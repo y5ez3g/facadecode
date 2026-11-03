@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The local window component, as the workspace extension waits for it (ARCHITECTURE-4.3, D94). The editor installs it through the
+// The local window component, as the workspace extension waits for it (ARCHITECTURE-4.3). The editor installs it through the
 // extension pack and may activate it after this extension - in a remote window it installs it locally only after the remote one -
 // so activation waits a bounded time for its command. Without it Facade cannot tell this window from another, and says so plainly.
 
@@ -12,7 +12,7 @@ import {
 	isDamagedWindowIdentity, isUnreadableWindowIdentity, isWindowIdentity, WINDOW_IDENTITY_COMMAND, type DamagedWindowIdentity, type UnreadableWindowIdentity,
 	type WindowIdentity
 } from '../base/windowIdentity';
-import { PANEL_VIEW } from '../ui/catalog';
+import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 
 /** The window component's extension ID. */
 export const WINDOW_COMPONENT = 'facade.facadecode-window';
@@ -76,12 +76,13 @@ export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_
 
 /**
  * Facade Code without its window component (ARCHITECTURE-4.3): the agents already running go on, nothing new starts, and the panel
- * and one notification say what to do, with an action that shows the component in the Extensions view. Once the editor has it, a
- * reload is offered. Answers what deactivation disposes.
+ * and one notification say what to do, with an action that shows the component in the Extensions view; each of Facade's commands
+ * says it again, rather than that the editor has no such command. Once the editor has it, a reload is offered. Answers what
+ * deactivation disposes.
  */
 export function showComponentMissing(context: vscode.ExtensionContext, session: string): vscode.Disposable {
 	const show = vscode.l10n.t("Show Window Component");
-	const explanation = vscode.l10n.t("Facade Code requires its Window Component. Install and enable \"Facade Code Window Component\", then reload the window. Active agents continue running.");
+	const explanation = vscode.l10n.t("Facade Code requires its Window Component. Install and enable \"Facade Code Window Component\" on this computer, then reload the window. Active agents continue running.");
 	const open = () => void vscode.commands.executeCommand('extension.open', WINDOW_COMPONENT);
 	const view = vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
 		resolveWebviewView: webviewView => {
@@ -95,11 +96,13 @@ export function showComponentMissing(context: vscode.ExtensionContext, session: 
 			});
 		}
 	});
-	void vscode.window.showWarningMessage(explanation, show).then(choice => {
+	const warn = () => void vscode.window.showWarningMessage(explanation, show).then(choice => {
 		if (choice === show) {
 			open();
 		}
 	});
+	warn();
+	const commands = Object.values(COMMANDS).map(id => vscode.commands.registerCommand(id, warn));
 	let offered = false;
 	let asking = false;
 	// Its command answering is what says it is there now, in whichever extension host the editor runs it. The editor tells of the
@@ -126,7 +129,7 @@ export function showComponentMissing(context: vscode.ExtensionContext, session: 
 			}
 		});
 	});
-	const disposable = vscode.Disposable.from(view, installed);
+	const disposable = vscode.Disposable.from(view, installed, ...commands);
 	context.subscriptions.push(disposable);
 	return disposable;
 }
@@ -142,7 +145,7 @@ function missingHtml(nonce: string, cspSource: string, explanation: string, show
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style nonce="${nonce}">
 body { padding: 12px 20px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); line-height: 1.4; }
-button { margin-top: 12px; padding: 4px 12px; border: none; border-radius: 2px; color: var(--vscode-button-foreground); background: var(--vscode-button-background); font: inherit; cursor: pointer; }
+button { margin-top: 12px; padding: 4px 12px; border: none; border-radius: var(--vscode-cornerRadius-small, 4px); color: var(--vscode-button-foreground); background: var(--vscode-button-background); font: inherit; cursor: pointer; }
 button:hover { background: var(--vscode-button-hoverBackground); }
 button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 </style>

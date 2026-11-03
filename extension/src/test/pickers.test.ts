@@ -253,7 +253,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.deepStrictEqual(asked, ['feat/x']);
 	});
 
-	test('D162: list ages follow VS Code short words, unit thresholds and rounding, including old conversations', () => {
+	test('UX-2.4: list ages follow VS Code short words, unit thresholds and rounding, including old conversations', () => {
 		const { ago } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
 		const now = Date.UTC(2026, 10, 1, 12);
 		const cases: readonly [number, string][] = [
@@ -272,7 +272,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.strictEqual(ago(future, now, 'en'), new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'medium' }).format(future));
 	});
 
-	test('D162: time phrases use the shipped editor-language translations', () => {
+	test('UX-2.4: time phrases use the shipped editor-language translations', () => {
 		const translated = vscodeFor(ui);
 		const bundle = JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../../l10n/bundle.l10n.zh-cn.json'), 'utf8')) as Record<string, string>;
 		translated.l10n.t = (text, ...args) => (bundle[text] ?? text).replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)]));
@@ -282,7 +282,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			['现在', '1 分钟前', '5 分钟前', '22 小时前', '1 天前', '2 周前', '3 个月前', '2 年前']);
 	});
 
-	test('a remote environment is named as VS Code\'s remote indicator names it, from the authority the local window sees (LIFECYCLE-1.1, D67)', () => {
+	test('a remote environment is named as VS Code\'s remote indicator names it, from the authority the local window sees (LIFECYCLE-1.1)', () => {
 		const { environmentLabel } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
 		const hex = Buffer.from(JSON.stringify({ hostName: 'build.example.com', user: 'me' })).toString('hex');
 		assert.deepStrictEqual([
@@ -352,11 +352,13 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		let availability: Awaited<ReturnType<WorktreePort['availability']>>;
 		let planned: string[];
 		let created: number;
+		/** What the service refuses the launch with, before accepting it; none accepts it. */
+		let refusal: Error | undefined;
 
 		const start = (startAt?: string) => {
 			const { newAgent } = load<typeof import('../ui/pickers/newAgent')>(require.resolve('../ui/pickers/newAgent'));
 			return newAgent({
-				agents: { launch: request => { launched.push(request); return 'run-new'; }, list: () => runs, close: async run => { closed.push(run); return 'terminated'; } },
+				agents: { launch: request => { if (refusal) { throw refusal; } launched.push(request); return 'run-new'; }, list: () => runs, close: async run => { closed.push(run); return 'terminated'; } },
 				locations: { snapshot: () => catalog, refresh: async () => undefined, onDidChange: changed.event },
 				clis: { list: async location => { listed.push(location.id); if (choices instanceof Error) { throw choices; } return { clis: choices, problems }; } },
 				worktrees,
@@ -380,6 +382,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			availability = { available: true };
 			planned = [];
 			created = 0;
+			refusal = undefined;
 			changed = new TestEmitter<void>();
 			runs = [];
 			closed = [];
@@ -410,7 +413,47 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([launched, selected, picker.shown, ui.current], [[{ name: 'Ada', location: MAIN.id, cli: 'claude', origin: 'human' }], ['run-new'], false, undefined]);
 		});
 
-		test('LIFECYCLE-1.3, D63: a lone folder Git has not read yet is a label; Change Working Location comes once Git finds a repository there, the CLI in focus kept', async () => {
+		test('a launch refused as its working location went meanwhile says so in the person\'s words, never by the location\'s ID (UX-2.4, LIFECYCLE-1.1)', async () => {
+			const { FacadeError } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
+			refusal = new FacadeError('INVALID', 'invalid_argument', `The working location ${MAIN.id} is not available in this window.`, { kind: 'location_gone', values: [] });
+			const done = start();
+			await settle();
+			ui.current!.accept();
+			await done;
+			assert.deepStrictEqual([errors, selected], [['Could not start Ada: The working location is no longer available.'], []]);
+		});
+
+		test('a launch this window can take no number for says why in the person\'s words: its window component too old - update it on this computer, then reload - or the counter not answering (RULES-2.2, UX-2.4)', async () => {
+			const { FacadeError } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
+			for (const kind of ['component_outdated', 'numbers_unavailable']) {
+				refusal = new FacadeError('UNAVAILABLE', 'unavailable', 'Nothing was started or sent.', { kind, values: [] });
+				const done = start();
+				await settle();
+				ui.current!.accept();
+				await done;
+			}
+			// Another window owning the workspace, in the same words, saying what to do (ARCHITECTURE-2.2)
+			const { OWNERSHIP_LOST } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
+			refusal = new FacadeError('INVALID', 'ownership_lost', 'This workspace is now owned by another window. Reload this window to take ownership.', OWNERSHIP_LOST);
+			const owned = start();
+			await settle();
+			ui.current!.accept();
+			await owned;
+			// A wrong facade.yolo is refused in the same words (UX-4.1)
+			refusal = new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"', { kind: 'yolo_type', values: ['"yes"'] });
+			const done = start();
+			await settle();
+			ui.current!.accept();
+			await done;
+			assert.deepStrictEqual([errors, selected], [[
+				'Could not start Ada: Facade Code requires a newer Window Component. Update "Facade Code Window Component" on this computer, then reload the window.',
+				'Could not start Ada: This computer\'s counter could not give the agent a number. Try again.',
+				'Could not start Ada: This workspace is owned by another window. Reload this window to take ownership.',
+				'Could not start Ada: facade.yolo must be true or false; received "yes".'
+			], []]);
+		});
+
+		test('LIFECYCLE-1.3: a lone folder Git has not read yet is a label; Change Working Location comes once Git finds a repository there, the CLI in focus kept', async () => {
 			const SHOP_FOLDER = place('loc-shop', 'shop', SHOP, { kind: 'folder', git: 'pending', opened: true, uri: SHOP.uri, path: SHOP.path });
 			catalog = { locations: [SHOP_FOLDER], folders: [SHOP], pending: true };
 			last = { location: SHOP_FOLDER.id, cli: 'claude' };
@@ -477,7 +520,28 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([opened, empty, emptyLabel, renamed, backed, launched, selected], [['text', 'New Agent · Change Name', 'Ada', undefined, undefined], undefined, ['New Agent ·  · main', ''], 'human', 'human', [], []]);
 		});
 
-		test('LIFECYCLE-1.3, D63: a lone plain folder is said as a label, never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
+		test('WORKTREES-2.1: New Worktree for a destination Resume remembered inside a checkout starts from that checkout, its branch named - never the folder\'s first', async () => {
+			const API = place('loc-api', 'api', SHOP, { path: `${LOGIN.path}/api`, kind: 'folder', git: 'none' });
+			catalog = { locations: [MAIN, LOGIN, API], folders: [SHOP], pending: false };
+			last = { location: API.id, cli: 'claude' };
+			const done = start();
+			await settle();
+			ui.current!.accept('Change Working Location...');
+			await settle();
+			const offered = ui.current!.item('New Worktree...').description;
+			ui.current!.accept('New Worktree...');
+			await settle();
+			ui.current!.type('feat/api');
+			ui.current!.accept();
+			await settle();
+			await settle();
+			const chosen = ui.current!.item('Change Working Location...').description;
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual([offered, planned, chosen], ['from login-fix', ['loc-login feat/api'], 'New worktree feat/api from login-fix']);
+		});
+
+		test('LIFECYCLE-1.3: a lone plain folder is said as a label, never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
 			catalog = { locations: [GUIDE], folders: [DOCS], pending: false };
 			last = { location: GUIDE.id, cli: 'claude' };
 			let done = start();
@@ -736,7 +800,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D73, LIFECYCLE-1.3: the folder step ends in Add Folder to Workspace... and offers removing each folder while another stays; a single-folder window has no folder step, so neither', async () => {
+		test('LIFECYCLE-1.3: the folder step ends in Add Folder to Workspace... and offers removing each folder while another stays; a single-folder window has no folder step, so neither', async () => {
 			catalog = { locations: [MAIN, LOGIN, GUIDE], folders: [SHOP, DOCS], pending: false };
 			let done = start();
 			await settle();
@@ -759,7 +823,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D73: Add Folder to Workspace... is the editor\'s own command, run with the step hidden; cancelled, the step is as it was; folders added, the step again with the first added selected', async () => {
+		test('LIFECYCLE-1.3: Add Folder to Workspace... is the editor\'s own command, run with the step hidden; cancelled, the step is as it was; folders added, the step again with the first added selected', async () => {
 			catalog = { locations: [MAIN, LOGIN, GUIDE], folders: [SHOP, DOCS], pending: false };
 			ui.workspaceFolders = [SHOP, DOCS];
 			const API: WorkspaceFolderInfo = { index: 2, name: 'api', uri: 'file:///api', path: '/api' };
@@ -796,7 +860,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D73: a folder\'s X asks first, saying the agents its removal closes, and Cancel does nothing; Remove calls updateWorkspaceFolders(index, 1) and leaves its agents to the removal; one folder left goes on to its locations', async () => {
+		test('LIFECYCLE-1.3: a folder\'s X asks first, saying the agents its removal closes, and Cancel does nothing; Remove calls updateWorkspaceFolders(index, 1) and leaves its agents to the removal; one folder left goes on to its locations', async () => {
 			catalog = { locations: [MAIN, LOGIN, GUIDE], folders: [SHOP, DOCS], pending: false };
 			last = { location: GUIDE.id, cli: 'claude' };
 			runs = [runAt(1, GUIDE), runAt(2, GUIDE), runAt(3, MAIN)];
@@ -840,7 +904,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D73: the location step offers Delete Worktree on linked worktrees alone - not on the main checkout, a plain folder, a worktree a workspace folder opened or one a workspace folder is in', async () => {
+		test('LIFECYCLE-1.3: the location step offers Delete Worktree on linked worktrees alone - not on the main checkout, a plain folder, a worktree a workspace folder opened or one a workspace folder is in', async () => {
 			const NOTES: WorkspaceFolderInfo = { index: 1, name: 'notes', uri: 'file:///holder/notes', path: '/holder/notes' };
 			catalog = {
 				locations: [
@@ -872,7 +936,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D73: Delete Worktree asks first - its folder, the branch kept, its agents - and Cancel does nothing; confirmed, the step is back at once without it, busy until it is gone, its own agents closed by the deletion', async () => {
+		test('LIFECYCLE-1.3: Delete Worktree asks first - its folder, the branch kept, its agents - and Cancel does nothing; confirmed, the step is back at once without it, busy until it is gone, its own agents closed by the deletion', async () => {
 			runs = [runAt(1, LOGIN), runAt(2, MAIN)];
 			let release!: () => void;
 			remove = async (_id, closeAgents) => {
@@ -907,7 +971,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D73, WORKTREES-3.2: Delete Worktree names and closes the agents launched inside it too - a resumed conversation\'s subdirectory, listed or not yet - and no other', async () => {
+		test('WORKTREES-3.2: Delete Worktree names and closes the agents launched inside it too - a resumed conversation\'s subdirectory, listed or not yet - and no other', async () => {
 			const API = place('loc-login-api', 'api', SHOP, { kind: 'folder', path: `${LOGIN.path}/api`, uri: 'file:///login-fix/api' });
 			catalog = { locations: [MAIN, LOGIN, API], folders: [SHOP], pending: false };
 			const tools = `${LOGIN.path}/tools`;
@@ -932,7 +996,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D73: a refused deletion is said - changes not committed, Git\'s own refusal - with the worktree back in the step and no agent closed by the picker; a detached worktree is asked about without a branch', async () => {
+		test('LIFECYCLE-1.3: a refused deletion is said - changes not committed, Git\'s own refusal - with the worktree back in the step and no agent closed by the picker; a detached worktree is asked about without a branch', async () => {
 			catalog = { locations: [MAIN, LOGIN, place('loc-loose', 'loose', SHOP, { detached: true })], folders: [SHOP], pending: false };
 			runs = [runAt(1, LOGIN)];
 			ui.answer = 'Delete';
@@ -989,7 +1053,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		let errors: string[];
 		let savedNames: Map<string, string>;
 		let nameReads: string[];
-		const open = (batches: readonly ConversationEntry[][], result: string | { running: string } = 'run-new', locations: readonly Location[] = [MAIN, LOGIN], running: readonly string[] = []) => {
+		const open = (batches: readonly ConversationEntry[][], result: string | { running: string } | Error = 'run-new', locations: readonly Location[] = [MAIN, LOGIN], running: readonly string[] = []) => {
 			const { resumeAgent } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
 			reads = 0;
 			return resumeAgent({
@@ -997,7 +1061,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				savedName: key => { nameReads.push(key.sessionId); return savedNames.get(key.sessionId); },
 				locations: { snapshot: () => ({ locations, folders: [SHOP], pending: false }) },
 				running: key => running.includes(key.sessionId),
-				resume: chosen => { resumedCwds.push(chosen.cwd); assert.strictEqual(chosen.cwdChoices, undefined); did.push(`resume ${chosen.key.sessionId}`); return result as never; },
+				resume: chosen => { resumedCwds.push(chosen.cwd); assert.strictEqual(chosen.cwdChoices, undefined); did.push(`resume ${chosen.key.sessionId}`); if (result instanceof Error) { throw result; } return result as never; },
 				reveal: async run => void did.push(`reveal ${run}`),
 				select: run => void did.push(`select ${run}`),
 				notifyError: text => errors.push(text),
@@ -1043,7 +1107,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('D64: each conversation is one line - its icon naming the CLI, then time and location; no CLI name or source as text', async () => {
+		test('LIFECYCLE-3.2: each conversation is one line - its icon naming the CLI, then time and location; no CLI name or source as text', async () => {
 			const done = open([[entry(4), entry(2)]]);
 			await settle();
 			const lines = ui.current!.items.map(item => [item.description, item.detail]);
@@ -1052,7 +1116,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual(lines, [['2 mins ago \u00b7 main', undefined], ['4 mins ago \u00b7 main', undefined]]);
 		});
 
-		test('D161: title leads, saved names follow time/location even when equal; absent names stay absent and CLI search reaches later pages', async () => {
+		test('LIFECYCLE-2.3: title leads, saved names follow time/location even when equal; absent names stay absent and CLI search reaches later pages', async () => {
 			savedNames.set('s0', 'Same title');
 			savedNames.set('s1', '');
 			savedNames.set('s3', 'Ada');
@@ -1096,7 +1160,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			}
 		});
 
-		test('D69: a conversation an agent already holds - resumed here, or running in another window - is not listed again', async () => {
+		test('LIFECYCLE-3.2: a conversation an agent already holds - resumed here, or running in another window - is not listed again', async () => {
 			const done = open([[entry(1), entry(2), entry(3)]], 'run-new', [MAIN, LOGIN], ['s1', 's3']);
 			await settle();
 			const listed = ui.current!.items.map(item => item.label);
@@ -1115,7 +1179,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual(resumedCwds, [LOGIN.path]);
 		});
 
-		test('a conversation listed twice shows once; one that cannot be resumed is not listed (D64); choosing one resumes it, shows the one already running here, or says it runs in another window (LIFECYCLE-3.2, 3.3)', async () => {
+		test('a conversation listed twice shows once; one that cannot be resumed is not listed (LIFECYCLE-3.2); choosing one resumes it, shows the one already running here, or says it runs in another window (LIFECYCLE-3.2, 3.3)', async () => {
 			const batch = [entry(1), entry(2, { unavailable: 'Codex cannot resume this conversation exactly' }), entry(1), entry(3)];
 			let done = open([batch]);
 			await settle();
@@ -1137,6 +1201,25 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				['Conversation 3 is already running in another window.']
 			]);
 		});
+
+		test('a Resume refused as another window owns the workspace says so in the person\'s words, with what to do (UX-2.4, LIFECYCLE-3.2)', async () => {
+			const { FacadeError, OWNERSHIP_LOST } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
+			const done = open([[entry(1)]], new FacadeError('INVALID', 'ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST));
+			await settle();
+			ui.current!.accept('Conversation 1');
+			await done;
+			assert.deepStrictEqual(errors, ['Could not resume Conversation 1: This workspace is owned by another window. Reload this window to take ownership.']);
+		});
+
+		test('a conversation whose working location is not in this window is refused in the person\'s words, by its path (UX-2.4, LIFECYCLE-3.2)', async () => {
+			const { FacadeError } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
+			const refusal = new FacadeError('INVALID', 'not_found', 'The conversation\'s working location /far/away is not available in this window.', { kind: 'location_not_here', values: ['/far/away'] });
+			const done = open([[entry(1)]], refusal);
+			await settle();
+			ui.current!.accept('Conversation 1');
+			await done;
+			assert.deepStrictEqual([did, errors], [['resume s1'], ['Could not resume Conversation 1: The working location /far/away is not available in this window.']]);
+		});
 	});
 
 	suite('Filter by Working Location', () => {
@@ -1154,7 +1237,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual(item.filter, missing, 'display escaping never changes the saved filter');
 		});
 
-		test('D166: same-name folders keep their selection targets and show count before their distinct parent paths', () => {
+		test('PANEL-1.5: same-name folders keep their selection targets and show count before their distinct parent paths', () => {
 			const { filterItems } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
 			const folders = [SHOP, DOCS].map((folder, index) => ({ ...folder, name: 'app', path: `/projects/team-${index}/app`, uri: `file:///projects/team-${index}/app` }));
 			const locations = folders.map((folder, index) => ({ ...GUIDE, id: `loc-${index}`, folders: [folder] }));
@@ -1189,7 +1272,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			return shown;
 		};
 
-		test('PANEL-2.3, D82: steps by folder - All Locations, then each folder with cards, one in two or more locations opening All Worktrees and its locations, main checkout first, any other filtering at once; a window of one folder shows that step alone, All Locations outside Git; one separator, below each step\'s first item', () => {
+		test('PANEL-2.3: steps by folder - All Locations, then each folder with cards, one in two or more locations opening All Worktrees and its locations, main checkout first, any other filtering at once; a window of one folder shows that step alone, All Locations outside Git; one separator, below each step\'s first item', () => {
 			const { filterItems, folderItems } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
 			const first = filterItems(modelWith().model, two);
 			assert.deepStrictEqual([
@@ -1213,7 +1296,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('a filtered location alone with cards in its folder opens the folder\'s step, where it stays in sight and Enter keeps it; one in a plain folder filters by the folder at once (PANEL-2.3, D82)', () => {
+		test('a filtered location alone with cards in its folder opens the folder\'s step, where it stays in sight and Enter keeps it; one in a plain folder filters by the folder at once (PANEL-2.3)', () => {
 			const { filterItems, folderItems } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
 			const login = modelWith({ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' }, { all: 1, [MAIN.id]: 0, [GUIDE.id]: 0, [SHOP.uri]: 1, [DOCS.uri]: 0 }).model;
 			const guide = modelWith({ kind: 'location', id: GUIDE.id, label: 'docs · guide' }, { all: 2, [MAIN.id]: 0, [LOGIN.id]: 0, [SHOP.uri]: 0 }).model;
@@ -1232,7 +1315,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('the current filter is highlighted - a location through its folder, then itself in the folder\'s step, titled with the folder, listed with no card left; Back returns to the first step at the folder; Escape in either step changes nothing (PANEL-2.3, D82)', async () => {
+		test('the current filter is highlighted - a location through its folder, then itself in the folder\'s step, titled with the folder, listed with no card left; Back returns to the first step at the folder; Escape in either step changes nothing (PANEL-2.3)', async () => {
 			const { pickFilter } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
 			const { set, model } = modelWith({ kind: 'location', id: LOGIN.id, label: 'shop · login-fix' }, { [LOGIN.id]: 0 });
 			let picking = pickFilter(model as never, locationsOf(() => two), log);
@@ -1332,7 +1415,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('choosing a location filters to it, a folder with one location by the folder at once, All Worktrees by the whole folder, and the first step\'s first item clears the filter (PANEL-2.3, D82)', async () => {
+		test('choosing a location filters to it, a folder with one location by the folder at once, All Worktrees by the whole folder, and the first step\'s first item clears the filter (PANEL-2.3)', async () => {
 			const { pickFilter } = load<typeof import('../ui/pickers/filter')>(require.resolve('../ui/pickers/filter'));
 			const { set, model } = modelWith();
 			const choose = async (catalog: Catalog, ...labels: string[]) => {
@@ -1367,7 +1450,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		const two: Catalog = { locations: [GUIDE, LOGIN, MAIN], folders: [DOCS, SHOP], pending: false };
 		const icons = () => ui.current!.items.map(item => (item.iconPath as { id: string }).id);
 
-		test('CLIS-4.1, D84: in a window of several folders, the folders with their own icons - one with a single location choosing it at once, one with more opening its own step titled with it, main checkout first; Back returns to the folders at it; no separator; Escape chooses none', async () => {
+		test('CLIS-4.1: in a window of several folders, the folders with their own icons - one with a single location choosing it at once, one with more opening its own step titled with it, main checkout first; Back returns to the folders at it; no separator; Escape chooses none', async () => {
 			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
 			let choosing = chooseLaunchLocation(locationsOf(() => two), log);
 			await settle();
@@ -1401,7 +1484,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('in a window of one folder, its locations at once - main checkout first, each with its path - searched by path too; Escape chooses none (CLIS-4.1, D84)', async () => {
+		test('in a window of one folder, its locations at once - main checkout first, each with its path - searched by path too; Escape chooses none (CLIS-4.1)', async () => {
 			const { chooseLaunchLocation } = load<typeof import('../ui/pickers/launchLocation')>(require.resolve('../ui/pickers/launchLocation'));
 			const one: Catalog = { locations: [LOGIN, MAIN], folders: [SHOP], pending: false };
 			let choosing = chooseLaunchLocation(locationsOf(() => one), log);
@@ -1488,7 +1571,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			activity: 'working', reporting: true, root: `run-${String(n).padStart(32, '0')}`, origin: 'human', tools: 'not_injected', ...more
 		});
 
-		test('U06, D161: single-line names, IDs, state, location and titles; empty/equal names, hidden CLI search, copied references and item actions', async () => {
+		test('U06, LIFECYCLE-2.3: single-line names, IDs, state, location and titles; empty/equal names, hidden CLI search, copied references and item actions', async () => {
 			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
 			let runs = [run(1, { title: 'Fix login' }), run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }), run(3, { lifecycle: 'starting', phase: 'launching_cli' }), run(4, { name: '', title: 'Unnamed work' }), run(5, { name: 'Same', title: 'Same', cli: 'muse', displayName: 'Muse Code' })];
 			const changed = new TestEmitter<RunChange>();

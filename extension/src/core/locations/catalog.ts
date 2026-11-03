@@ -194,7 +194,7 @@ function byLabel(a: Candidate, b: Candidate): number {
 }
 
 /**
- * Whether `location` is a worktree the person may delete (WORKTREES-3.2, D73): a linked one - not the main checkout, not a plain
+ * Whether `location` is a worktree the person may delete (WORKTREES-3.2): a linked one - not the main checkout, not a plain
  * folder - that no workspace folder opened or is in, compared by canonical key. The picker offers it and deletion refuses it by
  * this one rule; deletion also asks Git again.
  */

@@ -21,20 +21,20 @@ const POLL_MS = 100;
 const DRAFT_MS = 2_000;
 /** How long the input has to empty after Enter for the CLI to have taken the message (RULES-1.3), beyond that time too. */
 const TAKEN_MS = 3_000;
-/** How many bytes of a paste a terminal takes in a millisecond, as Orca measured: Windows' ConPTY 64, elsewhere 4 KB (D105). */
+/** How many bytes of a paste a terminal takes in a millisecond, as Orca measured: Windows' ConPTY 64, elsewhere 4 KB (CLIS-2.1). */
 const PASTE_BYTES_PER_MS: { readonly win32: number; readonly other: number } = { win32: 64, other: 4096 };
-/** How long more a CLI's input needs for each line of a paste before Enter: Antigravity expands a long paste over seconds (D105). */
+/** How long more a CLI's input needs for each line of a paste before Enter: Antigravity expands a long paste over seconds (CLIS-2.1). */
 const LINE_SETTLE_MS: { readonly [adapter: string]: number } = { 'agy-frame': 45 };
 /**
  * How long more a CLI needs for each character of a paste where it reads its input one key at a time: Codex on Windows reads console
  * input records, not a bracketed paste, which Orca measured at 21.1 s for 9,249 characters and gives 3 ms each. A character is a
- * UTF-16 code unit there, one key event each (D105).
+ * UTF-16 code unit there, one key event each (CLIS-2.1).
  */
 const CHAR_SETTLE_MS: { readonly [adapter: string]: { readonly [platform: string]: number } } = { 'codex-prompt': { win32: 3 } };
-/** How long type_text's Enter waits after its text at least, so that its CLI reads them apart (MCP-5.2, D113). */
+/** How long type_text's Enter waits after its text at least, so that its CLI reads them apart (MCP-5.2). */
 const DIRECT_ENTER_MS = 100;
 
-/** The input readers of CLIs whose model takes a paste alone as material, not a request: a message's lead is typed before it (D108). */
+/** The input readers of CLIs whose model takes a paste alone as material, not a request: a message's lead is typed before it (COLLABORATION-2.1). */
 const TAKES_LEAD: ReadonlySet<string> = new Set(['claude-frame']);
 
 /** How long a start waits for its CLI's input to read empty before it gives up what it types before the first turn. */
@@ -73,7 +73,7 @@ export interface OrdinaryInputDeps {
 	readonly monotonic?: () => number;
 	/** Waits `ms`, rejecting as soon as `signal` aborts. */
 	readonly wait?: (ms: number, signal?: AbortSignal) => Promise<void>;
-	/** The platform the run's terminal is on: how fast it takes a paste (D105). */
+	/** The platform the run's terminal is on: how fast it takes a paste (CLIS-2.1). */
 	readonly platform?: NodeJS.Platform;
 }
 
@@ -147,7 +147,7 @@ export class OrdinaryInput implements InputPort {
 
 	/**
 	 * How much longer than usual a paste of `text` takes to show and be taken in `run`'s CLI: twice its size's time, Antigravity's lines
-	 * and the characters of a CLI that reads them one at a time (D105, D118).
+	 * and the characters of a CLI that reads them one at a time (CLIS-2.1).
 	 */
 	pasteTime(run: RunId, text: string): number {
 		const adapter = this.adapterOf(run);
@@ -273,7 +273,7 @@ export class OrdinaryInput implements InputPort {
 		if ((await this.read(run, adapter)).state !== 'usable' || signal?.aborted || canPaste?.() === false) {
 			return { effects: NOTHING, shown: false };
 		}
-		// Typed ahead of the paste only where its CLI takes a paste alone as material (D108)
+		// Typed ahead of the paste only where its CLI takes a paste alone as material (COLLABORATION-2.1)
 		const typed = lead !== undefined && TAKES_LEAD.has(adapter) ? lead : undefined;
 		let pasted: InputEffect;
 		try {
@@ -288,7 +288,7 @@ export class OrdinaryInput implements InputPort {
 			return { effects: pasted.outcome === 'partial' ? { outcome: 'partial', text_written: 'partial', enter_written: false } : NOTHING, shown: false };
 		}
 		// The whole text is in the terminal: Enter goes only once the CLI shows it as the input's own draft, alone (RULES-1.6) - one that
-		// reads it a key at a time drawing it as it reads (D105)
+		// reads it a key at a time drawing it as it reads (CLIS-2.1)
 		const showMs = DRAFT_MS + this.pasteMs(text) + this.charactersMs(adapter, text);
 		let seen: string | undefined;
 		const shows = (reading: InputReading) => {
@@ -306,7 +306,7 @@ export class OrdinaryInput implements InputPort {
 	}
 
 	/**
-	 * Enter over the message's own draft, once its CLI has had what more it needs for a paste of its size (D105), then the input waited
+	 * Enter over the message's own draft, once its CLI has had what more it needs for a paste of its size (CLIS-2.1), then the input waited
 	 * on to empty: a confirmed submission, else what went in.
 	 */
 	private async enterNow(run: RunId, adapter: string, text: string, signal: AbortSignal | undefined): Promise<InputEffects> {
@@ -342,7 +342,7 @@ export class OrdinaryInput implements InputPort {
 
 	/**
 	 * type_text's text, then its Enter where asked (MCP-5.2): no draft protection, but its Enter in a write of its own once its CLI can
-	 * have read the text - a tenth of a second at least, and the time a paste of its size takes (D105, D113) - as a CLI that reads a
+	 * have read the text - a tenth of a second at least, and the time a paste of its size takes (CLIS-2.1, MCP-4.1) - as a CLI that reads a
 	 * paste's end and an Enter together may drop the Enter, as Claude Code does.
 	 */
 	async typeDirect(run: RunId, text: string, enter: boolean): Promise<InputEffect> {
@@ -372,18 +372,18 @@ export class OrdinaryInput implements InputPort {
 		return this.deps.pressKeys(run, keys).catch(refusedUnsent);
 	}
 
-	/** The time this platform's terminal takes to take in a paste of `text`, in whole tenths of a second (D105). */
+	/** The time this platform's terminal takes to take in a paste of `text`, in whole tenths of a second (CLIS-2.1). */
 	private pasteMs(text: string): number {
 		const rate = this.platform === 'win32' ? PASTE_BYTES_PER_MS.win32 : PASTE_BYTES_PER_MS.other;
 		return Math.floor(Buffer.byteLength(text, 'utf8') / rate / 100) * 100;
 	}
 
-	/** The time the CLI of the reader `adapter` needs for the lines of a paste of `text` before its Enter: Antigravity's (D105). */
+	/** The time the CLI of the reader `adapter` needs for the lines of a paste of `text` before its Enter: Antigravity's (CLIS-2.1). */
 	private linesMs(adapter: string | undefined, text: string): number {
 		return adapter ? (LINE_SETTLE_MS[adapter] ?? 0) * text.split(/\r\n|\r|\n/u).length : 0;
 	}
 
-	/** The time the CLI of the reader `adapter` needs on this platform to read a paste of `text` a key at a time: Codex on Windows (D105). */
+	/** The time the CLI of the reader `adapter` needs on this platform to read a paste of `text` a key at a time: Codex on Windows (CLIS-2.1). */
 	private charactersMs(adapter: string | undefined, text: string): number {
 		return adapter ? (CHAR_SETTLE_MS[adapter]?.[this.platform] ?? 0) * text.length : 0;
 	}
@@ -431,7 +431,7 @@ export class OrdinaryInput implements InputPort {
 }
 
 /**
- * Direct input that ptyd was never given - it cannot be reached, or the run's runtime takes no MCP input (D120) - went nowhere: a
+ * Direct input that ptyd was never given - it cannot be reached, or the run's runtime takes no MCP input (RULES-1.8) - went nowhere: a
  * refusal with no effect, never input of unknown effect (MCP-1.2).
  */
 function refusedUnsent(err: unknown): never {

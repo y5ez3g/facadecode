@@ -1,16 +1,16 @@
 # Facade Code
 
-This repository contains the IDE and reserves space for its independently distributed extension. Product documentation
-is shared under `docs/`, separated by product.
+This repository contains the IDE and its independently distributed extension. Product documentation is shared under
+`docs/`, separated by product.
 
 ## Routing
 
 - IDE source, dependencies, build scripts and tests: `ide/`. Read [ide/AGENTS.md](ide/AGENTS.md) and
   [docs/ide/ENGINEERING.md](docs/ide/ENGINEERING.md) before changing it.
-- Standalone extension: `extension/`, currently reserved for the owner to add the project.
+- Standalone extension: `extension/`. Read [extension/AGENTS.md](extension/AGENTS.md) before changing it.
 - IDE specifications: `docs/ide/`. The former `facade-code-spec/` directory has moved here.
 - Translated repository documentation: `docs/locales/`. Runtime translations remain in `ide/locales/`.
-- Extension documentation: `docs/extension/`, currently reserved.
+- Extension specification: `docs/extension/`.
 
 Run IDE development commands from `ide/`; open that folder to use its existing editor settings and development tools.
 Keep GitHub workflows and repository-wide metadata at the repository root. Each product keeps its own package manifest

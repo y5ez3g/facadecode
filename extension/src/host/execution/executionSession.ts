@@ -45,7 +45,8 @@ export class ExecutionSession {
 	constructor(private readonly options: SessionOptions) {
 		this.claim = options.claim ?? nextOwnerClaim(options.owner, options.home);
 		this.earlier = new EarlierPtyds(options.home, this.claim, {
-			log: options.log, lost: protocol => this.lose(protocol), ownerLost: () => this.transfer(), ...options.busy ? { busy: options.busy } : {}
+			log: options.log, lost: protocol => this.lose(protocol), ownerLost: () => this.transfer(), ...options.busy ? { busy: options.busy } : {},
+			...options.connected ? { connected: options.connected } : {}
 		});
 		this.reconcileTimer = setInterval(() => void options.reconcile(), RECONCILE_MS);
 		this.reconcileTimer.unref?.();
@@ -157,7 +158,7 @@ export class ExecutionSession {
 
 	/**
 	 * Connects and claims again, whether or not runs are shown: ptyd ends an absent owner's runs, and its claim, five minutes after
-	 * the window went (D75), and this window is still here. A failed connection keeps the loss, tried again by the next check.
+	 * the window went (RULES-4.1), and this window is still here. A failed connection keeps the loss, tried again by the next check.
 	 */
 	private async restore(hasRuns: boolean, restore: (client: PtydClient) => Promise<boolean>): Promise<void> {
 		if (this.closed) {

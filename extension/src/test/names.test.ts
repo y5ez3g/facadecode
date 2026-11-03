@@ -12,7 +12,7 @@ const KEY_NAMES: readonly string[] = [
 	...Array.from({ length: 26 }, (_, index) => `Ctrl+${String.fromCharCode('A'.charCodeAt(0) + index)}`)
 ];
 
-suite('Suggested agent names (LIFECYCLE-2.1, D57)', () => {
+suite('Suggested agent names (LIFECYCLE-2.1)', () => {
 	test('over a hundred short ASCII machine words, no two with the same first three letters, none a key name, a Facade word or a CLI', () => {
 		const keys = new Set(KEY_NAMES.map(key => key.toLowerCase()));
 		const words = ['agent', 'human', 'facade', 'pin', 'close', 'stop', 'resume', 'window', 'claude', 'codex', 'muse', 'qwen', 'agy', 'antigravity'];

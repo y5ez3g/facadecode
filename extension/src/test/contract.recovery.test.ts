@@ -59,6 +59,14 @@ suite('Contract: recovery preserves effects and existing operations', () => {
 		assert.ok(!JSON.stringify(lost).includes('secret body'));
 	});
 
+	test('a delivery that ran out of time is a blocker to look at on its target\'s screen; a route that timed out is reconnected (MCP-1.2)', () => {
+		const record = { id: 'm-42', to: { run: 'r', alias: '#a12' }, delivery: { status: 'failure', reason: 'timeout', effects: { outcome: 'none', text_written: 'none', enter_written: false }, attempts: 1 } };
+		const late = deliveryReceipt(record as never) as { error?: { code?: string; reason?: string }; recovery?: unknown };
+		assert.deepStrictEqual([late.error?.code, late.error?.reason, late.recovery], ['FAILED', 'timeout', { action: 'resolve_blocker', check: { tool: 'read_screen', arguments: { agent: '#a12' } } }]);
+		const lost = resultOf(failureAnswer('UNAVAILABLE', 'timeout', 'The window did not answer in time.', 'none', { tool: 'send_message', arguments: { to: '#a12', text: 'x' } }));
+		assert.deepStrictEqual(lost.recovery, { action: 'reconnect' });
+	});
+
 	test('lost pure queries have no state effects; an inbox read can acknowledge delivery', () => {
 		for (const tool of ['list_agents', 'read_screen', 'read_messages']) {
 			const result = resultOf(failureAnswer('UNAVAILABLE', 'timeout', 'Reply lost.', 'unknown', { tool, arguments: {} }));

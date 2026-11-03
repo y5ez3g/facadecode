@@ -3,14 +3,26 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import { AGENTS_ROUTE_COMMAND, WINDOW_ALLOCATE_COMMAND, WINDOW_DIRECTORY_COMMAND, WINDOW_PUBLISH_COMMAND, WINDOW_ROUTE_COMMAND, WORKSPACE_REPUBLISH_COMMAND } from '../base/windowNetwork';
 import type { RunChange, RunFacts } from '../core/ports';
-import { allocateNumbers } from '../record/windowRegistry';
+import { allocateNumbers, environmentFloor } from '../record/windowRegistry';
 import { runFacts } from './contractFakes';
 import { tempDir } from './util';
 import { TestEmitter, withModules } from './withModules';
 
 type Command = (...args: unknown[]) => unknown;
+
+/** What taking a number threw: a refusal, with its code, reason and the person's words. */
+function refusalOf(take: () => unknown): { readonly code?: string; readonly reason?: string; readonly said?: unknown; readonly message: string } {
+	try {
+		take();
+	} catch (err) {
+		return err as { code?: string; reason?: string; said?: unknown; message: string };
+	}
+	return assert.fail('a number was given');
+}
 
 /** The editor's commands as the workspace extension reaches its window component through them, scripted by each test. */
 function fakeEditor() {
@@ -89,18 +101,56 @@ suite('The workspace extension on the client network (ARCHITECTURE-2.1; RULES-1.
 		assert.strictEqual(new Set(given).size, given.length, 'the counter itself and the pool of numbers taken from it never give one number twice');
 	});
 
-	test('without the window component the pool says so, and numbers come from this environment\'s counter, with a line in the log', async () => {
+	test('RULES-2.2: with no number from the window component, a remote window\'s start or send is refused before any effect - no other counter stands in - said in the log; so is a local one\'s whose counter cannot be read', async () => {
 		const editor = fakeEditor();
 		const log: string[] = [];
-		let local = 40;
-		const pool = new editor.client.AliasPool('message', () => ++local, line => log.push(line));
+		const pool = new editor.client.AliasPool('message', undefined, line => log.push(line));
 		assert.strictEqual(await pool.prime(), false);
-		assert.deepStrictEqual([pool.next(), pool.next()], [41, 42]);
+		const refused = refusalOf(() => pool.next());
+		assert.deepStrictEqual([refused.code, refused.reason, refused.said], ['UNAVAILABLE', 'unavailable', { kind: 'numbers_unavailable', values: [] }]);
 		assert.ok(log.some(line => line.startsWith('Could not take message numbers from this computer\'s counter: command \'facade.window.allocate\' not found')), log.join('\n'));
-		// A component that answers with no numbers gives none either
+		// A component that answers with no numbers gives none either; nor does a local window\'s counter that cannot be read
 		editor.handlers.set(WINDOW_ALLOCATE_COMMAND, () => undefined);
-		const empty = new editor.client.AliasPool('message', () => ++local, () => undefined);
-		assert.deepStrictEqual([await empty.prime(), empty.next()], [false, 43]);
+		const empty = new editor.client.AliasPool('message', undefined, () => undefined);
+		const unreadable = new editor.client.AliasPool('agent', () => { throw new Error('the counter is damaged'); }, () => undefined, 'session-1', editor.client.LOCAL_POOL);
+		assert.strictEqual(await empty.prime(), false);
+		assert.match(refusalOf(() => empty.next()).message, /^No message number could be taken from this computer's counter: /);
+		assert.strictEqual(refusalOf(() => unreadable.next()).message, 'No agent number could be taken from this computer\'s counter: the counter is damaged. Nothing was started or sent; try again.');
+	});
+
+	test('RULES-2.2: a remote window asks for numbers past those its environment\'s earlier counters gave, which its component cannot read; one it cannot read gives none', async () => {
+		const editor = fakeEditor();
+		const asked: unknown[] = [];
+		editor.handlers.set(WINDOW_ALLOCATE_COMMAND, (_session, kind, count, floor) => { asked.push(floor); return allocateNumbers(home.dir, kind as 'agent', count as number, floor as number); });
+		// 0.0.1 gave #a1 to #a41 in that environment, whose Facade directory is not this computer's
+		const remote = tempDir('facade-remote-');
+		try {
+			fs.writeFileSync(path.join(remote.dir, 'agent-aliases.json'), JSON.stringify({ last: 41 }));
+			const pool = new editor.client.AliasPool('agent', undefined, () => undefined, 'session-1', editor.client.REMOTE_POOL, () => environmentFloor(remote.dir, 'agent'));
+			assert.strictEqual(await pool.prime(), true);
+			assert.deepStrictEqual([asked, pool.next()], [[41], 42]);
+			fs.writeFileSync(path.join(remote.dir, 'message-aliases.json'), '{');
+			const log: string[] = [];
+			const unreadable = new editor.client.AliasPool('message', undefined, line => log.push(line), 'session-1', editor.client.REMOTE_POOL, () => environmentFloor(remote.dir, 'message'));
+			assert.strictEqual(await unreadable.prime(), false);
+			assert.strictEqual(refusalOf(() => unreadable.next()).reason, 'unavailable');
+			assert.ok(log.some(line => line.includes('message-aliases.json')), log.join('\n'));
+		} finally {
+			remote.remove();
+		}
+	});
+
+	test('ARCHITECTURE-4.3, RULES-2.2: a window component too old for the client network leaves no other window - each one unavailable as protocol_incompatible, nothing carried - and no number: a start or send is refused, saying to update it on this computer and reload', async () => {
+		const editor = fakeEditor();
+		const network = new editor.client.OutdatedComponent('win-1');
+		const listed = await network.directory().then(() => 'listed', (err: { code?: string; reason?: string }) => [err.code, err.reason]);
+		const routed = await network.route();
+		assert.deepStrictEqual([network.self, listed, routed.ok, !routed.ok && [routed.reason, routed.effects]], ['win-1', ['UNAVAILABLE', 'protocol_incompatible'], false, ['protocol_incompatible', 'none']]);
+		for (const take of [() => editor.client.NO_AGENT_NUMBERS.next(), () => editor.client.NO_MESSAGE_NUMBERS.next()]) {
+			const refused = refusalOf(take);
+			assert.deepStrictEqual([refused.code, refused.reason, refused.said], ['UNAVAILABLE', 'unavailable', { kind: 'component_outdated', values: [] }]);
+			assert.match(refused.message, /Update "Facade Code Window Component" on this computer, then reload the window\.$/);
+		}
 	});
 
 	test('routes distinguish a missing command from an unreadable reply after dispatch', async () => {

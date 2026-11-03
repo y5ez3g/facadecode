@@ -163,10 +163,17 @@ export function allocateNumbers(home: string, kind: 'agent' | 'message', count: 
 		throw new Error('Numbers are taken from 1 to 1000 at a time.');
 	}
 	// Past the numbers this home's own environment counter gave as well: 0.0.1 counted its agents there, and they may still run
-	// after the update (RULES-2.2, D141)
-	const environment = path.join(home, ENVIRONMENT_COUNTERS[kind]);
-	return { first: takeNumbers(path.join(home, `client-${kind}-numbers.json`), count, `${kind} number`, () => Math.max(floor, lastOf(environment, `${kind} number`))), count };
+	// after the update (RULES-2.2)
+	return { first: takeNumbers(path.join(home, `client-${kind}-numbers.json`), count, `${kind} number`, () => Math.max(floor, environmentFloor(home, kind))), count };
 }
 
-/** The counters of one execution environment beside this computer's, by kind: 0.0.1's, and a window's out of its component's reach. */
+/** The counters of one execution environment beside this computer's, by kind: an earlier build's, 0.0.1's among them. */
 const ENVIRONMENT_COUNTERS = { agent: 'agent-aliases.json', message: 'message-aliases.json' } as const;
+
+/**
+ * The last number `kind`'s counter of the execution environment at `home` gave - an earlier build's - which numbers taken for a window
+ * there go past (RULES-2.2): 0 where it has none, an error where it cannot be read.
+ */
+export function environmentFloor(home: string, kind: 'agent' | 'message'): number {
+	return lastOf(path.join(home, ENVIRONMENT_COUNTERS[kind]), `${kind} number`);
+}

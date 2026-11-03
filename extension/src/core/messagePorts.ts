@@ -45,7 +45,7 @@ export interface MessageRecord {
 	readonly result?: { readonly [key: string]: unknown };
 	/** Unicode code points of `text`. */
 	readonly length: number;
-	/** The sender's request ID for this send, where it gave one: the same one again answers this record (MCP-1.1, D110). */
+	/** The sender's request ID for this send, where it gave one: the same one again answers this record (MCP-1.1). */
 	readonly requestId?: string;
 	/** Evidence of the original startup path, independent of how this message may later be read. */
 	readonly initialPrompt?: { readonly path: 'native' | 'post_start'; readonly capability: CapabilityState };
@@ -93,7 +93,7 @@ export interface SendRequest {
 	readonly callId?: string;
 	/** The ID {@link Messages.allocate} took for it, where it was formatted before it was sent: a creation prompt (COLLABORATION-2.2). */
 	readonly id?: string;
-	/** The caller's request ID, kept with the record (MCP-1.1, D110). */
+	/** The caller's request ID, kept with the record (MCP-1.1). */
 	readonly requestId?: string;
 	readonly initialPrompt?: MessageRecord['initialPrompt'];
 }
@@ -177,11 +177,11 @@ export interface InputPort {
 	/**
 	 * The input now: a usable composer without draft, a draft - `own` where it is `own` alone as its CLI draws it, after `lead` where
 	 * that was typed, the message an earlier attempt wrote whole (RULES-1.6), and `seen` itself where its CLI drew it as a placeholder
-	 * then (D118) - a native interaction, or unknown.
+	 * then (RULES-1.5) - a native interaction, or unknown.
 	 */
 	inspect(run: RunId, own?: string, lead?: string, seen?: string): Promise<'usable' | 'draft' | 'own' | 'interaction' | 'unknown'>;
 	/**
-	 * Pastes the complete text once - `lead` typed before it where its CLI takes a paste alone as material (D108) - and presses Enter
+	 * Pastes the complete text once - `lead` typed before it where its CLI takes a paste alone as material (COLLABORATION-2.1) - and presses Enter
 	 * once the input shows it as its own draft, answering what actually went in and whether the input showed it (RULES-1.3, 1.6,
 	 * 1.10). Once `signal` aborts - the attempt's deadline passed, or its run ended - nothing more goes in. `canPaste` is checked
 	 * immediately before writing: a read cancels an unstarted paste without interrupting an already-issued owned draft.
@@ -189,15 +189,15 @@ export interface InputPort {
 	submit(run: RunId, text: string, signal?: AbortSignal, lead?: string, canPaste?: () => boolean): Promise<Submission>;
 	/**
 	 * Presses Enter where the input holds `text` alone as its own draft, after `lead` where that was typed, written whole by an earlier
-	 * attempt - `seen` itself where it showed as a placeholder (D118) - and answers what went in: nothing where it holds anything else
+	 * attempt - `seen` itself where it showed as a placeholder (RULES-1.5) - and answers what went in: nothing where it holds anything else
 	 * (RULES-1.6). Once `signal` aborts nothing more goes in.
 	 */
 	enter(run: RunId, text: string, signal?: AbortSignal, lead?: string, seen?: string): Promise<InputEffects>;
-	/** How much longer than usual a paste of `text` into `run`'s CLI takes to show and be taken: its size, and lines for some (D105, D118). */
+	/** How much longer than usual a paste of `text` into `run`'s CLI takes to show and be taken: its size, and lines for some (CLIS-2.1). */
 	pasteTime?(run: RunId, text: string): number;
 }
 
-/** What one submission did: what went in, and whether the input showed the message as its own draft, as which (RULES-1.6, D118). */
+/** What one submission did: what went in, and whether the input showed the message as its own draft, as which (RULES-1.6). */
 export interface Submission {
 	readonly effects: InputEffects;
 	readonly shown: boolean;

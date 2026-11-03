@@ -25,7 +25,7 @@ export const BATCH = 100;
 /** The most file heads one batch reads; past it the batch ends early and the next goes on (LIFECYCLE-3.2). */
 export const MOST_READS_PER_BATCH = 1_000;
 
-/** How many file heads are read together, ahead of the one a batch takes next (D177). */
+/** How many file heads are read together, ahead of the one a batch takes next (LIFECYCLE-3.2). */
 const READ_TOGETHER = 8;
 
 /** A conversation as the picker lists it: the same facts as the core's ConversationEntry. */
@@ -78,7 +78,7 @@ class VendorPager {
 
 	private candidates: ScopedCandidate[] | undefined;
 	private next$ = 0;
-	/** The heads being read ahead of the one taken next, by candidate (D177). */
+	/** The heads being read ahead of the one taken next, by candidate (LIFECYCLE-3.2). */
 	private readonly ahead = new Map<ScopedCandidate, Promise<Found | undefined>>();
 	/** Enriched entries waiting until unread candidates can no longer precede them. Earliest activity first. */
 	private readonly pending: ResolvedCandidate[] = [];
@@ -163,7 +163,7 @@ class VendorPager {
 		return { entries, done: this.next$ >= this.candidates.length && !this.pending.length };
 	}
 
-	/** `candidate`'s head, read together with the next ones' (D177): each is still taken in its turn. */
+	/** `candidate`'s head, read together with the next ones' (LIFECYCLE-3.2): each is still taken in its turn. */
 	private readAhead(candidate: ScopedCandidate): Promise<Found | undefined> {
 		const candidates = this.candidates ?? [];
 		for (const next of [candidate, ...candidates.slice(this.next$, this.next$ + READ_TOGETHER - 1)]) {
@@ -214,7 +214,7 @@ export class VendorHistory {
 	/**
 	 * The files of every store that may keep a conversation of `directories`, each store found with the environment of the
 	 * directories whose launches use it (CLIS-1.2): a store is listed once, however many directories find it. Each store is listed in
-	 * a turn of its own, so that no long synchronous listing holds the extension host that draws the agents' terminals (D177).
+	 * a turn of its own, so that no long synchronous listing holds the extension host that draws the agents' terminals (LIFECYCLE-3.2).
 	 */
 	async candidatesOf(directories: readonly string[]): Promise<ScopedCandidate[]> {
 		const found = new Map<string, { readonly store: VendorStore; readonly dir: string; readonly directories: string[] }>();

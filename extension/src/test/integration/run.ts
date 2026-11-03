@@ -29,7 +29,7 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 const CUSTOM_CLI = 'my-cli';
 
 /**
- * Takes back the trust each launch gave its folder in Claude Code's configuration `file` (CLIS-3.3, D62): the entries of the run's own
+ * Takes back the trust each launch gave its folder in Claude Code's configuration `file` (CLIS-3.3): the entries of the run's own
  * folders under `root`, nothing else; the file is replaced whole, as Claude Code writes it.
  */
 function untrust(file: string, root: string): void {
@@ -40,7 +40,7 @@ function untrust(file: string, root: string): void {
 		return;
 	}
 	const config = JSON.parse(text) as { projects?: { [folder: string]: unknown } };
-	// Compared as the platform names folders: on Windows Claude Code keys them with forward slashes and either case of drive (D139)
+	// Compared as the platform names folders: on Windows Claude Code keys them with forward slashes and either case of drive (CLIS-3.3)
 	const spelled = (folder: string) => process.platform === 'win32' ? path.win32.resolve(folder).toLowerCase() : folder;
 	const base = spelled(root);
 	const folders = Object.keys(config.projects ?? {}).filter(folder => spelled(folder) === base || spelled(folder).startsWith(`${base}${path.sep}`));
@@ -101,7 +101,7 @@ async function main(): Promise<void> {
 	// An agent CLI that records where it runs and what it was given, as each built-in is installed
 	const { fake, launchers } = fakeClis(root);
 	const record = path.join(root, 'fake-cli.log');
-	// Claude Code's configuration, where each launch trusts its folder (CLIS-3.3, D62): the suite's own, never a person's
+	// Claude Code's configuration, where each launch trusts its folder (CLIS-3.3): the suite's own, never a person's
 	const claudeConfig = path.join(root, 'claude');
 	fs.mkdirSync(claudeConfig);
 	const home = path.join(root, 'home');
@@ -110,7 +110,7 @@ async function main(): Promise<void> {
 	const agentsHome = prepared ?? path.join(root, 'agents-home');
 	fs.mkdirSync(agentsHome, { recursive: true });
 	if ((only === 'real' || nativeLifecycle) && realState) { fs.cpSync(realState, agentsHome, { recursive: true }); }
-	// Antigravity merges trust into its existing temporary settings (D103).
+	// Antigravity merges trust into its existing temporary settings (CLIS-3.3).
 	fs.mkdirSync(path.join(agentsHome, '.gemini', 'antigravity-cli'), { recursive: true });
 	const agySettingsFile = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
 	if (!fs.existsSync(agySettingsFile)) { fs.writeFileSync(agySettingsFile, '{}\n'); }
@@ -168,7 +168,7 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
-	 * A folder window that becomes a multi-root workspace keeps its agents (ARCHITECTURE-2.2, D70). The editor refuses to enter a
+	 * A folder window that becomes a multi-root workspace keeps its agents (ARCHITECTURE-2.2). The editor refuses to enter a
 	 * workspace in a test run, so this one runs no tests: a driver extension beside Facade Code starts a fake CLI in the folder window
 	 * and adds a folder, then, in the extension host the editor restarts, says what Facade shows; this judges it.
 	 */
@@ -265,7 +265,7 @@ async function main(): Promise<void> {
 			const said = lines();
 			const before = said.find(line => line.phase === 'folder') as { runId: string; name: string; pid: number } | undefined;
 			const after = said.find(line => line.phase === 'workspace') as { folders: number; card: { runId: string; pinned: boolean } | null; terminals: string[] } | undefined;
-			console.log(`  Journey: ${suffix}: Pin and Unpin survive reload; a folder window becomes a multi-root workspace and keeps its pinned agent (LIFECYCLE-3.4, ARCHITECTURE-2.2, D70)\n    ${JSON.stringify(said)}`);
+			console.log(`  Journey: ${suffix}: Pin and Unpin survive reload; a folder window becomes a multi-root workspace and keeps its pinned agent (LIFECYCLE-3.4, ARCHITECTURE-2.2)\n    ${JSON.stringify(said)}`);
 			if (!before || !after || after.folders !== 2 || after.card?.runId !== before.runId || !after.card.pinned || !alive(before.pid)
 				|| after.terminals.filter(each => each === before.name).length !== 1 || !['reload-pinned', 'reload-unpinned'].every(phase => said.some(line => line.phase === phase))) {
 				throw new Error('Pin/Unpin did not survive reload, or the folder agent was not the same pinned run, live process and one terminal in the workspace it became.');
@@ -315,7 +315,7 @@ async function main(): Promise<void> {
 	};
 	/**
 	 * Real agents of one built-in working together (VERIFICATION G3): YOLO off, the suite's real journey alone. Each launch trusts its
-	 * folder in the CLI's own configuration where it keeps trust in a file (D62) - Claude Code's, or Antigravity's in the home folder
+	 * folder in the CLI's own configuration where it keeps trust in a file (CLIS-3.3) - Claude Code's, or Antigravity's in the home folder
 	 * its terminals have: the run takes that back, Antigravity's file restored as it was.
 	 */
 	const real = async () => {
@@ -348,7 +348,7 @@ async function main(): Promise<void> {
 			for (const [at, cli] of BUILT_INS.entries()) {
 				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
 				// Each agent's fake draws its input as this built-in does (CLIS-2.1); Muse Code's as it runs on Windows, reporting nothing:
-				// its dot follows its screen (CLIS-2.3, D80)
+				// its dot follows its screen (CLIS-2.3)
 				const screen = terminalEnv({ FACADE_IT_AS: cli.id, ...cli.id === 'muse' ? { FACADE_IT_SCREEN: 'muse' } : {} });
 				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, { ...missing, ...screen });
 			}

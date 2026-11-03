@@ -86,7 +86,7 @@ function tomlTable(entries: { readonly [name: string]: string }): string {
 	return `{ ${Object.entries(entries).map(([name, value]) => `${tomlString(name)} = ${tomlString(value)}`).join(', ')} }`;
 }
 
-/** Where Codex reads skills from in a project: the skill is a project file every run in the folder shares (CLIS-2.2, D50). */
+/** Where Codex reads skills from in a project: the skill is a project file every run in the folder shares (CLIS-2.2, ARCHITECTURE-4.1). */
 const SKILL_PATH = path.join('.agents', 'skills', SERVER_NAME, 'SKILL.md');
 
 /**
@@ -108,7 +108,7 @@ const codexTools: ToolsIntegration = {
 /**
  * Codex in its interactive terminal (CLIS-1.3, 3.3): trust applies to this launch through a TOML override, without writing its
  * configuration. YOLO bypasses approvals and sandbox; otherwise workspace-write keeps its native approval policy. It starts
- * without its update prompt, which would hold back the first task it is given (CLIS-3.2, D101).
+ * without its update prompt, which would hold back the first task it is given (CLIS-3.2).
  */
 export const codexAdapter: CliAdapter = {
 	id: 'codex',
@@ -129,7 +129,7 @@ export const codexAdapter: CliAdapter = {
 			'-c', 'mcp_servers.facade.startup_timeout_sec=30',
 			'-c', `mcp_servers.facade.tool_timeout_sec=${MOST_CALL_SECONDS}`,
 			'-c', 'mcp_servers.facade.default_tools_approval_mode="approve"',
-			// Its first model request waits this long for the server, not its 1 s default, which leaves a slow start out (D101)
+			// Its first model request waits this long for the server, not its 1 s default, which leaves a slow start out (CLIS-2.2)
 			'-c', 'mcp_optional_startup_grace_ms=10000'
 		],
 		// Embedded, as -c overrides need it: 0.166.0 otherwise warns of it under its input, and runs embedded all the same

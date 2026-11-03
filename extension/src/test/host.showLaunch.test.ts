@@ -3,7 +3,10 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import type { LaunchDescription } from '../clis/describe';
+import { tempDir } from './util';
 import { withModules } from './withModules';
 
 /** The editor's API as the document needs it: each text in English, its `{n}` filled in. */
@@ -68,11 +71,35 @@ suite('Show Agent Launch: its argument and its document (CLIS-4.1, UX-3.1)', () 
 		]);
 	});
 
+	test('CLIS-4.1: what a start adds to a CLI\'s environment is named as Facade\'s tools and session tracking, last among its layers', () => {
+		const launch = codex({ environment: { sources: ['host', 'run', 'facade'], variables: [{ source: 'facade', name: 'FACADE_CODE_SESSION_FILE', value: '/home/ada/.facade/runs/<run ID>.session.json' }] } });
+		const lines = launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: false }, launches: [launch], entries: [], problems: [], now }).split('\n');
+		assert.ok(lines.includes('  Environment layers, lowest precedence first: the extension host\'s environment → all agents → Facade\'s tools and session tracking'), lines.join('\n'));
+		assert.ok(lines.includes('    FACADE_CODE_SESSION_FILE=/home/ada/.facade/runs/<run ID>.session.json (Facade\'s tools and session tracking)'), lines.join('\n'));
+	});
+
 	test('withheld folder trust is shown as not granted, with no claim that a file entry will be written', () => {
 		const launch = codex({ trust: { kind: 'file', target: { file: '/home/ada/.claude.json', keys: ['projects', '/home/ada', 'hasTrustDialogAccepted'], entry: { value: true }, folder: '/home/ada', withheld: 'the home folder covers all projects' } } });
 		const text = launchDocument({ location: { label: 'home', path: '/home/ada' }, yolo: { value: false }, launches: [launch], entries: [], problems: [], now });
 		assert.match(text, /Trust: none provided for home folder, parents, or filesystem root; CLI prompts in its terminal/);
 		assert.ok(!text.includes('merged into'));
+	});
+
+	test('trust kept in a CLI\'s file is said to be merged into it where it exists; where it does not, that no entry is written and the CLI prompts in its terminal (CLIS-4.1, 3.3)', () => {
+		const temp = tempDir('fd-show-trust-');
+		try {
+			const file = path.join(temp.dir, '.claude.json');
+			const trustIn = (target: string) => launchDocument({ location: { label: 'main', path: '/repo' }, yolo: { value: false }, now, entries: [], problems: [],
+				launches: [codex({ trust: { kind: 'file', target: { file: target, keys: ['projects', '/repo', 'hasTrustDialogAccepted'], entry: { value: true }, folder: '/repo' } } })] }).split('\n').find(line => line.startsWith('  Trust:'));
+			const missing = trustIn(file);
+			fs.writeFileSync(file, '{}');
+			assert.deepStrictEqual([missing, trustIn(file)], [
+				`  Trust: no entry is written, as ${file} does not exist; the CLI prompts in its terminal`,
+				`  Trust: {"projects":{"/repo":{"hasTrustDialogAccepted":true}}} merged into ${file} before each start; unreadable files are preserved and the CLI prompts in its terminal`
+			]);
+		} finally {
+			temp.remove();
+		}
 	});
 
 	test('a CLI turned off, misconfigured, not found or unable to start says why, and no plan or program is invented for it', () => {

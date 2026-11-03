@@ -2,14 +2,14 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The first line's measured widths and location ellipses (PANEL-1.3, D128). Full strings stay in the card's state and hover.
+// The first line's measured widths and location ellipses (PANEL-1.3). Full strings stay in the card's state and hover.
 import type { Card } from './protocol';
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 /**
  * Where text is measured as the page draws it - its fonts and their fallbacks, which a canvas can choose otherwise for CJK text, so
- * that a label's width is the width of what it shows (D176). Hidden, out of the layout of the list, and read for a text only once.
+ * that a label's width is the width of what it shows (PANEL-1.3). Hidden, out of the layout of the list, and read for a text only once.
  */
 const probe = document.createElement('span');
 probe.style.cssText = 'position:absolute;left:0;top:0;white-space:pre';
@@ -84,7 +84,7 @@ function middle(text: string, width: number, measure: (text: string) => number):
 	return cut(low);
 }
 
-/** Whole graphemes from the start and an ellipsis, as many as fit; nothing where not even the ellipsis does (PANEL-1.3, D176). */
+/** Whole graphemes from the start and an ellipsis, as many as fit; nothing where not even the ellipsis does (PANEL-1.3). */
 function end(text: string, width: number, measure: (text: string) => number): string {
 	if (measure(text) <= width) {
 		return text;
@@ -129,7 +129,7 @@ function show(element: HTMLElement, fitted: FittedText): void {
 /**
  * Fit one card from its original strings, so widening or updating it never truncates an already shortened value. The name shows as
  * much of `fullName` as fits, ending in an ellipsis where it is cut, at the width of what it shows: a Pin after it stands as close
- * to the ellipsis as to a whole name (D176).
+ * to the ellipsis as to a whole name (PANEL-1.3).
  */
 export function fitCardTop(top: HTMLElement, name: HTMLElement, fullName: string, location: Card['location']): void {
 	// Not laid out - its view hidden - a card keeps what it shows, or its whole name, until it is

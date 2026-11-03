@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { agentOf, deliveryReceipt } from '../contract/facts';
+import { agentOf, deliveryReceipt, messageOf } from '../contract/facts';
 import { compactResult } from '../schema/compact';
 import { receiptTextOf } from '../contract/receiptText';
 import { accepted, answerOf, failure, success } from '../schema/result';
@@ -116,5 +116,14 @@ suite('MCP-01: compact public results', () => {
 		assert.deepStrictEqual(result.effects, { outcome: 'unknown', text_written: 'full', enter_written: null });
 		assert.match((result.error as { message: string }).message, /Example CLI 1\.2/);
 		assert.deepStrictEqual(result.data, { message_id: '#m42', target: '#a12' });
+	});
+
+	test('a read message names an agent with an empty name by its `#aN` alone, as every reference does (LIFECYCLE-2.1, MCP-4.2)', () => {
+		const record = {
+			id: 'm-5', alias: '#m5', kind: 'message', from: { run: 'r-1', alias: '#a1', name: '' }, to: { run: 'r-2', alias: '#a2', name: 'Ada' }, at: 0, text: 'Hi', length: 2,
+			delivery: { status: 'success', via: 'terminal', effects: {}, attempts: 1 }
+		} as unknown as MessageRecord;
+		const read = messageOf(record, true);
+		assert.deepStrictEqual([read.from_reference, read.to_reference], ['#a1', '@Ada #a2']);
 	});
 });

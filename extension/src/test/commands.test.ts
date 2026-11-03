@@ -139,6 +139,46 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([closed, errors], [[RUN], ['Ada Lovelace was closed, but its process could not be terminated.']]);
 	});
 
+	test('LIFECYCLE-2.1: Go to Agent\'s copy button copies `@name #aN`, and `#aN` alone for an agent with an empty name', async () => {
+		const copied: string[] = [];
+		const vscode = { env: { clipboard: { writeText: async (text: string) => void copied.push(text) } } };
+		const { AgentActions } = withModules({ vscode })<typeof import('../ui/commands/agent')>(require.resolve('../ui/commands/agent'));
+		const unnamed: RunFacts = { ...FACTS, id: `run-${'4'.padStart(32, '0')}`, alias: '#a4', name: '' };
+		const runs = new Map([[RUN, FACTS], [unnamed.id, unnamed]]);
+		const actions = new AgentActions({ agents: { get: (id: string) => runs.get(id) } as never, model: {} as never, execution: {} as never, notifyError: () => undefined });
+		await actions.copyReference(RUN);
+		await actions.copyReference(unnamed.id);
+		assert.deepStrictEqual(copied, ['@Ada Lovelace #a3', '#a4']);
+	});
+
+	test('UX-2.4: a Pin, Unpin or Close refused for Facade\'s own reason says it in the person\'s words; one whose agent went meanwhile says nothing, and no run\'s ID', async () => {
+		const notified: string[] = [];
+		const vscode = { l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) } };
+		const load = withModules({ vscode });
+		const { AgentActions } = load<typeof import('../ui/commands/agent')>(require.resolve('../ui/commands/agent'));
+		const { FacadeError, OWNERSHIP_LOST } = load<typeof import('../core/errors')>(require.resolve('../core/errors'));
+		let refusal: Error = new FacadeError('INVALID', 'ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST);
+		const refuse = () => { throw refusal; };
+		const agents = { get: () => FACTS, pin: refuse, unpin: refuse, close: async () => refuse() };
+		const actions = new AgentActions({ agents: agents as never, model: {} as never, execution: {} as never, notifyError: text => notified.push(text) });
+		actions.pin(RUN, true);
+		actions.pin(RUN, false);
+		await actions.close(RUN);
+		refusal = new FacadeError('INVALID', 'unsupported', 'Ada Lovelace\'s CLI cannot resume this exact conversation, so it cannot be pinned.', { kind: 'pin_unsupported', values: [] });
+		actions.pin(RUN, true);
+		refusal = new FacadeError('NOT_FOUND', 'not_found', `No agent ${RUN} in this window.`);
+		actions.pin(RUN, true);
+		const owned = 'This workspace is owned by another window. Reload this window to take ownership.';
+		const { reasonOf } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+		const { PlanError } = load<typeof import('../core/ports')>(require.resolve('../core/ports'));
+		assert.deepStrictEqual([reasonOf(new PlanError('No CLI "gone" is configured; the built-ins are claude.', 'not_found', { kind: 'cli_not_configured', values: ['"gone"'] })), reasonOf(new Error('EACCES: permission denied'))],
+			['No CLI "gone" is configured.', 'EACCES: permission denied'], 'a system error keeps its own words');
+		assert.deepStrictEqual(notified, [
+			`Could not pin Ada Lovelace: ${owned}`, `Could not unpin Ada Lovelace: ${owned}`, `Could not close Ada Lovelace: ${owned}`,
+			'Could not pin Ada Lovelace: Its CLI cannot resume this exact conversation, so it cannot be pinned.'
+		]);
+	});
+
 	test('notification navigation reveals the exact run and selects its card (UX-3.2)', async () => {
 		assert.deepStrictEqual([await run('facade.revealAgent', { run_id: RUN }), await run('facade.revealAgent', { run_id: `run-${'8'.padStart(32, '0')}` }), did], [true, false, [`reveal ${RUN}`]]);
 	});

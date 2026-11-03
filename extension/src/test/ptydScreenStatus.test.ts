@@ -26,7 +26,7 @@ function frame(above: readonly string[], input: readonly string[] = ['❯']): st
 	return [...above, `── Voice input (Alt+V to start) ${'─'.repeat(30)}`, ...input, rule, '  muse-spark-1.3 · minimal · <folder> · Launch overrides', '', ''];
 }
 
-suite('ptyd: Muse Code\'s screen, read as its status where it reports nothing (CLIS-2.3, D80)', () => {
+suite('ptyd: Muse Code\'s screen, read as its status where it reports nothing (CLIS-2.3)', () => {
 
 	test('real terminal soft wraps, including wide text and a resize, preserve the logical working row', async () => {
 		const terminal = new Terminal({ cols: 80, rows: 40, allowProposedApi: true });
@@ -136,7 +136,7 @@ suite('ptyd: Muse Code\'s screen, read as its status where it reports nothing (C
 	});
 });
 
-suite('ptyd: a screen reading in a program\'s status, which its own word always outranks (CLIS-2.3, D80)', () => {
+suite('ptyd: a screen reading in a program\'s status, which its own word always outranks (CLIS-2.3)', () => {
 
 	test('status review: resetting the terminal revokes its screen evidence', () => {
 		const status = new ProgramStatus();

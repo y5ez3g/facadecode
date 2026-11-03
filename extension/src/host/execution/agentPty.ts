@@ -13,7 +13,7 @@ const MOST_UNOPENED = 8 * 1024 * 1024;
 /** The most names said for a tab that are still told from a person's as the tab shows them: far more than are ever on their way. */
 const MOST_SAID = 32;
 
-/** How often a working agent's tab turns its spinner to the next frame (D185). */
+/** How often a working agent's tab turns its spinner to the next frame (LIFECYCLE-2.2). */
 const FRAME_MS = 100;
 
 /** A tab title as the editor shows it, which drops line breaks and tabs from what it is given (LIFECYCLE-2.2). */
@@ -83,14 +83,14 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private said: string[] = [];
 	/** What the tab was last seen showing. */
 	private seen: string;
-	/** The mouse reports the person's clicks type, a release the editor could not measure given its press's position (D170). */
+	/** The mouse reports the person's clicks type, a release the editor could not measure given its press's position (LIFECYCLE-2.2). */
 	private readonly mouse = new MouseReports();
-	/** Whether its tab spins while the agent works, the frame it shows and what turns it (D185). */
+	/** Whether its tab spins while the agent works, the frame it shows and what turns it (LIFECYCLE-2.2). */
 	private spinning = false;
 	private frame = 0;
 	private spinner: ReturnType<typeof setInterval> | undefined;
 
-	/** `still` says whether the editor is to reduce motion: the tab then shows one frame while the agent works (D185). */
+	/** `still` says whether the editor is to reduce motion: the tab then shows one frame while the agent works (LIFECYCLE-2.2). */
 	constructor(private name: string, private readonly log: (message: string) => void, private readonly still: () => boolean = () => false) {
 		this.created = name;
 		this.seen = name;
@@ -175,12 +175,12 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 	}
 
-	/** The tab's name (LIFECYCLE-2.2): only the agent's display name, which its tab shows after the spinner while it is busy (D185). */
+	/** The tab's name (LIFECYCLE-2.2): only the agent's display name, which its tab shows after the spinner while it is busy (LIFECYCLE-2.2). */
 	tabName(): string {
 		return this.name;
 	}
 
-	/** Spins a frame before the agent's name on its tab while it is busy, and shows the name alone once it is not (LIFECYCLE-2.2, D185). */
+	/** Spins a frame before the agent's name on its tab while it is busy, and shows the name alone once it is not (LIFECYCLE-2.2). */
 	spin(working: boolean): void {
 		if (working === this.spinning) {
 			return;
@@ -190,19 +190,36 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.spinner = undefined;
 		this.frame = 0;
 		if (working && !this.still()) {
-			this.spinner = setInterval(() => {
-				this.frame = (this.frame + 1) % FRAMES.length;
-				if (this.opened) {
-					this.nameEmitter.fire(this.titled());
-				}
-			}, FRAME_MS);
+			this.turn();
 		}
 		if (this.opened) {
 			this.say();
 		}
 	}
 
-	/** What its tab is given to show: the name, after the spinner's frame while the agent is busy (D185). */
+	/** Whether motion is wanted changed: a busy tab's spinner stops on its frame, or turns again (LIFECYCLE-2.2). */
+	motionChanged(): void {
+		const still = this.still();
+		if (!this.spinning || still === (this.spinner === undefined)) {
+			return;
+		}
+		clearInterval(this.spinner);
+		this.spinner = undefined;
+		if (!still) {
+			this.turn();
+		}
+	}
+
+	private turn(): void {
+		this.spinner = setInterval(() => {
+			this.frame = (this.frame + 1) % FRAMES.length;
+			if (this.opened) {
+				this.nameEmitter.fire(this.titled());
+			}
+		}, FRAME_MS);
+	}
+
+	/** What its tab is given to show: the name, after the spinner's frame while the agent is busy (LIFECYCLE-2.2). */
 	private titled(): string {
 		return this.spinning ? `${FRAMES[this.frame]} ${this.name}` : this.name;
 	}
@@ -229,7 +246,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 			this.resetDue = false;
 			return 'reset';
 		}
-		// The spinner's frame before a name is its own: what the title names is the name after it (D185)
+		// The spinner's frame before a name is its own: what the title names is the name after it (LIFECYCLE-2.2)
 		const spun = spunName(shown);
 		const named = spun ?? shown;
 		const at = this.said.indexOf(named);

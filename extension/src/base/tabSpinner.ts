@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The spinner a busy agent's tab turns between its logo and its name (LIFECYCLE-2.2, D185): a frame before the name in the title
+// The spinner a busy agent's tab turns between its logo and its name (LIFECYCLE-2.2): a frame before the name in the title
 // its tab is given, as editor tabs draw no icon in a label.
 
 /** Its frames, as Codex draws its own spinner. */

@@ -1,15 +1,15 @@
 # Experience
 
 Read this after [Product](PRODUCT.md). It walks the whole product from a person's perspective. Exact shared semantics
-live in [Rules](RULES.md); feature specifications own controls and values. The journeys below are normative scenarios,
-not evidence that today's code passes. All runtime checks remain to be executed.
+live in [Rules](RULES.md); feature specifications own controls and values. The journeys below are normative scenarios;
+[Verification](engineering/VERIFICATION.md) records which have been run.
 
-| Group | Decides | Implementation evidence |
-| --- | --- | --- |
-| 1 Starting the first agent | The common path and its failures | Unverified |
-| 2 Following an agent's work | Status, direct access and ending | Unverified |
-| 3 Working with other agents | Agent launches, discovery, messages and results | Unverified |
-| 4 Completing the work | Both complete journeys, changes of direction and optional features | Unverified |
+| Group | Decides |
+| --- | --- |
+| 1 Starting the first agent | The common path and its failures |
+| 2 Following an agent's work | Status, direct access, ending, Resume and Pin |
+| 3 Working with other agents | Agent launches, discovery, messages and results |
+| 4 Completing the work | Both complete journeys, changes of direction and optional features |
 
 ## 1 Starting the first agent
 
@@ -50,16 +50,18 @@ not block either step. A removed location is reselected; no silent CLI substitut
 
 **Change Working Location is an item in the same menu that shows the current location and CLI choices.**
 
-Choose a folder, then its location/worktree when there are multiple choices, then return to CLI selection. Single-choice
-steps are skipped. Back preserves selections; Escape makes no launch or worktree. Creating a worktree is an advanced
-choice in this flow, with the same contract as [Worktrees](features/WORKTREES.md).
+Choose a folder, then its location/worktree, then return to CLI selection. A single-folder window has no folder step; a
+plain folder outside a Git repository has no location step, and in a single-folder window it is shown as a label rather
+than an action that does nothing (LIFECYCLE-1.3). Back preserves selections; Escape makes no launch or worktree.
+Creating a worktree is an advanced choice in this flow, with the same contract as [Worktrees](features/WORKTREES.md).
 
 ### 1.6 Seeing the agent start
 
 **Choosing the CLI closes the menu and immediately creates the agent's card and terminal together.**
 
-The card and terminal identify one launch throughout setup and startup. A human launch comes to the front; an
-agent-created launch appears in the background. Progress is shown in the existing surfaces.
+The card and terminal identify one launch throughout setup and startup. A human launch shows its terminal and selects
+its card, scrolled into view; an agent-created launch appears in the background without moving the list. Progress is
+shown in the existing surfaces.
 
 ### 1.7 Startup outcomes and collaboration availability
 
@@ -76,10 +78,10 @@ Native Git post-create preparation does not gate CLI startup once the worktree e
 **The panel shows this window's agents; each editor terminal remains directly usable by the person.**
 
 Starting or working is green and a problem is red; idle, native permission/answer/sign-in blockers and unavailable
-activity show no dot, the hover saying which (D183). The second line says what was last sent to the agent - before
-anything, its title's words - unless the dot is red, when it says why, or the CLI waits for the person, when it says what
-for (D184); absence of reliable status is never claimed as idle. A turn ending removes the dot without a notification or a
-claim that the task is complete.
+activity show no dot, the hover saying which (RULES-3.2). The second line says what was last sent to the agent - before
+anything, its CLI title's words - unless the dot is red, when it says why, or the CLI waits for the person, when it says
+what for (PANEL-1.4); absence of reliable status is never claimed as idle. A turn ending removes the dot without a
+notification or a claim that the task is complete. A busy agent's tab turns a spinner before its name (LIFECYCLE-2.2).
 Clicking a card opens that same terminal. Human search and management stay within the current window.
 
 ### 2.2 Only errors and explicit calls to the person notify
@@ -107,6 +109,14 @@ minutes after it goes unless the workspace is opened again first, which shows th
 continue their work. Pending messages to ended runs fail to their agent senders where reachable and are never replayed
 on reopening. If only the sender closes, delivery already executing elsewhere may finish; work left at the closing side
 may end. No extra handover machinery guarantees that edge case. System results that cannot return simply end.
+
+### 2.5 Resume and Pin
+
+**Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
+
+Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are
+the same intent. Unpin keeps the current agent running. Explicit close and normal exit Unpin; abnormal exit and
+whole-window close preserve the intent. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
 
 ## 3 Working with other agents
 
@@ -150,12 +160,14 @@ result to its sender, whether the message was delivered or not. The recipient's 
 
 **Ordinary messages attempt usable draft-free input even while the target works; direct input deliberately has no draft guard.**
 
-A draft, menu or unrecognized input box causes the fixed finite retries; Facade never types a message into an input it
-cannot read, whatever the CLI's version. No typing-idle timer or extra protection for human typing that starts after
-the check. At-least-once attempts may repeat an uncertain submission with the same message ID; the injected skill tells
-the model how to recognize that repeat. Report actual partial or unknown effects if delivery fails. A message the
-recipient instead reads with read_messages counts as delivered and is not pasted again. Direct text/keys execute what
-the caller requests without a policy parameter or text-format/length restriction.
+A message goes in as one full paste plus Enter. Another draft, a native menu or a question is waited for, up to ten
+minutes, and never submitted with the message; an input box Facade cannot read fails at fifteen seconds without anything
+typed, whatever the CLI's version (RULES-1.4, 1.5). No typing-idle timer or extra protection for human typing that
+starts after the check. A message's text goes into the input at most once; a later attempt only presses Enter over its
+own draft (RULES-1.6). If a person submits that pasted text themselves, the injected skill tells the model how to
+recognize the repeated message ID. Report actual partial or unknown effects if delivery fails. A message the recipient
+instead reads with read_messages counts as delivered and is not pasted again. Direct text/keys execute what the caller
+requests without a policy parameter or text-format/length restriction.
 
 ### 3.6 Returning the final result and involving the person
 
@@ -165,14 +177,6 @@ A system receipt is not B's own reply and does not generate another failure mess
 to a closed A, that send reports the error to B. If B also cannot receive it, drop the report. The original delivery
 outcome remains unchanged. Only an agent's explicit decision to contact the person uses `#human`, which shows a
 notification in that agent's window.
-
-### 2.5 Resume and Pin
-
-**Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
-
-Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are
-the same intent. Unpin keeps the current agent running. Explicit close and normal exit Unpin; abnormal exit and
-whole-window close preserve the intent. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
 
 ## 4 Completing the work
 
@@ -215,28 +219,9 @@ Creation trees do not group the list or imply a team workflow.
 | --- | --- |
 | 1.1–1.7 | Walk first use, last location, location change, no Git, no CLI, cancel, immediate surfaces and both startup failures |
 | 2.1–2.3 | Observe actual activity, errors, native CLI prompts, normal exit, unknown abnormal exit and explicit closure |
-| 2.4 | Reload, disconnect, true close/reopen, pending messages to ended runs |
+| 2.4 | Reload, disconnect, close and immediate reopen under the five-minute policy, pending messages to ended runs |
+| 2.5 | Resume an exact conversation; Pin from the card and the native tab, restored on reopening; Unpin keeps the agent running |
 | 3.1–3.6 | Two-way cross-window and local/remote operations; explicit launch choices; all initial/final message outcomes |
 | 4.1–4.3 | Walk both complete journeys including review, redirected work, cleanup, multi-folder and plain-folder use |
 
-Evidence is recorded in [Verification](engineering/VERIFICATION.md); these scenarios have not been run by this rewrite.
-
-## Change log
-
-- 2026-11-02: The dot is green while an agent starts or works and red for a problem, none otherwise (D183); the second line
-  says what was last sent (D184).
-- 2026-11-01: 2.1 follows the owner's four dot meanings and separates idle from a native blocker (D127).
-- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
-
-- 2026-10-30: 4.3 says a panel filter affects display only (PANEL-2.3).
-- 2026-10-30: Step 2 of the Facade Code extension: group 3 and 4.1 carry the Facade Dots collaboration journeys across
-  this computer's windows, without Resume, Pin or filters; 3.4–3.6 follow the owner's decisions of that day: a read
-  message is delivered (D88), every CLI version is attempted (D89) and the person is `#human` (D91).
-
-- 2026-10-30: 2.4 says when a closed window's agents end under the owner's five-minute policy (D75).
-
-- 2026-10-29: Owner-approved IA-03: the editable name is a label and may be an empty string (LIFECYCLE-2.1).
-
-- 2026-10-29: 4.2 says Facade deletes only a clean linked worktree the person confirms (D73).
-- 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots specification: the rules step 1
-  needs, each with its final number. Later steps add the others.
+Evidence is recorded in [Verification](engineering/VERIFICATION.md).

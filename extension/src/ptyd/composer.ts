@@ -23,7 +23,7 @@ export interface InputReading {
 	 * there (RULES-1.6, CLIS-2.1). It is compared, never logged.
 	 */
 	readonly draft?: string;
-	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (D118). */
+	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (RULES-1.5). */
 	readonly hidden?: Hidden;
 }
 
@@ -235,7 +235,7 @@ function readFrame(screen: InputScreen, layout: FrameLayout): InputReading {
 		return noInput(rows, layout.menu, why);
 	}
 	// Antigravity's colored mode hint is not dim. Its empty-only footer distinguishes the hint from the exact same
-	// words pasted by a person, even when their cursor is back at the beginning (CLIS-2.1, D157).
+	// words pasted by a person, even when their cursor is back at the beginning (CLIS-2.1).
 	const placeholder = layout.placeholder;
 	if (placeholder && lower === prompt + 1 && placeholder.footer.test(textOf(rows[lower + 1]))) {
 		const text = textOf(rows[prompt].slice(2)).trimEnd();

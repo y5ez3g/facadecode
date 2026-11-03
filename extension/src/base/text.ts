@@ -57,11 +57,11 @@ const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
  */
 /**
  * The symbols, spaces and bullets a CLI puts before its title's words to show its state - a spinner's frame, `✳`, `●`, `✓` - which
- * change as it works while its words stay (PANEL-1.4, D184).
+ * change as it works while its words stay (PANEL-1.4).
  */
 const STATUS_PREFIX = /^[\p{S}\p{Z}\p{M}\p{Cf}\s\u00b7\u2022\u2027\u2219*]+/u;
 
-/** A CLI title's words without the state shown before them; undefined where it has none (PANEL-1.4, D184). */
+/** A CLI title's words without the state shown before them; undefined where it has none (PANEL-1.4). */
 export function titleText(title: string | undefined): string | undefined {
 	return title?.replace(STATUS_PREFIX, '').trim() || undefined;
 }

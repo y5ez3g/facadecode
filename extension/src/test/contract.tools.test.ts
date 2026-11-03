@@ -42,7 +42,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.agents.launched, []);
 		});
 
-		test('each call is logged by its tool, caller and outcome, never its arguments (ARCHITECTURE-3.3, D117)', async () => {
+		test('each call is logged by its tool, caller and outcome, never its arguments (ARCHITECTURE-3.3)', async () => {
 			const { lead } = team(s);
 			await s.call(lead, 'list_agents', {});
 			await s.call(lead, 'send_message', { to: '#a77', text: 'the secret words' });
@@ -124,6 +124,14 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(result.effects, { outcome: 'none' });
 		});
 
+		test('a facade.yolo neither true nor false leaves the snapshot whole, the setting\'s problem said among the window\'s (UX-4.1)', async () => {
+			const { lead } = team(s);
+			s.deps.yolo = () => { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"'); };
+			const result = resultOf(await s.call(lead, 'list_agents'));
+			assert.deepStrictEqual([result.status, result.data.complete, result.data.windows[0].problems[0], result.data.agents.length > 0],
+				['success', true, { setting: 'facade.yolo', problem: 'facade.yolo must be true or false; received "yes"' }, true]);
+		});
+
 		test('a folderless window remains visible, with zero launch locations', async () => {
 			const { lead } = team(s);
 			s.locations = [];
@@ -200,7 +208,44 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			// The explicit choices of a start that reached running are offered later
 		});
 
-		test('a request ID given again by the same caller answers the agent its first start started, starting nothing; another caller\'s is its own (D110)', async () => {
+		test('a built-in its setting turns off is refused as turned off by that setting, before any effect; an unknown CLI is still not found (MCP-2.2, CLIS-1.1)', async () => {
+			const { worker } = team(s);
+			// Turned off, it is listed for no new start, as the catalog lists it
+			const list = s.deps.clis.list;
+			s.deps.clis.list = async location => { const listed = await list(location); return { ...listed, clis: listed.clis.filter(each => each.id !== 'codex') }; };
+			s.deps.clis.turnedOff = cli => cli === 'codex' ? 'Codex is turned off by facade.codex.enabled' : undefined;
+			const off = resultOf(await s.call(worker, 'start_agent', { ...START, cli: 'codex' }));
+			const unknown = resultOf(await s.call(worker, 'start_agent', { ...START, cli: 'nope' }));
+			assert.deepStrictEqual([off.status, off.error?.code, off.error?.reason, off.error?.message, off.effects, s.agents.launched], ['failure', 'UNAVAILABLE', 'unavailable', 'Codex is turned off by facade.codex.enabled.', { outcome: 'none' }, []]);
+			assert.deepStrictEqual([unknown.error?.code, unknown.error?.reason], ['NOT_FOUND', 'not_found']);
+		});
+
+		test('a facade.yolo neither true nor false refuses a start before any effect - configuration_invalid, naming the setting - taking no number (UX-4.1, RULES-4.3)', async () => {
+			const { worker } = team(s);
+			s.deps.yolo = () => { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"'); };
+			let reserved = 0;
+			const reserve = s.messages.reserveResult.bind(s.messages);
+			s.messages.reserveResult = () => { reserved++; return reserve(); };
+			const refused = resultOf(await s.call(worker, 'start_agent', { ...START, prompt: 'Review it' }));
+			assert.deepStrictEqual([refused.status, refused.error?.code, refused.error?.reason, refused.error?.message, refused.effects, refused.recovery?.action],
+				['failure', 'UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"', { outcome: 'none' }, 'check_capability']);
+			assert.deepStrictEqual([s.agents.launched, s.messages.allocated, reserved], [[], [], 0]);
+		});
+
+		test('a start or send this window can take no number for is refused before any effect, with the reason (RULES-2.2)', async () => {
+			const { worker } = team(s);
+			const none = new FacadeError('UNAVAILABLE', 'unavailable', 'Nothing was started or sent: this window\'s Facade Code Window Component is too old.');
+			s.messages.reserveResult = () => { throw none; };
+			s.messages.allocate = () => { throw none; };
+			s.messages.send = async () => { throw none; };
+			for (const [tool, args] of [['start_agent', START], ['start_agent', { ...START, prompt: 'Review it' }], ['send_message', { to: '#a3', text: 'Hello' }]] as const) {
+				const refused = resultOf(await s.call(worker, tool, args));
+				assert.deepStrictEqual([tool, refused.status, refused.error?.code, refused.error?.reason, refused.error?.message, refused.effects], [tool, 'failure', 'UNAVAILABLE', 'unavailable', none.message, { outcome: 'none' }]);
+			}
+			assert.deepStrictEqual(s.agents.launched, []);
+		});
+
+		test('a request ID given again by the same caller answers the agent its first start started, starting nothing; another caller\'s is its own (RULES-1.1)', async () => {
 			const { lead, worker } = team(s);
 			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-1' }));
 			// Started a minute before the window's clock: within the hour a request ID answers for
@@ -218,7 +263,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.strictEqual(s.agents.launched.length, 4);
 		});
 
-		test('a request ID given again answers as its start went: still starting is accepted, a start that failed is its failure, nothing started again (D110, D118)', async () => {
+		test('a request ID given again answers as its start went: still starting is accepted, a start that failed is its failure, nothing started again (RULES-1.1, RULES-1.5)', async () => {
 			const { worker } = team(s);
 			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' }));
 			const started = s.agents.list().find(run => run.alias === first.data.agent_id)!;
@@ -407,7 +452,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.agents.launched, []);
 		});
 
-		test('a name is a label (O22): empty, repeated or "human" are all accepted; the ID tells agents apart', async () => {
+		test('a name is a label (LIFECYCLE-2.1): empty, repeated or "human" are all accepted; the ID tells agents apart', async () => {
 			const { lead } = team(s);
 			for (const name of ['', 'human', 'lead']) {
 				assert.strictEqual(resultOf(await s.call(lead, 'start_agent', { ...START, name })).status, 'success', JSON.stringify(name));
@@ -529,6 +574,18 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.agents.closed, []);
 		});
 
+		test('a process still ending at the timeout, whose later result no number can be taken for, is answered once it ended - never as a stop that did nothing (RULES-2.2, MCP-3.2)', async () => {
+			const { lead, worker } = team(s);
+			let finish!: (result: 'terminated') => void;
+			s.agents.closeWith = new Promise(resolve => finish = resolve);
+			s.timeout = 0.02;
+			s.messages.reserveResult = () => { throw new FacadeError('UNAVAILABLE', 'unavailable', 'No message number could be taken from this computer\'s counter.'); };
+			const answering = s.call(lead, 'stop_agent', { agent: worker.id });
+			setTimeout(() => finish('terminated'), 50);
+			const result = resultOf(await answering);
+			assert.deepStrictEqual([result.status, result.data.cleanup, result.effects, s.agents.closed, s.messages.reports.length], ['success', 'terminated', { outcome: 'confirmed' }, [worker.id], 0]);
+		});
+
 		test('a process still ending at the timeout is accepted, and its cleanup reported later under the same call', async () => {
 			const { lead, worker } = team(s);
 			let finish!: (result: 'terminated') => void;
@@ -555,7 +612,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', text_written: 'full', enter_written: true });
 		});
 
-		test('a request ID given again by the same sender answers the message it sent, as its delivery stands, sending nothing again (D110)', async () => {
+		test('a request ID given again by the same sender answers the message it sent, as its delivery stands, sending nothing again (RULES-1.1)', async () => {
 			const { lead } = team(s);
 			const first = resultOf(await s.call(lead, 'send_message', { to: '@worker', text: 'Please review.', request_id: 'ask-1' }));
 			// Sent a minute before the window's clock
@@ -597,7 +654,7 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.match(failed.error!.message, /Facade cannot type messages into the recipient's CLI; type_text still reaches its terminal/);
 		});
 
-		test('#human is the person in the caller\'s window; so is @human while no agent in reach is named human (RULES-2.3, O22, D91)', async () => {
+		test('#human is the person in the caller\'s window; so is @human while no agent in reach is named human (RULES-2.3)', async () => {
 			const { lead, worker } = team(s);
 			for (const to of ['#human', '@human', 'human']) {
 				const result = resultOf(await s.call(worker, 'send_message', { to, text: 'Done.' }));

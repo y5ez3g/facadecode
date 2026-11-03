@@ -412,7 +412,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		for (const yolo of [true, false]) {
 			const launch = plan({ cli: 'codex', yolo });
 			assert.deepStrictEqual(launch.args, [
-				// Its update prompt would hold back the first task it is given (CLIS-3.2, D101); embedded, as its -c overrides need it
+				// Its update prompt would hold back the first task it is given (CLIS-3.2); embedded, as its -c overrides need it
 				'-c', 'check_for_update_on_startup=false', '--no-daemon',
 				...(yolo ? ['--dangerously-bypass-approvals-and-sandbox'] : ['--sandbox', 'workspace-write']),
 				'-c', `projects={ ${tomlString(fs.realpathSync(cwd))} = { trust_level = "trusted" } }`
@@ -434,7 +434,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		const args = (yolo: boolean) => plan({ cli: 'claude', yolo }).args;
 		assert.deepStrictEqual(args(true), ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"]}', '--dangerously-skip-permissions']);
 		assert.deepStrictEqual(args(false), ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"],"sandbox":{"enabled":true}}']);
-		// Every launch trusts its folder in Claude Code's own file, never by an argument (CLIS-3.3, D62)
+		// Every launch trusts its folder in Claude Code's own file, never by an argument (CLIS-3.3)
 		for (const yolo of [true, false]) {
 			assert.strictEqual(plan({ cli: 'claude', yolo }).trust.kind, 'file', `${yolo}`);
 			assert.ok(!args(yolo).some(arg => /trust/i.test(arg)), `${yolo}`);
@@ -453,7 +453,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 		assert.deepStrictEqual([cleared, settingsOf(plan({ cli: 'claude', yolo: false }, {}, where))], [[false, false], { env: { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' }, disabledMcpjsonServers: ['facade'], sandbox: { enabled: true } }]);
 	});
 
-	test('Claude Code is kept from installing its VS Code extension, whose welcome would wait for Enter in the agent\'s terminal, unless the person set the switch (D144)', () => {
+	test('Claude Code is kept from installing its VS Code extension, whose welcome would wait for Enter in the agent\'s terminal, unless the person set the switch (CLIS-1.2)', () => {
 		assert.deepStrictEqual([plan({ cli: 'claude' }).env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, 'CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL' in plan({ cli: 'codex' }).env], ['1', false]);
 		// Whatever value the person gave, in any layer, is theirs: '0' or '' lets Claude Code install its extension
 		const given = (where: DestinationEnvironment) => plan({ cli: 'claude' }, {}, where).env.CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL;
@@ -579,7 +579,7 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 			const launch = plan({ cli });
 			assert.deepStrictEqual([launch.cli, launch.command, launch.executable, launch.env.FACADE_AGENT, 'ELECTRON_RUN_AS_NODE' in launch.env], [cli, cli, path.join(bin, cli), '#a7', false]);
 		}
-		// Muse Code alone is read from its screen where it sends no reports - on Windows (CLIS-2.3, D80); the others report themselves
+		// Muse Code alone is read from its screen where it sends no reports - on Windows (CLIS-2.3); the others report themselves
 		assert.deepStrictEqual(['claude', 'codex', ...added].map(cli => plan({ cli }).screenStatus), [undefined, undefined, undefined, 'muse', undefined, undefined]);
 	});
 

@@ -11,14 +11,29 @@ import type { ApprovalFact, SandboxFact } from './adapter';
 import type { Catalog, CatalogEntry } from './catalog';
 import type { CliProblem, CliSaid } from './config';
 import { AGENT_TERMINAL_VARIABLES, EnvironmentMap, RUN_VARIABLE } from './environment';
-import { adjustedEnvironment, CliPlanError, DestinationEnvironment, executableOf, layeredEnvironmentOf, LaunchTrust, planLaunch, targetOf } from './plan';
+import { adjustedEnvironment, CliPlanError, DestinationEnvironment, executableOf, layeredEnvironmentOf, LaunchTrust, PlanInput, planLaunch, targetOf } from './plan';
 import { redacted, redactedText } from './redact';
+import type { ToolsInput } from './tools';
 
 /**
  * A layer of the environment (CLIS-1.2), lowest first: the extension host's, the folder's terminal settings, the default
- * profile's map, the CLI's launch environment, its adapter's own quirk, and what every run is given.
+ * profile's map, the CLI's launch environment, its adapter's own quirk, what every run is given, and what Facade's tools and
+ * session tracking give a start.
  */
-export type EnvironmentSource = 'host' | 'terminal' | 'profile' | 'launch' | 'adapter' | 'run';
+export type EnvironmentSource = 'host' | 'terminal' | 'profile' | 'launch' | 'adapter' | 'run' | 'facade';
+
+/** What only a start has, as the document names it in its place (CLIS-4.1): never a value one start would get. */
+export const PLACEHOLDERS = { run: '<run ID>', session: '<session ID>', context: '<launch context>', instructions: '<instructions>' } as const;
+
+/**
+ * What a start adds to its CLI's launch besides the configuration (CLIS-2.2, 2.4): its session tracking, and the Facade tools where
+ * they are on - each given as a start would be, its own values placeholders.
+ */
+export interface EffectiveInputs {
+	readonly sessionFile: string;
+	readonly sessionHook: (cli: string, platform: NodeJS.Platform) => string;
+	readonly tools?: ToolsInput;
+}
 
 /** One CLI as the document describes it. */
 export interface LaunchDescription {
@@ -70,14 +85,15 @@ function variablesOf(source: EnvironmentSource, map: EnvironmentMap | undefined)
 
 /**
  * Each CLI of `catalog` as a start in `cwd` would have it now (CLIS-4.1): with `yolo` - the destination's `facade.yolo`, the one
- * YOLO source (RULES-4.3) - and the destination environment's own layers. Nothing is written: a trust kept in a file of the CLI's
- * is only named.
+ * YOLO source (RULES-4.3) - the destination environment's own layers and, given `effective`, what a start adds: the Facade tools'
+ * and session tracking's arguments and variables, in their places. Nothing is written: a trust kept in a file of the CLI's is only
+ * named, and the tools' and session's files are named, never made.
  */
-export function describeLaunches(catalog: Catalog, destination: DestinationEnvironment, cwd: string, yolo: boolean): readonly LaunchDescription[] {
-	return catalog.entries.map(entry => describeOne(entry, catalog, destination, cwd, yolo));
+export function describeLaunches(catalog: Catalog, destination: DestinationEnvironment, cwd: string, yolo: boolean, effective?: EffectiveInputs): readonly LaunchDescription[] {
+	return catalog.entries.map(entry => describeOne(entry, catalog, destination, cwd, yolo, effective));
 }
 
-function describeOne(entry: CatalogEntry, catalog: Catalog, destination: DestinationEnvironment, cwd: string, yolo: boolean): LaunchDescription {
+function describeOne(entry: CatalogEntry, catalog: Catalog, destination: DestinationEnvironment, cwd: string, yolo: boolean, effective?: EffectiveInputs): LaunchDescription {
 	const { adapter } = entry;
 	const { platform } = destination;
 	const unadjusted = layeredEnvironmentOf(entry, destination);
@@ -98,27 +114,41 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 		const target = targetOf(entry, executable.executable, env, platform, cwd);
 		program = { file: target.executable, configured: entry.path, ...target.args.length ? { script: target.args.join(' ') } : {}, throughCmd: target.throughCmd };
 	}
+	let args: readonly string[] | undefined;
+	let trust: LaunchTrust | undefined;
+	let planProblem: LaunchDescription['planProblem'];
+	const added: { source: EnvironmentSource; name: string; value: string | null }[] = [];
+	if (entry.enabled && executable?.executable !== undefined) {
+		try {
+			const base: PlanInput = { cli: adapter.id, alias: '#aN', cwd, yolo };
+			const configured = planLaunch(catalog, base, destination);
+			const planned = effective ? planLaunch(catalog, {
+				...base, sessionFile: effective.sessionFile, sessionHook: effective.sessionHook(adapter.id, platform), ...effective.tools ? { tools: effective.tools } : {}
+			}, destination) : configured;
+			// A new conversation's ID is made at its start: named in its place, never one a start would get
+			const shown = (text: string) => planned.sessionId ? text.split(planned.sessionId).join(PLACEHOLDERS.session) : text;
+			args = redacted(planned.args.map(shown)) as string[];
+			trust = planned.trust.kind === 'arguments' ? { kind: 'arguments', args: redacted(planned.trust.args) as string[] } : planned.trust;
+			// What the tools and session tracking add to its environment, set by Facade itself after every layer
+			for (const [name, value] of Object.entries(planned.env)) {
+				if (configured.env[name] !== value) {
+					added.push({ source: 'facade', name, value: redacted(shown(value), name) as string });
+				}
+			}
+		} catch (err) {
+			const text = redactedText(err instanceof Error ? err.message : String(err));
+			planProblem = err instanceof CliPlanError && err.said ? { text, said: safeSaid(err.said) } : { text };
+		}
+	}
 	const sources: EnvironmentSource[] = [
 		'host',
 		...destination.terminal && Object.keys(destination.terminal).length ? ['terminal' as const] : [],
 		...destination.profile && Object.keys(destination.profile).length ? ['profile' as const] : [],
 		...Object.keys(entry.environment).length ? ['launch' as const] : [],
 		...adjusted.length ? ['adapter' as const] : [],
-		'run'
+		'run',
+		...added.length ? ['facade' as const] : []
 	];
-	let args: readonly string[] | undefined;
-	let trust: LaunchTrust | undefined;
-	let planProblem: LaunchDescription['planProblem'];
-	if (entry.enabled && executable?.executable !== undefined) {
-		try {
-			const planned = planLaunch(catalog, { cli: adapter.id, alias: '#a0', cwd, yolo }, destination);
-			args = redacted(planned.args) as string[];
-			trust = planned.trust.kind === 'arguments' ? { kind: 'arguments', args: redacted(planned.trust.args) as string[] } : planned.trust;
-		} catch (err) {
-			const text = redactedText(err instanceof Error ? err.message : String(err));
-			planProblem = err instanceof CliPlanError && err.said ? { text, said: safeSaid(err.said) } : { text };
-		}
-	}
 	return {
 		cli: adapter.id,
 		displayName: adapter.displayName,
@@ -134,7 +164,8 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 				...variablesOf('profile', destination.profile),
 				...variablesOf('launch', entry.environment),
 				...adjusted,
-				...RUN_VARIABLES.map(each => ({ source: 'run' as const, ...each }))
+				...RUN_VARIABLES.map(each => ({ source: 'run' as const, ...each })),
+				...added
 			],
 			...destination.profileName && destination.profile && Object.keys(destination.profile).length ? { profile: destination.profileName } : {}
 		},

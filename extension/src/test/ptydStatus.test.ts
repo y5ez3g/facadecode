@@ -127,7 +127,7 @@ suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 		});
 	});
 
-	test('a clear, or a full reset, after a probe and no report since takes nothing away: the program\'s first report is still waited for (CLIS-2.3, D81)', () => {
+	test('a clear, or a full reset, after a probe and no report since takes nothing away: the program\'s first report is still waited for (CLIS-2.3)', () => {
 		const status = new ProgramStatus();
 		const seen: (RunStatus | undefined)[] = [];
 		status.onDidChange(each => seen.push(each));

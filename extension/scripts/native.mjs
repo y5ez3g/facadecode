@@ -1,4 +1,4 @@
-// The native backend's target (ARCHITECTURE-4.3; D29): VS Code's name for the OS and architecture a package's native artifacts
+// The native backend's target (ARCHITECTURE-4.3): VS Code's name for the OS and architecture a package's native artifacts
 // run on, read from the artifacts' own headers - never from their file names - and only ever this host's, where a build loads them
 // and starts a PTY with them. A VSIX names that target; one whose artifacts are of another, or whose addons are bound to one
 // runtime's ABI rather than Node-API, is refused.

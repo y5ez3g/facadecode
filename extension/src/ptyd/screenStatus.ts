@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// What a CLI that reports nothing of itself shows on its screen, read as its status (CLIS-2.3, D80): Muse Code, which sends no
+// What a CLI that reports nothing of itself shows on its screen, read as its status (CLIS-2.3): Muse Code, which sends no
 // OSC 7501 on Windows. A reader knows the layout its CLI was observed drawing and vouches only for what that layout shows; a
 // completed screen it does not know revokes prior screen evidence. Logical lines retain the terminal's real soft wraps;
 // hard line breaks are not guessed together. Text inside the input never supplies activity evidence.

@@ -163,7 +163,7 @@ export class ProgramStatus {
 	private current: RunStatus | undefined;
 	/** Whether the program has asked whether ptyd takes reports, or reported: from then on its own word alone counts. */
 	private partaking = false;
-	/** Whether the status now is what the run's screen showed, a program that takes no part being read so (CLIS-2.3, D80). */
+	/** Whether the status now is what the run's screen showed, a program that takes no part being read so (CLIS-2.3). */
 	private fromScreen = false;
 	private readonly listeners = new Set<(status: RunStatus | undefined) => void>();
 
@@ -192,7 +192,7 @@ export class ProgramStatus {
 	}
 
 	/**
-	 * What the run's screen shows, for a program that takes no part (CLIS-2.3, D80): taken as its own report would be, the same
+	 * What the run's screen shows, for a program that takes no part (CLIS-2.3): taken as its own report would be, the same
 	 * state and kind again keeping its time; nothing once the program has asked or reported.
 	 */
 	observed(reading: ScreenReading | undefined): void {
@@ -255,7 +255,7 @@ export class ProgramStatus {
 
 	/**
 	 * `clear`, a full reset or a new prompt revokes old evidence, including a screen observation. A probe with no report since
-	 * still waits for its first report (CLIS-2.3, D81).
+	 * still waits for its first report (CLIS-2.3).
 	 */
 	clear(): void {
 		if (this.current && this.current.state !== 'pending') {

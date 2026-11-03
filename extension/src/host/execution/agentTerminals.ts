@@ -58,9 +58,14 @@ export class AgentTerminals implements vscode.Disposable {
 	private readonly disposables: vscode.Disposable[] = [];
 	private creation = Promise.resolve();
 	private revealRequested?: { readonly pair: TerminalEntry; readonly preserveFocus: boolean };
+	/** The system's reduced-motion preference as the panel's page said it last; none until it has (LIFECYCLE-2.2). */
+	private systemReduced: boolean | undefined;
 
 	constructor(private readonly options: TerminalOptions) {
 		this.disposables.push(
+			vscode.workspace.onDidChangeConfiguration(change => {
+				if (change.affectsConfiguration('workbench.reduceMotion')) { this.moved(); }
+			}),
 			vscode.window.onDidChangeActiveTerminal(terminal => {
 				this.terminalActivatedAt = Date.now();
 				this.correlate();
@@ -117,10 +122,33 @@ export class AgentTerminals implements vscode.Disposable {
 		}, err => { pair.applyingPin = false; this.options.log(`Could not synchronize the pin of ${pair.run}: ${messageOf(err)}`); });
 	}
 
+	/**
+	 * Whether a busy tab's spinner keeps one frame still (LIFECYCLE-2.2, UX-2.2), as the editor stills its own progress: always with
+	 * `workbench.reduceMotion` on, never with it off; at `auto`, until the panel's page says the system allows motion - the extension
+	 * host cannot read it - and again once it says the system asks for less.
+	 */
+	private still(): boolean {
+		const setting = vscode.workspace.getConfiguration('workbench').get<string>('reduceMotion');
+		return setting === 'on' || (setting !== 'off' && this.systemReduced !== false);
+	}
+
+	/** The system's reduced-motion preference, as the panel's page says it: each busy tab's spinner follows it. */
+	systemMotion(reduced: boolean): void {
+		if (reduced !== this.systemReduced) {
+			this.systemReduced = reduced;
+			this.moved();
+		}
+	}
+
+	private moved(): void {
+		for (const pair of this.entries.values()) {
+			pair.pty.motionChanged();
+		}
+	}
+
 	/** Register the pseudoterminal first; the coordinator opens the native tab after registering its run. */
 	create(facts: Pick<PairFacts, 'run' | 'name' | 'cli'>, reveal: boolean): AgentTerminal {
-		// The editor's reduced motion stills the tab's spinner, as it stills its own progress (D185)
-		const pty = new AgentPty(facts.name, line => this.options.log(line), () => vscode.workspace.getConfiguration('workbench').get<string>('reduceMotion') === 'on');
+		const pty = new AgentPty(facts.name, line => this.options.log(line), () => this.still());
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
 		const pair: TerminalEntry = {
 			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(),

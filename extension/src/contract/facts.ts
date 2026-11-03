@@ -15,7 +15,7 @@ import { withRecovery } from '../schema/recovery';
 
 export type Data = { readonly [key: string]: unknown };
 
-/** The window the tools answer for. In M3 the only one a run knows; its ID may change on reload (D45). */
+/** The window the tools answer for. In M3 the only one a run knows; its ID may change on reload (ARCHITECTURE-2.2). */
 export interface ToolWindow {
 	readonly id: string;
 	readonly label: string;
@@ -40,6 +40,8 @@ export interface StartCatalog {
 	list(location: Location, details?: boolean): Promise<CliChoices & { readonly launches?: readonly CliFacts[] }>;
 	/** Each CLI's facts there now, launched with `yolo`. */
 	describe(location: Location, yolo: boolean): { readonly launches: readonly CliFacts[] };
+	/** Why `cli` is not listed for new starts, where it is a built-in its `.enabled` setting turns off (CLIS-1.1); none otherwise. */
+	turnedOff?(cli: string): string | undefined;
 }
 
 export function isoOf(ms: number): string {
@@ -157,7 +159,7 @@ function participant(who: MessageRecord['from'] | MessageRecord['to'] | NonNulla
 	if (who.run === '@human' || who.run === 'facade') {
 		return who.run === '@human' ? '#human' : undefined;
 	}
-	return who.alias ? (who.name !== undefined ? `@${who.name} ${who.alias}` : who.alias) : undefined;
+	return who.alias ? referenceOf({ name: who.name ?? '', alias: who.alias }) : undefined;
 }
 
 /** The messages of a long read as one file (COLLABORATION-4.2): each between headers naming it, its body exactly as it is. */
@@ -192,7 +194,7 @@ const SEND_FAILURES: { readonly [reason: string]: readonly [ErrorCode, string] }
 	partial_input: ['FAILED', 'Only part of the message went in.'],
 	// Another window refused it before recording it: its agent gone, or out of the sender's reach (MCP-1.2)
 	not_found: ['NOT_FOUND', 'The recipient was not found.'],
-	// No input reader for the recipient's CLI: a permanent obstacle, failed at once (MCP-1.2, D89)
+	// No input reader for the recipient's CLI: a permanent obstacle, failed at once (MCP-1.2)
 	unsupported: ['UNAVAILABLE', 'Facade cannot type messages into the recipient\'s CLI; type_text still reaches its terminal.']
 };
 

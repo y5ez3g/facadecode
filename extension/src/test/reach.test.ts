@@ -46,6 +46,12 @@ suite('Reach and references (RULES-2.3, 4.3)', () => {
 		assert.strictEqual(referenceOf(grandchild), '@helper #a4');
 	});
 
+	test('LIFECYCLE-2.1: an agent is referred to as `@name #aN`, and one with an empty name as its `#aN` alone, which resolves (RULES-2.3)', () => {
+		const unnamed = runFacts(7, { name: '', root: root.id, creator: root.id, origin: 'agent' });
+		assert.deepStrictEqual([referenceOf(child), referenceOf(unnamed)], ['@worker #a2', '#a7']);
+		assert.strictEqual(resolveAgent(referenceOf(unnamed), [...all, unnamed].filter(run => reaches(root, run))), unnamed);
+	});
+
 	test('the ID decides: a stale or wrong name beside it does not redirect, and a missing ID never falls back to the name', () => {
 		const tree = all.filter(run => reaches(root, run));
 		assert.strictEqual(resolveAgent('@lead #a4', tree), grandchild);
@@ -77,7 +83,7 @@ suite('Reach and references (RULES-2.3, 4.3)', () => {
 		assert.strictEqual(refusal(() => resolveAgent('nobody', tree, { outside })).reason, 'not_found');
 	});
 
-	test('#human is the person and never an agent; @human is the person while no agent in reach is named human (RULES-2.3, O22, D91)', () => {
+	test('#human is the person and never an agent; @human is the person while no agent in reach is named human (RULES-2.3)', () => {
 		const refused = refusal(() => resolveAgent('#human', all));
 		assert.deepStrictEqual([refused.code, refused.reason], ['INVALID', 'invalid_argument']);
 		assert.match(refused.message, /#human is the person/);
@@ -85,7 +91,7 @@ suite('Reach and references (RULES-2.3, 4.3)', () => {
 		assert.strictEqual(refusal(() => resolveAgent('Human', all)).reason, 'invalid_argument');
 	});
 
-	test('an agent may be named human (O22): @human is then ambiguous between it and the person, and its ID or #human decides', () => {
+	test('an agent may be named human (LIFECYCLE-2.1): @human is then ambiguous between it and the person, and its ID or #human decides', () => {
 		const named = runFacts(7, { name: 'human', root: root.id, creator: root.id, origin: 'agent' });
 		const tree = [...all.filter(run => reaches(root, run)), named];
 		for (const reference of ['@human', 'human', '@Human']) {

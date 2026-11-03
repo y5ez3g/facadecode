@@ -3,6 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import { WINDOW_IDENTITY_COMMAND } from '../base/windowIdentity';
 import { TestEmitter, withModules } from './withModules';
 
@@ -29,6 +31,10 @@ function fakeEditor() {
 					throw new Error(`command '${id}' not found`);
 				}
 				return handler(...args);
+			},
+			registerCommand: (id: string, handler: Command) => {
+				handlers.set(id, handler);
+				return { dispose: () => handlers.delete(id) };
 			}
 		},
 		extensions: { onDidChange: extensionsChanged.event },
@@ -48,7 +54,7 @@ function fakeEditor() {
 
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 
-suite('The window component as the workspace extension waits for it (ARCHITECTURE-4.3, D94, VERIFICATION E06)', () => {
+suite('The window component as the workspace extension waits for it (ARCHITECTURE-4.3, VERIFICATION E06)', () => {
 
 	test('a component that answers for this window is its identity at once; one that answers for another window is none', async () => {
 		const editor = fakeEditor();
@@ -131,6 +137,40 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 		// Disposed with the extension: the panel's page and the listening go
 		shown.dispose();
 		assert.strictEqual(editor.providers.size, 0);
+	});
+
+	test('missing, the notification and the panel say the component must be installed and enabled on this computer (ARCHITECTURE-4.3)', () => {
+		const editor = fakeEditor();
+		const shown = editor.component.showComponentMissing({ subscriptions: [] } as never, SESSION);
+		const view = { webview: { options: {}, html: '', cspSource: 'vscode-resource:', onDidReceiveMessage: () => undefined } };
+		editor.providers.get('facade.agents')!.resolveWebviewView(view);
+		assert.match(editor.notices[0].text, /Install and enable "Facade Code Window Component" on this computer, then reload the window\./);
+		assert.ok(view.webview.html.includes('Install and enable &#34;Facade Code Window Component&#34; on this computer, then reload the window.'));
+		shown.dispose();
+	});
+
+	test('missing, the panel\'s page draws its button with the 4 px control radius of the panel\'s own buttons (UX-2.1)', () => {
+		const editor = fakeEditor();
+		const shown = editor.component.showComponentMissing({ subscriptions: [] } as never, SESSION);
+		const view = { webview: { options: {}, html: '', cspSource: 'vscode-resource:', onDidReceiveMessage: () => undefined } };
+		editor.providers.get('facade.agents')!.resolveWebviewView(view);
+		const button = /\nbutton \{([^}]*)\}/.exec(view.webview.html)?.[1] ?? '';
+		assert.match(button, /border-radius: var\(--vscode-cornerRadius-small, 4px\);/);
+		shown.dispose();
+	});
+
+	test('missing, each of Facade\'s commands says the same, with the same action - never that the editor has no such command - until disposed (ARCHITECTURE-4.3)', async () => {
+		const editor = fakeEditor();
+		const shown = editor.component.showComponentMissing({ subscriptions: [] } as never, SESSION);
+		const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'package.json'), 'utf8')) as { contributes: { commands: { command: string }[] } };
+		const contributed = manifest.contributes.commands.map(each => each.command);
+		assert.deepStrictEqual(contributed.filter(id => !editor.handlers.has(id)), [], 'every contributed command answers');
+		for (const id of ['facade.newAgent', 'facade.showActiveAgents']) {
+			await (editor.handlers.get(id) as () => unknown)();
+		}
+		assert.deepStrictEqual(editor.notices.map(notice => [notice.kind, notice.text, notice.actions]), Array(3).fill(['warning', editor.notices[0].text, ['Show Window Component']]));
+		shown.dispose();
+		assert.deepStrictEqual(contributed.filter(id => editor.handlers.has(id)), []);
 	});
 
 	test('the editor telling of the change before it activates the component: the component is asked for again, and the reload offered once it answers (ARCHITECTURE-4.3)', async function () {

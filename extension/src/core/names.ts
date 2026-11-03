@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Short machine words the editable suggestion a person's New Agent offers is taken from (LIFECYCLE-2.1, D57): plain ASCII, easy
+ * Short machine words the editable suggestion a person's New Agent offers is taken from (LIFECYCLE-2.1): plain ASCII, easy
  * to type after `@`, no two sharing their first three letters, none a key name, a Facade word, a CLI or a brand.
  */
 export const SUGGESTED_NAMES: readonly string[] = [

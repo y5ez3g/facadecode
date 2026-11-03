@@ -5,7 +5,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
-import { compactPath, folderKeyOf, homeRelative } from '../../base/files';
+import { compactPath, folderKeyOf, homeRelative, isInsideFolder } from '../../base/files';
 import { isJsonObject } from '../../base/json';
 import { isDeletableWorktree, runsLaunchedIn } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
@@ -90,7 +90,7 @@ export function worktreeSourceLabel(location: Location): string {
 }
 
 /**
- * The environment a location runs in, as the New Agent picker and a card's hover say it beside the location (LIFECYCLE-1.1, D67):
+ * The environment a location runs in, as the New Agent picker and a card's hover say it beside the location (LIFECYCLE-1.1):
  * as VS Code's remote indicator names it. `authority` is the window's remote authority, which only the local window component
  * sees: the workspace extension host has its folders as `file:` URIs.
  */
@@ -251,7 +251,7 @@ export interface LocationDeps extends FolderStepDeps {
 const FOLDERS_CHANGE_MS = 10_000;
 
 /**
- * The folder step (LIFECYCLE-1.3, D73), Change Working Location's and New Worktree's alike (WORKTREES-2.1): every workspace folder - a
+ * The folder step (LIFECYCLE-1.3), Change Working Location's and New Worktree's alike (WORKTREES-2.1): every workspace folder - a
  * plain one too - by its name, the folder that holds it beside it, and an X that removes it from the workspace once the person
  * confirmed it; then Add Folder to Workspace..., the editor's own. Shown where the window has several folders, `at` selected; with one
  * there is nothing to choose, and that one is the answer at once - where a removal leaves one too. Answers the folder chosen, `BACK`
@@ -268,7 +268,7 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
 		const remove: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Remove Folder from Workspace") };
 		const items: FolderItem[] = [
 			// Its name, then the folder that holds it, as VS Code lists recent folders: the home folder as ~. Removing one is offered
-			// where another stays (D73)
+			// where another stays (LIFECYCLE-1.3)
 			...catalog.folders.map((each): FolderItem => ({ ...folderRow(catalog, each), buttons: [remove] })),
 			{ label: '', kind: vscode.QuickPickItemKind.Separator },
 			{ label: vscode.l10n.t("Add Folder to Workspace..."), iconPath: new vscode.ThemeIcon('add'), add: true }
@@ -298,7 +298,7 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
  * Change Working Location (LIFECYCLE-1.3): the workspace folder, then the location in it - with New Worktree where the folder's
  * repository can have one, else its reason - a step skipped where it has one choice. New Worktree asks its branch, checked as it is
  * typed. The folder step also adds folders to the workspace and removes them from it; the location step deletes a linked worktree,
- * each only once the person confirmed it (D73). Answers the destination chosen, `BACK` from its first step - the New Agent picker
+ * each only once the person confirmed it (LIFECYCLE-1.3). Answers the destination chosen, `BACK` from its first step - the New Agent picker
  * again - or none where the person ended the flow.
  */
 export async function chooseLocation(flow: Flow, deps: LocationDeps, titles: { readonly folder: string; readonly location: string; readonly branch: string }, current: Destination): Promise<Destination | typeof BACK | undefined> {
@@ -343,8 +343,10 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, titles: { r
 			return { location: source, worktree: { branch: plan.branch, destination: plan.destination, baseRef: plan.baseRef } };
 		}
 		const inFolder = locationsIn(locations.snapshot(), folder);
-		// The source of a new worktree: the current checkout where it is in this folder, else the folder's first (WORKTREES-2.1)
-		source = inFolder.find(each => each.id === current.location.id && each.kind === 'checkout') ?? inFolder.find(each => each.kind === 'checkout');
+		// The source of a new worktree: the current checkout where it is in this folder - for a subfolder Resume remembered, the checkout
+		// holding it - else the folder's first (WORKTREES-2.1)
+		const holding = inFolder.filter(each => each.kind === 'checkout' && isInsideFolder(current.location.path, each.path)).sort((a, b) => b.path.length - a.path.length)[0];
+		source = inFolder.find(each => each.id === current.location.id && each.kind === 'checkout') ?? holding ?? inFolder.find(each => each.kind === 'checkout');
 		// Nothing to choose here: a lone plain folder, no Git to offer or explain a worktree (LIFECYCLE-1.3)
 		if (inFolder.length <= 1 && !source) {
 			return inFolder[0] ? { location: inFolder[0] } : BACK;
@@ -363,7 +365,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, titles: { r
 				// Git is there but a prerequisite is not: why, where it would be offered - nothing at all for a plain folder (PANEL-1.2)
 				: { label: vscode.l10n.t("New Worktree..."), detail: plainText(availability.reason), iconPath: new vscode.ThemeIcon('add'), newWorktree: 'unavailable' }
 		];
-		// A linked worktree can be deleted here, one at a time (D73)
+		// A linked worktree can be deleted here, one at a time (LIFECYCLE-1.3)
 		const remove: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Delete Worktree") };
 		const itemsOf = (catalog: Catalog): StepItem[] => [
 			...locationItems(locationsIn(catalog, of).filter(each => each.id !== deleting?.id), of)
@@ -441,7 +443,7 @@ function closingText(count: number): string | undefined {
 	return count === 0 ? undefined : count === 1 ? vscode.l10n.t("Its agent will be closed.") : vscode.l10n.t("{0} associated agents will be closed.", count);
 }
 
-/** Whether the person confirmed `message` with `action`, asked in a modal warning: anything else is no (D73). */
+/** Whether the person confirmed `message` with `action`, asked in a modal warning: anything else is no (LIFECYCLE-1.3). */
 async function confirmed(message: string, action: string, detail?: string): Promise<boolean> {
 	return await vscode.window.showWarningMessage(message, { modal: true, ...(detail ? { detail } : {}) }, action) === action;
 }
@@ -450,7 +452,7 @@ async function confirmed(message: string, action: string, detail?: string): Prom
 const ADD_FOLDER_COMMAND = 'workbench.action.addRootFolder';
 
 /**
- * Add Folder to Workspace... (D73): the editor's own command, whose dialog and title are the editor's. Answers the first folder it
+ * Add Folder to Workspace... (LIFECYCLE-1.3): the editor's own command, whose dialog and title are the editor's. Answers the first folder it
  * added, once the catalog has what it added; none where it added none - the dialog cancelled, or only folders open already chosen.
  */
 async function addFolder(deps: FolderStepDeps): Promise<WorkspaceFolderInfo | undefined> {
@@ -471,7 +473,7 @@ async function addFolder(deps: FolderStepDeps): Promise<WorkspaceFolderInfo | un
 }
 
 /**
- * Remove Folder from Workspace (D73), once the person confirmed it - the folder stays on disk. The agents whose locations go with it
+ * Remove Folder from Workspace (LIFECYCLE-1.3), once the person confirmed it - the folder stays on disk. The agents whose locations go with it
  * are closed by the removal itself (WORKTREES-3.3). Removing the first folder restarts the extensions, which ends this flow.
  */
 async function removeFolder(deps: FolderStepDeps, folder: WorkspaceFolderInfo): Promise<void> {
@@ -516,7 +518,7 @@ function foldersSettled(locations: FolderStepDeps['locations'], settled: (folder
 	});
 }
 
-/** Asks before Delete Worktree (D73): its folder, the branch kept - or that it has none - and the agents that will close. */
+/** Asks before Delete Worktree (LIFECYCLE-1.3): its folder, the branch kept - or that it has none - and the agents that will close. */
 function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolean> {
 	// Those launched in a location inside it too, as a resumed conversation's subdirectory (WORKTREES-3.2)
 	const closing = runsLaunchedIn(deps.agents.list(), worktree.path, deps.locations.snapshot().locations, folderKeyOf).length;
@@ -531,7 +533,7 @@ function confirmDeletion(deps: LocationDeps, worktree: Location): Promise<boolea
 }
 
 /**
- * Deletes a confirmed worktree (WORKTREES-3.2, D73): refused with nothing touched where it has changes; else its agents closed, their
+ * Deletes a confirmed worktree (WORKTREES-3.2): refused with nothing touched where it has changes; else its agents closed, their
  * processes ended, before Git removes it. Why it was not deleted goes to the person. Never rejects.
  */
 async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<void> {

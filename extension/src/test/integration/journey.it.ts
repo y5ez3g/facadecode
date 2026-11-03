@@ -132,7 +132,7 @@ function alive(pid: number): boolean {
 	}
 }
 
-suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
+suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 	suiteSetup(async () => {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
@@ -185,8 +185,8 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
 		}
 		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
-		// its screen showed its empty input: the card says not working, without a dot (CLIS-2.3, D80, D183). Until then it was
-		// starting, never red (D81)
+		// its screen showed its empty input: the card says not working, without a dot (CLIS-2.3). Until then it was
+		// starting, never red (CLIS-2.3)
 		const dots = new Set([card.dot]);
 		const reported = await until('its idle report', async () => {
 			const now = (await state()).cards.find(each => each.runId === card.runId);
@@ -200,7 +200,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
 			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
 			// Before any message, the second line says the title's words, the state symbol before them left out; the hover keeps the
-			// title as the CLI set it (PANEL-1.4, D160, D184)
+			// title as the CLI set it (PANEL-1.4)
 			await until('the CLI title in the hover', async () => (await state()).cards.find(each => each.runId === card.runId)?.tooltip.some(line => line.includes(title)) ? true : undefined);
 			// The activity report follows the OSC title in the same write cycle; it must not replace it a moment later.
 			await new Promise(resolve => setTimeout(resolve, 250));

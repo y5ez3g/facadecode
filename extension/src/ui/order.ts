@@ -81,21 +81,21 @@ export class PanelPrefs {
 	}
 }
 
-// The panel's two queues, Pins first (PANEL-2.1, D173, D181): state changes never move a card; a new card goes last among the others,
+// The panel's two queues, Pins first (PANEL-2.1): state changes never move a card; a new card goes last among the others,
 // a new Pin last among the Pins, an unpinned card first among the others - just below the Pins it left, as an editor tab unpinned goes
 // right after the pinned tabs - and Move Up/Down moves it.
 
-/** The stack with `run` last, where a new card goes (PANEL-2.1, D173); one already in it stays where it is. */
+/** The stack with `run` last, where a new card goes (PANEL-2.1); one already in it stays where it is. */
 export function withNew(order: readonly string[], run: string): string[] {
 	return order.includes(run) ? [...order] : [...order, run];
 }
 
-/** The stack with `run` moved last: where a card goes as it enters the Pins (PANEL-2.1, D173). */
+/** The stack with `run` moved last: where a card goes as it enters the Pins (PANEL-2.1). */
 export function atEnd(order: readonly string[], run: string): string[] {
 	return [...order.filter(each => each !== run), run];
 }
 
-/** The stack with `run` moved first: where a card goes as it leaves the Pins, first below them (PANEL-2.1, D181). */
+/** The stack with `run` moved first: where a card goes as it leaves the Pins, first below them (PANEL-2.1). */
 export function atStart(order: readonly string[], run: string): string[] {
 	return [run, ...order.filter(each => each !== run)];
 }

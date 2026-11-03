@@ -161,16 +161,16 @@ const DRAWING = {};
  * One agent's process in a pty of ptyd's, with a headless terminal that draws everything it writes: what a window shows again
  * after a reload (ARCHITECTURE-2.3). It outlives the window that shows it; the supervisor owns explicit close and the selected
  * five-minute connection cleanup policy. An upgrade alone never terminates it. Its program is created as it is made, or for
- * ptyd's starts in its turn ({@link spawn}, D146): until then it has no process, keeps its size and what the person types for
+ * ptyd's starts in its turn ({@link spawn}, ARCHITECTURE-2.3): until then it has no process, keeps its size and what the person types for
  * it, takes no automated input, and a close ends it with none ever created.
  */
 export class Run {
 
-	/** Its pty, once its turn created its program (D146). */
+	/** Its pty, once its turn created its program (ARCHITECTURE-2.3). */
 	private pty: IPty | undefined;
-	/** What was typed before its program was created, written to it once it is: a console takes what is typed as it starts (D146). */
+	/** What was typed before its program was created, written to it once it is: a console takes what is typed as it starts (ARCHITECTURE-2.3). */
 	private readonly unwritten: string[] = [];
-	/** When its program was created; until then, when it was asked for (D81, D146). */
+	/** When its program was created; until then, when it was asked for (CLIS-2.3, ARCHITECTURE-2.3). */
 	private startTime = Date.now();
 	private readonly terminal: import('@xterm/headless').Terminal;
 	private readonly serializer: import('@xterm/addon-serialize').SerializeAddon;
@@ -182,7 +182,7 @@ export class Run {
 	private ending = false;
 	private readonly programStatus = new ProgramStatus();
 	private readonly queue = new InputQueue();
-	/** How its screen is read as its status while its program reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	/** How its screen is read as its status while its program reports nothing, where its adapter names a reader (CLIS-2.3). */
 	private readonly screenReader: ScreenReader | undefined;
 	private screenRead: ReturnType<typeof setTimeout> | undefined;
 	/** The number of the last output chunk: each is numbered as it is drawn, so that a reattach never shows one twice. */
@@ -227,8 +227,8 @@ export class Run {
 	/** Set once a window removed it: no window lists it again, and it is dropped as it ends. */
 	removed = false;
 	/**
-	 * When its program was created - the process start a run's startup counts from (D81) - or, until its turn, now: a window that sees
-	 * it before then gives its startup no less time than it has (D146).
+	 * When its program was created - the process start a run's startup counts from (CLIS-2.3) - or, until its turn, now: a window that sees
+	 * it before then gives its startup no less time than it has (ARCHITECTURE-2.3).
 	 */
 	get startedAt(): number {
 		return this.pty ? this.startTime : Date.now();
@@ -236,7 +236,7 @@ export class Run {
 	/** What the window keeps with its run, as it said last. */
 	meta: { readonly [key: string]: unknown };
 
-	/** `later` makes it with no program, for {@link spawn} to create in its turn (D146); else its program is created now. */
+	/** `later` makes it with no program, for {@link spawn} to create in its turn (ARCHITECTURE-2.3); else its program is created now. */
 	constructor(readonly params: SpawnParams, options: { readonly later?: boolean } = {}) {
 		this.meta = params.meta;
 		this.screenReader = screenReaderOf(params.screenStatus);
@@ -275,7 +275,7 @@ export class Run {
 	}
 
 	/**
-	 * Creates its program, in its size as it stands, and writes what was typed for it meanwhile (D146). Throws where the run was
+	 * Creates its program, in its size as it stands, and writes what was typed for it meanwhile (ARCHITECTURE-2.3). Throws where the run was
 	 * ended first - its program is then never created - or where node-pty cannot create it.
 	 */
 	spawn(): void {
@@ -332,7 +332,7 @@ export class Run {
 		}
 	}
 
-	/** Writes `data` to its program, or keeps it for the program its turn creates (D146). */
+	/** Writes `data` to its program, or keeps it for the program its turn creates (ARCHITECTURE-2.3). */
 	private send(data: string): void {
 		if (this.pty) {
 			this.pty.write(data);
@@ -353,7 +353,7 @@ export class Run {
 	 * Resolves once its program has started, with its PID: at once where node-pty starts it as it spawns, and on Windows - where
 	 * node-pty 1.2 starts it only once the console's output is connected - as soon as it has one. Rejects where it ended first, as
 	 * a program that could not start does, or none came within {@link START_WAIT_MS}: what ptyd heard meanwhile is read first, as
-	 * timers run before I/O, so that a busy ptyd never takes a program that started for one that did not (D146).
+	 * timers run before I/O, so that a busy ptyd never takes a program that started for one that did not (ARCHITECTURE-2.3).
 	 */
 	started(): Promise<void> {
 		return new Promise((resolve, reject) => {
@@ -461,7 +461,7 @@ export class Run {
 
 	/**
 	 * Pastes `text` as one input - bracketed where the program turned that mode on - and Enter after it if asked, in turn. A `lead` is
-	 * typed before the paste, in the same write: the program takes it as typed, and the paste whole after it (D108).
+	 * typed before the paste, in the same write: the program takes it as typed, and the paste whole after it (COLLABORATION-2.1).
 	 */
 	type(text: string, enter: boolean, lead?: string): Promise<InputEffect> {
 		return this.queue.add(async alive => {
@@ -470,7 +470,7 @@ export class Run {
 				return { outcome: 'not_applied', reason: 'ended', pasted: false, entered: false };
 			}
 			if (!this.pty) {
-				// No program yet to take it: nothing is kept to go in later, in modes it has not set yet (D146)
+				// No program yet to take it: nothing is kept to go in later, in modes it has not set yet (ARCHITECTURE-2.3)
 				return { outcome: 'not_applied', pasted: false, entered: false };
 			}
 			if (text) {
@@ -495,7 +495,7 @@ export class Run {
 	keys(keys: readonly string[]): Promise<InputEffect> {
 		return this.queue.add(async alive => {
 			if (!this.pty) {
-				// No program yet to take them (D146)
+				// No program yet to take them (ARCHITECTURE-2.3)
 				return { outcome: 'not_applied', keysSent: 0 };
 			}
 			let lone = false;
@@ -529,7 +529,7 @@ export class Run {
 			return 'already_exited';
 		}
 		if (!this.pty) {
-			// Its turn never came: it ends now, nothing having run, and its turn creates no program (D146)
+			// Its turn never came: it ends now, nothing having run, and its turn creates no program (ARCHITECTURE-2.3)
 			this.ended({ exitCode: 0 });
 			return 'terminated';
 		}
@@ -718,7 +718,7 @@ export class Run {
 
 	/**
 	 * What its program set that a terminal drawing its screen anew needs beside the serializer's modes, which leave these out
-	 * (ARCHITECTURE-2.3, D178): the mouse encoding - without which a reload sends the program mouse reports it cannot read, so that
+	 * (ARCHITECTURE-2.3): the mouse encoding - without which a reload sends the program mouse reports it cannot read, so that
 	 * neither its scrolling nor its selection works - the hidden cursor, the kitty keyboard protocol's flags on the screen it is on and
 	 * win32 input mode. Written after the screen, in the terminal the screen leaves it in.
 	 */
@@ -810,7 +810,7 @@ export class Run {
 	}
 
 	/**
-	 * Reads its screen as its status a moment after it drew (CLIS-2.3, D80), where its adapter names a reader and its program has
+	 * Reads its screen as its status a moment after it drew (CLIS-2.3), where its adapter names a reader and its program has
 	 * neither asked nor reported: at most every {@link SCREEN_READ_MS}, never in the middle of a synchronized update, and no more once
 	 * the program takes part or ends.
 	 */

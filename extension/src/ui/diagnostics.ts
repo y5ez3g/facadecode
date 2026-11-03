@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import type { CliChoice, RunFacts } from '../core/ports';
-import { referenceOf } from './cardView';
+import { referenceOf } from '../core/reach';
 
 /** How many of a live agent's last screen rows, and of the agents log's last lines, the diagnostics report holds (ARCHITECTURE-3.3). */
 export const SCREEN_ROWS = 12;
@@ -23,7 +23,7 @@ export interface DiagnosedAgent {
 	readonly screen?: readonly string[];
 }
 
-/** What the diagnostics report holds, gathered (ARCHITECTURE-3.3, D116). */
+/** What the diagnostics report holds, gathered (ARCHITECTURE-3.3). */
 export interface Diagnostics {
 	readonly at: number;
 	/** The extension's, its window component's and the editor's versions, the platform and the remote kind, each as one part. */
@@ -72,7 +72,7 @@ function agentLines({ facts, input, screen }: DiagnosedAgent): string[] {
 }
 
 /**
- * `text` with the home folder written `~` wherever it appears (D116), as `platform` compares paths: whatever its case on Windows and
+ * `text` with the home folder written `~` wherever it appears (ARCHITECTURE-3.3), as `platform` compares paths: whatever its case on Windows and
  * macOS, and whichever its separators on Windows - VS Code writes a drive letter in lower case, Node in upper. A home of one character,
  * a root, stays as it is.
  */
@@ -86,7 +86,7 @@ function withHomeAsTilde(text: string, home: string, platform: NodeJS.Platform):
 }
 
 /**
- * The diagnostics report as text (ARCHITECTURE-3.3, D116, D174): in English, as the agents log is, with the home folder
+ * The diagnostics report as text (ARCHITECTURE-3.3): in English, as the agents log is, with the home folder
  * written `~`. Nothing in it is sent anywhere.
  */
 export function diagnosticsText(diagnostics: Diagnostics, platform: NodeJS.Platform = process.platform): string {

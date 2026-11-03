@@ -375,7 +375,7 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		assert.deepStrictEqual([errors, editor.shown.length, worktrees.calls], [[`New Worktree is unavailable: ${NOTES_SAID} is not in a Git repository.`], 0, [['availability', NOTES.id]]]);
 	});
 
-	test('LIFECYCLE-1.3, D73: several folders are chosen among first, in Change Working Location\'s folder step - every folder, a plain one too, with the folder that holds it and its X - then a line and Add Folder to Workspace... last', async () => {
+	test('LIFECYCLE-1.3: several folders are chosen among first, in Change Working Location\'s folder step - every folder, a plain one too, with the folder that holds it and its X - then a line and Add Folder to Workspace... last', async () => {
 		const editor = fakeEditor();
 		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER, NOTES_FOLDER, OTHER_FOLDER], REPO, NOTES, OTHER), worktrees: fakeWorktrees(), agents: NO_AGENTS, notifyError: () => undefined, log: quiet });
 		const running = editor.handlers.get('facade.newWorktree')!();
@@ -439,7 +439,7 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		assert.deepStrictEqual(worktrees.calls, []);
 	});
 
-	test('D73: Add Folder to Workspace... is the editor\'s own command - the step hidden meanwhile; cancelled, the step is as it was; a folder added, the step again with it selected', async () => {
+	test('LIFECYCLE-1.3: Add Folder to Workspace... is the editor\'s own command - the step hidden meanwhile; cancelled, the step is as it was; a folder added, the step again with it selected', async () => {
 		const editor = fakeEditor();
 		const API_FOLDER = folderAt(2, '/w/api');
 		const API: Location = { ...NOTES, id: 'loc-api', path: '/w/api', uri: 'file:///w/api', label: 'api', folders: [API_FOLDER] };

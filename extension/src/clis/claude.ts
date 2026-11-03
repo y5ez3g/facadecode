@@ -23,7 +23,7 @@ const TITLE_SWITCH = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
 /**
  * The switch that keeps Claude Code from installing its VS Code extension. In a VS Code terminal without that extension, Claude Code
  * 2.1.316 installs it and then shows a welcome waiting for Enter in the agent's terminal, past which no message goes (RULES-1.4).
- * A run sets it where the person has not (D144).
+ * A run sets it where the person has not (CLIS-1.2).
  */
 const AUTO_INSTALL_SWITCH = 'CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL';
 
@@ -119,7 +119,7 @@ function mainCheckoutOf(root: string): string {
  * repository's main checkout - for a linked worktree, the checkout whose Git directory it shares - else, outside any repository, `cwd`
  * itself; its real path in Unicode NFC. On Windows (2.1.316) it neither follows a worktree to its main checkout nor respells a path:
  * the folder at or above `cwd` with a `.git` in it - a linked worktree's own - else `cwd` itself, as the run is given it, the case of
- * its drive and folders kept, with forward slashes (D139).
+ * its drive and folders kept, with forward slashes (CLIS-3.3).
  */
 export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string {
 	if (platform === 'win32') {
@@ -132,7 +132,7 @@ export function claudeProjectKey(cwd: string, platform: NodeJS.Platform): string
 }
 
 /**
- * Why Claude Code's trust is not written for its project folder `folder` (CLIS-3.3, D103): its trust covers every folder below a
+ * Why Claude Code's trust is not written for its project folder `folder` (CLIS-3.3): its trust covers every folder below a
  * trusted one, so for a filesystem root, the home folder `home` or a folder above it, it would trust every project there. None for
  * any other folder.
  */
@@ -180,7 +180,7 @@ const claudeTools: ToolsIntegration = {
  * Claude Code in its own UI (CLIS-1.3). YOLO on: its permissions bypassed, its sandbox as its own settings have it. YOLO off: its
  * sandbox on where it has one, its permission mode and rules its own. Every launch trusts its repository - or, outside any, its
  * folder - as accepting its trust question does: `hasTrustDialogAccepted` for the project in its global configuration (CLIS-3.3,
- * D62).
+ * CLIS-3.3).
  */
 export const claudeAdapter: CliAdapter = {
 	id: 'claude',
@@ -216,7 +216,7 @@ export const claudeAdapter: CliAdapter = {
 		return { file: claudeConfigFile(env, platform, cwd), keys: ['projects', folder, 'hasTrustDialogAccepted'], entry: { value: true }, folder, ...withheld ? { withheld } : {} };
 	},
 	// The title switch would also turn off its status reports; the run's --settings clears it for the files' copy (CLIS-2.3). No
-	// install of its VS Code extension, and so no welcome in the way of messages, where the person set nothing (D144)
+	// install of its VS Code extension, and so no welcome in the way of messages, where the person set nothing (CLIS-1.2)
 	adjustEnvironment: (env, platform) => {
 		setVariable(env, TITLE_SWITCH, null, platform);
 		if (variableOf(env, AUTO_INSTALL_SWITCH, platform) === undefined) {

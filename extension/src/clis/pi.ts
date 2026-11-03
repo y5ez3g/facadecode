@@ -141,7 +141,7 @@ export default function (pi) {
 
 /**
  * Pi is given the server by a per-run extension, `-e`, and its resource-discovery hook supplies the per-run skill unless an
- * identical one is already loaded (CLIS-2.2, D158). Nothing is written to the project or the person's settings.
+ * identical one is already loaded (CLIS-2.2). Nothing is written to the project or the person's settings.
  */
 const piTools: ToolsIntegration = {
 	capability: { state: 'unverified', reason: 'the server registered for the session by a per-run extension, -e, its tools declared to the model directly; its resource-discovery hook adds the run skill only when no identical Facade skill is loaded' },
@@ -159,8 +159,8 @@ const piTools: ToolsIntegration = {
 
 /**
  * Pi in its own UI (CLIS-1.3). It has no approvals and no sandbox, so YOLO has nothing to map: on or off, it runs as it natively
- * does (D79). Every launch trusts the folder it starts in for that launch alone with `--approve` - its project's settings,
- * extensions and skills loaded, as accepting its trust question does - writing nothing (CLIS-3.3, D62). It reports by OSC 7501 once
+ * does (CLIS-1.3). Every launch trusts the folder it starts in for that launch alone with `--approve` - its project's settings,
+ * extensions and skills loaded, as accepting its trust question does - writing nothing (CLIS-3.3). It reports by OSC 7501 once
  * its probe is answered (CLIS-2.3). Two Ctrl+C exit it with 0, a normal exit.
  */
 export const piAdapter: CliAdapter = {
@@ -192,7 +192,7 @@ export const piAdapter: CliAdapter = {
 	launchTarget: piInstallerTarget,
 	// Its input, recorded on macOS with Pi 1.4.0 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'pi-frame', evidence: 'its editor between two rules above its footer, its own cursor drawn there: empty, a typed, pasted, multi-line, long-paste, history or slash-command draft, while working, and gone behind its trust question and model picker' },
-	// No approvals and no sandbox: YOLO has nothing to map (D79)
+	// No approvals and no sandbox: YOLO has nothing to map (CLIS-1.3)
 	sandbox: () => ({ state: 'none' }),
 	approvals: () => ({ state: 'none' }),
 	interruptExit: sigintExit

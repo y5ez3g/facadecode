@@ -48,7 +48,7 @@ function listedIn(model: Model, catalog: Catalog, folder: WorkspaceFolderInfo): 
 		.filter(({ filter }) => model.count(filter) > 0 || (current?.kind === filter.kind && current.id === filter.id));
 }
 
-/** A step: `first`, then one separator and `rest` where there is any (PANEL-2.3, D82). */
+/** A step: `first`, then one separator and `rest` where there is any (PANEL-2.3). */
 function stepOf(first: Item, rest: readonly Item[]): Item[] {
 	return rest.length ? [first, { label: '', kind: vscode.QuickPickItemKind.Separator }, ...rest] : [first];
 }
@@ -58,7 +58,7 @@ function locationItem(model: Model, location: Location, filter: PanelFilter): It
 }
 
 /**
- * The first step of Filter by Working Location (PANEL-2.3, D82). In a window of several folders: All Locations, then each folder
+ * The first step of Filter by Working Location (PANEL-2.3). In a window of several folders: All Locations, then each folder
  * with cards. One opens its own step where two or more of its locations are listed, or where the filtered location is one of
  * several it has - so that the filter stays in sight and Enter keeps it; any other filters by the folder at once. In a window of
  * one folder: that folder's step alone, its first item every card - All Worktrees, or All Locations outside Git. A filtered
@@ -88,7 +88,7 @@ export function filterItems(model: Model, catalog: Catalog): Item[] {
 	return stepOf({ label: vscode.l10n.t("All Locations"), description: agentCountText(model.count(undefined)), iconPath: new vscode.ThemeIcon('list-flat'), filter: 'all' }, [...folders, ...lost]);
 }
 
-/** A folder's step (PANEL-2.3, D82): All Worktrees - the whole folder - then its locations listed, each with its count. */
+/** A folder's step (PANEL-2.3): All Worktrees - the whole folder - then its locations listed, each with its count. */
 export function folderItems(model: Model, catalog: Catalog, folder: WorkspaceFolderInfo): Item[] {
 	const whole = wholeOf(folder);
 	const locations = listedIn(model, catalog, folder).map(({ location, filter }) => locationItem(model, location, filter));
@@ -136,7 +136,7 @@ function step(flow: Flow, locations: Locations, options: Omit<CatalogStepOptions
 }
 
 /**
- * Filter by Working Location (PANEL-2.3, D82): native steps by folder, the current filter highlighted - through its folder in the
+ * Filter by Working Location (PANEL-2.3): native steps by folder, the current filter highlighted - through its folder in the
  * first. Choosing shows only that folder's or location's cards - the first step's first item every card - kept in workspace
  * storage; Back returns to the first step at the folder chosen; Escape changes nothing.
  */

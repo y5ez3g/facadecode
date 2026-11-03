@@ -5,7 +5,7 @@
 import * as assert from 'assert';
 import { MouseReports } from '../base/mouseReports';
 
-suite('Mouse reports an editor terminal could not measure (LIFECYCLE-2.2, D170)', () => {
+suite('Mouse reports an editor terminal could not measure (LIFECYCLE-2.2)', () => {
 
 	test('a release sent after a clicked link took the terminal away keeps its press position, never "aN;NaNm"', () => {
 		const mouse = new MouseReports();

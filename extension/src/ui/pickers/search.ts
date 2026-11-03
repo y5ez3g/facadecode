@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 /**
- * Adds matches for the CLI behind a row's icon without putting its name back in the row (D161). Native Quick Pick still
+ * Adds matches for the CLI behind a row's icon without putting its name back in the row (LIFECYCLE-2.3). Native Quick Pick still
  * matches/highlights visible fields. A CLI query can include visible words, such as "claude login"; every word must match.
  */
 export function matchesCliSearch(query: string, cli: string, name: string, item: { readonly label: string; readonly description?: string }): boolean {
