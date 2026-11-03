@@ -148,7 +148,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }));
 		await sleep(15_000);
 		assert.strictEqual(reported[0].result.about.delivery.reason, 'input_unknown');
-		assert.strictEqual(reported[0].result.text, `Delivery of your message #m50 to Bob (#a2) failed. Facade couldn't recognize Codex 0.166.0's input box. Nothing was entered in the terminal.`);
+		assert.strictEqual(reported[0].result.text, `Delivery of your message #m50 to Bob (#a2) failed. Facade could not recognize Codex 0.166.0's terminal input. Nothing was entered in the terminal.`);
 		assert.deepStrictEqual(input.submitted, []);
 	});
 
@@ -160,7 +160,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		await settled(service.send({ from: A, to: B, text: 'Ship it.', elapsedMs: 0 }));
 		await sleep(15_000);
 		const result = [...messages.records.values()].find(record => record.kind === 'result')!;
-		assert.match(result.text, /Facade couldn't recognize Codex's input box/);
+		assert.match(result.text, /Facade could not recognize Codex's terminal input/);
 	});
 
 	test('history shows this window\'s messages and the copies of those it sent to other windows, each once, oldest first', async () => {

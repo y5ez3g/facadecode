@@ -28,7 +28,7 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.closeAgent', 'Close Agent'],
 	['facade.filter', 'Filter by Working Location...', '$(filter)'],
 	['facade.configureAgents', 'Configure Agents...'],
-	['facade.showAgentLaunch', 'Show Agent Launch'],
+	['facade.showAgentLaunch', 'Show Agent Launch...'],
 	['facade.showAgentsLog', 'Show Agents Log']
 ];
 const HIDDEN: readonly [string, string, string?][] = [
@@ -142,7 +142,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		]);
 		// Each description names its CLI - the path the command PATH is searched for, the launch Show Agent Launch
 		for (const adapter of BUILT_IN_ADAPTERS) {
-			assert.strictEqual(english(settings[`${adapter.setting}.enabled`].markdownDescription), `Controls whether ${adapter.displayName} is offered for new agents. Turning it off does not stop agents that are running.`);
+			assert.strictEqual(english(settings[`${adapter.setting}.enabled`].markdownDescription), `Controls whether ${adapter.displayName} is offered for new agents. Turning it off does not stop running agents.`);
 			assert.strictEqual(english(settings[`${adapter.setting}.path`].markdownDescription), `Path to ${adapter.displayName}. Leave empty to use "${adapter.command}" from the terminal environment's PATH.`);
 			assert.strictEqual(english(settings[`${adapter.setting}.launch`].markdownDescription), `Advanced: additional command-line arguments and environment variables for ${adapter.displayName}. **Show Agent Launch** shows what each agent starts with.`);
 		}
@@ -165,7 +165,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			['resume'], false, ['start', 'resume', 'environment'],
 			{ type: 'array', items: { type: 'string' }, minItems: 1, contains: { type: 'string', pattern: '\\$\\{sessionId\\}' }, markdownDescription: '%config.custom.launch.resume%' }
 		]);
-		assert.ok(english(settings['facade.custom'].markdownDescription).endsWith(`An ID cannot be a built-in one: ${BUILT_IN_ADAPTERS.map(adapter => `\`${adapter.id}\``).slice(0, -1).join(', ')} or \`pi\`.`));
+		assert.ok(english(settings['facade.custom'].markdownDescription).endsWith(`An ID cannot be a built-in one: ${BUILT_IN_ADAPTERS.map(adapter => `\`${adapter.id}\``).slice(0, -1).join(', ')}, or \`pi\`.`));
 		// Every description resolves; no retired setting survives
 		const keys = [...JSON.stringify(contributes).matchAll(/"%([\w.]+)%"/g)].map(match => match[1]);
 		assert.deepStrictEqual(keys.filter(key => nls[key] === undefined), []);

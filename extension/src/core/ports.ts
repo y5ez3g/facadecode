@@ -237,13 +237,13 @@ export interface ActivityReport {
 	/** Source state-episode time on the execution environment's clock; absent without source evidence. */
 	readonly observedAt?: number;
 	/** A native blocker the CLI reports, in its own words where it gives them. */
-	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
+	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	/** Why activity is unknown or in error, for the card's second line. */
 	readonly reason?: string;
 	readonly error?: string;
 	/** A missing supervisor connection is infrastructure uncertainty, independent of the CLI's activity. */
 	readonly disconnected?: boolean;
-	/** The CLI's own title, sanitized and capped at 300 code points. Empty clears it; absent leaves it unchanged. */
+	/** The CLI's own bounded title, sanitized for display. Empty clears it; absent leaves it unchanged. */
 	readonly title?: string;
 	/** Whether this run's CLI has proven it reports activity (S12). */
 	readonly reporting: boolean;
@@ -522,7 +522,7 @@ export interface RunFacts {
 	readonly reporting: boolean;
 	/** Its process started, its CLI has shown no activity yet: the run is still starting, green, within CLIS-2.3's bound (D81). */
 	readonly awaitingActivity?: true;
-	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
+	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	readonly title?: string;
 	/** The unresolved error that makes the card red (RULES-3.2): launch failure, abnormal exit, reported error. */
 	readonly error?: RunError;

@@ -31,7 +31,7 @@
 	"config.collaboration.enabled": "エージェントが互いに起動と停止を行い、互いおよびユーザーにメッセージを送信し、互いのターミナルを読み取って入力できるようにします。新しく起動するエージェントにのみ適用されます。",
 	"config.collaboration.waitSeconds": "エージェントが別のエージェントの起動または停止を待機する秒数。この時間を過ぎると、エージェントは後でメッセージで結果を受け取ります。",
 	"command.filter": "作業場所でフィルター...",
-	"command.showAgentLaunch": "Agent の起動構成を表示",
+	"command.showAgentLaunch": "Agent の起動構成を表示...",
 	"command.showAgentsLog": "Agent のログを表示",
 	"config.claude.enabled": "新しいエージェントに Claude Code を提供するかどうかを制御します。オフにしても、実行中のエージェントは停止しません。",
 	"config.claude.launch": "詳細設定: Claude Code の追加のコマンド ライン引数と環境変数。各エージェントの起動内容は **Agent の起動構成を表示** で確認できます。",

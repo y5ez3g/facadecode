@@ -852,13 +852,17 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 		const reason = awaiting
 			? undefined
-			: facts.unknown === 'not_reporting'
-				? vscode.l10n.t("The CLI has not reported its activity")
-				: facts.unknown === 'waiting'
-					? vscode.l10n.t("Waiting for the CLI's first activity report")
-					: facts.unknown === 'cleared'
-						? vscode.l10n.t("The CLI cleared its activity report")
-						: undefined;
+			: facts.unknown === 'screen_unrecognized'
+				? vscode.l10n.t("The CLI's current screen is not recognized")
+				: facts.unknown === 'screen_reset'
+					? vscode.l10n.t("The terminal was reset; waiting for activity")
+					: facts.unknown === 'not_reporting'
+						? vscode.l10n.t("CLI has not reported activity")
+						: facts.unknown === 'waiting'
+							? vscode.l10n.t("Waiting for first CLI activity report")
+							: facts.unknown === 'cleared'
+								? vscode.l10n.t("CLI cleared activity report")
+								: undefined;
 		const report: ActivityReport = {
 			run: pair.run,
 			activity: facts.activity,
@@ -867,7 +871,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			...(awaiting ? { awaitingActivity: true } : {}),
 			...(facts.blocker ? { blocker: facts.blocker } : {}),
 			...(reason ? { reason } : {}),
-			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("The CLI reported an error") } : {}),
+			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("CLI reported an error") } : {}),
 			// This is the complete current title selection, including an explicit clear when both sources are empty.
 			title: title ?? ''
 		};
@@ -979,9 +983,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			run: pair.run,
 			activity: 'unknown',
 			reporting: facts.reporting,
-			reason: vscode.l10n.t("The connection to the agent's process was lost; reconnecting"),
+			reason: vscode.l10n.t("Connection to agent process lost; reconnecting"),
 			disconnected: true,
-			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("The CLI reported an error") } : {}),
+			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("CLI reported an error") } : {}),
 			...(title ? { title } : {})
 		};
 		// Told as the last report, so that the same report as before the loss is told again once the run is claimed

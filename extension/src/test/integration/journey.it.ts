@@ -322,7 +322,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		await showing;
 		const text = launch.getText();
 		assert.match(text, /^Agent launch in /);
-		assert.match(text, /^YOLO: on, from facade\.yolo; it applies to agents started from now on$/m);
+		assert.match(text, /^YOLO: on, from facade\.yolo; applies to newly started agents$/m);
 		for (const name of ['Claude Code (claude, facade.claude)', 'Codex (codex, facade.codex)', 'Pi (pi, facade.pi)']) {
 			assert.ok(text.includes(`\n${name}\n  Status: available\n`), `${name} available in:\n${text}`);
 		}

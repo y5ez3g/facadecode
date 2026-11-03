@@ -137,7 +137,8 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 		assert.match(attentionText(run, { kind: 'permission' }), /waiting for approval from the user/);
 		assert.match(attentionText(run, { kind: 'question', text: 'Which branch?' }), /There's a question from Echo \(#a2\):\nWhich branch\?/);
 		assert.match(attentionText(run, { kind: 'auth' }), /needs the user to sign in/);
-		for (const kind of ['permission', 'question', 'auth'] as const) {
+		assert.strictEqual(attentionText(run, { kind: 'unknown', text: 'Check the terminal' }), "Echo (#a2) needs the user's attention.\nCheck the terminal");
+		for (const kind of ['permission', 'question', 'auth', 'unknown'] as const) {
 			const text = attentionText(run, { kind });
 			assert.doesNotMatch(text, /send_message|#human|tell them|tell the person|press_keys|type_text/);
 		}

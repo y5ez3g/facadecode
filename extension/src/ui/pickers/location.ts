@@ -26,15 +26,15 @@ function wordsOf(problem: WorktreeProblem): string {
 	switch (problem.kind) {
 		case 'folder_name':
 			// {0} is the folder name a branch would give its worktree
-			return problem.why === 'unusable' ? vscode.l10n.t("\"{0}\" cannot be the name of a folder.", problem.name)
-				: problem.why === 'trailing' ? vscode.l10n.t("\"{0}\" ends in a dot or a space, which Windows does not allow at the end of a folder's name.", problem.name)
-					: vscode.l10n.t("\"{0}\" is a name Windows keeps for a device, so a folder cannot have it.", problem.name);
+			return problem.why === 'unusable' ? vscode.l10n.t("\"{0}\" is not a valid folder name.", problem.name)
+				: problem.why === 'trailing' ? vscode.l10n.t("\"{0}\" cannot end with a period or space on Windows.", problem.name)
+					: vscode.l10n.t("\"{0}\" is a reserved device name on Windows.", problem.name);
 		case 'branch_required': return vscode.l10n.t("Enter a branch name.");
 		case 'base_required': return vscode.l10n.t("Enter a commit, branch, or tag.");
-		case 'branch_rejected': return vscode.l10n.t("Git rejects \"{0}\" as a branch name.", problem.branch);
+		case 'branch_rejected': return vscode.l10n.t("\"{0}\" is not a valid Git branch name.", problem.branch);
 		// {0} is an existing branch whose name is the new one's folder, or inside it
-		case 'branch_prefix_clash': return vscode.l10n.t("The branch {0} already exists; Git cannot use the same name for both a branch and a branch-name prefix.", problem.clash);
-		case 'branch_exists': return vscode.l10n.t("A branch named {0} already exists.", problem.branch);
+		case 'branch_prefix_clash': return vscode.l10n.t("Branch {0} already exists and cannot be used as a branch prefix.", problem.clash);
+		case 'branch_exists': return vscode.l10n.t("Branch {0} already exists.", problem.branch);
 		// {0} is why the regular expression cannot be read
 		case 'pattern_invalid': return vscode.l10n.t("git.branchValidationRegex is not a valid regular expression: {0}", problem.detail);
 		// {0} is the branch, {1} the regular expression of git.branchValidationRegex
@@ -48,20 +48,20 @@ function wordsOf(problem: WorktreeProblem): string {
 		case 'no_commit': return vscode.l10n.t("{0} has no commits yet.", homeRelative(problem.path));
 		// {0} is the path, {1} what Git said
 		case 'git_failed': return vscode.l10n.t("Git could not read {0}: {1}", problem.path, problem.detail);
-		case 'git_extension_missing': return vscode.l10n.t("The editor's Git extension is not available, so worktrees cannot be created.");
+		case 'git_extension_missing': return vscode.l10n.t("Git extension is not available; worktrees cannot be created.");
 		// {0} is what the editor said
-		case 'git_extension_failed': return vscode.l10n.t("The editor's Git extension is not available: {0}", problem.detail);
-		case 'no_native_creation': return vscode.l10n.t("This editor's Git extension cannot create worktrees.");
-		case 'repository_not_open': return vscode.l10n.t("The editor's Git extension has not opened this repository, so no worktree of it can be created.");
+		case 'git_extension_failed': return vscode.l10n.t("Git extension is not available: {0}", problem.detail);
+		case 'no_native_creation': return vscode.l10n.t("Git extension cannot create worktrees.");
+		case 'repository_not_open': return vscode.l10n.t("The Git extension has not opened this repository; cannot create worktree.");
 		// {0} is what Git said
-		case 'creation_failed': return vscode.l10n.t("Git could not create the worktree: {0}", problem.detail);
+		case 'creation_failed': return vscode.l10n.t("Git reported: {0}", problem.detail);
 		// {0} is the worktree's path, {1} why Git could not be read
 		case 'creation_unconfirmed': return problem.detail === undefined
-			? vscode.l10n.t("The editor reported a new worktree at {0}, but Git does not list one there.", problem.path)
-			: vscode.l10n.t("The editor reported a new worktree at {0}, but Git could not confirm it: {1}", problem.path, problem.detail);
-		case 'created_elsewhere': return vscode.l10n.t("The worktree at {0} was created, but it is not among this window's working locations.", problem.path);
+			? vscode.l10n.t("Worktree reported at {0}, but Git does not list it.", problem.path)
+			: vscode.l10n.t("Worktree reported at {0}, but Git could not confirm it: {1}", problem.path, problem.detail);
+		case 'created_elsewhere': return vscode.l10n.t("Worktree created at {0}, but not found among window working locations.", problem.path);
 		// {0} is the name of the working location
-		case 'not_deletable': return vscode.l10n.t("Cannot delete \"{0}\": only standalone linked worktrees can be deleted.", problem.name);
+		case 'not_deletable': return vscode.l10n.t("Cannot delete \"{0}\": only a linked worktree with no workspace folder in it can be deleted.", problem.name);
 		// {0} is the worktree's name
 		case 'worktree_changed': return vscode.l10n.t("Cannot delete worktree \"{0}\": uncommitted changes present. Commit or stash them with Git, then try again.", problem.name);
 		// {0} is the worktree's name
@@ -69,11 +69,11 @@ function wordsOf(problem: WorktreeProblem): string {
 		// {0} is the worktree's name, {1} the name of the worktree inside it
 		case 'worktree_nested': return vscode.l10n.t("Cannot delete worktree \"{0}\": worktree \"{1}\" is inside it. Delete or move that worktree first, then try again.", problem.name, problem.nested);
 		// {0} is the worktree's name
-		case 'agents_not_ended': return vscode.l10n.t("Cannot delete worktree \"{0}\": an agent's process in it could not be confirmed to have ended. Try again once it has.", problem.name);
+		case 'agents_not_ended': return vscode.l10n.t("Cannot delete worktree \"{0}\": could not confirm that an agent process in it has ended. Try again once it has.", problem.name);
 		// {0} is the worktree's name, {1} the link inside it, as its path from the worktree's folder
 		case 'worktree_linked': return vscode.l10n.t("Cannot delete worktree \"{0}\": it contains a link to another folder ({1}), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.", problem.name, problem.link);
 		// {0} is the worktree's name, {1} its folder's full path
-		case 'worktree_left': return vscode.l10n.t("Deleted worktree \"{0}\", but Git left its folder {1} behind.", problem.name, problem.folder);
+		case 'worktree_left': return vscode.l10n.t("Deleted worktree \"{0}\", but folder {1} was left behind.", problem.name, problem.folder);
 		// {0} is the worktree's name, {1} what Git said
 		case 'deletion_failed': return deletionFailed(problem.name, problem.detail);
 	}
@@ -301,7 +301,7 @@ export async function chooseFolder(flow: Flow, deps: FolderStepDeps, title: stri
  * each only once the person confirmed it (D73). Answers the destination chosen, `BACK` from its first step - the New Agent picker
  * again - or none where the person ended the flow.
  */
-export async function chooseLocation(flow: Flow, deps: LocationDeps, title: string, current: Destination): Promise<Destination | typeof BACK | undefined> {
+export async function chooseLocation(flow: Flow, deps: LocationDeps, titles: { readonly folder: string; readonly location: string; readonly branch: string }, current: Destination): Promise<Destination | typeof BACK | undefined> {
 	const { locations, worktrees } = deps;
 	const start = locations.snapshot().folders;
 	let folder = start.find(each => current.location.folders.some(of => of.uri === each.uri)) ?? start[0];
@@ -319,7 +319,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 		}
 		if (step === 'folder') {
 			// One folder left after a removal: no folder step, but that folder's locations (LIFECYCLE-1.3)
-			const chosen = await chooseFolder(flow, deps, title, folder, true);
+			const chosen = await chooseFolder(flow, deps, titles.folder, folder, true);
 			if (chosen === undefined || chosen === BACK) {
 				return chosen;
 			}
@@ -332,7 +332,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 		}
 		if (step === 'branch' && source) {
 			// Back keeps the branch typed, to be there again, and New Worktree chosen on the step it returns to (UX-1.1)
-			const plan = await askWorktreeRef(flow, worktrees, source, { title, kind: 'branch', value: branch, back: true, typed: value => { branch = value; } });
+			const plan = await askWorktreeBranch(flow, worktrees, source, { title: titles.branch, value: branch, back: true, typed: value => { branch = value; } });
 			if (plan === undefined) {
 				return undefined;
 			}
@@ -372,7 +372,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, title: stri
 		];
 		const items = itemsOf(locations.snapshot());
 		const picked = await flow.pick<StepItem>({
-			title,
+			title: titles.location,
 			placeholder: from ? vscode.l10n.t("Select a branch or worktree") : vscode.l10n.t("Select a working location"),
 			items,
 			active: items.find(item => wantsWorktree ? item.newWorktree === 'available' : item.location?.id === current.location.id),
@@ -557,13 +557,13 @@ async function deleteWorktree(deps: LocationDeps, worktree: Location): Promise<v
 	}
 }
 
-type WorktreeRefInput = {
+type WorktreeBranchInput = {
+	readonly value?: string;
 	readonly title: string;
 	readonly back: boolean;
 	/** Told each text as it is typed: what Back keeps for the step's return (UX-1.1). */
 	readonly typed?: (value: string) => void;
-} & ({ readonly kind: 'branch'; readonly value?: string; readonly base?: string }
-	| { readonly kind: 'base'; readonly value: string; readonly branch: string });
+};
 
 /** The source's configured branch prefix; shared by both creation entries (WORKTREES-2.1). */
 function branchPrefixOf(source: Location): string {
@@ -576,7 +576,7 @@ export function worktreeBaseLabel(plan: WorktreePlan, source: Location, explicit
 	return explicitBase ?? (plan.baseRef === 'HEAD' ? worktreeSourceLabel(source) : plan.baseRef);
 }
 
-/** One preview for both creation entries and Change Base (WORKTREES-2.1). */
+/** One preview for both human creation entries (WORKTREES-2.1). */
 function worktreePreview(plan: WorktreePlan, source: Location, explicitBase: string | undefined): string {
 	return vscode.l10n.t("{0} (base: {1})", compactPath(plan.destination), worktreeBaseLabel(plan, source, explicitBase));
 }
@@ -594,12 +594,12 @@ export function copyPathAction(destination: string): StepAction {
 }
 
 /**
- * Both creation entries and Change Base use one validated reference input (WORKTREES-4.3). Planning has no effect;
+ * Both human creation entries use one validated branch input from HEAD (WORKTREES-4.3). Planning has no effect;
  * the caller decides when to create. Back and Escape return without accepting a plan or starting creation.
  */
-export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source: Location, asked: WorktreeRefInput): Promise<WorktreePlan | typeof BACK | undefined> {
-	const prefix = asked.kind === 'branch' ? branchPrefixOf(source).trim() : '';
-	const value = asked.kind === 'branch' ? asked.value ?? branchPrefixOf(source) : asked.value;
+export async function askWorktreeBranch(flow: Flow, worktrees: WorktreePort, source: Location, asked: WorktreeBranchInput): Promise<WorktreePlan | typeof BACK | undefined> {
+	const prefix = branchPrefixOf(source).trim();
+	const value = asked.value ?? branchPrefixOf(source);
 	/** Whether `text` names no branch yet: nothing typed, or git.branchPrefix alone (LIFECYCLE-1.3). */
 	const unnamed = (text: string) => !text.trim() || (prefix !== '' && text.trim() === prefix);
 	/** The plans the checks made, by the text each was for: the one taken is never planned twice. */
@@ -607,23 +607,23 @@ export async function askWorktreeRef(flow: Flow, worktrees: WorktreePort, source
 	const typed = await flow.text({
 		title: asked.title,
 		value,
-		// Append to a branch prefix; select the whole base so it can be replaced.
-		...(asked.kind === 'branch' ? { valueSelection: [value.length, value.length] as const } : {}),
-		placeholder: asked.kind === 'branch' ? vscode.l10n.t("Branch name") : vscode.l10n.t("Commit, branch, or tag (e.g. HEAD)"),
-		prompt: asked.kind === 'branch' ? vscode.l10n.t("Starts from {0}", asked.base ?? worktreeSourceLabel(source)) : vscode.l10n.t("Base ref for {0}", asked.branch),
+		// Append to the configured branch prefix.
+		valueSelection: [value.length, value.length],
+		placeholder: vscode.l10n.t("Branch name"),
+		prompt: vscode.l10n.t("Starts from {0}", worktreeSourceLabel(source)),
 		back: asked.back,
 		// The prefix the field starts with is where the person types, not a branch to judge yet
-		pristine: asked.kind === 'branch' && prefix !== '' && unnamed(value),
+		pristine: prefix !== '' && unnamed(value),
 		validate: value => {
 			asked.typed?.(value);
-			return !unnamed(value) ? undefined : wordsOf({ kind: asked.kind === 'branch' ? 'branch_required' : 'base_required' });
+			return !unnamed(value) ? undefined : wordsOf({ kind: 'branch_required' });
 		},
 		check: async value => {
 			try {
 				const text = value.trim();
-				const plan = asked.kind === 'branch' ? await worktrees.plan(source.id, text, asked.base) : await worktrees.plan(source.id, asked.branch, text);
+				const plan = await worktrees.plan(source.id, text);
 				plans.set(value, plan);
-				return { prompt: worktreePreview(plan, source, asked.kind === 'branch' ? asked.base : text), actions: [copyPathAction(plan.destination)] };
+				return { prompt: worktreePreview(plan, source, undefined), actions: [copyPathAction(plan.destination)] };
 			} catch (err) {
 				return { problem: worktreeProblemText(err, messageOf(err)) };
 			}

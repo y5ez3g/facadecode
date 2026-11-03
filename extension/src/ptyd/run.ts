@@ -3,12 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { tailStyles } from '../base/screenStyle';
+import { truncateText } from '../base/text';
 import type { IPty } from 'node-pty';
 import { InputReading, inputScreenOf, readInput } from './composer';
 import { InputEffect, InputQueue } from './input';
 import { KeyModes, keySequence, pasteSequence } from './keys';
 import type { RunExit, RunInfo, RunStatus, ScreenFrame, ScreenRead, SpawnParams, Termination } from './protocol';
-import { MOST_SCREEN_LINES, readScreen } from './screen';
+import { MOST_SCREEN_LINES, readScreen, readStatusLines } from './screen';
 import { ScreenReader, screenReaderOf } from './screenStatus';
 import { parseStatus, ProgramStatus, STATUS_REPLY } from './status';
 
@@ -97,14 +98,9 @@ const KILL_CONFIRM_MS = 2_000;
 /** The longest terminal title kept: a tab shows far less, and no message of a run may outgrow ptyd's frames (ARCHITECTURE-2.4). */
 const MOST_TITLE = 4096;
 
-/** `title` cut to {@link MOST_TITLE} code units, at a whole character. */
+/** `title` cut to {@link MOST_TITLE} code units, between complete graphemes. */
 function boundedTitle(title: string): string {
-	if (title.length <= MOST_TITLE) {
-		return title;
-	}
-	const cut = title.slice(0, MOST_TITLE);
-	// A character of two code units is not halved
-	return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;
+	return truncateText(title, MOST_TITLE);
 }
 
 /** How long a Windows console's output pipe may still bring what its program wrote last once it ended: node-pty's own flush time. */
@@ -459,6 +455,7 @@ export class Run {
 		}
 		this.pty?.resize(cols, rows);
 		this.terminal.resize(cols, rows);
+		this.readScreenSoon();
 		this.terminal.options.scrollback = scrollbackRows(cols);
 	}
 
@@ -826,26 +823,14 @@ export class Run {
 			if (this.programStatus.takesPart || this.exited) {
 				return;
 			}
-			if (this.terminal.modes.synchronizedOutputMode) {
+			if (this.drawing.length || this.terminal.modes.synchronizedOutputMode) {
 				this.readScreenSoon();
 				return;
 			}
-			const reading = this.screenReader!(this.screenRows());
-			if (reading) {
-				this.programStatus.observed(reading);
-			}
+			const screen = readStatusLines(this.terminal);
+			this.programStatus.observed(this.screenReader!(screen.lines, screen.clippedStart, screen.boldHeads));
 		}, SCREEN_READ_MS);
 		this.screenRead.unref?.();
-	}
-
-	/** The rows its terminal shows now, top to bottom, each without the spaces at its end. */
-	private screenRows(): string[] {
-		const buffer = this.terminal.buffer.active;
-		const rows: string[] = [];
-		for (let y = 0; y < this.terminal.rows; y++) {
-			rows.push(buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '');
-		}
-		return rows;
 	}
 
 	/**

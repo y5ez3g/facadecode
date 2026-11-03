@@ -81,7 +81,7 @@ export async function waitForWindowIdentity(session: string, waitMs = COMPONENT_
  */
 export function showComponentMissing(context: vscode.ExtensionContext, session: string): vscode.Disposable {
 	const show = vscode.l10n.t("Show Window Component");
-	const explanation = vscode.l10n.t("Facade Code needs its Window Component on this computer. Install and enable \"Facade Code Window Component\", then reload the window. Agents that are already running keep running.");
+	const explanation = vscode.l10n.t("Facade Code requires its Window Component. Install and enable \"Facade Code Window Component\", then reload the window. Active agents continue running.");
 	const open = () => void vscode.commands.executeCommand('extension.open', WINDOW_COMPONENT);
 	const view = vscode.window.registerWebviewViewProvider(PANEL_VIEW, {
 		resolveWebviewView: webviewView => {

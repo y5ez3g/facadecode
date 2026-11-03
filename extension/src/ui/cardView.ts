@@ -7,6 +7,15 @@ import type { AvatarColor, Card, CardMenu } from '../webview/protocol';
 
 /** The words a card is said in, in the person's language. */
 export interface CardWords {
+	readonly agent: (value: string) => string;
+	readonly title: (value: string) => string;
+	readonly prompt: (value: string) => string;
+	readonly status: (value: string) => string;
+	readonly reason: (value: string) => string;
+	readonly tools: (value: string) => string;
+	readonly location: (value: string) => string;
+	readonly path: (value: string) => string;
+
 	readonly pinned?: string;
 	readonly worktreeFailure: (reason: string, effects: WorktreeCreationEffects) => string;
 	readonly starting: string;
@@ -19,7 +28,8 @@ export interface CardWords {
 	/** `Error: {0}`, {0} the reason. */
 	readonly error: (reason: string) => string;
 	readonly activityUnavailable: string;
-	readonly readyForInput: string;
+	readonly needsAttention: string;
+	readonly toolsConnecting: string;
 	readonly needsPermission: string;
 	readonly needsSignIn: string;
 	readonly hasQuestion: string;
@@ -32,7 +42,7 @@ export interface CardWords {
 	readonly window: (label: string) => string;
 	/** Why an agent cannot work with other agents - its Facade tools are not there - in plain words; it runs on without them (PANEL-1.4). */
 	readonly toolsUnavailable: (problem: ToolsProblem | undefined, file: string | undefined) => string;
-	/** `Started by {0}`, {0} the reference of the agent that started it (PANEL-1.5). */
+	/** `Started by: {0}`, {0} the reference of the agent that started it (PANEL-1.5). */
 	readonly startedBy: (creator: string) => string;
 	/** The person's language, as a custom CLI's initial is uppercased in it (UX-2.1). */
 	readonly locale: string;
@@ -46,8 +56,9 @@ export interface CardPlace {
 	readonly folderPrefix?: string;
 	/** The location with its workspace folder: what the accessible label says. */
 	readonly qualified: string;
-	/** The qualified location with its environment and path: the hover's last line. */
-	readonly full: string;
+	/** The qualified location with its non-local environment, kept separate from its path. */
+	readonly context: string;
+	readonly path: string;
 }
 
 /**
@@ -86,7 +97,8 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 		return { dot: 'error', stateText: text, line: text };
 	}
 	if (facts.blocker) {
-		const kind = facts.blocker.kind === 'permission' ? words.needsPermission : facts.blocker.kind === 'auth' ? words.needsSignIn : words.hasQuestion;
+		const kind = facts.blocker.kind === 'permission' ? words.needsPermission : facts.blocker.kind === 'auth' ? words.needsSignIn
+			: facts.blocker.kind === 'question' ? words.hasQuestion : words.needsAttention;
 		const detail = facts.blocker.text?.trim();
 		const said = detail && detail !== kind ? `${kind} · ${detail}` : kind;
 		if ((facts.reporting && facts.activity !== 'unknown') || facts.lifecycle === 'starting' || facts.awaitingActivity) {
@@ -101,13 +113,14 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	if (facts.lifecycle === 'starting' || facts.awaitingActivity) {
 		return { dot: 'working', stateText: words.starting, line: tools ?? (facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName)) };
 	}
+	const connection = tools ?? (facts.tools === 'connecting' ? words.toolsConnecting : undefined);
 	// An agent another agent started is described by its first task until its CLI gives a title (PANEL-1.4)
 	const described = facts.title || facts.promptLine;
 	if (facts.reporting && facts.activity === 'working') {
-		return { dot: 'working', stateText: words.working, line: tools ?? (described || words.working) };
+		return { dot: 'working', stateText: words.working, line: connection ?? (described || words.working) };
 	}
 	if (facts.reporting && facts.activity === 'not_working') {
-		return { dot: 'idle', stateText: words.notWorking, line: tools ?? (described || words.readyForInput) };
+		return { dot: 'idle', stateText: words.notWorking, line: connection ?? (described || words.notWorking) };
 	}
 	const reason = facts.activityReason?.trim() || words.activityUnavailable;
 	return { dot: 'error', stateText: words.activityUnavailable, line: reason === words.activityUnavailable ? reason : `${words.activityUnavailable} · ${reason}`, ...(reason !== words.activityUnavailable ? { reason } : {}) };
@@ -190,14 +203,15 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const described = facts.title || facts.promptLine;
 	// Its tools going as its process ended - its MCP server ends with its CLI - is no problem of an ended card's: the exit says it
 	const gone = facts.lifecycle === 'ended' && facts.toolsProblem === 'disconnected';
-	const tools = facts.tools === 'unavailable' && !gone ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile) : undefined;
+	const tools = facts.tools === 'unavailable' && !gone ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile)
+		: facts.tools === 'connecting' && facts.lifecycle !== 'ended' ? words.toolsConnecting : undefined;
 	const tooltip = [
-		[facts.name, facts.alias, facts.displayName].filter(Boolean).join(' · '),
-		...described ? [described] : [],
-		status.stateText,
-		...status.reason && status.reason !== described ? [status.reason] : [],
+		words.agent([facts.name, facts.alias, facts.displayName].filter(Boolean).join(' · ')),
+		...described ? [facts.title ? words.title(described) : words.prompt(described)] : [],
+		words.status(status.stateText),
+		...status.reason && status.reason !== described ? [words.reason(status.reason)] : [],
 		// The card's row may cut this line short: the hover says it whole (PANEL-1.5)
-		...tools ? [tools] : [],
+		...tools ? [words.tools(tools)] : [],
 		...facts.origin === 'agent' && (facts.creatorLabel ?? facts.creator) ? [words.startedBy((facts.creatorLabel ?? facts.creator)!)] : []
 	];
 	const label = [facts.name, facts.alias, ...(facts.pin && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
@@ -209,7 +223,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		name: facts.name,
 		alias: facts.alias,
 		...(avatar ? { avatar } : {}),
-		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: input.window ? `${place.full}\n${words.window(input.window)}` : place.full },
+		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: [words.location(place.context), words.path(place.path), ...input.window ? [words.window(input.window)] : []].join('\n') },
 		dot: status.dot,
 		stateText: status.stateText,
 		line: status.line,

@@ -3,10 +3,23 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { truncateText } from '../base/text';
+import { truncateCodePoints, truncateText } from '../base/text';
 import { shown } from '../clis/config';
 
 suite('Text previews keep Unicode characters whole', () => {
+
+	test('UTF-16 and code-point limits never split a family, flag, skin tone or combining accent', () => {
+		for (const grapheme of ['👨‍👩‍👧‍👦', '🇨🇳', '👍🏽', 'e\u0301']) {
+			for (const truncate of [truncateText, truncateCodePoints]) {
+				const prefix = 'x';
+				const text = prefix + grapheme + 'tail';
+				for (let limit = 2; limit <= grapheme.length + 2; limit++) {
+					const result = truncate(text, limit);
+					assert.ok(result === 'x…' || result.startsWith(prefix + grapheme), JSON.stringify({ text, limit, result }));
+				}
+			}
+		}
+	});
 
 	test('the ellipsis fits the limit without splitting an emoji, and text already within the limit is kept', () => {
 		assert.deepStrictEqual([

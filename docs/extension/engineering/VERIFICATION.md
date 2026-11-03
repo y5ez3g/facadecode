@@ -318,13 +318,13 @@ without waiting for the grace timer; this is recorded as forced process exit, ne
 
 | ID | Scenario | Expected observation / owner |
 | --- | --- | --- |
-| W01 | Native Git creation, selected checkout/base, occupied destination, invalid branch | Source labels name the selected checkout's branch rather than a subfolder; fixed sibling path and current native Git result; no overwrite; WORKTREES-2 |
+| W01 | Human creation from opened main/linked checkout, subfolder and detached HEAD; branch validation, Copy Path, Back/Escape; programmatic explicit base | Both human entries use their actual source HEAD; standalone accepts a valid branch directly without confirmation/base editing, New Agent waits for CLI choice; title, source and destination previews remain accurate, including after Back; no creation on typing/cancel; programmatic explicit bases still work; fixed sibling destination and no overwrite; WORKTREES-2, 4.3 |
 | W02 | Request worktree without Git/repository/commit; ordinary folder launch | Creation reports actual prerequisite; no initialization/initial commit/advice flow; ordinary agent still launches |
 | W03 | Native copy/link/preparation delayed or failed; close creation before CLI spawn | Existing recognized worktree permits CLI without waiting; canceled launch does not spawn; no Facade setup job monitor/retry |
 | W04 | Delete Worktree on clean, dirty, locked, detached and nesting worktrees with agents; an assumed-unchanged or skipped edit; an agent that does not end; a file written as its agents end | Clean: agents close and end, then `git worktree remove` without `--force`, branch kept; dirty or locked: refused untouched; detached: confirmation says it has no branch; no other deletion, discard confirmation or stop-with-delete entrypoints; WORKTREES-3.2 |
 | W05 | Actually remove workspace folder or externally delete worktree with agents | Immediately close affected pair(s), background cleanup; other locations continue |
 | W06 | Remote temporarily disconnected or Git read fails while location was known | Do not mistake unavailable observation for actual location deletion; no cleanup from that alone |
-| U01 | Narrow/high contrast/reduced motion/non-English/keyboard/screen reader | UX/PANEL checks, no invented completion/extra badges |
+| U01 | Narrow/high contrast/reduced motion/non-English/keyboard/screen reader; same-named filter folders; full card hover; creation substep navigation | UX/PANEL checks; folder count then parent path without changing filtering; uniform localized Label: value hover fields preserve complete text and source clocks; explicit substep titles; no invented completion/extra badges |
 | U02 | Old-page action/reply, unrelated state change before a current-page action, agent rename while menu open | PANEL-3.1 generation isolation and current-target validation; no wrong target or required per-action expected revision |
 | U03 | Human operation error, agent operation error, failed message return, explicit `#human` | Error to initiator; no agent message fallback to human; explicit contact shown in related window even when terminal visible |
 | U04 | Empty filtered panel; a person's start outside the filter; missing Git | Filter remains unchanged; new card follows normal data/order and only matching entries display; no launch-default change |
@@ -337,6 +337,7 @@ without waiting for the grace timer; this is recorded as forced process exit, ne
 | U11 | A message to the person opened from its notification, with a long body, links and command text | Read-only; delivery outcome shown; links and commands rendered as text; COLLABORATION-3.2 |
 | U12 | Scrollbar initially idle, hover/leave, wheel and keyboard scrolling, drag outside and release/cancel, window blur, reduced motion, resize and changing card counts; track clicks with both scrollByPage values; Modern UI absent/on/off and live changes; both caps and first/last cards inside a rounded host clip at 100%, 125%, 150% and 200% display scale; native sidebar width sweeps through clipped and unclipped iframe sizes; short and empty content | PANEL-3.3 visibility and fading; native sidebar width, corners, theme colors and matching hit area in both modes; shared content/overlay compensation, dynamic correction removed when no longer needed and a device-pixel guard for rounded cross-origin bounds; filled cap/card contours retained (shared edge antialiasing allowed), no additional list top/bottom padding and 2 px Modern UI clearance for scrollbar ends only; compare total bottom spacing with native Extensions in the same editor; no traditional decorative inset, full scroll range through wheel, keyboard and dragging, fractional track endpoints and correct empty-padding hit testing; zero scrollbar gutter with and without overflow; no width jump on hover, stuck visibility, lost valid scroll position or hidden keyboard target |
 | U13 | Panel widths 180/260/420/720 px, editor zoom -1/0/2, short/long names and folder/worktree pairs, Pin/Unpin, resize and Unicode; four dot meanings and stable names during title updates | Short labels use their natural width; long locations borrow space, both components remain, middle ellipses preserve whole graphemes, full hover/accessibility stay available, no overlap/overflow with the Pin or clipped viewport; grey idle differs from yellow blockers, normal titles have no state prefix and native titles never rename an agent; PANEL-1.3–1.5, RULES-3.2 |
+| U14 | Native blocked with missing/new kind across every CLI; connecting tools before/after startup; long Unicode titles; empty/missing report titles; unknown-state reports; Muse soft wraps, hard breaks, clipping, native answer/animation styling, synchronized redraw, reset and recovery | Preserve generic yellow blockers and full hover; Idle makes no input-readiness claim; not-yet-connected tools stay distinct from failure; graphemes stay whole; complete native reports replace title, invalid/unknown states do not alter a record; lost screen evidence never invents idle or retains working. Record native client/provider and platform evidence separately; RULES-3.2, PANEL-1.4–1.5, CLIS-2.3 |
 | C02 | Executable found only through configured default-profile PATH; null/omitted variables at each env layer; remote and Windows cases | Discovery and launch use the same CLIS-1.2 environment; null removes, omission inherits; no shell-init execution/parser |
 | C04 | Custom definition missing/empty Resume, lacking exact-session placeholder, containing a capabilities field, a key that cannot be an ID, valid unverified Resume | Invalid definitions cannot start; only path/launch are configured; a valid command alone does not prove Resume/Pin under CLIS-3.4 |
 | C03 | New worktree with tracked relative executable; missing/nonexecutable file after creation | Static validation before creation; cwd-dependent checks use actual Git destination before spawn; failure retains pair and created worktree; no preparation barrier/rollback |
@@ -578,6 +579,42 @@ connection loss still preserves the last title. Regression checks cover clearing
 Compilation, all 155 checks in the adapter, execution, core lifecycle, card and program-status suites, and the
 specification audit passed. The new clearing regressions failed before the fix and passed afterward.
 
+#### Panel status review evidence, 2026-11-02
+
+D164 corrects seven implementation/presentation findings and one readiness-copy discrepancy. The audit's separate
+suspicion about unknown OSC 7501 states was withdrawn after checking revision 0.4: discarding the entire unknown-state
+report and retaining the last valid record is required. Conformance tests preserve that behavior and capability negotiation.
+
+Six targeted regressions failed before implementation: changed/wrapped Muse working rows, reset evidence, generic blockers,
+long title preservation, grapheme boundaries and report-title replacement. On macOS arm64 with Node 24.21.0 the final build
+passes both TypeScript projects, 1231 unit tests (six platform-specific skips), the darwin-arm64/window package builds,
+12 package checks, localization (322 runtime texts and 64 manifest strings in English and eleven translations) and the
+specification audit. The shared blocker/card tests cover all six built-ins and a custom CLI. Controlled real PTYs cover
+soft wrapping, resize, synchronized redraw, reset, loss/recovery, native-report precedence and decorated long-title reattachment.
+
+The final isolated VS Code 1.144.0 editor run passes all 40 journey/cross-window checks for six built-ins and a custom CLI,
+plus all six reload/window-conversion and six immediate-close/reopen cases. The final expiry case ends its process after
+300,118 ms under the production grace period and restores the same pinned session in a new process with exactly one terminal.
+All editor journeys use fake CLIs and separate profiles, extensions and Facade roots. The first editor pass reached Muse
+and failed its initial-idle assertion: the fake CLI drew the text `fake agent ready`
+instead of the native surrounding layout. Its Muse transcript now draws the recorded header, prompt markers and indented
+continuations. A controlled PTY check confirms idle both at startup and after a multiline submission; the editor assertion
+is unchanged. Earlier passed CLI runs and the failed run remain in the local logs.
+
+An isolated Muse Code 1.4.14 process, with a fresh temporary home/workspace and a loopback deterministic provider, supplied
+native terminal screens for idle, working and turn end while resizing from 108 to 38 columns and back. Both its native
+reports and the fallback reader agree on working/not-working after the fix; the native `done` report is not an overall task
+completion claim. The new recorded narrow answer keeps the bold answer marker that distinguishes it from the animation's
+same-shaped nonbold mark. The first probe expected only `idle` after a response and timed out on a valid `done`; its evidence
+was retained and the harness corrected to the actual protocol. The second exposed the missing answer-marker reading; the
+final probe passes at 108/38 columns and 40/24/6 rows. These are native-client rendering/transport observations, not real-model
+reasoning evidence. No account or existing owner editor/agent was used, and no Qwen process ran.
+
+New runs use ptyd protocol 12. Earlier supervised processes remain connected and alive rather than being restarted by an
+update; those processes keep their original supervisor behavior until they end. This run does not certify new Windows/Linux,
+Remote-SSH/WSL/container, minimum-editor, other native CLI versions, or all native approval/error scenarios. Local logs and
+probe scripts stay under `extension/build/panel-status-*`; the discussion draft remains local.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**
@@ -597,6 +634,10 @@ for review, not acceptance evidence.
 | 4.1, 4.3 | Handoff, spec-amendment log and independent review |
 
 ## Change log
+
+- 2026-11-02: Added D166 coverage for folder disambiguation, labeled hover, creation titles and direct HEAD-based standalone creation.
+
+- 2026-11-02: Added U14 and recorded panel status regression, native rendering and protocol-conformance evidence with platform limits (D164).
 
 - 2026-11-02: J11 and U06 cover the single-line picker priorities, CLI search and manual Resume naming (D161).
 - 2026-11-02: Recorded the six-CLI title audit and regression coverage for clearing a title without retaining stale card text.

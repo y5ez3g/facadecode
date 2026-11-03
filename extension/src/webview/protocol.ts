@@ -28,7 +28,7 @@ export interface Card {
 	readonly avatar?: { readonly file: string } | { readonly initial: string; readonly color: AvatarColor };
 	/**
 	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it,
-	 * then gives its folder and the window, each on a line of its own (PANEL-1.5, D74).
+	 * then gives its path and window as localized Label: value lines (PANEL-1.5).
 	 */
 	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly full: string };
 	/** Green work, grey idle, yellow native blocker or red error/unknown (RULES-3.2, D127). */

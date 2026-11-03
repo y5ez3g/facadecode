@@ -280,7 +280,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		// The child's card opens in the background, says who started it, and the person's focus stays (LIFECYCLE-2.2, PANEL-1.5)
 		const childCard = (await state()).cards.find(each => each.alias === child);
 		assert.ok(childCard, 'the child has a card in this window');
-		assert.ok(childCard.tooltip.includes(`Started by ${card.name} ${alias}`), childCard.tooltip.join(' | '));
+		assert.ok(childCard.tooltip.includes(`Started by: ${card.name} ${alias}`), childCard.tooltip.join(' | '));
 		const listed = ran.content('list_agents', 1)?.data.agents as { agent_id: string; creator?: string; root: string }[];
 		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.creator, each.root]), [[card.runId, card.runId]], 'the child joins its creator\'s tree');
 

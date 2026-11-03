@@ -22,7 +22,7 @@ card loading. Title actions in order: Filter by Working Location (`filter`, fill
 (Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
 The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Configure Agents... in a separate group. Go to Agent..., Show Agent Launch and Show Agents Log
+Configure Agents... in a separate group. Go to Agent..., Show Agent Launch... and Show Agents Log
 are Command Palette entries, not view-menu items (D83, D129). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
@@ -96,16 +96,21 @@ Priority: retained failure or specific connection/status error; known native blo
 explanation; unavailable Facade tools; active startup stage, active until the CLI first shows its activity (CLIS-2.3);
 CLI title; creation prompt first line; fallback. When a known native blocker coexists with unavailable activity, lead with
 the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
-A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file} in this folder`,
+A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file}`,
 or `Cannot work with other agents: its Facade tools stopped` once its tools went away (D136), and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
-title. Fallbacks: `Working`, `Ready for input`, `Activity unavailable`. Before any prompt, a proven ready CLI may say
-`Ready for your first message`. Never `Done, waiting for you` from a turn end. Normal work/idle shows the CLI title or
+title. Fallbacks: `Working`, `Idle`, `Activity unavailable`. Idle alone proves neither an empty composer nor usable input;
+there is no separate first-message readiness claim. Never `Done, waiting for you` from a turn end. Normal work/idle shows the CLI title or
 creation prompt directly, without a repeated `Working`/`Idle` prefix. Native blockers lead with `Needs permission`,
-`Sign-in required` or `Waiting for an answer`, followed by the CLI's original words when present. Errors lead with
+`Sign-in required` or `Waiting for an answer`, followed by the CLI's original words when present. A reported blocker with
+no recognized kind says `Needs attention`, preserving its original words. Errors lead with
 `Error: {reason}`; unavailable activity names that state before its explanation. No popup solely for a native blocker (D127).
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
-dot or notification rules. Working breathes every 1.8 s using opacity only (0–65% overlay of row background); reduced
+dot or notification rules. Tools injected but not yet connected say `Not connected to other agents yet` in the hover;
+after startup this also precedes the CLI title in the second line, below errors and blockers. It is not a failure inferred
+from elapsed time and does not change the dot. An actual tool connection removes the message; known injection failures
+or a lost existing connection keep their specific explanation. Ended cards do not claim a pending tool connection.
+Working breathes every 1.8 s using opacity only (0–65% overlay of row background); reduced
 motion is static. Hover explicitly says `Starting`, `Working`, `Idle`, the native blocker's kind, `Error: {reason}` or
 `Activity unavailable`; the accessible label preserves it. No unread dot, completed check, bold-name state or extra error badge.
 
@@ -113,14 +118,20 @@ motion is static. Hover explicitly says `Starting`, `Working`, `Idle`, the nativ
 
 **Every fact cut from a card remains readable without relying on color.**
 
-Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason; for
-a working agent, how long ago its CLI reported that work, `Reported working 25 min. ago` - the CLI's last word, which a long
-silence leaves for the person to judge rather than turning it into idle or done, following competitive analysis of
-last-update indicators (D114). This uses the source observation for the current working episode, preserved through
+Card tooltip lines use a localized `Label: value` format throughout: `Agent:` for name, short run ID and CLI;
+`Title:` for a full title or `Prompt:` for the creation prompt; `Status:` and a distinct `Reason:` when present.
+Use `Tools:` for unavailable or connecting collaboration tools, retaining 1.4's conditions and omitting a disconnected
+tools explanation caused by normal process exit. Empty names create no empty identity separator. Keep title-over-prompt
+priority and suppress a reason identical to the description. For a working agent, `Reported working:` shows how long
+ago its CLI reported that work, for example `Reported working: 25 min. ago`. This is the CLI's last word; a long silence
+leaves the person to judge it rather than turning it into idle or done, following competitive analysis of last-update
+indicators (D114). This uses the source observation for the current working episode, preserved through
 title changes and reload, not the host's report-receipt or API-query time. Missing source time omits the line.
 Relative times use the source clock; an observation ahead of that clock shows its absolute time instead;
-started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
-written `~` except on Windows; window. Accessible label: name, short run
+`Started:` for started relative time and, for an agent started by an agent, `Started by:` for its creator;
+`Location:` for qualified location including non-local environment context; `Path:` for its complete path, the home
+folder written `~` except on Windows; `Window:` for the window. Preserve case and every path component, allowing
+native wrapping. Do not repeat natural-language prefixes after labels. Missing facts omit their lines. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,
 options with `aria-selected`, decorative icons hidden, one roving Tab stop. Update labels in place. State-change
 announcements are polite, coalesced, and do not repeatedly announce spinner/progress ticks.
@@ -158,7 +169,10 @@ revalidated against current host state under 3.1, never the selected row by fall
 Filter by Working Location opens native Quick Pick steps by folder (D82). In each step one separator follows the first
 item, then come the folders or locations that have cards (including starting and retained failures) or hold the
 current filter, each with its count. In a window of several folders the first step lists All Locations, then the
-folders. A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
+folders. Every folder row keeps its name as label and shows `{agent count} · {parent path}` as description, with
+the count first and the parent path using the existing home-relative representation. Do not shorten this path
+artificially; native clipping may still occur. Location rows retain their existing names, icons and counts.
+A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
 (WORKTREES-1.2) - where two or more of its locations are listed, or where the filtered location is one of several it
 has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its
 first item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog no longer
@@ -273,6 +287,14 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
   among the Pins - and scrolls a new card the person started into view (D173); 2.2 and 2.3 remove the card's Copy Agent
   Reference, Filter by This Location, Filter by This Folder and Clear Filter, and 1.1 Message History... (D174); 1.3 fits a
   long name to the text it shows, so a Pin follows its ellipsis at 4 px (D176).
+
+- 2026-11-02: Applied the owner's screenshot decisions: count-first parent paths in folder filters and uniform labeled hover facts (D166).
+
+- 2026-11-02: Applied owner-approved copy polish to the launch inspection command name and the collaboration-failure
+  example; status evidence, priority and the screenshot-reviewed layout remain unchanged.
+
+- 2026-11-02: Use Idle without an input-readiness promise, expose not-yet-connected tools and retain generic blockers and full bounded hover text (D164).
+
 - 2026-11-01: 1.4 says when an agent's Facade tools went away (D136).
 - 2026-11-01: Describe the competitive-analysis rationale without naming individual products; hover behavior is unchanged.
 - 2026-11-01: Removed Message History... from the view's More Actions menu at the owner's request; its Command

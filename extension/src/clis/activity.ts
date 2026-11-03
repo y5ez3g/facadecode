@@ -16,6 +16,7 @@ export interface ReportedStatus {
 	readonly state: 'idle' | 'working' | 'done' | 'blocked' | 'error' | 'pending';
 	/** Pending because the CLI asked whether the terminal takes reports and has not reported yet. */
 	readonly negotiating?: true;
+	readonly unavailable?: 'screen_unrecognized' | 'screen_reset';
 	readonly kind?: 'permission' | 'question' | 'auth';
 	readonly msg?: string;
 	readonly title?: string;
@@ -27,14 +28,14 @@ export interface ActivityFacts {
 	/** Whether this run's CLI has taken part in the protocol (CLIS-2.3). */
 	readonly reporting: boolean;
 	/** Why activity is unknown: the CLI never reported, has not reported yet, or took its report back. */
-	readonly unknown?: 'not_reporting' | 'waiting' | 'cleared';
-	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
+	readonly unknown?: 'not_reporting' | 'waiting' | 'cleared' | 'screen_unrecognized' | 'screen_reset';
+	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	/** A known error the CLI reported, in its own words where it gave some. */
 	readonly error?: { readonly text?: string };
 }
 
-/** The most code points of a title or status text a run shows (CLIS-2.3). */
-export const MOST_SHOWN = 300;
+/** Keep the complete bounded CLI text for hover; card width is handled by CSS (CLIS-2.3). */
+export const MOST_SHOWN = 4096;
 
 /**
  * The activity `status` establishes (CLIS-2.3): working → working; idle, done and blocked → not working, a blocker with what it
@@ -52,17 +53,17 @@ export function activityOf(status: ReportedStatus | undefined): ActivityFacts {
 		case 'done':
 			return { activity: 'not_working', reporting: true };
 		case 'blocked':
-			return { activity: 'not_working', reporting: true, ...status.kind ? { blocker: { kind: status.kind, ...text ? { text } : {} } } : {} };
+			return { activity: 'not_working', reporting: true, blocker: { kind: status.kind ?? 'unknown', ...text ? { text } : {} } };
 		case 'error':
 			return { activity: 'not_working', reporting: true, error: text ? { text } : {} };
 		case 'pending':
-			return { activity: 'unknown', reporting: true, unknown: status.negotiating ? 'waiting' : 'cleared' };
+			return { activity: 'unknown', reporting: true, unknown: status.unavailable ?? (status.negotiating ? 'waiting' : 'cleared') };
 	}
 }
 
 /**
  * The title a run shows for its CLI (CLIS-2.3, D160): the terminal's nonempty OSC 0/2 title over the report's title, with visible
- * symbols and words intact. Invisible formatting and controls removed, at most 300 code points with an ellipsis.
+ * symbols and words intact. Invisible formatting and controls removed; no additional short-preview cap.
  */
 export function cliTitle(titles: { readonly reported?: string; readonly terminal?: string }): string | undefined {
 	for (const raw of [titles.terminal, titles.reported]) {

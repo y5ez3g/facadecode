@@ -309,7 +309,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(original.delivery, { status: 'failure', reason: 'input_draft', effects: { outcome: 'none', text_written: 'none', enter_written: false }, deadline: start + 600_000, attempts: 200 });
 		const result = service.inbox(A, { all: true, limit: 100 }).records[0];
 		assert.deepStrictEqual([result.about, result.at - start], ['m-1', 600_000]);
-		assert.ok(result.text.includes('There was already a draft in the terminal, and it was left untouched.'), result.text);
+		assert.ok(result.text.includes('An existing draft in the terminal was left untouched.'), result.text);
 		// Never delivered, the message itself is what B's own read would find waiting
 		assert.deepStrictEqual(service.inbox(B, { limit: 100 }).records.map(record => record.id), ['m-1']);
 	});
@@ -364,7 +364,7 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(since(start, input.inspected.filter(each => each.run === B).map(each => each.at)), [0, 3_000]);
 		const result = service.inbox(A, { all: true, limit: 100 }).records[0];
 		assert.deepStrictEqual([result.about, result.at - start], ['m-1', 4_000]);
-		assert.ok(result.text.includes('The session ended.'), result.text);
+		assert.ok(result.text.includes('The agent process ended.'), result.text);
 	});
 
 	test('closing the target within the response budget answers failure, not accepted', async () => {

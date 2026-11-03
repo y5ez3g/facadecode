@@ -31,7 +31,7 @@
 	"config.collaboration.enabled": "允许 Agent 相互启动和停止，相互发送消息并向你发送消息，以及读取彼此的终端并在其中输入。仅对新启动的 Agent 生效。",
 	"config.collaboration.waitSeconds": "Agent 等待另一个 Agent 启动或停止的秒数。超过此时间后，该 Agent 稍后会通过消息收到结果。",
 	"command.filter": "按工作位置筛选...",
-	"command.showAgentLaunch": "显示 Agent 启动配置",
+	"command.showAgentLaunch": "显示 Agent 启动配置...",
 	"command.showAgentsLog": "显示 Agent 日志",
 	"config.claude.enabled": "控制是否为新 Agent 提供 Claude Code。关闭后不会停止正在运行的 Agent。",
 	"config.claude.launch": "高级: Claude Code 的附加命令行参数和环境变量。**显示 Agent 启动配置** 会显示每个 Agent 启动时所用的配置。",

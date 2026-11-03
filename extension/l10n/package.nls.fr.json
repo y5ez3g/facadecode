@@ -31,7 +31,7 @@
 	"config.collaboration.enabled": "Permettre aux agents de se démarrer et de s'arrêter mutuellement, de s'envoyer des messages et de vous en envoyer, et de lire les terminaux des uns et des autres et d'y saisir du texte. S'applique uniquement aux nouveaux agents.",
 	"config.collaboration.waitSeconds": "Nombre de secondes pendant lesquelles un agent attend qu'un autre agent démarre ou s'arrête. Passé ce délai, l'agent reçoit le résultat plus tard dans un message.",
 	"command.filter": "Filtrer par emplacement de travail...",
-	"command.showAgentLaunch": "Afficher la configuration de lancement de l'agent",
+	"command.showAgentLaunch": "Afficher la configuration de lancement de l'agent...",
 	"command.showAgentsLog": "Afficher le journal des agents",
 	"config.claude.enabled": "Contrôle si Claude Code est proposé pour les nouveaux agents. Le désactiver n'arrête pas les agents en cours d'exécution.",
 	"config.claude.launch": "Avancé : arguments de ligne de commande et variables d'environnement supplémentaires pour Claude Code. **Afficher la configuration de lancement de l'agent** montre avec quoi chaque agent démarre.",

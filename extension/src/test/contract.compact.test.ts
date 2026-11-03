@@ -140,7 +140,7 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		assert.strictEqual((receipt.result?.data as { agent_id: string }).agent_id, initial.data.agent_id);
 		assert.ok(!formatResult(receipt).includes(JSON.stringify(receipt.result)));
 		assert.strictEqual(receipt.alias, initial.data.result_message_id);
-		assert.match(formatResult(receipt), /🔔 .*session has started/);
+		assert.match(formatResult(receipt), /🔔 .*has started/);
 		const read = await s.serve({ caller: lead.id, tool: 'read_messages', arguments: { ids: [receipt.alias] } });
 		assert.strictEqual(s.messages.delivered.length, 0);
 		const data = resultOf(read.answer).data.messages[0];

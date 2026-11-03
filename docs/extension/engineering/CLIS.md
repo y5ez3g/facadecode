@@ -235,7 +235,11 @@ authentication mechanism is introduced.
 **Only root-process reports and tested adapter evidence change displayed activity or input availability.**
 
 Support the existing OSC 7501 adapter where verified: `working` → working; `idle|done|blocked` → not_working; `error` →
-known error; `clear`, reset or pending probe → unknown. Activity reporting is verified for a run when that run's CLI
+known error; `clear`, reset or pending probe → unknown. A `blocked` report remains blocked even without a known kind.
+Reports follow the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status): each replaces
+the whole root record, so omitted or empty titles clear that report's title. Malformed or unknown-state reports are
+discarded without changing the last valid record; capability replies advertise only the states implemented here.
+Activity reporting is verified for a run when that run's CLI
 answers the OSC 7501 capability probe or sends valid reports, independent of CLI version; CLI-specific quirks remain
 version-scoped evidence. OpenCode reports from its 2.x line; its 1.x line, which sends no reports, is not started
 (D78, D145). Ignore worker reports carrying a distinct worker ID. Respond to capability probes only for
@@ -246,18 +250,23 @@ report - none at all, or a probe answered and no report since - is a red status 
 line, not a neutral dot; a report the CLI clears is one at once. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A supported terminal
 animation may establish working, but its absence supplies no idle proof.
 
-Muse Code sends no reports on Windows, so its adapter names a screen reader that ptyd applies to a run whose CLI has
-neither asked nor reported (D80): working while Muse Code's own working row - a mark, then `… esc to interrupt)` - shows
-above its input frame; not working, ready for input, while its input frame - a rule, labeled where it offers voice
-input, its `❯` prompt row and the plain rule under it - shows without that row, empty or holding a draft; blocked on
-sign-in at its sign-in choice and on permission at its workspace trust question, each shown in place of that frame. A
-screen it reads as none of these, or one still being drawn, leaves the status as it was. Its own reports always take precedence: once the CLI asks or reports, the screen is no longer read.
+Muse Code's observed Windows versions send no reports, so its adapter names a screen reader that ptyd applies to a run
+whose CLI has neither asked nor reported (D80). It reads logical lines, joining terminal soft wraps without guessing
+where hard line breaks belong. A recognized working indicator above its complete input frame establishes working.
+Idle requires the complete known input/footer layout and a recognized surrounding region, retaining native text styling
+where it distinguishes an answer marker from a working indicator; an unknown indicator,
+clipped region or unfamiliar dialog never supplies idle evidence. Drafts remain separate from activity. Its sign-in
+choice and workspace trust question establish their corresponding blockers only when replacing the input frame.
+An unrecognized completed screen revokes prior screen evidence; a full reset does too. A synchronized update still
+being drawn is not observed. Its own reports always take precedence: once the CLI asks or reports, the screen is no longer read.
 Evidence becomes stale after route loss/reset;
 title/status from a new run does not update a previous one. A status episode starts on state/kind/reason change;
 progress-only updates keep its start time.
 
-Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes, reject controls and malformed reports; sanitize
-invisible formatting, trim and cap displayed title/status at 300 Unicode code points with ellipsis. Prefer the CLI's
+Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes and titles up to 192 decoded bytes; reject controls
+and malformed reports. Sanitize invisible formatting and whitespace without stripping visible decorations. Keep the
+bounded terminal title (up to 4096 UTF-16 units) and protocol text available to the hover; do not discard them at a
+300-character preview limit. Display previews may be shortened, always between complete graphemes. Prefer the CLI's
 nonempty terminal title from OSC 0/2; use a status report's title only when no terminal title is available (D160).
 A later activity report must not replace a terminal title or suppress its decoration-only updates. Preserve the CLI's
 visible title, including status symbols, decorations, CLI/folder/agent
@@ -416,9 +425,9 @@ restoration; the definition requirement never becomes a claim that an untested i
 
 ## 4 Inspection and design
 
-### 4.1 Show Agent Launch
+### 4.1 Show Agent Launch...
 
-**Show Agent Launch displays the current effective configuration and actual known choices without running a CLI.**
+**Show Agent Launch... displays the current effective configuration and actual known choices without running a CLI.**
 
 Show executable/environment source, cwd, literal argument order, resulting YOLO, native sandbox/approval facts, how
 the folder is trusted and configuration errors. Use one launch configuration and RULES-4.3's YOLO source. A chosen
@@ -514,6 +523,12 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 - 2026-11-02: 2.2 brings a Facade's own content up to date whatever wrote it - another version, another Facade data
   directory or a change since - and marks the skill with its Facade version so that a later one stands (D179).
+
+- 2026-11-02: Owner-approved copy polish adds the ellipsis to the launch inspection command title; location selection,
+  configuration facts and secret redaction retain their existing behavior.
+
+- 2026-11-02: Complete-record status titles, protocol-compliant unknown-state handling, full bounded hover text and grapheme-safe previews; logical screen lines and marker styling with explicit evidence loss (D164).
+
 - 2026-11-02: Replace model-choice catalogs with requested settings in startup logs and current override support in list_agents.
 
 - 2026-11-02: Empty current titles clear stale card text after live updates and reattachment; native title formatting remains the CLI's choice.

@@ -6,12 +6,23 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BUILT_IN_ADAPTERS } from '../clis/catalog';
+import { activityOf, cliTitle } from '../clis/activity';
+import { parseStatus } from '../ptyd/status';
 import type { RunFacts, WorktreeCreationEffects } from '../core/ports';
 import { avatarOf, cardOf, CardWords, statusOf } from '../ui/cardView';
 import type * as PresentationModule from '../ui/presentation';
 import { withModules } from './withModules';
 
 const WORDS: CardWords = {
+	agent: value => `Agent: ${value}`,
+	title: value => `Title: ${value}`,
+	prompt: value => `Prompt: ${value}`,
+	status: value => `Status: ${value}`,
+	reason: value => `Reason: ${value}`,
+	tools: value => `Tools: ${value}`,
+	location: value => `Location: ${value}`,
+	path: value => `Path: ${value}`,
+
 	starting: 'Starting',
 	startingCli: cli => `Starting ${cli}...`,
 	creatingWorktree: 'Creating worktree...',
@@ -20,7 +31,7 @@ const WORDS: CardWords = {
 	error: reason => `Error: ${reason}`,
 	worktreeFailure: reason => reason,
 	activityUnavailable: 'Activity unavailable',
-	readyForInput: 'Ready for input',
+	needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet',
 	needsPermission: 'Needs permission',
 	needsSignIn: 'Sign-in required',
 	hasQuestion: 'Waiting for an answer',
@@ -28,7 +39,7 @@ const WORDS: CardWords = {
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
 	window: label => `Window: ${label}`,
 	toolsUnavailable: problem => `Can't work with other agents: ${problem}`,
-	startedBy: creator => `Started by ${creator}`,
+	startedBy: creator => `Started by: ${creator}`,
 	exitUnknown: 'Getrennt; Exit-Ursache unbekannt',
 	locale: 'en'
 };
@@ -42,10 +53,51 @@ function run(more: Partial<RunFacts> = {}): RunFacts {
 	};
 }
 
-const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', full: 'shop · main\n/app' };
+const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', context: 'shop · main', path: '/app' };
 const menu = { moveUp: false, moveDown: true };
 
 suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () => {
+
+	test('all CLIs retain a blocker without a recognized kind, including its full reason in the hover', () => {
+		const message = `Please review ${'a long explanation '.repeat(30)}👨‍👩‍👧‍👦`;
+		for (const cli of [...BUILT_IN_ADAPTERS.map(adapter => adapter.id), 'custom']) {
+			for (const kind of ['', ':kind=future']) {
+				const report = parseStatus(`state=blocked${kind}:msg=${Buffer.from(message).toString('base64')}`);
+				assert.ok(report && report !== 'query' && report.state === 'blocked');
+				const { activity, reporting, blocker } = activityOf({ ...report, state: 'blocked' });
+				const facts = run({ cli, activity, reporting, blocker });
+				const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
+				assert.deepStrictEqual([card.dot, card.stateText, card.line], ['blocked', 'Needs attention', `Needs attention · ${message}`], cli);
+				assert.ok(card.tooltip.includes(WORDS.reason(message)), cli);
+			}
+		}
+	});
+
+	test('connecting tools are visible without implying a failure or changing the activity dot, and actual connection removes the notice', () => {
+		for (const activity of ['working', 'not_working'] as const) {
+			const facts = run({ activity, title: '✳ Checking tests', tools: 'connecting' });
+			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
+			assert.strictEqual(card.dot, activity === 'working' ? 'working' : 'idle');
+			assert.strictEqual(card.line, WORDS.toolsConnecting);
+			assert.ok(card.tooltip.includes(WORDS.tools(WORDS.toolsConnecting)));
+			assert.ok(card.tooltip.includes(WORDS.title(facts.title!)));
+			assert.strictEqual(statusOf({ ...facts, tools: 'available' }, WORDS).line, facts.title);
+			assert.strictEqual(statusOf({ ...facts, blocker: { kind: 'unknown' } }, WORDS).line, WORDS.needsAttention);
+			assert.strictEqual(statusOf({ ...facts, error: { source: 'cli', reason: 'Failed', at: 1 } }, WORDS).line, 'Error: Failed');
+			const ended = cardOf({ ...facts, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 } }, { place, selected: false, menu, words: WORDS });
+			assert.ok(!ended.tooltip.includes(WORDS.tools(WORDS.toolsConnecting)));
+		}
+		const starting = cardOf(run({ lifecycle: 'starting', phase: 'launching_cli', tools: 'connecting' }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(starting.line, 'Starting Claude Code...');
+		assert.ok(starting.tooltip.includes(WORDS.tools(WORDS.toolsConnecting)));
+	});
+
+	test('the second line and hover retain the complete bounded CLI title, including decorations and multi-code-point emoji', () => {
+		const title = `✳ ${'a'.repeat(298)}👨‍👩‍👧‍👦 | workspace`;
+		const card = cardOf(run({ title: cliTitle({ terminal: title }) }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(card.line, title);
+		assert.ok(card.tooltip.includes(WORDS.title(title)));
+	});
 
 	test('a working card carries when its CLI reported that work, for its hover to say how long ago; any other card does not (RULES-3.2)', () => {
 		const working = cardOf(run({ activity: 'working', reporting: true, activitySince: 1_234 }), { place, selected: false, menu, words: WORDS });
@@ -58,7 +110,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		const ended = cardOf(run({ ...lost, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
 		const live = cardOf(run({ ...lost, activity: 'not_working', reporting: true }), { place, selected: false, menu, words: WORDS });
 		const never = cardOf(run({ tools: 'unavailable', toolsProblem: 'conflict', lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 }, error: { reason: 'Exited with code 1', source: 'exit', at: 3 } }), { place, selected: false, menu, words: WORDS });
-		const said = (card: { readonly tooltip: readonly string[] }) => card.tooltip.some(line => line.startsWith('Can\'t work with other agents'));
+		const said = (card: { readonly tooltip: readonly string[] }) => card.tooltip.some(line => line.startsWith('Tools: Can\'t work with other agents'));
 		assert.deepStrictEqual([said(ended), said(live), said(never)], [false, true, true]);
 	});
 
@@ -108,12 +160,12 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 	});
 
 	test('a run whose CLI has shown no activity yet is still starting, green with its stage, over its title; an error still comes first (CLIS-2.3, D81)', () => {
-		const connection = { reason: 'The connection to the agent\'s process was lost; reconnecting', source: 'connection', at: 3 };
+		const connection = { reason: "Connection to agent process lost; reconnecting", source: 'connection', at: 3 };
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: true, awaitingActivity: true }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, error: connection }), WORDS).dot,
-			statusOf(run({ activity: 'unknown', reporting: false, activityReason: 'The CLI has not reported its activity' }), WORDS).dot
+			statusOf(run({ activity: 'unknown', reporting: false, activityReason: "CLI has not reported activity" }), WORDS).dot
 		], [
 			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
 			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
@@ -134,7 +186,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
-	test('reliable activity is green or grey over the CLI title, else Working or Ready for input - never a completion claim (PANEL-1.4)', () => {
+	test('reliable activity is green or grey over the CLI title, else Working or Idle - never a completion or input-readiness claim (PANEL-1.4)', () => {
 		const lines = [
 			statusOf(run({ activity: 'working', title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'working' }), WORDS),
@@ -145,7 +197,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			{ dot: 'working', stateText: 'Working', line: 'Fix login' },
 			{ dot: 'working', stateText: 'Working', line: 'Working' },
 			{ dot: 'idle', stateText: 'Idle', line: 'Fix login' },
-			{ dot: 'idle', stateText: 'Idle', line: 'Ready for input' }
+			{ dot: 'idle', stateText: 'Idle', line: 'Idle' }
 		]);
 		assert.ok(lines.every(each => !/done/i.test(JSON.stringify(each))));
 		assert.deepStrictEqual([
@@ -159,16 +211,16 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		const blocked = cardOf(run({ activity: 'not_working', blocker: { kind: 'question' }, title: 'Fix the login flow' }), { place, selected: false, menu, words: WORDS });
 		const unknown = cardOf(run({ activity: 'unknown', reporting: false }), { place, selected: false, menu, words: WORDS });
 		assert.deepStrictEqual([working.tooltip, working.label, working.selected, working.startedAt, working.location, working.menu], [
-			['Ada · #a1 · Claude Code', 'Fix the login flow', 'Working'],
+			['Agent: Ada · #a1 · Claude Code', 'Title: Fix the login flow', 'Status: Working'],
 			'Ada, #a1, Working, shop · main, Claude Code, Fix the login flow',
-			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'shop · main\n/app' }, menu
+			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'Location: shop · main\nPath: /app' }, menu
 		]);
-		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Ada · #a1 · Claude Code', 'Fix the login flow', 'Waiting for an answer'], 'Ada, #a1, Waiting for an answer, shop · main, Claude Code']);
+		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Agent: Ada · #a1 · Claude Code', 'Title: Fix the login flow', 'Status: Waiting for an answer'], 'Ada, #a1, Waiting for an answer, shop · main, Claude Code']);
 		// The second line saying no more than the state is not said twice
-		assert.deepStrictEqual([unknown.tooltip, unknown.label, unknown.dot], [['Ada · #a1 · Claude Code', 'Activity unavailable'], 'Ada, #a1, Activity unavailable, shop · main, Claude Code', 'error']);
+		assert.deepStrictEqual([unknown.tooltip, unknown.label, unknown.dot], [['Agent: Ada · #a1 · Claude Code', 'Status: Activity unavailable'], 'Ada, #a1, Activity unavailable, shop · main, Claude Code', 'error']);
 		// An empty name is left out of both, never said as an empty part; the card carries its #aN for what the page says of it
 		const unnamed = cardOf(run({ name: '' }), { place, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual([unnamed.tooltip[0], unnamed.label, unnamed.alias], ['#a1 · Claude Code', '#a1, Working, shop · main, Claude Code', '#a1']);
+		assert.deepStrictEqual([unnamed.tooltip[0], unnamed.label, unnamed.alias], ['Agent: #a1 · Claude Code', '#a1, Working, shop · main, Claude Code', '#a1']);
 		// Nothing the page never draws is sent
 		assert.deepStrictEqual(Object.keys(working).filter(key => ['cliName', 'pinId'].includes(key)), []);
 		// A launch that never started says when it was accepted
@@ -187,9 +239,21 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 
 	test('PANEL-1.5: the hover names the window with the agent\'s qualified location, where the window has a name', () => {
 		const card = cardOf(run({ title: 'Fix login' }), { place, selected: false, menu, words: WORDS, window: 'shop' });
-		assert.deepStrictEqual([card.tooltip, card.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main\n/app\nWindow: shop']);
+		assert.deepStrictEqual([card.tooltip, card.location.full], [['Agent: Ada · #a1 · Claude Code', 'Title: Fix login', 'Status: Working'], 'Location: shop · main\nPath: /app\nWindow: shop']);
 		const own = cardOf(run({ title: 'Fix login' }), { place, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual([own.tooltip, own.location.full], [['Ada · #a1 · Claude Code', 'Fix login', 'Working'], 'shop · main\n/app']);
+		assert.deepStrictEqual([own.tooltip, own.location.full], [['Agent: Ada · #a1 · Claude Code', 'Title: Fix login', 'Status: Working'], 'Location: shop · main\nPath: /app']);
+	});
+
+	test('hover labels preserve multiline values, source context, creator and title priority without empty or duplicate fields', () => {
+		const title = 'Line one\nLine two';
+		const facts = run({ name: '', title, promptLine: 'Initial task', origin: 'agent', creatorLabel: 'Maker #a7',
+			activity: 'unknown', reporting: false, activityReason: title });
+		const remote = { ...place, context: 'shop · main · SSH: remote', path: '/Case/one\nTwo' };
+		const card = cardOf(facts, { place: remote, selected: false, menu, words: WORDS, window: 'Remote' });
+		assert.deepStrictEqual(card.tooltip, ['Agent: #a1 · Claude Code', `Title: ${title}`, 'Status: Activity unavailable', 'Started by: Maker #a7']);
+		assert.strictEqual(card.location.full, 'Location: shop · main · SSH: remote\nPath: /Case/one\nTwo\nWindow: Remote');
+		const prompt = cardOf({ ...facts, title: undefined, activityReason: 'No status' }, { place: remote, selected: false, menu, words: WORDS });
+		assert.deepStrictEqual(prompt.tooltip, ['Agent: #a1 · Claude Code', 'Prompt: Initial task', 'Status: Activity unavailable', 'Reason: No status', 'Started by: Maker #a7']);
 	});
 
 	test('avatars: each built-in\'s maker avatar, a file of media/agents; a custom CLI\'s initial on the colour its name picks (PANEL-1.3, UX-2.1)', () => {

@@ -11,11 +11,20 @@ import type { PanelState } from '../webview/protocol';
 import { TestEmitter } from './withModules';
 
 const WORDS: CardWords = {
+	agent: value => `Agent: ${value}`,
+	title: value => `Title: ${value}`,
+	prompt: value => `Prompt: ${value}`,
+	status: value => `Status: ${value}`,
+	reason: value => `Reason: ${value}`,
+	tools: value => `Tools: ${value}`,
+	location: value => `Location: ${value}`,
+	path: value => `Path: ${value}`,
+
 	worktreeFailure: reason => reason, pinned: 'Pinned',
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', working: 'Working', notWorking: 'Idle', error: reason => `Error: ${reason}`,
-	activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
+	activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, window: label => `Window: ${label}`,
-	toolsUnavailable: problem => `Can't work with other agents: ${problem}`, startedBy: creator => `Started by ${creator}`,
+	toolsUnavailable: problem => `Can't work with other agents: ${problem}`, startedBy: creator => `Started by: ${creator}`,
 	exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
 };
 
@@ -343,8 +352,8 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		locations.changed.fire();
 		await tick();
 		assert.deepStrictEqual([multi, model.state().cards[0].location], [
-			{ label: 'login-fix', folderPrefix: 'shop', full: 'shop · login-fix\n/login-fix' },
-			{ label: 'login-fix', full: 'login-fix\n/login-fix' }
+			{ label: 'login-fix', folderPrefix: 'shop', full: 'Location: shop · login-fix\nPath: /login-fix' },
+			{ label: 'login-fix', full: 'Location: login-fix\nPath: /login-fix' }
 		]);
 	});
 
@@ -356,7 +365,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(2, { location: MAIN.id, cwd: MAIN.path }));
 		await tick();
 		assert.deepStrictEqual(model.state().cards.map(card => card.location), [
-			{ label: 'docs', full: 'docs\n/docs' }, { label: 'main', folderPrefix: 'shop', full: 'shop · main\n/main' }
+			{ label: 'docs', full: 'Location: docs\nPath: /docs' }, { label: 'main', folderPrefix: 'shop', full: 'Location: shop · main\nPath: /main' }
 		]);
 	});
 
@@ -371,7 +380,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual([before, model.state().cards.map(card => card.name), model.state().cards[0].location.full, model.state().capabilities], [
 			['Lead'],
 			['Chief'],
-			'shop · main\n/main\nWindow: shop',
+			'Location: shop · main\nPath: /main\nWindow: shop',
 			{ remote: false }
 		]);
 	});

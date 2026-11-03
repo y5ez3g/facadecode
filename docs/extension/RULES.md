@@ -273,9 +273,11 @@ missing source time stays absent. Lost execution connections mark retained activ
 
 An unresolved error takes precedence. Without such an error, observed work/startup is green - startup lasting until the
 CLI first shows its activity, within CLIS-2.3's bound. Observed not-working with no blocker is grey; native permission,
-answer and sign-in blockers are yellow. Unknown activity remains red, including beside a known blocker, and the second
+answer and sign-in blockers are yellow; a reported blocker without a recognized kind stays a generic blocker, never idle.
+Unknown activity remains red, including beside a known blocker, and the second
 line explains the unavailable status. Grey requires reliable idle evidence; it never stands for an unknown state (D127).
-A quiet screen does not prove idle. A turn ending becomes grey without a notification or a task-completion claim. Recovery clears only the
+A quiet screen or an unrecognized working indicator does not prove idle. Screen evidence is invalidated by a full reset
+or an unrecognized completed layout; incomplete synchronized drawing supplies no new observation. A turn ending becomes grey without a notification or a task-completion claim. Recovery clears only the
 corresponding error. Reduced motion removes breathing, never the accessible state description.
 
 ### 3.3 Exit classification is independent of who caused it
@@ -411,6 +413,8 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
 ## Change log
+
+- 2026-11-02: Retain blockers with unknown kinds and invalidate lost screen evidence without guessing idle (D164).
 
 - 2026-11-01: D149 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.
 
