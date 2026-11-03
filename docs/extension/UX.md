@@ -135,9 +135,10 @@ shown as a localized absolute time instead of an invented recent activity. Panel
 updates refresh text; API IDs/paths never change with locale. Translations cover settings, pickers, errors, menus,
 access labels and empty states in the same implementation change. Facade's own failure reasons - CLI configuration and
 worktree problems, another window owning the workspace, a working location gone or not in this window, no agent or
-message number, a window component too old, a conversation its CLI cannot pin - reach the person in their language
-through one presentation shared by pickers, notifications and cards, never with an internal ID such as a location's; a
-system's, Git's or a CLI's own error keeps its own words. Logs and the text agents read stay English.
+message number, a window component too old, a conversation its CLI cannot pin, an installation an update or uninstall
+removed - reach the person in their language through one presentation shared by pickers, notifications and cards, never
+with an internal ID such as a location's; a system's, Git's or a CLI's own error keeps its own words. Logs and the text
+agents read stay English.
 
 ## 3 Commands
 

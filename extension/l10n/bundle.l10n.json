@@ -304,6 +304,7 @@
 	"Facade Code requires a newer Window Component. Update \"Facade Code Window Component\" on this computer, then reload the window.": "Facade Code requires a newer Window Component. Update \"Facade Code Window Component\" on this computer, then reload the window.",
 	"This computer's counter could not give the agent a number. Try again.": "This computer's counter could not give the agent a number. Try again.",
 	"This workspace is owned by another window. Reload this window to take ownership.": "This workspace is owned by another window. Reload this window to take ownership.",
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.",
 	"No CLI {0} is configured.": "No CLI {0} is configured.",
 	"Its CLI cannot resume this exact conversation, so it cannot be pinned.": "Its CLI cannot resume this exact conversation, so it cannot be pinned.",
 	"The working location {0} is not available in this window.": "The working location {0} is not available in this window.",

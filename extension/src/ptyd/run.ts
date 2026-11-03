@@ -47,10 +47,17 @@ export function installationGone(script = process.argv[1], platform = process.pl
 	return undefined;
 }
 
+/** ptyd starts no program, as what of its installation `gone` names was removed (ARCHITECTURE-2.4): told to the window with it. */
+export class InstallationGone extends Error {
+	constructor(readonly gone: string) {
+		super(`This agent runtime's installation was removed - ${gone} is gone, as an update or uninstall does - so it starts no program. Reload the window to start agents in the installed one.`);
+	}
+}
+
 function spawnPty(params: SpawnParams): IPty {
 	const gone = installationGone();
 	if (gone) {
-		throw new Error(`This agent runtime's installation was removed - ${gone} is gone, as an update or uninstall does - so it starts no program. Reload the window to start agents in the installed one.`);
+		throw new InstallationGone(gone);
 	}
 	const native = loadPty();
 	const options = {

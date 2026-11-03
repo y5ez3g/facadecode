@@ -323,5 +323,6 @@
 	"New Agent · Change Name": "新しいエージェント · 名前を変更",
 	"New Agent · Select Folder": "新しいエージェント · フォルダーを選択",
 	"New Agent · Working Location": "新しいエージェント · 作業場所",
-	"New Agent · New Worktree": "新しいエージェント · 新しい作業ツリー"
+	"New Agent · New Worktree": "新しいエージェント · 新しい作業ツリー",
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "このウィンドウのエージェントを実行する Facade Code のインストールが、更新またはアンインストールによって削除されました ({0} がありません)。そのため、エージェントを開始できません。インストールされているバージョンでエージェントを開始するには、ウィンドウを再読み込みしてください。"
 }

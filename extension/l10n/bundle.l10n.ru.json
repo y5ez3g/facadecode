@@ -323,5 +323,6 @@
 	"New Agent · Change Name": "Новый агент · Изменить имя",
 	"New Agent · Select Folder": "Новый агент · Выбор папки",
 	"New Agent · Working Location": "Новый агент · Рабочее расположение",
-	"New Agent · New Worktree": "Новый агент · Новое рабочее дерево"
+	"New Agent · New Worktree": "Новый агент · Новое рабочее дерево",
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "Установка Facade Code, в которой работают агенты этого окна, удалена обновлением или удалением расширения ({0} отсутствует), поэтому ни один агент не может запуститься. Перезагрузите окно, чтобы запускать агентов в установленной версии."
 }

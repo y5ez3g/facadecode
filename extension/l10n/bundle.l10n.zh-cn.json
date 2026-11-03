@@ -323,5 +323,6 @@
 	"New Agent · Change Name": "新建 Agent · 更改名称",
 	"New Agent · Select Folder": "新建 Agent · 选择文件夹",
 	"New Agent · Working Location": "新建 Agent · 工作位置",
-	"New Agent · New Worktree": "新建 Agent · 新建工作树"
+	"New Agent · New Worktree": "新建 Agent · 新建工作树",
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "运行此窗口 Agent 的 Facade Code 安装已被更新或卸载删除（{0} 已不存在），因此无法启动 Agent。请重新加载窗口，以使用已安装的版本启动 Agent。"
 }

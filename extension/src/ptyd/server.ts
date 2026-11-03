@@ -14,7 +14,7 @@ import { lineReader } from '../base/lines';
 import { isAgentKey } from './keys';
 import { CallEvent, CallRefusal, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
 import { OwnerClaims, type OwnerClock } from './ownership';
-import { MOST_RUN_BUFFER, Run, RunListener } from './run';
+import { InstallationGone, MOST_RUN_BUFFER, Run, RunListener } from './run';
 import { ensurePtydSocket } from './socket';
 
 /** How long ptyd stays up with no live run and no window: a window opening next starts it again. */
@@ -340,7 +340,7 @@ export class PtydServer {
 				},
 				err => {
 					const refused = err instanceof CallRefused ? err : undefined;
-					connection.send({ id: request.id, error: messageOf(err), ...refused ? { reason: refused.reason, effects: refused.effects } : {} });
+					connection.send({ id: request.id, error: messageOf(err), ...refused ? { reason: refused.reason, effects: refused.effects } : {}, ...err instanceof InstallationGone ? { gone: err.gone } : {} });
 					if (refused?.close) {
 						connection.socket.end();
 					}

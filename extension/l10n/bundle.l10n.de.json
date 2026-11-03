@@ -323,5 +323,6 @@
 	"New Agent · Change Name": "Neuer Agent · Namen ändern",
 	"New Agent · Select Folder": "Neuer Agent · Ordner auswählen",
 	"New Agent · Working Location": "Neuer Agent · Arbeitsort",
-	"New Agent · New Worktree": "Neuer Agent · Neuer Worktree"
+	"New Agent · New Worktree": "Neuer Agent · Neuer Worktree",
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "Die Facade Code-Installation, die die Agenten dieses Fensters ausführt, wurde durch ein Update oder eine Deinstallation entfernt ({0} fehlt), daher kann kein Agent starten. Laden Sie das Fenster neu, um Agenten mit der installierten Version zu starten."
 }

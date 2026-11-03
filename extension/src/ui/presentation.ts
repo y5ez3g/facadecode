@@ -137,6 +137,8 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'component_outdated': return vscode.l10n.t("Facade Code requires a newer Window Component. Update \"Facade Code Window Component\" on this computer, then reload the window.");
 		case 'numbers_unavailable': return vscode.l10n.t("This computer's counter could not give the agent a number. Try again.");
 		case 'ownership_lost': return vscode.l10n.t("This workspace is owned by another window. Reload this window to take ownership.");
+		// {0} is the file of Facade Code's installation that an update or uninstall removed, such as its dist/ptyd.js
+		case 'installation_removed': return vscode.l10n.t("The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.", a);
 		// {0} is the CLI's ID, quoted
 		case 'cli_not_configured': return vscode.l10n.t("No CLI {0} is configured.", a);
 		case 'pin_unsupported': return vscode.l10n.t("Its CLI cannot resume this exact conversation, so it cannot be pinned.");

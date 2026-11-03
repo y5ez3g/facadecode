@@ -323,5 +323,6 @@
 	"New Agent · Change Name": "Yeni Aracı · Adı Değiştir",
 	"New Agent · Select Folder": "Yeni Aracı · Klasör Seç",
 	"New Agent · Working Location": "Yeni Aracı · Çalışma konumu",
-	"New Agent · New Worktree": "Yeni Aracı · Yeni Çalışma Ağacı"
+	"New Agent · New Worktree": "Yeni Aracı · Yeni Çalışma Ağacı",
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "Bu pencerenin aracılarını çalıştıran Facade Code kurulumu bir güncelleme veya kaldırma işlemiyle silindi ({0} yok), bu nedenle hiçbir aracı başlatılamıyor. Yüklü sürümle aracı başlatmak için pencereyi yeniden yükleyin."
 }

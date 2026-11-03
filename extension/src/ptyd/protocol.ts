@@ -245,7 +245,11 @@ export interface Request<M extends Method = Method> {
  */
 export type Response =
 	| { readonly id: number; readonly result: unknown }
-	| { readonly id: number; readonly error: string; readonly reason?: CallRefusal; readonly effects?: 'none' | 'unknown' };
+	| {
+		readonly id: number; readonly error: string; readonly reason?: CallRefusal; readonly effects?: 'none' | 'unknown';
+		/** Where a start was refused as ptyd's installation was removed: what of it is gone (ARCHITECTURE-2.4). */
+		readonly gone?: string;
+	};
 
 export interface OwnerEvent {
 	readonly event: 'ownerLost';

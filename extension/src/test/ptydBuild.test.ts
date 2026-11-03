@@ -9,10 +9,12 @@ import * as path from 'path';
 import { performance } from 'perf_hooks';
 import { forgetPtyd, ptydBuild, ptydRecords, recordedPtyds, recordPtyd } from '../base/ptydRegistry';
 import { ownPtydSocket, PtydClient, ptydSocketPath } from '../host/execution/ptydClient';
+import { FacadeError } from '../core/errors';
 import { PTYD_PROTOCOL } from '../ptyd/protocol';
-import { installationGone } from '../ptyd/run';
+import { InstallationGone, installationGone } from '../ptyd/run';
 import { PtydServer } from '../ptyd/server';
 import { nextOwnerClaim } from '../record/ownership';
+import { withModules } from './withModules';
 
 suite('Each installation runs its own ptyd (ARCHITECTURE-2.4)', () => {
 	let temp: string;
@@ -114,6 +116,37 @@ suite('Each installation runs its own ptyd (ARCHITECTURE-2.4)', () => {
 			window.dispose();
 			assert.ok(await idled - closed >= idleMs * 0.9, 'its wait starts as its window goes');
 		} finally {
+			server.close();
+		}
+	});
+
+	test('a start a ptyd refuses as its installation was removed reaches the window as Facade\'s own reason: in the person\'s language, in English for agents and logs (UX-2.4)', async () => {
+		const home = path.join(temp, 'home');
+		const socket = ptydSocketPath(home, PTYD_PROTOCOL, 'abcdef0123');
+		const server = new PtydServer(socket, () => undefined);
+		assert.strictEqual(await server.listen(), true);
+		const script = process.argv[1];
+		try {
+			const window = (await PtydClient.join(socket, PTYD_PROTOCOL))!;
+			await window.request('claim', nextOwnerClaim('workspace-1', home));
+			// The script it runs from is gone, as an update removes it
+			const gone = path.join(temp, 'facade.facadecode-0.0.5', 'dist', 'ptyd.js');
+			process.argv[1] = gone;
+			const refused = await window.request('spawn', {
+				run: 'run-refused', owner: 'workspace-1', file: process.execPath, args: ['-e', ''], cwd: os.tmpdir(), env: {}, cols: 80, rows: 24, meta: {}
+			}).then(() => assert.fail('a removed installation started a program'), (err: unknown) => err);
+			process.argv[1] = script;
+			window.dispose();
+			assert.ok(refused instanceof FacadeError, String(refused));
+			assert.deepStrictEqual([refused.code, refused.reason, refused.said], ['FAILED', 'launch_failed', { kind: 'installation_removed', values: [gone] }]);
+			assert.strictEqual(refused.message, new InstallationGone(gone).message);
+			assert.match(refused.message, /installation was removed/);
+			const said: string[] = [];
+			const { reasonText } = withModules({ vscode: { l10n: { t: (text: string, ...values: string[]) => { said.push(text); return text.replace(/\{(\d)\}/g, (_, at) => values[Number(at)]); } } } })<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
+			assert.strictEqual(reasonText(refused.said, refused.message), `The Facade Code installation that runs this window's agents was removed by an update or uninstall (${gone} is gone), so no agent can start. Reload the window to start agents with the installed version.`);
+			assert.strictEqual(said.length, 1, 'worded through the translated text');
+		} finally {
+			process.argv[1] = script;
 			server.close();
 		}
 	});

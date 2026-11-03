@@ -181,8 +181,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly pendingForget = new Set<RunId>();
 	/** The ptyds a check is listing now, each by its socket: one that does not answer is not asked again meanwhile. */
 	private readonly listing = new Set<string>();
-	/** The sockets of the ptyds of builds from before ptyds were named by build that listed no live run in this activation. */
-	private readonly quiet = new Set<string>();
 	/** Whether the first restore is over: runs a ptyd lists that no pair shows are told from then on. */
 	private restored = false;
 	/** When each run a ptyd lists and no pair shows was last told, to tell it once a while. */
@@ -257,7 +255,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 */
 	async conversations(): Promise<readonly ConversationKey[]> {
 		const held = [...await this.ask('conversations', {})];
-		held.push(...(await this.otherRuns(true)).flatMap(run => {
+		held.push(...(await this.otherRuns()).flatMap(run => {
 			const meta = run.meta;
 			return !run.exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
 				? [{ sessionId: meta.sessionId, cli: meta.cli, environment: meta.environment }] : [];
@@ -315,30 +313,20 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	/** Global discovery also sees the previous release's live runs; observing another workspace never claims it. */
 	private async allRuns(): Promise<readonly RunInfo[]> {
-		return [...await this.ask('list', {}), ...await this.otherRuns(false)];
+		return [...await this.ask('list', {}), ...await this.otherRuns()];
 	}
 
 	/**
-	 * The runs of every workspace in the ptyds other than this window's own (ARCHITECTURE-2.4). A ptyd of a build from before ptyds
-	 * were named by build keeps another five minutes at every connection, so one that listed no live run is passed by `quietSkipped`
-	 * from then on in this activation, for it to exit; this activation's one listing of every workspace's runs, as it releases the
-	 * project files of agents gone everywhere (CLIS-2.2), passes none by.
+	 * The runs of every workspace in the ptyds other than this window's own, each asked anew, so that a conversation an agent holds in
+	 * any of them is never started twice (LIFECYCLE-3.2, ARCHITECTURE-2.4).
 	 */
-	private async otherRuns(quietSkipped: boolean): Promise<readonly RunInfo[]> {
+	private async otherRuns(): Promise<readonly RunInfo[]> {
 		const runs: RunInfo[] = [];
 		for (const other of this.session.others().filter(each => each.protocol >= 9)) {
-			if (quietSkipped && this.quiet.has(other.socket)) {
-				continue;
-			}
 			const client = await PtydClient.join(other.socket, other.protocol);
 			if (!client) { continue; }
-			try {
-				const listed = await within(client.request('list', {}));
-				if (other.pid === undefined && !listed.some(run => !run.exited)) {
-					this.quiet.add(other.socket);
-				}
-				runs.push(...listed);
-			} finally { client.dispose(); }
+			try { runs.push(...await within(client.request('list', {}))); }
+			finally { client.dispose(); }
 		}
 		return runs;
 	}

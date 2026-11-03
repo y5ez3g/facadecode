@@ -13,6 +13,7 @@ import * as path from 'path';
 import { timeout } from '../../base/async';
 import { connectWithin } from '../../base/connect';
 import { messageOf } from '../../base/errors';
+import { FacadeError } from '../../core/errors';
 import { lineReader } from '../../base/lines';
 import type { OwnerClaim } from '../../base/ownership';
 import { EARLIER_PROTOCOLS, CallEvent, isPtydEvent, Method, OwnerEvent, PTYD_PROTOCOL, Requests, Response, RunEvent } from '../../ptyd/protocol';
@@ -39,6 +40,14 @@ export class PtydLost extends Error { }
 
 /** The ptyd of an earlier protocol holds none of the window's runs any more - it went, or they did: they ended with it. */
 export class PtydGone extends Error { }
+
+/**
+ * A start ptyd refused, as `gone` of its installation was removed (ARCHITECTURE-2.4): Facade's own reason, which the person is told
+ * in their language and an agent and the log in `english` (UX-2.4).
+ */
+export function installationRemoved(english: string, gone: string): FacadeError {
+	return new FacadeError('FAILED', 'launch_failed', english, { kind: 'installation_removed', values: [gone] });
+}
 
 /**
  * The socket the ptyd of `protocol` listens on for the Facade data directory `home`: one ptyd per person, directory, protocol and
@@ -124,7 +133,7 @@ export class PtydClient {
 			const waiting = this.pending.get(message.id);
 			this.pending.delete(message.id);
 			if ('error' in message) {
-				waiting?.reject(new Error(message.error));
+				waiting?.reject(typeof message.gone === 'string' ? installationRemoved(message.error, message.gone) : new Error(message.error));
 			} else {
 				waiting?.resolve(message.result);
 			}
