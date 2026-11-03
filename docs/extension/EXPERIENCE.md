@@ -131,12 +131,13 @@ manager, judge, team hierarchy or “all work done” state is imposed.
 
 **An agent supplies a name, destination window, working location and CLI; model and effort can use CLI defaults.**
 
-A child joins its creator's creation tree and uses RULES-4.3's launch-time YOLO rule. The API cannot choose YOLO.
-It may request a new worktree as part of startup. A new child can be placed in another valid window on this computer,
-local or remote, even when that window has no agents; a window without a folder has no working location.
-An optional prompt follows COLLABORATION-2.2's native/post-start path. Process startup and prompt submission have
-separate results; a pending prompt later reports its final outcome under MCP-2.3. Facade has no task concept or
-automatic child report. Explicit model/effort in this call takes precedence under CLIS-1.4.
+A child joins its creator's creation tree and uses RULES-4.3's launch-time YOLO rule. The API cannot choose YOLO. It may
+request a new worktree as part of startup. A new child can be placed in another valid window on this computer, local or
+remote, even when that window has no agents; a window without a folder has no working location. An optional prompt
+follows COLLABORATION-2.2's native/post-start path. Process startup and prompt submission have separate results; a
+pending prompt later reports its final outcome under MCP-2.3. Facade has no task concept and reports no child's work;
+its one automatic notice to a creator is RULES-1.8's, of a child waiting on a permission, question or sign-in. Explicit
+model/effort in this call takes precedence under CLIS-1.4.
 
 ### 3.3 Discovering launch choices
 

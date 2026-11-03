@@ -149,13 +149,16 @@ suite('The window component as the workspace extension waits for it (ARCHITECTUR
 		shown.dispose();
 	});
 
-	test('missing, the panel\'s page draws its button with the 4 px control radius of the panel\'s own buttons (UX-2.1)', () => {
+	test('missing, the panel\'s page draws its button as the empty states draw theirs: the 4 px control radius, the theme\'s button border, 26 px tall, label size (UX-2.1, PANEL-1.2)', () => {
 		const editor = fakeEditor();
 		const shown = editor.component.showComponentMissing({ subscriptions: [] } as never, SESSION);
 		const view = { webview: { options: {}, html: '', cspSource: 'vscode-resource:', onDidReceiveMessage: () => undefined } };
 		editor.providers.get('facade.agents')!.resolveWebviewView(view);
 		const button = /\nbutton \{([^}]*)\}/.exec(view.webview.html)?.[1] ?? '';
 		assert.match(button, /border-radius: var\(--vscode-cornerRadius-small, 4px\);/);
+		assert.match(button, /border: 1px solid var\(--vscode-button-border, transparent\);/);
+		assert.match(button, /height: 26px;/);
+		assert.match(button, /font-size: var\(--vscode-fontSize-label1, 12px\);/);
 		shown.dispose();
 	});
 

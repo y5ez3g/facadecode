@@ -729,7 +729,7 @@ class ToolService {
 			return { result: accepted(data, { ...effects, outcome: 'pending' }), headline: `${before} Its process is still starting. The start's outcome is ${LATER}.` };
 		}
 		if (facts.end?.kind === 'failed') {
-			const message = `${before} It could not start: ${facts.error?.reason ?? 'its launch failed.'}`;
+			const message = `${before} It could not start: ${facts.error?.english ?? facts.error?.reason ?? 'its launch failed.'}`;
 			return { result: failure({ code: 'FAILED', reason: facts.error?.source === 'worktree' ? 'worktree_failed' : 'launch_failed', message }, data, effects), headline: message };
 		}
 		if (!present && !facts.end) {
@@ -951,9 +951,13 @@ class ToolService {
 		try {
 			resultMessageId = this.deps.messages.reserveResult();
 		} catch (err) {
-			// No number for a later result can be taken now (RULES-2.2), and the card is gone already: the stop answers once its end is known
-			this.deps.log?.(`Could not number the later result of the stop of ${target.alias}, so its end is waited for: ${errorText(err)}`);
-			return stopped(target, await closing);
+			// No number for a later result can be taken now (RULES-2.2), and the card is gone already: the stop answers as still ending,
+			// within its wait (MCP-3.2), and no later result comes - list_agents tells its end
+			this.deps.log?.(`Could not number the later result of the stop of ${target.alias}; none will follow: ${errorText(err)}`);
+			return {
+				result: accepted({ agent_id: target.id, reference: referenceOf(target), call_id: call.callId, closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
+				headline: `Closed ${shown}'s card and terminal; its process is still being ended, and no later result can be numbered: list_agents shows its end.`
+			};
 		}
 		void closing.then(late => {
 			const final = stopped(target, late);

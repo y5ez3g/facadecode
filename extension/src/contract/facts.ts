@@ -110,7 +110,7 @@ export function agentOf(run: RunFacts, window: ToolWindow, now: number, input?: 
 		tools: run.tools,
 		message_input: input ? { state: input.state, reason: input.reason } : undefined,
 		title: run.title,
-		error: run.error ? { reason: run.error.reason, source: run.error.source, at: isoOf(run.error.at) } : undefined,
+		error: run.error ? { reason: run.error.english ?? run.error.reason, source: run.error.source, at: isoOf(run.error.at) } : undefined,
 		exit: run.end ? defined({ kind: run.end.kind, code: run.end.code, signal: run.end.signal, at: isoOf(run.end.at) }) : undefined,
 		observed_at: isoOf(now),
 		state_observed_at: run.activitySince !== undefined ? isoOf(run.activitySince) : undefined,

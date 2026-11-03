@@ -44,9 +44,9 @@ activity-bar icon. Do not display worktree tutorials when Git is absent or make 
 filter look like all agents ended. Paragraphs wrap; buttons are native-themed and keyboard accessible. There is no
 composer field.
 
-A window whose Facade could not start shows the reason in the panel, in place of its progress and cards. A window
-without its window component shows ARCHITECTURE-4.3's explanation there, with a button that shows the component in the
-Extensions view, themed as the empty states' buttons are (UX-2.1).
+A window whose Facade could not start shows the reason in the panel, in place of its progress and cards, and Facade's
+commands repeat that reason. A window without its window component shows ARCHITECTURE-4.3's explanation there, with a
+button that shows the component in the Extensions view, themed as the empty states' buttons are (UX-2.1).
 
 Invoking New Agent with no folder opens a native Quick Pick titled `New Agent`, with placeholder
 `Open a folder to continue` and one item: `Open Folder...`, detail
@@ -216,14 +216,15 @@ that asked. An action correlation ID is an implementation detail when needed to 
 required on every action. Test-only probes never ship.
 
 Update `src/webview/protocol.ts` (the wire types both sides use), `src/ui/model.ts`, `src/ui/panel.ts` and
-`src/webview/panel.ts` together. Webview sends `ready`, validated `act` (`open`, `new`, `resume`, `clearFilter`,
-`openFolder`, `rename`), and diagnostic `error`; host sends `state`, `scrolling`, and matching action outcomes. `open`
-serves a card's click, Enter and Space, `rename` its F2 (UX-2.3), and the others the empty-state buttons of 1.2;
-`rename` asks the host to open the native Input Box, and the host validates the target. Context menu commands run in
-the host through validated targets. Page-held state is navigation/typeahead/scroll, not business rules. Use the
-webview's saved page state to restore the still-valid scroll position and keyboard navigation target when the person
-hides and reopens the view; restoring a navigation target does not take actual input focus. Rebuild current cards from
-the host model and discard a navigation target whose card is gone. Use this saved page state without a host
+`src/webview/panel.ts` together. Webview sends `ready`, carrying whether the system asks for reduced motion, `motion`
+when that changes - which the host passes to busy tabs' spinners (UX-2.2) - validated `act` (`open`, `new`, `resume`,
+`clearFilter`, `openFolder`, `rename`), and diagnostic `error`; host sends `state`, `scrolling`, and matching action
+outcomes. `open` serves a card's click, Enter and Space, `rename` its F2 (UX-2.3), and the others the empty-state
+buttons of 1.2; `rename` asks the host to open the native Input Box, and the host validates the target. Context menu
+commands run in the host through validated targets. Page-held state is navigation/typeahead/scroll, not business rules.
+Use the webview's saved page state to restore the still-valid scroll position and keyboard navigation target when the
+person hides and reopens the view; restoring a navigation target does not take actual input focus. Rebuild current cards
+from the host model and discard a navigation target whose card is gone. Use this saved page state without a host
 persistence service or retainContextWhenHidden; keep cards keyed and avatars reused within a page.
 
 ### 3.2 Security and resource use

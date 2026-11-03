@@ -574,16 +574,17 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.agents.closed, []);
 		});
 
-		test('a process still ending at the timeout, whose later result no number can be taken for, is answered once it ended - never as a stop that did nothing (RULES-2.2, MCP-3.2)', async () => {
+		test('a process still ending at the timeout, whose later result no number can be taken for, is answered within the wait as still ending, with no later result - never as a stop that did nothing (RULES-2.2, MCP-3.2)', async () => {
 			const { lead, worker } = team(s);
 			let finish!: (result: 'terminated') => void;
 			s.agents.closeWith = new Promise(resolve => finish = resolve);
 			s.timeout = 0.02;
 			s.messages.reserveResult = () => { throw new FacadeError('UNAVAILABLE', 'unavailable', 'No message number could be taken from this computer\'s counter.'); };
-			const answering = s.call(lead, 'stop_agent', { agent: worker.id });
-			setTimeout(() => finish('terminated'), 50);
-			const result = resultOf(await answering);
-			assert.deepStrictEqual([result.status, result.data.cleanup, result.effects, s.agents.closed, s.messages.reports.length], ['success', 'terminated', { outcome: 'confirmed' }, [worker.id], 0]);
+			const result = resultOf(await s.call(lead, 'stop_agent', { agent: worker.id }));
+			assert.deepStrictEqual([result.status, result.data.cleanup, result.data.result_message_id, result.effects, s.agents.closed], ['accepted', 'pending', undefined, { outcome: 'pending' }, [worker.id]]);
+			finish('terminated');
+			await new Promise(resolve => setTimeout(resolve, 20));
+			assert.strictEqual(s.messages.reports.length, 0, 'no later result without a number for it');
 		});
 
 		test('a process still ending at the timeout is accepted, and its cleanup reported later under the same call', async () => {

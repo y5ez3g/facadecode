@@ -56,7 +56,7 @@ function agentLines({ facts, input, screen }: DiagnosedAgent): string[] {
 	const tools = `tools ${facts.tools}${facts.toolsReason ? ` (${facts.toolsReason})` : ''}`;
 	const reader = `input reader ${facts.inputAdapter ?? 'none'}${input ? `, reads ${input}` : ''}`;
 	const ended = facts.end ? [`  ended ${facts.end.kind}${facts.end.code !== undefined ? `, code ${facts.end.code}` : ''}${facts.end.signal ? `, ${facts.end.signal}` : ''} at ${iso(facts.end.at)}`] : [];
-	const error = facts.error ? [`  error from ${facts.error.source}: ${facts.error.reason}`] : [];
+	const error = facts.error ? [`  error from ${facts.error.source}: ${facts.error.english ?? facts.error.reason}`] : [];
 	// Its last rows that have something on them, the rows above them blank cut
 	const rows = [...screen ?? []];
 	while (rows.length && !rows[0].trim()) {

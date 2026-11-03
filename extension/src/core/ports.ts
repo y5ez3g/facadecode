@@ -505,7 +505,10 @@ export type Lifecycle = 'starting' | 'running' | 'ended';
 export type Phase = 'creating_worktree' | 'launching_cli' | 'running';
 
 export interface RunError {
+	/** The reason as the person reads it, in their language where Facade words it (UX-2.4). */
 	readonly reason: string;
+	/** The same reason in English, for agents and logs (UX-1.3, MCP-1.2), where it differs from `reason`. */
+	readonly english?: string;
 	readonly worktree?: WorktreeCreationEffects;
 	/** Where the error came from: `launch`, `cli`, `exit`, `activity`, `location`... */
 	readonly source: string;

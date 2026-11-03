@@ -55,7 +55,6 @@ export function withWorktreeEffects(reason: string, effects?: WorktreeCreationEf
 	return retained ? `${sentence} ${retained}` : reason;
 }
 
-/** Facade's own reason in the person's language (UX-2.4): a CLI's configuration or a launch setting; `otherwise` where it has none. */
 /**
  * Why an operation of the person's failed, as they are told it (UX-2.4): Facade's own reason in their language, any other error -
  * the system's, Git's or a CLI's - in its own words.
@@ -64,6 +63,7 @@ export function reasonOf(err: unknown): string {
 	return err instanceof PlanError || err instanceof FacadeError ? reasonText(err.said, err.message) : messageOf(err);
 }
 
+/** Facade's own reason in the person's language (UX-2.4), as `said` names it; `otherwise` where it has none. */
 export function reasonText(said: FacadeReason | undefined, otherwise: string): string {
 	const [a = '', b = '', c = '', d = '', e = ''] = said?.values ?? [];
 	switch (said?.kind) {

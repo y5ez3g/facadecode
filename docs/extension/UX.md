@@ -36,7 +36,8 @@ news/warning/progress toasts. Agent-operation errors return to the caller; no me
 creates a human popup. Show a permitted human notification only in its related window. There is no durable
 notification-recovery protocol. Example: `Could not start Ada: {CLI error}`. Show opens the exact source run or final
 screen; a launch that failed on its CLI's configuration also offers Configure Agents, and ARCHITECTURE-4.3's
-missing-component notice offers Show Window Component and Reload Window. A message to the person reads `{agent name}
+missing-component notice offers Show Window Component, while Reload Window comes on a notice of its own once the
+component answers. A message to the person reads `{agent name}
 #aN: {first line of the message}` (`#aN: ...` for an empty name) and offers `Open Message`, which opens the complete
 message read-only, then `Show Agent`, which opens that agent's terminal. No Retry or generic Learn More. Maximum 300
 display code points including ellipsis; full diagnostic or message remains available. Escape/neutralize Markdown and
@@ -77,7 +78,7 @@ language's natural grammar while preserving placeholders, product names and the 
 | Text / secondary | `foreground` / `descriptionForeground` |
 | Hover | `list.hoverBackground` |
 | Selection | `list.activeSelectionBackground`, `list.activeSelectionForeground` even after panel loses focus |
-| Keyboard focus | 1 px `list.focusOutline` inside row; none on the card a context menu is open on |
+| Keyboard focus | 1 px `list.focusOutline` inside row, kept while a context menu is open; the card a menu is open on gets no other frame |
 | Busy / problem dot | `charts.green` / `charts.red`; no dot for anything else |
 | Status meaning and unknown evidence | RULES-3.2; second-line wording is PANEL-1.4 |
 | Controls | `button.*`, `input.*`, `inputValidation.*`, `scrollbarSlider.*` |
@@ -133,8 +134,10 @@ shown as a localized absolute time instead of an invented recent activity. Panel
 `Intl.RelativeTimeFormat`; full timestamps are localized in human details, UTC ISO strings in APIs/journals. Locale
 updates refresh text; API IDs/paths never change with locale. Translations cover settings, pickers, errors, menus,
 access labels and empty states in the same implementation change. Facade's own failure reasons - CLI configuration and
-worktree problems - reach the person in their language through one presentation shared by pickers, notifications and
-cards; logs and API text stay English.
+worktree problems, another window owning the workspace, a working location gone or not in this window, no agent or
+message number, a window component too old, a conversation its CLI cannot pin - reach the person in their language
+through one presentation shared by pickers, notifications and cards, never with an internal ID such as a location's; a
+system's, Git's or a CLI's own error keeps its own words. Logs and the text agents read stay English.
 
 ## 3 Commands
 

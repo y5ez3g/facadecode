@@ -764,6 +764,9 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		await settle();
 		assert.deepStrictEqual({ reason: world.agents.get(id)?.error?.reason, failure: world.failures.map(each => each.reason), log: world.log.filter(line => line.startsWith('Could not start')) },
 			{ reason: 'translated location_gone', failure: ['translated location_gone'], log: ['Could not start #a1: The working location /work/app is no longer available.'] });
+		// Agents read the English: its start's outcome and its kept error (list_agents, MCP-1.2)
+		assert.deepStrictEqual([(await world.agents.started(id)).error, world.agents.get(id)?.error?.english],
+			['The working location /work/app is no longer available.', 'The working location /work/app is no longer available.']);
 	});
 
 	test('after a reload, live runs not claimed by another window are reattached without a second launch, and failed launches return red (J09, LIFECYCLE-3.5)', async () => {
@@ -1144,6 +1147,29 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		const next = world.agents.resume(ENTRY, { reveal: true }) as RunId;
 		await settle();
 		assert.deepStrictEqual([world.agents.get(next)?.pin, world.pins()], [undefined, []]);
+	});
+
+	test('LIFECYCLE-3.4: a Pin refused before any card is told with the others and kept, the next Pins restored all the same; an empty-named one is told by its #aN', async () => {
+		const world = setUp();
+		const deps = (world.agents as unknown as { deps: { pinStore: { save(p: Pin): void }; yolo: () => boolean } }).deps;
+		deps.pinStore.save({ id: 'pin-refused', conversation: { environment: 'local', cli: 'claude', sessionId: 'refused' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: 'Refused' });
+		deps.pinStore.save({ id: 'pin-empty', conversation: { environment: 'local', cli: 'claude', sessionId: 'empty' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: '' });
+		// The first Pin's start is refused before it takes a number, as with a facade.yolo neither true nor false
+		let reads = 0;
+		const yolo = deps.yolo;
+		deps.yolo = () => { if (++reads === 1) { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received 1'); } return yolo(); };
+		await world.agents.restorePins();
+		const added = world.agents.list().filter(run => run.pin !== undefined);
+		assert.deepStrictEqual(added.map(run => [run.name, run.pin, run.error?.source]), [['', 'pin-empty', 'location']], 'the next Pin keeps its red card');
+		assert.deepStrictEqual(world.failures.map(failure => [failure.kind, (failure as { count?: number }).count]), [['restore', 2]], 'one notification for the opening, the refused Pin counted');
+		assert.ok(world.pins().some(pin => pin.id === 'pin-refused'), 'the refused Pin is kept for the next opening');
+		assert.ok(world.log.some(line => line.startsWith('Could not restore the Pin of Refused: facade.yolo must be true or false')), world.log.join('\n'));
+		// Told alone, the empty-named one is named by its #aN
+		const again = setUp();
+		(again.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save({ id: 'pin-empty', conversation: { environment: 'local', cli: 'claude', sessionId: 'empty' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: '' });
+		await again.agents.restorePins();
+		const [card] = again.agents.list().filter(run => run.pin === 'pin-empty');
+		assert.deepStrictEqual(again.failures.map(failure => failure.name), [card.alias]);
 	});
 
 	test('a Pin a card already holds is not restored again on a reload; a Pin whose location is gone keeps a red card holding it, told once (RULES-4.2, LIFECYCLE-3.4)', async () => {

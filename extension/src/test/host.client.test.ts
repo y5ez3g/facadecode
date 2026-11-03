@@ -179,6 +179,25 @@ suite('The workspace extension on the client network (ARCHITECTURE-2.1; RULES-1.
 		assert.strictEqual(await editor.client.networkAddress('session-1'), undefined);
 	});
 
+	test('ARCHITECTURE-4.3: only a component without the directory command is too old; a directory call that fails otherwise is tried again', async () => {
+		const editor = fakeEditor();
+		const directory = { self: 'win-1', windows: [{ window: 'win-1', label: 'Design', environment: 'local', agents: [] }], unavailable: [] };
+		let calls = 0;
+		editor.handlers.set(WINDOW_DIRECTORY_COMMAND, () => { if (++calls < 3) { throw new Error('EACCES: permission denied, scandir'); } return directory; });
+		const paused: number[] = [];
+		assert.strictEqual(await editor.client.networkAddress('session-1', 5, async ms => { paused.push(ms); }), 'win-1');
+		assert.deepStrictEqual([calls, paused], [3, [1_000, 1_000]]);
+		// A failure that lasts gives up after its tries; a missing command at once
+		editor.handlers.set(WINDOW_DIRECTORY_COMMAND, () => { throw new Error('EACCES: permission denied, scandir'); });
+		paused.length = 0;
+		assert.strictEqual(await editor.client.networkAddress('session-1', 3, async ms => { paused.push(ms); }), undefined);
+		assert.strictEqual(paused.length, 2);
+		editor.handlers.delete(WINDOW_DIRECTORY_COMMAND);
+		paused.length = 0;
+		assert.strictEqual(await editor.client.networkAddress('session-1', 3, async ms => { paused.push(ms); }), undefined);
+		assert.strictEqual(paused.length, 0);
+	});
+
 	test('outer route timeout bounds the wait but does not cancel, repeat or invent the outcome of a dispatched command', async () => {
 		const editor = fakeEditor();
 		const network = new editor.client.ClientNetwork('win-1');

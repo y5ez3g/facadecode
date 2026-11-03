@@ -93,14 +93,20 @@ export function numbersUnavailable(kind: 'agent' | 'message', why: string): Faca
 
 /**
  * This window's address on the network, from its component: none where the component is missing or too old to carry requests, and
- * the tools then reach this window alone.
+ * the tools then reach this window alone (ARCHITECTURE-4.3). Only a component without the directory command is too old: any other
+ * failure of the call - a registry read, a crossing between extension hosts - is tried again, `tries` times a second apart.
  */
-export async function networkAddress(session: string = vscode.env.sessionId): Promise<string | undefined> {
-	try {
-		const directory = await vscode.commands.executeCommand<unknown>(WINDOW_DIRECTORY_COMMAND, session);
-		return isDirectory(directory) ? directory.self : undefined;
-	} catch {
-		return undefined;
+export async function networkAddress(session: string = vscode.env.sessionId, tries = 5, pause: (ms: number) => Promise<void> = ms => new Promise(resolve => setTimeout(resolve, ms))): Promise<string | undefined> {
+	for (let attempt = 1; ; attempt++) {
+		try {
+			const directory = await vscode.commands.executeCommand<unknown>(WINDOW_DIRECTORY_COMMAND, session);
+			return isDirectory(directory) ? directory.self : undefined;
+		} catch (err) {
+			if (messageOf(err).includes(`'${WINDOW_DIRECTORY_COMMAND}' not found`) || attempt >= tries) {
+				return undefined;
+			}
+		}
+		await pause(1_000);
 	}
 }
 

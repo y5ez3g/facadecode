@@ -146,7 +146,7 @@ body.facade-modern {
 
 /*
  * The keyboard's card, outlined as VS Code's focused list row where the keys put it there, never by the pointer's click; the card a
- * menu is opened on gets no frame (UX-2.3, D175).
+ * menu is opened on gets no frame (UX-2.3).
  */
 #list .item:focus {
 	outline: none;
@@ -424,7 +424,7 @@ body.vscode-reduce-motion .dot.working::after {
 
 /*
  * Name and location keep a short label whole and share the remaining width; the page measures their displayed fonts and assigns
- * the widths (PANEL-1.3, D128). Location stays at the line's end, its folder and worktree ellipsized separately in the middle.
+ * the widths (PANEL-1.3). Location stays at the line's end, its folder and worktree ellipsized separately in the middle.
  */
 .place {
 	flex: 0 0 auto;
@@ -578,7 +578,7 @@ body.vscode-high-contrast-light .item.selected {
 	outline-offset: -1px;
 }
 
-/* Not while a menu is open: the card it was opened on stays unframed (D175) */
+/* Not while a menu is open: the card it was opened on stays unframed (UX-2.1) */
 body.vscode-high-contrast:not(.vscode-context-menu-visible) .item:hover:not(.selected),
 body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:hover:not(.selected) {
 	outline: 1px dashed var(--vscode-contrastActiveBorder);

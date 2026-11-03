@@ -429,7 +429,7 @@ export class AgentService implements Agents, Disposable {
 		if (!facts) {
 			return { state: 'closed', ...prompt, ...worktree };
 		}
-		return facts.lifecycle === 'running' ? { state: 'running', ...prompt, ...worktree } : { state: 'failed', ...(facts.error ? { error: facts.error.reason } : {}), ...prompt, ...worktree };
+		return facts.lifecycle === 'running' ? { state: 'running', ...prompt, ...worktree } : { state: 'failed', ...(facts.error ? { error: facts.error.english ?? facts.error.reason } : {}), ...prompt, ...worktree };
 	}
 
 	async warmedUp(id: RunId): Promise<void> {
@@ -679,7 +679,7 @@ export class AgentService implements Agents, Disposable {
 		const at = this.deps.clock.now();
 		const effects = run.worktree ? { worktree: run.worktree } : {};
 		const reason = err !== undefined && this.deps.describe ? this.deps.describe(err, english) : english;
-		this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, source, at, ...effects } }, 'lifecycle');
+		this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, ...reason !== english ? { english } : {}, source, at, ...effects } }, 'lifecycle');
 		this.deps.execution.note(run.facts.id, reason);
 		this.deps.log.event(`Could not start ${run.facts.alias}: ${english}`);
 		this.recordFact('agent_start_failed', run.facts, { source, reason: english });
@@ -926,15 +926,26 @@ export class AgentService implements Agents, Disposable {
 		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
 		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holdingPin(pin));
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
-		const failed: { readonly id: RunId; readonly name: string; readonly reason: string }[] = [];
+		const failed: { readonly id?: RunId; readonly name: string; readonly reason: string }[] = [];
+		// A Pin refused before any card - a facade.yolo neither true nor false, no number to give (UX-4.1, RULES-2.2) - fails as
+		// itself, kept for the next opening, and the others are restored all the same (LIFECYCLE-3.4)
 		const restoreOne = async (pin: Pin): Promise<void> => {
+			try {
+				await restoring(pin);
+			} catch (err) {
+				this.deps.log.event(`Could not restore the Pin of ${pin.name || pin.conversation.cli}: ${messageOf(err)}`);
+				failed.push({ name: pin.name || pin.conversation.cli, reason: this.wording(err) });
+			}
+		};
+		const restoring = async (pin: Pin): Promise<void> => {
 			// One whose location was removed is no failure to show: its removal unpins it, even where that write failed (RULES-2.4)
 			if (!this.pins().some(saved => saved.id === pin.id) || this.holdingPin(pin) || this.deps.locations.removalOf(pin.location)) { return; }
 			const location = this.locationFor(pin.location, pin.cwd);
 			if (!location || location.environment !== pin.conversation.environment) {
 				const english = `Its working location ${pin.cwd} is not available in this window.`;
 				const reason = this.deps.describe?.(new FacadeError('UNAVAILABLE', 'not_found', english, locationNotHere(pin.cwd)), english) ?? english;
-				failed.push({ id: this.unrestorable(pin, reason, english), name: pin.name, reason });
+				const id = this.unrestorable(pin, reason, english);
+				failed.push({ id, name: labelOf(this.runs.get(id)?.facts ?? { name: pin.name, alias: '' }), reason });
 				return;
 			}
 			// One pinned before its CLI named a conversation starts a new one, which its Pin takes once named (LIFECYCLE-3.4)
@@ -948,7 +959,7 @@ export class AgentService implements Agents, Disposable {
 			this.restoring.delete(id);
 			const facts = this.runs.get(id)?.facts;
 			if (facts?.end?.kind === 'failed') {
-				failed.push({ id, name: facts.name, reason: facts.error?.reason ?? '' });
+				failed.push({ id, name: labelOf(facts), reason: facts.error?.reason ?? '' });
 			}
 		};
 		const workers = Array.from({ length: Math.min(RESTORE_CONCURRENCY, queue.length) }, async () => {
@@ -960,7 +971,7 @@ export class AgentService implements Agents, Disposable {
 		if (failed.length && !this.ownershipLost && !this.disposed) {
 			// A known failure no agent is responsible for: one notification for this opening (RULES-1.8)
 			const [first] = failed;
-			this.deps.human.failed({ kind: 'restore', name: first.name, reason: first.reason, count: failed.length }, this.runs.has(first.id) ? { show: first.id } : {});
+			this.deps.human.failed({ kind: 'restore', name: first.name, reason: first.reason, count: failed.length }, first.id && this.runs.has(first.id) ? { show: first.id } : {});
 		}
 	}
 
@@ -977,7 +988,7 @@ export class AgentService implements Agents, Disposable {
 			location: pin.location, cwd: pin.cwd, environment: pin.conversation.environment, yolo,
 			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false,
 			...pin.conversation.sessionId ? { sessionId: pin.conversation.sessionId, resumable: true, pinnable: true } : {},
-			pin: pin.id, end: { kind: 'failed', at }, error: { reason, source: 'location', at }
+			pin: pin.id, end: { kind: 'failed', at }, error: { reason, ...reason !== english ? { english } : {}, source: 'location', at }
 		};
 		const run: Run = { facts, exactResume: true, settled: Promise.resolve() };
 		this.runs.set(id, run);
@@ -1135,8 +1146,8 @@ export class AgentService implements Agents, Disposable {
 		if (normal) {
 			// A normal exit removes the pair (RULES-3.3)
 			try { this.unpinned(run); } catch (err) {
-				const reason = this.wording(err), at = this.deps.clock.now();
-				this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, source: 'pin', at } }, 'lifecycle');
+				const reason = this.wording(err), english = messageOf(err), at = this.deps.clock.now();
+				this.update(run, { lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason, ...reason !== english ? { english } : {}, source: 'pin', at } }, 'lifecycle');
 				this.retain(run);
 				this.deps.execution.note(exit.run, reason);
 				this.deps.log.event(`Could not remove the Pin of ${run.facts.alias}: ${messageOf(err)}`);
@@ -1229,7 +1240,7 @@ function isRunRecord(value: unknown): value is RunFacts {
 			['permission', 'question', 'auth', 'unknown'].includes(value.blocker.kind) && (value.blocker.text === undefined || typeof value.blocker.text === 'string')) &&
 		(value.end === undefined || isJsonObject(value.end) && ['failed', 'abnormal'].includes(value.end.kind as string) && typeof value.end.at === 'number' && Number.isFinite(value.end.at) &&
 		(value.end.code === undefined || typeof value.end.code === 'number') && (value.end.signal === undefined || typeof value.end.signal === 'string')) &&
-		(value.error === undefined || isJsonObject(value.error) && typeof value.error.reason === 'string' && typeof value.error.source === 'string' && typeof value.error.at === 'number' && Number.isFinite(value.error.at) &&
+		(value.error === undefined || isJsonObject(value.error) && typeof value.error.reason === 'string' && (value.error.english === undefined || typeof value.error.english === 'string') && typeof value.error.source === 'string' && typeof value.error.at === 'number' && Number.isFinite(value.error.at) &&
 		(value.error.worktree === undefined || (isJsonObject(value.error.worktree) &&
 			(value.error.worktree.branch === undefined || (typeof value.error.worktree.branch === 'string' && !!value.error.worktree.branch)) &&
 			(value.error.worktree.folder === undefined || (typeof value.error.worktree.folder === 'string' && !!value.error.worktree.folder)) &&

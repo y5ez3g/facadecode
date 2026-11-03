@@ -145,7 +145,7 @@ function missingHtml(nonce: string, cspSource: string, explanation: string, show
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <style nonce="${nonce}">
 body { padding: 12px 20px; color: var(--vscode-foreground); font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); line-height: 1.4; }
-button { margin-top: 12px; padding: 4px 12px; border: none; border-radius: var(--vscode-cornerRadius-small, 4px); color: var(--vscode-button-foreground); background: var(--vscode-button-background); font: inherit; cursor: pointer; }
+button { display: inline-flex; align-items: center; justify-content: center; min-width: 60px; height: 26px; margin-top: 12px; padding: 4px 12px; border: 1px solid var(--vscode-button-border, transparent); border-radius: var(--vscode-cornerRadius-small, 4px); color: var(--vscode-button-foreground); background: var(--vscode-button-background); font-family: inherit; font-size: var(--vscode-fontSize-label1, 12px); line-height: 16px; white-space: nowrap; cursor: pointer; }
 button:hover { background: var(--vscode-button-hoverBackground); }
 button:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
 </style>
