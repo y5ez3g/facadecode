@@ -58,6 +58,8 @@ export interface MessageServiceDeps {
 	readonly monotonic?: () => number;
 	/** Waits `ms`, rejecting as soon as `signal` aborts. */
 	readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
+	/** A message its recipient's CLI took from its input: what that agent's card says on its second line (PANEL-1.4, D184). */
+	readonly said?: (run: RunId, text: string) => void;
 }
 
 /** The first response comes within this long of the request reaching Facade (RULES-1.2). */
@@ -593,6 +595,7 @@ export class MessageService implements Messages, Disposable {
 				stage.attempts++;
 				if (attempt.kind === 'submitted') {
 					if (attempt.effects.outcome === 'confirmed') {
+						this.deps.said?.(stage.target, typeof text === 'string' ? text : text());
 						return { status: 'success', effects: attempt.effects, attempts: stage.attempts, via: 'terminal' };
 					}
 					stage.effects = telling(stage.effects, attempt.effects);

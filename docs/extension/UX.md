@@ -76,7 +76,7 @@ language's natural grammar while preserving placeholders, product names and the 
 | Hover | `list.hoverBackground` |
 | Selection | `list.activeSelectionBackground`, `list.activeSelectionForeground` even after panel loses focus |
 | Keyboard focus | 1 px `list.focusOutline` inside row; none on the card a context menu is open on (D175) |
-| Work / idle / blocker / error | `charts.green` / `descriptionForeground` / `charts.yellow` / `charts.red` |
+| Busy / problem dot | `charts.green` / `charts.red`; no dot for anything else (D183) |
 | Status meaning and unknown evidence | RULES-3.2; second-line wording is PANEL-1.4 |
 | Controls | `button.*`, `input.*`, `inputValidation.*`, `scrollbarSlider.*` |
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
@@ -273,7 +273,7 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 
 ## Change log
 
-- 2026-11-02: 3.2's `agentSelectedResumable` is `agentSelectedPinnable` (D182).
+- 2026-11-02: 2.1 keeps the green busy and red problem dots alone (D183); 3.2's `agentSelectedResumable` is `agentSelectedPinnable` (D182).
 - 2026-11-02: 3.1 removes Copy Agent Reference, Message History..., Clear Filter and Copy Diagnostics, and 3.2 the card's
   Filter by This Location and Filter by This Folder, at the owner's request (D174); 2.1 and 2.3 leave the card a context
   menu is open on unframed (D175).

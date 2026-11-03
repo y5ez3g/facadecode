@@ -24,6 +24,7 @@ import { McpServerLaunch, shimLaunch as launchShim } from '../../transport/launc
 import { AgentTerminals, type AgentTerminal } from './agentTerminals';
 import { ExecutionSession, RECONCILE_MS } from './executionSession';
 import { PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from './ptydClient';
+import { submittedDraft, taken, TypedEnters } from './submissions';
 import { EARLIER_PROTOCOLS, PTYD_PROTOCOL } from '../../ptyd/protocol';
 
 /** How long a CLI has to end on the hang-up before ptyd kills its process group (LIFECYCLE-4.2): no UI waits for it. */
@@ -38,6 +39,12 @@ const START_ROWS = 30;
 
 /** How long after its process started a run is still starting while its CLI has shown no activity (CLIS-2.3, D81). */
 const STARTUP_MS = 20_000;
+/** How long work that stopped is still told as work: a CLI between two steps does not blink its dot and tab (RULES-3.2, D183). */
+const HOLD_MS = 1_000;
+/** How long an Enter the person typed waits for the reading of the input it submits, at most: a moment, never a stall (D184). */
+const READ_BEFORE_ENTER_MS = 150;
+/** How long typing sent with an Enter has to be drawn before the input is read: what it adds to the draft (D184). */
+const DRAWN_MS = 30;
 
 /** How long after a run a ptyd lists was told as not shown it is told again, should showing it have failed meanwhile. */
 const UNSHOWN_AGAIN_MS = 30_000;
@@ -106,6 +113,17 @@ interface Pair {
 	/** The last report told, to tell each change once. */
 	told?: string;
 	events?: { dispose(): void };
+	/** Its Facade tools were injected and have not connected yet: its startup waits for them, within its bound (D183). */
+	toolsPending?: boolean;
+	/** Whether the last report told said it works; and when its CLI was first seen not working since, by the monotonic clock (D183). */
+	workingTold?: boolean;
+	stoppedAt?: number;
+	holdCheck?: boolean;
+	/** Its input reader, as its launch planned it: what reads the text an Enter of the person's submits (CLIS-2.1, D184). */
+	inputAdapter?: string;
+	/** The person's typing, sent in turn: an Enter waits a moment for the reading of the input it submits (D184). */
+	typing?: Promise<void>;
+	readonly enters: TypedEnters;
 }
 
 /** A minimal event emitter for the port's events, independent of the editor's disposal order. */
@@ -171,6 +189,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
 	readonly onDidIdentify = this.identities.event;
 	readonly onDidPinTab = this.tabPins.event;
+	private readonly submissions = new Emitter<{ readonly run: RunId; readonly text: string }>();
+	readonly onDidSubmit = this.submissions.event;
 	private readonly transfers = new Emitter<void>();
 	private readonly toolConnections = new Emitter<RunId>();
 	private readonly toolDisconnections = new Emitter<RunId>();
@@ -393,6 +413,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			throw new Error('The agent was closed before its CLI started.');
 		}
 		pair.cli = plan.cli;
+		pair.inputAdapter = plan.input.adapter;
+		pair.toolsPending = plan.tools.state === 'injected';
 		// Where it runs now - a new worktree's folder, not the one it was accepted in - and as what: the title rules read them (CLIS-2.3)
 		pair.facts = { ...pair.facts, cwd: plan.cwd, displayName: plan.displayName, command: plan.command, cli: plan.cli };
 		this.listen(pair, client);
@@ -478,6 +500,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		// Restore the run's screen before opening its background terminal; input waits until the process is claimed again.
 		const pair = this.pairs.get(live.run) ?? this.create(facts, false, true);
 		pair.cli = live.meta.cli;
+		pair.inputAdapter = typeof live.meta.inputAdapter === 'string' ? live.meta.inputAdapter : undefined;
+		// Tools not connected yet as its window went: its startup still waits for them, within its bound (D183)
+		pair.toolsPending = live.meta.tools === 'connecting';
 		// Through the ptyd that holds it: this window's own, or one of an earlier protocol that still does (ARCHITECTURE-2.4)
 		pair.protocol = this.where.get(live.run) ?? PTYD_PROTOCOL;
 		let client: PtydClient;
@@ -744,7 +769,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private create(facts: PairFacts, reveal: boolean, deferTerminal = false): Pair {
 		const terminal = this.terminals.create(facts, reveal);
 		const pair: Pair = {
-			run: facts.run, protocol: PTYD_PROTOCOL, facts, terminal, lifetime: new AbortController(), cli: facts.cli, terminalTitle: ''
+			run: facts.run, protocol: PTYD_PROTOCOL, facts, terminal, lifetime: new AbortController(), cli: facts.cli, terminalTitle: '', enters: new TypedEnters()
 		};
 		this.pairs.set(facts.run, pair);
 		if (!deferTerminal) {
@@ -760,9 +785,68 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				const { screen, seq } = await client.request('attach', { run });
 				return { screen, seq };
 			},
-			input: (data: string) => void client.request('input', { run, data }).catch(err => this.options.log(`Could not type into ${run}: ${messageOf(err)}`)),
+			input: (data: string) => this.typed(client, run, data),
 			resize: (columns: number, rows: number) => void client.request('resize', { run, cols: columns, rows }).catch(() => undefined)
 		};
+	}
+
+	/** Turns the spinner on `run`'s tab while its card's dot is green, and stops it otherwise (LIFECYCLE-2.2, D185). */
+	spin(run: RunId, busy: boolean): void {
+		this.pairs.get(run)?.terminal.pty.spin(busy);
+	}
+
+	/**
+	 * What the person typed into `run`'s terminal, sent to its process in turn. An Enter waits a moment for its input reader's reading
+	 * of what it submits - never longer than {@link READ_BEFORE_ENTER_MS} - and a draft the CLI then takes is told, for its card's second
+	 * line (PANEL-1.4, D184). A run without an input reader, or of a ptyd that reads no input, is typed into as it is.
+	 */
+	private typed(client: PtydClient, run: RunId, data: string): void {
+		const send = (chunk: string) => {
+			if (chunk) {
+				void client.request('input', { run, data: chunk }).catch(err => this.options.log(`Could not type into ${run}: ${messageOf(err)}`));
+			}
+		};
+		const pair = this.pairs.get(run);
+		const adapter = pair?.inputAdapter;
+		if (!pair || !adapter || pair.protocol < 9) {
+			send(data);
+			return;
+		}
+		const typing = (pair.typing ?? Promise.resolve()).then(async () => {
+			for (let rest = data; rest;) {
+				const enter = pair.enters.next(rest);
+				if (!enter) {
+					send(rest);
+					return;
+				}
+				const before = rest.slice(0, enter.index);
+				send(before);
+				const reading = await this.readBeforeEnter(run, adapter, !!before);
+				send(rest.slice(enter.index, enter.index + enter.length));
+				rest = rest.slice(enter.index + enter.length);
+				const draft = submittedDraft(reading);
+				if (draft !== undefined) {
+					void taken(draft, () => this.inspectInput(run, adapter).catch(() => undefined), ms => timeout(ms, pair.lifetime.signal)).then(took => {
+						if (took && this.pairs.get(run) === pair) {
+							this.submissions.fire({ run, text: draft });
+						}
+					}, () => undefined);
+				}
+			}
+		}).catch(err => this.options.log(`Could not type into ${run}: ${messageOf(err)}`));
+		pair.typing = typing;
+	}
+
+	/** `run`'s input as `adapter` reads it before an Enter, what was typed with it drawn first; none where it cannot be read at once. */
+	private async readBeforeEnter(run: RunId, adapter: string, typedWith: boolean): Promise<InputReading | undefined> {
+		try {
+			if (typedWith) {
+				await timeout(DRAWN_MS);
+			}
+			return await Promise.race([this.inspectInput(run, adapter), timeout(READ_BEFORE_ENTER_MS).then(() => undefined)]);
+		} catch {
+			return undefined;
+		}
 	}
 
 	/** Hears what ptyd tells of `pair`'s run through `client`. */
@@ -796,6 +880,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			}
 			case 'tools':
 				this.toolConnections.fire(pair.run);
+				if (pair.toolsPending) {
+					pair.toolsPending = false;
+					this.tell(pair);
+				}
 				break;
 			case 'toolsGone':
 				this.toolDisconnections.fire(pair.run);
@@ -839,8 +927,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		if (!unshown) {
 			pair.shown = true;
 		}
-		const left = unshown && !pair.shown ? (pair.startupEnds ?? 0) - performance.now() : 0;
+		// Nor is it over while its Facade tools have not connected; past its bound, either is a start that did not become ready (D183)
+		const pending = (unshown && !pair.shown) || !!pair.toolsPending;
+		const left = pending ? (pair.startupEnds ?? 0) - performance.now() : 0;
 		const awaiting = left > 0;
+		const notReady = pending && !awaiting && pair.startupEnds !== undefined;
 		if (awaiting && !pair.startupCheck) {
 			pair.startupCheck = true;
 			void timeout(Math.ceil(left), pair.lifetime.signal).then(() => {
@@ -849,6 +940,27 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 					this.tell(pair);
 				}
 			}, () => undefined);
+		}
+		// Work that stopped is told a second later, its CLI perhaps only between two steps: its dot and tab do not blink. A blocker or an
+		// error is told at once (RULES-3.2, D183)
+		if (facts.activity === 'working') {
+			pair.stoppedAt = undefined;
+		} else if (pair.workingTold && !facts.blocker && !facts.error) {
+			const now = performance.now();
+			pair.stoppedAt ??= now;
+			const held = pair.stoppedAt + HOLD_MS - now;
+			if (held > 0) {
+				if (!pair.holdCheck) {
+					pair.holdCheck = true;
+					void timeout(Math.ceil(held), pair.lifetime.signal).then(() => {
+						pair.holdCheck = false;
+						if (this.pairs.get(pair.run) === pair) {
+							this.tell(pair);
+						}
+					}, () => undefined);
+				}
+				return;
+			}
 		}
 		const reason = awaiting
 			? undefined
@@ -869,6 +981,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			...(pair.status ? { observedAt: pair.status.at } : {}),
 			reporting: facts.reporting,
 			...(awaiting ? { awaitingActivity: true } : {}),
+			...(notReady ? { notReady: true } : {}),
 			...(facts.blocker ? { blocker: facts.blocker } : {}),
 			...(reason ? { reason } : {}),
 			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("CLI reported an error") } : {}),
@@ -878,6 +991,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		const told = JSON.stringify(report);
 		if (told !== pair.told) {
 			pair.told = told;
+			pair.workingTold = report.activity === 'working';
+			pair.stoppedAt = undefined;
 			this.reports.fire(report);
 		}
 	}
@@ -990,6 +1105,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		};
 		// Told as the last report, so that the same report as before the loss is told again once the run is claimed
 		pair.told = JSON.stringify(report);
+		pair.workingTold = false;
 		this.reports.fire(report);
 	}
 

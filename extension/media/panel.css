@@ -309,8 +309,8 @@ body.facade-modern {
 
 /*
  * What is known of the agent, on its avatar's corner as a chat app's presence, cut out of the row so that it reads on any background
- * (RULES-3.2): green and breathing for startup/work; grey and still for reliable idle; yellow and still for a native blocker;
- * red and still for an error, unknown activity included (D127).
+ * (RULES-3.2): green and breathing for work, red and still for an error, and none for anything else - startup, idle, a native
+ * blocker or unknown activity, which the hover says (D183).
  */
 .dot {
 	position: absolute;
@@ -334,13 +334,8 @@ body.facade-modern {
 	opacity: 0;
 	animation: facade-breathe 1.8s ease-in-out infinite;
 }
-/* Description text can be translucent (notably in high contrast): paint it over the row, never over the avatar beneath it. */
-.dot.not-working {
-	background: linear-gradient(var(--vscode-descriptionForeground), var(--vscode-descriptionForeground)),
-		linear-gradient(var(--facade-row-background), var(--facade-row-background)), var(--facade-base-background);
-}
-.dot.blocked { background: var(--vscode-charts-yellow); }
 .dot.error { background: var(--vscode-charts-red); }
+.dot.none { display: none; }
 
 /* Work: the dot fades towards the row and back - by opacity alone, its cut-out ring staying as it is (PANEL-1.4) */
 @keyframes facade-breathe {

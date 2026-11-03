@@ -12,6 +12,12 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
 
+/**
+ * A tab title without the spinner's frame a busy agent's tab shows before its name (D185). This driver is copied alone into the
+ * test window's extensions, so it imports nothing of the extension's at run time.
+ */
+const unspun = (title: string) => title.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /u, '');
+
 const OUT = process.env.FACADE_IT_CONVERSION!;
 const RECORD = process.env.FACADE_IT_RECORD!;
 const REOPEN = process.env.FACADE_IT_REOPEN === '1';
@@ -56,7 +62,7 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 /** Finish a native turn before closing: a preallocated ID alone is not a persisted conversation. */
 async function nativeTurn(runId: string, name: string): Promise<void> {
 	await until('native CLI input', async () => await vscode.commands.executeCommand('facade.messageInput', runId) === 'usable' ? true : undefined, 60_000);
-	const terminal = await until('its native terminal', async () => vscode.window.terminals.find(each => each.name.startsWith(name)));
+	const terminal = await until('its native terminal', async () => vscode.window.terminals.find(each => unspun(each.name).startsWith(name)));
 	const answer = `READY_${Date.now().toString(36).toUpperCase()}`;
 	const prompt = `Reply with exactly ${answer}. Do not use tools.`;
 	terminal.sendText(prompt, false);
@@ -77,7 +83,7 @@ async function pinState(runId: string, pinned: boolean): Promise<void> {
 	});
 	await vscode.commands.executeCommand('facade.revealAgent', { run_id: runId });
 	await until('its native tab to agree', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
-		.some(tab => tab.input instanceof vscode.TabInputTerminal && tab.label.startsWith(card.name) && tab.isPinned === pinned) || undefined);
+		.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && tab.isPinned === pinned) || undefined);
 }
 
 export async function activate(): Promise<void> {
@@ -100,7 +106,7 @@ export async function activate(): Promise<void> {
 			const pid = await until('the CLI to start', async () => pidOf(alias));
 			// Its terminal open, as a person sees it before adding a folder: one the restart beat to opening tells the editor no
 			// process, which leaves its tab beside the new one, as Facade retires no tab it cannot tell from another's (ARCHITECTURE-2.2)
-			const terminal = await until('its terminal', async () => vscode.window.terminals.find(each => each.name.startsWith(card.name)));
+			const terminal = await until('its terminal', async () => vscode.window.terminals.find(each => unspun(each.name).startsWith(card.name)));
 			let opened = false;
 			void Promise.resolve(terminal.processId).then(() => { opened = true; }, () => { opened = true; });
 			await until('its terminal to open', async () => opened || undefined);
@@ -156,8 +162,8 @@ export async function activate(): Promise<void> {
 		await pinState(runId, true);
 		const card = await until('the same card in the workspace', async () => (await state()).cards.find(each => each.runId === runId)).catch(() => undefined);
 		// The editor closes the terminals of the extension host it restarted in its own time: what the window settles to is judged
-		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => each.name === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
-		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: vscode.window.terminals.map(each => each.name) });
+		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => unspun(each.name) === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
+		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: vscode.window.terminals.map(each => unspun(each.name)) });
 	} catch (err) {
 		const screens = await state().then(current => Promise.all(current.cards.map(async card => ({ name: card.name,
 			text: await vscode.commands.executeCommand('facade.screen', card.runId, 500) }))), () => []);

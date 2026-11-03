@@ -49,6 +49,8 @@ class FakeExecution implements ExecutionPort {
 	elsewhere: ConversationKey[] = [];
 	async conversations(): Promise<readonly ConversationKey[]> { return this.elsewhere; }
 	pinTab(run: RunId, pinned: boolean): void { this.pinnedTabs.push({ run, pinned }); }
+	readonly spins: { run: RunId; busy: boolean }[] = [];
+	spin(run: RunId, busy: boolean): void { this.spins.push({ run, busy }); }
 	failSpawnFor?: (plan: LaunchPlan) => boolean;
 	readonly transfers = new Emitter<void>();
 	readonly toolConnections = new Emitter<RunId>();
@@ -1197,6 +1199,46 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		const after = [reload.agents.list().map(each => [each.id, each.pin, each.pinnable]), reload.plans.length];
 		await reload.agents.close(run);
 		assert.deepStrictEqual([after, reload.pins()], [[[[run, world.pins()[0].id, true]], 0], []]);
+	});
+
+	test('D184: the last message sent to a run is kept - an empty one is none, a title never replaces it - with its process across a reload', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Line', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		const report = (title: string) => world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title });
+		const said: (string | undefined)[] = [];
+		const seen = () => said.push(world.agents.get(id)?.said);
+		report('✳ Claude Code'); seen();
+		world.agents.said(id, '  fix the\nlogin   bug  '); seen();
+		report('⠂ Fixing the login bug'); seen();
+		world.agents.said(id, '/clear'); seen();
+		world.agents.said(id, '   '); seen();
+		const meta = world.execution.metas.get(id)!;
+		const reload = setUp();
+		reload.execution.liveRuns = [{ run: id, claimedElsewhere: false, pid: 4242, startedAt: 1000, meta }];
+		await reload.agents.restore();
+		reload.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, title: '✳ Something else' });
+		assert.deepStrictEqual([said, meta.said, reload.agents.get(id)?.said], [
+			[undefined, 'fix the login bug', 'fix the login bug', '/clear', '/clear'], '/clear', '/clear'
+		]);
+	});
+
+	test('D185: a run\'s tab spins while its dot is green - starting or working - and stops once it is idle, waits for the person or is red', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Spin', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		const report = (more: Partial<ActivityReport>) => world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: '', ...more });
+		report({ activity: 'unknown', reporting: false, awaitingActivity: true });
+		report({ activity: 'not_working' });
+		report({ activity: 'working' });
+		report({ activity: 'working', blocker: { kind: 'permission' } });
+		report({ activity: 'working' });
+		report({ activity: 'not_working', notReady: true });
+		report({ activity: 'not_working' });
+		world.execution.exits.fire({ run: id, code: 3, interruptVerified: false });
+		// Accepted, it starts green; this test's execution reports nothing at its start, as a window's does at once, so it stops until
+		// the first report here
+		assert.deepStrictEqual(world.execution.spins.filter(each => each.run === id).map(each => each.busy), [true, false, true, false, true, false, true, false]);
 	});
 
 	test('a conversation has one Pin: pinning a card whose CLI resumed a pinned conversation takes that Pin last among the Pins, and a pinned card switching to it replaces it - Unpin then leaves none to restore (RULES-4.2, LIFECYCLE-3.4, PANEL-2.1, D173)', async () => {

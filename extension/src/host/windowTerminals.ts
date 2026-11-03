@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import type { OwnerClaim } from '../base/ownership';
+import { unspun } from '../base/tabSpinner';
 import { isTerminalRegistration, TERMINAL_REGISTRATION_MS } from '../base/windowIdentity';
 import { beginWindowTerminals, retireWindowTerminals, type RetiredTerminals } from '../record/windowIdentity';
 
@@ -137,7 +138,8 @@ export class WindowTerminals implements vscode.Disposable {
 			let retired = false;
 			for (const [title, group] of groups) {
 				if (!group.every(run => runs.has(run) && owner.runs.has(run))) { continue; }
-				const old = found.filter(each => each.name === title && each.terminal.name === title && eligible(each.terminal)
+				// A working agent's tab title has a spinner's frame before its name, a tick apart from one to the next (D185)
+				const old = found.filter(each => unspun(each.name) === title && unspun(each.terminal.name) === title && eligible(each.terminal)
 					&& vscode.window.terminals.includes(each.terminal) && !(each.pid !== undefined && each.pid > 0));
 				// Unknown PIDs do not shrink an ambiguous group into an apparently exact one.
 				if (old.length !== group.length || old.some(each => each.pid === undefined || !Number.isFinite(each.pid) || each.pid > 0)) { continue; }
@@ -163,7 +165,7 @@ export class WindowTerminals implements vscode.Disposable {
 		if (this.storage && this.epoch) {
 			try {
 				retireWindowTerminals(this.storage.directory, this.epoch, [...this.owners.values()].map(owner => ({ claim: owner.claim,
-					runs: [...owner.runs].map(([run, terminal]) => ({ run, title: terminal.name })) })));
+					runs: [...owner.runs].map(([run, terminal]) => ({ run, title: unspun(terminal.name) })) })));
 			} catch (error) { this.storage.log(`Could not record retired terminal resources: ${messageOf(error)}`); }
 		}
 		this.owners.clear();

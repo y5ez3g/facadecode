@@ -38,7 +38,7 @@ let stateReceivedAt = performance.now();
 /** Where the person was when this view last hid: restored on the first list drawn, without taking input focus (PANEL-3.1). */
 let restoring = savedBrowsing();
 
-const DOTS: readonly unknown[] = ['working', 'idle', 'blocked', 'error'];
+const DOTS: readonly unknown[] = ['working', 'error', 'none'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
 const AVATAR_COLORS: readonly unknown[] = ['blue', 'orange', 'purple'];
 
@@ -470,9 +470,8 @@ function update(entry: Drawn, card: Card): void {
 		entry.look = look;
 		entry.avatar.firstElementChild?.replaceWith(newFace(card.avatar));
 	}
-	const kind = card.dot === 'idle' ? 'not-working' : card.dot;
-	if (!entry.dot.classList.contains(kind) || entry.dot.title !== card.stateText) {
-		entry.dot.className = `dot ${kind}`;
+	if (!entry.dot.classList.contains(card.dot) || entry.dot.title !== card.stateText) {
+		entry.dot.className = `dot ${card.dot}`;
 		entry.dot.title = card.stateText;
 	}
 	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3, D176)

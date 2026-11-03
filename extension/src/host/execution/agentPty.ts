@@ -5,12 +5,16 @@
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { MouseReports } from '../../base/mouseReports';
+import { SPINNER_FRAMES as FRAMES, spunName } from '../../base/tabSpinner';
 
 /** The most output an unopened terminal keeps for its first draw; beyond it, the run's screen is taken anew as it opens. */
 const MOST_UNOPENED = 8 * 1024 * 1024;
 
 /** The most names said for a tab that are still told from a person's as the tab shows them: far more than are ever on their way. */
 const MOST_SAID = 32;
+
+/** How often a working agent's tab turns its spinner to the next frame (D185). */
+const FRAME_MS = 100;
 
 /** A tab title as the editor shows it, which drops line breaks and tabs from what it is given (LIFECYCLE-2.2). */
 function shownAs(title: string): string {
@@ -81,8 +85,13 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private seen: string;
 	/** The mouse reports the person's clicks type, a release the editor could not measure given its press's position (D170). */
 	private readonly mouse = new MouseReports();
+	/** Whether its tab spins while the agent works, the frame it shows and what turns it (D185). */
+	private spinning = false;
+	private frame = 0;
+	private spinner: ReturnType<typeof setInterval> | undefined;
 
-	constructor(private name: string, private readonly log: (message: string) => void) {
+	/** `still` says whether the editor is to reduce motion: the tab then shows one frame while the agent works (D185). */
+	constructor(private name: string, private readonly log: (message: string) => void, private readonly still: () => boolean = () => false) {
 		this.created = name;
 		this.seen = name;
 	}
@@ -166,9 +175,36 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 	}
 
-	/** The tab's name (LIFECYCLE-2.2): only the agent's display name. */
+	/** The tab's name (LIFECYCLE-2.2): only the agent's display name, which its tab shows after the spinner while it is busy (D185). */
 	tabName(): string {
 		return this.name;
+	}
+
+	/** Spins a frame before the agent's name on its tab while it is busy, and shows the name alone once it is not (LIFECYCLE-2.2, D185). */
+	spin(working: boolean): void {
+		if (working === this.spinning) {
+			return;
+		}
+		this.spinning = working;
+		clearInterval(this.spinner);
+		this.spinner = undefined;
+		this.frame = 0;
+		if (working && !this.still()) {
+			this.spinner = setInterval(() => {
+				this.frame = (this.frame + 1) % FRAMES.length;
+				if (this.opened) {
+					this.nameEmitter.fire(this.titled());
+				}
+			}, FRAME_MS);
+		}
+		if (this.opened) {
+			this.say();
+		}
+	}
+
+	/** What its tab is given to show: the name, after the spinner's frame while the agent is busy (D185). */
+	private titled(): string {
+		return this.spinning ? `${FRAMES[this.frame]} ${this.name}` : this.name;
 	}
 
 	/** The native terminal's initial name, set before VS Code opens the pseudoterminal. */
@@ -193,13 +229,19 @@ export class AgentPty implements vscode.Pseudoterminal {
 			this.resetDue = false;
 			return 'reset';
 		}
-		const at = this.said.indexOf(shown);
+		// The spinner's frame before a name is its own: what the title names is the name after it (D185)
+		const spun = spunName(shown);
+		const named = spun ?? shown;
+		const at = this.said.indexOf(named);
 		if (at >= 0) {
 			// The names said before it are shown already, or never will be
 			this.said.splice(0, at);
 			return undefined;
 		}
-		return { renamed: shown };
+		if (spun !== undefined && spun === shownAs(this.name)) {
+			return undefined;
+		}
+		return { renamed: named };
 	}
 
 	open(dimensions: vscode.TerminalDimensions | undefined): void {
@@ -247,6 +289,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	dispose(): void {
 		this.completeOpen(false);
+		clearInterval(this.spinner);
+		this.spinner = undefined;
 		this.binding = undefined;
 		this.writeEmitter.dispose();
 		this.nameEmitter.dispose();
@@ -266,7 +310,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 				this.said.shift();
 			}
 		}
-		this.nameEmitter.fire(name);
+		this.nameEmitter.fire(this.titled());
 	}
 
 	/** Takes the run's screen and draws it; output that comes meanwhile is drawn after it. */

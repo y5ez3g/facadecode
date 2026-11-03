@@ -10,6 +10,7 @@ import { FacadeError, invalid } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
 import { labelOf, normalizeName, suggestName } from './names';
 import { REQUEST_MS } from './requests';
+import { dotOf } from './status';
 import {
 	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, LocationId,
 	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
@@ -61,6 +62,8 @@ interface Run {
 	prompt?: LaunchPlan['prompt'];
 	/** Settles once what its start types before its first turn is done or given up (COLLABORATION-2.2). */
 	warm?: Promise<void>;
+	/** Whether its tab was told to spin: while its dot is green (D185). */
+	spinning?: boolean;
 }
 
 interface StartOptions {
@@ -92,6 +95,8 @@ function pinnableOf(facts: RunFacts, exactResume: boolean | undefined): boolean 
 	return !!facts.resumable || (!!exactResume && facts.lifecycle !== 'ended');
 }
 const RESTORE_CONCURRENCY = 2;
+/** The most a card's second line keeps of a message sent: far more than any card shows (PANEL-1.4). */
+const MOST_LINE = 1024;
 /** How long a failed listing of the running conversations waits before it is asked again, at first and at most. */
 const CONVERSATIONS_RETRY_MS = 2_000;
 const MOST_CONVERSATIONS_RETRY_MS = 30_000;
@@ -151,6 +156,9 @@ export class AgentService implements Agents, Disposable {
 		}
 		if (execution.onDidPinTab) {
 			this.subscriptions.push(execution.onDidPinTab(({ run, pinned }) => this.tabPinned(run, pinned)));
+		}
+		if (execution.onDidSubmit) {
+			this.subscriptions.push(execution.onDidSubmit(({ run, text }) => this.said(run, text)));
 		}
 		if (execution.onDidClosePair) {
 			this.subscriptions.push(execution.onDidClosePair(run => void this.tabClosed(run)));
@@ -808,6 +816,22 @@ export class AgentService implements Agents, Disposable {
 		);
 	}
 
+	/**
+	 * A message sent to the run: what its CLI took from its input after the person's Enter, or a message Facade delivered. Its card's
+	 * second line says the last one, its CLI's title no more (PANEL-1.4, D184); kept with its process across a reload.
+	 */
+	said(id: RunId, text: string): void {
+		const run = this.runs.get(id);
+		const said = displayLine(text, MOST_LINE);
+		if (!run || run.facts.lifecycle === 'ended' || !said || said === run.facts.said) {
+			return;
+		}
+		this.update(run, { said }, 'reported');
+		if (run.facts.pid !== undefined) {
+			this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
+		}
+	}
+
 	pin(id: RunId): void {
 		if (this.ownershipLost) { throw invalid('ownership_lost', 'Another window owns this workspace.'); }
 		const run = this.runs.get(id);
@@ -1053,6 +1077,7 @@ export class AgentService implements Agents, Disposable {
 			disconnected: report.disconnected || undefined,
 			reporting: report.reporting,
 			awaitingActivity: report.awaitingActivity,
+			notReady: report.notReady,
 			activityReason: report.reason,
 			blocker: report.blocker,
 			title: report.title === '' ? undefined : report.title ?? run.facts.title
@@ -1154,6 +1179,13 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	private emit(change: RunChange): void {
+		// Its tab spins while its dot is green, by the same rule (LIFECYCLE-2.2, D185)
+		const run = this.runs.get(change.run);
+		const busy = !!run && dotOf(run.facts) === 'working';
+		if (run && busy !== !!run.spinning) {
+			run.spinning = busy;
+			this.deps.execution.spin?.(change.run, busy);
+		}
 		for (const listener of [...this.listeners]) {
 			listener(change);
 		}
@@ -1171,7 +1203,7 @@ function isRunRecord(value: unknown): value is RunFacts {
 		typeof value.lifecycle === 'string' && ['starting', 'running', 'ended'].includes(value.lifecycle) &&
 		typeof value.phase === 'string' && ['creating_worktree', 'launching_cli', 'running'].includes(value.phase) &&
 		typeof value.activity === 'string' && ['working', 'not_working', 'unknown'].includes(value.activity) && typeof value.reporting === 'boolean' &&
-		['title', 'activityReason'].every(key => value[key] === undefined || typeof value[key] === 'string') &&
+		['title', 'activityReason', 'said'].every(key => value[key] === undefined || typeof value[key] === 'string') &&
 		['pid', 'startedAt'].every(key => value[key] === undefined || typeof value[key] === 'number' && Number.isFinite(value[key])) &&
 		(value.blocker === undefined || isJsonObject(value.blocker) && typeof value.blocker.kind === 'string' &&
 			['permission', 'question', 'auth', 'unknown'].includes(value.blocker.kind) && (value.blocker.text === undefined || typeof value.blocker.text === 'string')) &&
@@ -1243,6 +1275,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' || meta.toolsProblem === 'disconnected' ? { toolsProblem: meta.toolsProblem } : {}),
 		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
 		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
+		...(typeof meta.said === 'string' && meta.said ? { said: meta.said } : {}),
 		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),
 		...(isCapability(meta.inputCapability) ? { inputCapability: meta.inputCapability } : {})
 	};
@@ -1280,6 +1313,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.toolsProblem !== undefined ? { toolsProblem: facts.toolsProblem } : {}),
 		...(facts.toolsFile !== undefined ? { toolsFile: facts.toolsFile } : {}),
 		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
+		...(facts.said !== undefined ? { said: facts.said } : {}),
 		...(facts.inputAdapter !== undefined ? { inputAdapter: facts.inputAdapter } : {}),
 		...(facts.inputCapability !== undefined ? { inputCapability: facts.inputCapability } : {})
 	};

@@ -247,8 +247,13 @@ export interface ActivityReport {
 	readonly title?: string;
 	/** Whether this run's CLI has proven it reports activity (S12). */
 	readonly reporting: boolean;
-	/** Its CLI has shown no activity yet, and its run is still starting: no later than its bound from its process start (CLIS-2.3, D81). */
+	/**
+	 * Its run is still starting - its CLI has not shown its activity yet, or its Facade tools have not connected - within its bound
+	 * from its process start (CLIS-2.3, D81, D183).
+	 */
 	readonly awaitingActivity?: true;
+	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly (D183). */
+	readonly notReady?: true;
 }
 
 export interface ExitReport {
@@ -276,7 +281,11 @@ export type CleanupResult = 'terminated' | 'already_exited' | 'unconfirmed' | 'f
 export interface ExecutionPort {
 	readonly onDidIdentify?: Event<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>;
 	readonly onDidPinTab?: Event<{ readonly run: RunId; readonly pinned: boolean }>;
+	/** The person pressed Enter over text in a run's input, and its CLI took it (PANEL-1.4, D184): that text, as its input drew it. */
+	readonly onDidSubmit?: Event<{ readonly run: RunId; readonly text: string }>;
 	pinTab?(run: RunId, pinned: boolean): void;
+	/** Turns the spinner on the run's tab while its card's dot is green, and stops it otherwise (LIFECYCLE-2.2, D185). */
+	spin?(run: RunId, busy: boolean): void;
 	conversations?(): Promise<readonly ConversationKey[]>;
 	/** Creates the run's editor terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). */
 	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void;
@@ -361,6 +370,8 @@ export interface RunMeta {
 	readonly toolsProblem?: ToolsProblem;
 	readonly toolsFile?: string;
 	readonly promptLine?: string;
+	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4, D184). */
+	readonly said?: string;
 	/** Its ordinary-message input as its launch planned it, kept across a reload. */
 	readonly inputAdapter?: string;
 	readonly inputCapability?: CapabilityState;
@@ -531,12 +542,22 @@ export interface RunFacts {
 	readonly activitySince?: number;
 	readonly disconnected?: boolean;
 	readonly activityReason?: string;
-	/** Whether the run's CLI proved it reports activity; without it activity is unknown, shown red (RULES-3.2). */
+	/** Whether the run's CLI proved it reports activity; without it activity is unknown (RULES-3.2). */
 	readonly reporting: boolean;
-	/** Its process started, its CLI has shown no activity yet: the run is still starting, green, within CLIS-2.3's bound (D81). */
+	/**
+	 * Its process started, and its CLI has not shown its activity yet or its Facade tools have not connected: the run is still
+	 * starting, within CLIS-2.3's bound (D81, D183).
+	 */
 	readonly awaitingActivity?: true;
+	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly, red (D183). */
+	readonly notReady?: true;
 	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	readonly title?: string;
+	/**
+	 * The last message sent to it (PANEL-1.4, D184): what its CLI took from its input after the person's Enter, or a message Facade
+	 * delivered. Its card's second line says it from then on, never the CLI's title again.
+	 */
+	readonly said?: string;
 	/** The unresolved error that makes the card red (RULES-3.2): launch failure, abnormal exit, reported error. */
 	readonly error?: RunError;
 	/** How the process ended, where it ended and the pair is retained (abnormal exit or failed launch, RULES-3.3). */

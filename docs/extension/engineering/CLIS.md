@@ -173,8 +173,8 @@ one key at a time - 21.1 s for 9,249 characters - in the paste's own time, the w
 before Enter (D132) - and delivery
 confirmed once the input box is empty again. State actual full/partial/unknown effects. A later attempt never types the
 text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require a reconciliation API.
-An unknown version still starts its terminal, and its activity can still be verified per run under 2.3. Unproved
-activity shows red with an error once the run's startup is over (2.3). Every CLI advertised as fully supported must actually demonstrate the required
+An unknown version still starts its terminal, and its activity can still be verified per run under 2.3. A CLI that never
+shows its activity is red, with its reason, once the run's startup bound passed (2.3, D183). Every CLI advertised as fully supported must actually demonstrate the required
 capabilities on its stated platform.
 
 ### 2.2 MCP files and cleanup
@@ -243,11 +243,12 @@ Activity reporting is verified for a run when that run's CLI
 answers the OSC 7501 capability probe or sends valid reports, independent of CLI version; CLI-specific quirks remain
 version-scoped evidence. OpenCode reports from its 2.x line; its 1.x line, which sends no reports, is not started
 (D78, D145). Ignore worker reports carrying a distinct worker ID. Respond to capability probes only for
-protocols implemented by the PTY adapter. A run is still starting, green with its startup stage, until its CLI first
-shows its activity - a valid report or, where its screen is read, a state its reader knows - for at most 20 s from its
-process start, a reloaded window counting from that start too (D81). Past that bound, a missing reliable activity
-report - none at all, or a probe answered and no report since - is a red status error with its reason in the second
-line, not a neutral dot; a report the CLI clears is one at once. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A supported terminal
+protocols implemented by the PTY adapter. A run is still starting, with its startup stage, until its CLI first shows its
+activity - a valid report or, where its screen is read, a state its reader knows - and its injected Facade tools connect,
+for at most 20 s from its process start, a reloaded window counting from that start too (D81, D183). Past that bound, a
+run whose CLI never showed its activity - no report at all, or a probe answered and no report since - or whose tools never
+connected did not start properly: red, with its reason (RULES-3.2). A report the CLI clears later is unknown activity,
+never idle. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A supported terminal
 animation may establish working, but its absence supplies no idle proof.
 
 Muse Code's observed Windows versions send no reports, so its adapter names a screen reader that ptyd applies to a run
@@ -512,7 +513,7 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.4 | Each built-in's destination discovery, unknown-version launch, matching profile/PATH/env/quoting, Windows launcher recognition, native permission mapping, explicit per-call model/effort and native defaults |
-| 2.1–2.3 | Adapter evidence, layout-based input readers on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, pre-approved Facade tools, optional server, owned-file cleanup, startup until the first activity or its bound - a reload too - then red unknown, title sanitizing for each built-in's titles, Muse Code's screen reader on its fixtures and its reports' precedence |
+| 2.1–2.3 | Adapter evidence, layout-based input readers on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, pre-approved Facade tools, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, title sanitizing for each built-in's titles, Muse Code's screen reader on its fixtures and its reports' precedence |
 | 3.1–3.4 | `.enabled` affects new starts only, custom CLIs require Resume without capability declarations, minimal argument/env schema, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
 | 4.1–4.2 | Show Agent Launch describes and redacts the configured launch; staged cwd validation; version invalidation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes, no claims inferred from historical tables |
@@ -521,6 +522,7 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-02: 2.3's startup also waits for the run's Facade tools; a run not ready by its bound is red (D183).
 - 2026-11-02: 2.2 brings a Facade's own content up to date whatever wrote it - another version, another Facade data
   directory or a change since - and marks the skill with its Facade version so that a later one stands (D179).
 

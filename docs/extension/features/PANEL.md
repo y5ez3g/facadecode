@@ -90,25 +90,27 @@ space keeps its visible shape smaller than the name's letters (D122).
 
 ### 1.4 Second line and dot
 
-**The second line adds the most useful known fact without claiming task completion.**
+**The second line says what was last sent to the agent, unless its dot is red or its CLI waits for the person.**
 
-Priority: retained failure or specific connection/status error; known native blocker; generic activity-unavailable
-explanation; unavailable Facade tools; active startup stage, active until the CLI first shows its activity (CLIS-2.3);
-CLI title; creation prompt first line; fallback. When a known native blocker coexists with unavailable activity, lead with
-the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
-A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file}`,
-or `Cannot work with other agents: its Facade tools stopped` once its tools went away (D136), and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
-title. Fallbacks: `Working`, `Idle`, `Activity unavailable`. Idle alone proves neither an empty composer nor usable input;
-there is no separate first-message readiness claim. Never `Done, waiting for you` from a turn end. Normal work/idle shows the CLI title or
-creation prompt directly, without a repeated `Working`/`Idle` prefix. Native blockers lead with `Needs permission`,
+It says the last message sent to the agent: the person's text after a nonempty Enter, slash commands included, read from
+its input as drawn; a message Facade delivered; or the task it was started with, its creation prompt's first line. Before
+any, it says its CLI title's words, the spinner frame or state symbol a CLI puts before them left out for every CLI; once a
+message was sent, a title never replaces it, and the hover keeps the title as the CLI set it (D160, D184). The last message
+is kept across a reload. Two cases say something else while they last: a red dot says why (RULES-3.2) - the error, the Facade
+tools it cannot use or the start not ready - and a native blocker says what it waits for.
+A CLI without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file}`,
+or `Cannot work with other agents: its Facade tools stopped` once its tools went away (D136), and stays usable.
+Fallbacks, before any message or title: the startup stage, `Working`, `Idle`, `Activity unavailable`. Idle alone proves neither an empty composer nor usable input;
+there is no separate first-message readiness claim. Never `Done, waiting for you` from a turn end. Normal work/idle shows the message or
+title directly, without a repeated `Working`/`Idle` prefix. Native blockers lead with `Needs permission`,
 `Sign-in required` or `Waiting for an answer`, followed by the CLI's original words when present. A reported blocker with
 no recognized kind says `Needs attention`, preserving its original words. Errors lead with
-`Error: {reason}`; unavailable activity names that state before its explanation. No popup solely for a native blocker (D127).
+`Error: {reason}`; why activity is unavailable is the hover's. No popup solely for a native blocker (D127).
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
 dot or notification rules. Tools injected but not yet connected say `Not connected to other agents yet` in the hover;
-after startup this also precedes the CLI title in the second line, below errors and blockers. It is not a failure inferred
-from elapsed time and does not change the dot. An actual tool connection removes the message; known injection failures
+startup waits for them, and once its bound passed without them the dot is red and the second line says so (D183). An
+actual tool connection removes the message; known injection failures
 or a lost existing connection keep their specific explanation. Ended cards do not claim a pending tool connection.
 Working breathes every 1.8 s using opacity only (0–65% overlay of row background); reduced
 motion is static. Hover explicitly says `Starting`, `Working`, `Idle`, the native blocker's kind, `Error: {reason}` or
@@ -283,6 +285,8 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
+- 2026-11-02: 1.4 says the last message sent to the agent, or before any its title's words without the frame before them,
+  unless its dot is red or its CLI waits for the person (D184); startup waits for the tools, and the dot is RULES-3.2's (D183).
 - 2026-11-02: 2.1 moves an unpinned card first among the other cards, just below the Pins, where it was last (D181).
 - 2026-11-02: 2.1 puts a card last in the area it enters - new and unpinned cards last among the others, a new Pin last
   among the Pins - and scrolls a new card the person started into view (D173); 2.2 and 2.3 remove the card's Copy Agent

@@ -67,21 +67,65 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 				const { activity, reporting, blocker } = activityOf({ ...report, state: 'blocked' });
 				const facts = run({ cli, activity, reporting, blocker });
 				const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
-				assert.deepStrictEqual([card.dot, card.stateText, card.line], ['blocked', 'Needs attention', `Needs attention · ${message}`], cli);
+				assert.deepStrictEqual([card.dot, card.stateText, card.line], ['none', 'Needs attention', `Needs attention · ${message}`], cli);
 				assert.ok(card.tooltip.includes(WORDS.reason(message)), cli);
 			}
 		}
 	});
 
-	test('connecting tools are visible without implying a failure or changing the activity dot, and actual connection removes the notice', () => {
+	test('D183: green while it starts or works; red for an error, Facade tools it cannot use or a start not ready by its bound; none otherwise, its state in the hover', () => {
+		const shown = (facts: RunFacts) => {
+			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
+			return [card.dot, card.stateText, card.line, card.tooltip.includes(WORDS.status(card.stateText))];
+		};
+		assert.deepStrictEqual([
+			shown(run({ lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false, tools: 'connecting' })),
+			shown(run({ activity: 'not_working', awaitingActivity: true, tools: 'connecting' })),
+			shown(run({ activity: 'working', said: 'fix the login bug' })),
+			shown(run({ activity: 'not_working', said: 'fix the login bug' })),
+			shown(run({ activity: 'unknown', reporting: false, activityReason: 'The terminal was reset', said: 'fix the login bug' })),
+			shown(run({ activity: 'not_working', blocker: { kind: 'permission', text: 'Run npm test?' }, notReady: true, tools: 'connecting' })),
+			shown(run({ activity: 'not_working', notReady: true, tools: 'connecting', said: 'fix the login bug' })),
+			shown(run({ activity: 'unknown', reporting: false, notReady: true, activityReason: 'CLI has not reported activity' })),
+			shown(run({ activity: 'working', tools: 'unavailable', toolsProblem: 'conflict', toolsFile: 'SKILL.md' })),
+			shown(run({ activity: 'working', error: { reason: 'Failed', source: 'cli', at: 1 } }))
+		], [
+			['working', 'Starting', 'Starting Claude Code...', true],
+			['working', 'Starting', 'Starting Claude Code...', true],
+			['working', 'Working', 'fix the login bug', true],
+			['none', 'Idle', 'fix the login bug', true],
+			['none', 'Activity unavailable', 'fix the login bug', true],
+			['none', 'Needs permission', 'Needs permission · Run npm test?', true],
+			['error', 'Not connected to other agents yet', 'Not connected to other agents yet', true],
+			['error', 'CLI has not reported activity', 'CLI has not reported activity', true],
+			['error', 'Can\'t work with other agents: conflict', 'Can\'t work with other agents: conflict', true],
+			['error', 'Error: Failed', 'Error: Failed', true]
+		]);
+	});
+
+	test('D184: the second line says the last message sent to it - the task it was started with being the first - and its CLI title\'s words only before any', () => {
+		const line = (facts: Partial<RunFacts>) => statusOf(run({ activity: 'not_working', ...facts }), WORDS).line;
+		assert.deepStrictEqual([
+			line({ title: '⠐ Fixing the login bug' }),
+			line({ title: '✳ Fixing the login bug', said: '/clear' }),
+			line({ title: '✳ Fixing the login bug', promptLine: 'Implement the parser' }),
+			line({ title: '✳ Fixing the login bug', promptLine: 'Implement the parser', said: 'and the tests' }),
+			line({ title: '⠋' }),
+			line({})
+		], ['Fixing the login bug', '/clear', 'Implement the parser', 'and the tests', 'Idle', 'Idle']);
+	});
+
+	test('connecting tools are said in the hover; a start not ready by its bound says them on its red second line (D183), and actual connection removes them', () => {
 		for (const activity of ['working', 'not_working'] as const) {
 			const facts = run({ activity, title: '✳ Checking tests', tools: 'connecting' });
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
-			assert.strictEqual(card.dot, activity === 'working' ? 'working' : 'idle');
-			assert.strictEqual(card.line, WORDS.toolsConnecting);
+			assert.strictEqual(card.dot, activity === 'working' ? 'working' : 'none');
+			assert.strictEqual(card.line, 'Checking tests');
+			const late = statusOf({ ...facts, notReady: true }, WORDS);
+			assert.deepStrictEqual([late.dot, late.line], ['error', WORDS.toolsConnecting]);
 			assert.ok(card.tooltip.includes(WORDS.tools(WORDS.toolsConnecting)));
 			assert.ok(card.tooltip.includes(WORDS.title(facts.title!)));
-			assert.strictEqual(statusOf({ ...facts, tools: 'available' }, WORDS).line, facts.title);
+			assert.strictEqual(statusOf({ ...facts, tools: 'available' }, WORDS).line, 'Checking tests');
 			assert.strictEqual(statusOf({ ...facts, blocker: { kind: 'unknown' } }, WORDS).line, WORDS.needsAttention);
 			assert.strictEqual(statusOf({ ...facts, error: { source: 'cli', reason: 'Failed', at: 1 } }, WORDS).line, 'Error: Failed');
 			const ended = cardOf({ ...facts, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 } }, { place, selected: false, menu, words: WORDS });
@@ -92,10 +136,10 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.ok(starting.tooltip.includes(WORDS.tools(WORDS.toolsConnecting)));
 	});
 
-	test('the second line and hover retain the complete bounded CLI title, including decorations and multi-code-point emoji', () => {
+	test('the hover retains the complete bounded CLI title, decorations and multi-code-point emoji included; the second line its words (D160, D184)', () => {
 		const title = `✳ ${'a'.repeat(298)}👨‍👩‍👧‍👦 | workspace`;
 		const card = cardOf(run({ title: cliTitle({ terminal: title }) }), { place, selected: false, menu, words: WORDS });
-		assert.strictEqual(card.line, title);
+		assert.strictEqual(card.line, title.slice(2));
 		assert.ok(card.tooltip.includes(WORDS.title(title)));
 	});
 
@@ -126,22 +170,23 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual(received, [['spawn refused', effects]]);
 	});
 
-	test('J05: an unresolved error is red with its reason first, whatever else is known; unknown activity is red too, its reason on the second line', () => {
+	test('J05: an unresolved error is red with its reason first, whatever else is known; unknown activity has no dot, its reason on the second line where it has nothing else to say (D183)', () => {
 		const cases: [Partial<RunFacts>, string, string, string][] = [
 			[{ lifecycle: 'ended', end: { kind: 'failed', at: 3 }, error: { reason: 'claude was not found', source: 'launch', at: 3 }, title: 'T', blocker: { kind: 'question' } }, 'error', 'Error: claude was not found', 'Error: claude was not found'],
 			[{ lifecycle: 'ended', end: { kind: 'abnormal', code: 2, at: 3 }, error: { reason: 'Exited with code 2', source: 'exit', at: 3 } }, 'error', 'Error: Beendet mit Code 2', 'Error: Beendet mit Code 2'],
 			[{ activity: 'working', error: { reason: 'Rate limited', source: 'cli', at: 3 }, title: 'Fix login' }, 'error', 'Error: Rate limited', 'Error: Rate limited'],
 			[{ lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false, error: { reason: 'Spawn failed', source: 'launch', at: 3 } }, 'error', 'Error: Spawn failed', 'Error: Spawn failed'],
-			[{ activity: 'unknown', reporting: false }, 'error', 'Activity unavailable', 'Activity unavailable'],
-			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity', title: 'Fix login' }, 'error', 'Activity unavailable', 'Activity unavailable · This CLI reports no activity'],
-			[{ activity: 'working', reporting: false, title: 'Fix login' }, 'error', 'Activity unavailable', 'Activity unavailable']
+			[{ activity: 'unknown', reporting: false }, 'none', 'Activity unavailable', 'Activity unavailable'],
+			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity' }, 'none', 'Activity unavailable', 'Activity unavailable'],
+			[{ activity: 'unknown', reporting: false, activityReason: 'This CLI reports no activity', title: '✳ Fix login' }, 'none', 'Activity unavailable', 'Fix login'],
+			[{ activity: 'working', reporting: false, title: 'Fix login' }, 'none', 'Activity unavailable', 'Fix login']
 		];
 		for (const [facts, dot, stateText, line] of cases) {
-			assert.deepStrictEqual(statusOf(run(facts), WORDS), { dot, stateText, line, ...(line !== stateText && dot === 'error' && stateText === 'Activity unavailable' ? { reason: facts.activityReason } : {}) }, JSON.stringify(facts));
+			assert.deepStrictEqual(statusOf(run(facts), WORDS), { dot, stateText, line, ...(facts.activityReason && !facts.error ? { reason: facts.activityReason } : {}) }, JSON.stringify(facts));
 		}
 	});
 
-	test('a native blocker is yellow in the CLI\'s own words, else Needs permission, Sign-in required or Waiting for an answer; startup is green with its stage', () => {
+	test('a native blocker has no dot and says the CLI\'s own words, else Needs permission, Sign-in required or Waiting for an answer; startup is green (D183)', () => {
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'not_working', blocker: { kind: 'permission', text: 'Allow Bash(npm test)?' } }), WORDS),
 			statusOf(run({ activity: 'not_working', blocker: { kind: 'permission' } }), WORDS).line,
@@ -150,16 +195,16 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			statusOf(run({ lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false, title: 'T' }), WORDS),
 			statusOf(run({ lifecycle: 'starting', phase: 'creating_worktree', activity: 'unknown', reporting: false }), WORDS).line
 		], [
-			{ dot: 'blocked', stateText: 'Needs permission', line: 'Needs permission · Allow Bash(npm test)?', reason: 'Allow Bash(npm test)?' },
+			{ dot: 'none', stateText: 'Needs permission', line: 'Needs permission · Allow Bash(npm test)?', reason: 'Allow Bash(npm test)?' },
 			'Needs permission',
 			'Sign-in required',
 			'Waiting for an answer',
-			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
+			{ dot: 'working', stateText: 'Starting', line: 'T' },
 			'Creating worktree...'
 		]);
 	});
 
-	test('a run whose CLI has shown no activity yet is still starting, green with its stage, over its title; an error still comes first (CLIS-2.3, D81)', () => {
+	test('a run whose CLI has shown no activity yet is still starting, green, its title or else its stage on the second line; an error still comes first, red (CLIS-2.3, D81, D183, D184)', () => {
 		const connection = { reason: "Connection to agent process lost; reconnecting", source: 'connection', at: 3 };
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, title: 'Fix login' }), WORDS),
@@ -167,26 +212,26 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, error: connection }), WORDS).dot,
 			statusOf(run({ activity: 'unknown', reporting: false, activityReason: "CLI has not reported activity" }), WORDS).dot
 		], [
-			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
+			{ dot: 'working', stateText: 'Starting', line: 'Fix login' },
 			{ dot: 'working', stateText: 'Starting', line: 'Starting Claude Code...' },
 			'error',
-			'error'
+			'none'
 		]);
 	});
 
-	test('a known native blocker leads the second line over unavailable activity, which keeps the dot red and its explanation (PANEL-1.4, RULES-3.2)', () => {
+	test('a known native blocker leads the second line in its own words whatever the activity, without a dot (PANEL-1.4, RULES-3.2, D183)', () => {
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, blocker: { kind: 'auth' } }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: true, blocker: { kind: 'question' } }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: false, activityReason: 'No activity report since 10:02', blocker: { kind: 'permission', text: 'Allow Bash?' } }), WORDS).line
 		], [
-			{ dot: 'error', stateText: 'Activity unavailable', line: 'Sign-in required · Activity unavailable', reason: 'Sign-in required' },
-			{ dot: 'error', stateText: 'Activity unavailable', line: 'Waiting for an answer · Activity unavailable', reason: 'Waiting for an answer' },
-			'Needs permission · Allow Bash? · No activity report since 10:02'
+			{ dot: 'none', stateText: 'Sign-in required', line: 'Sign-in required' },
+			{ dot: 'none', stateText: 'Waiting for an answer', line: 'Waiting for an answer' },
+			'Needs permission · Allow Bash?'
 		]);
 	});
 
-	test('reliable activity is green or grey over the CLI title, else Working or Idle - never a completion or input-readiness claim (PANEL-1.4)', () => {
+	test('reliable work is green and idle has no dot, over the CLI title\'s words, else Working or Idle - never a completion or input-readiness claim (PANEL-1.4, D183)', () => {
 		const lines = [
 			statusOf(run({ activity: 'working', title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'working' }), WORDS),
@@ -196,8 +241,8 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual(lines, [
 			{ dot: 'working', stateText: 'Working', line: 'Fix login' },
 			{ dot: 'working', stateText: 'Working', line: 'Working' },
-			{ dot: 'idle', stateText: 'Idle', line: 'Fix login' },
-			{ dot: 'idle', stateText: 'Idle', line: 'Idle' }
+			{ dot: 'none', stateText: 'Idle', line: 'Fix login' },
+			{ dot: 'none', stateText: 'Idle', line: 'Idle' }
 		]);
 		assert.ok(lines.every(each => !/done/i.test(JSON.stringify(each))));
 		assert.deepStrictEqual([
@@ -217,7 +262,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Agent: Ada · #a1 · Claude Code', 'Title: Fix the login flow', 'Status: Waiting for an answer'], 'Ada, #a1, Waiting for an answer, shop · main, Claude Code']);
 		// The second line saying no more than the state is not said twice
-		assert.deepStrictEqual([unknown.tooltip, unknown.label, unknown.dot], [['Agent: Ada · #a1 · Claude Code', 'Status: Activity unavailable'], 'Ada, #a1, Activity unavailable, shop · main, Claude Code', 'error']);
+		assert.deepStrictEqual([unknown.tooltip, unknown.label, unknown.dot], [['Agent: Ada · #a1 · Claude Code', 'Status: Activity unavailable'], 'Ada, #a1, Activity unavailable, shop · main, Claude Code', 'none']);
 		// An empty name is left out of both, never said as an empty part; the card carries its #aN for what the page says of it
 		const unnamed = cardOf(run({ name: '' }), { place, selected: false, menu, words: WORDS });
 		assert.deepStrictEqual([unnamed.tooltip[0], unnamed.label, unnamed.alias], ['Agent: #a1 · Claude Code', '#a1, Working, shop · main, Claude Code', '#a1']);

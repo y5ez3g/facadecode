@@ -137,10 +137,12 @@ copy button copies `@name #aN` without a toast; there is no Copy Agent Reference
 
 Human New shows the terminal; agent creation preserves focus. Card/Go to Agent reveals the same terminal without
 launching another. The tab shows only the agent name beside the CLI's theme-appropriate logo; custom CLIs use a terminal
-icon (D130). Built-in tab logos use contributed native icons, with their brand colors and theme foreground for monochrome
+icon (D130). While its card's dot is green a spinner's frame turns between the logo and the name, as Codex draws its own,
+for every CLI; reduced motion keeps one frame still (D185). Built-in tab logos use contributed native icons, with their brand colors and theme foreground for monochrome
 marks. They remain recognizable in light, dark and high-contrast themes, including after a theme change or terminal
 restoration (D159). This uses the public icon API; it does not patch editor styles or change the person's theme.
-CLI titles and status remain in PANEL-1.4's second line, never appended to the tab name. Do not add a name
+CLI titles and other status remain in PANEL-1.4's second line, never appended to the tab name; the spinner's frames are
+never taken for a rename. Do not add a name
 length limit or change the editor's tab-width settings. Native tab renames synchronize the complete display name when
 valid, without removing text that resembles a CLI title. Match terminals by actual identity,
 never by a duplicate title. Facade never offers panel placement
@@ -306,6 +308,7 @@ See [Verification](../engineering/VERIFICATION.md). Runtime results remain unver
 
 ## Change log
 
+- 2026-11-02: 2.2 turns a spinner between the logo and the name on a busy agent's tab (D185).
 - 2026-11-02: 3.4 lets a resumed conversation be pinned from its start (D180), and a new agent before its CLI names its
   conversation, the Pin taking the one it names or restoring a new one until then (D182).
 - 2026-11-02: 3.1 closes a live agent whose tab the person closed by itself without asking, and asks only for tabs closed

@@ -119,7 +119,8 @@ export class AgentTerminals implements vscode.Disposable {
 
 	/** Register the pseudoterminal first; the coordinator opens the native tab after registering its run. */
 	create(facts: Pick<PairFacts, 'run' | 'name' | 'cli'>, reveal: boolean): AgentTerminal {
-		const pty = new AgentPty(facts.name, line => this.options.log(line));
+		// The editor's reduced motion stills the tab's spinner, as it stills its own progress (D185)
+		const pty = new AgentPty(facts.name, line => this.options.log(line), () => vscode.workspace.getConfiguration('workbench').get<string>('reduceMotion') === 'on');
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
 		const pair: TerminalEntry = {
 			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(),
