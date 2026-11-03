@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.0.3
+
+Pin from the start, a calmer status display, and fixes from daily use.
 
 - **Closing an agent's tab closes it.** Closing a running agent's terminal tab yourself - its close button, Close, Close Editor - no longer asks first. Facade still asks once when tabs close together, as with Close All or Close Others.
 - **New agents join at the bottom.** New cards go to the bottom of the list, and a card you pin to the bottom of the pinned cards; a card you unpin goes to the top of the others, just below the pinned cards. Move Up and Move Down still reorder them.
