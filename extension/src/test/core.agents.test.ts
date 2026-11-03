@@ -661,6 +661,22 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.ok(world.log.some(line => /Could not unpin "A", whose working location was removed: disk full/.test(line)));
 	});
 
+	test('LIFECYCLE-3.1: a tab closed by the person whose process could not be ended tells them, as Close Agent does; an ended or unconfirmed cleanup says nothing', async () => {
+		const world = continuitySetup();
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		(world.execution as unknown as { cleanup: string }).cleanup = 'failed';
+		world.execution.tabCloses.fire(id);
+		await settle();
+		assert.deepStrictEqual([world.agents.get(id), world.failures.map(failure => [failure.kind, failure.name])], [undefined, [['terminate', 'A']]]);
+		const quiet = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		(world.execution as unknown as { cleanup: string }).cleanup = 'unconfirmed';
+		world.execution.tabCloses.fire(quiet);
+		await settle();
+		assert.strictEqual(world.failures.length, 1, 'an unconfirmed cleanup is reported as neither');
+	});
+
 	test('a tab closed by the person whose close fails - its Unpin could not be saved - keeps the agent, opens its terminal again and tells the person it could not unpin it (LIFECYCLE-3.1, RULES-1.8)', async () => {
 		const world = continuitySetup();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });

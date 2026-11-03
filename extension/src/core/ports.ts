@@ -614,6 +614,8 @@ export interface RunChange {
 /** A failure the core tells the person, as facts the window words in the person's language (UX-2.4). */
 export type HumanFailure = { readonly kind: 'restore'; readonly name: string; readonly reason: string; readonly count: number; readonly worktree?: never }
 	| { readonly kind: 'pin' | 'unpin'; readonly name: string; readonly reason: string; readonly worktree?: never }
+	/** A close whose process could not be ended: its card is gone already (LIFECYCLE-3.1). */
+	| { readonly kind: 'terminate'; readonly name: string; readonly reason?: never; readonly worktree?: never }
 	| { readonly kind: 'start'; readonly name: string; readonly reason: string; readonly worktree?: WorktreeCreationEffects };
 
 export interface HumanPort {

@@ -196,14 +196,13 @@ switches editor windows to manage another window; agents can use MCP across wind
 Card menus, Go to Agent, Command Palette and terminal closure use the lifecycle effect in RULES-4.1: immediate pair
 removal and Unpin, with process cleanup in the background where a process exists. There is no separate human Stop Agent
 command. MCP keeps `stop_agent` under MCP-3.2 and uses the same close service. Return actual cleanup status to the
-initiator without recreating a closed card or claiming an unreachable process is dead: a person whose Close Agent - from
-a card menu, Go to Agent or the Command Palette - could not end the process is told `{0} was closed, but its process
-could not be terminated.`, and an unconfirmed cleanup is reported as neither; a terminal tab's close says nothing more.
-A close while the process is being started answers how that start's cleanup ended. A close ptyd has not confirmed is
-recorded, so that a reload ends that run rather than showing it again. No worktree/files/history deletion is attached.
-Closing an agent does not close the agents it started. Unsolicited exits follow RULES-3.3. A close whose Unpin cannot be
-saved keeps the agent (RULES-4.1); from the card, the palette or Go to Agent the person is told `Could not close {0}:
-{1}`.
+initiator without recreating a closed card or claiming an unreachable process is dead: a person whose close - from a
+card menu, Go to Agent, the Command Palette or the agent's terminal tab - could not end the process is told `{0} was
+closed, but its process could not be terminated.`, and an unconfirmed cleanup is reported as neither. A close while the
+process is being started answers how that start's cleanup ended. A close ptyd has not confirmed is recorded, so that a
+reload ends that run rather than showing it again. No worktree/files/history deletion is attached. Closing an agent does
+not close the agents it started. Unsolicited exits follow RULES-3.3. A close whose Unpin cannot be saved keeps the agent
+(RULES-4.1); from the card, the palette or Go to Agent the person is told `Could not close {0}: {1}`.
 
 Closing a live agent's terminal tab by itself - its close button, Close in its menu, a middle click or Close Editor -
 closes the agent at once, as Close Agent does. A tab the editor closes together with other editor tabs (Close All,

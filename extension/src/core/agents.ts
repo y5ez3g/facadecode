@@ -785,7 +785,11 @@ export class AgentService implements Agents, Disposable {
 			return;
 		}
 		if (this.runs.get(id) === run) {
-			await this.close(id).catch(err => {
+			// Closing its tab is the person's Close Agent, and a process it could not end is said as there (LIFECYCLE-3.1, RULES-1.8)
+			const label = labelOf(run.facts);
+			await this.close(id).then(cleanup => {
+				if (cleanup === 'failed') { this.deps.human.failed({ kind: 'terminate', name: label }, {}); }
+			}, err => {
 				this.deps.log.event(`Could not close ${run.facts.alias} as its tab was closed: ${messageOf(err)}`);
 				if (this.runs.get(id) === run) {
 					// Kept, as its Unpin could not be saved: its terminal opens again, and the person who closed it is told (RULES-1.8)
