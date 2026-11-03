@@ -283,16 +283,20 @@ missing source time stays absent. Lost execution connections mark retained activ
 
 Green and breathing while the agent is busy: starting - until its CLI first shows its activity and its injected Facade
 tools connect, within CLIS-2.3's bound - or working. Red where something is wrong: a failed launch, an abnormal exit, a
-lost connection to its process, an error its CLI reported, Facade tools it cannot use - injected tools that failed or went
-away - or a start not ready within its bound. Red comes before green. A native permission, answer or sign-in question
-waiting for the person shows no dot even where its Facade tools are unusable or its start was not ready in time, as the
-second line says what it waits for (PANEL-1.4); an error or an ended run stays red. Idle, a reported blocker without a
-recognized kind and unknown activity show no dot either; the hover and accessible label say which. A blocker stays a
-blocker, never idle; idle still requires reliable evidence. Work that stops is shown so a second later, as a CLI between
-two steps does not blink; a blocker or a problem is shown at once.
-A quiet screen or an unrecognized working indicator does not prove idle. Screen evidence is invalidated by a full reset
-or an unrecognized completed layout; incomplete synchronized drawing supplies no new observation. A turn ending removes the dot without a notification or a task-completion claim. Recovery clears only the
-corresponding error. Reduced motion removes breathing, never the accessible state description.
+lost connection to its process, an error its CLI reported, Facade tools it cannot use - injected tools that failed or
+went away - or a start not ready within its bound. Red comes before green. A native permission, answer or sign-in
+question waiting for the person shows no dot even where its Facade tools are unusable or its start was not ready in
+time, as the second line says what it waits for (PANEL-1.4); an error or an ended run stays red. Idle, a reported
+blocker without a recognized kind and unknown activity show no dot either; the hover and accessible label say which. A
+blocker stays a blocker, never idle; idle still requires reliable evidence. Work that stops is shown so a second later,
+as a CLI between two steps does not blink; a blocker or a problem is shown at once. A quiet screen or an unrecognized
+working indicator does not prove idle. Screen evidence is invalidated by a full reset or an unrecognized completed
+layout; incomplete synchronized drawing supplies no new observation. A turn ending removes the dot without a
+notification or a task-completion claim. Recovery clears only the corresponding error. Reduced motion removes breathing,
+never the accessible state description.  Activity describes the agent's interactive turn: a command left running after
+that turn, such as a development server, does not by itself keep the agent working. A tested adapter may tell that case
+apart from a CLI's broader process report under CLIS-2.3. Available input, a quiet terminal and an earlier answer alone
+never prove idle.
 
 ### 3.3 Exit classification is independent of who caused it
 

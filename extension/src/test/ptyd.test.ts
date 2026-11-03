@@ -709,6 +709,66 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('a fresh screen recovers after reset', () => latest()?.state === 'working');
 	});
 
+	test('Codex completion and follow-up status reach events, list and reattach while its background process remains alive (CLIS-2.3)', async function () {
+		this.timeout(15_000);
+		const client = await connect();
+		const events = eventsOf(client, 'codex-background');
+		const captures: { label: string; lines: string[]; dimLines: number[] }[] = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../src/test/fixtures/screens/codex/0.166.0-background.json'), 'utf8'));
+		const frame = (label: string) => {
+			const capture = captures.find(each => each.label === label)!;
+			return '\x1b[2J\x1b[H' + capture.lines.map((line, index) => capture.dimLines.includes(index) ? `\x1b[2m${line}\x1b[22m` : line).join('\r\n');
+		};
+		const native = (body: string) => `\x1b]7501;${body}\x1b\\`;
+		const frames = {
+			i: frame('background-completed'), w: frame('follow-up-working'), t: frame('follow-up-streaming'),
+			s: '\x1b[?2026h' + frame('follow-up-working'), e: '\x1b[?2026l',
+			b: native('state=blocked:kind=permission') + frame('background-completed'),
+			f: native('state=error') + frame('background-completed'),
+			c: native('state=clear') + frame('background-completed'),
+			n: native('state=working') + frame('follow-up-working'),
+			r: '\x1bc' + frame('background-completed')
+		};
+		const pidFile = path.join(socketDir, 'background.pid');
+		const source = `process.stdin.setRawMode(true);
+		const child = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+		require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+		process.on('exit', () => child.kill());
+		const frames = ${JSON.stringify(frames)};
+		process.stdout.write(frames.n);
+		process.stdin.on('data', chunk => { for (const command of chunk.toString()) { process.stdout.write(frames[command] || ''); } });
+		setInterval(() => {}, 1000);`;
+		await spawn(client, 'codex-background', source, { cols: 120, rows: 40, screenStatus: 'codex-0.166' });
+		const latest = () => events.flatMap(event => event.event === 'status' && event.status ? [event.status] : []).at(-1);
+		const send = (data: string) => client.request('input', { run: 'codex-background', data });
+		await until('native working', () => latest()?.state === 'working');
+		await send('i');
+		await until('completed turn', () => latest()?.state === 'idle');
+		const firstCompletion = latest()!.at;
+		const backgroundPid = Number(fs.readFileSync(pidFile, 'utf8'));
+		assert.ok(alive(backgroundPid), 'the background process did not end with the interactive turn');
+		await send('s');
+		await new Promise(resolve => setTimeout(resolve, 250));
+		assert.strictEqual(latest()!.at, firstCompletion, 'a partial synchronized update is not a status observation');
+		await send('e');
+		await until('follow-up working without another native report', () => latest()?.state === 'working');
+		await send('t');
+		await new Promise(resolve => setTimeout(resolve, 250));
+		assert.strictEqual(latest()?.state, 'working', 'streaming has a background-only footer but no new completed-turn summary');
+		await send('i');
+		await until('next completion', () => latest()?.state === 'idle' && latest()!.at > firstCompletion);
+		for (const [command, expected] of [['b', 'blocked'], ['f', 'error'], ['c', 'pending'], ['n', 'working'], ['r', 'pending'], ['n', 'working'], ['i', 'idle']]) {
+			await send(command);
+			await until(`native precedence: ${command}`, () => latest()?.state === expected);
+		}
+		assert.ok(alive(backgroundPid));
+		const expected = latest();
+		client.dispose();
+		const recovered = await connect();
+		assert.deepStrictEqual((await recovered.request('list', { owner: 'w1' })).find(run => run.run === 'codex-background')?.status, expected);
+		assert.deepStrictEqual((await recovered.request('attach', { run: 'codex-background' })).info.status, expected);
+		await recovered.request('terminate', { run: 'codex-background', graceMs: 100 });
+	});
+
 	test('a window that does not take its output pauses the run once the output waiting for it passes the bound, and lets it go on once it is gone (ARCHITECTURE-2.4)', async function () {
 		this.timeout(30_000);
 		const observer = await connect(false);

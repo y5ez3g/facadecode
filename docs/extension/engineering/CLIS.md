@@ -162,23 +162,29 @@ Each built-in CLI has an input reader that recognizes its input box by layout - 
 placeholder drawn dim or known by its words, and the cursor position or the CLI's own drawn cursor - not by version
 number. Every installed version is attempted. A screen the reader does not recognize is unknown: nothing is typed, and
 the message fails at its deadline with `input_unknown`, naming the CLI and the version Facade found. The version never
-gates message input; only 1.1's unsupported line is refused, at its start. A CLI without an input reader fails
-ordinary messages at once with `unsupported`. Readers are tested against recorded screens of real CLI versions; a
-changed layout becomes a new recorded case, and a reader never guesses an empty input from a layout it does not
-recognize. `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed and pasted text,
-messages, a Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few
-long lines, a hundred-line message and Claude Code's lead - without submitting anything, at 40 rows or the `--rows`
-given, and checks each reader and its own-draft recognition against what it drew; it is run once a CLI updates, and the
-screens it saves, each paste's text kept with its screen, become recorded cases. In a terminal 24 rows high, as an
-editor's panel may be, Antigravity and Pi scroll a draft taller than their input box, Antigravity marking it with
-`↑ 1 more lines` first in the box and Pi in its upper rule, `─── ↑ 2 more ───`: their readers say how many rows are out
-of sight above and below, apart from the draft, and a draft whose end in sight is the message's end, nothing being out
-of sight below, is the message's own. Pi draws a paste of ten lines or fewer and more than 1,000 characters as
-`[paste #1 1284 chars]`, counting a line break as one and a tab as four; its reader reads that count apart from the
-paste's number, so that a person's `[paste #2 11284 chars]` is not a message's 1,284, and finds Pi's own drawn cursor by
-its column, after wide characters too. Codex 0.166.0 draws a status at the right end of its hints row,
-`⚠ 1 warning · f2 to view`, alone there while a draft hides the hints, when `-c` overrides run it outside its background
-server: Facade starts it with `--no-daemon`, and its reader takes that row either way.
+gates message input; only 1.1's unsupported line is refused, at its start. A CLI without an input reader fails ordinary
+messages at once with `unsupported`. Readers are tested against recorded screens of real CLI versions; a changed layout
+becomes a new recorded case, and a reader never guesses an empty input from a layout it does not recognize.
+`scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed and pasted text, messages, a
+Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines, a
+hundred-line message and Claude Code's lead - without submitting anything, at 40 rows or the `--rows` given, and checks
+each reader and its own-draft recognition against what it drew; it is run once a CLI updates, and the screens it saves,
+each paste's text kept with its screen, become recorded cases. In a terminal 24 rows high, as an editor's panel may be,
+Antigravity and Pi scroll a draft taller than their input box, Antigravity marking it with `↑ 1 more lines` first in the
+box and Pi in its upper rule, `─── ↑ 2 more ───`: their readers say how many rows are out of sight above and below,
+apart from the draft, and a draft whose end in sight is the message's end, nothing being out of sight below, is the
+message's own. Pi draws a paste of ten lines or fewer and more than 1,000 characters as `[paste #1 1284 chars]`,
+counting a line break as one and a tab as four; its reader reads that count apart from the paste's number, so that a
+person's `[paste #2 11284 chars]` is not a message's 1,284, and finds Pi's own drawn cursor by its column, after wide
+characters too. Codex 0.166.0 draws a status at the right end of its hints row, `⚠ 1 warning · f2 to view`, alone there
+while a draft hides the hints, when `-c` overrides run it outside its background server: Facade starts it with
+`--no-daemon`, and its reader takes that row either way. Codex 0.166.0's passive transcript footer can replace its
+shortcuts row with `enter/esc latest` or `New activity · enter/esc latest`, optionally followed by `· ? shortcuts` and a
+right-aligned warning, and a resting draft changes that hint to `esc latest`: these are usable input layouts only with
+the model/folder row, the blank separator, the complete composer and the cursor in it, and the same draft and
+synchronized-drawing checks apply. Active transcript browsing, search and selection are not these passive footers and
+stay unavailable to ordinary delivery. A usable input in a passive transcript view says nothing about current activity,
+as its transcript can show old content (2.3).
 
 Antigravity's accept-edits and plan modes draw a colored, non-dim initial placeholder. Recognize its exact mode
 sentence (or the CLI's width-truncated prefix ending in `...`) only inside its one-line frame with the empty-input
@@ -310,14 +316,24 @@ fallback. A supported terminal animation may establish working, but its absence 
 Muse Code's observed Windows versions send no reports, so its adapter names a screen reader that ptyd applies to a run
 whose CLI has neither asked nor reported. It reads logical lines, joining terminal soft wraps without guessing where
 hard line breaks belong. A recognized working indicator above its complete input frame establishes working. Idle
-requires the complete known input/footer layout and a recognized surrounding region, retaining native text styling
-where it distinguishes an answer marker from a working indicator; an unknown indicator, clipped region or unfamiliar
-dialog never supplies idle evidence. Drafts remain separate from activity. Its sign-in choice and workspace trust
-question establish their corresponding blockers only when replacing the input frame. An unrecognized completed screen
-revokes prior screen evidence; a full reset does too. A synchronized update still being drawn is not observed. Its own
-reports always take precedence: once the CLI asks or reports, its screen is not read from then on. Evidence becomes stale
-after route loss/reset; title/status from a new run does not update a previous one. A status episode starts on
-state/kind/reason change; progress-only updates keep its start time.
+requires the complete known input/footer layout and a recognized surrounding region, retaining native text styling where
+it distinguishes an answer marker from a working indicator; an unknown indicator, clipped region or unfamiliar dialog
+never supplies idle evidence. Drafts remain separate from activity. Its sign-in choice and workspace trust question
+establish their corresponding blockers only when replacing the input frame. An unrecognized completed screen revokes
+prior screen evidence; a full reset does too. A synchronized update still being drawn is not observed. Its own reports
+always take precedence: once the CLI asks or reports, its screen is not read from then on. Evidence becomes stale after
+route loss/reset; title/status from a new run does not update a previous one. A status episode starts on
+state/kind/reason change; progress-only updates keep its start time.  Codex 0.166.0 reports root `working` while any
+background command it started survives, even after its interactive turn ends; its own terminal-title animation follows
+the active turn instead. For this version alone, the adapter names a correction that narrows `working` to idle while the
+current completed screen shows its native dim `Worked for … • …` turn summary, then only blank spacing and its dim
+background-terminal footer, followed by the complete input/model/hints layout. Draft text is outside that evidence, and
+the footer may be clipped exactly at the native width as long as its identifying text and the whole turn summary stay
+visible. The footer alone is insufficient: Codex also draws it while it streams an answer. A new turn, an unfamiliar
+drawing or a lost layout removes the correction and restores the CLI's own report; a synchronized update still being
+drawn supplies no new observation. Native idle/done, blockers, errors, clear/reset and probe states are never
+overridden, and the report's record and title stay intact. Other versions and other CLIs keep their own reports until
+verified the same way; a run held by an older ptyd keeps that ptyd's behavior (ARCHITECTURE-2.4).
 
 Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes and titles up to 192 decoded bytes; reject controls
 and malformed reports. Sanitize invisible formatting and whitespace without stripping visible decorations. Keep the

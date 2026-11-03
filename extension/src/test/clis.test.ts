@@ -424,6 +424,17 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 			tomlString(fs.realpathSync(cwd).replace(/[A-Z]/g, letter => letter.toLowerCase())));
 	});
 
+	test('Codex selects its completed-background correction only for the installed version that was verified (CLIS-2.3)', () => {
+		const metadata = path.join(temp.dir, 'codex-package.json');
+		assert.strictEqual(plan({ cli: 'codex' }).screenStatus, undefined);
+		for (const version of ['0.165.0', '0.166.0', '0.166.1', '0.167.0', '0.166.0-dev']) {
+			fs.writeFileSync(metadata, JSON.stringify({ version }));
+			const launch = plan({ cli: 'codex' });
+			assert.strictEqual(launch.version, version);
+			assert.strictEqual(launch.screenStatus, version === '0.166.0' ? 'codex-0.166' : undefined);
+		}
+	});
+
 	test('Codex TOML quotes paths containing quotes, backslashes, controls and Unicode without treating them as configuration syntax', () => {
 		assert.strictEqual(tomlString('a"b\\c\t\n\u0000\u007F🌍'), '"a\\"b\\\\c\\t\\n\\u0000\\u007F🌍"');
 		assert.throws(() => tomlString('\uD800'), /unpaired/);

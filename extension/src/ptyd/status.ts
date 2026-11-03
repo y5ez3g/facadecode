@@ -156,25 +156,35 @@ function keptText(text: string | undefined): string | undefined {
 
 /**
  * The status of a run's program: none while it has neither asked whether ptyd takes reports nor reported - it takes no part;
- * `pending` once it asked, cleared its record or lost screen evidence; else its latest complete report.
+ * `pending` once it asked, cleared its record or lost screen evidence; else its latest complete report, with the tested
+ * Codex completed-turn correction where selected (CLIS-2.3).
  */
 export class ProgramStatus {
 
 	private current: RunStatus | undefined;
-	/** Whether the program has asked whether ptyd takes reports, or reported: from then on its own word alone counts. */
+	/** A tested Codex finished-turn layout can narrow its aggregate `working`; the native record stays separate. */
+	private completedTurn: RunStatus | undefined;
+	/** Whether the program has asked whether ptyd takes reports, or reported: from then on no fallback supplies its status. */
 	private partaking = false;
 	/** Whether the status now is what the run's screen showed, a program that takes no part being read so (CLIS-2.3). */
 	private fromScreen = false;
 	private readonly listeners = new Set<(status: RunStatus | undefined) => void>();
 
+	constructor(private readonly correctBackgroundTurn = false) { }
+
 	/** The status now; none for a program that takes no part. */
 	get status(): RunStatus | undefined {
-		return this.current;
+		return this.completedTurn ?? this.current;
 	}
 
-	/** Whether the program has taken part in the protocol: its screen is then read no more. */
+	/** Whether the program has taken part in the protocol. */
 	get takesPart(): boolean {
 		return this.partaking;
+	}
+
+	/** Muse's fallback stops at negotiation; Codex's version-scoped correction reads only a native working record. */
+	get acceptsScreen(): boolean {
+		return this.correctBackgroundTurn ? this.current?.state === 'working' : !this.partaking;
 	}
 
 	onDidChange(listener: (status: RunStatus | undefined) => void): () => void {
@@ -192,10 +202,24 @@ export class ProgramStatus {
 	}
 
 	/**
-	 * What the run's screen shows, for a program that takes no part (CLIS-2.3): taken as its own report would be, the same
-	 * state and kind again keeping its time; nothing once the program has asked or reported.
+	 * Tested screen evidence (CLIS-2.3): Codex's completed-turn correction of native working, or Muse's fallback before its
+	 * first probe/report. Repeated evidence keeps the effective activity episode's time.
 	 */
 	observed(reading: ScreenReading | undefined): void {
+		if (this.correctBackgroundTurn) {
+			if (this.current?.state !== 'working') { return; }
+			if (reading?.state === 'idle') {
+				if (this.completedTurn) { return; }
+				this.completedTurn = { state: 'idle', ...this.current.title ? { title: this.current.title } : {}, at: Date.now() };
+			} else {
+				if (!this.completedTurn) { return; }
+				this.completedTurn = undefined;
+				// The effective activity changed, even if Codex's aggregate native report has not changed between turns.
+				this.current = { ...this.current, at: Date.now() };
+			}
+			this.emit();
+			return;
+		}
 		if (this.partaking) {
 			return;
 		}
@@ -239,7 +263,7 @@ export class ProgramStatus {
 		// The same state, kind and words again - its progress alone moved on: the same episode, its time kept (CLIS-2.3)
 		if (now !== undefined && now.state === next.state && now.kind === next.kind && now.msg === next.msg && !now.negotiating) {
 			if (now.title !== next.title) {
-				this.set({ ...next, at: now.at });
+				this.set({ ...next, at: now.at }, true);
 			}
 			return;
 		}
@@ -263,8 +287,14 @@ export class ProgramStatus {
 		}
 	}
 
-	private set(status: RunStatus): void {
+	private set(status: RunStatus, titleOnly = false): void {
 		this.current = status;
-		this.listeners.forEach(listener => listener(status));
+		this.completedTurn = titleOnly && this.completedTurn
+			? { state: 'idle', at: this.completedTurn.at, ...status.title ? { title: status.title } : {} } : undefined;
+		this.emit();
+	}
+
+	private emit(): void {
+		this.listeners.forEach(listener => listener(this.status));
 	}
 }

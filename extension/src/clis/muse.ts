@@ -240,7 +240,7 @@ export const museAdapter: CliAdapter = {
 	initialPrompt: { state: 'unverified', reason: 'the prompt as its positional argument after --, which starts the interactive session with it' },
 	// 1.4.14 reads a prompt that is one of its commands' names as that command, even after --, and refuses to start (CLIS-2.2)
 	promptProblem: prompt => /^[a-z][a-z0-9-]*$/.test(prompt) ? 'Muse Code reads a prompt of one lowercase word as one of its commands, even after --' : undefined,
-	screenStatus: 'muse',
+	screenStatus: () => 'muse',
 	// Its input, recorded on macOS with Muse Code 1.4.14 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
 	input: { adapter: 'muse-frame', evidence: 'its input frame between two rules, its upper one labeled where it offers voice input: empty, a typed, pasted, multi-line, history or slash-command draft, and gone behind its trust question' },
 	sandbox: yolo => yolo ? { state: 'off', by: ['--disable-sandbox'] } : { state: 'native' },

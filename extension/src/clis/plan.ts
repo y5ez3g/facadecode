@@ -73,7 +73,7 @@ export interface PlannedLaunch {
 	readonly cwd: string;
 	/** How it trusts its folder: its entry is for the caller to merge into the CLI's file before the run starts. */
 	readonly trust: LaunchTrust;
-	/** The CLI's installed version where its installation says it: diagnostics only (CLIS-2.1). */
+	/** The CLI's installed version where its installation says it: diagnostics and tested status corrections (CLIS-2.1, 2.3). */
 	readonly version?: string;
 	readonly model?: string;
 	readonly effort?: string;
@@ -84,7 +84,7 @@ export interface PlannedLaunch {
 	readonly input: { readonly adapter?: string; readonly capability: Capability };
 	/** The files the run's launch needs written before it starts, where the tools are injected (CLIS-2.2). */
 	readonly injection?: Injection;
-	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3). */
+	/** The adapter's native status layout for ptyd, as a fallback or version-scoped correction (CLIS-2.3). */
 	readonly screenStatus?: string;
 	/** What its start types before its first turn, where the tools are injected and its adapter needs it (COLLABORATION-2.2). */
 	readonly warmUp?: WarmUp;
@@ -390,6 +390,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 	const runEnv = runEnvironment(started, input.alias, platform);
 	if (adapter.sessionIdentity && input.sessionFile) { runEnv[SESSION_FILE_VARIABLE] = input.sessionFile; }
 	Object.assign(runEnv, integration?.env);
+	const screenStatus = adapter.screenStatus?.(version);
 	return {
 		...integration?.files ? { files: integration.files } : {},
 		cli: adapter.id,
@@ -410,7 +411,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		...prompt ? { prompt } : {},
 		input: inputOf(adapter),
 		...injection ? { injection } : {},
-		...adapter.screenStatus ? { screenStatus: adapter.screenStatus } : {},
+		...screenStatus ? { screenStatus } : {},
 		// Only for the tools: without them, nothing waits on its first turn
 		...injection && adapter.warmUp ? { warmUp: adapter.warmUp } : {}
 	};

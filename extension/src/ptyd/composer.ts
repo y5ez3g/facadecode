@@ -259,6 +259,12 @@ const CODEX_MODEL = /^ {2}\S.*? · (?:[~/]|[A-Za-z]:\\)/;
  * at its right end too, `⚠ 1 warning · f2 to view`, alone on the row while a draft hides its hints.
  */
 const CODEX_HINTS = /^ {2}(?:\S.*? · )?(?:\? for shortcuts|tab to queue message)(?: {2,}\S.*?)? *$|^ {20,}\S.*$/;
+/**
+ * 0.166.0's passive transcript navigation leaves its composer focused: `enter/esc latest`, optionally `New activity · `
+ * first and ` · ? shortcuts` last. A resting draft changes it to `esc latest`. Active browsing, search and selection have
+ * different controls and do not match. This is input evidence only: a passive view can show an old transcript (CLIS-2.1).
+ */
+const CODEX_PASSIVE_HINTS = /^ {2}(?:New activity · )?(?:enter\/esc latest(?: · \? shortcuts)?|esc latest)(?: {2,}⚠ [1-9]\d* warnings? · f2 to view)? *$/u;
 
 /**
  * Codex's input, as 0.165.0 was observed drawing it, which has no frame: its footer at the bottom of what it draws - the model line, and a row of hints under
@@ -272,7 +278,7 @@ function readCodexPrompt(screen: InputScreen): InputReading {
 	while (model >= 0 && isBlank(rows[model])) {
 		model--;
 	}
-	if (model >= 0 && CODEX_HINTS.test(textOf(rows[model]))) {
+	if (model >= 0 && (CODEX_HINTS.test(textOf(rows[model])) || CODEX_PASSIVE_HINTS.test(textOf(rows[model])))) {
 		model--;
 	}
 	if (model < 2 || !CODEX_MODEL.test(textOf(rows[model])) || !isBlank(rows[model - 1])) {

@@ -112,6 +112,8 @@ const codexTools: ToolsIntegration = {
  */
 export const codexAdapter: CliAdapter = {
 	id: 'codex',
+	// Its root status includes retained background commands; only this version's completed-turn layout is verified (CLIS-2.3).
+	screenStatus: version => version === '0.166.0' ? 'codex-0.166' : undefined,
 	sessionIdentity: true,
 	sessionIntegration: codexSession,
 	identityOptions: ['--last'],

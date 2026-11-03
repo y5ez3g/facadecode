@@ -230,10 +230,10 @@ export interface CliAdapter {
 	 */
 	launchTarget?(file: string, platform: NodeJS.Platform, env: Environment, cwd: string): LaunchTarget | undefined;
 	/**
-	 * The screen reader ptyd reads its status with while it sends no OSC 7501 reports, by its ID in `ptyd/screenStatus.ts`: Muse
-	 * Code's, which sends none on Windows (CLIS-2.3). Its own reports, where it sends them, always take precedence.
+	 * A tested native status layout, by its ID in `ptyd/screenStatus.ts`: Muse's fallback before native reports, or Codex's
+	 * completed-turn correction for a known installed version (CLIS-2.3). Unknown versions receive no version-scoped correction.
 	 */
-	readonly screenStatus?: 'muse';
+	screenStatus?(version: string | undefined): string | undefined;
 	/** Its sandbox for a launch with this YOLO on this platform, as Show Agent Launch says it (CLIS-1.3, 4.1). */
 	sandbox(yolo: boolean, platform: NodeJS.Platform): SandboxFact;
 	/** Its approvals for a launch with this YOLO (CLIS-1.3, 4.1). */

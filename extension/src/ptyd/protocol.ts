@@ -13,7 +13,7 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 13;
+export const PTYD_PROTOCOL = 14;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
@@ -21,9 +21,10 @@ export const PTYD_PROTOCOL = 13;
  * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. 10 lacks 11's screen style ranges and stable final-screen time.
  * 11 lacks 12's screen-evidence invalidation, logical-line status reading and complete record replacement.
  * 12 lacks 13's Windows Unicode input and draft handling; its backend may belong to a removed installation (CLIS-2.1, ARCHITECTURE-2.4).
+ * 13 lacks 14's Codex completed-turn correction (CLIS-2.3).
  * New runs go to none of these.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13];
 
 import type { ScreenStyle } from '../base/screenStyle';
 import type { OwnerClaim } from '../base/ownership';
@@ -50,8 +51,8 @@ export interface SpawnParams {
 	/** What the window keeps of the agent with its run, to show it again after a reload. Plain JSON. */
 	readonly meta: { readonly [key: string]: unknown };
 	/**
-	 * The screen reader that reads the run's status from its screen while its program reports nothing (CLIS-2.3), by its ID
-	 * in `screenStatus.ts`; none for a program that is read by its reports alone. An ID this ptyd knows no reader by reads nothing.
+	 * The adapter's tested status layout, by its ID in `screenStatus.ts`: a fallback before reports, or the version-scoped
+	 * Codex correction of aggregate working (CLIS-2.3). An unknown ID reads nothing.
 	 */
 	readonly screenStatus?: string;
 }
