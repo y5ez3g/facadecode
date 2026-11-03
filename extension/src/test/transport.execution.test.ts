@@ -14,6 +14,8 @@ import type { LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
 import { PtydClient, PtydNotSent, ptydSocketPath } from '../host/execution/ptydClient';
 import { PtydServer } from '../ptyd/server';
+import { EARLIER_PROTOCOLS } from '../ptyd/protocol';
+import { nextOwnerClaim } from '../record/ownership';
 import { TOOL_PROTOCOL, ToolCall } from '../schema/protocol';
 import { QUERY_ROUTE_MS } from '../schema/tools';
 import { IDLE, program, programEnv } from './ptydPlace';
@@ -168,6 +170,42 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 		assert.match(thrown.content[0].text, /could not complete stop_agent: the store is gone/);
 		served.dispose();
 		assert.strictEqual((await ask('tools/call', { name: 'list_agents', arguments: {} })).structuredContent.error.reason, 'window_unavailable');
+	});
+
+	test('retained agents answer tools through their earlier supervisor after an upgrade and reconnect (D193)', async () => {
+		const protocol = EARLIER_PROTOCOLS.at(-1)!;
+		const socket = ptydSocketPath(home, protocol);
+		const earlier = new PtydServer(socket, () => undefined, undefined, protocol);
+		assert.strictEqual(await earlier.listen(), true);
+		cleanups.push(() => earlier.close());
+		const before = (await PtydClient.join(socket, protocol))!;
+		cleanups.push(() => before.dispose());
+		await before.request('claim', nextOwnerClaim('workspace-1', home));
+		const run = 'retained-tools';
+		const original = await before.request('spawn', { run, owner: 'workspace-1', ...program(IDLE), cwd: os.tmpdir(), cols: 80, rows: 24, meta: { ...meta(run) } });
+		before.dispose();
+		const port = portOf();
+		const seen: { callId: string; tool: string }[] = [];
+		port.serveTools(async call => {
+			seen.push({ callId: call.callId, tool: call.tool });
+			return { answer: { text: call.callId, structured: { status: 'success' }, isError: false } };
+		});
+		const shim = (await PtydClient.join(socket, protocol))!;
+		cleanups.push(() => shim.dispose());
+		await shim.request('hello', { protocol, role: 'shim', run });
+		// Restore uses the same execution-session connection that must also serve the retained shim.
+		const session = (port as unknown as { session: { client(protocol: number): Promise<PtydClient> } }).session;
+		for (const callId of ['after-upgrade', 'after-reconnect']) {
+			const client = await session.client(protocol);
+			await client.request('attach', { run });
+			const query = callId === 'after-upgrade';
+			const answer = await shim.request('call', { protocol: TOOL_PROTOCOL, caller: run, tool: query ? 'list_agents' : 'send_message', arguments: query ? {} : { to: '#a2', text: 'hello' }, callId, elapsedMs: 0, ...query ? { routeDeadlineMs: 2_000 } : {} });
+			assert.deepStrictEqual(answer, { text: callId, structured: { status: 'success' }, isError: false });
+			assert.strictEqual((await client.request('list', { owner: 'workspace-1' }))[0].pid, original.pid);
+			client.dispose();
+			await until('the earlier connection to close', () => client.isClosed);
+		}
+		assert.deepStrictEqual(seen, [{ callId: 'after-upgrade', tool: 'list_agents' }, { callId: 'after-reconnect', tool: 'send_message' }], 'queries and effect requests are each served exactly once');
 	});
 
 	test('allRunIds gives the runs of every workspace whose processes live; reads, text and keys pass to ptyd for this owner; an unreachable ptyd is said plainly', async () => {

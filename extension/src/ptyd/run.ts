@@ -7,7 +7,7 @@ import { truncateText } from '../base/text';
 import type { IPty } from 'node-pty';
 import { InputReading, inputScreenOf, readInput } from './composer';
 import { InputEffect, InputQueue } from './input';
-import { KeyModes, keySequence, pasteSequence } from './keys';
+import { KeyModes, keySequence, pasteSequence, win32Text } from './keys';
 import type { RunExit, RunInfo, RunStatus, ScreenFrame, ScreenRead, SpawnParams, Termination } from './protocol';
 import { MOST_SCREEN_LINES, readScreen, readStatusLines } from './screen';
 import { ScreenReader, screenReaderOf } from './screenStatus';
@@ -335,7 +335,7 @@ export class Run {
 	/** Writes `data` to its program, or keeps it for the program its turn creates (D146). */
 	private send(data: string): void {
 		if (this.pty) {
-			this.pty.write(data);
+			this.pty.write(process.platform === 'win32' && this.win32Input ? win32Text(data) : data);
 		} else {
 			this.unwritten.push(data);
 		}

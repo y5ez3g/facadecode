@@ -5,14 +5,14 @@
 import * as path from 'path';
 import { CliAdapter, configOverrides, sigintExit } from './adapter';
 import * as fs from 'fs';
-import { readJsonFile } from '../base/files';
-import { isJsonObject } from '../base/json';
+import { codeOf, messageOf } from '../base/errors';
+import { isEqualPath, readJsonFile } from '../base/files';
+import { isJsonObject, type JsonObject } from '../base/json';
 import { executableAt, launchTarget, LaunchTarget, xdgDirOf } from './executable';
-import { variableOf } from './environment';
 import { sessionDirOf, type SessionIntegration, type SessionIntegrationInput } from './identity';
 import { museDataDir } from './history/muse';
-import { RUN_VARIABLE, Environment } from './environment';
-import { SERVER_NAME, serverEntry, sharedServer, ToolsIntegration } from './tools';
+import { RUN_VARIABLE, variableOf, type Environment } from './environment';
+import { SERVER_NAME, serverEntry, sharedServer, type ToolsConflict, ToolsIntegration } from './tools';
 
 /** The installer's active native program avoids cmd.exe/PowerShell changing JSON arguments (CLIS-2.4). */
 export function museTarget(file: string, platform: NodeJS.Platform, env: Environment, cwd: string): LaunchTarget {
@@ -34,6 +34,11 @@ export function museTarget(file: string, platform: NodeJS.Platform, env: Environ
 	} catch { return target; }
 }
 
+/** The person's own Muse Code settings file, as the environment `env` it starts with places it: hooks and MCP servers among the rest. */
+function museSettingsFile(env: Environment, platform: NodeJS.Platform): string {
+	return path.join(xdgDirOf('config', env, platform), 'muse', 'settings.json');
+}
+
 /**
  * Preserve the user's hook groups; managed and project hooks remain loaded by Muse itself. Settings or per-launch hooks it cannot read -
  * its settings file read as such files are, comments and trailing commas allowed - stay as they are, for Muse Code to say what is wrong
@@ -41,7 +46,7 @@ export function museTarget(file: string, platform: NodeJS.Platform, env: Environ
  */
 export function museSession({ file, hook, env, extra, throughCmd, platform, instructions }: SessionIntegrationInput): SessionIntegration {
 	if (throughCmd) { return { unavailable: true }; }
-	const settings = readJsonFile(path.join(xdgDirOf('config', env, platform), 'muse', 'settings.json'));
+	const settings = readJsonFile(museSettingsFile(env, platform));
 	if (settings.kind === 'other') { return { unavailable: true }; }
 	let hooks = settings.kind === 'object' ? settings.value.hooks : undefined;
 	const overrides = configOverrides(extra).filter(each => each.key === 'hooks' && each.value !== undefined);
@@ -72,6 +77,96 @@ const SKILL_PATH = path.join('.agents', 'skills', SERVER_NAME, 'SKILL.md');
 const RUNTIME_REFERENCE = 'FACADE_ELECTRON_RUN_AS_NODE';
 
 /**
+ * The project MCP files a run of Muse Code in `cwd` reads, nearest first: `.mcp.json` in each folder from `cwd` up to the top of
+ * its repository - the folder with `.git` - and outside a repository in `cwd` alone, as Muse Code 1.4.14 reads them (D188).
+ */
+export function museProjectMcpFiles(cwd: string): string[] {
+	const start = path.resolve(cwd);
+	const folders: string[] = [];
+	for (let folder = start; ; folder = path.dirname(folder)) {
+		folders.push(folder);
+		if (fs.existsSync(path.join(folder, '.git'))) {
+			return folders.map(each => path.join(each, MCP_FILE));
+		}
+		if (path.dirname(folder) === folder) {
+			return [path.join(start, MCP_FILE)];
+		}
+	}
+}
+
+/**
+ * Why Muse Code 1.4.14 cannot load the project MCP file `text`, as it was seen to fail: text that is not plain JSON - a byte order
+ * mark, a comment, a trailing comma, nothing at all - no JSON object, an `mcpServers` that is no object, or a server in it that is
+ * no object with a `command` or `url` string. Undefined where it loads, as far as these go (D188).
+ */
+function unloadableBy(text: string): string | undefined {
+	let value: unknown;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		// JSON parse errors can quote configuration values; diagnostics identify the file, never its contents.
+		return 'is not plain JSON, as Muse Code reads it';
+	}
+	if (!isJsonObject(value)) {
+		return 'holds no JSON object';
+	}
+	const servers = value.mcpServers;
+	if (servers === undefined) {
+		return undefined;
+	}
+	if (!isJsonObject(servers)) {
+		return 'has an mcpServers that is not a JSON object';
+	}
+	const odd = Object.keys(servers).find(name => {
+		const each = servers[name];
+		return !isJsonObject(each) || (typeof each.command !== 'string' && typeof each.url !== 'string');
+	});
+	return odd === undefined ? undefined : `names a server ${JSON.stringify(odd)} with neither a command nor a url`;
+}
+
+/**
+ * How a run of Muse Code in `cwd` can be given the server (D188). Muse Code refuses a run whose `-c mcpServers.facade` names a
+ * server its own settings or a project MCP file it reads already names, and one whose project MCP file it cannot load: by `-c`
+ * where neither is so. Where `cwd`'s own `.mcp.json` names it, the project entry instead, which takes the place of a Facade's
+ * there - another installation's, or the Facade Code IDE's (D179, D186) - and is a conflict where the server is the person's own
+ * (CLIS-2.2). Anything else in the way is a conflict: the person's settings naming one, a project file it cannot load or a folder
+ * above naming one. A file in `cwd` is named relative to it.
+ */
+function museRoute(cwd: string, env: Environment, platform: NodeJS.Platform): 'argument' | 'project' | ToolsConflict {
+	const shown = (file: string) => path.dirname(file) === path.resolve(cwd) ? path.basename(file) : file;
+	const settingsFile = museSettingsFile(env, platform);
+	const settings = readJsonFile(settingsFile);
+	if (settings.kind === 'object' && isJsonObject(settings.value.mcpServers) && Object.hasOwn(settings.value.mcpServers, SERVER_NAME)) {
+		return { conflict: { file: settingsFile, reason: `${settingsFile} names a ${SERVER_NAME} server in mcpServers, beside which Muse Code refuses to run with Facade's; Facade leaves it as it is` } };
+	}
+	const own = path.join(path.resolve(cwd), MCP_FILE);
+	let route: 'argument' | 'project' = 'argument';
+	for (const file of museProjectMcpFiles(cwd)) {
+		let text: string;
+		try {
+			text = fs.readFileSync(file, 'utf8');
+		} catch (err) {
+			if (codeOf(err) === 'ENOENT' || codeOf(err) === 'ENOTDIR') {
+				continue;
+			}
+			return { conflict: { file: shown(file), reason: `${file} could not be read: ${messageOf(err)}; Facade leaves it as it is` } };
+		}
+		const why = unloadableBy(text);
+		if (why !== undefined) {
+			return { conflict: { file: shown(file), reason: `${file} ${why}, and Muse Code refuses to run with Facade's server beside a project MCP file it cannot load; Facade leaves it as it is` } };
+		}
+		const servers = (JSON.parse(text) as JsonObject).mcpServers;
+		if (isJsonObject(servers) && Object.hasOwn(servers, SERVER_NAME)) {
+			if (!isEqualPath(file, own)) {
+				return { conflict: { file: shown(file), reason: `${file} names a ${SERVER_NAME} server in mcpServers, beside which Muse Code refuses to run with Facade's in ${cwd}; Facade leaves it as it is` } };
+			}
+			route = 'project';
+		}
+	}
+	return route;
+}
+
+/**
  * Muse Code is given the server for the run alone by `-c mcpServers.facade=<entry>`, and the skill in the project's
  * `.agents/skills/facade`, shared by the folder's runs; every launch trusts the folder, so it reads it (CLIS-2.2, 3.3). A run's
  * entry may name variables only by references to the CLI's environment, which carries the run's own. It is optional: Muse Code
@@ -80,15 +175,21 @@ const RUNTIME_REFERENCE = 'FACADE_ELECTRON_RUN_AS_NODE';
  * cmd.exe, which cannot carry it, is given the `facade` entry of the project's `.mcp.json` instead, merged into the person's file
  * and shared by the folder's runs, its variables `${NAME:-}` references - empty in a session the person starts there by hand,
  * whose server then serves nothing, where an unset reference would turn off every server of theirs - and with no `mode`: Muse
- * Code 1.4.14 refuses one in a project's file, as a configuration error that turns off all its MCP servers (D147).
+ * Code 1.4.14 refuses one in a project's file, as a configuration error that turns off all its MCP servers (D147). So is a run
+ * whose own folder's `.mcp.json` already names a `facade` server, beside which Muse Code refuses a `-c` one; a run whose `-c`
+ * server Muse Code would refuse over anything else of the person's starts without the tools (D188).
  */
 const museTools: ToolsIntegration = {
-	capability: { state: 'unverified', reason: 'the server by -c mcpServers.facade for the run alone - where Windows starts it through cmd.exe, a facade entry merged into the project\'s .mcp.json, shared by the folder\'s runs - with references to the run\'s variables in the CLI\'s environment, and the skill in the project\'s .agents/skills/facade' },
-	where: (_runDir, cwd) => `-c mcpServers.${SERVER_NAME} of the launch alone - where Windows starts it through cmd.exe, mcpServers.${SERVER_NAME} in ${path.join(cwd, MCP_FILE)} - and the skill in ${path.join(cwd, SKILL_PATH)}, shared by the runs there`,
-	inject: ({ server, skill, platform, throughCmd }) => {
+	capability: { state: 'unverified', reason: 'the server by -c mcpServers.facade for the run alone - where Windows starts it through cmd.exe, or the folder\'s .mcp.json already names a facade server, a facade entry merged into the project\'s .mcp.json, shared by the folder\'s runs - with references to the run\'s variables in the CLI\'s environment, and the skill in the project\'s .agents/skills/facade' },
+	where: (_runDir, cwd) => `-c mcpServers.${SERVER_NAME} of the launch alone - where Windows starts it through cmd.exe, or the folder's ${MCP_FILE} already names a ${SERVER_NAME} server, mcpServers.${SERVER_NAME} in ${path.join(cwd, MCP_FILE)} - and the skill in ${path.join(cwd, SKILL_PATH)}, shared by the runs there`,
+	inject: ({ server, skill, platform, throughCmd, cwd, env: cliEnv }) => {
 		const shared = sharedServer(server);
 		const skillFile = { kind: 'file', path: SKILL_PATH, content: skill } as const;
-		if (platform === 'win32' && throughCmd) {
+		const route = platform === 'win32' && throughCmd ? 'project' : cwd === undefined ? 'argument' : museRoute(cwd, cliEnv ?? {}, platform ?? process.platform);
+		if (typeof route !== 'string') {
+			return route;
+		}
+		if (route === 'project') {
 			const references = Object.fromEntries([...Object.keys(shared.env), RUN_VARIABLE].map(name => [name, `\${${name}:-}`]));
 			const entry = serverEntry({ ...shared.server, env: { ...shared.server.env, ...references } });
 			return { values: {}, runFiles: [], project: [{ kind: 'entry', path: MCP_FILE, keys: ['mcpServers', SERVER_NAME], value: entry }, skillFile], env: shared.env };

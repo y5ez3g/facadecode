@@ -8,6 +8,7 @@
 
 import * as path from 'path';
 import { isJsonObject, type JsonObject } from '../base/json';
+import type { Environment } from './environment';
 
 /** A capability as an adapter can stand behind it (CLIS-2.1): supported, unavailable or unverified, with why. */
 export interface Capability {
@@ -44,6 +45,17 @@ export interface ToolsInput {
 	readonly platform?: NodeJS.Platform;
 	/** Whether its program starts through cmd.exe on Windows, which cannot carry an argument's JSON (CLIS-1.2). */
 	readonly throughCmd?: boolean;
+	/** The folder it starts in, and the environment it starts with, where how it is given the tools depends on what it finds there. */
+	readonly cwd?: string;
+	readonly env?: Environment;
+}
+
+/**
+ * Why a launch cannot be given the tools, found before anything is written: configuration of the person's own the CLI would
+ * refuse to run beside them, named by `file`. The CLI then starts without them, which it can (CLIS-2.2).
+ */
+export interface ToolsConflict {
+	readonly conflict: { readonly file: string; readonly reason: string };
 }
 
 /**
@@ -74,7 +86,7 @@ export interface ToolsIntegration {
 	readonly capability: Capability;
 	/** Where it goes, in words for Show Agent Launch. */
 	where(runDir: string, cwd: string): string;
-	inject(input: ToolsInput): Injection;
+	inject(input: ToolsInput): Injection | ToolsConflict;
 }
 
 /** The run's folder of launch files, in the Facade directory `home`. */
