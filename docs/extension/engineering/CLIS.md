@@ -221,7 +221,9 @@ Before a project write, snapshot exact original bytes/existence, lock the path a
 and record content hashes/reference counts. Content a Facade wrote is Facade's whatever wrote it - another version, another
 Facade data directory, or one changed since - and is brought up to date (D179): a skill by its `facade` name and the
 description every Facade skill begins with, the plugin's manifest by its name and description, its MCP configuration,
-hooks and a `.mcp.json` entry by Facade's server alone, the shim. A skill Facade writes into a folder ends with a line naming
+hooks and a `.mcp.json` entry by Facade's server alone, the shim. What the Facade Code IDE's agent extension writes into
+a folder is Facade's too: its `facade` skill by its own description, its Antigravity plugin's manifest by its name alone,
+its server by its shim (D186). A skill Facade writes into a folder ends with a line naming
 the Facade version that wrote it; one a later version marked stands. An existing `facade` server/skill of the person's own is
 a conflict; fail integration while preserving the CLI where it can launch safely. Never overwrite malformed user config or
 unknown values. On cleanup remove only unchanged Facade-owned content after the last run that uses it releases it; a
@@ -522,6 +524,8 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-02: 2.2 brings the facade skill and Antigravity plugin the Facade Code IDE wrote into a folder up to date as
+  Facade's own (D186).
 - 2026-11-02: 2.3's startup also waits for the run's Facade tools; a run not ready by its bound is red (D183).
 - 2026-11-02: 2.2 brings a Facade's own content up to date whatever wrote it - another version, another Facade data
   directory or a change since - and marks the skill with its Facade version so that a later one stands (D179).

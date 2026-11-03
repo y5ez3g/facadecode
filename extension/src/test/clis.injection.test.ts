@@ -18,7 +18,7 @@ import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconc
 import { sessionDirOf, sessionFileOf } from '../clis/identity';
 import { CliPlanError, DestinationEnvironment, discoverEntry, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
 import { INPUT_ADAPTERS } from '../ptyd/composer';
-import { laterVersion, markedSkill, McpServer, ProjectWrite, runDirOf, skillVersionOf, ToolsInput } from '../clis/tools';
+import { isFacadeContent, laterVersion, markedSkill, McpServer, ProjectWrite, runDirOf, skillVersionOf, ToolsInput } from '../clis/tools';
 import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
 import type * as HostClisModule from '../host/clis';
 import type * as SettingsModule from '../host/settings';
@@ -705,6 +705,29 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		const now = writes.map(write => fs.readFileSync(path.join(cwd, write.path), 'utf8'));
 		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
 		assert.deepStrictEqual([now, writes.map(write => fs.existsSync(path.join(cwd, write.path)))], [writes.map(write => write.kind === 'file' ? write.content : ''), [false, false, false, false]]);
+	});
+
+	test('D186: the facade skill and Antigravity plugin the Facade Code IDE wrote are Facade\'s too: brought up to date, and gone with the last run', () => {
+		// As the IDE's agent extension writes them, from Facade Code.app
+		const ideSkill = '---\nname: facade\ndescription: "Coordinate Facade Code agents through MCP tools. Use for delegation, messages, [facade] notices, and inspecting or answering an agent\'s CLI."\n---\n\n# Facade\n';
+		const ideServer = { command: '/Applications/Facade Code.app/Contents/Frameworks/Facade Code Helper (Plugin).app/Contents/MacOS/Facade Code Helper (Plugin)', args: ['/Applications/Facade Code.app/Contents/Resources/app/extensions/facade-agents/dist/shim.js', 'mcp', '--agent'], env: { ELECTRON_RUN_AS_NODE: '1' } };
+		placed(skillFile(), ideSkill);
+		const plugin = path.join('.agents', 'plugins', 'facade');
+		placed(path.join(cwd, plugin, 'plugin.json'), JSON.stringify({ name: 'facade' }, undefined, '\t'));
+		placed(path.join(cwd, plugin, 'mcp_config.json'), JSON.stringify({ mcpServers: { facade: ideServer } }, undefined, '\t'));
+		placed(path.join(cwd, plugin, 'skills', 'facade', 'SKILL.md'), ideSkill);
+		const writes: ProjectWrite[] = [
+			skill(facadeSkill('current words', '0.0.3')),
+			{ kind: 'file', path: path.join(plugin, 'plugin.json'), content: `${JSON.stringify({ name: 'facade', description: 'The Facade Code tools: current.' }, undefined, 2)}\n` },
+			{ kind: 'file', path: path.join(plugin, 'mcp_config.json'), content: `${JSON.stringify({ mcpServers: { facade: { command: '/new/node', args: ['/new/dist/shim.js'], env: {} } } }, undefined, 2)}\n` },
+			{ kind: 'file', path: path.join(plugin, 'skills', 'facade', 'SKILL.md'), content: facadeSkill('current words', '0.0.3') }
+		];
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, writes), undefined);
+		const now = writes.map(write => fs.readFileSync(path.join(cwd, write.path), 'utf8'));
+		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
+		assert.deepStrictEqual([now, writes.map(write => fs.existsSync(path.join(cwd, write.path)))], [writes.map(write => write.kind === 'file' ? write.content : ''), [false, false, false, false]]);
+		// A plugin of the person's own, named facade and saying more, is still theirs
+		assert.strictEqual(isFacadeContent('plugin.json', JSON.stringify({ name: 'facade', version: '1.0.0' })), false);
 	});
 
 	test('D179: a facade server another installation left in .mcp.json is brought up to date beside the person\'s own servers, and taken out alone after the last run; a facade server of theirs stays a conflict', () => {
