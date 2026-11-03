@@ -16,7 +16,7 @@ import { CODEX_STORE } from './codex';
 import { MUSE_STORE } from './muse';
 import { OPENCODE_STORE } from './opencode';
 import { PI_STORE } from './pi';
-import { inScope } from './scope';
+import { Scope } from './scope';
 import type { Candidate, Found, VendorStore } from './store';
 
 /** How many conversations a batch holds (LIFECYCLE-3.2). */
@@ -24,6 +24,9 @@ export const BATCH = 100;
 
 /** The most file heads one batch reads; past it the batch ends early and the next goes on (LIFECYCLE-3.2). */
 export const MOST_READS_PER_BATCH = 1_000;
+
+/** How many file heads are read together, ahead of the one a batch takes next (D177). */
+const READ_TOGETHER = 8;
 
 /** A conversation as the picker lists it: the same facts as the core's ConversationEntry. */
 export interface DiscoveredConversation {
@@ -61,7 +64,7 @@ export interface VendorHistoryOptions {
 
 /** A file of a store, with the directories of the scope whose launches find that store. */
 interface ScopedCandidate extends Candidate {
-	readonly scope: readonly string[];
+	readonly scope: Scope;
 }
 
 interface ResolvedCandidate {
@@ -75,6 +78,8 @@ class VendorPager {
 
 	private candidates: ScopedCandidate[] | undefined;
 	private next$ = 0;
+	/** The heads being read ahead of the one taken next, by candidate (D177). */
+	private readonly ahead = new Map<ScopedCandidate, Promise<Found | undefined>>();
 	/** Enriched entries waiting until unread candidates can no longer precede them. Earliest activity first. */
 	private readonly pending: ResolvedCandidate[] = [];
 	private readonly seen = new Set<string>();
@@ -100,7 +105,10 @@ class VendorPager {
 			return { entries: [], done: true };
 		}
 		// Listed once: every file a store may keep a conversation of the scope in, most recently active first
-		this.candidates ??= this.history.candidatesOf(this.scope.directories).sort((a, b) => b.at - a.at || (a.file < b.file ? -1 : 1));
+		this.candidates ??= (await this.history.candidatesOf(this.scope.directories)).sort((a, b) => b.at - a.at || (a.file < b.file ? -1 : 1));
+		if (this.disposed) {
+			return { entries: [], done: true };
+		}
 		const entries: DiscoveredConversation[] = [];
 		let reads = 0;
 		while (!this.disposed && entries.length < BATCH) {
@@ -113,12 +121,12 @@ class VendorPager {
 				}
 				this.next$++;
 				reads++;
-				const found = await this.history.read(unread);
+				const found = await this.readAhead(unread);
 				if (this.disposed) {
 					break;
 				}
 				// Only a directory whose launches find this store: another's Resume would not find the conversation there.
-				if (found && inScope(found.cwd, unread.scope)) {
+				if (found && unread.scope.includes(found.cwd)) {
 					const at = Math.min(found.activityAt ?? unread.at, unread.at);
 					let low = 0, high = this.pending.length;
 					while (low < high) {
@@ -155,10 +163,25 @@ class VendorPager {
 		return { entries, done: this.next$ >= this.candidates.length && !this.pending.length };
 	}
 
+	/** `candidate`'s head, read together with the next ones' (D177): each is still taken in its turn. */
+	private readAhead(candidate: ScopedCandidate): Promise<Found | undefined> {
+		const candidates = this.candidates ?? [];
+		for (const next of [candidate, ...candidates.slice(this.next$, this.next$ + READ_TOGETHER - 1)]) {
+			// A head that cannot be read is no conversation, as a reader that finds none says
+			if (!next.found && !this.ahead.has(next)) {
+				this.ahead.set(next, this.history.read(next).catch(() => undefined));
+			}
+		}
+		const reading = this.ahead.get(candidate) ?? this.history.read(candidate);
+		this.ahead.delete(candidate);
+		return reading;
+	}
+
 	dispose(): void {
 		this.disposed = true;
 		this.candidates = [];
 		this.pending.length = 0;
+		this.ahead.clear();
 		this.unavailable.clear();
 	}
 }
@@ -190,9 +213,10 @@ export class VendorHistory {
 
 	/**
 	 * The files of every store that may keep a conversation of `directories`, each store found with the environment of the
-	 * directories whose launches use it (CLIS-1.2): a store is listed once, however many directories find it.
+	 * directories whose launches use it (CLIS-1.2): a store is listed once, however many directories find it. Each store is listed in
+	 * a turn of its own, so that no long synchronous listing holds the extension host that draws the agents' terminals (D177).
 	 */
-	candidatesOf(directories: readonly string[]): ScopedCandidate[] {
+	async candidatesOf(directories: readonly string[]): Promise<ScopedCandidate[]> {
 		const found = new Map<string, { readonly store: VendorStore; readonly dir: string; readonly directories: string[] }>();
 		const args = this.arguments();
 		for (const directory of directories) {
@@ -209,7 +233,13 @@ export class VendorHistory {
 				found.set(key, each);
 			}
 		}
-		return [...found.values()].flatMap(({ store, dir, directories: scope }) => store.candidates(dir, scope).map(candidate => ({ ...candidate, scope })));
+		const listed: ScopedCandidate[] = [];
+		for (const { store, dir, directories: within } of found.values()) {
+			await new Promise(resolve => setImmediate(resolve));
+			const scope = new Scope(within);
+			listed.push(...store.candidates(dir, scope).map(candidate => ({ ...candidate, scope })));
+		}
+		return listed;
 	}
 
 	/** A candidate's metadata: read once per version of its file. */

@@ -218,9 +218,14 @@ only when its complete bytes match the run's bundled skill; otherwise supply the
 retains Pi's native collision diagnostic: do not suppress warnings, overwrite it, or disable other skills (D158).
 
 Before a project write, snapshot exact original bytes/existence, lock the path across runs, merge only owned content,
-and record content hashes/reference counts. An existing different `facade` server/skill is a conflict; fail integration
-while preserving the CLI where it can launch safely. Never overwrite malformed user config or unknown values. On cleanup
-remove only unchanged Facade-owned content after the last run that uses it releases it; modified files remain with a
+and record content hashes/reference counts. Content a Facade wrote is Facade's whatever wrote it - another version, another
+Facade data directory, or one changed since - and is brought up to date (D179): a skill by its `facade` name and the
+description every Facade skill begins with, the plugin's manifest by its name and description, its MCP configuration,
+hooks and a `.mcp.json` entry by Facade's server alone, the shim. A skill Facade writes into a folder ends with a line naming
+the Facade version that wrote it; one a later version marked stands. An existing `facade` server/skill of the person's own is
+a conflict; fail integration while preserving the CLI where it can launch safely. Never overwrite malformed user config or
+unknown values. On cleanup remove only unchanged Facade-owned content after the last run that uses it releases it; a
+`.mcp.json` entry taken over goes with the file left as it would be without it, and modified files remain with a
 diagnostic. Never hide arbitrary files by modifying global Git ignore. Do not copy vendor credentials into project
 files. Per-run files reside in the execution environment's Facade data directory; no identity token or protected-file
 authentication mechanism is introduced.
@@ -515,6 +520,9 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
+
+- 2026-11-02: 2.2 brings a Facade's own content up to date whatever wrote it - another version, another Facade data
+  directory or a change since - and marks the skill with its Facade version so that a later one stands (D179).
 
 - 2026-11-02: Owner-approved copy polish adds the ellipsis to the launch inspection command title; location selection,
   configuration facts and secret redaction retain their existing behavior.

@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- **Closing an agent's tab closes it.** Closing a running agent's terminal tab yourself - its close button, Close, Close Editor - no longer asks first. Facade still asks once when tabs close together, as with Close All or Close Others.
+- **New agents join at the bottom.** New cards, and cards you unpin, go to the bottom of the list; a card you pin goes to the bottom of the pinned cards. Move Up and Move Down still reorder them.
+- **Fewer commands.** Copy Agent Reference, Message History..., Clear Filter, Filter by This Location, Filter by This Folder and Copy Diagnostics are removed. Go to Agent still copies an agent's reference, the first item of **Filter by Working Location...** clears a filter, and a message to you still opens from its notification.
+- **Fixed: scrolling and selecting stopped after a reload.** After a window reload, an agent whose CLI takes the mouse - Claude Code among them - could no longer be scrolled or have its text selected, because the redrawn terminal sent mouse events in an encoding the CLI cannot read. A redrawn terminal now keeps the mouse encoding, a hidden cursor and the CLI's keyboard protocol. Agents started before this version get it once they are started again.
+- **Fixed: "Cannot work with other agents: move or rename .agents/skills/facade/SKILL.md".** Codex, Antigravity and Muse Code agents could not work with other agents in a folder where another Facade - an earlier version, or one with its own data folder - had left its skill or plugin. Facade now recognizes its own files and brings them up to date; a skill or server of your own named `facade` is still left alone.
+- **Fixed: `aN;NaNm` typed into an agent.** Clicking a file link in an agent's terminal could type `aN;NaNm` into its CLI, because VS Code reported the click after the file had covered the terminal.
+- **Fixed: a pinned card's name.** The pin stood further from a shortened name than from a whole one.
+- **No frame on a card's menu.** Right-clicking a card no longer draws a frame around it.
+- **Faster Resume Agent.** Saved conversations are read in about a third of the time, without holding up your agents' terminals meanwhile.
+
 ## 0.0.2
 
 Agents that work together, six native CLIs, and saved conversations.

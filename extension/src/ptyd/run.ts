@@ -81,6 +81,10 @@ const ALTERNATE_SCREEN_MODES = [47, 1047, 1049];
 
 /** Win32 input mode: `CSI ? 9001 h`. */
 const WIN32_INPUT_MODE = 9001;
+/** Mouse reports as SGR, `ESC [ < ...`, and as SGR in pixels: the encodings a program sets beside the reports it asks for. */
+const MOUSE_ENCODINGS = [1006, 1016];
+/** Show the cursor (DECTCEM): reset, the program hides it. */
+const CURSOR_SHOWN_MODE = 25;
 
 /** How many sets of kitty keyboard flags a screen's stack holds, as the protocol has it. */
 const KITTY_STACK_MOST = 16;
@@ -213,6 +217,9 @@ export class Run {
 	private ctrlCAt: number | undefined;
 	private readonly kittyStacks = { normal: [] as number[], alternate: [] as number[] };
 	private win32Input = false;
+	/** The mouse encoding its program set, of {@link MOUSE_ENCODINGS}; none for the default one. */
+	private mouseEncoding: number | undefined;
+	private cursorHidden = false;
 	/** The last frame its program drew on the alternate screen, kept as it left it or ended there (MCP-5.1). */
 	private frame: ScreenFrame | undefined;
 	/** Set once ptyd let go of it: its headless terminal is gone. */
@@ -407,7 +414,7 @@ export class Run {
 		const seq = this.seq;
 		return new Promise((resolve, reject) => this.afterDrawn(() => {
 			try {
-				resolve({ screen: this.serializer.serialize({ scrollback: scrollbackRows(this.terminal.cols) }), seq });
+				resolve({ screen: this.serializer.serialize({ scrollback: scrollbackRows(this.terminal.cols) }) + this.modesBeyondScreen(), seq });
 			} catch (err) {
 				reject(err);
 			}
@@ -709,14 +716,31 @@ export class Run {
 		return new Promise(resolve => this.afterDrawn(resolve));
 	}
 
+	/**
+	 * What its program set that a terminal drawing its screen anew needs beside the serializer's modes, which leave these out
+	 * (ARCHITECTURE-2.3, D178): the mouse encoding - without which a reload sends the program mouse reports it cannot read, so that
+	 * neither its scrolling nor its selection works - the hidden cursor, the kitty keyboard protocol's flags on the screen it is on and
+	 * win32 input mode. Written after the screen, in the terminal the screen leaves it in.
+	 */
+	private modesBeyondScreen(): string {
+		const kitty = this.kittyStacks[this.terminal.buffer.active.type];
+		return [
+			...this.mouseEncoding ? [`\x1b[?${this.mouseEncoding}h`] : [],
+			...this.cursorHidden ? [`\x1b[?${CURSOR_SHOWN_MODE}l`] : [],
+			...kitty.map(flags => `\x1b[>${flags}u`),
+			...this.win32Input ? [`\x1b[?${WIN32_INPUT_MODE}h`] : []
+		].join('');
+	}
+
 	private keyModes(): KeyModes {
 		const stack = this.kittyStacks[this.terminal.buffer.active.type];
 		return { applicationCursorKeys: this.terminal.modes.applicationCursorKeysMode, kittyFlags: stack[stack.length - 1] ?? 0, win32Input: this.win32Input };
 	}
 
 	/**
-	 * Follows what the program sets that the headless terminal does not keep: the kitty keyboard protocol's flags - pushed, popped
-	 * and set, a stack for each screen - and win32 input mode. The terminal's own handling of each sequence still runs.
+	 * Follows what the program sets that the headless terminal does not keep, or keeps where its serializer does not write it: the
+	 * kitty keyboard protocol's flags - pushed, popped and set, a stack for each screen - win32 input mode, the mouse encoding and the
+	 * cursor's visibility, each back to its default on a reset. The terminal's own handling of each sequence still runs.
 	 */
 	private followModes(): void {
 		const parser = this.terminal.parser;
@@ -741,20 +765,46 @@ export class Run {
 			return true;
 		});
 		parser.registerCsiHandler({ prefix: '?', final: 'h' }, params => {
-			if (numbers(params).includes(WIN32_INPUT_MODE)) {
-				this.win32Input = true;
+			for (const mode of numbers(params)) {
+				if (mode === WIN32_INPUT_MODE) {
+					this.win32Input = true;
+				} else if (MOUSE_ENCODINGS.includes(mode)) {
+					this.mouseEncoding = mode;
+				} else if (mode === CURSOR_SHOWN_MODE) {
+					this.cursorHidden = false;
+				}
 			}
 			return false;
 		});
 		parser.registerCsiHandler({ prefix: '?', final: 'l' }, params => {
 			const modes = numbers(params);
-			if (modes.includes(WIN32_INPUT_MODE)) {
-				this.win32Input = false;
+			for (const mode of modes) {
+				if (mode === WIN32_INPUT_MODE) {
+					this.win32Input = false;
+				} else if (MOUSE_ENCODINGS.includes(mode)) {
+					// As the terminal does: the default encoding again, whichever of them is reset
+					this.mouseEncoding = undefined;
+				} else if (mode === CURSOR_SHOWN_MODE) {
+					this.cursorHidden = true;
+				}
 			}
 			// Before the terminal leaves the alternate screen, which it clears as it does: its last frame is kept (MCP-5.1)
 			if (this.terminal.buffer.active.type === 'alternate' && modes.some(mode => ALTERNATE_SCREEN_MODES.includes(mode))) {
 				this.keepFrame();
 			}
+			return false;
+		});
+		// A soft reset shows the cursor again; a full one sets everything back
+		parser.registerCsiHandler({ intermediates: '!', final: 'p' }, () => {
+			this.cursorHidden = false;
+			return false;
+		});
+		parser.registerEscHandler({ final: 'c' }, () => {
+			this.kittyStacks.normal.length = 0;
+			this.kittyStacks.alternate.length = 0;
+			this.win32Input = false;
+			this.mouseEncoding = undefined;
+			this.cursorHidden = false;
 			return false;
 		});
 	}

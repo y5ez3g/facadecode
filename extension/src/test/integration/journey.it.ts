@@ -106,13 +106,15 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 
 /** New Agent with the preselected CLI, accepted as soon as its picker shows: the card it creates. */
 async function newCard(): Promise<PanelState['cards'][number]> {
-	const before = (await state()).cardCount;
+	const before = new Set((await state()).cards.map(card => card.runId));
 	void vscode.commands.executeCommand('facade.newAgent');
-	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
+	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes. A new card goes last
+	// (PANEL-2.1): it is the one not there before.
 	return until('a new card', async () => {
 		const now = await state();
-		if (now.cardCount > before) {
-			return now.cards[0];
+		const added = now.cards.find(card => !before.has(card.runId));
+		if (added) {
+			return added;
 		}
 		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 		return undefined;
@@ -241,11 +243,12 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		const cwd = path.join(vscode.workspace.workspaceFolders![0].uri.fsPath, 'nested');
 		fs.mkdirSync(cwd, { recursive: true });
 		const fixture = resumeFixture(cwd);
-		const before = (await state()).cardCount;
+		const before = new Set((await state()).cards.map(each => each.runId));
 		void vscode.commands.executeCommand('facade.history');
 		const card = await until('the resumed card', async () => {
 			const current = await state();
-			if (current.cardCount > before) { return current.cards[0]; }
+			const added = current.cards.find(each => !before.has(each.runId));
+			if (added) { return added; }
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			return undefined;
 		});
@@ -277,8 +280,18 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			this.skip();
 		}
 		const card = await newCard();
-		await vscode.commands.executeCommand('facade.filterByLocation', { run_id: card.runId });
-		const filtered = await until('the filter', async () => { const now = await state(); return now.filter ? now : undefined; });
+		// Filter by Working Location..., as the person takes the card's location: in this window of one folder, the item after its
+		// whole folder
+		void vscode.commands.executeCommand('facade.filter');
+		const filtered = await until('the filter', async () => {
+			const now = await state();
+			if (now.filter) {
+				return now;
+			}
+			await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
+			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+			return undefined;
+		});
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
 		const said = await until('the page to say so', async () => {

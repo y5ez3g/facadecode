@@ -4,9 +4,11 @@
 
 // What Facade puts into project folders and run folders for the tools (CLIS-2.2). A project write happens only where a CLI requires
 // one, under one lock across the runs and windows of the execution environment: the exact original bytes are kept, only Facade's own
-// content is merged in, and each run that uses it holds a reference in the record. A different `facade` server or skill already there
-// is a conflict, and malformed or unknown content is never overwritten. After the last run lets go, content Facade wrote that nobody
-// changed goes - the original put back byte for byte - and a file changed since stays, with a diagnostic. A record that cannot be
+// content is merged in, and each run that uses it holds a reference in the record. Content a Facade wrote - of another version, from
+// another Facade directory, or changed since - is recognized as Facade's and brought up to date, unless a later Facade marked it
+// (D179); a `facade` server or skill of the person's own is a conflict, and malformed or unknown content is never overwritten. After
+// the last run lets go, content Facade wrote that nobody changed goes - the original put back byte for byte - and a file changed
+// since stays, with a diagnostic. A record that cannot be
 // read is never replaced. No global Git ignore is touched, and no folder is removed that Facade did not make or that holds
 // anything. A run counts as alive from its plan, before its process exists, so a window that opens meanwhile leaves its files.
 
@@ -19,7 +21,7 @@ import { canonicalJson, isJsonObject } from '../base/json';
 import { addMembers, applyJsonEdits, JsonEdit, JsonMember, JsonObjectNode, jsonStyleOf, memberOf, nodeValue, replaceValue } from '../base/jsonc';
 import { withFileLock } from '../base/lock';
 import { isSessionFileName } from './identity';
-import { Injection, ProjectWrite, runDirOf } from './tools';
+import { Injection, isFacadeContent, isFacadeServer, laterVersion, ProjectWrite, runDirOf, skillVersionOf } from './tools';
 
 /** The record's file in the Facade directory `home`: what Facade put into project folders and the runs that use it. */
 export function injectedRecordOf(home: string): string {
@@ -168,6 +170,23 @@ function fileStep(file: string, content: string, held: Held | undefined): Step |
 			}
 		};
 	}
+	if (current && isFacadeContent(file, current.toString('utf8'))) {
+		const theirs = skillVersionOf(current.toString('utf8'));
+		const ours = skillVersionOf(content);
+		if (theirs && ours && laterVersion(theirs, ours)) {
+			// A later Facade's: it stands, and stays that Facade's to take out
+			return { file, apply: run => held ? { ...held, runs: withRun(held.runs, run) } : undefined };
+		}
+		// Facade's own from an earlier version, another Facade directory, or changed since: brought up to date, and Facade's to take
+		// out once its last run ends (D179)
+		return {
+			file,
+			apply: run => {
+				replaceFile(file, wanted, undefined, 0o666);
+				return { ...held ?? { kind: 'file', original: null, created: [] }, written: sha256(wanted), owned: sha256(wanted), runs: withRun(held?.runs ?? [], run) };
+			}
+		};
+	}
 	if (current) {
 		return held
 			? `${file} was changed after Facade wrote it; Facade leaves it as it is`
@@ -229,6 +248,15 @@ function entryStep(file: string, write: Extract<ProjectWrite, { kind: 'entry' }>
 			// later only where nothing else of the file was changed either
 			const untouched = sha256(bytes) === held.written;
 			return edited([replaceValue(read.text, member.value, write.value, style)], (text, run) => ({ ...held, written: untouched ? sha256(text) : held.written, owned, runs: withRun(held.runs, run) }));
+		}
+		if (isFacadeServer(nodeValue(member.value))) {
+			// A Facade's entry of another installation or Facade directory, or changed since: brought up to date. What goes back
+			// later is the file without it, never the entry it replaced (D179)
+			const without = Buffer.from(applyJsonEdits(read.text, [withoutMember(servers!, member)])).toString('base64');
+			return edited([replaceValue(read.text, member.value, write.value, style)], (text, run) => ({
+				kind: 'entry', keys: write.keys, original: held?.original ?? without, written: sha256(text), owned, parent: held?.parent ?? false,
+				created: held?.created ?? [], runs: withRun(held?.runs ?? [], run)
+			}));
 		}
 		return `${file} already names another ${key} server in ${parentKey}; Facade leaves it as it is`;
 	}

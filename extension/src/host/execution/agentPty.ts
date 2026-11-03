@@ -4,6 +4,7 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { MouseReports } from '../../base/mouseReports';
 
 /** The most output an unopened terminal keeps for its first draw; beyond it, the run's screen is taken anew as it opens. */
 const MOST_UNOPENED = 8 * 1024 * 1024;
@@ -78,6 +79,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private said: string[] = [];
 	/** What the tab was last seen showing. */
 	private seen: string;
+	/** The mouse reports the person's clicks type, a release the editor could not measure given its press's position (D170). */
+	private readonly mouse = new MouseReports();
 
 	constructor(private name: string, private readonly log: (message: string) => void) {
 		this.created = name;
@@ -228,7 +231,10 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	handleInput(data: string): void {
 		if (this.binding && !this.ended) {
-			this.binding.input(data);
+			const typed = this.mouse.repair(data);
+			if (typed) {
+				this.binding.input(typed);
+			}
 		}
 	}
 

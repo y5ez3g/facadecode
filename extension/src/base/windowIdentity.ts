@@ -40,7 +40,7 @@ export interface WindowIdentity {
 	readonly session: string;
 	/** The window's remote authority, `ssh-remote+host`, which only the local component sees; none in a local window. */
 	readonly remote?: string;
-	/** The component's own version, which a remote extension host cannot see, for Copy Diagnostics (ARCHITECTURE-3.3, D116). */
+	/** The component's own version, which a remote extension host cannot see, for the diagnostics report (ARCHITECTURE-3.3, D116). */
 	readonly component?: string;
 }
 

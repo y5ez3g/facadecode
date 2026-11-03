@@ -12,7 +12,7 @@ import * as path from 'path';
 import type { Environment } from '../environment';
 import { xdgDirOf } from '../executable';
 import { SESSION_ID } from '../identity';
-import { inScope, titleOf } from './scope';
+import { Scope, titleOf } from './scope';
 import { openReadOnly } from './sqlite';
 import type { Candidate, Found, VendorStore } from './store';
 
@@ -32,10 +32,10 @@ export function museDataDir(env: Environment, platform: NodeJS.Platform = proces
 }
 
 /**
- * The conversations of the index at `dir` in `directories` or a folder below them that Muse Code itself would offer to resume: one
+ * The conversations of the index at `dir` in `scope` or a folder below it that Muse Code itself would offer to resume: one
  * with a prompt, valid, whose log is there. Each is read whole from its row; columns a version lacks are done without.
  */
-export function museCandidates(dir: string, directories: readonly string[]): Candidate[] {
+export function museCandidates(dir: string, scope: Scope): Candidate[] {
 	const index = path.join(dir, 'session-index.db');
 	const db = openReadOnly(index);
 	if (!db) {
@@ -57,7 +57,7 @@ export function museCandidates(dir: string, directories: readonly string[]): Can
 	const candidates: Candidate[] = [];
 	for (const row of rows) {
 		const at = typeof row.at === 'number' || typeof row.at === 'bigint' ? Number(row.at) / 1000 : NaN;
-		if (typeof row.id !== 'string' || !SESSION_ID.test(row.id) || typeof row.cwd !== 'string' || !inScope(row.cwd, directories)
+		if (typeof row.id !== 'string' || !SESSION_ID.test(row.id) || typeof row.cwd !== 'string' || !scope.includes(row.cwd)
 			|| !(at > 0) || typeof row.log !== 'string' || !fs.existsSync(row.log)) {
 			continue;
 		}

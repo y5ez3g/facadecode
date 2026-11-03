@@ -12,7 +12,7 @@ import { isJsonObject } from '../../base/json';
 import { variableOf } from '../environment';
 import { homeOf } from '../executable';
 import { SESSION_ID } from '../identity';
-import { formsOf, headLines, mtimeOf, namesIn, PROMPT_BYTES, tailLines, titleOf } from './scope';
+import { headLines, mtimeOf, namesIn, PROMPT_BYTES, Scope, tailLines, titleOf } from './scope';
 import type { Candidate, Found, VendorStore } from './store';
 
 /** The folder Pi 1.4 keeps the sessions of `cwd` in by default: its path, a leading separator dropped, each separator and colon a dash, between `--`. */
@@ -21,15 +21,15 @@ export function piSessionFolderName(cwd: string): string {
 }
 
 /**
- * The session files in the store at `dir` that may be of `directories` or a folder below them (LIFECYCLE-3.2): in the default layout,
+ * The session files in the store at `dir` that may be of `scope` or a folder below it (LIFECYCLE-3.2): in the default layout,
  * those of the folders named for them, as `claudeCandidates` lists Claude Code's - a sibling's that shares a prefix is read and left
  * out by its header - and every file a session-dir override keeps directly, which has no folder per cwd.
  */
-export function piCandidates(dir: string, directories: readonly string[] = []): Candidate[] {
+export function piCandidates(dir: string, scope: Scope = new Scope([])): Candidate[] {
 	const caseless = process.platform === 'win32' || process.platform === 'darwin';
 	const compared = (name: string) => caseless ? name.toLowerCase() : name;
-	const prefixes = [...new Set(directories.flatMap(formsOf).map(each => compared(piSessionFolderName(each).slice(0, -2))))];
-	const scoped = (name: string) => !directories.length || prefixes.some(prefix => compared(name) === `${prefix}--` || compared(name).startsWith(`${prefix}-`));
+	const prefixes = [...new Set(scope.forms.map(each => compared(piSessionFolderName(each).slice(0, -2))))];
+	const scoped = (name: string) => !scope.directories.length || prefixes.some(prefix => compared(name) === `${prefix}--` || compared(name).startsWith(`${prefix}-`));
 	const folders = [dir, ...namesIn(dir, /^--.*--$/).filter(scoped).map(name => path.join(dir, name))];
 	return folders.flatMap(directory => namesIn(directory, /\.jsonl$/).flatMap(name => {
 		const file = path.join(directory, name);

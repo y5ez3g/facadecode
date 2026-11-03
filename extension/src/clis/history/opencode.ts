@@ -7,13 +7,13 @@
 import * as path from 'path';
 import { variableOf } from '../environment';
 import { xdgDirOf } from '../executable';
-import { inScope, titleOf } from './scope';
+import { Scope, titleOf } from './scope';
 import { openReadOnly } from './sqlite';
 import type { Candidate, VendorStore } from './store';
 
 export const OPENCODE_SESSION_ID = /^ses_[a-zA-Z0-9]+$/;
 
-export function openCodeCandidates(file: string, directories: readonly string[]): Candidate[] {
+export function openCodeCandidates(file: string, scope: Scope): Candidate[] {
 	const db = openReadOnly(file);
 	if (!db) { return []; }
 	try {
@@ -25,7 +25,7 @@ export function openCodeCandidates(file: string, directories: readonly string[])
 		const rows = db.prepare(`SELECT id, directory AS cwd, title, time_updated AS at FROM ${table} WHERE parent_id IS NULL ${archived}`).all();
 		return rows.flatMap(row => {
 			if (typeof row.id !== 'string' || !OPENCODE_SESSION_ID.test(row.id) || typeof row.cwd !== 'string'
-				|| !path.isAbsolute(row.cwd) || !inScope(row.cwd, directories) || typeof row.at !== 'number' || !(row.at > 0)) { return []; }
+				|| !path.isAbsolute(row.cwd) || !scope.includes(row.cwd) || typeof row.at !== 'number' || !(row.at > 0)) { return []; }
 			const title = typeof row.title === 'string' ? titleOf(row.title) : undefined;
 			return [{ cli: 'opencode', file: `${file}#${row.id}`, at: row.at, sessionId: row.id,
 				found: { sessionId: row.id, cwd: path.normalize(row.cwd), ...title ? { title } : {} } }];

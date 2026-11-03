@@ -103,18 +103,8 @@
 				"category": "%command.category%"
 			},
 			{
-				"command": "facade.copyAgentReference",
-				"title": "%command.copyAgentReference%",
-				"category": "%command.category%"
-			},
-			{
 				"command": "facade.closeAgent",
 				"title": "%command.closeAgent%",
-				"category": "%command.category%"
-			},
-			{
-				"command": "facade.messageHistory",
-				"title": "%command.messageHistory%",
 				"category": "%command.category%"
 			},
 			{
@@ -124,18 +114,8 @@
 				"icon": "$(filter)"
 			},
 			{
-				"command": "facade.clearFilter",
-				"title": "%command.clearFilter%",
-				"category": "%command.category%"
-			},
-			{
 				"command": "facade.configureAgents",
 				"title": "%command.configureAgents%",
-				"category": "%command.category%"
-			},
-			{
-				"command": "facade.copyDiagnostics",
-				"title": "%command.copyDiagnostics%",
 				"category": "%command.category%"
 			},
 			{
@@ -161,16 +141,6 @@
 			{
 				"command": "facade.moveDown",
 				"title": "%command.moveDown%",
-				"category": "%command.category%"
-			},
-			{
-				"command": "facade.filterByLocation",
-				"title": "%command.filterByLocation%",
-				"category": "%command.category%"
-			},
-			{
-				"command": "facade.filterByFolder",
-				"title": "%command.filterByFolder%",
 				"category": "%command.category%"
 			},
 			{
@@ -240,11 +210,6 @@
 					"group": "1_agent@2"
 				},
 				{
-					"command": "facade.copyAgentReference",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent'",
-					"group": "1_agent@3"
-				},
-				{
 					"command": "facade.moveUp",
 					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp",
 					"group": "2_move@1"
@@ -253,21 +218,6 @@
 					"command": "facade.moveDown",
 					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveDown",
 					"group": "2_move@2"
-				},
-				{
-					"command": "facade.filterByLocation",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewFilterLocation",
-					"group": "3_location@1"
-				},
-				{
-					"command": "facade.filterByFolder",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewFilterFolder",
-					"group": "3_location@2"
-				},
-				{
-					"command": "facade.clearFilter",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewFiltered",
-					"group": "3_location@3"
 				},
 				{
 					"command": "facade.closeAgent",
@@ -281,16 +231,8 @@
 					"when": "facade.agentSelected"
 				},
 				{
-					"command": "facade.copyAgentReference",
-					"when": "facade.agentSelected"
-				},
-				{
 					"command": "facade.closeAgent",
 					"when": "facade.agentSelected"
-				},
-				{
-					"command": "facade.clearFilter",
-					"when": "facade.filtered"
 				},
 				{
 					"command": "facade.newWorktree",
@@ -302,14 +244,6 @@
 				},
 				{
 					"command": "facade.moveDown",
-					"when": "false"
-				},
-				{
-					"command": "facade.filterByLocation",
-					"when": "false"
-				},
-				{
-					"command": "facade.filterByFolder",
 					"when": "false"
 				},
 				{

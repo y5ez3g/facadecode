@@ -11,10 +11,6 @@ export interface CardMenu {
 	readonly unpin?: boolean;
 	readonly moveUp: boolean;
 	readonly moveDown: boolean;
-	/** Filter by This Location and Filter by This Folder: each only where it would show another set of cards (PANEL-2.3). */
-	readonly filterLocation: boolean;
-	readonly filterFolder: boolean;
-	readonly clearFilter: boolean;
 }
 
 /** The `charts` colours a custom CLI's avatar can take: none that a status dot uses (UX-2.1). */

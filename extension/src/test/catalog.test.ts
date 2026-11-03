@@ -25,13 +25,9 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.unpinAgent', 'Unpin Agent'],
 	['facade.showActiveAgents', 'Go to Agent...'],
 	['facade.renameAgent', 'Rename Agent...'],
-	['facade.copyAgentReference', 'Copy Agent Reference'],
 	['facade.closeAgent', 'Close Agent'],
-	['facade.messageHistory', 'Message History...'],
 	['facade.filter', 'Filter by Working Location...', '$(filter)'],
-	['facade.clearFilter', 'Clear Filter'],
 	['facade.configureAgents', 'Configure Agents...'],
-	['facade.copyDiagnostics', 'Copy Diagnostics'],
 	['facade.showAgentLaunch', 'Show Agent Launch...'],
 	['facade.showAgentsLog', 'Show Agents Log']
 ];
@@ -39,17 +35,12 @@ const HIDDEN: readonly [string, string, string?][] = [
 	['facade.newWorktree', 'New Worktree...'],
 	['facade.moveUp', 'Move Up'],
 	['facade.moveDown', 'Move Down'],
-	['facade.filterByLocation', 'Filter by This Location'],
-	['facade.filterByFolder', 'Filter by This Folder'],
 	// Filter by Working Location as its title button shows it while a filter is on (UX-3.2)
 	['facade.filterOn', 'Filter by Working Location...', '$(filter-filled)'],
 	['facade.revealAgent', 'Show Agent']
 ];
-/**
- * Registered by the host itself rather than the panel: New Worktree, Message History beside the message records (COLLABORATION-3.2)
- * and Copy Diagnostics beside the agents log (ARCHITECTURE-3.3).
- */
-const HOST_COMMANDS = ['facade.newWorktree', 'facade.messageHistory', 'facade.copyDiagnostics', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
+/** Registered by the host itself rather than the panel: New Worktree, and Show Agent Launch and Show Agents Log beside the CLIs and the log. */
+const HOST_COMMANDS = ['facade.newWorktree', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
@@ -95,19 +86,13 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
 				{ command: 'facade.unpinAgent', when: `${card} && webviewUnpin`, group: '1_agent@2' },
 				{ command: 'facade.pinAgent', when: `${card} && webviewPin`, group: '1_agent@2' },
-				{ command: 'facade.copyAgentReference', when: card, group: '1_agent@3' },
 				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
 				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' },
-				{ command: 'facade.filterByLocation', when: `${card} && webviewFilterLocation`, group: '3_location@1' },
-				{ command: 'facade.filterByFolder', when: `${card} && webviewFilterFolder`, group: '3_location@2' },
-				{ command: 'facade.clearFilter', when: `${card} && webviewFiltered`, group: '3_location@3' },
 				{ command: 'facade.closeAgent', when: card, group: '4_close@1' }
 			],
 			commandPalette: [
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
-				{ command: 'facade.copyAgentReference', when: 'facade.agentSelected' },
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
-				{ command: 'facade.clearFilter', when: 'facade.filtered' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
 				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedResumable && !facade.agentSelectedPinned' },
 				{ command: 'facade.unpinAgent', when: 'facade.agentSelectedPinned' }
@@ -123,7 +108,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
 		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.configureAgents']);
 		// These commands are in the Command Palette alone (D83, D129); Configure Agents is in it too.
-		const palette = ['facade.messageHistory', 'facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
+		const palette = ['facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.configureAgents'].includes(each.command)));
 	});
@@ -232,7 +217,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Message History, Copy Diagnostics, Show Agent Launch and Show Agents Log (UX-3.2, E03)', () => {
+		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Show Agent Launch and Show Agents Log (UX-3.2, E03)', () => {
 			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id));
 			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
 		});

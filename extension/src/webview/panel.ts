@@ -42,7 +42,7 @@ const DOTS: readonly unknown[] = ['working', 'idle', 'blocked', 'error'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
 const AVATAR_COLORS: readonly unknown[] = ['blue', 'orange', 'purple'];
 
-const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean, filterLocation: isBoolean, filterFolder: isBoolean, clearFilter: isBoolean }, { pin: isBoolean, unpin: isBoolean });
+const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean }, { pin: isBoolean, unpin: isBoolean });
 const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) })
 	|| isShaped(value, { initial: value => isString(value) && value !== '', color: value => AVATAR_COLORS.includes(value) });
 const isCard: Check = value => isShaped(value, {
@@ -337,6 +337,10 @@ interface Drawn {
 
 /** The cards on the list by run ID, as drawn last; none before the first draw. */
 let drawn: Map<string, Drawn> | undefined;
+/** The cards drawn after the first draw, by when they came: one the person started scrolls into view as it is selected (D173). */
+const arrived = new Map<string, number>();
+/** How long a new card waits to be selected to scroll into view: a person's start selects it within a state or two. */
+const ARRIVED_MS = 2_000;
 /** The filter the cards were drawn for last: another shows its cards at once, without motion (UX-2.2). */
 let drawnFilter: string | undefined;
 
@@ -355,6 +359,9 @@ function draw(cards: readonly Card[]): void {
 		let entry = drawn?.get(card.runId);
 		if (!entry) {
 			entry = make(card);
+			if (drawn !== undefined) {
+				arrived.set(card.runId, performance.now());
+			}
 			if (moving) {
 				animate(entry.element, 'opening');
 			}
@@ -399,6 +406,17 @@ function draw(cards: readonly Card[]): void {
 		}
 	}
 	drawn = next;
+	// A new card goes last in its area (PANEL-2.1, D173): the one the person started, selected, scrolls into view; an agent's does not
+	for (const [run, at] of arrived) {
+		if (!next.has(run) || performance.now() - at > ARRIVED_MS) {
+			arrived.delete(run);
+		}
+	}
+	const started = cards.find(card => card.selected && arrived.has(card.runId));
+	if (started) {
+		arrived.delete(started.runId);
+		revealArrived(next.get(started.runId)!.element);
+	}
 	if (keyed !== undefined && !next.has(keyed)) {
 		const gone = order.indexOf(keyed);
 		const after = order.slice(gone + 1).find(run => next.has(run)) ?? order.slice(0, Math.max(gone, 0)).reverse().find(run => next.has(run));
@@ -457,9 +475,7 @@ function update(entry: Drawn, card: Card): void {
 		entry.dot.className = `dot ${kind}`;
 		entry.dot.title = card.stateText;
 	}
-	if (entry.name.textContent !== card.name) {
-		entry.name.textContent = card.name;
-	}
+	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3, D176)
 	const place = JSON.stringify([card.pinned, card.location.label, card.location.folderPrefix, card.location.full]);
 	if (place !== entry.place) {
 		entry.place = place;
@@ -503,7 +519,7 @@ function placeOf(location: Card['location']): HTMLElement {
 /** Short labels stay whole; long names end-ellipsize, long location components middle-ellipsize (PANEL-1.3, D128). */
 function fitPlaces(): void {
 	for (const entry of drawn?.values() ?? []) {
-		fitCardTop(entry.top, entry.name, entry.card.location);
+		fitCardTop(entry.top, entry.name, entry.card.name, entry.card.location);
 	}
 }
 new ResizeObserver(fitPlaces).observe(list);
@@ -532,9 +548,6 @@ function contextOf(card: Card): string {
 		...(menu.unpin ? { webviewUnpin: true } : {}),
 		...(menu.moveUp ? { webviewMoveUp: true } : {}),
 		...(menu.moveDown ? { webviewMoveDown: true } : {}),
-		...(menu.filterLocation ? { webviewFilterLocation: true } : {}),
-		...(menu.filterFolder ? { webviewFilterFolder: true } : {}),
-		...(menu.clearFilter ? { webviewFiltered: true } : {}),
 		preventDefaultContextMenuItems: true
 	});
 }
@@ -542,6 +555,34 @@ function contextOf(card: Card): string {
 /** Whether the person asked for less motion: by VS Code's `workbench.reduceMotion`, as it marks the page, or their system's (UX-2.2). */
 function reducedMotion(): boolean {
 	return document.body.classList.contains('vscode-reduce-motion') || matchMedia('(prefers-reduced-motion: reduce)').matches;
+}
+
+/** Scrolls a new card into view as little as it takes, once it has opened; nothing where it is gone by then. */
+function revealArrived(element: HTMLElement): void {
+	let done = false;
+	const reveal = () => {
+		if (done) {
+			return;
+		}
+		done = true;
+		element.removeEventListener('animationend', ended);
+		if (element.isConnected) {
+			cancelSmoothScroll();
+			element.scrollIntoView({ block: 'nearest' });
+		}
+	};
+	const ended = (event: AnimationEvent) => {
+		if (event.target === element) {
+			reveal();
+		}
+	};
+	if (element.classList.contains('opening')) {
+		element.addEventListener('animationend', ended);
+		// Where it does not run - the view hidden - it is done all the same
+		setTimeout(reveal, 400);
+	} else {
+		reveal();
+	}
 }
 
 /** Has `element` move as `name` says, once; where it does not run - the view hidden - it ends all the same. */
@@ -699,13 +740,5 @@ function highlight(runId: string | undefined): void {
 		entry.element.setAttribute('aria-selected', String(id === runId));
 	}
 }
-
-// The card a menu was opened on is marked while the menu is up, as VS Code's lists mark it
-list.addEventListener('contextmenu', event => {
-	for (const card of list.querySelectorAll('.item.menu-target')) {
-		card.classList.remove('menu-target');
-	}
-	(event.target as HTMLElement).closest('.item')?.classList.add('menu-target');
-});
 
 post({ type: 'ready' });

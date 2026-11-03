@@ -19,7 +19,7 @@ import { CatalogEntry, catalogOf, entryOf, SettingsReader } from '../clis/catalo
 import { acquireProject, injectedRecordOf, markPlanned, reconcileRuns, releaseRun, removeRunFiles, writeRunFiles } from '../clis/injected';
 import { CliPlanError, DestinationEnvironment, discover, discoverEntry, environmentOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough, targetOf } from '../clis/plan';
 import { installedVersionOf } from '../clis/version';
-import { runDirOf, ToolsInput } from '../clis/tools';
+import { markedSkill, runDirOf, ToolsInput } from '../clis/tools';
 import { writeTrust } from '../clis/trust';
 import type { CliFacts } from '../contract/tools';
 import { CliCatalogPort, CliChoice, CliChoices, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
@@ -40,6 +40,8 @@ export interface HostClisOptions {
 	readonly fact?: (event: string, fields: Readonly<Record<string, unknown>>) => void;
 	/** This execution environment's Facade directory, where runs' launch files go (ARCHITECTURE-3.1). */
 	readonly home?: string;
+	/** The extension's version, which marks the skill Facade writes into a folder (D179). */
+	readonly version?: string;
 }
 
 /** The plan as the core has it: without the trust and injected files written for it. */
@@ -62,6 +64,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	private readonly home: string;
 	private readonly scans = new Map<string, string>();
 	private readonly fact: HostClisOptions['fact'];
+	private readonly skill: string;
 
 	constructor(options: HostClisOptions = {}) {
 		this.read = options.read ?? readSetting;
@@ -69,6 +72,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		this.log = options.log ?? (() => undefined);
 		this.home = options.home ?? facadeHome();
 		this.fact = options.fact;
+		this.skill = options.version ? markedSkill(FACADE_SKILL, options.version) : FACADE_SKILL;
 	}
 
 	/**
@@ -227,7 +231,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 
 	/** What a start of `run` is given of the tools: its shim, the bundled skill and its own folder. */
 	private toolsOf(run: string, server: ToolsInput['server']): ToolsInput {
-		return { server, skill: FACADE_SKILL, runDir: runDirOf(this.home, run) };
+		return { server, skill: this.skill, runDir: runDirOf(this.home, run) };
 	}
 
 	/**

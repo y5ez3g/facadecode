@@ -807,11 +807,11 @@ export class AgentService implements Agents, Disposable {
 		const pin: Pin = { id: earlier?.id ?? this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`, conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
 		this.pinStore.save(pin);
 		if (earlier) {
-			// Pin moves it to the very top (PANEL-2.1), as a new Pin goes; where that order cannot be saved, the Pin still is
+			// Pin moves it last among the Pins (PANEL-2.1, D173), as a new Pin goes; where that order cannot be saved, the Pin still is
 			try {
-				this.pinStore.reorder([pin.id, ...this.pins().map(each => each.id).filter(each => each !== pin.id)]);
+				this.pinStore.reorder([...this.pins().map(each => each.id).filter(each => each !== pin.id), pin.id]);
 			} catch (err) {
-				this.deps.log.event(`Could not move the Pin of ${run.facts.alias} to the top: ${messageOf(err)}`);
+				this.deps.log.event(`Could not move the Pin of ${run.facts.alias} last among the Pins: ${messageOf(err)}`);
 			}
 		}
 		for (const other of this.runs.values()) { if (other !== run && other.facts.pin === pin.id) { this.losePin(other); } }

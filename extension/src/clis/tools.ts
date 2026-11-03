@@ -7,7 +7,7 @@
 // shim, routed by the run's ID - an address, never a credential. Each adapter owns its own integration and how far it is verified.
 
 import * as path from 'path';
-import type { JsonObject } from '../base/json';
+import { isJsonObject, type JsonObject } from '../base/json';
 
 /** A capability as an adapter can stand behind it (CLIS-2.1): supported, unavailable or unverified, with why. */
 export interface Capability {
@@ -112,7 +112,82 @@ export function mcpConfigText(server: McpServer): string {
 	return `${JSON.stringify({ mcpServers: { [SERVER_NAME]: serverEntry(server) } }, undefined, 2)}\n`;
 }
 
+/** The server script the runs' CLIs start, beside ptyd's (MCP-6.1). */
+export const SHIM_FILE = 'shim.js';
+/** How the description of every skill Facade has written begins: with its name, what tells a SKILL.md is Facade's (D179). */
+export const FACADE_SKILL_SIGNATURE = 'How the Facade Code tools work';
+/** How the description of every plugin manifest Facade has written begins. */
+const FACADE_PLUGIN_SIGNATURE = 'The Facade Code tools';
+/** The line a skill Facade writes into a folder ends with, naming the Facade version that wrote it. */
+const SKILL_VERSION_MARK = /<!-- Facade Code (\d+(?:\.\d+)*) writes this file\b/;
+
+/**
+ * `skill` as Facade writes it into a folder: its last line names `version`, so that a later Facade replaces it and an earlier one
+ * leaves it, as the later one's (D179).
+ */
+export function markedSkill(skill: string, version: string): string {
+	return `${skill.trimEnd()}\n\n<!-- Facade Code ${version} writes this file and replaces it as it updates. -->\n`;
+}
+
+/** The Facade version a skill's last line names; none for a skill written before skills were marked. */
+export function skillVersionOf(text: string): string | undefined {
+	return SKILL_VERSION_MARK.exec(text)?.[1];
+}
+
+/** Whether version `a` is later than `b`: their dotted numbers compared in turn, a missing one as 0. */
+export function laterVersion(a: string, b: string): boolean {
+	const [x, y] = [a, b].map(each => each.split('.').map(Number));
+	for (let i = 0; i < Math.max(x.length, y.length); i++) {
+		if ((x[i] ?? 0) !== (y[i] ?? 0)) {
+			return (x[i] ?? 0) > (y[i] ?? 0);
+		}
+	}
+	return false;
+}
+
+/** Whether `value` is an MCP server entry that starts Facade's shim, of whichever installation. */
+export function isFacadeServer(value: unknown): boolean {
+	return isJsonObject(value) && Array.isArray(value.args)
+		&& value.args.some(arg => typeof arg === 'string' && arg.split(/[\\/]/).pop() === SHIM_FILE);
+}
+
+/**
+ * Whether `text`, the content of `file`, is what a Facade wrote there - of any version, from any Facade directory - rather than the
+ * person's own (CLIS-2.2, D179): its skill by its name and description, the plugin's manifest by its name and description, its MCP
+ * configuration and hooks by Facade's server alone, the shim. Content of the same name that is not recognizably Facade's is the
+ * person's, and stays.
+ */
+export function isFacadeContent(file: string, text: string): boolean {
+	const name = path.basename(file);
+	if (name === 'SKILL.md') {
+		const front = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)?.[1] ?? '';
+		const field = (key: string) => new RegExp(`^${key}:[ \\t]*(.*)$`, 'm').exec(front)?.[1].trim().replace(/^"(.*)"$/, '$1');
+		return field('name') === SERVER_NAME && !!field('description')?.startsWith(FACADE_SKILL_SIGNATURE);
+	}
+	let value: unknown;
+	try {
+		value = JSON.parse(text);
+	} catch {
+		return false;
+	}
+	if (!isJsonObject(value)) {
+		return false;
+	}
+	const keys = Object.keys(value);
+	switch (name) {
+		case 'plugin.json':
+			return value.name === SERVER_NAME && typeof value.description === 'string' && value.description.startsWith(FACADE_PLUGIN_SIGNATURE);
+		case 'mcp_config.json':
+			return keys.length === 1 && isJsonObject(value.mcpServers) && Object.keys(value.mcpServers).join() === SERVER_NAME
+				&& isFacadeServer(value.mcpServers[SERVER_NAME]);
+		case 'hooks.json':
+			return keys.join() === SERVER_NAME && JSON.stringify(value[SERVER_NAME]).includes(SHIM_FILE);
+		default:
+			return false;
+	}
+}
+
 /** A plugin's manifest: its name and what it is. */
 export function pluginManifest(): JsonObject {
-	return { name: SERVER_NAME, description: 'The Facade Code tools: start agents, send and read messages, and read or type into agent terminals.' };
+	return { name: SERVER_NAME, description: `${FACADE_PLUGIN_SIGNATURE}: start agents, send and read messages, and read or type into agent terminals.` };
 }

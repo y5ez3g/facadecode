@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { isJsonObject, type JsonObject } from '../../base/json';
 import { SESSION_ID } from '../identity';
-import { edgeLines, formsOf, HEAD_BYTES, headLines, mtimeOf, namesIn, PROMPT_BYTES, titleOf } from './scope';
+import { edgeLines, HEAD_BYTES, headLines, mtimeOf, namesIn, PROMPT_BYTES, Scope, titleOf } from './scope';
 import type { Environment } from '../environment';
 import { variableOf } from '../environment';
 import { homeOf } from '../executable';
@@ -21,10 +21,10 @@ export function claudeProjectFolderName(folder: string): string {
 	return folder.replace(/[^A-Za-z0-9]/g, '-');
 }
 
-/** The conversation files that may be of `directories` or folders below them: their project folders and those named below. */
-export function claudeCandidates(configDir: string, directories: readonly string[]): Candidate[] {
+/** The conversation files that may be of `scope` or folders below it: their project folders and those named below. */
+export function claudeCandidates(configDir: string, scope: Scope): Candidate[] {
 	const projects = path.join(configDir, 'projects');
-	const prefixes = [...new Set(directories.flatMap(formsOf).map(claudeProjectFolderName))];
+	const prefixes = [...new Set(scope.forms.map(claudeProjectFolderName))];
 	const candidates: Candidate[] = [];
 	for (const name of namesIn(projects)) {
 		if (!prefixes.some(prefix => name === prefix || name.startsWith(`${prefix}-`))) {

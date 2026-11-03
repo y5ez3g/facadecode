@@ -32,10 +32,30 @@ export function formsOf(folder: string): string[] {
 	return [...new Set([folder, real])];
 }
 
-/** Whether `cwd` is one of `directories` or inside one, compared as given and as they really are. */
-export function inScope(cwd: string, directories: readonly string[]): boolean {
-	const forms = formsOf(cwd);
-	return directories.some(dir => formsOf(dir).some(scope => forms.some(each => isEqualPath(each, scope) || isInsideFolder(each, scope))));
+/**
+ * The directories one reading of the stores lists conversations of, and every folder below them (LIFECYCLE-3.2). Each folder's real
+ * path is resolved once for the reading, not once for every conversation compared with it: a store of hundreds of conversations
+ * would otherwise resolve the same few folders thousands of times, synchronously (D177).
+ */
+export class Scope {
+	/** Each directory as given and as it really is. */
+	readonly forms: readonly string[];
+	private readonly within = new Map<string, boolean>();
+
+	constructor(readonly directories: readonly string[]) {
+		this.forms = [...new Set(directories.flatMap(formsOf))];
+	}
+
+	/** Whether `cwd` is one of the directories or inside one, compared as given and as they really are. */
+	includes(cwd: string): boolean {
+		let answer = this.within.get(cwd);
+		if (answer === undefined) {
+			const forms = formsOf(cwd);
+			answer = this.forms.some(scope => forms.some(each => isEqualPath(each, scope) || isInsideFolder(each, scope)));
+			this.within.set(cwd, answer);
+		}
+		return answer;
+	}
 }
 
 /** Bounded list metadata at both ends, using one handle; small files are read only once. */

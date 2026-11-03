@@ -33,8 +33,8 @@ export class WorkspacePins implements PinStore {
 	save(pin: Pin): void {
 		const pins = this.list();
 		const at = pins.findIndex(each => each.id === pin.id);
-		// A new Pin goes to the very top (PANEL-2.1)
-		this.write(at === -1 ? [pin, ...pins] : pins.map(each => each.id === pin.id ? pin : each));
+		// A new Pin goes last among the Pins (PANEL-2.1, D173)
+		this.write(at === -1 ? [...pins, pin] : pins.map(each => each.id === pin.id ? pin : each));
 	}
 
 	remove(id: string): void {

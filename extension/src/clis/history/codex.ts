@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { isJsonObject } from '../../base/json';
 import { SESSION_ID } from '../identity';
-import { headLines, inScope, mtimeOf, namesIn, PROMPT_BYTES, titleOf } from './scope';
+import { headLines, mtimeOf, namesIn, PROMPT_BYTES, Scope, titleOf } from './scope';
 import { openReadOnly } from './sqlite';
 import type { Environment } from '../environment';
 import { variableOf } from '../environment';
@@ -18,7 +18,7 @@ import { homeOf } from '../executable';
 import type { Candidate, Found, VendorStore } from './store';
 
 /** Every rollout of the store: Codex keeps no index by folder. */
-export function codexCandidates(codexHome: string, directories: readonly string[] = []): Candidate[] {
+export function codexCandidates(codexHome: string, scope: Scope = new Scope([])): Candidate[] {
 	const root = path.join(codexHome, 'sessions');
 	const candidates: Candidate[] = [];
 	const indexed = new Set<string>();
@@ -34,7 +34,7 @@ export function codexCandidates(codexHome: string, directories: readonly string[
 			for (const row of db.prepare(`SELECT id, cwd, ${name} AS title, ${at} AS at, rollout_path, ${mode} AS history_mode, archived, source FROM threads`).all()) {
 				if (typeof row.id !== 'string' || !SESSION_ID.test(row.id)) { continue; }
 				indexed.add(row.id);
-				if (row.archived || typeof row.cwd !== 'string' || (directories.length && !inScope(row.cwd, directories))
+				if (row.archived || typeof row.cwd !== 'string' || (scope.directories.length && !scope.includes(row.cwd))
 					|| typeof row.at !== 'number' || !(row.at > 0) || (typeof row.source === 'string' && row.source.includes('subagent'))
 					|| (row.history_mode !== 'paginated' && (typeof row.rollout_path !== 'string' || !fs.existsSync(row.rollout_path)))) { continue; }
 				const title = typeof row.title === 'string' ? titleOf(row.title) : undefined;

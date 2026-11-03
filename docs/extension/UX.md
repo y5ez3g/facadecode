@@ -75,7 +75,7 @@ language's natural grammar while preserving placeholders, product names and the 
 | Text / secondary | `foreground` / `descriptionForeground` |
 | Hover | `list.hoverBackground` |
 | Selection | `list.activeSelectionBackground`, `list.activeSelectionForeground` even after panel loses focus |
-| Keyboard focus | 1 px `list.focusOutline` inside row |
+| Keyboard focus | 1 px `list.focusOutline` inside row; none on the card a context menu is open on (D175) |
 | Work / idle / blocker / error | `charts.green` / `descriptionForeground` / `charts.yellow` / `charts.red` |
 | Status meaning and unknown evidence | RULES-3.2; second-line wording is PANEL-1.4 |
 | Controls | `button.*`, `input.*`, `inputValidation.*`, `scrollbarSlider.*` |
@@ -107,7 +107,8 @@ High Contrast, and Solarized Light. A failed contrast/layout case is a defect, n
 
 One roving Tab stop; Tab/Shift+Tab leave. Up/Down/Home/End/Page Up/Page Down move focus, scroll minimally into view.
 Typeahead combines characters within 750 ms and wraps to the next matching name. Enter/Space opens, F2 renames; native
-context-menu key opens the current card's menu. Click focuses without a keyboard outline. Escape closes transient UI.
+context-menu key opens the current card's menu. A click or right-click focuses without a keyboard outline, and the card a
+context menu is open on gets no frame (D175). Escape closes transient UI.
 Use semantic listbox/options, aria-selected and current state labels. No unbounded live-region chatter.
 No global shortcuts are preassigned; existing commands are bindable through normal Keyboard Shortcuts.
 
@@ -140,7 +141,7 @@ as menu-only. Arguments bypass a picker only
 when their schema fully identifies the target; invalid arguments fail without guessing. The table is the authoritative
 command inventory, not a second description of behavior.
 
-For Rename, Pin, Unpin, Copy Agent Reference and Close Agent, a palette invocation without an explicit target uses PANEL-2.1's
+For Rename, Pin, Unpin and Close Agent, a palette invocation without an explicit target uses PANEL-2.1's
 current selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does
 not open a target picker. Rename still asks for the new name. Explicit arguments and card/tab context target that exact
 run and are validated against current state, without falling back to the selection.
@@ -153,18 +154,17 @@ run and are validated against current state, without falling back to the selecti
 | `unpinAgent` | Unpin Agent | Pinned record; card | LIFECYCLE-3.4 |
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
-| `copyAgentReference` | Copy Agent Reference | Known owned record; card/Go to Agent | LIFECYCLE-2.1 |
 | `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
-| `messageHistory` | Message History... | Always; this window's records; Command Palette | COLLABORATION-3.2 |
 | `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
-| `clearFilter` | Clear Filter | Active filter; card/empty state | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
 | `showAgentLaunch` | Show Agent Launch... | Always; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
-| `copyDiagnostics` | Copy Diagnostics | Always; Command Palette | ARCHITECTURE-3.3 |
 
 PANEL-1.1 places the editor's own Add Folder to Workspace... command in the view menu; it is not another `facade.` command.
+Copy Agent Reference, Message History..., Clear Filter, Filter by This Location, Filter by This Folder and Copy Diagnostics
+are removed without aliases (D174): Go to Agent's item button still copies an agent's reference, the filter picker's first item
+and the filtered empty state's button clear a filter, and a message to the person opens from its notification.
 Refresh, New Agent Here, the former working-location rename/navigation/copy/terminal commands have no contributed entry or hidden compatibility alias. Facade Dots' `facade.agents.showLaunch` and
 `facade.agents.showLog` are not aliases of Show Agent Launch and Show Agents Log.
 
@@ -172,7 +172,7 @@ Refresh, New Agent Here, the former working-location rename/navigation/copy/term
 
 **Context-only actions carry their actual target and never substitute the foreground agent.**
 
-Hidden from palette: `newWorktree` (view-menu creation), `moveUp`, `moveDown`, `filterByLocation`, `filterByFolder`,
+Hidden from palette: `newWorktree` (view-menu creation), `moveUp`, `moveDown`,
 `filterOn` (the filled-icon alias of `filter`) and `revealAgent` (notification navigation)
 and `openMessage` (notification navigation to one message). The worktree command follows WORKTREES-4.3. Tab Rename/Copy
 entries are contributed only on editors/versions where public context can be resolved exactly; otherwise the
@@ -272,6 +272,10 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-11-02: 3.1 removes Copy Agent Reference, Message History..., Clear Filter and Copy Diagnostics, and 3.2 the card's
+  Filter by This Location and Filter by This Folder, at the owner's request (D174); 2.1 and 2.3 leave the card a context
+  menu is open on unframed (D175).
 
 - 2026-11-02: Owner accepted the copy-polish report independently of the screenshot IA proposals. Added the launch
   inspection command's ellipsis and clarified concise, objective wording without imposing a dynamic-text length cap.
