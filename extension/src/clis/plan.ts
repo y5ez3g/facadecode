@@ -301,8 +301,12 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		...input.model !== undefined ? adapter.groups.model ?? [] : [],
 		...input.effort !== undefined ? adapter.groups.effort ?? [] : []
 	], adapter.aliases);
-	let injection = input.tools ? adapter.tools?.inject({ ...input.tools, platform, throughCmd: target.throughCmd }) : undefined;
-	let tools: PlannedLaunch['tools'] = injection ? { state: 'injected' } : { state: 'not_injected' };
+	// What the CLI finds where it starts may leave no way to give it the tools that it would run with: it then starts without them
+	const offered = input.tools ? adapter.tools?.inject({ ...input.tools, platform, throughCmd: target.throughCmd, cwd: input.cwd, env }) : undefined;
+	let injection = offered && !('conflict' in offered) ? offered : undefined;
+	let tools: PlannedLaunch['tools'] = offered && 'conflict' in offered
+		? { state: 'unavailable', problem: 'conflict', file: offered.conflict.file, reason: offered.conflict.reason }
+		: injection ? { state: 'injected' } : { state: 'not_injected' };
 	// The tools' variables on the person's own, where a CLI's variable must keep theirs: one that cannot be read keeps theirs whole,
 	// and the CLI starts without the tools rather than without the person's configuration (CLIS-2.2)
 	const merged: { [name: string]: string } = {};

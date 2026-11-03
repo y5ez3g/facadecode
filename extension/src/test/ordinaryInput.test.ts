@@ -7,7 +7,7 @@ import type { InputEffects, Submission } from '../core/messagePorts';
 import type { CapabilityState, RunFacts, RunId } from '../core/ports';
 import { PtydLost, PtydNotSent } from '../host/execution/ptydClient';
 import { OrdinaryInput } from '../host/input';
-import { isOwnDraft, isSameDraft } from '../ptyd/drafts';
+import { drawnAs, isOwnDraft, isSameDraft } from '../ptyd/drafts';
 import { codedOf } from '../schema/result';
 import type { InputEffect, InputReading, InputState } from '../ptyd/protocol';
 
@@ -328,6 +328,22 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		}
 	});
 
+	test('Codex and Muse keep the first non-ASCII character before the placeholder for the remainder of their paste (D191)', () => {
+		for (const adapter of ['codex-prompt', 'muse-frame']) {
+			for (const first of ['📨', '🔔', '请']) {
+				const rest = ` Message from probe (#a0) · #m2\n${'Review the code. '.repeat(100)}🚀`;
+				const text = first + rest;
+				const count = [...rest].length;
+				const draft = `${first}[Pasted Content ${count} chars]`;
+				assert.ok(isOwnDraft(draft, text, adapter), `${adapter}: ${draft}`);
+				for (const changed of [`x${draft}`, `${draft}x`, `${first}[Pasted Content ${count - 1} chars]`, `${first}[Pasted Content ${count + 3} chars]`, `🚀[Pasted Content ${count} chars]`, `${first}[Pasted Content ${count} chars][Pasted Content 1 chars]`]) {
+					assert.ok(!isOwnDraft(changed, text, adapter), changed);
+				}
+			}
+			assert.ok(!isOwnDraft('a[Pasted Content 100 chars]', 'a' + 'b'.repeat(100), adapter), 'no unobserved ASCII-prefix matching');
+		}
+	});
+
 	test('Pi counts a wide paste\'s characters as it draws them - its tabs four spaces - and a draft scrolled in its box is its own by the end in sight, rows out of sight above alone (D118)', () => {
 		const wide = `[Facade message #m6 | from @lead #a1 | window Design]\n${'Review the login flow. '.repeat(50)}\n[/Facade message #m6]`;
 		const chars = wide.length;
@@ -439,6 +455,51 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		const direct = setUp({ inputAdapter: 'codex-prompt' }, 'win32');
 		await direct.input.typeDirect(RUN, 'y'.repeat(1_000), true);
 		assert.deepStrictEqual(direct.waits, [100 + 3 * 1_000]);
+	});
+
+	test('Muse Code on Windows reads a paste a key at a time too: 1 ms a UTF-16 unit, in a paste\'s time beyond the usual and the wait for its draft (D190)', async () => {
+		const text = 'y'.repeat(7_533);
+		const muse = setUp({ inputAdapter: 'muse-frame' }, 'win32');
+		// Its bytes at ConPTY's rate, in whole tenths of a second, twice, and a millisecond each
+		assert.strictEqual(muse.input.pasteTime(RUN, text), 2 * 100 + 7_533);
+		assert.strictEqual(setUp({ inputAdapter: 'muse-frame' }).input.pasteTime(RUN, text), 0, 'elsewhere Muse Code takes a bracketed paste whole');
+		// As measured: its whole count drawn 4.9 s after the paste, beyond the 2 s and the bytes' time it waited for before
+		muse.terminal.showsPasteAfter = 49;
+		assert.deepStrictEqual(await effects(muse.input.submit(RUN, text)), CONFIRMED);
+		const elsewhere = setUp({ inputAdapter: 'muse-frame' });
+		elsewhere.terminal.showsPasteAfter = 49;
+		assert.deepStrictEqual(await effects(elsewhere.input.submit(RUN, text)), { outcome: 'unknown', text_written: 'full', enter_written: false }, 'without it, given up after 2 s');
+	});
+
+	test('Codex and Muse Code on Windows draw a paste without its characters outside the BMP - each half paired with its own release - and their draft without them is the message\'s own; elsewhere and for other CLIs it is not (D189)', async () => {
+		// As Pump drew Jolt's message: the 📨 gone, the space after it kept
+		const text = '📨 Message from Jolt (#a49) · #m52\n你好！请问现在几点了？🚀';
+		const drawn = (pasted: string) => pasted.replace(/[\u{10000}-\u{10FFFF}]/gu, '');
+		for (const inputAdapter of ['codex-prompt', 'muse-frame']) {
+			const lossy = setUp({ inputAdapter }, 'win32');
+			lossy.terminal.draws = drawn;
+			assert.deepStrictEqual(await lossy.input.submit(RUN, text), { effects: CONFIRMED, shown: true, draft: drawn(text) }, inputAdapter);
+			assert.ok(lossy.terminal.calls.includes('keys Enter'));
+		}
+		// Its placeholder for a long paste counts what it read, the characters it lost not among them
+		const long = `📨 Message from Jolt (#a49) · #m53\n${'x'.repeat(1_200)}`;
+		const folded = setUp({ inputAdapter: 'codex-prompt' }, 'win32');
+		folded.terminal.draws = pasted => `[Pasted Content ${drawn(pasted).length} chars]`;
+		assert.deepStrictEqual((await folded.input.submit(RUN, long)).effects, CONFIRMED);
+		// Anything else lost, or added, is not its own; nor is a draft without them where Codex keeps them, or of another CLI
+		for (const [facts, platform, draws] of [
+			[{ inputAdapter: 'codex-prompt' }, 'win32', (pasted: string) => drawn(pasted).replace('·', '')],
+			[{ inputAdapter: 'codex-prompt' }, 'win32', (pasted: string) => `${drawn(pasted)} and more`],
+			[{ inputAdapter: 'codex-prompt' }, 'darwin', drawn],
+			[{ inputAdapter: 'pi-frame' }, 'win32', drawn]
+		] as const) {
+			const other = setUp(facts, platform);
+			other.terminal.draws = draws;
+			assert.deepStrictEqual(await other.input.submit(RUN, text), { effects: { outcome: 'unknown', text_written: 'full', enter_written: false }, shown: false }, `${facts.inputAdapter} on ${platform}`);
+			assert.ok(!other.terminal.calls.includes('keys Enter'));
+		}
+		assert.deepStrictEqual([drawnAs(text, 'codex-prompt', 'win32'), drawnAs(text, 'muse-frame', 'win32'), drawnAs(text, 'codex-prompt', 'linux'), drawnAs(text, 'claude-frame', 'win32'), drawnAs('no emoji', 'codex-prompt', 'win32')],
+			[[text, drawn(text)], [text, drawn(text)], [text], [text], ['no emoji']]);
 	});
 
 	test('Enter goes only over the message\'s own draft: a CLI\'s placeholder for it, never a draft a person changed (RULES-1.6)', async () => {

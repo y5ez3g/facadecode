@@ -21,6 +21,18 @@ export interface KeyModes {
 
 export const DEFAULT_KEY_MODES: KeyModes = { applicationCursorKeys: false, kittyFlags: 0, win32Input: false };
 
+/**
+ * Text for a Windows console in win32 input mode (D191). ConPTY otherwise synthesizes a release after each UTF-16 unit;
+ * Codex's and Muse's Windows readers pair a high surrogate with that release and lose the character. These are text, not
+ * physical keys: send the two key-down records together, without releases (which those readers would insert a second time).
+ * Existing control sequences and BMP text pass through unchanged.
+ * https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md
+ */
+export function win32Text(text: string): string {
+	return text.replace(/[\u{10000}-\u{10FFFF}]/gu, pair =>
+		`\x1b[0;0;${pair.charCodeAt(0)};1;0;1_\x1b[0;0;${pair.charCodeAt(1)};1;0;1_`);
+}
+
 /** The kitty protocol's flags: escape codes that tell keys apart, and every key as an escape code. */
 const KITTY_DISAMBIGUATE = 1;
 const KITTY_ALL_KEYS = 8;

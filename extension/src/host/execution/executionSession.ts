@@ -45,7 +45,8 @@ export class ExecutionSession {
 	constructor(private readonly options: SessionOptions) {
 		this.claim = options.claim ?? nextOwnerClaim(options.owner, options.home);
 		this.earlier = new EarlierPtyds(options.home, this.claim, {
-			log: options.log, lost: protocol => this.lose(protocol), ownerLost: () => this.transfer(), ...options.busy ? { busy: options.busy } : {}
+			log: options.log, lost: protocol => this.lose(protocol), ownerLost: () => this.transfer(),
+			connected: client => options.connected?.(client), ...options.busy ? { busy: options.busy } : {}
 		});
 		this.reconcileTimer = setInterval(() => void options.reconcile(), RECONCILE_MS);
 		this.reconcileTimer.unref?.();

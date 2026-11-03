@@ -259,6 +259,8 @@ export class PtydClient {
 /** What a window hears of the ptyds of earlier protocols it joined. */
 export interface EarlierEvents {
 	readonly log: (line: string) => void;
+	/** The joined connection serves the retained runs' tool calls as the current connection does (D193). */
+	readonly connected?: (client: PtydClient) => void;
 	/** The connection to the ptyd of `protocol` closed unasked: its runs are not heard until it is joined again. */
 	readonly lost: (protocol: number) => void;
 	/** The workspace went to a newer activation there. */
@@ -385,6 +387,7 @@ export class EarlierPtyds {
 			if (this.disposed) {
 				throw new PtydNotSent('The window is closing.');
 			}
+			this.events.connected?.(client);
 		} catch (err) {
 			client.dispose();
 			if (/ownership was transferred or expired/.test(messageOf(err))) {

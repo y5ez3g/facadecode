@@ -16,7 +16,8 @@ import { INPUT_ADAPTERS, InputCell, InputScreen, InputState, inputScreenOf, read
  * `scripts/capture-inputs.mjs`, which keeps a paste's text with its screen - Claude Code 2.1.316 and Codex 0.166.0 then new, Codex
  * with the warning under its input that its configuration overrides bring - and again in a 120x24 terminal, as an editor's panel
  * may be, with a taller paste and a wider one: where Antigravity and Pi scroll a draft in its input box, and Pi draws a wide paste
- * as `[paste #1 1284 chars]` (D118).
+ * as `[paste #1 1284 chars]` (D118). Windows Codex 0.166.0 and Muse Code 1.4.14 were captured again on 2026-11-03 with isolated
+ * local test providers: their original Unicode messages and emoji-prefixed long-paste placeholders are kept together (D191).
  */
 const FIXTURES = path.join(__dirname, '..', '..', '..', 'src', 'test', 'fixtures', 'composer');
 
@@ -43,7 +44,9 @@ const FOLDERS: { readonly [folder: string]: { readonly adapter: string; readonly
 	'agy-1.4.12-modes': { adapter: 'agy-frame', garble: chars => chars.replace('>', '❯') },
 	'muse-1.4.14-24rows': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') },
 	'pi-1.4.0-24rows': { adapter: 'pi-frame', garble: chars => chars.replace(/─/g, '-') },
-	'opencode-2.1.4-24rows': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') }
+	'opencode-2.1.4-24rows': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') },
+	'codex-0.166.0-windows-pastes': { adapter: 'codex-prompt', garble: chars => chars.replace('›', '>') },
+	'muse-1.4.14-windows-pastes': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') }
 };
 
 /** A screen as a fixture keeps it: each row's cells - a string of one character each, trailing spaces cut - and its dim and inverse runs. */

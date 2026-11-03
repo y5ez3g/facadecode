@@ -290,10 +290,15 @@ or a lifetime operation-count quota that disables an otherwise usable session.
 Existing processes are not killed just because an extension/protocol is updated. Compatible reconnect preserves their
 actual identity; incompatible tools report unavailable. A build speaks every earlier protocol a released build used, and drops none: a window joins each such
 ptyd that holds runs of its workspace - never starting one - claims them there, and shows and operates them through it as
-its own: cards, terminals, input, resizing, closing and ends (RULES-4.1, D86). A run whose earlier-protocol ptyd is gone
+its own: cards, terminals, input, resizing, closing and ends (RULES-4.1, D86). Every joined connection that supports MCP also
+serves the retained runs' tool calls and returns answers through that same connection, on initial join and reconnect (D193).
+A run whose earlier-protocol ptyd is gone
 ended with it, how is not known. A request a later protocol added goes to no earlier ptyd. Once none of the window's runs
 is left in such a ptyd the window lets it go, to exit once idle. New starts use current settings/protocol, in the window's
 own ptyd. Upgrade/reload behavior must be verified with in-flight work.
+Changes to ptyd behavior or its packaged native backend advance its protocol generation even when request shapes stay
+the same. The updated window starts new runs in that generation and keeps earlier runs in their original supervisor;
+it must not send new starts to a supervisor whose installation the editor removed during an update (D192).
 
 ## 3 Data and safety
 
@@ -527,6 +532,8 @@ what was tested and what remains. Task assignments, pauses and discussion author
 See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this design.
 
 ## Change log
+
+- 2026-11-03: Advance the supervisor generation with runtime/backend changes so new starts use the installed backend after an update (D192).
 
 - 2026-11-02: 2.3 carries the terminal modes the serializer leaves out across a reattach - the mouse encoding first, whose
   loss stopped scrolling and selection after a reload (D178).
