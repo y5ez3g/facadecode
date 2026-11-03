@@ -68,6 +68,8 @@ export interface AgentExecutionOptions {
 	readonly shimScript?: string;
 	/** How long a run is still starting while its CLI shows no activity: {@link STARTUP_MS}, or a test's. */
 	readonly startupMs?: number;
+	/** How long an Enter the person typed waits for the reading of the input it submits: {@link READ_BEFORE_ENTER_MS}, or a test's. */
+	readonly readBeforeEnterMs?: number;
 }
 
 /** What answers a tool call: told when this window read it, on this process's monotonic clock (RULES-1.2). */
@@ -843,7 +845,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			if (typedWith) {
 				await timeout(DRAWN_MS);
 			}
-			return await Promise.race([this.inspectInput(run, adapter), timeout(READ_BEFORE_ENTER_MS).then(() => undefined)]);
+			return await Promise.race([this.inspectInput(run, adapter), timeout(this.options.readBeforeEnterMs ?? READ_BEFORE_ENTER_MS).then(() => undefined)]);
 		} catch {
 			return undefined;
 		}

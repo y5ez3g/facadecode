@@ -228,8 +228,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 
 	/** A window's execution port; `startupMs`, how long its runs are still starting while their CLIs show no activity. */
-	const portOf = (startupMs?: number) => {
-		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined, ...startupMs !== undefined ? { startupMs } : {} });
+	const portOf = (startupMs?: number, readBeforeEnterMs?: number) => {
+		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined,
+			...startupMs !== undefined ? { startupMs } : {}, ...readBeforeEnterMs !== undefined ? { readBeforeEnterMs } : {} });
 		ports.push(port);
 		return port;
 	};
@@ -417,7 +418,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 
 	test('D184: an Enter the person types over a draft goes in after the text typed before it, and once the CLI took the draft its text is told; an empty Enter, a line break in a paste or a run without an input reader tells nothing', async () => {
-		const port = portOf();
+		// The reading before an Enter given time a slow runner needs: a reading that comes too late would tell nothing
+		const port = portOf(undefined, 5_000);
 		const submitted: { run: RunId; text: string }[] = [];
 		port.onDidSubmit(each => submitted.push(each));
 		port.openPair(facts('run-said'), { reveal: false });
