@@ -5,6 +5,7 @@
 
 // A run's screen read from ptyd's headless terminal (MCP-5.1): its logical lines, each annotated and as plain text.
 
+import type { ScreenStyle } from '../base/screenStyle';
 import type { IBuffer, IBufferCell, IBufferLine, Terminal } from '@xterm/headless';
 
 export const MOST_SCREEN_LINES = 2_000;
@@ -18,6 +19,7 @@ export interface IAgentScreen {
 	readonly lines: readonly string[];
 	/** The same lines as plain text, without marks. */
 	readonly text: readonly string[];
+	readonly styles?: readonly ScreenStyle[];
 	readonly buffer: AgentScreenBuffer;
 	/** Whether the buffer holds lines with something on them above those read. */
 	readonly older: boolean;
@@ -63,6 +65,23 @@ export function drawnCells(line: IBufferLine | undefined, cell: IBufferCell | un
 	return cells;
 }
 
+/** Visible logical lines only, preserving soft-wrap boundaries and whether the first line's beginning was clipped. */
+export function readStatusLines(raw: Terminal): { readonly lines: readonly string[]; readonly clippedStart: boolean; readonly boldHeads: ReadonlySet<number> } {
+	const buffer = raw.buffer.active;
+	const cell = buffer.getNullCell();
+	const lines: string[] = [];
+	const boldHeads = new Set<number>();
+	let start = buffer.baseY;
+	for (let row = start; row < buffer.baseY + raw.rows; row++) {
+		if (row + 1 === buffer.baseY + raw.rows || !buffer.getLine(row + 1)?.isWrapped) {
+			if (buffer.getLine(start)?.getCell(0, cell)?.isBold()) { boldHeads.add(lines.length); }
+			lines.push(renderLine(buffer, start, row, cell).plain);
+			start = row + 1;
+		}
+	}
+	return { lines, clippedStart: !!buffer.getLine(buffer.baseY)?.isWrapped, boldHeads };
+}
+
 /**
  * The bottom `count` lines of `raw`'s active buffer - or of the one asked for - as the terminal draws them:
  * the rows a line wraps over joined into one line, blank lines between kept, the spaces a line ends in cut,
@@ -80,6 +99,7 @@ export function readScreen(raw: Terminal, count: number, which: AgentScreenBuffe
 	}
 	const lines: string[] = [];
 	const text: string[] = [];
+	const rowStyles: ScreenStyle[][] = [];
 	while (row >= 0 && lines.length < count) {
 		let start = row;
 		while (start > 0 && buffer.getLine(start)?.isWrapped) {
@@ -88,6 +108,7 @@ export function readScreen(raw: Terminal, count: number, which: AgentScreenBuffe
 		const line = renderLine(buffer, start, row, cell);
 		lines.push(line.marked);
 		text.push(line.plain);
+		rowStyles.push(line.styles);
 		row = start - 1;
 	}
 	let older = false;
@@ -99,11 +120,19 @@ export function readScreen(raw: Terminal, count: number, which: AgentScreenBuffe
 		while (lines.length && !lines[lines.length - 1]) {
 			lines.pop();
 			text.pop();
+			rowStyles.pop();
 		}
 	}
 	// The normal buffer lets go of its oldest rows once it holds its scrollback above the screen
 	const trimmed = buffer.type === 'normal' && buffer.length >= raw.rows + (raw.options.scrollback ?? 0);
-	return { lines: lines.reverse(), text: text.reverse(), buffer: buffer.type, older, trimmed };
+	text.reverse();
+	let offset = 0;
+	const styles = rowStyles.reverse().flatMap((cues, index) => {
+		const shifted = cues.map(cue => ({ ...cue, start: cue.start + offset, end: cue.end + offset }));
+		offset += [...text[index]].length + 1;
+		return shifted;
+	});
+	return { lines: lines.reverse(), text, styles, buffer: buffer.type, older, trimmed };
 }
 
 /** Whether a row has nothing on it: no characters, nothing in inverse video. */
@@ -123,7 +152,7 @@ function isBlankRow(line: IBufferLine | undefined, cell: IBufferCell): boolean {
 }
 
 /** The rows `start` to `end` of `buffer` as one line of text, marked as `readScreen` says, and plain. */
-function renderLine(buffer: IBuffer, start: number, end: number, cell: IBufferCell): { readonly marked: string; readonly plain: string } {
+function renderLine(buffer: IBuffer, start: number, end: number, cell: IBufferCell): { readonly marked: string; readonly plain: string; readonly styles: ScreenStyle[] } {
 	const cells: IScreenCell[] = [];
 	for (let y = start; y <= end; y++) {
 		const row: IScreenCell[] = [];
@@ -137,7 +166,20 @@ function renderLine(buffer: IBuffer, start: number, end: number, cell: IBufferCe
 		cells.push(...(y < end ? row.slice(0, row.length - empty) : row));
 	}
 	const shown = cells.slice(0, endOfLine(cells));
-	return { marked: markedText(shown), plain: shown.map(each => each.chars).join('').trimEnd() };
+	const styles: ScreenStyle[] = [];
+	let offset = 0;
+	for (const { chars, mark } of shown) {
+		const end = offset + [...chars].length;
+		if (mark !== Mark.None) {
+			const inverse = mark & Mark.Inverse ? true : undefined, dim = mark & Mark.Dim ? true : undefined;
+			const previous = styles[styles.length - 1];
+			if (previous && previous.end === offset && previous.inverse === inverse && previous.dim === dim) {
+				styles[styles.length - 1] = { ...previous, end };
+			} else { styles.push({ start: offset, end, ...(inverse ? { inverse } : {}), ...(dim ? { dim } : {}) }); }
+		}
+		offset = end;
+	}
+	return { marked: markedText(shown), plain: shown.map(each => each.chars).join(''), styles };
 }
 
 /**

@@ -5,16 +5,19 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { museScreen, screenReaderOf } from '../ptyd/screenStatus';
+import { Terminal } from '@xterm/headless';
+import { readStatusLines } from '../ptyd/screen';
+import { museScreen, ScreenReading, screenReaderOf } from '../ptyd/screenStatus';
 import { ProgramStatus } from '../ptyd/status';
 
 // Tests compile to build/out/test; the fixtures stay beside their source
 const FIXTURES = path.join(__dirname, '..', '..', '..', 'src', 'test', 'fixtures', 'screens', 'muse');
 
 /** A fixture's rows as a terminal shows them: each without the spaces at its end. */
-function rowsOf(name: string): string[] {
-	const fixture = JSON.parse(fs.readFileSync(path.join(FIXTURES, `${name}.json`), 'utf8')) as { readonly rows: readonly { readonly cells: string }[] };
-	return fixture.rows.map(row => row.cells.trimEnd());
+function readingOf(name: string): ScreenReading | undefined {
+	const fixture = JSON.parse(fs.readFileSync(path.join(FIXTURES, `${name}.json`), 'utf8')) as { readonly rows: readonly { readonly cells: string; readonly bold?: readonly [number, number][] }[] };
+	const bold = new Set(fixture.rows.flatMap((row, index) => row.bold?.some(([start, end]) => start === 0 && end > 0) ? [index] : []));
+	return museScreen(fixture.rows.map(row => row.cells.trimEnd()), false, bold);
 }
 
 /** Muse Code's input frame at the bottom of a screen, with the rows `above` it. */
@@ -25,13 +28,59 @@ function frame(above: readonly string[], input: readonly string[] = ['❯']): st
 
 suite('ptyd: Muse Code\'s screen, read as its status where it reports nothing (CLIS-2.3, D80)', () => {
 
+	test('real terminal soft wraps, including wide text and a resize, preserve the logical working row', async () => {
+		const terminal = new Terminal({ cols: 80, rows: 40, allowProposedApi: true });
+		try {
+			const screen = frame(['◈ Checking 编译结果 and a task with a very long description (3s · esc to interrupt)']);
+			await new Promise<void>(resolve => terminal.write(screen.join('\r\n'), resolve));
+			for (const cols of [80, 38, 100]) {
+				terminal.resize(cols, 40);
+				const reading = readStatusLines(terminal);
+				assert.deepStrictEqual(museScreen(reading.lines, reading.clippedStart), { state: 'working' }, String(cols));
+			}
+		} finally { terminal.dispose(); }
+	});
+
+	test('the native bold answer marker distinguishes a response from the same words in a working indicator', async () => {
+		const terminal = new Terminal({ cols: 80, rows: 40, allowProposedApi: true });
+		try {
+			for (const [marker, expected] of [['◆ ', 'working'], ['\x1b[1m◆ \x1b[22m', 'idle']] as const) {
+				await new Promise<void>(resolve => terminal.write(`\x1bc${frame([`${marker}Thinking (3s · esc to interrupt)`]).join('\r\n')}`, resolve));
+				const screen = readStatusLines(terminal);
+				assert.deepStrictEqual(museScreen(screen.lines, screen.clippedStart, screen.boldHeads), { state: expected });
+			}
+		} finally { terminal.dispose(); }
+	});
+
+	test('a clipped or incomplete layout supplies no idle evidence or stale login prompt', () => {
+		const signIn = ['  Log in with browser · Enter to choose', '  Set an API key'];
+		const whole = frame(['◈ Thinking (2s · esc to interrupt)']);
+		assert.deepStrictEqual([
+			museScreen(frame([])),
+			museScreen(whole, true),
+			museScreen(whole.slice(0, -3)),
+			museScreen([...signIn, ...whole.slice(0, -3)])
+		], [undefined, undefined, undefined, undefined]);
+	});
+
+	test('status review: changed or hard-wrapped working indicators are unknown, never idle', () => {
+		for (const above of [
+			['◈ Thinking (2s · esc to cancel)'],
+			['◈ Thinking through a longer task (3s ·', 'esc to interrupt)'],
+			['An unfamiliar activity indicator']
+		]) {
+			assert.strictEqual(museScreen(frame(above)), undefined, above.join('\n'));
+		}
+	});
+
 	test('every screen it was seen drawing: working while its working row stands above its input, past its usage warning and queued input; not working with the input empty or holding a draft; blocked at its sign-in choice and its trust question', () => {
 		const names = fs.readdirSync(FIXTURES).map(file => file.replace(/\.json$/, '')).sort();
-		assert.deepStrictEqual(Object.fromEntries(names.map(name => [name, museScreen(rowsOf(name))])), {
+		assert.deepStrictEqual(Object.fromEntries(names.map(name => [name, readingOf(name)])), {
 			'1.4.12-linux-idle': { state: 'idle' },
 			'1.4.12-linux-sign-in': { state: 'blocked', kind: 'auth' },
 			'1.4.12-win32-idle': { state: 'idle' },
 			'1.4.14-darwin-busy': { state: 'working' },
+			'1.4.14-darwin-answered-narrow': { state: 'idle' },
 			'1.4.14-darwin-busy-submitted': { state: 'working' },
 			'1.4.14-darwin-empty': { state: 'idle' },
 			// Recalled from its history while it works: still working
@@ -89,6 +138,13 @@ suite('ptyd: Muse Code\'s screen, read as its status where it reports nothing (C
 
 suite('ptyd: a screen reading in a program\'s status, which its own word always outranks (CLIS-2.3, D80)', () => {
 
+	test('status review: resetting the terminal revokes its screen evidence', () => {
+		const status = new ProgramStatus();
+		status.observed({ state: 'working' });
+		status.clear();
+		assert.strictEqual(status.status?.state, 'pending');
+	});
+
 	test('a program that takes no part is read from its screen, the same reading again keeping its time; once it asks or reports, its screen counts for nothing', () => {
 		const status = new ProgramStatus();
 		const seen: unknown[] = [];
@@ -109,7 +165,7 @@ suite('ptyd: a screen reading in a program\'s status, which its own word always 
 		assert.strictEqual(status.status!.state, 'idle');
 	});
 
-	test('a report takes the place of a screen reading too; a reset or a new prompt does not take a screen reading away, which is no record of the program\'s own', () => {
+	test('native reports take precedence; reset and a new shell prompt invalidate screen evidence', () => {
 		const reported = new ProgramStatus();
 		reported.observed({ state: 'working' });
 		reported.report({ state: 'done' });
@@ -119,6 +175,26 @@ suite('ptyd: a screen reading in a program\'s status, which its own word always 
 		read.observed({ state: 'working' });
 		read.clear();
 		read.promptStarted();
-		assert.deepStrictEqual([read.takesPart, read.status!.state], [false, 'working']);
+		assert.deepStrictEqual([read.takesPart, read.status!.state, read.status!.unavailable], [false, 'pending', 'screen_reset']);
+	});
+
+	test('unrecognized completed screens revoke old observations without inventing a fresh startup or resetting the time repeatedly', () => {
+		const status = new ProgramStatus();
+		status.observed(undefined);
+		assert.deepStrictEqual([status.status], [undefined], 'no initial evidence: the launch still has its initial grace');
+		status.observed({ state: 'idle' });
+		status.observed(undefined);
+		const lost = status.status;
+		assert.strictEqual(lost?.state, 'pending');
+		assert.strictEqual(lost?.unavailable, 'screen_unrecognized');
+		status.observed(undefined);
+		assert.strictEqual(status.status, lost);
+		status.observed({ state: 'working' });
+		assert.strictEqual(status.status?.state, 'working');
+		status.promptStarted();
+		assert.strictEqual(status.status?.unavailable, 'screen_reset');
+		status.report({ state: 'idle' });
+		status.observed(undefined);
+		assert.strictEqual(status.status?.state, 'idle', 'screen loss cannot override a native report');
 	});
 });

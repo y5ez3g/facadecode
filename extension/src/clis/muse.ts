@@ -39,7 +39,7 @@ export function museTarget(file: string, platform: NodeJS.Platform, env: Environ
  * its settings file read as such files are, comments and trailing commas allowed - stay as they are, for Muse Code to say what is wrong
  * with them, and the launch claims no identity tracking (CLIS-2.4).
  */
-export function museSession({ file, hook, env, extra, throughCmd, platform }: SessionIntegrationInput): SessionIntegration {
+export function museSession({ file, hook, env, extra, throughCmd, platform, instructions }: SessionIntegrationInput): SessionIntegration {
 	if (throughCmd) { return { unavailable: true }; }
 	const settings = readJsonFile(path.join(xdgDirOf('config', env, platform), 'muse', 'settings.json'));
 	if (settings.kind === 'other') { return { unavailable: true }; }
@@ -60,7 +60,8 @@ export function museSession({ file, hook, env, extra, throughCmd, platform }: Se
 	// The per-launch override consumed: its hooks go in the run's own, once
 	const consumed = new Set(overrides.flatMap(({ index, span }) => span === 2 ? [index, index + 1] : [index]));
 	return { extra: extra.filter((_, index) => !consumed.has(index)), args: ['-c', `hooks=${JSON.stringify(merged)}`],
-		files: [{ file: path.join(sessionDirOf(file), 'muse.json'), content: JSON.stringify({ data: museDataDir(env, platform) }) }] };
+		files: [{ file: path.join(sessionDirOf(file), 'muse.json'), content: JSON.stringify({ data: museDataDir(env, platform) }) },
+			...(instructions ? [{ file: path.join(sessionDirOf(file), 'context.json'), content: JSON.stringify({ instructions }) }] : [])] };
 }
 
 /** The project's MCP file Muse Code reads in a trusted folder, and where it reads skills there (CLIS-2.2). */

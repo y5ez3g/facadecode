@@ -6,6 +6,8 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BUILT_IN_ADAPTERS } from '../clis/catalog';
+import { activityOf, cliTitle } from '../clis/activity';
+import { parseStatus } from '../ptyd/status';
 import type { RunFacts, WorktreeCreationEffects } from '../core/ports';
 import { avatarOf, cardOf, CardWords, statusOf } from '../ui/cardView';
 import type * as PresentationModule from '../ui/presentation';
@@ -20,7 +22,7 @@ const WORDS: CardWords = {
 	error: reason => `Error: ${reason}`,
 	worktreeFailure: reason => reason,
 	activityUnavailable: 'Activity unavailable',
-	readyForInput: 'Ready for input',
+	needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet',
 	needsPermission: 'Needs permission',
 	needsSignIn: 'Sign-in required',
 	hasQuestion: 'Waiting for an answer',
@@ -46,6 +48,47 @@ const place = { label: 'main', qualified: 'shop · main', folderPrefix: 'shop', 
 const menu = { moveUp: false, moveDown: true, filterLocation: false, filterFolder: false, clearFilter: false };
 
 suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () => {
+
+	test('all CLIs retain a blocker without a recognized kind, including its full reason in the hover', () => {
+		const message = `Please review ${'a long explanation '.repeat(30)}👨‍👩‍👧‍👦`;
+		for (const cli of [...BUILT_IN_ADAPTERS.map(adapter => adapter.id), 'custom']) {
+			for (const kind of ['', ':kind=future']) {
+				const report = parseStatus(`state=blocked${kind}:msg=${Buffer.from(message).toString('base64')}`);
+				assert.ok(report && report !== 'query' && report.state === 'blocked');
+				const { activity, reporting, blocker } = activityOf({ ...report, state: 'blocked' });
+				const facts = run({ cli, activity, reporting, blocker });
+				const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
+				assert.deepStrictEqual([card.dot, card.stateText, card.line], ['blocked', 'Needs attention', `Needs attention · ${message}`], cli);
+				assert.ok(card.tooltip.includes(message), cli);
+			}
+		}
+	});
+
+	test('connecting tools are visible without implying a failure or changing the activity dot, and actual connection removes the notice', () => {
+		for (const activity of ['working', 'not_working'] as const) {
+			const facts = run({ activity, title: '✳ Checking tests', tools: 'connecting' });
+			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
+			assert.strictEqual(card.dot, activity === 'working' ? 'working' : 'idle');
+			assert.strictEqual(card.line, WORDS.toolsConnecting);
+			assert.ok(card.tooltip.includes(WORDS.toolsConnecting));
+			assert.ok(card.tooltip.includes(facts.title!));
+			assert.strictEqual(statusOf({ ...facts, tools: 'available' }, WORDS).line, facts.title);
+			assert.strictEqual(statusOf({ ...facts, blocker: { kind: 'unknown' } }, WORDS).line, WORDS.needsAttention);
+			assert.strictEqual(statusOf({ ...facts, error: { source: 'cli', reason: 'Failed', at: 1 } }, WORDS).line, 'Error: Failed');
+			const ended = cardOf({ ...facts, lifecycle: 'ended', end: { kind: 'abnormal', at: 3, code: 1 } }, { place, selected: false, menu, words: WORDS });
+			assert.ok(!ended.tooltip.includes(WORDS.toolsConnecting));
+		}
+		const starting = cardOf(run({ lifecycle: 'starting', phase: 'launching_cli', tools: 'connecting' }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(starting.line, 'Starting Claude Code...');
+		assert.ok(starting.tooltip.includes(WORDS.toolsConnecting));
+	});
+
+	test('the second line and hover retain the complete bounded CLI title, including decorations and multi-code-point emoji', () => {
+		const title = `✳ ${'a'.repeat(298)}👨‍👩‍👧‍👦 | workspace`;
+		const card = cardOf(run({ title: cliTitle({ terminal: title }) }), { place, selected: false, menu, words: WORDS });
+		assert.strictEqual(card.line, title);
+		assert.ok(card.tooltip.includes(title));
+	});
 
 	test('a working card carries when its CLI reported that work, for its hover to say how long ago; any other card does not (RULES-3.2)', () => {
 		const working = cardOf(run({ activity: 'working', reporting: true, activitySince: 1_234 }), { place, selected: false, menu, words: WORDS });
@@ -134,7 +177,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
-	test('reliable activity is green or grey over the CLI title, else Working or Ready for input - never a completion claim (PANEL-1.4)', () => {
+	test('reliable activity is green or grey over the CLI title, else Working or Idle - never a completion or input-readiness claim (PANEL-1.4)', () => {
 		const lines = [
 			statusOf(run({ activity: 'working', title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'working' }), WORDS),
@@ -145,7 +188,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			{ dot: 'working', stateText: 'Working', line: 'Fix login' },
 			{ dot: 'working', stateText: 'Working', line: 'Working' },
 			{ dot: 'idle', stateText: 'Idle', line: 'Fix login' },
-			{ dot: 'idle', stateText: 'Idle', line: 'Ready for input' }
+			{ dot: 'idle', stateText: 'Idle', line: 'Idle' }
 		]);
 		assert.ok(lines.every(each => !/done/i.test(JSON.stringify(each))));
 		assert.deepStrictEqual([
@@ -208,15 +251,23 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual(new Set(['a', 'b', 'c', 'd', 'e', 'f'].map(name => custom(name).color)).size, 3);
 		// A name with nothing to show has no avatar: the card leaves it out
 		assert.deepStrictEqual([avatarOf('', '', 'en'), avatarOf(' ', ' ', 'en')], [undefined, undefined]);
-		// And each one's logo for pickers and terminal tabs, in both themes
+		// Image logos for pickers, and registered native glyphs for terminal tabs in every theme
 		const vscode = {
 			ThemeIcon: class { constructor(readonly id: string) { } },
+			ThemeColor: class { constructor(readonly id: string) { } },
 			Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: path.join(base.fsPath, ...parts) }) }
 		};
-		const { cliIcon } = withModules({ vscode })<typeof PresentationModule>(require.resolve('../ui/presentation'));
+		const { cliIcon, cliTerminalIcon } = withModules({ vscode })<typeof PresentationModule>(require.resolve('../ui/presentation'));
 		const logos = builtIns.map(cli => cliIcon({ fsPath: media } as never, cli) as unknown as { readonly light: { readonly fsPath: string }; readonly dark: { readonly fsPath: string } });
 		assert.deepStrictEqual(logos.flatMap(logo => [logo.light?.fsPath, logo.dark?.fsPath]).filter(file => !file || !fs.existsSync(file)), []);
 		assert.deepStrictEqual((cliIcon({ fsPath: media } as never, 'other') as unknown as { readonly id: string }).id, 'terminal');
+		const manifest = JSON.parse(fs.readFileSync(path.join(media, '..', 'package.json'), 'utf8'));
+		for (const cli of builtIns) {
+			const icon = cliTerminalIcon(cli);
+			assert.strictEqual(icon.id, `facade-cli-${cli}`);
+			assert.ok(manifest.contributes.icons[icon.id], `${cli}'s terminal icon is registered`);
+		}
+		assert.strictEqual(cliTerminalIcon('other').id, 'terminal');
 		const cardFor = (more: Partial<RunFacts>) => cardOf(run(more), { place, selected: false, menu, words: WORDS });
 		assert.deepStrictEqual([cardFor({}).avatar, cardFor({ cli: 'my-cli', displayName: 'my-cli' }).avatar, 'avatar' in cardFor({ cli: 'my-cli', displayName: ' ' })],
 			[{ file: 'avatar-claude.png' }, avatarOf('my-cli', 'my-cli', 'en'), false]);

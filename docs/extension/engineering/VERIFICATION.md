@@ -32,6 +32,12 @@ editor/client/server version; CLI and model when relevant; local/SSH/WSL/contain
 command/procedure; observed result; assertion/log/screenshot path; pass/fail/blocked/not-run; known limitations. Store
 results with the tested build or handoff, without credentials or full private conversations. Screenshots are
 needed for visual/focus claims; traces for process/delivery/lifetime claims. Historical source claims stay historical.
+MCP polish compares fixed whole journeys against a frozen build, recording UTF-8 context/result bytes, calls, effects,
+duplicates, false conclusions and recovery choices. Bytes are not token counts. Deterministic contract faults, native
+clients with controlled providers and real-model choices are separate evidence classes. Keep all attempts and denominators;
+small repeated model samples establish observations, not universal reliability. Timing in fakes is harness timing only.
+The reproducible `extension/scripts/measure-mcp.mjs` harness checks the same scenarios against a chosen compiled tree;
+baseline failures remain in its report rather than being omitted to improve a size comparison.
 
 ### 1.3 Required gates for an implementation milestone
 
@@ -249,7 +255,7 @@ passes.
 | J07 | Close card/terminal, stop during creation, unreachable remote cleanup; close live agents' tabs alone and with Close All, then Cancel and confirm | Immediately remove pair; cleanup background, no fixed five-second wait; created files remain; one question for tabs closed together, Cancel reopens their terminals, confirm ends them; LIFECYCLE-3.1 |
 | J08 | Close creator, keep worker in same/other window | Workers remain except those owned by a window actually closed; RULES-4.1 |
 | J09 | Reload, extension-host restart, an update from the last released build with its agents running, remote loss, close-one, close-last, immediate reopen, close-last without reopen | G2 trace; original process survives reload/disconnect/update; after the update the earlier build's agents show and work through its ptyd, which exits once they are gone (ARCHITECTURE-2.4); reopen within five minutes claims the original runs; without it they end at five minutes (RULES-4.1) |
-| J11 | Resume an external and a Facade conversation, a nested cwd, old history beyond the first page, a disabled CLI and a running session | Exact ID/CLI/cwd, known name and current launch settings; no duplicate process or age cutoff; no implicit re-pin; LIFECYCLE-3.2, LIFECYCLE-3.3 |
+| J11 | Resume an external and a Facade conversation, missing/empty/saved names, a nested cwd, old history beyond the first page, a disabled CLI and a running session | Exact ID/CLI/cwd and current launch settings; keep a nonempty saved name, otherwise assign and save a short suggestion only on manual Resume; no duplicate process, age cutoff or implicit re-pin; LIFECYCLE-3.2, LIFECYCLE-3.3 |
 | J12 | Pin/Unpin from a card and native tab; reopen, failed restoration, session change, explicit close and normal/abnormal exit | One saved intent, pinned area/order, two background starts at most, no focus theft or retry loop; individual failure cards and one summary; LIFECYCLE-3.4, RULES-4.2 |
 | J16 | Both EXPERIENCE-4.1 journeys through review/integration and ordinary cleanup | No built-in task/workflow; files accessible without Git |
 | J13 | New VS Code user follows empty-panel explanation | First agent starts without a separate onboarding wizard |
@@ -263,7 +269,7 @@ passes.
 
 | ID | Scenario | Expected observation / owner |
 | --- | --- | --- |
-| M01 | Query destination with zero agents; open window with no folder; disconnected runtime; missing/unknown catalogs | Include the folderless window with zero locations; selecting it returns an empty catalog and launch has no effects; distinguish known absence from unavailable windows; no invented CLI/model; MCP-2.1 |
+| M01 | List current state with empty/folderless windows, multiple folders/worktrees, location-specific CLIs, invalid configuration and unreachable windows; target one agent | One snapshot supplies launch/communication destinations and current CLI availability, counts cover responding scope, unavailable is not empty, retained ended state is targeted only and does not scan CLIs; MCP-2.1, 3.1 |
 | M02 | Omit name/window/location/CLI; omit model/effort; pass unsupported field/type | Required fields fail together before effects; omitted model/effort add no per-call override under CLIS-1.4; optional request_id on start/send alone; no permissions/task fields |
 | M03 | Create across windows/remotes, plain folder or external-created checkout; native/post-start prompt still pending after process success | Actual destination, creator's tree and background focus; YOLO per RULES-4.3; separate process and delivery results; pending prompt later returns its outcome with the same message ID/target under MCP-2.3; native path invents no Enter effect |
 | M04 | Send full multiline content while recipient working; busy queue observable/unobservable | One full paste + Enter; success without waiting; no unsupported queued claim |
@@ -289,6 +295,21 @@ passes.
 | M24 | Facade server cannot start or connect | The CLI starts and stays usable; the card explains in plain words; tools_state unavailable; LIFECYCLE-1.5 |
 | M25 | Message to the person while its agent's terminal is visible and hidden; long message | Notification in the sender's window names the agent; Show Agent and Open Message open the agent and the complete message; no notification in another window; COLLABORATION-2.3 |
 | M26 | Concurrent starts/sends with one request ID; routed delivery with a lost reply; Unicode request IDs; retry after run exit, close, failed start or interrupted startup | One original run/message within the one-hour period; receiver deduplicates before input and returns the original ID; metadata survives reload without restoring closed cards; an unrecorded startup outcome stays unknown; MCP-1.1, D119 |
+| M27 | Default discovery from a folder or worktree; unavailable peer directory; explicit all/destination/CLI selection; lists of 1/20/100/200 agents with equal timestamps and a changed cursor selection | One current-location discovery call without a peer scan; no guessed location; compact rows with explicit scope/completeness; complete, stable pages and targeted details; incompatible cursor selection fails before remote reads; MCP-2.1, MCP-3.1 |
+| M28 | Repeated activity reports, title changes, reconnection/reload, missing source time and browser/source clock differences | Source state observation stays distinct from query time and panel reconstruction; reliable relative or absolute hover time, no invented recency or elapsed-time warning; RULES-3.1, PANEL-1.5 |
+| M29 | Notifications with blank/long/duplicate names, Unicode and literal boundary text; parallel accepted operations; routed duplicate result after reload; a receipt batch partially submitted before reload | Approved 📨/🔔 English templates, complete original bodies, no terminal JSON/footer; reserved result_message_id matches the final result without a fake inbox item; frozen input is not reformatted or pasted twice; success/unknown/partial, input, prompt, process and worktree facts stay distinguishable; COLLABORATION-2.1–2.2, MCP-1.3 |
+| M30 | Human/agent creation, two runs in one directory, a newly created worktree, creator closure, no prompt, shim reconnect and restored conversation | Each launch's own identity, creator address, actual location and initial message remain available through private instructions; shared files contain no personalized context; no welcome turn, mandatory report or replay; MCP-6.2 |
+| M31 | Current and retained terminal frames, inverse/dim together, blank cursor, literal marker characters, Unicode/combining text and large local/routed output | One reversible styled body with exact text and cues; one complete JSON file uses the same representation; historical frames keep their own time; unavailable source cues explicit; compare payload cost and real-model interpretation without changing raw input; MCP-5.1–5.2 |
+| M32 | All six native clients: injection, first task, complete notification/receipt, one-call discovery, screen interpretation, reload and exact restoration | Version/platform/provider recorded separately for native input, controlled-provider and real-model checks; a fake CLI or an unauthenticated launch is no model-support claim; isolated state only, with missing login/platform evidence explicit; VERIFICATION-2.1 |
+| M33 | Route connection/queue time, exhausted budgets, lost/malformed/late replies, pure queries versus delivery-confirming inbox reads, and retries after target disappearance | One remaining budget through hops; no request forwarded after expiry; none/unknown/partial remain truthful; original target/request identity preserved; no automatic replay; MCP-1.1–1.3 |
+| M34 | Initialize, tools/list, a tool loaded alone, optional skill and native private-context hooks | Launch identity and delivery semantics reach the model without mandatory skill reads; titles/annotations preserve names, arguments and approval behavior; compare each context layer in UTF-8 bytes and retain real-model evidence limits; MCP-6.1–6.2 |
+| M35 | Concurrent operations on one agent, routing, reload, rename/close, expired originals and lost receipt delivery | Existing IDs and explicit operation/route facts remain searchable without message bodies in logs; localized summaries never guess missing records; receipt transport and operation outcomes remain separate; COLLABORATION-3.2, ARCHITECTURE-3.3 |
+| M36 | Fixed discovery/start/message, long screen, pagination, uncertain input, lost reply and accepted-result journeys before/after polish | Report text/structured/context bytes separately, extra calls and actual effects; zero duplicate writes/starts or false completion in deterministic scenarios; retain all native/model attempts and platform limits; VERIFICATION-1.2 |
+| M37 | Launch with defaults or explicit model/effort; inspect structured history, rotation and failures | Requested settings are distinct from effective native settings; request/start/failure/exit share IDs without prompts or argv, bounded JSONL history is readable with ordinary file tools, no model catalog or removed discovery MCP; CLIS-1.4, ARCHITECTURE-3.3 |
+
+Native lifecycle probes use the isolated editor driver, record the actual CLI PID and native session ID, and compare
+both across reload and reopening. Ending that test-owned process after window closure can exercise exact restoration
+without waiting for the grace timer; this is recorded as forced process exit, never as evidence of the five-minute policy.
 
 
 ### 3.3 Files, safety and presentation
@@ -308,7 +329,7 @@ passes.
 | U03 | Human operation error, agent operation error, failed message return, explicit `#human` | Error to initiator; no agent message fallback to human; explicit contact shown in related window even when terminal visible |
 | U04 | Empty filtered panel; a person's start outside the filter; missing Git | Filter remains unchanged; new card follows normal data/order and only matching entries display; no launch-default change |
 | U05 | New card, manual movement, filter | Card-count badge, stack insertion and stable state changes |
-| U06 | Go to Agent with duplicate names, exact/short IDs and stale-name copied references; terminal placement; native rename, CLI title changes and restored background tabs | ID selects the intended current-window run; picker detail/hover distinguish duplicates; editor-only terminals show the CLI icon and agent name without appended CLI titles; native renames keep literal title-like suffixes; no global default shortcut; LIFECYCLE-2.2 |
+| U06 | Go to Agent and Resume with empty/equal/long names and titles, CLI searches and later history pages; exact/short IDs and stale-name copied references; terminal placement, rename, CLI title changes and restored background tabs | Single-line pickers emphasize name/title respectively, retain equal fields and hidden CLI search, and distinguish duplicate names by short ID; Resume browsing never assigns names; ID selects the intended current-window run; editor-only terminals show the CLI icon and agent name without appended CLI titles; native renames keep literal title-like suffixes; no global default shortcut; LIFECYCLE-2.2, 2.3, 3.2, 3.3 |
 | U07 | Command/menu catalog with starting, live and retained-ended records; view a notified source | One Close Agent action for all states; no attention queue/seen state, nextAgent, human stopAgent or startAgent registration; opening does not clear the error |
 | U08 | Activate agent B, switch to a file/unrelated terminal, invoke palette Rename/Copy/Close; repeat without a selected run | Available actions target B under UX-3.1; no target picker; unavailable without a valid target; explicit card/tab context still targets its own run |
 | U09 | Browse near the 80th card, switch to Explorer, then return; repeat after the navigation target is removed | Restore still-valid scroll position and navigation target without stealing input focus; removed target is discarded; existing PANEL-3.3 scrolling behavior is unchanged |
@@ -316,6 +337,7 @@ passes.
 | U11 | Message History with conversations from this and other windows, long bodies, links and command text | Only messages involving this window's agents; read-only; delivery outcome shown; links and commands rendered as text; COLLABORATION-3.2 |
 | U12 | Scrollbar initially idle, hover/leave, wheel and keyboard scrolling, drag outside and release/cancel, window blur, reduced motion, resize and changing card counts; track clicks with both scrollByPage values; Modern UI absent/on/off and live changes; both caps and first/last cards inside a rounded host clip at 100%, 125%, 150% and 200% display scale; native sidebar width sweeps through clipped and unclipped iframe sizes; short and empty content | PANEL-3.3 visibility and fading; native sidebar width, corners, theme colors and matching hit area in both modes; shared content/overlay compensation, dynamic correction removed when no longer needed and a device-pixel guard for rounded cross-origin bounds; filled cap/card contours retained (shared edge antialiasing allowed), no additional list top/bottom padding and 2 px Modern UI clearance for scrollbar ends only; compare total bottom spacing with native Extensions in the same editor; no traditional decorative inset, full scroll range through wheel, keyboard and dragging, fractional track endpoints and correct empty-padding hit testing; zero scrollbar gutter with and without overflow; no width jump on hover, stuck visibility, lost valid scroll position or hidden keyboard target |
 | U13 | Panel widths 180/260/420/720 px, editor zoom -1/0/2, short/long names and folder/worktree pairs, Pin/Unpin, resize and Unicode; four dot meanings and stable names during title updates | Short labels use their natural width; long locations borrow space, both components remain, middle ellipses preserve whole graphemes, full hover/accessibility stay available, no overlap/overflow with the Pin or clipped viewport; grey idle differs from yellow blockers, normal titles have no state prefix and native titles never rename an agent; PANEL-1.3–1.5, RULES-3.2 |
+| U14 | Native blocked with missing/new kind across every CLI; connecting tools before/after startup; long Unicode titles; empty/missing report titles; unknown-state reports; Muse soft wraps, hard breaks, clipping, native answer/animation styling, synchronized redraw, reset and recovery | Preserve generic yellow blockers and full hover; Idle makes no input-readiness claim; not-yet-connected tools stay distinct from failure; graphemes stay whole; complete native reports replace title, invalid/unknown states do not alter a record; lost screen evidence never invents idle or retains working. Record native client/provider and platform evidence separately; RULES-3.2, PANEL-1.4–1.5, CLIS-2.3 |
 | C02 | Executable found only through configured default-profile PATH; null/omitted variables at each env layer; remote and Windows cases | Discovery and launch use the same CLIS-1.2 environment; null removes, omission inherits; no shell-init execution/parser |
 | C04 | Custom definition missing/empty Resume, lacking exact-session placeholder, containing a capabilities field, a key that cannot be an ID, valid unverified Resume | Invalid definitions cannot start; only path/launch are configured; a valid command alone does not prove Resume/Pin under CLIS-3.4 |
 | C03 | New worktree with tracked relative executable; missing/nonexecutable file after creation | Static validation before creation; cwd-dependent checks use actual Git destination before spawn; failure retains pair and created worktree; no preparation barrier/rollback |
@@ -420,6 +442,179 @@ Not rerun for this merge: real-model/C4 journeys, native Windows or Linux, Remot
 or the minimum supported editor. Earlier platform results remain evidence for their own snapshots. The local passes
 do not certify those platforms or close their release gates.
 
+#### MCP polish items 05–11 local evidence, 2026-11-01
+
+The MCP polish snapshot over merge `cd80cac0` includes release-review head `29b73c2d`. The local source manifest and
+logs stay in `extension/build/mcp0511/`; the before-item-12 source fingerprints are in `extension/build/mcp1215/baseline.json`.
+These are build-specific results, not a certification of every native platform.
+
+| Check | Observed result |
+| --- | --- |
+| Compile, production bundle/package, package checks, localization and spec audit | PASS: darwin-arm64 0.0.2; 11 package checks; 300 runtime and 64 manifest strings in 12 locales; 12 normative documents, 185 rules and 80 links |
+| Unit suite | PASS: 1185 tests, 6 platform-specific skips; `unit-merged-final.json` |
+| Official VS Code 1.144.0, isolated profiles and fake CLIs | PASS: 40 editor assertions across six built-ins, a custom CLI and two windows, six reload/workspace-conversion checks, six immediate-reopen checks; actual 300190 ms grace expiry then exact session restoration; `integration-merged-fixed.log` |
+| Native input captures on macOS 27.2 arm64 | PASS: Claude Code 2.1.316, Codex 0.166.0, Antigravity 1.4.12, Muse Code 1.4.14-R7309.1, OpenCode 2.1.4 and Pi 1.4.0; long/Unicode inputs and approved message/receipt headers |
+| Native reload, workspace conversion, immediate reopen and exact session restoration | PASS for all six versions above on the merged build; real process and session IDs recorded, a fresh response token checked after resume; `real-lifecycle-<cli>-merged-final.log` |
+| Real-model collaboration | Claude Code with its signed-in model, OpenCode and Pi with OpenRouter kimi-k2.6 passed before the remote merge: one-call discovery, child context, initial task and message round-trip; `real-claude-complete.log`, `real-opencode-final.log`, `real-pi-exact-match.log` |
+| Native CLI with controlled provider | Codex passed `real-codex-exact.log` before the merge; Antigravity and Muse passed `real-<cli>-merged-final.log` after it. These prove actual CLI/tool/context transport and effects, not independent model reasoning |
+
+Muse's collaboration probe used YOLO on; with YOLO off its native approval appeared as CLIS-2.2 specifies. No product
+approval bypass was added. The other collaboration probes used YOLO off. Native forced supervisor exit exercises exact
+restoration; only the separately timed fake-CLI grace run proves the five-minute policy. All editor/CLI state was isolated.
+The split MCP polish items 05–11 commits additionally compiled independently and passed their affected focused suites.
+
+Not rerun on this snapshot: native Windows/Linux, Remote-SSH, WSL, containers, minimum-supported editor, or actual-model
+collaboration for Codex/Antigravity/Muse. Earlier release-review evidence remains tied to its own source. No real Qwen probe ran.
+
+#### MCP polish items 12–15 local evidence, 2026-11-02
+
+Items 12, 13 and 14 are independently committed as `98f80275`, `358654b4` and `de5e3bda`. Item 15 adds the reproducible
+`npm run measure:mcp` harness, opt-in native interpretation probes and an empty-inbox delivery fact. The local,
+uncommitted measurement record in `docs/extension/audit/mcp-polish-2026-11-02.json` identifies the tested source,
+frozen pre-item-12 build, individual native attempts and their failures. Raw logs and isolated profiles remain local under
+`extension/build/mcp1215/` and `extension/build/mcp0511/`.
+
+On macOS 27.2 arm64, Node 24.21.0 and official VS Code 1.144.0: compilation, the darwin-arm64 0.0.2 and window packages,
+11 package checks, 1201 unit tests (6 platform skips), localization (305 runtime and 64 manifest strings, 12 locales)
+and the specification audit passed. The full isolated editor suite passed its 40 assertions, six reload/workspace
+conversions, six immediate reopens, and actual 300091 ms grace expiry followed by exact pinned-session restoration.
+The final native-probe-only Pi startup guard was compiled and rechecked separately; shipped production behavior did
+not change after these gates.
+
+The same 19 deterministic journeys make 30 calls before and after: 65/70 assertions pass in the frozen build and
+70/70 after. Four previously incorrect cross-window outcomes and the new empty-inbox fact account for the difference.
+No duplicate effects or false completion occur in the tested scenarios. Text result bytes increase from 259548 to
+260149, preserving failure facts and the delivery notice; structured results have the same size, counted separately.
+Complete output files remain 36632 bytes. Tool names and argument schemas are unchanged. The configured outer timeout
+has 50 seconds beyond the maximum operation wait plus route allowance; this does not guarantee arbitrary network delay.
+
+Initialization/tools/skill are 1110/7709/4859 UTF-8 bytes, compared with 1482/6939/6197 before. All three layers together
+shrink by 940 bytes (6.4%), but initialization plus tools without the optional skill grows by 398 bytes. This is a
+tradeoff for titles, truthful metadata and local tool semantics, not a claim that every client's model context shrinks.
+Native clients can load, omit, transform or repeat these layers; whole-request model token costs were not measured.
+
+Claude Code with native Sonnet passed three independent collaboration runs before the empty-inbox clarification and
+one afterwards. In the latter session it also answered all six hypothetical outcome questions correctly in three
+sequential trials; these are interpretation observations, not independent network-fault experiments. Two earlier quiz
+attempts failed before any answer because the test used raw terminal input for a large paste; the corrected probe uses
+the product's terminal-mode-aware paste and verifies its complete draft. The test command is absent from the shipped bundle.
+
+Kimi K2.6 failures remain explicit: OpenCode passed one then failed one repeated run, both before and after the
+empty-inbox clarification, by exceeding the unchanged two-read inbox budget. Its actual transcript contains the
+delivery notice, and its stored instructions contain the no-poll guidance. Pi first exceeded that budget; after the
+clarification it received CONTEXT but ended with a thinking-only stop without the required PING tool call. Successful
+delivery is not model execution. The product neither suppresses valid reads nor forces turn endings or hidden retries.
+
+On the same production build, OpenCode with OpenRouter Sonnet 5.5 passed three consecutive runs. Pi with that model
+passed two runs; its next fresh-profile attempt submitted before native fd setup finished and therefore made no model
+call. That harness failure is retained separately; after the probe waited for Pi's session tools after startup, three
+consecutive fresh-profile runs passed. Codex, Antigravity and Muse each passed a final native-client run
+with controlled providers; Muse used YOLO on. These do not certify their independent model reasoning.
+
+The six native lifecycle results remain those of MCP polish item 11. No new Windows/Linux, Remote-SSH, WSL, container, minimum-editor
+or actual-model Codex/Antigravity/Muse support claim is made. Small model samples, including successful controls, do
+not establish universal reliability or erase the failed Kimi observations.
+
+Owner manual review on 2026-11-02 found that the skill description's unquoted colon made its frontmatter invalid YAML.
+Earlier successful MCP/model journeys therefore did not prove that the optional skill loaded. The generator now quotes
+the complete description; a YAML parser regression check preserves the parsed name and full description. Pi 1.4.0's
+actual `loadSkillsFromDir`, run only on an isolated temporary directory, rejected the old file (zero skills, the same
+parse error as the screenshot) and accepted the corrected file (one skill, no diagnostics). Compilation, 55 focused
+checks (one platform skip), 70 measurement assertions, packaging and 11 package checks passed after the fix. The skill
+now occupies 4861 bytes, two more than the snapshot above. Evidence remains local in `extension/build/mcp-review-window/`.
+This does not repair unrelated user-installed skills or replace a conflicting project skill owned by another setup.
+
+The same owner review exposed Antigravity 1.4.12's initial accept-edits hint being read as a draft. Isolated native
+captures reproduced it at 120 and 60 columns, and in plan mode. After the reader fix, all three initial hints read
+usable; typed text and the identical hint pasted with the cursor returned to its beginning remain drafts. Twelve
+recorded screens cover these cases and clearing the input. No input was submitted and no model was called in those
+captures. Compilation, 113 focused checks (one platform skip), packaging and 11 package checks passed. The merged
+remote cross-window journey also passed: six checks, four unrelated journeys skipped. The missing
+repository `.agents/` ignore was restored; generated files were neither staged nor deleted. For the owner's local
+test setup, the old project skill was backed up byte-for-byte under `extension/build/mcp-review-window/old-skill/`
+and replaced with the current generated skill. Product protection of unknown conflicting files remains unchanged;
+this local repair is not an automatic migration or a claim that existing processes acquired tools after startup.
+
+The subsequent mixed-CLI review found Pi discovering both the shared project skill and its explicit per-run copy.
+Its resource-discovery hook now reuses an already loaded byte-identical skill instead of adding the second copy.
+Pi 1.4.0's native SDK passed startup with a project skill, reload after its removal, and reload after its return;
+each loaded one Facade skill without a collision. A different-content skill still reported the native collision,
+and another skill remained loaded throughout, including with skill commands disabled. The isolated probe used
+a fixture consumer of registered MCP servers and made no transport or model calls; it verifies native resource
+discovery, not new model or platform support. Compilation, 81 focused checks (one platform skip), all six built-in
+fake-CLI tool-injection journeys and 11 package checks passed. The custom-CLI version of that journey is deliberately
+skipped. Native Windows/Linux Pi and future CLI releases were not verified. Unrelated user skill warnings are outside
+this product fix. Evidence remains local in `extension/build/mcp-review-window/`.
+
+The owner's light-theme tab review reproduced a native VS Code 1.144.0 defect in an isolated editor with no Facade:
+all four image-backed terminal logos disappeared on switching to Light Modern and returned in Dark Modern. Terminal
+logos now use contributed icons from the existing artwork. Asset checks catch displaced color layers; native checks
+compare the glyph's rendered advance with the original 16 px icon slot, including the 13 px native label font.
+`node scripts/test-agent-icons.mjs`, after compilation and packaging, passed all six logos in Light Modern, Dark Modern,
+both High Contrast themes, Solarized Light, the Minimal file-icon theme, and a reload into Light Modern. It also
+preserved the native choice to hide icons when the file-icon theme is disabled. Actual screenshots were inspected
+after correcting the first font trial's layer bearings and undersized glyphs. Compilation, 1,204 unit checks
+(six platform skips), all seven fake-CLI launch journeys, 12 package checks, localization and specification audits
+passed. These rendering results are for macOS arm64 / VS Code 1.144.0; they do not certify other editors/platforms or
+the declared minimum version. Screenshots and probe logs remain local; no owner's live terminal was driven as a test.
+
+The subsequent title review found that the removed decoration filters were not the only way symbols disappeared:
+the plain OSC 7501 report title still took precedence over the CLI's decorated OSC 0/2 terminal title. D160 reverses
+that source precedence without changing startup, blocker, error or unavailable-tool messages. A real-PTY regression
+passed reports before/after the terminal title, decoration-only updates and reattachment. All seven fake-CLI editor
+launch journeys passed repeated decorated terminal titles followed by a different plain report title, while the editor
+tab kept the agent's name. Compilation, 1,205 unit checks (six platform skips), 12 package checks, localization and
+specification audits passed on macOS arm64 / VS Code 1.144.0. These fixtures verify Facade's handling of both title
+channels; they are not new native CLI/version certification. Logs remain local in `extension/build/mcp-review-window/`.
+
+The owner's follow-up title audit read current supervisor snapshots in the two review windows without claiming,
+attaching to, typing into or reloading their runs. Claude, Codex, Muse Code, OpenCode and Pi had native terminal titles;
+the three observed Antigravity runs had neither terminal nor report titles. Installed Claude Code 2.1.316 code confirms
+that accepting program-status support suppresses its native title prefix. Installed OpenCode code shortens long native
+titles itself; Pi 1.4.0 builds its title from its symbol, optional session name and folder. These are current observations,
+not a guarantee that other versions or settings behave identically. Facade does not synthesize missing symbols.
+The audit also reproduced stale card text after a CLI cleared its title: the execution report omitted the empty value,
+so the core retained the old one. Explicit clearing now crosses that boundary, while missing information during a
+connection loss still preserves the last title. Regression checks cover clearing, reattachment and subsequent titles.
+Compilation, all 155 checks in the adapter, execution, core lifecycle, card and program-status suites, and the
+specification audit passed. The new clearing regressions failed before the fix and passed afterward.
+
+#### Panel status review evidence, 2026-11-02
+
+D164 corrects seven implementation/presentation findings and one readiness-copy discrepancy. The audit's separate
+suspicion about unknown OSC 7501 states was withdrawn after checking revision 0.4: discarding the entire unknown-state
+report and retaining the last valid record is required. Conformance tests preserve that behavior and capability negotiation.
+
+Six targeted regressions failed before implementation: changed/wrapped Muse working rows, reset evidence, generic blockers,
+long title preservation, grapheme boundaries and report-title replacement. On macOS arm64 with Node 24.21.0 the final build
+passes both TypeScript projects, 1231 unit tests (six platform-specific skips), the darwin-arm64/window package builds,
+12 package checks, localization (322 runtime texts and 64 manifest strings in English and eleven translations) and the
+specification audit. The shared blocker/card tests cover all six built-ins and a custom CLI. Controlled real PTYs cover
+soft wrapping, resize, synchronized redraw, reset, loss/recovery, native-report precedence and decorated long-title reattachment.
+
+The final isolated VS Code 1.144.0 editor run passes all 40 journey/cross-window checks for six built-ins and a custom CLI,
+plus all six reload/window-conversion and six immediate-close/reopen cases. The final expiry case ends its process after
+300,118 ms under the production grace period and restores the same pinned session in a new process with exactly one terminal.
+All editor journeys use fake CLIs and separate profiles, extensions and Facade roots. The first editor pass reached Muse
+and failed its initial-idle assertion: the fake CLI drew the text `fake agent ready`
+instead of the native surrounding layout. Its Muse transcript now draws the recorded header, prompt markers and indented
+continuations. A controlled PTY check confirms idle both at startup and after a multiline submission; the editor assertion
+is unchanged. Earlier passed CLI runs and the failed run remain in the local logs.
+
+An isolated Muse Code 1.4.14 process, with a fresh temporary home/workspace and a loopback deterministic provider, supplied
+native terminal screens for idle, working and turn end while resizing from 108 to 38 columns and back. Both its native
+reports and the fallback reader agree on working/not-working after the fix; the native `done` report is not an overall task
+completion claim. The new recorded narrow answer keeps the bold answer marker that distinguishes it from the animation's
+same-shaped nonbold mark. The first probe expected only `idle` after a response and timed out on a valid `done`; its evidence
+was retained and the harness corrected to the actual protocol. The second exposed the missing answer-marker reading; the
+final probe passes at 108/38 columns and 40/24/6 rows. These are native-client rendering/transport observations, not real-model
+reasoning evidence. No account or existing owner editor/agent was used, and no Qwen process ran.
+
+New runs use ptyd protocol 12. Earlier supervised processes remain connected and alive rather than being restarted by an
+update; those processes keep their original supervisor behavior until they end. This run does not certify new Windows/Linux,
+Remote-SSH/WSL/container, minimum-editor, other native CLI versions, or all native approval/error scenarios. Local logs and
+probe scripts stay under `extension/build/panel-status-*`; the discussion draft remains local.
+
 ### 4.3 Review output
 
 **The final implementation report states what works, what was tested and what remains, with no hidden partial completion.**
@@ -440,8 +635,17 @@ for review, not acceptance evidence.
 
 ## Change log
 
+- 2026-11-02: Added U14 and recorded panel status regression, native rendering and protocol-conformance evidence with platform limits (D164).
+
+- 2026-11-02: J11 and U06 cover the single-line picker priorities, CLI search and manual Resume naming (D161).
+- 2026-11-02: Recorded the six-CLI title audit and regression coverage for clearing a title without retaining stale card text.
+- 2026-11-02: Recorded the actual-terminal-title precedence, decoration updates and reattachment checks (D160).
+
+- 2026-11-02: Recorded the terminal-logo theme/size/layer regression checks and native rendering evidence (D159).
+
 - 2026-11-01: Recorded the release review's test round - real CLIs, Remote-SSH to Windows and Linux hosts, a container, WSL, updates and 100 agents - and what it did not run (D139-D147).
 - 2026-11-01: Evidence that named this release's packages by the version an earlier commit wrote names them as this release's: its version is 0.0.2 (D142).
+- 2026-11-01: M27–M32 cover MCP discovery, source time, readable notifications, private initial context, single-body screens and separate native evidence (D152).
 - 2026-11-01: Recorded the release review's Windows and Linux evidence and what it did not run (D131-D138).
 - 2026-11-01: U06 covers name-only editor tabs, native rename and restored background titles (D130).
 - 2026-11-01: U13 covers the panel status, stable-name and responsive-location decisions D127/D128.

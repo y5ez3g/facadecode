@@ -61,7 +61,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 
 	test('nothing is coerced: no strings for booleans or integers, no fractions, no null', () => {
 		for (const [tool, args, field] of [
-			['list_agents', { include_ended: 'true' }, 'include_ended'],
+			['list_agents', { details: 'true' }, 'details'],
 			['list_agents', { limit: '5' }, 'limit'],
 			['list_agents', { limit: 5.5 }, 'limit'],
 			['list_agents', { cursor: null }, 'cursor'],
@@ -87,7 +87,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 	});
 
 	test('the schema\'s documented defaults, and no others, are filled in', () => {
-		assert.deepStrictEqual(validateArguments('list_agents', {}), { include_ended: false, limit: 100 });
+		assert.deepStrictEqual(validateArguments('list_agents', {}), { details: false, limit: 100 });
 		assert.deepStrictEqual(validateArguments('read_messages', undefined), { all: false, limit: 100 });
 		assert.deepStrictEqual(validateArguments('read_screen', { agent: '#a1' }), { agent: '#a1', lines: 50 });
 		assert.deepStrictEqual(validateArguments('type_text', { agent: '#a1', text: 'hi' }), { agent: '#a1', text: 'hi', enter: false });
@@ -98,7 +98,7 @@ suite('Schema: tool arguments are validated whole, exactly, before any effect (M
 		assert.strictEqual(refusal(() => validateArguments('list_agents', [])).reason, 'invalid_argument');
 		assert.strictEqual(refusal(() => validateArguments('list_agents', 'all')).reason, 'invalid_argument');
 		assert.strictEqual(refusal(() => validateArguments('stop_agent', undefined)).reason, 'missing_argument');
-		assert.deepStrictEqual(validateArguments('list_start_options', undefined), {});
+		assert.deepStrictEqual(validateArguments('list_agents', undefined), { details: false, limit: 100 });
 	});
 
 	test('every tool has a check for its schema, and every schema property type is one the validator knows', () => {

@@ -4,6 +4,7 @@
 
 import * as assert from 'assert';
 import { createToolServices } from '../contract/tools';
+import { deliveryReceipt } from '../contract/facts';
 import type { InputPort, MessageRecord } from '../core/messagePorts';
 import { MessageService, MessageStore } from '../core/messages';
 import { OrdinaryInput } from '../host/input';
@@ -24,6 +25,7 @@ function delivery(s: Setup, input?: InputPort) {
 	});
 	let next = 0;
 	const service = new MessageService({
+		receipt: deliveryReceipt,
 		agents: { get: id => s.agents.get(id), onDidChange: () => ({ dispose() { } }) },
 		input: input ?? {
 			capability: () => ({ state: 'supported', reason: 'test terminal' }),
@@ -105,7 +107,7 @@ suite('MCP reliability: retries through the real delivery service', () => {
 			network.window(3, 'Elsewhere', [remoteAgent(30, { name: 'worker' })]);
 			for (const to of ['@worker', worker.id]) {
 				const retry = resultOf(await a.call(lead, 'send_message', { ...args, to }));
-				assert.deepStrictEqual([retry.status, retry.data.message_id, retry.data.target, retry.data.repeated], ['success', 'm-1', worker.id, true], to);
+				assert.deepStrictEqual([retry.status, retry.data.message_id, retry.data.target, retry.data.repeated], ['success', '#m1', worker.alias, true], to);
 			}
 			assert.deepStrictEqual([mb.pastes.length, mc.pastes.length, ma.copies.get('m-1')?.delivery.status], [1, 0, 'success']);
 		} finally {
@@ -136,15 +138,16 @@ suite('MCP reliability: retries through the real delivery service', () => {
 			const args = { to: worker.id, text: 'Do this once.', request_id: '🔁'.repeat(200) };
 			const first = await a.call(lead, 'send_message', args);
 			assert.strictEqual(resultOf(first).effects.outcome, 'unknown');
-			assert.match(first.text, /whether it was delivered is not known/);
+			assert.deepStrictEqual(JSON.parse(first.text), first.structured);
+			assert.strictEqual(resultOf(first).effects.enter_written, null);
 			const retry = resultOf(await a.call(lead, 'send_message', args));
-			assert.deepStrictEqual([retry.status, retry.data.message_id, mb.pastes.length], ['success', 'm-1', 1]);
+			assert.deepStrictEqual([retry.status, retry.data.message_id, mb.pastes.length], ['success', '#m1', 1]);
 			assert.strictEqual(ma.copies.get('m-1')?.requestId, args.request_id);
 			// The recipient has closed since then; the recorded request still answers, even if the sender lost its local copy.
 			b.agents.runs.delete(worker.id);
 			ma.copies.clear();
 			const again = resultOf(await a.call(lead, 'send_message', args));
-			assert.deepStrictEqual([again.status, again.data.message_id, mb.pastes.length], ['success', 'm-1', 1]);
+			assert.deepStrictEqual([again.status, again.data.message_id, mb.pastes.length], ['success', '#m1', 1]);
 		} finally {
 			ma.service.dispose(); mb.service.dispose(); a.dispose(); b.dispose();
 		}

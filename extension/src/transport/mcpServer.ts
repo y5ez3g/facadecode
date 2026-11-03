@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The MCP server of one run's shim (MCP-6.1): JSON-RPC 2.0 requests of the run's CLI, each answered once. It lists the nine tools
+// The MCP server of one run's shim (MCP-6.1): JSON-RPC 2.0 requests of the run's CLI, each answered once. It lists the eight tools
 // (MCP-1.1) and carries each tool call to the window that owns the run; the window validates and acts, and its answer returns as
 // MCP returns a result - English text and the same facts structured (MCP-1.2).
 
@@ -25,6 +25,7 @@ const ALWAYS_LOAD = { 'antigravity/alwaysLoad': true };
 export interface McpShimOptions {
 	/** The run's short ID, `#aN`, whose instructions the model is given. */
 	readonly alias: string;
+	readonly context?: string;
 	readonly version: string;
 	/**
 	 * Whether it speaks for a run: false where its CLI started it without the run's variables - a session the person started by hand
@@ -151,14 +152,14 @@ export class McpShim {
 					protocolVersion: typeof asked === 'string' && MCP_VERSIONS.includes(asked) ? asked : MCP_VERSIONS[0],
 					capabilities: { tools: { listChanged: false } },
 					serverInfo: { name: 'facade', version: this.options.version },
-					instructions: serving ? instructionsFor(this.options.alias) : NOT_SERVING
+					instructions: serving ? instructionsFor(this.options.alias, this.options.context) : NOT_SERVING
 				};
 			}
 			case 'ping':
 				return {};
 			case 'tools/list':
 				// Each tool given directly where a CLI otherwise loads tools on demand: Antigravity's first turn has them so (CLIS-2.2)
-				return { tools: this.options.serving === false ? [] : TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, _meta: ALWAYS_LOAD })) };
+				return { tools: this.options.serving === false ? [] : TOOLS.map(tool => ({ ...tool, _meta: ALWAYS_LOAD })) };
 			case 'tools/call': {
 				if (!isObject(params) || typeof params.name !== 'string') {
 					throw new RpcError(-32602, 'Invalid params: tools/call names its tool by a string `name`.');
@@ -186,11 +187,11 @@ export class McpShim {
 			answer = await this.options.link.call(call, readAt);
 		} catch (err) {
 			if (err instanceof CallFailed) {
-				return failureAnswer(err.code, err.reason, err.message, err.outcome);
+				return failureAnswer(err.code, err.reason, err.message, err.outcome, call);
 			}
-			return failureAnswer('UNAVAILABLE', 'window_unavailable', `The call was not carried to a Facade Code window: ${err instanceof Error ? err.message : String(err)}. Whether it took effect is not known.`, 'unknown');
+			return failureAnswer('UNAVAILABLE', 'window_unavailable', `The call was not carried to a Facade Code window: ${err instanceof Error ? err.message : String(err)}. Whether it took effect is not known.`, 'unknown', call);
 		}
 		return isToolAnswer(answer) ? answer
-			: failureAnswer('UNAVAILABLE', 'protocol_incompatible', 'The Facade Code window answered in a form this MCP server cannot read: the call may have taken effect.', 'unknown');
+			: failureAnswer('UNAVAILABLE', 'protocol_incompatible', 'The Facade Code window answered in a form this MCP server cannot read: the call may have taken effect.', 'unknown', call);
 	}
 }

@@ -7,9 +7,11 @@
 
 import type { MessageRecord } from '../core/messagePorts';
 import { headerText } from '../core/messages';
-import type { CapabilityState, CliChoice, Location, RunFacts } from '../core/ports';
+import type { CapabilityState, CliChoice, CliChoices, Location, RunFacts } from '../core/ports';
 import { referenceOf } from '../core/reach';
-import type { ErrorCode } from '../schema/result';
+import { accepted, failure, success, type ErrorCode } from '../schema/result';
+import { compactResult } from '../schema/compact';
+import { withRecovery } from '../schema/recovery';
 
 export type Data = { readonly [key: string]: unknown };
 
@@ -18,6 +20,26 @@ export interface ToolWindow {
 	readonly id: string;
 	readonly label: string;
 	readonly environment: string;
+}
+
+/** What a CLI's adapter states for a location (the Show Agent Launch facts of `clis/describe.ts`); any it lacks is unverified. */
+export interface CliFacts {
+	readonly cli: string;
+	readonly takes?: { readonly model: boolean; readonly effort: boolean };
+	readonly activity?: CapabilityState;
+	readonly session?: CapabilityState;
+	/** Its native initial-prompt argument where it maps one, and how far that is verified (CLIS-3.2). */
+	readonly initialPrompt?: { readonly mapping?: readonly string[]; readonly capability: CapabilityState };
+	/** The input adapter that reads its ordinary-message input, and whether it is verified for the version found (CLIS-2.1). */
+	readonly input?: { readonly adapter?: string; readonly capability: CapabilityState };
+	readonly version?: { readonly version: string; readonly source: string };
+}
+
+/** The CLI catalog of a location (`host/clis.ts`). */
+export interface StartCatalog {
+	list(location: Location, details?: boolean): Promise<CliChoices & { readonly launches?: readonly CliFacts[] }>;
+	/** Each CLI's facts there now, launched with `yolo`. */
+	describe(location: Location, yolo: boolean): { readonly launches: readonly CliFacts[] };
 }
 
 export function isoOf(ms: number): string {
@@ -73,6 +95,8 @@ export function agentOf(run: RunFacts, window: ToolWindow, now: number, input?: 
 		location_id: run.location,
 		cwd: run.cwd,
 		cli: run.cli,
+		requested_model: run.model,
+		requested_effort: run.effort,
 		creator: run.creator ?? (run.origin === 'human' ? '#human' : undefined),
 		root: run.root,
 		yolo: run.yolo,
@@ -87,12 +111,14 @@ export function agentOf(run: RunFacts, window: ToolWindow, now: number, input?: 
 		error: run.error ? { reason: run.error.reason, source: run.error.source, at: isoOf(run.error.at) } : undefined,
 		exit: run.end ? defined({ kind: run.end.kind, code: run.end.code, signal: run.end.signal, at: isoOf(run.end.at) }) : undefined,
 		observed_at: isoOf(now),
-		stale: false
+		state_observed_at: run.activitySince !== undefined ? isoOf(run.activitySince) : undefined,
+		stale: run.lifecycle !== 'ended' && run.disconnected === true
 	});
 }
 
 /** A message record as read_messages returns it (MCP-4.2), with its fetch state before this read; `text` left out for a file. */
 export function messageOf(record: MessageRecord, withText: boolean): Data {
+	const result = record.kind === 'result' ? record.result : undefined;
 	return defined({
 		message_id: record.id,
 		alias: record.alias,
@@ -107,11 +133,13 @@ export function messageOf(record: MessageRecord, withText: boolean): Data {
 		reply_to: record.replyTo,
 		about: record.about,
 		// A Facade result completing an accepted call names that call and the agent it was on (MCP-1.3)
-		call_id: record.callId,
+		call_id: record.kind === 'result' ? record.callId : undefined,
+		operation: record.operation,
 		agent: record.agent?.run,
 		agent_reference: record.agent ? participant(record.agent) : undefined,
 		length: record.length,
-		text: withText ? record.text : undefined,
+		text: withText && !result ? record.text : undefined,
+		result: withText ? result : undefined,
 		delivery: defined({
 			status: record.delivery.status,
 			reason: record.delivery.reason,
@@ -135,6 +163,7 @@ function participant(who: MessageRecord['from'] | MessageRecord['to'] | NonNulla
 /** The messages of a long read as one file (COLLABORATION-4.2): each between headers naming it, its body exactly as it is. */
 export function messageFile(records: readonly MessageRecord[]): string {
 	return records.map(record => {
+		const body = record.kind === 'result' && record.result ? JSON.stringify(record.result) : record.text;
 		const kind = record.kind === 'result' ? 'Facade result' : 'Facade message';
 		const fields = [
 			`${kind} ${record.alias}`,
@@ -144,10 +173,10 @@ export function messageFile(records: readonly MessageRecord[]): string {
 			...record.replyTo ? [`reply to ${record.replyTo}`] : [],
 			...record.about ? [`about ${record.about}`] : [],
 			...record.agent ? [`agent ${participant(record.agent) ?? record.agent.run}`] : [],
-			...record.callId ? [`call ${headerText(record.callId)}`] : [],
-			`${record.length} code points`
+			...record.kind === 'result' && record.callId ? [`call ${headerText(record.callId)}`] : [],
+			`${[...body].length} code points`
 		];
-		return `[${fields.join(' | ')}]\n${record.text}\n[/${kind} ${record.alias}]`;
+		return `[${fields.join(' | ')}]\n${body}\n[/${kind} ${record.alias}]`;
 	}).join('\n\n') + '\n';
 }
 
@@ -170,4 +199,17 @@ const SEND_FAILURES: { readonly [reason: string]: readonly [ErrorCode, string] }
 export function sendFailureOf(reason: string | undefined): { readonly code: ErrorCode; readonly reason: string; readonly message: string } {
 	const known = reason !== undefined ? SEND_FAILURES[reason] : undefined;
 	return known ? { code: known[0], reason: reason!, message: known[1] } : { code: 'FAILED', reason: reason ?? 'failed', message: `The message was not delivered${reason ? ` (${reason})` : ''}.` };
+}
+
+/** The same delivery facts as send_message, supplied to the core through its receipt port (MCP-1.2, 1.3). */
+export function deliveryReceipt(record: MessageRecord, cli?: string): Data {
+	const delivery = record.delivery;
+	const data = defined({ message_id: record.id, target: record.to.alias ?? (record.to.run === '@human' ? '#human' : record.to.run), reply_to: record.replyTo });
+	const effects = defined({ ...delivery.effects });
+	const error = sendFailureOf(delivery.reason);
+	const result = delivery.status === 'success'
+		? success({ ...data, disposition: delivery.via === 'read' ? 'read_messages' : record.to.run === '@human' ? 'notified' : 'submitted_to_cli' }, effects)
+		: delivery.status === 'pending' ? accepted(defined({ ...data, obstacle: delivery.reason, deadline: delivery.deadline === undefined ? undefined : isoOf(delivery.deadline) }), effects)
+			: failure({ ...error, message: delivery.reason === 'input_unknown' && cli ? `${error.message} CLI: ${cli}.` : error.message }, data, effects);
+	return withRecovery('send_message', compactResult('send_message', result)) as unknown as Data;
 }

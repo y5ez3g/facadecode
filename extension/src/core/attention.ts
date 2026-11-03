@@ -9,7 +9,7 @@
 import { messageOf } from '../base/errors';
 import type { Messages } from './messagePorts';
 import type { Agents, Disposable, RunFacts, RunId } from './ports';
-import { referenceOf } from './reach';
+import { notificationName } from './notificationText';
 
 /** How long a started agent waits on its CLI's question before its creator is told. */
 export const ATTENTION_MS = 20_000;
@@ -27,16 +27,13 @@ type Waiting = NonNullable<RunFacts['blocker']>;
 
 /** The notice its creator gets, in the words of a Facade result (RULES-1.7): what the agent waits on, and who can answer it. */
 export function attentionText(run: Pick<RunFacts, 'name' | 'alias'>, waiting: Waiting): string {
-	const who = `${referenceOf(run)}, which you started,`;
-	const said = waiting.text ? ` (${JSON.stringify(waiting.text)})` : '';
-	const notice = 'This is a Facade status notice. It does not request human contact or authorize answering the prompt; follow the person\'s task instructions.';
+	const who = notificationName({ run: run.alias, ...run });
+	const quote = waiting.text ? `\n${waiting.text}` : '';
 	switch (waiting.kind) {
-		case 'permission':
-			return `${who} is waiting for permission in its terminal${said}. Permission is the person's to give. ${notice}`;
-		case 'question':
-			return `${who} is waiting for an answer in its terminal${said}. ${notice}`;
-		case 'auth':
-			return `${who} is waiting for a sign-in in its terminal${said}. Only the person can sign in. ${notice}`;
+		case 'permission': return `${who} is waiting for approval from the user.${quote}`;
+		case 'auth': return `${who} needs the user to sign in.${quote}`;
+		case 'question': return `There's a question from ${who}:${quote || ' Open the terminal to read it.'}`;
+		case 'unknown': return `${who} needs the user's attention.${quote || ' Open the terminal to see what it needs.'}`;
 	}
 }
 

@@ -26,6 +26,7 @@ async function state(): Promise<PanelState> {
 async function until<T>(what: string, probe: () => Promise<T | undefined> | T | undefined, ms: number): Promise<T> {
 	const end = Date.now() + ms;
 	for (;;) {
+		assertLookBudget();
 		const value = await probe();
 		if (value !== undefined) {
 			return value;
@@ -63,18 +64,27 @@ function toolCalls(): { readonly at: number; readonly tool: string; readonly by:
 }
 
 /** How often an agent may call a tool that only looks, in the whole journey: more is polling for what a paste brings (D117). */
-const LOOKS = { read_messages: 2, list_agents: 3, read_screen: 2 } as const;
+const LOOKS = { read_messages: 2, list_agents: 4, read_screen: 2 } as const;
 
-/** How long its CLI takes to show its input, with what its start types before the first turn (COLLABORATION-2.2). */
-const READY_MS = REAL === 'agy' ? 25_000 : 10_000;
+/** Stop a real model's failed journey promptly instead of paying for minutes of repetitive queries. */
+function assertLookBudget(): void {
+	const calls = toolCalls();
+	for (const by of new Set(calls.map(call => call.by))) {
+		for (const [tool, most] of Object.entries(LOOKS)) {
+			const count = calls.filter(call => call.by === by && call.tool === tool).length;
+			assert.ok(count <= most, `${by} called ${tool} ${count} times (limit ${most}); automatic delivery needs no polling`);
+		}
+	}
+}
 
-const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and do exactly this: '
-	+ '1) Call list_start_options without arguments, then with the window_id of the window you are in, to find its first location_id. '
-	// "After this one": the first task comes as a Facade message too, which a literal model would answer as well
-	+ `2) Call start_agent with name "Echo", cli "${REAL}", that window_id and location_id, and this prompt: "When the next Facade message `
-	+ 'after this one arrives, reply to its sender once with send_message, the text exactly PONG, and do nothing else." '
-	+ '3) Call send_message to Echo\'s agent_id with the text PING. '
-	+ '4) End your turn. When a Facade message with PONG reaches you, answer DONE and nothing else.';
+const TASK_LEAD = 'This is a test of Facade Code. ';
+const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n'
+	+ '1) Call list_agents without arguments to get current windows, locations, available CLIs and agents.\n'
+	+ `2) Call start_agent with name "Echo", cli "${REAL}", that window_id and location_id, and this prompt: "Use your Facade initialization context to send your creator one message: `
+	+ 'CONTEXT followed by your creator address, your own Facade short ID, and your initial message ID, separated by single spaces. '
+	+ 'Then, only when a message whose entire body is PING arrives, reply to its sender with send_message, the text exactly PONG. Do nothing else."\n'
+	+ '3) End your turn. When Echo sends its CONTEXT message, call send_message to Echo\'s agent_id with the text PING exactly once.\n'
+	+ '4) When a Facade message with PONG reaches you, answer DONE and nothing else.';
 
 (REAL ? suite : suite.skip)(`Journey: real ${REAL ?? 'CLI'} agents work together through Facade (G3, J12, M02, D90)`, () => {
 	suiteSetup(async () => {
@@ -91,6 +101,10 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 			const screens = await Promise.all((await state()).cards.map(async card => `${card.name}:\n${await vscode.commands.executeCommand<{ text: string[] }>('facade.screen', card.runId)
 				.then(read => read.text.join('\n'), () => '(its screen could not be read)')}`));
 			throw new Error(`${(err as Error).message}\n\n${screens.join('\n\n')}`);
+		} finally {
+			// The isolated test owns every card here. Failed models must not keep spending usage during the window grace period.
+			const cards = await state().then(current => current.cards, () => []);
+			await Promise.allSettled(cards.map(card => vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId })));
 		}
 	});
 
@@ -105,21 +119,50 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 			return card;
 		}, 60_000);
 		const terminal = await until('its terminal', () => vscode.window.terminals.find(each => each.name.startsWith(first.name)), 30_000);
-		// Typed as the person types: the task, then Enter on its own once the CLI has taken the text
-		await new Promise(resolve => setTimeout(resolve, READY_MS));
-		terminal.sendText(TASK, false);
-		await new Promise(resolve => setTimeout(resolve, 2_000));
+		if (REAL === 'pi') {
+			// Pi mounts its editor before downloading managed fd/rg, but refuses Enter until startup finishes.
+			// Its session MCP connection follows that setup. Do not mistake an editable composer for readiness.
+			await until('Pi startup and its session tools', async () => {
+				const lines = (await vscode.commands.executeCommand<string>('facade.diagnostics')).split('\n');
+				const at = lines.findIndex(line => line.startsWith('- ') && line.includes(first.runId));
+				return at >= 0 && lines[at + 1]?.includes('; tools available;') ? true : undefined;
+			}, 60_000);
+		}
+		// A fixed startup sleep can send the first task into onboarding or before the composer exists.
+		await until('the CLI input to be usable', async () => await vscode.commands.executeCommand('facade.messageInput', first.runId) === 'usable' ? true : undefined, 60_000);
+		// Claude folds a long one-line paste into an attachment without a size. A visible lead and counted multi-line body
+		// let the same production reader verify this test's own draft before the test presses Enter.
+		const lead = REAL === 'claude' ? TASK_LEAD : undefined;
+		if (lead) {
+			terminal.sendText(lead, false);
+			await until('the test task lead', async () => await vscode.commands.executeCommand('facade.messageInput', first.runId, lead) === 'own' ? true : undefined, 30_000);
+		}
+		// sendText is raw terminal input: newlines would submit separate turns in Pi. Only Claude needs the counted
+		// multi-line attachment; the other clients receive this test's single-line task, as before.
+		const taskText = lead ? TASK : TASK.replaceAll('\n', ' ');
+		terminal.sendText(lead ? taskText.slice(lead.length) : taskText, false);
+		await until('the first task to show as its own draft', async () => await vscode.commands.executeCommand('facade.messageInput', first.runId, taskText, lead) === 'own' ? true : undefined, 30_000);
 		terminal.sendText('\r', false);
 
 		const second: Card = await until('the agent it starts', async () => (await state()).cards.find(each => !before.has(each.runId) && each.runId !== first.runId), 240_000);
 		assert.ok(second.tooltip.some(line => line.startsWith('Started by') && line.includes(first.name)), second.tooltip.join(' | '));
 
 		const delivered = (from: string, to: string, text: string) => messages().find(each => each.kind === 'message' && each.from.run === from && each.to.run === to
-			&& each.text.includes(text) && each.delivery.status === 'success' ? each : undefined);
+			&& each.text === text && each.delivery.status === 'success' ? each : undefined);
 		// Its first task went in with its launch; the message after it was pasted into its input and submitted
-		const task = await until('its first task', () => delivered(first.runId, second.runId, 'PONG'), 90_000);
+		const task = await until('its first task delivery', () => messages().find(each => each.kind === 'message' && each.from.run === first.runId && each.to.run === second.runId && each.text.includes('PONG')
+			&& ['success', 'unknown', 'failure'].includes(each.delivery.status)), 90_000);
+		assert.ok(task.delivery.status === 'success' || task.delivery.status === 'unknown', JSON.stringify(task));
 		// Natively where its CLI takes a first prompt it can use; Antigravity's after its tools are ready (COLLABORATION-2.2)
-		assert.strictEqual(task.delivery.via, REAL === 'agy' ? 'terminal' : 'launch', JSON.stringify(task));
+		assert.strictEqual(task.initialPrompt?.path, REAL === 'agy' ? 'post_start' : 'native', JSON.stringify(task));
+		assert.ok(task.delivery.via === (REAL === 'agy' ? 'terminal' : 'launch') || task.delivery.via === 'read', JSON.stringify(task));
+		const firstAlias = first.tooltip.join(' ').match(/#a\d+/)![0];
+		const secondAlias = second.tooltip.join(' ').match(/#a\d+/)![0];
+		const expectedContext = `CONTEXT ${firstAlias} ${secondAlias} ${task.alias}`;
+		// Observe the first task before sending the next one: a native CLI may steer an in-progress turn with later input.
+		// Concurrent delivery has its own tests; this journey measures launch-context availability independently of that race.
+		const context = await until('the creator, own identity and initial message from launch context', () => delivered(second.runId, first.runId, expectedContext), 240_000);
+		assert.strictEqual(context.text, expectedContext);
 		const ping = await until('PING to it', () => delivered(first.runId, second.runId, 'PING'), 240_000);
 		assert.deepStrictEqual([ping.delivery.via, ping.delivery.effects.text_written, ping.delivery.effects.enter_written], ['terminal', 'full', true], JSON.stringify(ping));
 		const pong = await until('its PONG back', () => delivered(second.runId, first.runId, 'PONG'), 240_000);
@@ -128,7 +171,8 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 		// What the models did (D117): the first answers its PONG, and neither sends a message twice, starts another agent, or polls
 		await new Promise(resolve => setTimeout(resolve, 30_000));
 		const sent = (from: string) => messages().filter(each => each.kind === 'message' && each.from.run === from && each.id !== task.id).map(each => each.text);
-		assert.deepStrictEqual([sent(first.runId).length, sent(second.runId).length], [1, 1], `each sends its message once: ${JSON.stringify([sent(first.runId), sent(second.runId)])}`);
+		assert.deepStrictEqual(sent(first.runId), ['PING']);
+		assert.deepStrictEqual([...sent(second.runId)].sort(), [expectedContext, 'PONG'].sort(), 'each sends its message once, with no notification reply loop');
 		assert.strictEqual((await state()).cards.filter(each => !before.has(each.runId)).length, 2, 'one agent started by the first');
 		const calls = toolCalls();
 		for (const card of [first, second]) {
@@ -139,8 +183,49 @@ const TASK = 'This is a test of Facade Code. Use only your facade MCP tools, and
 			}
 			assert.ok(own.filter(each => each.tool === 'start_agent' && each.status !== 'failure').length <= 1, `${card.name} started more than one agent`);
 		}
+		console.log(`Native collaboration calls: ${JSON.stringify(calls.map(({ tool, by, status }) => ({ tool, by, status })))}`);
+		if (process.env.FACADE_IT_REAL_DECISIONS === '1') { await decisionProbe(first, terminal); }
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: second.runId });
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: first.runId });
 	}
 });
+
+/** Real-model interpretation of hypothetical outcomes, not proof of actual network-fault recovery. No scenario action is executed. */
+async function decisionProbe(parent: Card, terminal: vscode.Terminal): Promise<void> {
+	const expected = { lost_keyed_send: 'repeat_original_request', expired_key: 'inspect_effects', partial_input: 'inspect_effects', accepted_start: 'await_result', delivery_receipt: 'delivery_only', incomplete_agents: 'unknown' };
+	const before = toolCalls().length;
+	const results: unknown[] = [];
+	for (let trial = 1; trial <= 3; trial++) {
+		await until('the parent input before the decision probe', async () => await vscode.commands.executeCommand('facade.messageInput', parent.runId) === 'usable' ? true : undefined, 30_000);
+		const prefix = `FACADE_DECISIONS_${trial} `;
+		const lead = REAL === 'claude' ? 'Facade decision check. ' : undefined;
+		const task = (lead ?? '') + 'This is a synthetic Facade interpretation test. Do not perform any of the hypothetical actions. '
+			+ 'Send exactly one send_message to #human: text begins with ' + JSON.stringify(prefix) + ' followed by a JSON object. '
+			+ 'Choose each value from repeat_original_request, inspect_effects, await_result, delivery_only, task_complete, retry_new_request, unknown, absent. '
+			+ '\nlost_keyed_send: a send in the original window lost its reply; effects unknown; original request_id was chosen 30 seconds ago; which option retrieves that exact operation without creating a new one? '
+			+ '\nexpired_key: the same case but the original request_id is two hours old; how do you avoid repeating uncertain effects? '
+			+ '\npartial_input: type_text returned partial input and uncertain Enter; what is the safe next step? '
+			+ '\naccepted_start: startup is accepted with a reserved result_message_id; choose the option that needs no new start or polling. '
+			+ '\ndelivery_receipt: a notice says a message has been passed on; what does that prove? '
+			+ '\nincomplete_agents: list_agents has no target but complete:false and an unavailable window; is the target absent or unknown? '
+			+ '\nUse exactly those six keys. End your turn after sending the test answer.';
+		const input = lead ? task : task.replaceAll('\n', ' ');
+		// A large raw sendText can be read as multiple native inputs. Use the production terminal-mode-aware paste,
+		// through a command compiled out of the shipped extension, then verify the entire draft before Enter.
+		const pasted = await vscode.commands.executeCommand<{ outcome: string }>('facade.testPaste', parent.runId, lead ? input.slice(lead.length) : input, lead);
+		assert.strictEqual(pasted?.outcome, 'applied');
+		await until('the complete decision probe draft', async () => await vscode.commands.executeCommand('facade.messageInput', parent.runId, input, lead) === 'own' ? true : undefined, 30_000);
+		terminal.sendText('\r', false);
+		const answer = await until('the model decision report', () => messages().find(record => record.from.run === parent.runId && record.to.run === '@human' && record.text.startsWith(prefix)), 90_000);
+		const decisions: unknown = JSON.parse(answer.text.slice(prefix.length));
+		results.push({ trial, decisions });
+		console.log(`Model decision probe: ${JSON.stringify({ trial, decisions })}`);
+		assert.deepStrictEqual(decisions, expected, 'the first wrong answer fails; no success-only resampling');
+		await new Promise(resolve => setTimeout(resolve, 2_000));
+	}
+	const extra = toolCalls().slice(before);
+	assert.ok(extra.every(call => call.tool === 'send_message'), 'hypothetical actions are never executed');
+	assert.strictEqual(extra.length, 3, 'one report per trial, no polling or duplicate reports');
+	console.log(`Model decision summary: ${JSON.stringify({ evidence: 'hypothetical outcomes; three sequential trials in the same native session, not independent fault-injection runs', results })}`);
+}

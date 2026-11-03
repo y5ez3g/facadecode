@@ -4,13 +4,10 @@
 
 import * as assert from 'assert';
 import { FacadeError } from '../core/errors';
-import { TOOL_PROTOCOL, ToolAnswer } from '../schema/protocol';
+import { TOOL_PROTOCOL } from '../schema/protocol';
 import { MESSAGE_LIMIT } from '../schema/tools';
-import { assertSameFacts, FACTS, resultOf, runFacts, runId, Setup, setUp, WORKTREE } from './contractFakes';
+import { assertSameFacts, resultOf, runFacts, runId, Setup, setUp, WORKTREE } from './contractFakes';
 import { waitFor } from './util';
-
-/** The headline of an answer: what its text says before the facts. */
-const headlineOf = (answer: ToolAnswer) => answer.text.split('\n')[0];
 
 /** A root the person started, YOLO off, with a child, a grandchild, and an unrelated YOLO root. */
 function team(s: Setup) {
@@ -24,7 +21,7 @@ function team(s: Setup) {
 
 const START = { name: 'backend review', window_id: 'win-1', location_id: 'loc-1', cli: 'claude' };
 
-suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
+suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 
 	let s: Setup;
 	setup(() => s = setUp());
@@ -53,23 +50,23 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			await s.call(runId(99), 'list_agents', {});
 			const calls = s.log.filter(line => line.startsWith('Tool '));
 			assert.strictEqual(calls.length, 4, calls.join('\n'));
-			assert.match(calls[0], /^Tool list_agents by #a1: success in \d+ ms$/);
-			assert.match(calls[1], /^Tool send_message by #a1: failure NOT_FOUND \(\w+\) in \d+ ms$/);
-			assert.match(calls[2], /^Tool an unknown tool by #a1: failure INVALID \(unsupported\) in \d+ ms$/);
-			assert.match(calls[3], new RegExp(`^Tool list_agents by ${runId(99)}: failure NOT_FOUND \\(not_found\\) in \\d+ ms$`));
+			assert.match(calls[0], /^Tool list_agents by #a1: success in \d+ ms; /);
+			assert.match(calls[1], /^Tool send_message by #a1: failure NOT_FOUND \(\w+\) in \d+ ms; /);
+			assert.match(calls[2], /^Tool an unknown tool by #a1: failure INVALID \(unsupported\) in \d+ ms; /);
+			assert.match(calls[3], new RegExp(`^Tool list_agents by ${runId(99)}: failure NOT_FOUND \\(not_found\\) in \\d+ ms; `));
 			assert.ok(!s.log.some(line => line.includes('secret')), s.log.join('\n'));
 		});
 
 		test('the check of text against structure catches a field the text leaves out or misstates', () => {
 			const structured = { status: 'success', data: { agent_id: 'run-1', count: 2 }, effects: { outcome: 'confirmed' } };
-			assertSameFacts({ text: 'Done.\n\nstatus: success\ndata:\n  agent_id: run-1\n  count: 2\neffects:\n  outcome: confirmed', structured, isError: false });
-			assert.throws(() => assertSameFacts({ text: 'Done.\n\nstatus: success\ndata:\n  agent_id: run-1\neffects:\n  outcome: confirmed', structured, isError: false }));
-			assert.throws(() => assertSameFacts({ text: 'Done.\n\nstatus: success\ndata:\n  agent_id: run-1\n  count: 2\neffects:\n  outcome: confirmed', structured, isError: true }));
+			assertSameFacts({ text: JSON.stringify(structured), structured, isError: false });
+			assert.throws(() => assertSameFacts({ text: JSON.stringify({ ...structured, data: { agent_id: 'run-1' } }), structured, isError: false }));
+			assert.throws(() => assertSameFacts({ text: JSON.stringify(structured), structured, isError: true }));
 		});
 
 		test('a call of another tool protocol, or of none, is refused protocol_incompatible before anything is looked at or done', async () => {
 			const { lead } = team(s);
-			for (const protocol of [TOOL_PROTOCOL - 1, undefined]) {
+			for (const protocol of [1, 2, 3, 4, TOOL_PROTOCOL + 1, undefined]) {
 				const answer = await s.service({ caller: lead.id, tool: 'start_agent', arguments: START, protocol });
 				const result = resultOf(answer);
 				assert.deepStrictEqual([result.error?.code, result.error?.reason, result.effects], ['UNAVAILABLE', 'protocol_incompatible', { outcome: 'none' }]);
@@ -101,7 +98,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 
 		test('a window_id other than this window\'s is not found where no other window is known', async () => {
 			const { lead } = team(s);
-			for (const [tool, args] of [['list_start_options', { window_id: 'win-2' }], ['list_agents', { window_id: 'win-2' }], ['start_agent', { ...START, window_id: 'win-2' }]] as const) {
+			for (const [tool, args] of [['list_agents', { window_id: 'win-2' }], ['start_agent', { ...START, window_id: 'win-2' }]] as const) {
 				const result = resultOf(await s.call(lead, tool, args));
 				assert.deepStrictEqual([result.error?.code, result.error?.reason], ['NOT_FOUND', 'not_found'], tool);
 			}
@@ -109,111 +106,78 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 		});
 	});
 
-	suite('list_start_options', () => {
-
-		test('without window_id: the open window, its locations and availability, complete with no unavailable windows', async () => {
+	suite('current discovery through list_agents', () => {
+		test('one snapshot contains folders, worktrees, coalesced CLIs and counts in reach', async () => {
 			const { lead } = team(s);
-			const result = resultOf(await s.call(lead, 'list_start_options'));
+			s.agents.add({ ...lead, model: 'opus', effort: 'high' });
+			const result = resultOf(await s.call(lead, 'list_agents'));
 			assert.strictEqual(result.status, 'success');
-			assert.deepStrictEqual(result.data, {
-				windows: [{
-					window_id: 'win-1', label: 'Design', environment: 'local', available: true,
-					locations: [{ location_id: 'loc-1', label: 'app', path: '/work/app' }, { location_id: 'loc-wt', label: 'fix', path: '/work/app.worktrees/fix' }]
-				}],
-				complete: true,
-				unavailable_windows: []
-			});
+			assert.deepStrictEqual(result.data.counts, { known_windows: 1, responding_windows: 1, folders: 1, locations: 2, worktrees: 1, agents: 3 });
+			const window = result.data.windows[0];
+			assert.deepStrictEqual(window.folders, s.locations[0].folders.map(({ name, uri, path }) => ({ name, uri, path })));
+			assert.deepStrictEqual(window.locations.map((each: { location_id: string }) => each.location_id), ['loc-1', 'loc-wt']);
+			assert.deepStrictEqual(window.clis.map((each: { cli: string; available: boolean }) => [each.cli, each.available]), [['claude', true], ['codex', true], ['qwen', false]]);
+			assert.ok(window.clis.every((each: { location_ids?: string[] }) => each.location_ids === undefined));
+			assert.deepStrictEqual(window.clis[0].overrides, { model: true, effort: true });
+			assert.deepStrictEqual([result.data.agents[0].requested_model, result.data.agents[0].requested_effort], ['opus', 'high']);
+			assert.strictEqual(window.history_log.path, s.deps.historyLog);
 			assert.deepStrictEqual(result.effects, { outcome: 'none' });
 		});
 
-		test('a window with no folder is listed with no location and cannot start an agent', async () => {
+		test('a folderless window remains visible, with zero launch locations', async () => {
 			const { lead } = team(s);
 			s.locations = [];
-			const result = resultOf(await s.call(lead, 'list_start_options'));
-			assert.strictEqual(result.data.windows[0].available, false);
-			assert.match(result.data.windows[0].reason, /No folder is open/);
-			assert.deepStrictEqual(result.data.windows[0].locations, []);
+			s.deps.locations.snapshot = () => ({ folders: [], locations: [], pending: false });
+			const result = resultOf(await s.call(lead, 'list_agents'));
+			assert.deepStrictEqual([result.data.windows[0].locations, result.data.windows[0].clis, result.data.counts.folders], [[], [], 0]);
+			assert.strictEqual(result.data.windows[0].clis_queried, false);
+			assert.strictEqual(result.data.complete, true);
 		});
 
-		test('with window_id the location catalog; with location_id its CLIs; with cli its choices and capabilities', async () => {
+		test('location-specific CLI availability is never presented as window-wide', async () => {
 			const { lead } = team(s);
-			const locations = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1' }));
-			assert.deepStrictEqual(locations.data.locations[0], { location_id: 'loc-1', label: 'app', path: '/work/app', environment: 'local', kind: 'checkout', folder: 'app', opened: true, branch: 'main', main: true, git: 'ok' });
-			assert.strictEqual(locations.data.complete, true);
-			const clis = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1' }));
-			assert.deepStrictEqual(clis.data.clis.map((each: { cli: string; available: boolean }) => [each.cli, each.available]), [['claude', true], ['codex', true], ['qwen', false]]);
-			assert.strictEqual(clis.data.clis[2].problem, 'qwen was not found on PATH.');
-			s.choices.remember('local', 'claude', { model: 'sonnet' });
-			s.choices.remember('local', 'claude', { model: 'opus', effort: 'high' });
-			const cli = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }));
-			assert.deepStrictEqual(cli.data.model.values, ['opus', 'sonnet']);
-			assert.deepStrictEqual([cli.data.model.source, cli.data.model.status, cli.data.model.takes], ['previous_starts', 'partial', true]);
-			assert.deepStrictEqual(cli.data.effort.values, ['high']);
-			assert.deepStrictEqual([cli.data.cli.version, cli.data.cli.version_source], ['2.1.314', undefined]);
-			const capabilities = cli.data.capabilities;
-			// No exact sessions in this product: Resume and Pin come in a later step
-			assert.deepStrictEqual(Object.keys(capabilities), ['activity', 'message_input', 'screen', 'direct_input', 'initial_prompt']);
-			assert.strictEqual(capabilities.activity.state, 'supported');
-			assert.deepStrictEqual(capabilities.message_input, { state: 'supported', reason: 'claude-frame reads its input by its layout.', adapter: 'claude-frame' });
-			assert.deepStrictEqual([capabilities.screen.state, capabilities.direct_input.state], ['supported', 'supported']);
-			assert.deepStrictEqual(capabilities.initial_prompt, { state: 'unverified', reason: 'A positional prompt argument, not yet verified.', path: 'native' });
-			for (const each of Object.values(capabilities) as { reason: string }[]) {
-				assert.ok(each.reason.length > 0);
-			}
+			const list = s.deps.clis.list;
+			s.deps.clis.list = async location => ({ ...await list(location), clis: [{ id: 'claude', displayName: 'Claude Code', available: location.id === 'loc-1' }] });
+			const rows = resultOf(await s.call(lead, 'list_agents')).data.windows[0].clis;
+			assert.deepStrictEqual(rows.map((each: { available: boolean; location_ids: string[] }) => [each.available, each.location_ids]), [[true, ['loc-1']], [false, ['loc-wt']]]);
+			const selected = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-wt' }));
+			assert.strictEqual(selected.data.windows[0].clis.length, 1);
+			assert.deepStrictEqual(selected.data.windows[0].counts, { folders: 1, locations: 1, worktrees: 1, agents: 0 });
 		});
 
-		test('a malformed custom catalog reports its configuration error while keeping valid built-ins available', async () => {
+		test('a malformed custom catalog keeps valid built-ins, while failed scans are explicitly partial', async () => {
 			const { lead } = team(s);
 			const list = s.deps.clis.list;
 			const problems = [{ setting: 'facade.custom', problem: 'facade.custom must be an object; received array' }];
 			s.deps.clis.list = async location => ({ ...await list(location), problems });
-			const result = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1' }));
-			assert.deepStrictEqual(result.data.problems, problems);
-			assert.ok(result.data.clis.some((each: { cli: string; available: boolean }) => each.cli === 'claude' && each.available));
+			const result = resultOf(await s.call(lead, 'list_agents'));
+			assert.deepStrictEqual(result.data.windows[0].problems, problems);
+			assert.ok(result.data.windows[0].clis[0].available);
+			s.deps.clis.list = async location => { if (location.id === 'loc-wt') { throw new Error('Directory unreadable'); } return list(location); };
+			const partial = resultOf(await s.call(lead, 'list_agents'));
+			assert.strictEqual(partial.data.complete, false);
+			assert.strictEqual(partial.data.windows[0].unavailable_locations[0].location_id, 'loc-wt');
+			assert.deepStrictEqual(partial.data.windows[0].clis[0].location_ids, ['loc-1']);
 		});
 
-		test('a CLI that takes no effort says so; one without adapter facts is unverified, never assumed', async () => {
+		test('no model catalog: overrides are adapter facts and details add current capabilities', async () => {
 			const { lead } = team(s);
-			const codex = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'codex' }));
-			assert.deepStrictEqual(codex.data.effort, { takes: false, values: [], source: 'adapter', status: 'complete', reason: 'Codex takes no explicit effort.' });
-			assert.strictEqual(codex.data.capabilities.activity.state, 'unverified');
-			assert.deepStrictEqual(codex.data.capabilities.initial_prompt, { state: 'unavailable', reason: 'It maps no prompt argument.', path: 'post_start' });
-			const qwen = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'qwen' }));
-			assert.deepStrictEqual([qwen.data.capabilities.activity.state, qwen.data.capabilities.initial_prompt.state, qwen.data.model.takes], ['unverified', 'unverified', undefined]);
+			const window = resultOf(await s.call(lead, 'list_agents', { details: true })).data.windows[0];
+			assert.deepStrictEqual(window.clis[1].overrides, { model: true, effort: false });
+			assert.strictEqual(window.clis[0].version, '2.1.314');
+			assert.strictEqual(window.clis[0].message_input.state, 'supported');
+			assert.strictEqual(window.clis[0].model, undefined);
+			s.deps.clis.describe = () => { throw new Error('Unreadable adapter'); };
+			const unknown = resultOf(await s.call(lead, 'list_agents')).data.windows[0].clis;
+			assert.deepStrictEqual(unknown[0].overrides, { model: 'unknown', effort: 'unknown' });
 		});
 
-		test('message input is what the CLI\'s reader states, whatever its version (D89): supported with its reader; without one, unavailable and messages fail with unsupported', async () => {
+		test('a location needs its window; invalid selections and the removed discovery tool fail without effects', async () => {
 			const { lead } = team(s);
-			const read = { state: 'supported' as const, reason: 'claude-frame reads Claude Code\'s input by its layout.' };
-			s.deps.clis = {
-				list: s.deps.clis.list,
-				describe: () => ({ launches: [{ ...FACTS[0], version: { version: '9.9.9', source: 'a version never recorded' }, input: { adapter: 'claude-frame', capability: read } }, { ...FACTS[1], input: undefined }, FACTS[2]] })
-			};
-			const claude = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }));
-			assert.deepStrictEqual(claude.data.capabilities.message_input, { ...read, adapter: 'claude-frame' });
-			const codex = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'codex' }));
-			assert.strictEqual(codex.data.capabilities.message_input.state, 'unavailable');
-			assert.match(codex.data.capabilities.message_input.reason, /fails with unsupported; type_text still works/);
-		});
-
-		test('where the adapter\'s facts cannot be read, its capabilities are unverified with that reason', async () => {
-			const { lead } = team(s);
-			s.deps.clis = { list: s.deps.clis.list, describe: () => { throw new Error('PATH unreadable'); } };
-			const result = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }));
-			assert.strictEqual(result.data.capabilities.activity.state, 'unverified');
-			assert.match(result.data.capabilities.activity.reason, /PATH unreadable/);
-			assert.strictEqual(result.data.capabilities.session, undefined);
-			assert.strictEqual(result.data.model.takes, undefined);
-		});
-
-		test('a subordinate selection names its parent, and an unknown location or CLI is not found', async () => {
-			const { lead } = team(s);
-			const noWindow = resultOf(await s.call(lead, 'list_start_options', { location_id: 'loc-1' }));
+			const noWindow = resultOf(await s.call(lead, 'list_agents', { location_id: 'loc-1' }));
 			assert.deepStrictEqual([noWindow.error?.reason, noWindow.data.missing], ['missing_argument', ['window_id']]);
-			const noLocation = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', cli: 'claude' }));
-			assert.deepStrictEqual(noLocation.data.missing, ['location_id']);
-			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-9' })).error?.reason, 'not_found');
-			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-1', location_id: 'loc-1', cli: 'kimi' })).error?.reason, 'not_found');
+			assert.strictEqual(resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-9' })).error?.reason, 'not_found');
+			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options')).error?.reason, 'unsupported');
 		});
 	});
 
@@ -224,32 +188,28 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(worker, 'start_agent', { ...START, model: 'opus', effort: 'high' });
 			const result = resultOf(answer);
 			// In the background, the caller's tree joined from its own facts: its run and its root (RULES-4.3, LIFECYCLE-2.2)
-			assert.deepStrictEqual(s.agents.launched, [{ name: 'backend review', location: 'loc-1', cli: 'claude', model: 'opus', effort: 'high', origin: 'agent', creator: { run: worker.id, root: runId(1), label: 'worker #a2' } }]);
-			const id = runId(100);
-			assert.strictEqual(result.status, 'success');
+			assert.deepStrictEqual(s.agents.launched, [{ name: 'backend review', location: 'loc-1', cli: 'claude', model: 'opus', effort: 'high', origin: 'agent', startCallId: 'call-1', resultMessageId: 'm-1', creator: { run: worker.id, root: runId(1), label: 'worker #a2' } }]);
+						assert.strictEqual(result.status, 'success');
 			assert.deepStrictEqual(result.data, {
-				agent_id: id, reference: '@backend review #a100', alias: '#a100', name: 'backend review', window_id: 'win-1', window: 'Design', environment: 'local',
+				agent_id: '#a100', name: 'backend review', window_id: 'win-1', window: 'Design', environment: 'local',
 				location_id: 'loc-1', cwd: '/work/app', cli: 'claude', creator: worker.id, root: runId(1), yolo: true,
 				process_state: 'running', tools_state: 'connecting', requested_model: 'opus', requested_effort: 'high'
 			});
-			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', agent_id: id });
+			assert.deepStrictEqual(result.effects, { outcome: 'confirmed' });
 			assert.strictEqual(answer.isError, false);
-			assert.match(answer.text, /^Started @backend review #a100 \(run-0+64\) with claude in \/work\/app: its process is running\./);
 			// The explicit choices of a start that reached running are offered later
-			assert.deepStrictEqual(s.choices.list('local', 'claude'), { model: ['opus'], effort: ['high'] });
 		});
 
 		test('a request ID given again by the same caller answers the agent its first start started, starting nothing; another caller\'s is its own (D110)', async () => {
 			const { lead, worker } = team(s);
 			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-1' }));
 			// Started a minute before the window's clock: within the hour a request ID answers for
-			const started = s.agents.runs.get(first.data.agent_id)!;
+			const started = s.agents.list().find(run => run.alias === first.data.agent_id)!;
 			s.agents.runs.set(started.id, { ...started, createdAt: Date.UTC(2026, 9, 28, 21, 59, 0) });
 			const again = await s.call(worker, 'start_agent', { ...START, name: 'something else', request_id: 'review-1' });
 			const repeated = resultOf(again);
 			assert.deepStrictEqual([s.agents.launched.length, s.agents.launched[0].requestId], [1, 'review-1']);
-			assert.deepStrictEqual([repeated.status, repeated.data.agent_id, repeated.data.repeated, repeated.data.request_id, repeated.effects], ['success', first.data.agent_id, true, 'review-1', { outcome: 'none', agent_id: first.data.agent_id }]);
-			assert.match(headlineOf(again), /^Request review-1 started @backend review #a100 \(run-0+64\) already, at .*: nothing was started again\./);
+			assert.deepStrictEqual([repeated.status, repeated.data.agent_id, repeated.data.repeated, repeated.data.request_id, repeated.effects], ['success', first.data.agent_id, true, 'review-1', { outcome: 'none' }]);
 			// Another caller's ID of the same text, or this caller's new one, starts anew; and one older than an hour no longer answers
 			await s.call(lead, 'start_agent', { ...START, request_id: 'review-1' });
 			await s.call(worker, 'start_agent', { ...START, request_id: 'review-2' });
@@ -261,12 +221,11 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 		test('a request ID given again answers as its start went: still starting is accepted, a start that failed is its failure, nothing started again (D110, D118)', async () => {
 			const { worker } = team(s);
 			const first = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' }));
-			const started = s.agents.runs.get(first.data.agent_id)!;
+			const started = s.agents.list().find(run => run.alias === first.data.agent_id)!;
 			const at = Date.UTC(2026, 9, 28, 21, 59, 0);
 			s.agents.runs.set(started.id, { ...started, createdAt: at, lifecycle: 'starting' });
 			const starting = await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' });
-			assert.deepStrictEqual([resultOf(starting).status, resultOf(starting).effects], ['accepted', { outcome: 'pending', agent_id: started.id }]);
-			assert.match(headlineOf(starting), /Its process is still starting\. The start's outcome is recorded later as a Facade result/);
+			assert.deepStrictEqual([resultOf(starting).status, resultOf(starting).effects], ['accepted', { outcome: 'pending' }]);
 			s.agents.runs.set(started.id, { ...started, createdAt: at, lifecycle: 'ended', end: { kind: 'failed', at }, error: { reason: 'claude was not found', source: 'launch', at } });
 			const failed = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'review-3' }));
 			assert.deepStrictEqual([failed.status, failed.error?.code, failed.error?.reason, failed.data.repeated], ['failure', 'FAILED', 'launch_failed', true]);
@@ -279,7 +238,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const saved = runFacts(100, { creator: worker.id, requestId: 'kept-start', lifecycle: 'ended' });
 			s.agents.requested = () => saved;
 			const ended = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'kept-start' }));
-			assert.deepStrictEqual([ended.status, ended.data.agent_id, ended.data.process, ended.data.repeated], ['success', saved.id, 'unknown', true]);
+			assert.deepStrictEqual([ended.status, ended.data.agent_id, ended.data.process_state, ended.data.repeated], ['success', saved.alias, 'unknown', true]);
 			s.agents.requested = () => ({ ...saved, lifecycle: 'starting' });
 			const interrupted = resultOf(await s.call(worker, 'start_agent', { ...START, request_id: 'kept-start' }));
 			assert.deepStrictEqual([interrupted.status, interrupted.error?.reason, interrupted.effects.outcome, s.agents.launched.length], ['failure', 'window_unavailable', 'unknown', 0]);
@@ -290,9 +249,8 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			s.messages.respond = () => ({ status: 'success', delivery: { status: 'success', effects: { outcome: 'none' }, attempts: 0, via: 'read' } });
 			const sent = await s.call(lead, 'send_message', { to: worker.id, text: 'Read this.' });
 			assert.strictEqual(resultOf(sent).data.disposition, 'read_messages');
-			assert.match(headlineOf(sent), /through read_messages/);
-			const started = await s.call(lead, 'start_agent', { ...START, prompt: 'Read the first task.' });
-			assert.match(headlineOf(started), /prompt #m2 was delivered through read_messages after startup/);
+			const started = resultOf(await s.call(lead, 'start_agent', { ...START, prompt: 'Read the first task.' }));
+			assert.deepStrictEqual([started.data.prompt.path, started.data.prompt.status, started.data.prompt.delivered_via], ['post_start', 'success', 'read']);
 		});
 
 		test('a native prompt is the caller\'s headed message, its ID taken before the launch; used unverified, its outcome is unknown, never invented', async () => {
@@ -301,17 +259,16 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.\nThen the tests.' });
 			const result = resultOf(answer);
 			// The CLI is given the message as any message goes: header, whole text, footer - the sender and window named, not the recipient
-			assert.strictEqual(s.agents.launched[0].prompt, '[Facade message #m1 | from @lead #a1 | window Design]\nReview the changes.\nThen the tests.\n[/Facade message #m1]');
+			assert.strictEqual(s.agents.launched[0].prompt, '📨 Message from lead (#a1) · #m1\nReview the changes.\nThen the tests.');
 			assert.strictEqual(s.agents.launched[0].promptLine, 'Review the changes.');
 			assert.deepStrictEqual(s.messages.prompts, [{
-				request: { id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.\nThen the tests.', callId: 'call-1' },
-				// Its launch delivered it: one state, so it is no message waiting in the child's inbox (COLLABORATION-3.1)
-				delivery: { status: 'success', effects: { outcome: 'unknown' }, attempts: 0, via: 'launch', deliveredAt: Date.UTC(2026, 9, 28, 22, 0, 0) }
+				request: { id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.\nThen the tests.', callId: 'call-1', initialPrompt: { path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' } } },
+				// An unverified mapping leaves acceptance unknown; an explicit inbox read may deliver it later.
+				delivery: { status: 'unknown', effects: { outcome: 'unknown' }, attempts: 0, via: 'launch', reason: 'submission_unconfirmed' }
 			}]);
 			assert.deepStrictEqual(s.messages.sent, []);
-			assert.deepStrictEqual(result.data.prompt, { message_id: 'm-1', alias: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' }, status: 'success', effects: { outcome: 'unknown' } });
+			assert.deepStrictEqual(result.data.prompt, { message_id: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' }, status: 'unknown', effects: { outcome: 'unknown' }, recovery: { action: 'inspect_effects', check: { tool: 'read_screen', arguments: { agent: '#a100' } } } });
 			assert.strictEqual(result.status, 'success');
-			assert.match(headlineOf(answer), /that mapping is unverified, so whether the CLI accepted the prompt is not known/);
 		});
 
 		test('a native prompt whose mapping is supported is confirmed accepted', async () => {
@@ -328,12 +285,12 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			s.messages.recordError = new Error('EACCES: permission denied');
 			const answer = await s.call(lead, 'start_agent', { ...START, prompt: 'Go.' });
 			const result = resultOf(answer);
-			assert.deepStrictEqual([result.status, result.effects], ['success', { outcome: 'confirmed', agent_id: runId(100) }]);
+			assert.deepStrictEqual([result.status, result.effects], ['success', { outcome: 'confirmed' }]);
 			assert.deepStrictEqual(result.data.prompt, {
-				message_id: 'm-1', alias: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' },
-				status: 'failure', reason: 'unexpected_error', message: 'EACCES: permission denied', effects: { outcome: 'unknown' }
+				message_id: '#m1', path: 'native', capability: { state: 'unverified', reason: 'Not yet verified.' },
+				status: 'failure', reason: 'unexpected_error', message: 'EACCES: permission denied', effects: { outcome: 'unknown' },
+				recovery: { action: 'inspect_effects', check: { tool: 'read_screen', arguments: { agent: '#a100' } } }
 			});
-			assert.match(headlineOf(answer), /could not be recorded: EACCES: permission denied The agent keeps running\./);
 		});
 
 		test('without a native mapping the prompt goes after startup as the caller\'s ordinary message, reported as its first response', async () => {
@@ -343,14 +300,13 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const result = resultOf(answer);
 			// The ID taken before the launch is the one it is sent with
 			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
-			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1' }]);
+			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' } } }]);
 			assert.strictEqual(result.status, 'success');
 			assert.deepStrictEqual(result.data.prompt, {
-				message_id: 'm-1', alias: '#m1', path: 'post_start',
+				message_id: '#m1', path: 'post_start',
 				capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' },
 				status: 'pending', obstacle: 'input_unknown', deadline: '2026-10-28T23:00:15.000Z', effects: { outcome: 'pending', text_written: 'none', enter_written: false }
 			});
-			assert.match(headlineOf(answer), /prompt #m1 is still being delivered after startup; its outcome is recorded later as a Facade result in your inbox/);
 		});
 
 		test('a prompt that goes after startup waits for what the start types before the first turn: its budget starts once the tools are ready (COLLABORATION-2.2)', async () => {
@@ -396,7 +352,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(s.agents.launched[0].worktree, { branch: 'review-api', baseRef: 'HEAD' });
 			s.agents.settle(runId(100), { state: 'running' }, { location: WORKTREE.id, cwd: WORKTREE.path });
 			const result = resultOf(await answering);
-			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', agent_id: runId(100), worktree_created: WORKTREE.path });
+			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', worktree_created: WORKTREE.path });
 			assert.deepStrictEqual([result.data.requested_worktree, result.data.cwd], [undefined, WORKTREE.path]);
 		});
 
@@ -409,9 +365,8 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const result = resultOf(answer);
 			assert.strictEqual(result.status, 'accepted');
 			assert.strictEqual(answer.isError, false);
-			assert.deepStrictEqual(result.effects, { outcome: 'pending', agent_id: runId(100) });
+			assert.deepStrictEqual(result.effects, { outcome: 'pending' });
 			assert.deepStrictEqual([result.data.process_state, result.data.phase], ['starting', undefined]);
-			assert.match(headlineOf(answer), /The start's outcome is recorded later as a Facade result in your inbox, and typed into your terminal where your CLI's message input allows\./);
 			assert.strictEqual(s.messages.reports.length, 0);
 			s.agents.settle(runId(100), { state: 'running' });
 			await waitFor(() => s.messages.reports.length === 1);
@@ -430,10 +385,9 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const result = resultOf(answer);
 			assert.deepStrictEqual([result.status, result.error?.code, result.error?.reason], ['failure', 'FAILED', 'launch_failed']);
 			assert.match(result.error!.message, /claude was not found on PATH\./);
-			assert.deepStrictEqual(result.effects, { outcome: 'partial', agent_id: runId(100) });
+			assert.deepStrictEqual(result.effects, { outcome: 'partial' });
 			assert.strictEqual(result.data.process_state, 'failed');
 			assert.strictEqual(answer.isError, true);
-			assert.deepStrictEqual(s.choices.list('local', 'claude'), { model: [], effort: [] });
 		});
 
 		test('nothing is accepted where the location, CLI, name or a requested choice cannot be used', async () => {
@@ -472,16 +426,16 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 	suite('list_agents', () => {
 
 		test('lists the caller\'s whole creation tree without YOLO, and every agent with it', async () => {
-			const { lead, helper, stranger } = team(s);
+			const { helper, stranger } = team(s);
 			const tree = resultOf(await s.call(helper, 'list_agents'));
-			assert.deepStrictEqual(tree.data.agents.map((each: { alias: string }) => each.alias), ['#a1', '#a2', '#a3']);
+			assert.deepStrictEqual(tree.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a1', '#a2', '#a3']);
 			assert.deepStrictEqual([tree.data.complete, tree.data.unavailable_windows, tree.data.next_cursor], [true, [], undefined]);
 			const all = resultOf(await s.call(stranger, 'list_agents'));
-			assert.deepStrictEqual(all.data.agents.map((each: { alias: string }) => each.alias), ['#a1', '#a2', '#a3', '#a4']);
+			assert.deepStrictEqual(all.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a1', '#a2', '#a3', '#a4']);
 			assert.deepStrictEqual(all.data.agents[0], {
-				agent_id: lead.id, alias: '#a1', reference: '@lead #a1', name: 'lead', window_id: 'win-1', window: 'Design', environment: 'local',
-				location_id: 'loc-1', cwd: '/work/app', cli: 'claude', creator: '#human', root: lead.id, yolo: false, created_at: '1970-01-01T00:00:01.001Z',
-				process: 'running', activity: 'not_working', tools: 'available', observed_at: '2026-10-28T22:00:00.000Z', stale: false
+				agent_id: '#a1', name: 'lead', window_id: 'win-1', environment: 'local',
+				location_id: 'loc-1', cwd: '/work/app', cli: 'claude', yolo: false,
+				process_state: 'running', activity: 'not_working', tools_state: 'available', observed_at: '2026-10-28T22:00:00.000Z', stale: false
 			});
 			for (const each of all.data.agents) {
 				assert.ok(!Object.keys(each).some(key => /task|operation|credential/.test(key)));
@@ -496,20 +450,20 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 					: { state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI.' }
 			};
 			const agents = resultOf(await s.call(lead, 'list_agents')).data.agents as { agent_id: string; message_input: unknown }[];
-			assert.deepStrictEqual(agents.filter(each => [lead.id, helper.id].includes(each.agent_id)).map(each => each.message_input), [
-				{ state: 'supported', reason: 'claude-frame reads Claude Code\'s input by its layout.' },
+			assert.deepStrictEqual(agents.filter(each => [lead.alias, helper.alias].includes(each.agent_id)).map(each => each.message_input), [
+				{ state: 'supported' },
 				{ state: 'unavailable', reason: 'Facade cannot read the message input of Example CLI.' }
 			]);
 		});
 
-		test('ended agents only with include_ended, with their retained error and exit, never as live', async () => {
+		test('ended agents only by targeted lookup, with their retained error and exit, never as live', async () => {
 			const { lead } = team(s);
 			s.agents.add(runFacts(5, { name: 'crashed', root: lead.id, lifecycle: 'ended', end: { kind: 'abnormal', code: 1, at: Date.UTC(2026, 9, 28, 21) }, error: { reason: 'Exited with code 1', source: 'exit', at: Date.UTC(2026, 9, 28, 21) } }));
 			const live = resultOf(await s.call(lead, 'list_agents'));
-			assert.ok(!live.data.agents.some((each: { alias: string }) => each.alias === '#a5'));
-			const ended = resultOf(await s.call(lead, 'list_agents', { include_ended: true }));
-			const crashed = ended.data.agents.find((each: { alias: string }) => each.alias === '#a5');
-			assert.deepStrictEqual([crashed.process, crashed.pid, crashed.exit, crashed.error.reason], ['ended', undefined, { kind: 'abnormal', code: 1, at: '2026-10-28T21:00:00.000Z' }, 'Exited with code 1']);
+			assert.ok(!live.data.agents.some((each: { agent_id: string }) => each.agent_id === '#a5'));
+			const ended = resultOf(await s.call(lead, 'list_agents', { agent: '#a5' }));
+			const crashed = ended.data.agents.find((each: { agent_id: string }) => each.agent_id === '#a5');
+			assert.deepStrictEqual([crashed.process_state, crashed.pid, crashed.exit, crashed.error.reason], ['ended', undefined, { kind: 'abnormal', code: 1, at: '2026-10-28T21:00:00.000Z' }, 'Exited with code 1']);
 		});
 
 		test('pages with next_cursor until the last page, and refuses a cursor it did not give', async () => {
@@ -521,10 +475,20 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			let cursor: string | undefined;
 			do {
 				const page = resultOf(await s.call(stranger, 'list_agents', { limit: 3, ...cursor ? { cursor } : {} }));
-				seen.push(...page.data.agents.map((each: { alias: string }) => each.alias));
+				seen.push(...page.data.agents.map((each: { agent_id: string }) => each.agent_id));
 				cursor = page.data.next_cursor;
 			} while (cursor);
 			assert.deepStrictEqual(seen, ['#a1', '#a2', '#a3', '#a4', '#a10', '#a11', '#a12', '#a13', '#a14']);
+			const first = resultOf(await s.call(stranger, 'list_agents', { limit: 2 }));
+			for (const selection of [{ include_ended: true }, { window_id: 'win-1' }]) {
+				const changed = resultOf(await s.call(stranger, 'list_agents', { cursor: first.data.next_cursor, ...selection }));
+				assert.strictEqual(changed.error?.reason, 'invalid_argument');
+			}
+			const next = resultOf(await s.call(stranger, 'list_agents', { cursor: first.data.next_cursor, limit: 2, details: true }));
+			assert.deepStrictEqual(next.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a3', '#a4']);
+			const ended = resultOf(await s.call(stranger, 'list_agents', { limit: 2, window_id: 'win-1' }));
+			const selected = resultOf(await s.call(stranger, 'list_agents', { cursor: ended.data.next_cursor, window_id: 'win-1', agent: '#a3' }));
+			assert.strictEqual(selected.error?.reason, 'invalid_argument', 'targeting an agent changes selection even in the same window');
 			const bad = resultOf(await s.call(stranger, 'list_agents', { cursor: 'nonsense' }));
 			assert.deepStrictEqual([bad.error?.reason, bad.data.invalid[0].field], ['invalid_argument', 'cursor']);
 		});
@@ -537,8 +501,8 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(lead, 'stop_agent', { agent: '@worker' });
 			const result = resultOf(answer);
 			assert.deepStrictEqual(s.agents.closed, [worker.id]);
-			assert.deepStrictEqual(result.data, { agent_id: worker.id, reference: '@worker #a2', process_state: 'ended', cleanup: 'terminated' });
-			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', agent_id: worker.id });
+			assert.deepStrictEqual(result.data, { agent_id: worker.alias, closed: true, process_state: 'ended', cleanup: 'terminated' });
+			assert.deepStrictEqual(result.effects, { outcome: 'confirmed' });
 			assert.ok(s.agents.get(runId(3)), 'the child keeps running');
 		});
 
@@ -549,7 +513,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([ended.status, ended.data.already_ended, ended.data.cleanup], ['success', true, 'already_ended']);
 			s.agents.closeWith = 'unconfirmed';
 			const unconfirmed = resultOf(await s.call(lead, 'stop_agent', { agent: '#a3' }));
-			assert.deepStrictEqual([unconfirmed.status, unconfirmed.data.process_state, unconfirmed.effects.outcome], ['success', 'unknown', 'partial']);
+			assert.deepStrictEqual([unconfirmed.status, unconfirmed.data.process_state, unconfirmed.effects.outcome], ['failure', 'unknown', 'partial']);
 			s.agents.closeWith = 'failed';
 			const failed = resultOf(await s.call(lead, 'stop_agent', { agent: lead.id }));
 			assert.deepStrictEqual([failed.status, failed.error?.reason, failed.effects.outcome], ['failure', 'cleanup_failed', 'partial']);
@@ -572,8 +536,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			s.timeout = 0.02;
 			const answer = await s.call(lead, 'stop_agent', { agent: worker.id });
 			const result = resultOf(answer);
-			assert.deepStrictEqual([result.status, result.data.cleanup, result.effects], ['accepted', 'pending', { outcome: 'pending', agent_id: worker.id }]);
-			assert.match(headlineOf(answer), /that outcome is recorded later as a Facade result in your inbox/);
+			assert.deepStrictEqual([result.status, result.data.cleanup, result.effects], ['accepted', 'pending', { outcome: 'pending' }]);
 			finish('terminated');
 			await waitFor(() => s.messages.reports.length === 1);
 			assert.deepStrictEqual([s.messages.reports[0].to, s.messages.reports[0].callId, s.messages.reports[0].agent], [lead.id, 'call-1', worker.id]);
@@ -588,7 +551,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(lead, 'send_message', { to: '@worker', text: 'Please review.' });
 			const result = resultOf(answer);
 			assert.deepStrictEqual(s.messages.sent, [{ from: lead.id, to: worker.id, text: 'Please review.', elapsedMs: 7, callId: 'call-1' }]);
-			assert.deepStrictEqual(result.data, { message_id: 'm-1', alias: '#m1', target: worker.id, target_reference: '@worker #a2', length: 14, disposition: 'submitted_to_cli' });
+			assert.deepStrictEqual(result.data, { message_id: '#m1', target: worker.alias, disposition: 'submitted_to_cli' });
 			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', text_written: 'full', enter_written: true });
 		});
 
@@ -602,14 +565,12 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const repeated = resultOf(again);
 			assert.deepStrictEqual([s.messages.sent.length, s.messages.sent[0].requestId], [1, 'ask-1']);
 			assert.deepStrictEqual([repeated.status, repeated.data.message_id, repeated.data.repeated], ['success', first.data.message_id, true]);
-			assert.match(headlineOf(again), /^Request ask-1 sent message #m1 to @worker #a2 already: nothing was sent again\. It was delivered\.$/);
 			// One that was not delivered stays so; a new request ID sends anew
 			s.messages.respond = () => ({ status: 'failure', reason: 'input_draft' });
 			await s.call(lead, 'send_message', { to: '@worker', text: 'Second.', request_id: 'ask-2' });
 			s.messages.records[1] = { ...s.messages.records[1], at: minuteAgo };
 			const failed = await s.call(lead, 'send_message', { to: '@worker', text: 'Second.', request_id: 'ask-2' });
 			assert.strictEqual(resultOf(failed).status, 'failure');
-			assert.match(headlineOf(failed), /A new request_id sends it anew\.$/);
 			assert.strictEqual(s.messages.sent.length, 2);
 		});
 
@@ -630,10 +591,9 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(lead, 'send_message', { to: worker.id, text: 'x' });
 			const pending = resultOf(answer);
 			assert.deepStrictEqual([pending.status, pending.data.deadline, pending.data.obstacle, pending.effects.outcome], ['accepted', '2026-10-28T23:00:15.000Z', 'input_draft', 'pending']);
-			assert.match(headlineOf(answer), /its outcome is recorded later as a Facade result in your inbox/);
 			s.messages.respond = () => ({ status: 'failure', reason: 'unsupported' });
 			const failed = resultOf(await s.call(lead, 'send_message', { to: worker.id, text: 'x' }));
-			assert.deepStrictEqual([failed.error?.code, failed.error?.reason, failed.data.message_id, failed.effects.outcome], ['UNAVAILABLE', 'unsupported', 'm-2', 'none']);
+			assert.deepStrictEqual([failed.error?.code, failed.error?.reason, failed.data.message_id, failed.effects.outcome], ['UNAVAILABLE', 'unsupported', '#m2', 'none']);
 			assert.match(failed.error!.message, /Facade cannot type messages into the recipient's CLI; type_text still reaches its terminal/);
 		});
 
@@ -641,7 +601,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const { lead, worker } = team(s);
 			for (const to of ['#human', '@human', 'human']) {
 				const result = resultOf(await s.call(worker, 'send_message', { to, text: 'Done.' }));
-				assert.deepStrictEqual([result.data.target, result.data.target_reference, result.data.disposition], ['#human', '#human', 'notified'], to);
+				assert.deepStrictEqual([result.data.target, result.data.disposition], ['#human', 'notified'], to);
 			}
 			assert.deepStrictEqual(s.messages.sent.map(each => each.to), ['@human', '@human', '@human']);
 			// An agent named human in reach makes @human ambiguous; #human and its ID still decide
@@ -651,7 +611,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([ambiguous.error?.code, ambiguous.error?.reason], ['INVALID', 'ambiguous_reference']);
 			assert.match(ambiguous.error!.message, /Use #human for the person, or the agent's ID/);
 			assert.strictEqual(resultOf(await s.call(worker, 'send_message', { to: '#human', text: 'You.' })).data.target, '#human');
-			assert.strictEqual(resultOf(await s.call(worker, 'send_message', { to: '#a9', text: 'It.' })).data.target, named.id);
+			assert.strictEqual(resultOf(await s.call(worker, 'send_message', { to: '#a9', text: 'It.' })).data.target, named.alias);
 			// Outside the caller's reach the agent named human makes no ambiguity
 			const outsider = runFacts(10, { name: 'outsider' });
 			s.agents.add(outsider);
@@ -670,7 +630,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const mine = s.messages.deliver(worker, lead, 'question');
 			const reply = resultOf(await s.call(lead, 'send_message', { to: '#a2', text: 'answer', reply_to: mine.alias }));
 			assert.strictEqual(s.messages.sent[0].replyTo, mine.id);
-			assert.strictEqual(reply.data.reply_to, mine.id);
+			assert.strictEqual(reply.data.reply_to, mine.alias);
 		});
 	});
 
@@ -684,20 +644,19 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const second = s.messages.undelivered(helper, lead, 'two\nlines', 'pending');
 			const answer = await s.call(lead, 'read_messages');
 			const result = resultOf(answer);
-			assert.deepStrictEqual(result.data.messages.map((each: { message_id: string; delivery: { status: string } }) => [each.message_id, each.delivery.status]), [[first.id, 'failure'], [second.id, 'pending']]);
+			assert.deepStrictEqual(result.data.messages.map((each: { message_id: string; delivery: { status: string } }) => [each.message_id, each.delivery.status]), [[first.alias, 'failure'], [second.alias, 'pending']]);
 			assert.deepStrictEqual(result.data.messages[0], {
-				message_id: first.id, alias: first.alias, kind: 'message', from: worker.id, from_reference: '@worker #a2', to: lead.id, to_reference: '@lead #a1',
-				at: new Date(first.at).toISOString(), window: 'win-1', environment: 'local', length: 3, text: 'one',
-				delivery: { status: 'failure', reason: 'input_draft', effects: { outcome: 'none', text_written: 'none', enter_written: false }, attempts: 5 }
+				message_id: first.alias, kind: 'message', from: '@worker #a2',
+				at: new Date(first.at).toISOString(), window: 'win-1', environment: 'local', text: 'one',
+				delivery: { status: 'failure', reason: 'input_draft', effects: { outcome: 'none', text_written: 'none', enter_written: false } }
 			});
 			assert.strictEqual(result.data.messages[1].delivery.deadline, '2026-10-28T23:00:15.000Z');
-			assert.match(answer.text, /\n {6}text: \|-\n {8}two\n {8}lines\n/);
 			assert.deepStrictEqual(s.messages.delivered, [{ run: lead.id, ids: [first.id, second.id] }]);
 			const again = resultOf(await s.call(lead, 'read_messages'));
-			assert.deepStrictEqual([again.data.messages, headlineOf(await s.call(lead, 'read_messages'))], [[], 'Nothing is waiting for you: every message sent to you was delivered.']);
+			assert.deepStrictEqual([again.status, again.data.messages], ['success', []]);
 			const all = resultOf(await s.call(lead, 'read_messages', { all: true }));
 			assert.deepStrictEqual(all.data.messages.map((each: { message_id: string; delivery: { delivered_via: string } }) => [each.message_id, each.delivery.delivered_via]),
-				[[first.id, 'read'], [seen.id, 'terminal'], [second.id, 'read']]);
+				[[first.alias, 'read'], [seen.alias, 'terminal'], [second.alias, 'read']]);
 		});
 
 		test('records are delivered once the answer was handed back, never before; one not handed back is read again', async () => {
@@ -707,7 +666,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual([resultOf(served.answer).data.messages.length, s.messages.delivered], [1, []]);
 			// That answer did not reach the shim: the same record comes again, still not delivered
 			const again = await s.serve({ caller: lead.id, tool: 'read_messages', arguments: {} });
-			assert.deepStrictEqual(resultOf(again.answer).data.messages.map((each: { message_id: string; delivery: { status: string } }) => [each.message_id, each.delivery.status]), [[record.id, 'failure']]);
+			assert.deepStrictEqual(resultOf(again.answer).data.messages.map((each: { message_id: string; delivery: { status: string } }) => [each.message_id, each.delivery.status]), [[record.alias, 'failure']]);
 			again.delivered!();
 			assert.deepStrictEqual(s.messages.delivered, [{ run: lead.id, ids: [record.id] }]);
 			// Nothing read, nothing to deliver
@@ -727,7 +686,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const { lead, worker } = team(s);
 			s.messages.report({ to: lead.id, callId: 'call-41', agent: worker.id, text: 'Started @worker #a2.' });
 			const [result] = resultOf(await s.call(lead, 'read_messages')).data.messages;
-			assert.deepStrictEqual([result.kind, result.from, result.call_id, result.agent, result.agent_reference], ['result', 'facade', 'call-41', worker.id, '@worker #a2']);
+			assert.deepStrictEqual([result.kind, result.from, result.call_id, result.agent], ['result', 'facade', 'call-41', worker.alias]);
 		});
 
 		test('IDs are looked up in the caller\'s inbox only, even with YOLO', async () => {
@@ -764,7 +723,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			assert.ok(file.text.includes(`[Facade message ${a.alias} | from @worker #a2 | to @lead #a1 | ${new Date(a.at).toISOString()} | 5000 code points]\n${a.text}\n[/Facade message ${a.alias}]`));
 			assert.ok(file.text.includes(b.text));
 			assert.deepStrictEqual(result.data.file, { path: `${s.deps.home}/results/messages-1.txt`, size: Buffer.byteLength(file.text), code_points: 8001 });
-			assert.deepStrictEqual(result.data.messages.map((each: { message_id: string; text?: string; length: number }) => [each.message_id, each.text, each.length]), [[a.id, undefined, 5000], [b.id, undefined, 3001]]);
+			assert.deepStrictEqual(result.data.messages.map((each: { message_id: string; text?: string; length: number }) => [each.message_id, each.text, each.length]), [[a.alias, undefined, undefined], [b.alias, undefined, undefined]]);
 			assert.ok(answer.text.length < 4000);
 			assert.deepStrictEqual(s.messages.delivered, [{ run: lead.id, ids: [a.id, b.id] }]);
 		});
@@ -774,7 +733,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			s.messages.undelivered(worker, lead, '\u{1F600}'.repeat(MESSAGE_LIMIT));
 			const result = resultOf(await s.call(lead, 'read_messages'));
 			assert.strictEqual(s.written.length, 0);
-			assert.strictEqual(result.data.messages[0].length, MESSAGE_LIMIT);
+			assert.strictEqual([...result.data.messages[0].text].length, MESSAGE_LIMIT);
 		});
 
 		test('a file that cannot be written fails the read, which changed nothing, and delivers nothing', async () => {
@@ -788,21 +747,35 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 	});
 
 	suite('read_screen', () => {
+		test('large Unicode screens and historical frames keep reversible text, cues and observation times in one JSON file', async () => {
+			const { lead, worker } = team(s);
+			const text = `🐱e\u0301 中文 [[literal]]\n${'x'.repeat(8_100)}`;
+			const styles = [{ start: 0, end: 3, inverse: true as const, dim: true as const }];
+			const frame = { text: ['旧菜单 🐱'], lines: ['[[旧菜单 🐱]]'], styles: [{ start: 0, end: 5, inverse: true as const }], capturedAt: 1_000 };
+			s.terminal.screen = { text: text.split('\n'), lines: text.split('\n'), styles, buffer: 'normal', older: false, trimmed: false, capturedAt: 2_000, exited: false, frame };
+			const result = resultOf(await s.call(lead, 'read_screen', { agent: worker.alias }));
+			const stored = JSON.parse(s.written[0].text);
+			assert.strictEqual(stored.agent_id, worker.alias);
+			assert.strictEqual(stored.reference, undefined);
+			assert.deepStrictEqual([stored.text, stored.text_format, stored.observed_at], ['[[{{🐱e\u0301}}]] 中文 \\[\\[literal\\]\\]\n' + 'x'.repeat(8_100), 'facade-styled', new Date(2_000).toISOString()]);
+			assert.deepStrictEqual(stored.last_alternate_frame, { text: '[[旧菜单 🐱]]', captured_at: new Date(1_000).toISOString(), line_count: 1 });
+			assert.strictEqual(stored.styles, undefined);
+			assert.deepStrictEqual([result.data.text, result.data.styles, result.data.last_alternate_frame, result.data.file.format], [undefined, undefined, undefined, 'json']);
+		});
 
-		const screen = { lines: ['❯ [[hello]]', '  {{working}}'], text: ['❯ hello', '  working'], buffer: 'normal' as const, older: true, trimmed: false, capturedAt: Date.UTC(2026, 9, 28, 22), exited: false };
+		const screen = { lines: ['❯ [[hello]]', '  {{working}}'], text: ['❯ hello', '  working'], styles: [{ start: 2, end: 7, inverse: true as const }, { start: 10, end: 17, dim: true as const }], buffer: 'normal' as const, older: true, trimmed: false, capturedAt: Date.UTC(2026, 9, 28, 22), exited: false };
 
-		test('returns the logical lines of a reachable agent, observed when, with annotations alongside', async () => {
+		test('returns one body with readable style cues, logical lines and observation time', async () => {
 			const { lead, helper } = team(s);
 			s.terminal.screen = screen;
 			const answer = await s.call(lead, 'read_screen', { agent: '@helper', lines: 20 });
 			const result = resultOf(answer);
 			assert.deepStrictEqual(s.terminal.reads, [{ run: helper.id, lines: 20 }]);
 			assert.deepStrictEqual(result.data, {
-				agent_id: helper.id, reference: '@helper #a3', window_id: 'win-1', observed_at: '2026-10-28T22:00:00.000Z', process_state: 'running', stale: false,
+				agent_id: helper.alias, window_id: 'win-1', observed_at: '2026-10-28T22:00:00.000Z', process_state: 'running', stale: false,
 				buffer: 'normal', line_count: 2, older_lines: true, trimmed: false,
-				text: '❯ hello\n  working', annotated: '❯ [[hello]]\n  {{working}}'
+				text: '❯ [[hello]]\n  {{working}}', text_format: 'facade-styled'
 			});
-			assert.match(answer.text, /\n {2}text: \|-\n {4}❯ hello\n {6}working\n/);
 		});
 
 		test('a retained ended screen is dated and stale, never live; one never captured is unavailable', async () => {
@@ -812,7 +785,6 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const answer = await s.call(lead, 'read_screen', { agent: '#a5' });
 			const result = resultOf(answer);
 			assert.deepStrictEqual([result.data.process_state, result.data.stale], ['ended', true]);
-			assert.match(answer.text, /^The retained final screen of @crashed #a5 .* captured 2026-10-28T22:00:00\.000Z: its process has ended, so this is not live output\./);
 			s.terminal.screen = undefined;
 			assert.strictEqual(resultOf(await s.call(lead, 'read_screen', { agent: '#a5' })).error?.reason, 'ended');
 		});
@@ -820,22 +792,23 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 		test('the last alternate-screen frame comes apart from the final normal output, inline or in a file of its own', async () => {
 			const { lead } = team(s);
 			s.agents.add(runFacts(5, { name: 'tui', root: lead.id, lifecycle: 'ended' }));
-			const frame = { lines: ['[[> menu]]', 'item'], text: ['> menu', 'item'], capturedAt: Date.UTC(2026, 9, 28, 21, 58) };
-			s.terminal.screen = { ...screen, lines: ['$ exited'], text: ['$ exited'], exited: true, frame };
+			const frame = { lines: ['[[> menu]]', 'item'], text: ['> menu', 'item'], styles: [{ start: 0, end: 6, inverse: true as const }], capturedAt: Date.UTC(2026, 9, 28, 21, 58) };
+			s.terminal.screen = { ...screen, lines: ['$ exited'], text: ['$ exited'], styles: [], exited: true, frame };
 			const answer = await s.call(lead, 'read_screen', { agent: '#a5' });
 			const result = resultOf(answer);
-			assert.deepStrictEqual([result.data.text, result.data.last_alternate_frame], ['$ exited', { captured_at: '2026-10-28T21:58:00.000Z', line_count: 2, text: '> menu\nitem', annotated: '[[> menu]]\nitem' }]);
-			assert.match(headlineOf(answer), /`last_alternate_frame` is apart from it: the last frame its full-screen program drew, as it left the alternate screen or ended on it at 2026-10-28T21:58:00\.000Z\./);
+			assert.deepStrictEqual([result.data.text, result.data.last_alternate_frame], ['$ exited', { captured_at: '2026-10-28T21:58:00.000Z', line_count: 2, text: '[[> menu]]\nitem' }]);
 			const long = Array.from({ length: 150 }, (_, i) => `${i} ${'y'.repeat(60)}`);
 			s.terminal.screen = { ...screen, frame: { lines: long, text: long, capturedAt: frame.capturedAt } };
 			const filed = resultOf(await s.call(lead, 'read_screen', { agent: '#a2' }));
-			assert.deepStrictEqual(s.written.map(each => [each.kind, each.text]), [['screen', '❯ hello\n  working\n'], ['screen', `${long.join('\n')}\n`]]);
-			assert.deepStrictEqual([filed.data.text, filed.data.last_alternate_frame.text, filed.data.last_alternate_frame.file.path], [undefined, undefined, `${s.deps.home}/results/screen-2.txt`]);
+			assert.strictEqual(s.written.length, 1);
+			assert.strictEqual(JSON.parse(s.written[0].text).text, '❯ [[hello]]\n  {{working}}');
+			assert.deepStrictEqual([filed.data.text, filed.data.last_alternate_frame, filed.data.file.format], [undefined, undefined, 'json']);
+			assert.strictEqual(JSON.parse(s.written[0].text).last_alternate_frame.text, long.join('\n'));
 		});
 
 		test('empty live output is a successful empty read', async () => {
 			const { lead } = team(s);
-			s.terminal.screen = { ...screen, lines: [], text: [], older: false };
+			s.terminal.screen = { ...screen, lines: [], text: [], styles: [], older: false };
 			const result = resultOf(await s.call(lead, 'read_screen', { agent: '#a2' }));
 			assert.deepStrictEqual([result.status, result.data.text, result.data.line_count], ['success', '', 0]);
 		});
@@ -843,9 +816,10 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 		test('above 8,000 code points the complete screen goes in a file', async () => {
 			const { lead } = team(s);
 			const lines = Array.from({ length: 200 }, (_, i) => `${i} ${'x'.repeat(60)}`);
-			s.terminal.screen = { ...screen, lines, text: lines };
+			s.terminal.screen = { ...screen, lines, text: lines, styles: [] };
 			const result = resultOf(await s.call(lead, 'read_screen', { agent: '#a2', lines: 200 }));
-			assert.deepStrictEqual([s.written[0].kind, s.written[0].text], ['screen', `${lines.join('\n')}\n`]);
+			assert.deepStrictEqual([s.written[0].kind, JSON.parse(s.written[0].text).text], ['screen', lines.join('\n')]);
+			assert.strictEqual(JSON.parse(s.written[0].text).text_format, 'facade-styled');
 			assert.strictEqual(result.data.text, undefined);
 			assert.deepStrictEqual(result.data.file.path, `${s.deps.home}/results/screen-1.txt`);
 		});
@@ -874,7 +848,7 @@ suite('Contract: the nine tools of one window (MCP-2 to 5)', () => {
 			const result = resultOf(answer);
 			assert.deepStrictEqual(s.terminal.typed, [{ run: worker.id, text, enter: true }]);
 			assert.deepStrictEqual(result.effects, { outcome: 'confirmed', text_written: 'full', enter_written: true });
-			assert.deepStrictEqual(result.data, { agent_id: worker.id, reference: '@worker #a2', length: 26, enter: true });
+			assert.deepStrictEqual(result.data, { agent_id: worker.alias });
 			const plain = resultOf(await s.call(lead, 'type_text', { agent: '@worker', text: 'y' }));
 			assert.deepStrictEqual(plain.effects, { outcome: 'confirmed', text_written: 'full', enter_written: false });
 			const enter = resultOf(await s.call(lead, 'type_text', { agent: '@worker', text: '', enter: true }));

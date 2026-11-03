@@ -13,15 +13,17 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 10;
+export const PTYD_PROTOCOL = 12;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
  * through those ptyds, and starts none there (ARCHITECTURE-2.4). None is ever dropped. 8, of 0.0.1, is 9 without `spawn`'s
- * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. New requests go to neither.
+ * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. 10 lacks 11's screen style ranges and stable final-screen time.
+ * 11 lacks 12's screen-evidence invalidation, logical-line status reading and complete record replacement. New runs go to none of these.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8, 9];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11];
 
+import type { ScreenStyle } from '../base/screenStyle';
 import type { OwnerClaim } from '../base/ownership';
 import { isJsonObject } from '../base/json';
 import type { InputReading } from './composer';
@@ -65,12 +67,14 @@ export type StatusKind = 'permission' | 'question' | 'auth';
 export interface RunStatus {
 	/** Pending on the program's question whether the terminal takes reports, with no report yet. */
 	readonly negotiating?: true;
+	/** Screen evidence was revoked; these are supervisor observations, not wire-protocol states. */
+	readonly unavailable?: 'screen_unrecognized' | 'screen_reset';
 	readonly state: StatusState | 'pending';
 	/** What it waits for, where it is blocked and says. */
 	readonly kind?: StatusKind;
 	/** What it says it is doing, or why it waits: its own words, shown as text alone. */
 	readonly msg?: string;
-	/** The title its reports give, which a window prefers over the terminal title (CLIS-2.3). */
+	/** The report's title, used when the program has no nonempty terminal title (CLIS-2.3). */
 	readonly title?: string;
 	/** When it came to this, in milliseconds since 1970 on ptyd's clock. */
 	readonly at: number;
@@ -112,6 +116,7 @@ export type Termination = 'terminated' | 'already_exited' | 'unconfirmed' | 'fai
 export interface ScreenFrame {
 	readonly lines: readonly string[];
 	readonly text: readonly string[];
+	readonly styles?: readonly ScreenStyle[];
 	/** When the program left the alternate screen, or ended on it. */
 	readonly capturedAt: number;
 }
@@ -122,6 +127,7 @@ export interface ScreenRead {
 	readonly lines: readonly string[];
 	/** The same lines as plain text. */
 	readonly text: readonly string[];
+	readonly styles?: readonly ScreenStyle[];
 	readonly buffer: 'normal' | 'alternate';
 	/** Whether the buffer holds lines with something on them above those read. */
 	readonly older: boolean;
@@ -287,7 +293,8 @@ export function isPtydEvent(value: unknown): value is RunEvent | OwnerEvent | Ca
 			const status = value.status;
 			return status === undefined || isJsonObject(status) && typeof status.state === 'string' && ['pending', 'idle', 'working', 'done', 'blocked', 'error'].includes(status.state) &&
 				typeof status.at === 'number' && Number.isFinite(status.at) && ['title', 'msg'].every(key => status[key] === undefined || typeof status[key] === 'string') &&
-				(status.kind === undefined || typeof status.kind === 'string' && ['permission', 'question', 'auth'].includes(status.kind));
+				(status.kind === undefined || typeof status.kind === 'string' && ['permission', 'question', 'auth'].includes(status.kind)) &&
+				(status.unavailable === undefined || status.state === 'pending' && typeof status.unavailable === 'string' && ['screen_unrecognized', 'screen_reset'].includes(status.unavailable));
 		}
 		default: return false;
 	}

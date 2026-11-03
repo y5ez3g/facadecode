@@ -3,8 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // Every tool's result (MCP-1.2): a status, its data, the error of a failure and the effects that actually happened - never more
-// than happened, `unknown` where something may have. MCP gets it twice, as structured facts and as English text that states the
-// same facts: a sentence saying what came of the call, then every field of the structured result.
+// than happened, `unknown` where something may have. The current MCP result serializes the same object in both channels.
 
 import { messageOf } from '../base/errors';
 import type { ToolAnswer } from './protocol';
@@ -28,12 +27,21 @@ export interface ResultError {
 	readonly message: string;
 }
 
+/** Optional API recovery facts, never an automatic action or a team workflow (MCP-1.2). */
+export interface Recovery {
+	readonly action: 'correct_arguments' | 'resolve_target' | 'check_capability' | 'resolve_blocker' | 'inspect_effects' | 'repeat_original_request' | 'reconnect' | 'update_tools';
+	readonly check?: { readonly tool: 'list_agents' | 'read_screen'; readonly arguments: { readonly [key: string]: unknown } };
+	readonly request_id?: string;
+	readonly condition?: 'within_original_hour';
+}
+
 /** MCP-1.2's envelope. `accepted` is finite work continuing - neither success nor failure. */
 export interface Result<T = unknown> {
 	readonly status: 'success' | 'failure' | 'accepted';
 	readonly data: T;
 	readonly error?: ResultError;
 	readonly effects: Effects;
+	readonly recovery?: Recovery;
 }
 
 export const NO_EFFECTS: Effects = { outcome: 'none' };
@@ -78,92 +86,8 @@ export function errorResult<T = { readonly [key: string]: unknown }>(err: unknow
 	return failure({ code: 'FAILED', reason: 'unexpected_error', message: messageOf(err) }, data, options.effects ?? { outcome: 'unknown' });
 }
 
-/**
- * MCP's answer for `result`: `headline`, a sentence or two saying what came of the call - by default its status and any error - then
- * every field of the structured result, so that text and structure state the same facts (MCP-6.2). Failure alone is an MCP error.
- */
-export function answerOf(result: Result, headline?: string): ToolAnswer {
-	const text = `${headline ?? headlineOf(result)}\n\n${renderFacts(result).join('\n')}`;
-	return { text, structured: result as unknown as { readonly [key: string]: unknown }, isError: result.status === 'failure' };
-}
-
-function headlineOf(result: Result): string {
-	switch (result.status) {
-		case 'success': return 'Succeeded.';
-		case 'accepted': return 'Accepted: the operation continues, and a Facade result reports its outcome later.';
-		case 'failure': return `Failed: ${result.error?.message ?? 'no reason was given.'}`;
-	}
-}
-
-/** The fields of `value` as indented `key: value` lines, lists as `- item`: every field, none left out or reworded. */
-export function renderFacts(value: { readonly [key: string]: unknown } | Result, indent = 0): string[] {
-	return Object.entries(value).flatMap(([key, each]) => field(key, each, indent));
-}
-
-function field(key: string, value: unknown, indent: number): string[] {
-	if (value === undefined) {
-		return [];
-	}
-	const pad = '  '.repeat(indent);
-	if (Array.isArray(value)) {
-		return value.length ? [`${pad}${key}:`, ...items(value, indent + 1)] : [`${pad}${key}: []`];
-	}
-	if (isObject(value)) {
-		const lines = renderFacts(value, indent + 1);
-		return lines.length ? [`${pad}${key}:`, ...lines] : [`${pad}${key}: {}`];
-	}
-	if (isBlock(value)) {
-		return [`${pad}${key}: ${blockOf(value, indent + 1)}`];
-	}
-	return [`${pad}${key}: ${scalar(value)}`];
-}
-
-function items(values: readonly unknown[], indent: number): string[] {
-	const pad = '  '.repeat(indent);
-	return values.flatMap(value => {
-		if (Array.isArray(value)) {
-			return value.length ? [`${pad}-`, ...items(value, indent + 1)] : [`${pad}- []`];
-		}
-		if (isObject(value)) {
-			const lines = renderFacts(value, indent + 1);
-			// The item's first field on the dash's line, as YAML writes a list of objects
-			return lines.length ? [`${pad}- ${lines[0].trimStart()}`, ...lines.slice(1)] : [`${pad}- {}`];
-		}
-		return [`${pad}- ${isBlock(value) ? blockOf(value, indent + 1) : scalar(value)}`];
-	});
-}
-
-function isObject(value: unknown): value is { readonly [key: string]: unknown } {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** Text of several lines, with no control but tabs and line feeds: shown as it reads, as a block. */
-function isBlock(value: unknown): value is string {
-	// eslint-disable-next-line no-control-regex
-	return typeof value === 'string' && value.includes('\n') && !/[\u0000-\u0008\u000b-\u001f\u007f-\u009f\u2028\u2029]/.test(value);
-}
-
-/**
- * `text` as a YAML literal block: its indicator - `|-` without a final line break, `|` with one, `|+` with more - then each of
- * its lines indented under the field, so that no line of it can stand for another field and its exact text can be read back.
- */
-function blockOf(text: string, indent: number): string {
-	const pad = '  '.repeat(indent);
-	const body = text.replace(/\n+$/, '');
-	const trailing = text.length - body.length;
-	return [trailing === 0 ? '|-' : trailing === 1 ? '|' : '|+', ...body.split('\n').map(line => pad + line), ...Array.from({ length: Math.max(0, trailing - 1) }, () => pad)].join('\n');
-}
-
-/**
- * A scalar as text: a plain one-line string as it is; any other - empty, padded, with tabs or controls, or one that would read
- * as a number, boolean or null - quoted as JSON, so that its exact content shows.
- */
-function scalar(value: unknown): string {
-	if (typeof value !== 'string') {
-		return value === null ? 'null' : String(value);
-	}
-	// eslint-disable-next-line no-control-regex
-	const plain = value !== '' && value === value.trim() && !value.startsWith('"') && !/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(value)
-		&& !/^(?:true|false|null|-?\d[\d.e+-]*)$/i.test(value);
-	return plain ? value : JSON.stringify(value);
+/** One public object in either channel; JSON escaping preserves exact content and distinguishes null/false/empty. */
+export function answerOf(result: Result): ToolAnswer {
+	const text = JSON.stringify(result);
+	return { text, structured: JSON.parse(text), isError: result.status === 'failure' };
 }

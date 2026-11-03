@@ -4,8 +4,8 @@
 
 // What a CLI that reports nothing of itself shows on its screen, read as its status (CLIS-2.3, D80): Muse Code, which sends no
 // OSC 7501 on Windows. A reader knows the layout its CLI was observed drawing and vouches only for what that layout shows; a
-// screen it does not know is no reading at all, which leaves the run's status as it was. Only rows of text are read, never cells
-// a person typed into: the program's own marks decide.
+// completed screen it does not know revokes prior screen evidence. Logical lines retain the terminal's real soft wraps;
+// hard line breaks are not guessed together. Text inside the input never supplies activity evidence.
 
 import type { StatusKind } from './protocol';
 
@@ -16,7 +16,7 @@ export interface ScreenReading {
 }
 
 /** A reader of the rows a run's terminal shows, top to bottom, each without the spaces at its end. */
-export type ScreenReader = (rows: readonly string[]) => ScreenReading | undefined;
+export type ScreenReader = (rows: readonly string[], clippedStart?: boolean, boldHeads?: ReadonlySet<number>) => ScreenReading | undefined;
 
 /** The top of Muse Code's input: a rule, with a label in it where it offers voice input - `── Voice input (Alt+V to start) ───`. */
 const UPPER_RULE = /^(?:─{2} [^─]+ ─+|─+)$/;
@@ -28,12 +28,16 @@ const PROMPT = /^❯(?: |$)/;
  * Its working row: one of its marks - not its prompt - then what it does and since when, `◈ Thinking (3s · esc to interrupt)`; it
  * stands above the input only while a turn goes on.
  */
-const WORKING = /^[^\s❯] \S.*\besc to interrupt\)$/u;
+const WORKING = /^[◈◆◇] \S.*\besc to interrupt\)$/u;
 /**
  * What stands between its working row and its input while it works: its usage warning, its queued input with what is queued under
  * it, and blank rows.
  */
-const BETWEEN = /^(?:$| {2}|⚠ |◆ Queued input|└ )/u;
+const USAGE = /^⚠ Usage /u;
+const QUEUED = /^◆ Queued input(?: ·|$)/u;
+/** Its complete footer identifies the input layout, independently of model names and effort choices. */
+const FOOTER = /^ {2}\S.* · \S.* · \S.*$/u;
+const HEADER = /^ {2}Muse Code \d+\.\d+\.\d+\b/;
 /** Its sign-in choice, in place of everything else until the person signs in. */
 const SIGN_IN = [/^ *Log in with browser\b/, /^ *Set an API key\b/];
 /** Its workspace trust question. */
@@ -53,7 +57,10 @@ function museFrame(rows: readonly string[]): number | undefined {
 			prompt--;
 		}
 		if (PROMPT.test(rows[prompt]) && prompt > 0 && UPPER_RULE.test(rows[prompt - 1])) {
-			return prompt - 1;
+			const below = rows.slice(bottom + 1).filter(row => row !== '');
+			if (below.length === 1 && FOOTER.test(below[0])) {
+				return prompt - 1;
+			}
 		}
 	}
 	return undefined;
@@ -61,13 +68,15 @@ function museFrame(rows: readonly string[]): number | undefined {
 
 /**
  * Muse Code's screen (1.4.12, 1.4.14): working while its working row stands above its input frame, past only what stands between
- * them; not working while the frame shows without it, empty or holding a draft; blocked on sign-in at its sign-in choice, on
+ * them; idle only in its complete known resting layout, empty or holding a draft; blocked on sign-in at its sign-in choice, on
  * permission at its trust question, which stand in place of the frame - their words above a frame, left from before, say nothing.
  * Anything else is no reading.
  */
-export function museScreen(rows: readonly string[]): ScreenReading | undefined {
+export function museScreen(rows: readonly string[], clippedStart = false, boldHeads?: ReadonlySet<number>): ScreenReading | undefined {
 	const frame = museFrame(rows);
 	if (frame === undefined) {
+		// A partial input frame is not an earlier login/trust prompt left in the conversation.
+		if (rows.some(row => PROMPT.test(row) || UPPER_RULE.test(row))) { return undefined; }
 		if (SIGN_IN.every(choice => rows.some(row => choice.test(row)))) {
 			return { state: 'blocked', kind: 'auth' };
 		}
@@ -76,15 +85,33 @@ export function museScreen(rows: readonly string[]): ScreenReading | undefined {
 		}
 		return undefined;
 	}
-	for (let row = frame - 1; row >= 0; row--) {
-		if (WORKING.test(rows[row])) {
-			return { state: 'working' };
-		}
-		if (!BETWEEN.test(rows[row])) {
-			break;
-		}
+	let row = frame - 1;
+	const skipHints = () => {
+		while (row >= 0 && (rows[row] === '' || USAGE.test(rows[row]))) { row--; }
+	};
+	skipHints();
+	// Queued text is a distinct block. Do not skip arbitrary indented content: it may be an unfamiliar indicator.
+	let queued = row;
+	while (queued >= 0 && /^(?: {2}|└ )/u.test(rows[queued])) { queued--; }
+	const hasQueue = queued >= 0 && QUEUED.test(rows[queued]);
+	if (hasQueue) { row = queued - 1; skipHints(); }
+	// Muse also uses a diamond for an answer. Its bold marker distinguishes it from the nonbold working animation.
+	const answer = (at: number) => rows[at]?.startsWith('◆ ') && boldHeads?.has(at);
+	if (row >= 0 && WORKING.test(rows[row]) && !answer(row) && !(row === 0 && clippedStart)) {
+		return { state: 'working' };
 	}
-	return { state: 'idle' };
+	if (hasQueue) { return undefined; }
+	if (row < 0) { return undefined; }
+	if (row === 0 && clippedStart) { return undefined; }
+	// Positive layout boundaries: its startup header, a prior conversation block, or a now-dismissed native login/trust screen.
+	if (HEADER.test(rows[row]) || TRUST.test(rows[row]) || SIGN_IN.some(choice => choice.test(rows[row]))) {
+		return { state: 'idle' };
+	}
+	while (row >= 0 && rows[row].startsWith('  ')) { row--; }
+	if (row >= 0 && !(row === 0 && clippedStart) && (/^(?:❯ |• )/u.test(rows[row]) || answer(row))) {
+		return { state: 'idle' };
+	}
+	return undefined;
 }
 
 /** The screen readers, by the ID a CLI adapter names (CLIS-2.3). */

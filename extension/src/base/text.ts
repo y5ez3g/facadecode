@@ -19,16 +19,25 @@ export function inertCommandLinks(text: string): string {
 	return text.replace(COMMAND_SCHEME, '$1​$2');
 }
 
-/**
- * `text` cut to at most `max` Unicode code points, its ellipsis included, cut only between whole code points: the display caps
- * of CLIS-2.3 and UX-1.2 count code points, not UTF-16 units.
- */
-export function truncateCodePoints(text: string, max: number): string {
-	const points = [...text];
-	if (points.length <= max) {
-		return text;
+const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
+
+/** A bounded prefix in the requested units, cut only between complete visible characters. */
+function truncate(text: string, max: number, length: (text: string) => number): string {
+	if (length(text) <= max) { return text; }
+	if (max <= 0) { return ''; }
+	let used = 0;
+	let end = 0;
+	for (const { segment, index } of GRAPHEMES.segment(text)) {
+		used += length(segment);
+		if (used > max - 1) { break; }
+		end = index + segment.length;
 	}
-	return max <= 0 ? '' : `${points.slice(0, max - 1).join('').trimEnd()}…`;
+	return `${text.slice(0, end).trimEnd()}…`;
+}
+
+/** `text` cut to at most `max` Unicode code points, ellipsis included, without splitting a grapheme. */
+export function truncateCodePoints(text: string, max: number): string {
+	return truncate(text, max, value => [...value].length);
 }
 
 /**
@@ -50,17 +59,7 @@ export function displayLine(text: string, max: number): string {
 	return truncateCodePoints(text.replace(INVISIBLE_FORMATTING, '').replace(CONTROL_CHARACTERS, ' ').replace(/\s+/g, ' ').trim(), max);
 }
 
-/** A preview of at most `maxLength` UTF-16 units, including its ellipsis, cut only between complete Unicode code points. */
+/** A preview of at most `maxLength` UTF-16 units, including its ellipsis, cut only between complete graphemes. */
 export function truncateText(text: string, maxLength: number): string {
-	if (text.length <= maxLength) {
-		return text;
-	}
-	if (maxLength <= 0) {
-		return '';
-	}
-	let end = maxLength - 1;
-	if (end > 0 && text.codePointAt(end - 1)! > 0xffff) {
-		end--;
-	}
-	return `${text.slice(0, end).trimEnd()}…`;
+	return truncate(text, maxLength, value => value.length);
 }

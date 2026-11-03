@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import { AgentService } from '../core/agents';
 import { FacadeError } from '../core/errors';
+import { SUGGESTED_NAMES } from '../core/names';
 import {
 	ActivityReport, CleanupResult, Disposable, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, Location, LocationPort,
 	ConversationEntry, ConversationMeta, ConversationKey, Pin, PinStore,
@@ -127,7 +128,9 @@ function setUp(options: {
 	const retained = new Map<RunId, RetainedRun>();
 	const released: RunId[] = [];
 	const shims: RunId[] = [];
+	const shimInputs: { run: RunId; facts: RunFacts; location: Location }[] = [];
 	const log: string[] = [];
+	const events: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
 	let next = 0;
 	let alias = 0;
 	let now = 10_000;
@@ -180,24 +183,51 @@ function setUp(options: {
 		retained: { list: () => [...retained.values()], put: run => retained.set(run.id, run), remove: run => retained.delete(run) },
 		aliases: { next: () => `#a${++alias}` },
 		clock: { now: () => ++now },
-		log: { event: text => log.push(text) },
+		log: { event: text => log.push(text), fact: (event, fields) => events.push({ event, fields }) },
 		lifetime: { onDidClose: closes.event },
 		yolo: () => true,
-		...(options.tools ? { tools: (run: RunId) => (shims.push(run), { command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } }) } : {}),
+		...(options.tools ? { tools: (run: RunId, facts: RunFacts, location: Location) => {
+			shims.push(run);
+			shimInputs.push({ run, facts: { ...facts }, location });
+			return { command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } };
+		} } : {}),
 		...(options.describe ? { describe: options.describe } : {}),
 		...(options.warmUp ? { warmUp: options.warmUp } : {}),
 		newRunId: () => `run-${(++next).toString(16).padStart(32, '0')}`
 	});
 	const changes: RunChange[] = [];
 	agents.onDidChange(change => changes.push(change));
-	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, log, changes, created, plans, advance: (ms: number) => { now += ms; } };
+	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, shimInputs, log, events, changes, created, plans, advance: (ms: number) => { now += ms; } };
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 
+
+suite('Structured lifecycle facts', () => {
+	for (const outcome of ['exit', 'failed', 'close'] as const) {
+		test(`${outcome} correlates the requested settings without logging prompt text`, async () => {
+			const world = setUp();
+			if (outcome === 'failed') { world.execution.spawnError = new Error('Spawn unavailable'); }
+			const id = world.agents.launch({ name: 'Example', location: 'loc-1', cli: 'claude', origin: 'human', model: 'example-model', effort: 'high', prompt: 'PRIVATE PROMPT' });
+			await world.agents.started(id);
+			if (outcome === 'exit') { world.execution.exits.fire({ run: id, code: 0, interruptVerified: false }); }
+			if (outcome === 'close') { world.execution.cleanup = 'failed'; await world.agents.close(id); }
+			const request = world.events.find(each => each.event === 'agent_start_requested')!;
+			assert.deepStrictEqual([request.fields.agent_id, request.fields.requested_model, request.fields.requested_effort], [id, 'example-model', 'high']);
+			assert.strictEqual(world.events.some(each => each.event === 'agent_started'), outcome !== 'failed');
+			const last = world.events.at(-1)!;
+			assert.strictEqual(last.fields.agent_id, id);
+			assert.strictEqual(last.event, { exit: 'agent_exited', failed: 'agent_start_failed', close: 'agent_closed' }[outcome]);
+			if (outcome === 'close') { assert.strictEqual(last.fields.cleanup, 'failed', 'closing the pair is not confirmed process termination'); }
+			assert.ok(!JSON.stringify(world.events).includes('PRIVATE PROMPT'));
+			world.agents.dispose();
+		});
+	}
+});
+
 suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 	const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
-	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once' } as const;
+	const request = { name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: creator, root: creator }, requestId: 'start-once', promptId: 'm-7', startCallId: 'original-call', resultMessageId: 'm-8' } as const;
 
 	for (const end of ['close', 'exit', 'failed'] as const) {
 		test(`${end}: the first request survives removal and reload without restoring a closed pair`, async () => {
@@ -221,6 +251,9 @@ suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 			await reload.agents.restore();
 			assert.deepStrictEqual([reload.agents.list(), [...reload.execution.pairs]], [[], []]);
 			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.id, id);
+			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.promptId, 'm-7');
+			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.startCallId, 'original-call');
+			assert.strictEqual(reload.agents.requested(creator, request.requestId)?.resultMessageId, 'm-8');
 			reload.advance(60 * 60_000);
 			assert.strictEqual(reload.agents.requested(creator, request.requestId), undefined);
 			assert.strictEqual(reload.retained.size, 0, 'expired metadata is removed');
@@ -237,6 +270,7 @@ suite('Start request metadata survives the run (MCP-1.1, D119)', () => {
 		reload.retained.set(id, saved);
 		await reload.agents.restore();
 		assert.strictEqual(reload.agents.requested(creator, request.requestId)?.lifecycle, 'starting');
+		assert.strictEqual(reload.agents.requested(creator, request.requestId)?.resultMessageId, 'm-8');
 		assert.deepStrictEqual([reload.agents.list(), reload.execution.spawned], [[], []]);
 		await world.agents.close(id);
 		await world.agents.started(id);
@@ -545,24 +579,45 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const world = setUp();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Fix login' });
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234, title: 'Fix login' });
 		assert.deepStrictEqual([world.agents.get(id)?.activity, world.agents.get(id)?.title], ['working', 'Fix login']);
-		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, error: 'API overloaded' });
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, observedAt: 2345, error: 'API overloaded' });
 		assert.strictEqual(world.agents.get(id)?.error?.reason, 'API overloaded');
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true });
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234 });
 		assert.strictEqual(world.agents.get(id)?.error, undefined);
 		assert.strictEqual(world.agents.get(id)?.title, 'Fix login', 'the last title stays until the CLI sets another');
 		// When its CLI reported its current activity: the same report again keeps that time, another activity takes its own
 		const since = world.agents.get(id)!.activitySince;
-		assert.strictEqual(typeof since, 'number');
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Still' });
+		assert.strictEqual(since, 1234);
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234, title: 'Still' });
 		assert.strictEqual(world.agents.get(id)!.activitySince, since);
 		assert.strictEqual(world.agents.get(id)!.name, 'A', 'CLI titles never replace the creation name (D127)');
 		world.agents.rename(id, 'Ada');
-		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true });
-		assert.ok(world.agents.get(id)!.activitySince! >= since!);
-		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'A different task' });
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, observedAt: 2345 });
+		assert.strictEqual(world.agents.get(id)!.activitySince, 2345);
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, observedAt: 1234, title: 'A different task' });
 		assert.strictEqual(world.agents.get(id)!.name, 'Ada', 'later titles preserve an explicit rename too');
+		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: false, disconnected: true, reason: 'Lost' });
+		assert.strictEqual(world.agents.get(id)!.activitySince, 1234);
+		assert.strictEqual(world.agents.get(id)!.disconnected, true);
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true });
+		assert.strictEqual(world.agents.get(id)!.activitySince, undefined, 'missing source time is not invented');
+		assert.strictEqual(world.agents.get(id)!.disconnected, undefined);
+	});
+
+	test('an explicit empty title removes the old title; missing connection information preserves it (CLIS-2.3)', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, title: 'Fix tests' });
+		world.execution.reports.fire({ run: id, activity: 'unknown', reporting: true, disconnected: true, reason: 'Lost' });
+		assert.strictEqual(world.agents.get(id)?.title, 'Fix tests');
+		world.execution.reports.fire({ run: id, activity: 'not_working', reporting: true, title: '' });
+		assert.strictEqual(world.agents.get(id)?.title, undefined, 'the card can now use its no-title fallback');
+		assert.strictEqual(world.agents.get(id)?.error, undefined, 'reconnection still clears its connection error');
+		assert.strictEqual(world.agents.get(id)?.name, 'Ada');
+		world.execution.reports.fire({ run: id, activity: 'working', reporting: true, title: 'Next task' });
+		assert.strictEqual(world.agents.get(id)?.title, 'Next task');
 	});
 
 	test('a run is awaiting its CLI\'s activity while its reports say so, and no longer once one does not (CLIS-2.3, D81)', async () => {
@@ -771,6 +826,25 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 });
 
 suite('Agent launches into new worktrees (WORKTREES-2)', () => {
+	test('private initialization uses the completed worktree and this run\'s creator and first message, before planning', async () => {
+		let release!: () => void;
+		const world = setUp({ tools: true, worktreeGate: new Promise(resolve => release = resolve) });
+		const creator = 'run-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+		const id = world.agents.launch({ name: 'Ada', location: LOCATION.id, cli: 'claude', origin: 'agent',
+			creator: { run: creator, root: creator, label: 'Ben #a42' }, promptId: 'm-10', worktree: { branch: 'fix' } });
+		await settle();
+		assert.strictEqual(world.shimInputs.length, 0, 'no stale parent-checkout context while creation is pending');
+		release();
+		await world.agents.started(id);
+		const first = world.shimInputs[0];
+		assert.strictEqual(first.run, id);
+		assert.deepStrictEqual(first.location, WORKTREE);
+		assert.deepStrictEqual([first.facts.creator, first.facts.creatorLabel, first.facts.promptId], [creator, 'Ben #a42', 'm-10']);
+		const other = world.agents.launch({ name: 'Ada', location: LOCATION.id, cli: 'claude', origin: 'human' });
+		await world.agents.started(other);
+		assert.deepStrictEqual([world.shimInputs[1].run, world.shimInputs[1].location, world.shimInputs[1].facts.creator, world.shimInputs[1].facts.promptId], [other, LOCATION, undefined, undefined]);
+		assert.strictEqual(world.shimInputs[0].facts.promptId, 'm-10', 'a later launch never replaces another run\'s context');
+	});
 
 	test('partial Git failures retain only confirmed effects and carry them through notifications and reload', async () => {
 		for (const effects of [{}, { branchCreated: true }, { destinationCreated: WORKTREE.path }, { branchCreated: true, destinationCreated: WORKTREE.path }]) {
@@ -828,11 +902,13 @@ suite('Agent launches into new worktrees (WORKTREES-2)', () => {
 		let release!: () => void;
 		const gated = setUp({ worktreeGate: new Promise(resolve => release = resolve) });
 		const closing = gated.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'human', worktree: { branch: 'fix' } });
+		const completed = gated.agents.started(closing);
 		await gated.agents.close(closing);
 		release();
 		await settle();
 		assert.strictEqual(gated.created.length, 1, 'the worktree was still made');
 		assert.strictEqual(gated.execution.spawned.length, 0, 'its CLI never starts');
+		assert.deepStrictEqual(await completed, { state: 'closed', worktreeCreated: WORKTREE.path });
 	});
 
 	test('a worktree that cannot be made keeps the pair red with the actual reason (J04, WORKTREES-2.1)', async () => {
@@ -847,6 +923,28 @@ const continuitySetup = (options: Parameters<typeof setUp>[0] = {}) => setUp({ .
 const ENTRY: ConversationEntry = { key: { environment: 'local', cli: 'claude', sessionId: 'sess-1' }, cwd: '/work/app', title: 'Saved work' };
 suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RULES-4.2, WORKTREES-2)', () => {
 	const setUp = (options: Parameters<typeof continuitySetup>[0] = {}) => continuitySetup(options);
+	test('D161: manual Resume generates and saves only missing/empty names; existing names, even a title, stay literal', async () => {
+		for (const saved of [undefined, '', '   ', 'Saved work', 'Reviewer']) {
+			const world = setUp();
+			world.agents.launch({ name: 'Bolt', location: 'loc-1', cli: 'claude', origin: 'human' });
+			if (saved !== undefined) { world.conversations.set('sess-1', { cwd: ENTRY.cwd, location: 'loc-1', name: saved }); }
+			const id = world.agents.resume(ENTRY, { reveal: true }) as RunId;
+			await world.agents.started(id);
+			const name = world.agents.get(id)!.name;
+			if (saved?.trim()) {
+				assert.strictEqual(name, saved);
+			} else {
+				assert.ok(SUGGESTED_NAMES.includes(name), name);
+				assert.notStrictEqual(name, 'Bolt', 'use an available suggestion');
+			}
+			assert.strictEqual(world.conversations.get('sess-1')?.name, name);
+			await world.agents.close(id);
+			const again = world.agents.resume(ENTRY, { reveal: true }) as RunId;
+			await world.agents.started(again);
+			assert.strictEqual(world.agents.get(again)?.name, name, 'subsequent Resume keeps the saved name');
+		}
+	});
+
 	test('Resume starts the exact conversation in a new run, keeps its name, and never runs it twice (J11, LIFECYCLE-3.3)', async () => {
 		const world = setUp();
 		world.conversations.set('sess-1', { location: 'loc-1', cwd: '/work/app', name: 'Reviewer' });

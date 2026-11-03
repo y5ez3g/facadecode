@@ -89,6 +89,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 			},
 			worktrees: { availability: async () => ({ available: false, reason: 'none' }), plan: async () => { throw new Error('none'); }, create: async () => { throw new Error('none'); }, remove: async () => { throw new Error('none'); } },
 			conversations: { open: () => { opened++; return { next: async () => ({ entries: [], done: true }), dispose: () => undefined }; } },
+			savedName: () => undefined,
 			locations: {
 				snapshot: () => ({ locations: [LOCATION], folders: LOCATION.folders, pending: false }), resolve: id => id === LOCATION.id ? LOCATION : undefined,
 				refresh: () => refreshing, onDidChange: changes.event, onDidRemove: changes.event, removalOf: () => undefined

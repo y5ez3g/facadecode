@@ -7,6 +7,7 @@ import type { Agents, RunFacts, RunId } from '../../core/ports';
 import { CardWords, statusOf } from '../cardView';
 import { PanelModel, REPORT_COALESCE_MS } from '../model';
 import { cliIcon, plainText } from '../presentation';
+import { matchesCliSearch } from './search';
 
 export interface GoToAgentDeps {
 	readonly model: Pick<PanelModel, 'ordered' | 'placeOf'>;
@@ -36,7 +37,7 @@ type Item = vscode.QuickPickItem & { readonly run: RunId };
 
 /**
  * Go to Agent (LIFECYCLE-2.3): this window's agents alone - starting, running and retained red ones - one line each, searched by name,
- * CLI, title, location, short ID and copied reference. Its name, then its short ID, CLI, state, location and CLI title in its
+ * CLI, title, location, short ID and copied reference. Its name, then its short ID, state, location and CLI title in its
  * description, so that duplicate names are told apart. Choosing one shows its own terminal; each item copies its reference or closes
  * it, the picker staying open.
  */
@@ -47,23 +48,26 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	picker.title = vscode.l10n.t("Go to Agent");
 	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location or ID");
 	picker.matchOnDescription = true;
-	const itemOf = (facts: RunFacts): Item => ({
-		label: plainText(facts.name),
-		description: plainText([facts.alias, facts.displayName, statusOf(facts, deps.words).stateText, deps.model.placeOf(facts).qualified, facts.title].filter(Boolean).join(' · ')),
-		iconPath: cliIcon(deps.media, facts.cli),
-		buttons: [copy, close],
-		run: facts.id
-	});
-	/** The run the search names by ID, as the items show it now: the items change only as that, or the agents, change. */
+	const itemOf = (facts: RunFacts): Item => {
+		const item: Item = {
+			label: plainText(facts.name || facts.alias),
+			description: plainText([facts.name ? facts.alias : undefined, statusOf(facts, deps.words).stateText, deps.model.placeOf(facts).qualified, facts.title].filter(Boolean).join(' · ')),
+			iconPath: cliIcon(deps.media, facts.cli),
+			buttons: [copy, close],
+			run: facts.id
+		};
+		return { ...item, alwaysShow: matchesCliSearch(picker.value, facts.cli, facts.displayName, item) };
+	};
+	/** The query used for the current items, including their hidden CLI matches. */
 	let shownFor: string | undefined;
 	const refresh = (agentsChanged: boolean) => {
 		const runs = deps.model.ordered();
-		// An ID typed or pasted decides, whatever name comes with it; any other search is the picker's own
+		// An ID typed or pasted decides, whatever name comes with it; other searches include the CLI behind each icon.
 		const named = referencedRun(picker.value, runs)?.id;
-		if (!agentsChanged && named === shownFor) {
+		if (!agentsChanged && picker.value === shownFor) {
 			return;
 		}
-		shownFor = named;
+		shownFor = picker.value;
 		const active = picker.activeItems[0]?.run;
 		picker.items = named ? [{ ...itemOf(runs.find(run => run.id === named)!), alwaysShow: true }] : runs.map(itemOf);
 		const again = picker.items.find(item => item.run === active);

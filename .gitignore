@@ -4,6 +4,9 @@ node_modules
 npm-debug.log
 *.tsbuildinfo
 
+# Native agent integration files are local runtime state (ARCHITECTURE-4.1).
+.agents/
+
 # IDE application bundles are emitted beside ide/.
 /VSCode-*/
 /facade-darwin-*.dmg
@@ -15,3 +18,7 @@ npm-debug.log
 /deb/
 /setup/
 /screenshot.ps1
+
+# Generated extension review reports stay local; audit scripts and specifications are tracked.
+/docs/extension/audit/review-*.json
+/docs/extension/audit/mcp-polish-*.json

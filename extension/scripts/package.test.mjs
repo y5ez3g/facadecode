@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
 import { binaryTarget, filesOfZip, hostTarget, nativeProblems, packageTarget } from './native.mjs';
 import { packageReadme } from './readme.mjs';
@@ -73,6 +74,39 @@ test('the staged product carries the font of New Agent\'s own icon and the Codic
 	const notices = fs.readFileSync(path.join(stage, 'ThirdPartyNotices.txt'), 'utf8');
 	assert.match(notices, /^@vscode\/codicons: the new-session icon \(media\/new-agent\.woff\)$/m);
 	assert.match(notices, /Creative Commons Attribution 4\.0 International Public License/);
+});
+
+test('all built-in terminal logos are packaged native icons with color layers and monochrome outlines (LIFECYCLE-2.2)', () => {
+	const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
+	const characters = new Set();
+	for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
+		const { fontPath, fontCharacter } = manifest.contributes.icons[`facade-cli-${cli}`].default;
+		assert.ok(!characters.has(fontCharacter), `${cli} must have its own glyph`);
+		characters.add(fontCharacter);
+		const font = fs.readFileSync(path.join(stage, fontPath));
+		assert.strictEqual(font.subarray(0, 4).toString('ascii'), 'wOFF');
+		const tables = Array.from({ length: font.readUInt16BE(12) }, (_, i) => font.subarray(44 + i * 20, 48 + i * 20).toString('ascii'));
+		for (const required of ['cmap', 'glyf', 'COLR', 'CPAL']) { assert.ok(tables.includes(required), `${cli}: missing ${required}`); }
+	}
+	// Each COLR layer needs its own true bearing. A zero bearing shifts nonzero-x layers left,
+	// breaking multicolor logos even though the font and every code point load successfully.
+	const bytes = fs.readFileSync(path.join(stage, manifest.contributes.icons['facade-cli-pi'].default.fontPath));
+	const tables = new Map();
+	for (let i = 0; i < bytes.readUInt16BE(12); i++) {
+		const at = 44 + i * 20, name = bytes.subarray(at, at + 4).toString('ascii');
+		const offset = bytes.readUInt32BE(at + 4), compressed = bytes.readUInt32BE(at + 8), length = bytes.readUInt32BE(at + 12);
+		const data = bytes.subarray(offset, offset + compressed);
+		tables.set(name, compressed < length ? inflateSync(data) : data);
+	}
+	const count = tables.get('maxp').readUInt16BE(4), metrics = tables.get('hhea').readUInt16BE(34);
+	const long = tables.get('head').readInt16BE(50) === 1;
+	const offset = i => long ? tables.get('loca').readUInt32BE(i * 4) : tables.get('loca').readUInt16BE(i * 2) * 2;
+	for (let i = 0; i < count; i++) {
+		if (offset(i) === offset(i + 1)) { continue; }
+		const xMin = tables.get('glyf').readInt16BE(offset(i) + 2);
+		const bearing = tables.get('hmtx').readInt16BE(i < metrics ? i * 4 + 2 : metrics * 4 + (i - metrics) * 2);
+		assert.strictEqual(bearing, xMin, `glyph ${i}: keep the layer's position`);
+	}
 });
 
 test('the native backend starts a PTY after the extension is moved outside the repository', { timeout: 15000 }, async t => {

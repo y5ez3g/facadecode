@@ -67,7 +67,13 @@ process.stdout.write('fake agent ready\r\n');
 
 const NBSP = ' ';
 const PLACEHOLDER = 'Try a task';
-const lines: string[] = ['fake agent ready'];
+/** The built-in whose native input and surrounding transcript this fixture draws (CLIS-2.1, 2.3). */
+const as = process.env.FACADE_IT_AS ?? (process.env.FACADE_IT_SCREEN === 'muse' ? 'muse' : 'claude');
+const lines: string[] = [as === 'muse' ? '  Muse Code 1.4.14' : 'fake agent ready'];
+
+function appendTranscript(text: string): void {
+	lines.push(...text.split('\n').map((line, index) => as === 'muse' ? `${index === 0 ? '❯ ' : '  '}${line}` : line));
+}
 let draft = '';
 /** Where the paste in its draft starts: what was typed before it stays as typed, as a lead does (D108). */
 let pastedFrom: number | undefined;
@@ -75,20 +81,18 @@ let pastedFrom: number | undefined;
 // A native prompt: after `--`, or OpenCode's `--prompt`
 const prompt = args.includes('--prompt') ? args.indexOf('--prompt') : args.indexOf('--');
 if (prompt >= 0 && args[prompt + 1] !== undefined) {
-	lines.push(...args[prompt + 1].split('\n'));
+	appendTranscript(args[prompt + 1]);
 }
 
-/** The built-in it stands in for, whose input it draws as that CLI does, for that CLI's reader (CLIS-2.1): Claude Code by default. */
-const as = process.env.FACADE_IT_AS ?? (process.env.FACADE_IT_SCREEN === 'muse' ? 'muse' : 'claude');
-
-/** A row of its input as it draws it: its text, with SGR sequences, and the column the cursor stands at where it is on that row. */
+/** A row of its input, including SGR and the cursor-save sequence at its actual input position. */
 interface Row {
 	readonly text: string;
-	readonly cursor?: number;
 }
 
 const dim = (text: string) => `\x1b[2m${text}\x1b[22m`;
 const inverse = (text: string) => `\x1b[7m${text}\x1b[27m`;
+// Let the terminal measure Unicode cells, including emoji and combining marks. A code-point count is not a cursor column.
+const SAVE_CURSOR = '\x1b7';
 
 /**
  * Its input as each built-in draws its own, `shown` its draft or nothing (CLIS-2.1): Claude Code's frame with a dim placeholder;
@@ -98,25 +102,24 @@ const inverse = (text: string) => `\x1b[7m${text}\x1b[27m`;
  */
 function inputRows(width: number, shown: string): Row[] {
 	const rule = '─'.repeat(width);
-	const length = [...shown].length;
 	// A footer is one physical row, even under macOS's long temporary directory or a deep workspace path.
 	// Letting it wrap overwrites the following row and no longer represents the CLI's input layout.
 	const footer = (text: string) => [...text].slice(0, width).join('');
 	switch (as) {
 		case 'codex':
-			return [{ text: `› ${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: '' }, { text: footer(`  gpt-fake max · ${process.cwd()}`) }, { text: '  ? for shortcuts' }];
+			return [{ text: `› ${shown}${SAVE_CURSOR}${shown ? '' : dim(PLACEHOLDER)}` }, { text: '' }, { text: footer(`  gpt-fake max · ${process.cwd()}`) }, { text: '  ? for shortcuts' }];
 		case 'agy':
-			return [{ text: rule }, { text: shown ? `> ${shown}` : '>', cursor: 2 + length }, { text: rule }, { text: '? for shortcuts' }];
+			return [{ text: rule }, { text: `> ${shown}${SAVE_CURSOR}` }, { text: rule }, { text: '? for shortcuts' }];
 		case 'muse': {
 			const label = '── Voice input (⌥ + v to start) ';
-			return [{ text: `${label}${'─'.repeat(Math.max(2, width - [...label].length))}` }, { text: shown ? `❯ ${shown}` : '❯', cursor: 2 + length }, { text: rule }, { text: footer(`  muse-spark-1.3 · minimal · ${process.cwd()}`) }];
+			return [{ text: `${label}${'─'.repeat(Math.max(2, width - [...label].length))}` }, { text: `❯ ${shown}${SAVE_CURSOR}` }, { text: rule }, { text: footer(`  muse-spark-1.3 · minimal · ${process.cwd()}`) }];
 		}
 		case 'pi':
-			return [{ text: rule }, { text: `${shown}${inverse(' ')}`, cursor: length }, { text: rule }, { text: footer(process.cwd()) }, { text: '↑0 ↓0 0.0%/131k (auto)' }];
+			return [{ text: rule }, { text: `${shown}${SAVE_CURSOR}${inverse(' ')}` }, { text: rule }, { text: footer(process.cwd()) }, { text: '↑0 ↓0 0.0%/131k (auto)' }];
 		case 'opencode':
-			return [{ text: '  ┃' }, { text: `  ┃  ${shown || 'Ask anything… "Fix broken tests"'}`, cursor: 5 + length }, { text: '  ┃' }, { text: '  ┃  Build · qwen3.8-flash' }, { text: `  ╹${'▀'.repeat(Math.max(2, width - 3))}` }];
+			return [{ text: '  ┃' }, { text: `  ┃  ${shown}${SAVE_CURSOR}${shown ? '' : 'Ask anything… "Fix broken tests"'}` }, { text: '  ┃' }, { text: '  ┃  Build · qwen3.8-flash' }, { text: `  ╹${'▀'.repeat(Math.max(2, width - 3))}` }];
 		default:
-			return [{ text: rule }, { text: `❯${NBSP}${shown || dim(PLACEHOLDER)}`, cursor: 2 + length }, { text: rule }];
+			return [{ text: rule }, { text: `❯${NBSP}${shown}${SAVE_CURSOR}${shown ? '' : dim(PLACEHOLDER)}` }, { text: rule }];
 	}
 }
 
@@ -130,6 +133,8 @@ interface Quirks {
 	readonly garble?: boolean;
 	/** A terminal title emitted when this fixture changes, independent of its activity report. */
 	readonly title?: string;
+	/** A separate, undecorated report title, sent after the terminal title to catch source-precedence regressions. */
+	readonly reportedTitle?: string;
 }
 const QUIRKS = `${record}.quirks.${agent}`;
 function quirks(): Quirks {
@@ -164,16 +169,18 @@ function draw(): void {
 	const shown = pasted.includes('\n') || [...draft].length > width - 6 ? `${typed}${collapsed}` : draft;
 	const input: Row[] = panel
 		// Antigravity's MCP panel in place of its input: its server ready once it was started
-		? [{ text: 'MCP Servers' }, { text: '>  ✓ facade_facade  Tools: list_agents', cursor: 0 }, { text: 'Keyboard: esc Exit' }]
+		? [{ text: 'MCP Servers' }, { text: `${SAVE_CURSOR}>  ✓ facade_facade  Tools: list_agents` }, { text: 'Keyboard: esc Exit' }]
 		: inputRows(width, shown);
-	const body = lines.flatMap(line => line.match(new RegExp(`.{1,${width}}`, 'gu')) ?? ['']).slice(-(height - input.length));
+	const body = lines.flatMap(line => {
+		const parts = line.match(new RegExp(`.{1,${as === 'muse' ? width - 2 : width}}`, 'gu')) ?? [''];
+		return parts.map((part, index) => as === 'muse' && index > 0 ? `  ${part}` : part);
+	}).slice(-(height - input.length));
 	const out = ['\x1b[?2026h', '\x1b[H\x1b[2J'];
 	// What it printed sits right above its input, as a CLI's transcript does
 	const top = height - input.length;
 	body.forEach((line, at) => out.push(`\x1b[${top - body.length + at + 1};1H${line}`));
 	input.forEach((row, at) => out.push(`\x1b[${top + at + 1};1H${row.text}`));
-	const at = input.findIndex(row => row.cursor !== undefined);
-	out.push(`\x1b[${top + at + 1};${input[at].cursor! + 1}H`);
+	out.push('\x1b8');
 	out.push('\x1b[?2026l');
 	process.stdout.write(out.join(''));
 }
@@ -225,7 +232,7 @@ function take(): void {
 		return;
 	}
 	fs.appendFileSync(`${record}.received.${agent}`, `${JSON.stringify(draft)}\n`);
-	lines.push(...draft.split('\n'));
+	appendTranscript(draft);
 	draft = '';
 }
 
@@ -318,9 +325,12 @@ function start(): void {
 		const now = fs.existsSync(QUIRKS) ? fs.readFileSync(QUIRKS, 'utf8') : '';
 		if (now !== quirked) {
 			quirked = now;
-			const title = quirks().title;
+			const { title, reportedTitle } = quirks();
 			if (title !== undefined) {
 				process.stdout.write(`${ESC}]0;${title}${ST}`);
+			}
+			if (reportedTitle !== undefined && process.env.FACADE_IT_SCREEN !== 'muse') {
+				process.stdout.write(`${ESC}]7501;state=idle:title=${Buffer.from(reportedTitle).toString('base64')}${ST}`);
 			}
 			draw();
 		}
@@ -376,7 +386,14 @@ async function serverOf(): Promise<Server | undefined> {
 	if (extension >= 0) {
 		let registered: Server | undefined;
 		const load = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
-		(await load(pathToFileURL(args[extension + 1]).href)).default({ registerMcpServer: (_name: string, server: Server) => registered = server });
+		const hooks: (() => void)[] = [];
+		(await load(pathToFileURL(args[extension + 1]).href)).default({
+			registerMcpServer: (_name: string, server: Server) => registered = server,
+			on: (event: string, handler: (event: { systemPromptOptions: { sections: Record<string, string> } }) => void) => {
+				if (event === 'before_agent_start') { hooks.push(() => handler({ systemPromptOptions: { sections: {} } })); }
+			}
+		});
+		for (const hook of hooks) { hook(); }
 		return registered;
 	}
 	const inline = process.env.OPENCODE_CONFIG_CONTENT;

@@ -20,6 +20,8 @@ export interface SessionIntegrationInput {
 	readonly cwd: string;
 	readonly extra: readonly string[];
 	readonly tools?: boolean;
+	/** Initialization context for clients that omit MCP server instructions from the model request. */
+	readonly instructions?: string;
 	readonly throughCmd?: boolean;
 }
 
@@ -115,6 +117,10 @@ export const SESSION_HOOK_SCRIPT = [
 	'const temp = file + "." + process.pid + ".tmp";',
 	'fs.writeFileSync(temp, JSON.stringify({ session_id: id, pending_session_id: pending, transcript_path: input.transcript_path, cwd: input.cwd, source: status ? "status" : input.source || input.hook_event_name }), { mode: 0o600 });',
 	'fs.renameSync(temp, file);',
+	'if (input.hook_event_name === "SessionStart" && process.env.MUSE_SESSION_ID === input.session_id) {',
+	'const context = JSON.parse(fs.readFileSync(path.join(file.replace(/\\.json$/, ".d"), "context.json"), "utf8"));',
+	'if (typeof context.instructions === "string") process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: context.instructions } }));',
+	'}',
 	'} catch { } })();',
 	// The native title callback is a process-bound state report. Forward an existing user command unchanged, with the same input.
 	'if (input && input.product === "antigravity" && process.env.FACADE_CODE_TITLE_COMMAND) {',
@@ -138,14 +144,19 @@ function shellWord(text: string): string {
  * installation need not have.
  */
 export function sessionHookCommand(runtime: string, platform: NodeJS.Platform, cli: string, file: string, script: string): string {
+	return nodeHookCommand(runtime, platform, cli, [script, file]);
+}
+
+/** Run a native CLI hook with the editor's Node runtime, preserving every argument as one shell word. */
+export function nodeHookCommand(runtime: string, platform: NodeJS.Platform, cli: string, args: readonly string[]): string {
 	if (platform === 'win32' && cli !== 'claude') {
 		// Native Windows hooks use cmd.exe, not Claude's Git Bash. Encoded PowerShell keeps paths and JS out of cmd parsing.
 		const word = (value: string) => `'${value.replace(/'/g, "''")}'`;
-		const command = `$env:ELECTRON_RUN_AS_NODE='1'; & ${word(runtime)} ${word(script)} ${word(file)}; exit $LASTEXITCODE`;
+		const command = `$env:ELECTRON_RUN_AS_NODE='1'; & ${[runtime, ...args].map(word).join(' ')}; exit $LASTEXITCODE`;
 		return `powershell.exe -NoProfile -NonInteractive -EncodedCommand ${Buffer.from(command, 'utf16le').toString('base64')}`;
 	}
 	const posix = (each: string) => platform === 'win32' ? each.replace(/\\/g, '/') : each;
-	return `ELECTRON_RUN_AS_NODE=1 ${shellWord(posix(runtime))} ${shellWord(posix(script))} ${shellWord(file)}`;
+	return `ELECTRON_RUN_AS_NODE=1 ${[runtime, ...args].map(each => shellWord(posix(each))).join(' ')}`;
 }
 
 /** The conversation a run's session file records; none where there is no valid record. */

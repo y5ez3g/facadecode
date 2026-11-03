@@ -61,6 +61,7 @@ suite('Copy Diagnostics: what it copies (ARCHITECTURE-3.3, D116)', () => {
 		}));
 		assert.strictEqual(text, [
 			'Facade Code diagnostics, 2026-10-31T12:00:00.000Z',
+			"Scope: this window and execution environment only; other windows' logs are not collected.",
 			'Facade Code 0.0.2; window component 0.0.2; Visual Studio Code 1.143.0; darwin arm64; local',
 			'Collaboration through Facade\'s tools: on',
 			'',
@@ -193,7 +194,7 @@ suite('Copy Diagnostics: the command (UX-3.1, ARCHITECTURE-3.3)', () => {
 			const { registerDiagnostics } = withModules({ vscode: remoteApi(handlers) })<typeof import('../host/diagnostics')>(require.resolve('../host/diagnostics'));
 			registerDiagnostics({ ...deps, ...component ? { component } : {} });
 			await handlers.get('facade.copyDiagnostics')!();
-			assert.ok(copied[copied.length - 1].split('\n')[1].includes(`; ${named}; `), copied[copied.length - 1].split('\n')[1]);
+			assert.ok(copied[copied.length - 1].split('\n').find(line => line.includes('window component'))!.includes(`; ${named}; `), copied[copied.length - 1].split('\n').find(line => line.includes('window component'))!);
 			assert.match(copied[copied.length - 1], /; remote ssh-remote\n/);
 		}
 	});

@@ -34,19 +34,25 @@ export interface MessageRecord {
 	readonly replyTo?: string;
 	/** For a Facade result: the message it reports on. */
 	readonly about?: string;
-	/** For a Facade result: the tool call whose accepted response it completes (MCP-1.3). */
+	/** Original tool call, retained with the message for its later Facade result, including after reload (MCP-1.3). */
 	readonly callId?: string;
 	/** For a Facade result about another operation than a message: the agent it was on, a start's or a stop's (MCP-1.3). */
 	readonly agent?: { readonly run: RunId; readonly alias?: string; readonly name?: string };
+	/** Explicit operation facts for a start/stop receipt; never inferred from its prose or delivery outcome. */
+	readonly operation?: { readonly tool: 'start_agent' | 'stop_agent'; readonly window: string };
 	readonly text: string;
+	/** Machine facts for a Facade result; text remains its readable history body. Absent on older receipts and messages. */
+	readonly result?: { readonly [key: string]: unknown };
 	/** Unicode code points of `text`. */
 	readonly length: number;
 	/** The sender's request ID for this send, where it gave one: the same one again answers this record (MCP-1.1, D110). */
 	readonly requestId?: string;
+	/** Evidence of the original startup path, independent of how this message may later be read. */
+	readonly initialPrompt?: { readonly path: 'native' | 'post_start'; readonly capability: CapabilityState };
 	/** The window its header names, where its sender is another window's: what a delivery that goes on after a reload types again. */
 	readonly label?: string;
 	readonly delivery: {
-		readonly status: 'pending' | 'success' | 'failure';
+		readonly status: 'pending' | 'success' | 'failure' | 'unknown';
 		readonly reason?: string;
 		readonly effects: InputEffects;
 		/** Epoch ms when an accepted delivery ends at the latest. */
@@ -66,6 +72,8 @@ export interface MessageRecord {
 		 */
 		readonly start?: number;
 		readonly pasted?: true;
+		/** Frozen input, including a whole receipt batch, before the first possible write. */
+		readonly input?: { readonly text: string; readonly lead?: string; readonly messages: readonly string[] };
 		readonly seen?: string;
 		readonly entered?: true;
 	};
@@ -87,6 +95,7 @@ export interface SendRequest {
 	readonly id?: string;
 	/** The caller's request ID, kept with the record (MCP-1.1, D110). */
 	readonly requestId?: string;
+	readonly initialPrompt?: MessageRecord['initialPrompt'];
 }
 
 /** The first response to a send (RULES-1.2): success, failure, or accepted with its deadline and current obstacle. */
@@ -95,6 +104,20 @@ export interface SendResult {
 	readonly status: 'success' | 'failure' | 'accepted';
 	readonly reason?: string;
 	readonly obstacle?: string;
+}
+
+/** A final result for an existing operation, correlated without adding a new operation identity. */
+export interface ResultReport {
+	readonly id?: string;
+	readonly to: RunId;
+	readonly callId?: string;
+	readonly requestId?: string;
+	readonly agent?: RunId;
+	readonly agentParty?: MessageRecord['agent'];
+	readonly operation?: MessageRecord['operation'];
+	readonly about?: string;
+	readonly text: string;
+	readonly result?: MessageRecord['result'];
 }
 
 export interface InboxQuery {
@@ -120,17 +143,19 @@ export interface Messages {
 	send(request: SendRequest): Promise<SendResult>;
 	/**
 	 * Takes the ID of a message from `from` not sent yet, and answers the text its recipient's CLI is given for it: its header naming
-	 * the sender and this window, the whole text and its footer (COLLABORATION-2.1). A creation prompt is made so before its launch,
+	 * the sender and, across windows, its source, followed by the whole text (COLLABORATION-2.1). A creation prompt is made so before its launch,
 	 * so that the native path gives the CLI the message its record keeps (COLLABORATION-2.2); it is sent or recorded with that ID.
 	 */
 	allocate(request: { readonly from: RunId; readonly text: string; readonly party?: MessageRecord['from']; readonly label?: string }): { readonly id: string; readonly text: string };
+	/** Reserve an existing message number without creating an inbox record. */
+	reserveResult(): string;
 	/** A start's creation prompt went in natively: recorded as the caller's message to the child with its outcome (COLLABORATION-2.2). */
 	recordPrompt(request: Omit<SendRequest, 'elapsedMs'>, delivery: MessageRecord['delivery']): MessageRecord;
 	/**
 	 * A Facade result about an operation other than a message - a start that completed after its accepted response (MCP-1.3): a
 	 * `result` record in `to`'s inbox, delivered with its own budget, ending quietly where it cannot be (RULES-1.7).
 	 */
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly agentParty?: MessageRecord['agent']; readonly about?: string; readonly text: string }): MessageRecord;
+	report(request: ResultReport): MessageRecord;
 	/** Keeps a copy of a message this window's agent sent to another window's, for Message History; its outcome updates it. */
 	keepSent(record: MessageRecord): void;
 	/** The caller's own inbox, never another's (MCP-4.2). */

@@ -12,6 +12,8 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import { connectWithin } from '../base/connect';
+import { monotonic } from '../base/clock';
+import { expiredRoute, RouteExpired, spendRouteTime, withinRoute } from '../base/routeBudget';
 import { messageOf } from '../base/errors';
 import { isJsonObject } from '../base/json';
 import { lineReader } from '../base/lines';
@@ -134,6 +136,7 @@ class Peer {
 	}
 
 	ask(from: string, request: RouteRequest): Promise<RouteResponse> {
+		if (request.deadlineMs <= 0) { return Promise.resolve(expiredRoute(false)); }
 		if (this.isClosed) {
 			return Promise.resolve({ ok: false, reason: 'window_unavailable', message: `The Facade window ${this.window} is not connected: the request had no effect.`, effects: 'none' });
 		}
@@ -331,6 +334,8 @@ export class WindowNetwork {
 
 	/** Carries `request` to its window and back, or says why it could not, and whether it may have acted there. */
 	async route(request: RouteRequest): Promise<RouteResponse> {
+		const began = monotonic();
+		if (request.deadlineMs <= 0) { return expiredRoute(false); }
 		if (this.disposed) {
 			return { ok: false, reason: 'window_unavailable', message: 'This Facade window is closing: the request had no effect.', effects: 'none' };
 		}
@@ -343,15 +348,16 @@ export class WindowNetwork {
 		}
 		let peer: Peer;
 		try {
-			peer = await this.peer(entry);
+			peer = await withinRoute(this.peer(entry), request.deadlineMs - (monotonic() - began));
 		} catch (err) {
+			if (err instanceof RouteExpired) { return expiredRoute(false); }
 			// Nothing answers where its entry says it listens: that window went without saying so, and its entry goes (ARCHITECTURE-1.1)
 			if (err instanceof Unreached && err.absent) {
 				this.forget(entry);
 			}
 			return { ok: false, reason: 'window_unavailable', message: `The Facade window ${request.to} cannot be reached: ${messageOf(err)}. The request had no effect.`, effects: 'none' };
 		}
-		return peer.ask(this.window, request);
+		return peer.ask(this.window, spendRouteTime(request, monotonic() - began));
 	}
 
 	dispose(): void {
@@ -538,6 +544,10 @@ export class WindowNetwork {
 			}
 			if (this.disposed) {
 				answer(request.id, { ok: false, reason: 'window_unavailable', message: 'This Facade window is closing: the request had no effect.', effects: 'none' });
+				return;
+			}
+			if (request.deadlineMs <= 0) {
+				answer(request.id, expiredRoute(false));
 				return;
 			}
 			if (serving >= MOST_PENDING) {

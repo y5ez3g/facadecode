@@ -138,6 +138,8 @@ export interface McpServerLaunch {
 	readonly command: string;
 	readonly args: readonly string[];
 	readonly env: { readonly [name: string]: string };
+	/** The same model instructions for a client's native context hook where MCP server instructions are not exposed. */
+	readonly instructions?: string;
 }
 
 /**
@@ -232,14 +234,16 @@ export type Activity = 'working' | 'not_working' | 'unknown';
 export interface ActivityReport {
 	readonly run: RunId;
 	readonly activity: Activity;
+	/** Source state-episode time on the execution environment's clock; absent without source evidence. */
+	readonly observedAt?: number;
 	/** A native blocker the CLI reports, in its own words where it gives them. */
-	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
+	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	/** Why activity is unknown or in error, for the card's second line. */
 	readonly reason?: string;
 	readonly error?: string;
 	/** A missing supervisor connection is infrastructure uncertainty, independent of the CLI's activity. */
 	readonly disconnected?: boolean;
-	/** The CLI's own title, sanitized and capped at 300 code points. */
+	/** The CLI's own bounded title, sanitized for display. Empty clears it; absent leaves it unchanged. */
 	readonly title?: string;
 	/** Whether this run's CLI has proven it reports activity (S12). */
 	readonly reporting: boolean;
@@ -340,6 +344,12 @@ export interface RunMeta {
 	readonly origin?: 'human' | 'agent';
 	/** The creator's request ID for its start, where it gave one (MCP-1.1, D110). */
 	readonly requestId?: string;
+	/** The original creation prompt's message ID, retained for start-result lookup without replay. */
+	readonly promptId?: string;
+	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
+	readonly startCallId?: string;
+	/** Reserved final receipt, allocated before accepting this start. */
+	readonly resultMessageId?: string;
 	readonly model?: string;
 	readonly effort?: string;
 	readonly version?: string;
@@ -504,14 +514,15 @@ export interface RunFacts {
 	readonly pid?: number;
 	readonly startedAt?: number;
 	readonly activity: Activity;
-	/** Epoch ms its CLI's report of its current activity came: how long ago it said so, never that it still does (RULES-3.2). */
+	/** Source state-episode time, not receipt/query time or a heartbeat (RULES-3.2). */
 	readonly activitySince?: number;
+	readonly disconnected?: boolean;
 	readonly activityReason?: string;
 	/** Whether the run's CLI proved it reports activity; without it activity is unknown, shown red (RULES-3.2). */
 	readonly reporting: boolean;
 	/** Its process started, its CLI has shown no activity yet: the run is still starting, green, within CLIS-2.3's bound (D81). */
 	readonly awaitingActivity?: true;
-	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
+	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	readonly title?: string;
 	/** The unresolved error that makes the card red (RULES-3.2): launch failure, abnormal exit, reported error. */
 	readonly error?: RunError;
@@ -525,6 +536,12 @@ export interface RunFacts {
 	readonly origin: 'human' | 'agent';
 	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1, D110). */
 	readonly requestId?: string;
+	/** The original creation prompt's message ID; no new prompt is inferred from a repeated request. */
+	readonly promptId?: string;
+	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
+	readonly startCallId?: string;
+	/** Reserved final receipt, allocated before accepting this start. */
+	readonly resultMessageId?: string;
 	/** The model and effort this start asked for, where it asked (CLIS-1.4). */
 	readonly model?: string;
 	readonly effort?: string;
@@ -605,6 +622,8 @@ export interface Clock {
 }
 
 export interface LogPort {
+	/** Structured diagnostic facts only; callers never include prompts, terminal output or complete environments. */
+	fact?(event: string, fields: Readonly<Record<string, unknown>>): void;
 	/** One line of the agents log: UTC, safe references, no secrets or message text (ARCHITECTURE-3.3). */
 	event(text: string): void;
 }
@@ -628,6 +647,11 @@ export interface LaunchRequest {
 	readonly creator?: { readonly run: RunId; readonly root: RunId; readonly label?: string };
 	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D110). */
 	readonly requestId?: string;
+	readonly promptId?: string;
+	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */
+	readonly startCallId?: string;
+	/** Reserved final receipt, allocated before accepting this start. */
+	readonly resultMessageId?: string;
 	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
 	readonly prompt?: string;
 	/** The first line of the caller's own prompt text, shown in the card's hover. */
@@ -638,6 +662,8 @@ export interface LaunchRequest {
 export interface StartOutcome {
 	readonly state: 'running' | 'failed' | 'closed';
 	readonly error?: string;
+	/** A folder created by this launch, also when its card was closed before startup settled. */
+	readonly worktreeCreated?: string;
 	/** How the creation prompt went in, where one was asked for. */
 	readonly prompt?: LaunchPlan['prompt'];
 }

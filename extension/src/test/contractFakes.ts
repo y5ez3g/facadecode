@@ -6,15 +6,14 @@
 
 import * as assert from 'assert';
 import type { Directory, DirectoryAgent, DirectoryWindow, RouteResponse } from '../base/windowNetwork';
+import type { Data } from '../contract/facts';
 import type { NetworkPort, RouteOp } from '../contract/network';
 import { createToolService, CliFacts, InputOutcome, ScreenSnapshot, TerminalPort, ToolServiceDeps } from '../contract/tools';
 import { FacadeError } from '../core/errors';
 import type { InboxPage, InboxQuery, MessageRecord, Messages, SendRequest, SendResult } from '../core/messagePorts';
 import { formatMessage } from '../core/messages';
 import type { Agents, CleanupResult, CliChoice, LaunchRequest, Location, RunFacts, RunId, StartOutcome } from '../core/ports';
-import { ChoiceStore } from '../record/choices';
 import { ServedAnswer, TOOL_PROTOCOL, ToolAnswer, ToolCall } from '../schema/protocol';
-import { renderFacts } from '../schema/result';
 import { codePoints } from '../schema/validate';
 import { tempDir } from './util';
 
@@ -95,10 +94,12 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 		const n = this.next++;
 		const facts = runFacts(n, {
 			name: request.name.trim(), cli: request.cli, location: request.location, origin: request.origin, creator: request.creator?.run,
-			root: request.creator?.root ?? runId(n), yolo: true, lifecycle: 'starting', phase: request.worktree ? 'creating_worktree' : 'launching_cli',
+			root: request.creator?.root ?? runId(n), createdAt: this.now(), yolo: true, lifecycle: 'starting', phase: request.worktree ? 'creating_worktree' : 'launching_cli',
 			pid: undefined, startedAt: undefined, tools: 'connecting', activity: 'unknown', reporting: false,
 			...request.model !== undefined ? { model: request.model } : {}, ...request.effort !== undefined ? { effort: request.effort } : {},
-			...request.requestId !== undefined ? { requestId: request.requestId } : {}
+			...request.requestId !== undefined ? { requestId: request.requestId } : {},
+			...request.promptId !== undefined ? { promptId: request.promptId } : {},
+			startCallId: request.startCallId, resultMessageId: request.resultMessageId
 		});
 		this.runs.set(facts.id, facts);
 		this.starts.set(facts.id, new Deferred());
@@ -159,7 +160,7 @@ export class FakeAgents implements Pick<Agents, 'launch' | 'started' | 'warmedUp
 /** The first response a send gets, by default success. */
 export type SendResponse = Pick<SendResult, 'status' | 'reason' | 'obstacle'> & { readonly delivery?: MessageRecord['delivery'] };
 
-export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'> {
+export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'> {
 	now: () => number = Date.now;
 	readonly records: MessageRecord[] = [];
 	readonly sent: SendRequest[] = [];
@@ -185,7 +186,8 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return {
 			id: `m-${n}`, alias: `#m${n}`, kind, from: this.who(kind === 'result' ? 'facade' : request.from), to: this.who(request.to), window: 'win-1', environment: 'local',
 			at: 3000 + n, ...request.replyTo ? { replyTo: request.replyTo } : {}, ...request.callId ? { callId: request.callId } : {}, text: request.text, length: codePoints(request.text), delivery,
-			...request.requestId !== undefined ? { requestId: request.requestId } : {}
+			...request.requestId !== undefined ? { requestId: request.requestId } : {},
+			...request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {}
 		};
 	}
 
@@ -197,10 +199,10 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return [...this.records, ...this.kept].find(record => record.kind === 'message' && record.from.run === from && record.requestId === requestId && record.at > this.now() - 60 * 60_000);
 	}
 
-	allocate(request: { readonly from: RunId; readonly text: string }): { readonly id: string; readonly text: string } {
+	allocate(request: { readonly from: RunId; readonly text: string; readonly party?: MessageRecord['from']; readonly label?: string }): { readonly id: string; readonly text: string } {
 		const n = ++this.n;
 		this.allocated.push(`m-${n}`);
-		return { id: `m-${n}`, text: formatMessage({ alias: `#m${n}`, from: this.who(request.from) as MessageRecord['from'], text: request.text }, 'Design') };
+		return { id: `m-${n}`, text: formatMessage({ alias: `#m${n}`, from: request.party ?? this.who(request.from) as MessageRecord['from'], text: request.text }, request.label ?? '') };
 	}
 
 	async send(request: SendRequest): Promise<SendResult> {
@@ -226,10 +228,14 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'recor
 		return record;
 	}
 
-	report(request: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly text: string }): MessageRecord {
+	reserveResult(): string { return `m-${++this.n}`; }
+
+	report(request: Parameters<Messages['report']>[0]): MessageRecord {
 		this.reports.push(request);
-		const base = this.recordOf({ from: 'facade', to: request.to, text: request.text, ...request.callId ? { callId: request.callId } : {} }, { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 }, 'result');
-		const record: MessageRecord = request.agent ? { ...base, agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : base;
+		const base = this.recordOf({ id: request.id, from: 'facade', to: request.to, text: request.text, ...request.callId ? { callId: request.callId } : {} }, { status: 'pending', effects: { outcome: 'pending' }, attempts: 0 }, 'result');
+		const record: MessageRecord = { ...base, ...request.result ? { result: request.result } : {},
+			...request.operation ? { operation: request.operation } : {}, ...request.requestId !== undefined ? { requestId: request.requestId } : {},
+			...request.agentParty ? { agent: request.agentParty } : request.agent ? { agent: this.who(request.agent) as MessageRecord['to'] & { run: RunId } } : {} };
 		this.records.push(record);
 		return record;
 	}
@@ -337,7 +343,6 @@ export interface Setup {
 	readonly agents: FakeAgents;
 	readonly messages: FakeMessages;
 	readonly terminal: FakeTerminal;
-	readonly choices: ChoiceStore;
 	readonly written: { readonly home: string; readonly kind: 'messages' | 'screen'; readonly text: string; readonly ids?: readonly string[] }[];
 	readonly log: string[];
 	readonly dispose: () => void;
@@ -352,7 +357,6 @@ export function setUp(): Setup {
 	const messages = new FakeMessages(agents);
 	const terminal = new FakeTerminal();
 	const temp = tempDir('facade-code-contract-');
-	const choices = new ChoiceStore(temp.dir);
 	const written: Setup['written'][number][] = [];
 	const log: string[] = [];
 	let calls = 0;
@@ -374,7 +378,7 @@ export function setUp(): Setup {
 			written.push({ home, kind, text, ...ids ? { ids } : {} });
 			return { path: `${home}/results/${kind}-${written.length}.txt`, size: Buffer.byteLength(text) };
 		},
-		choices,
+		historyLog: `${temp.dir}/events.jsonl`,
 		timeout: () => setup.timeout,
 		yolo: () => true,
 		clock: { now: () => Date.UTC(2026, 9, 28, 22, 0, 0) },
@@ -395,42 +399,20 @@ export function setUp(): Setup {
 		service: (call: TestCall, receivedAt?: number) => handedBack(serve(call, receivedAt)),
 		call: (caller: RunFacts | RunId, tool: string, args?: unknown) =>
 			handedBack(serve({ caller: typeof caller === 'string' ? caller : caller.id, tool, arguments: args, elapsedMs: 7 })),
-		agents, messages, terminal, choices, written, log, deps,
+		agents, messages, terminal, written, log, deps,
 		dispose: temp.remove
 	});
 	return setup;
 }
 
-/** The answer's text heads the facts with a sentence, then lists exactly the structured result's fields (MCP-6.2). */
+/** Both MCP representations contain exactly the same object (MCP-6.2). */
 export function assertSameFacts(answer: ToolAnswer): void {
-	const listing = renderFacts(answer.structured).join('\n');
-	assert.ok(answer.text.endsWith(`\n\n${listing}`), `the text does not end in the structured facts:\n${answer.text}`);
-	const headline = answer.text.slice(0, answer.text.length - listing.length - 2);
-	assert.ok(headline.trim().length > 0 && !headline.includes('\n'), `the headline is one paragraph: ${JSON.stringify(headline)}`);
-	const walk = (value: unknown, key: string) => {
-		if (value === undefined) {
-			return;
-		}
-		if (key) {
-			assert.ok(listing.includes(`${key}:`), `${key} is not in the text`);
-		}
-		if (Array.isArray(value)) {
-			value.forEach(each => walk(each, ''));
-		} else if (value !== null && typeof value === 'object') {
-			Object.entries(value).forEach(([name, each]) => walk(each, name));
-		} else if (typeof value === 'string') {
-			const shown = value.includes('\n') ? value.split('\n').every(line => listing.includes(line)) : listing.includes(value) || listing.includes(JSON.stringify(value));
-			assert.ok(shown, `${JSON.stringify(value)} is not in the text`);
-		} else {
-			assert.ok(listing.includes(String(value)), `${String(value)} is not in the text`);
-		}
-	};
-	walk(answer.structured, '');
+	assert.deepStrictEqual(JSON.parse(answer.text), answer.structured);
 	assert.strictEqual(answer.isError, answer.structured.status === 'failure');
 }
 
 /** The structured result of an answer, its facts checked to be the same as its text. */
-export function resultOf(answer: ToolAnswer): { status: string; data: any; error?: { code: string; reason: string; message: string }; effects: any } { // eslint-disable-line @typescript-eslint/no-explicit-any
+export function resultOf(answer: ToolAnswer): { status: string; data: any; error?: { code: string; reason: string; message: string }; effects: any; recovery?: import('../schema/result').Recovery } { // eslint-disable-line @typescript-eslint/no-explicit-any
 	assertSameFacts(answer);
 	return answer.structured as never;
 }
@@ -480,4 +462,10 @@ export class FakeNetwork implements NetworkPort {
 		this.routed.push(route);
 		return this.respond(route);
 	}
+}
+
+/** Complete remote response, including a window with no agents. */
+export function remoteSnapshot(windowId: string, agents: readonly Data[] = [], extra: Data = {}) {
+	return { window: { window_id: windowId, label: 'Backend', environment: 'ssh-remote+box',
+		folders: [], locations: [], clis: [], counts: { folders: 0, locations: 0, worktrees: 0, agents: agents.length }, complete: true, ...extra }, agents };
 }

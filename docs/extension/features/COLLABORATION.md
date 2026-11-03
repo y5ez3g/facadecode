@@ -20,6 +20,8 @@ The network is every Facade window open on this client computer, whatever execut
 Startup discovery includes open windows, valid locations and actual CLI choices, including empty-agent windows.
 RULES-4.3 owns run YOLO and reach. A new child joins its creator's tree even when placed in another window.
 Startup arguments follow MCP-2.2. Agent-created runs appear in the destination without changing human focus.
+A disconnected window is not an absent agent. A cross-window failure states whether the request never reached the
+execution path or whether its answer is missing; only the latter leaves an earlier effect uncertain.
 No automatic child-idle, completion or exit reports are generated. Organization and reporting belong to prompt/skill.
 
 ### 1.2 Screens and deliberate terminal control
@@ -40,22 +42,20 @@ claim ordinary-message support. A frame returned after typing is observation, no
 
 **An agent message submits its full content, with a small identity header, to the recipient's CLI.**
 
-Format (English API text):
+Format (English terminal text):
 
 ```text
-[Facade message #m42 | from @Ada #a7 | window Design | reply to #m39]
+📨 Message from Ada (#a7) · #m42
 <complete original text>
-[/Facade message #m42]
 ```
 
-The optional reply field appears only when supplied. Bodies are data: control bytes/terminal escapes are rejected by
-MCP validation; ordinary Unicode and newlines are preserved, never silently truncated. Metadata uses escaped display
-text so a name cannot forge a header. A body containing the delimiter remains literal body content, identified also by
-length in the operation record. A message is one paste followed by Enter, not one Enter per line. Where the recipient's CLI
-takes a paste alone as material rather than a request - Claude Code - the words `Act on this Facade message: ` are typed
-before the paste in the same write, so that the message is the person's own request. Competitive analysis identified
-Claude Code refusing a brief that came as a paste alone (D108). A Facade result asks for nothing and has none. No ten-message batching
-that changes per-send identity, no doorbell or reminder line, and no “fetch the body” notice in place of the message.
+A reply adds `Reply to #m39` to the header; another window adds `From Design`. Same-window delivery omits the window.
+Names are bounded single-line display text; empty names use the short ID alone. Bodies are data: control bytes and terminal
+escapes are rejected by MCP validation; ordinary Unicode, blank lines and newlines are preserved without truncation.
+There is no closing label, JSON wrapper, generic read_messages instruction or fetch-body notice. Each ordinary message is
+one paste and one submission. Native adaptation may type the notification header before pasting the body when a CLI
+requires typed context to treat pasted content as a request; it adds no extra message or model turn. Input already started
+keeps its original rendered text through reload; formatting changes never trigger a second paste.
 The header's message ID is the same across retries under RULES-1.1; MCP-6.2 teaches the receiving model to deduplicate it.
 Oversized content fails before writing with the supported limit; a caller can explicitly send a file-reference message.
 A path in such a message is just text; Facade never assumes a remote path is readable in another environment.
@@ -64,10 +64,17 @@ A path in such a message is just text; Facade never assumes a remote path is rea
 
 **System results are Facade facts; a creation prompt is an ordinary message supplied by the caller.**
 
-An asynchronous message result identifies its original message, sender/target and actual delivered/not-delivered
-outcome and effects, including delivery through read_messages; MCP-1.3 owns originating-call matching for asynchronous
-operations. Clearly label the report as a Facade result, not a reply authored by the recipient, and request no
-response. An unreachable result ends; do not notify a person, send another error to B, or resend the original content.
+A system result starts with 🔔 and reports actual facts in natural English, without JSON or a closing label. Confirmed
+delivery says `Your message #m42 has been passed on to Ada (#a7).` It references the original message, not a second visible
+receipt number. An async start/stop result uses its reserved message number under MCP-1.3. Full call IDs stay in structured
+records. Partial input, uncertain submission, process/tools/prompt distinctions and created worktrees remain explicit;
+ordinary success needs no boilerplate. Receipt delivery is separate from the operation it reports. Existing permission,
+question and sign-in notices use the same voice without changing recipients, frequency or authority.
+An unavailable window before execution says the message could not be sent and confirms untouched input only when known.
+After forwarding without an answer, it says delivery could not be confirmed; it never recommends a blind resend.
+These distinctions refine existing failure notifications; they add no new notification or recipient.
+These are Facade facts, not replies authored by the recipient, and request no response. An unreachable result ends;
+do not notify a person, send another error to B, or resend the original content.
 Use the native interactive prompt argument that CLIS-3.2 maps for the CLI, even while it is unverified, and report its
 capability state with the prompt outcome. Without a mapping, start the CLI and automatically send the same prompt after
 process startup through ordinary message delivery. The caller does not need to compensate for CLI differences. Start
@@ -81,6 +88,8 @@ tools for the turns after it. Its creation prompt goes after that, as its first 
 A blocked input box consumes the normal attempts. Both paths use RULES-1.3's meaning of delivery; native acceptance
 does not require a terminal Enter effect.
 Report process startup and prompt input separately. Failed prompt submission leaves the started agent available.
+An unverified native prompt remains unconfirmed in its record and human history; it is neither confirmed delivery nor
+a continuing background delivery. Reading its complete record can subsequently deliver it without another paste.
 MCP-2.3 owns the final report when prompt input remains pending after process startup.
 Do not duplicate a confirmed native prompt through the post-start path; uncertainty follows finite at-least-once rules.
 There is no task, task result, child completion report or replay of a creation prompt.
@@ -112,6 +121,10 @@ Show opens the actual run/record in this window, never a same-named replacement 
 
 **A record handed back by read_messages is delivered; reading starts no new terminal paste.**
 
+System-result records may retain structured operation facts beside their existing human-readable text. The agent gets
+the structured facts in its receipt or MCP read; Message History keeps the readable text. Ordinary message bodies and
+older text-only system results stay intact. Both representations identify the same operation and effects (MCP-1.2).
+
 read_messages without IDs returns the caller's incoming records that are not yet delivered; all:true pages all retained
 incoming records. Explicit IDs also resolve only inside the caller's inbox. Other agents' inboxes and the caller's own
 sent messages are unavailable through this tool, including in YOLO. A message has one delivery state (RULES-1.3);
@@ -129,9 +142,14 @@ submission. No understanding or completion claim is inferred from reading.
 Use the command/picker title `Message History...`, not Chat Room. List one-to-one conversations by recent activity,
 then show source, recipient, time, body, reply relation, delivery outcome and system-result references.
 History may contain records from previous openings of this workspace within retention. Its UI does not expose a
-client-wide or cross-window management surface. It is Facade message history, not the vendor's whole CLI conversation.
+client-wide or cross-window management surface. Each record labels its own transport outcome `Delivery`; a system result
+then gives the readable operation outcome, with complete structured facts below it. It is Facade message history, not the vendor's whole CLI conversation.
 No live composer, send/replay control, group conversation or delete/hide control is added. Render message content as
 text; do not execute links or commands embedded in it.
+Start/stop results retain the operation name and execution window explicitly, with the target's recorded short identity;
+history labels the operation and agent without inferring them from prose. Full call/request IDs and route fields belong
+below the original body in localized Technical details, together with the unchanged operation result. A reserved receipt
+ID is not a fabricated record. Missing/expired original messages keep their references without invented content.
 
 ### 3.3 History retention
 
@@ -181,7 +199,12 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Runtime behavior remai
 
 ## Change log
 
+- 2026-11-01: D149 keeps unverified native prompt acceptance unconfirmed in machine results and readable history.
+
 - 2026-11-01: 4.1 shows a sender's copy whose result never came back as unconfirmed after its deadline (D132).
+- 2026-11-01: D148 separates structured system receipts for agents from readable Message History text, preserving
+  ordinary bodies, old records, correlation and the existing delivery handoff.
+
 - 2026-11-01: Describe competitive-analysis findings without naming individual products; message behavior is unchanged.
 - 2026-10-31: 3.1 follows RULES-1.5's completion of an already pasted owned draft after read delivery (D119).
 - 2026-10-31: 2.1 types `Act on this Facade message: ` before a message's paste for Claude Code (D108).

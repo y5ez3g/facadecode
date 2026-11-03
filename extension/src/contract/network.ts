@@ -14,9 +14,7 @@ import type { RunFacts, RunId } from '../core/ports';
 export type RouteOp =
 	/** A tool call for that window's agents or locations, made there for a caller of this one: start, stop, screen and input. */
 	| 'call'
-	/** That window as list_start_options lists it, with its working locations (MCP-2.1). */
-	| 'summary'
-	/** That window's agents as list_agents lists them, within the caller's reach (MCP-3.1). */
+	/** That window's current locations, CLI availability and agents as list_agents lists them, within the caller's reach (MCP-3.1). */
 	| 'agents'
 	/** A message for one of its agents, delivered there under that window's input rules (RULES-1.4, 1.5). */
 	| 'deliver'
@@ -46,6 +44,8 @@ export interface GuestCaller {
 
 /** A tool call routed here from the caller's window. `inline` asks for a long screen's text in the answer, not a file here. */
 export interface RoutedCall {
+	/** The originating tool protocol, validated before the routed action. */
+	readonly protocol: number;
 	readonly tool: string;
 	readonly arguments: unknown;
 	readonly caller: GuestCaller;
@@ -69,9 +69,13 @@ export interface RoutedDelivery {
 
 /** A Facade result for one of the receiving window's agents: about a message of its own, or another operation's outcome. */
 export interface RoutedResult {
+	readonly id?: string;
 	readonly to: RunId;
 	readonly text: string;
+	readonly result?: { readonly [key: string]: unknown };
 	readonly callId?: string;
+	readonly requestId?: string;
+	readonly operation?: MessageRecord['operation'];
 	/** The message it reports on, as the delivering window recorded it: the sender's copy is brought up to date with it. */
 	readonly about?: MessageRecord;
 	/** The agent the operation was on, as its window names it. */

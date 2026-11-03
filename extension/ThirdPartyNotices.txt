@@ -9,6 +9,8 @@ Facade Code / Visual Studio Code (inherited source)
 
 Source includes material inherited from Facade Code, a Visual Studio Code fork
 (https://github.com/microsoft/vscode). Its original combined notice follows; inherited file notices remain in the source.
+History-list relative-time formatting also follows VS Code; its translated time phrases come from
+https://github.com/microsoft/vscode-loc (MIT, Copyright (c) Microsoft Corporation).
 
 MIT License
 

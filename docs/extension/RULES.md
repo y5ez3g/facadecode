@@ -51,7 +51,9 @@ launch path; no synthetic Enter is required. Passing arguments to an unstarted p
 read_messages result that is handed back to the recipient delivers every record it contains (COLLABORATION-3.1).
 Busy/idle transitions or unrelated output are not evidence that this particular instruction was submitted. The adapter
 reports actual effects; uncertainty remains explicit. Never truncate content and report full success.
-Each message has one delivery state: being delivered, delivered or not delivered. There is no separate fetch state.
+Each message has one delivery state: being delivered, delivered, not delivered, or unconfirmed where native prompt
+acceptance is unknown. Unconfirmed native input starts no automatic post-start delivery; an explicit inbox read may
+deliver that same record without another paste. There is no separate fetch state.
 Human notification handoff is defined separately in COLLABORATION-2.3.
 
 ### 1.4 Input protection applies to every attempt
@@ -261,15 +263,21 @@ A live process can lack its Facade tools. A working CLI can accept a message. An
 unknown activity report does not prove unusable input. Internal cleanup may be stopping, but explicit close removes UI
 immediately. A stale observation is labeled as such rather than treated as proof of exit.
 
+State observation time comes from the execution environment's current state episode, not the query or view refresh.
+Repeated reports, title-only changes and reload preserve that source time. It is neither a heartbeat nor task duration;
+missing source time stays absent. Lost execution connections mark retained activity observations stale without an age threshold.
+
 ### 3.2 The dot says only what is known
 
 **Starting or working is green, idle is grey, a native blocker is yellow, and an error or unavailable reliable status is red.**
 
 An unresolved error takes precedence. Without such an error, observed work/startup is green - startup lasting until the
 CLI first shows its activity, within CLIS-2.3's bound. Observed not-working with no blocker is grey; native permission,
-answer and sign-in blockers are yellow. Unknown activity remains red, including beside a known blocker, and the second
+answer and sign-in blockers are yellow; a reported blocker without a recognized kind stays a generic blocker, never idle.
+Unknown activity remains red, including beside a known blocker, and the second
 line explains the unavailable status. Grey requires reliable idle evidence; it never stands for an unknown state (D127).
-A quiet screen does not prove idle. A turn ending becomes grey without a notification or a task-completion claim. Recovery clears only the
+A quiet screen or an unrecognized working indicator does not prove idle. Screen evidence is invalidated by a full reset
+or an unrecognized completed layout; incomplete synchronized drawing supplies no new observation. A turn ending becomes grey without a notification or a task-completion claim. Recovery clears only the
 corresponding error. Reduced motion removes breathing, never the accessible state description.
 
 ### 3.3 Exit classification is independent of who caused it
@@ -405,6 +413,10 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 [Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
 
 ## Change log
+
+- 2026-11-02: Retain blockers with unknown kinds and invalidate lost screen evidence without guessing idle (D164).
+
+- 2026-11-01: D149 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.
 
 - 2026-11-01: From the owner-requested release review: 1.4 tries a starting run's input as unknown; 1.5 joins results
   that come together into one paste; 1.9 continues a reloaded window's deliveries within their deadlines (D132).

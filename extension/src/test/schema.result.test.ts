@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { accepted, answerOf, errorResult, failure, renderFacts, success } from '../schema/result';
+import { accepted, answerOf, errorResult, failure, success } from '../schema/result';
 import { ArgumentError, validateArguments } from '../schema/validate';
 
 /** An error as any layer codes one: what the result reads off it is its MCP code and reason. */
@@ -13,74 +13,25 @@ class CodedError extends Error {
 	}
 }
 
-suite('Schema: results say the same in text and structure, and never more than happened (MCP-1.2)', () => {
+suite('Schema: current results say the same in text and structure (MCP-1.2)', () => {
 
 	test('failure alone is an MCP error; accepted is not success, and not an error either', () => {
 		assert.strictEqual(answerOf(success({})).isError, false);
-		assert.strictEqual(answerOf(accepted({ agent_id: 'run-1' }, { outcome: 'pending', agent_id: 'run-1' })).isError, false);
+		const waiting = answerOf(accepted({ agent_id: '#a1' }, { outcome: 'pending' }));
+		assert.strictEqual(waiting.isError, false);
+		assert.deepStrictEqual(JSON.parse(waiting.text), waiting.structured);
+		assert.strictEqual(waiting.structured.status, 'accepted');
 		const failed = answerOf(failure({ code: 'NOT_FOUND', reason: 'not_found', message: 'No agent "x" was found.' }, {}));
 		assert.strictEqual(failed.isError, true);
-		assert.match(failed.text, /^Failed: No agent "x" was found\./);
-		assert.match(failed.text, /\n {2}code: NOT_FOUND\n {2}reason: not_found\n/);
-		assert.match(answerOf(accepted({}, { outcome: 'pending' })).text, /^Accepted: the operation continues, and a Facade result reports its outcome later\./);
+		assert.deepStrictEqual(JSON.parse(failed.text), failed.structured);
+		assert.deepStrictEqual(failed.structured.error, { code: 'NOT_FOUND', reason: 'not_found', message: 'No agent "x" was found.' });
 	});
 
-	test('the structured answer is the envelope itself, and its text lists every field of it after the headline', () => {
-		const result = success({ agent_id: 'run-1', yolo: false, count: 3, empty: [], nothing: {}, tags: ['a', 'b'], runs: [{ id: 'x', n: 1 }, { id: 'y', n: 2 }] }, { outcome: 'confirmed', agent_id: 'run-1' });
-		const answer = answerOf(result, 'Started.');
-		assert.strictEqual(answer.structured, result);
-		assert.strictEqual(answer.text, [
-			'Started.',
-			'',
-			'status: success',
-			'data:',
-			'  agent_id: run-1',
-			'  yolo: false',
-			'  count: 3',
-			'  empty: []',
-			'  nothing: {}',
-			'  tags:',
-			'    - a',
-			'    - b',
-			'  runs:',
-			'    - id: x',
-			'      n: 1',
-			'    - id: y',
-			'      n: 2',
-			'effects:',
-			'  outcome: confirmed',
-			'  agent_id: run-1'
-		].join('\n'));
-	});
-
-	test('text of several lines is a literal block, indented under its field, so that no line of it can pass for a field', () => {
-		const lines = renderFacts({ text: 'status: success\n  indented\n\nend', kept: 'a\n', more: 'b\n\n', after: 1 });
-		assert.deepStrictEqual(lines.join('\n').split('\n'), [
-			'text: |-',
-			'  status: success',
-			'    indented',
-			'  ',
-			'  end',
-			'kept: |',
-			'  a',
-			'more: |+',
-			'  b',
-			'  ',
-			'after: 1'
-		]);
-	});
-
-	test('a string that would not read back as itself is quoted as JSON', () => {
-		assert.deepStrictEqual(renderFacts({ a: '', b: ' padded', c: 'cr\rhere', d: '42', e: 'true', f: '"quoted"', g: 'plain words: fine', h: null }), [
-			'a: ""',
-			'b: " padded"',
-			'c: "cr\\rhere"',
-			'd: "42"',
-			'e: "true"',
-			'f: "\\"quoted\\""',
-			'g: plain words: fine',
-			'h: null'
-		]);
+	test('both representations contain the complete JSON envelope, preserving empty and false values', () => {
+		const result = success({ agent_id: '#a1', yolo: false, count: 3, empty: [], nothing: {}, tags: ['a', 'b'], runs: [{ id: 'x', n: 1 }, { id: 'y', n: 2 }] }, { outcome: 'confirmed' });
+		const answer = answerOf(result);
+		assert.deepStrictEqual(answer.structured, result);
+		assert.deepStrictEqual(JSON.parse(answer.text), result);
 	});
 
 	test('a coded error keeps its code and reason and claims no effect; any other error is FAILED with unknown effects', () => {
@@ -93,7 +44,7 @@ suite('Schema: results say the same in text and structure, and never more than h
 		assert.deepStrictEqual(thrown.effects, { outcome: 'unknown' });
 		const withEffects = errorResult('boom', { effects: { outcome: 'unknown', text_written: 'unknown', enter_written: null }, data: { agent_id: 'run-1' } });
 		assert.deepStrictEqual(withEffects, { status: 'failure', data: { agent_id: 'run-1' }, error: { code: 'FAILED', reason: 'unexpected_error', message: 'boom' }, effects: { outcome: 'unknown', text_written: 'unknown', enter_written: null } });
-		assert.match(answerOf(withEffects).text, /enter_written: null/);
+		assert.strictEqual(JSON.parse(answerOf(withEffects).text).effects.enter_written, null);
 	});
 
 	test('in a call that only reads, an uncoded error is UNAVAILABLE and had no effect', () => {

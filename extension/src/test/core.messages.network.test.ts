@@ -108,7 +108,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		const result = await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0, callId: 'c-1' }));
 		assert.strictEqual(result.status, 'success');
 		assert.deepStrictEqual([result.record.id, result.record.from, result.record.fromWindow, result.record.window], ['m-50', SENDER.party, 'win-2', 'win-1']);
-		assert.deepStrictEqual(input.submitted, [{ run: B, text: '[Facade message #m50 | from @Gus #a9 | window Backend]\nShip it.\n[/Facade message #m50]' }]);
+		assert.deepStrictEqual(input.submitted, [{ run: B, text: '📨 Message from Gus (#a9) · #m50 · From Backend\nShip it.' }]);
 	});
 
 	test('its accepted outcome goes back to the sender\'s window as a result about it - never into this window', async () => {
@@ -120,7 +120,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		assert.strictEqual(reported.length, 1);
 		const [{ window, result: report }] = reported;
 		assert.deepStrictEqual([window, report.to, report.callId, report.about.id, report.about.delivery.status], ['win-2', GUEST, 'c-1', 'm-50', 'success']);
-		assert.strictEqual(report.text, `Your message #m50 to @Bob #a2 (${B}) was submitted to its CLI. This is a Facade result, not a reply from the recipient.`);
+		assert.strictEqual(report.text, `Your message #m50 has been passed on to Bob (#a2).`);
 		// Nothing is typed into this window for it, and no result record is kept here: that window keeps it
 		assert.deepStrictEqual([input.submitted.map(each => each.run), [...messages.records.keys()]], [[B], ['m-50']]);
 	});
@@ -150,7 +150,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }));
 		await sleep(15_000);
 		assert.strictEqual(reported[0].result.about.delivery.reason, 'input_unknown');
-		assert.strictEqual(reported[0].result.text, `Your message #m50 to @Bob #a2 (${B}) was not delivered: its input could not be read until the deadline; Facade did not recognize the input box of Codex 0.166.0 (input_unknown). Input effects: none. This is a Facade result, not a reply from the recipient.`);
+		assert.strictEqual(reported[0].result.text, `Delivery of your message #m50 to Bob (#a2) failed. Facade couldn't recognize Codex 0.166.0's input box. Nothing was entered in the terminal.`);
 		assert.deepStrictEqual(input.submitted, []);
 	});
 
@@ -162,7 +162,7 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		await settled(service.send({ from: A, to: B, text: 'Ship it.', elapsedMs: 0 }));
 		await sleep(15_000);
 		const result = [...messages.records.values()].find(record => record.kind === 'result')!;
-		assert.match(result.text, /Facade did not recognize the input box of Codex \(input_unknown\)/);
+		assert.match(result.text, /Facade couldn't recognize Codex's input box/);
 	});
 
 	test('history shows this window\'s messages and the copies of those it sent to other windows, each once, oldest first', async () => {
@@ -212,8 +212,8 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		const record = service.recordPrompt({ id: 'm-60', from: GUEST, sender: SENDER, to: B, text: 'Build it.' }, { status: 'success', effects: { outcome: 'unknown' }, attempts: 0, via: 'launch', deliveredAt: 1 });
 		assert.deepStrictEqual([record.id, record.from, record.fromWindow, record.delivery.via], ['m-60', SENDER.party, 'win-2', 'launch']);
 		// What a prompt's header is made of, for the native path: the guest's party
-		const allocated = service.allocate({ from: GUEST, text: 'Build it.', party: SENDER.party });
-		assert.strictEqual(allocated.text, `[Facade message #m${allocated.id.slice(2)} | from @Gus #a9 | window Design]\nBuild it.\n[/Facade message #m${allocated.id.slice(2)}]`);
+		const allocated = service.allocate({ from: GUEST, text: 'Build it.', party: SENDER.party, label: SENDER.label });
+		assert.strictEqual(allocated.text, `📨 Message from Gus (#a9) · #m${allocated.id.slice(2)} · From Backend\nBuild it.`);
 	});
 
 	test('a result another window routes for this window\'s agent is about the message it names, and names the agent as that window did', async () => {
@@ -221,6 +221,6 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		const record = service.report({ to: A, text: 'Your message #m5 was submitted to its CLI.', callId: 'c-3', about: 'm-5', agentParty: { run: GUEST, alias: '#a9', name: 'Gus' } });
 		assert.deepStrictEqual([record.kind, record.about, record.callId, record.agent], ['result', 'm-5', 'c-3', { run: GUEST, alias: '#a9', name: 'Gus' }]);
 		await sleep(1);
-		assert.deepStrictEqual(input.submitted.map(each => [each.run, each.text.split('\n')[0]]), [[A, '[Facade result #m1 | about #m5 | agent @Gus #a9 | call c-3]']]);
+		assert.deepStrictEqual(input.submitted.map(each => [each.run, each.text.split('\n')[0]]), [[A, '🔔 Your message #m5 was submitted to its CLI.']]);
 	});
 });

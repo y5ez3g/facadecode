@@ -40,6 +40,7 @@ const FOLDERS: { readonly [folder: string]: { readonly adapter: string; readonly
 	'claude-2.1.316-24rows': { adapter: 'claude-frame', garble: chars => chars.replace('❯', '>') },
 	'codex-0.166.0-24rows': { adapter: 'codex-prompt', garble: chars => chars.replace('›', '>') },
 	'agy-1.4.12-24rows': { adapter: 'agy-frame', garble: chars => chars.replace('>', '❯') },
+	'agy-1.4.12-modes': { adapter: 'agy-frame', garble: chars => chars.replace('>', '❯') },
 	'muse-1.4.14-24rows': { adapter: 'muse-frame', garble: chars => chars.replace('❯', '>') },
 	'pi-1.4.0-24rows': { adapter: 'pi-frame', garble: chars => chars.replace(/─/g, '-') },
 	'opencode-2.1.4-24rows': { adapter: 'opencode-frame', garble: chars => chars.replace('┃', '|') }
@@ -177,7 +178,7 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 			assert.ok(!isOwnDraft(reading.draft, `${pasted[each.fixture.name]}\nmore`, each.adapter), label(each));
 			checked++;
 		}
-		assert.strictEqual(checked, 3 * Object.keys(FOLDERS).filter(folder => !folder.endsWith('-pastes') && !folder.endsWith('-24rows') && !['claude-2.1.316', 'codex-0.166.0'].includes(folder)).length);
+		assert.strictEqual(checked, 3 * Object.keys(FOLDERS).filter(folder => !folder.endsWith('-pastes') && !folder.endsWith('-24rows') && !folder.endsWith('-modes') && !['claude-2.1.316', 'codex-0.166.0'].includes(folder)).length);
 		// Each captured paste, its text kept with its screen: its own draft, after its lead where one was typed
 		const captured = PROBED.filter(probed => probed.fixture.paste !== undefined);
 		assert.ok(captured.length >= 60, `${captured.length} captured pastes`);
@@ -257,6 +258,23 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		// Its placeholder is empty input only with the cursor where the input starts
 		const home = PROBED.find(each => each.folder === 'opencode-2.1.4' && each.fixture.name === 'empty')!;
 		assert.deepStrictEqual(readInput(home.screen, 'opencode-frame'), { state: 'usable', evidence: `the input box at row ${home.screen.cursor.y + 1} is empty but for its placeholder` });
+	});
+
+	test('Antigravity mode hints need the empty-input footer; identical user text at the input start remains a draft (D157)', () => {
+		const modes = PROBED.filter(each => each.folder === 'agy-1.4.12-modes');
+		for (const each of modes.filter(each => each.fixture.name.endsWith('-empty'))) {
+			assert.strictEqual(readInput(each.screen, each.adapter).state, 'usable', label(each));
+			const footer = each.screen.cursor.y + 2;
+			assert.strictEqual(readInput(blank(each.screen, y => y === footer), each.adapter).state, 'draft', `${label(each)} without the empty-only hint`);
+		}
+		const literal = modes.filter(each => each.fixture.name.endsWith('-same-text-home'));
+		assert.strictEqual(literal.length, 3);
+		for (const each of literal) {
+			assert.strictEqual(each.screen.cursor.x, 2);
+			const reading = readInput(each.screen, each.adapter);
+			assert.strictEqual(reading.state, 'draft', label(each));
+			assert.strictEqual(reading.draft, (each.fixture.rows[each.screen.cursor.y].cells as string).slice(2));
+		}
 	});
 
 	test('Pi\'s editor is no taller than it can be: a picker between two rules over its footer is a native menu, never input', () => {

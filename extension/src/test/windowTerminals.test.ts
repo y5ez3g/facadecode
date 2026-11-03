@@ -83,6 +83,7 @@ suite('Window terminal registration: actual objects across workspace host genera
 		const api = {
 			env: { sessionId: owner.session }, EventEmitter: TestEmitter,
 			ThemeIcon: class { constructor(readonly id: string) { } }, Uri: { joinPath: () => ({}) },
+			ThemeColor: class { constructor(readonly id: string) { } },
 			ViewColumn: { Active: -1 }, TerminalExitReason: { Shutdown: 1 },
 			workspace: { getConfiguration: () => ({ get: () => ' - ' }), onDidChangeConfiguration: changed.event },
 			window: {

@@ -3,13 +3,13 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { locationOf } from '../contract/facts';
 import type { GuestCaller } from '../contract/network';
 import { createToolServices, ToolServices } from '../contract/tools';
 import type { MessageRecord } from '../core/messagePorts';
+import { TOOL_PROTOCOL } from '../schema/protocol';
 import { accepted, failure, success } from '../schema/result';
 import { MESSAGE_LIMIT } from '../schema/tools';
-import { FakeNetwork, remoteAgent, resultOf, runFacts, runId, Setup, setUp } from './contractFakes';
+import { FakeNetwork, remoteSnapshot, remoteAgent, resultOf, runFacts, runId, Setup, setUp } from './contractFakes';
 import { waitFor } from './util';
 
 /** A root the person started, YOLO off, with a child and a grandchild, and an unrelated YOLO root. */
@@ -37,7 +37,7 @@ function recordOf(id: string, from: string, to: string, delivery: MessageRecord[
 
 const DELIVERED: MessageRecord['delivery'] = { status: 'success', effects: { outcome: 'confirmed', text_written: 'full', enter_written: true }, attempts: 1, via: 'terminal', deliveredAt: 4100 };
 
-suite('Contract: the nine tools across the windows of this computer (COLLABORATION-1.1, MCP-2 to 5)', () => {
+suite('Contract: the eight tools across the windows of this computer (COLLABORATION-1.1, MCP-2 to 5)', () => {
 
 	let s: Setup;
 	let network: FakeNetwork;
@@ -50,73 +50,93 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 	});
 	teardown(() => s.dispose());
 
-	suite('list_start_options', () => {
+	test('malformed query replies mean an unavailable window, never an empty complete list', async () => {
+		const { stranger } = team(s);
+		network.window(2, 'Backend', [remoteAgent(20)]);
+		for (const body of [undefined, {}, { agents: 'empty', locations: 'empty' }]) {
+			network.respond = () => ({ ok: true, result: body });
+			for (const tool of ['list_agents'] as const) {
+				const result = resultOf(await s.call(stranger, tool, {}));
+				assert.strictEqual(result.data.complete, false);
+				assert.strictEqual(result.data.unavailable_windows[0].reason, 'invalid_response');
+				assert.strictEqual(result.effects.outcome, 'none');
+			}
+		}
+	});
 
-		test('without a window: this window first, each other one that answers, and those that do not listed apart - never an empty success', async () => {
+	test('a lost targeted screen read has no input effect; raw input on the same route remains unknown', async () => {
+		const { stranger } = team(s);
+		network.window(2, 'Backend', [remoteAgent(20)]);
+		network.respond = () => ({ ok: false, reason: 'timeout', message: 'Reply lost.', effects: 'unknown' });
+		const screen = resultOf(await s.call(stranger, 'read_screen', { agent: '#a20' }));
+		const input = resultOf(await s.call(stranger, 'type_text', { agent: '#a20', text: 'x' }));
+		assert.deepStrictEqual([screen.error?.reason, screen.effects.outcome], ['timeout', 'none']);
+		assert.deepStrictEqual([input.error?.reason, input.effects.outcome], ['timeout', 'unknown']);
+		assert.strictEqual(input.data.window_id, 'win-2');
+		assert.strictEqual(network.routed.length, 2);
+	});
+
+	suite('window discovery in list_agents', () => {
+		test('empty remote windows remain launch destinations, and unavailable windows remain explicit', async () => {
 			const { lead } = team(s);
 			network.window(2, 'Backend', [], 'ssh-remote+box');
 			network.window(3, 'Docs');
 			network.unavailable = [{ window: 'win-4', label: 'Newer build', reason: 'protocol_incompatible' }];
-			const backend = { window_id: 'win-2', label: 'Backend', environment: 'ssh-remote+box', available: true, locations: [{ location_id: 'loc-9', label: 'api' }] };
-			network.respond = route => route.window === 'win-2'
-				? { ok: true, result: backend }
-				: { ok: false, reason: 'timeout', message: 'The Facade window win-3 did not answer within 10 seconds: the request may have taken effect there.', effects: 'unknown' };
-			const result = resultOf(await s.call(lead, 'list_start_options', {}));
-			assert.strictEqual(result.status, 'success');
+			const backend = remoteSnapshot('win-2', [], { folders: [{ name: 'api', uri: 'file:///srv/api', path: '/srv/api' }],
+				locations: [{ location_id: 'loc-9', label: 'api', path: '/srv/api' }], clis: [{ cli: 'codex', available: true }],
+				counts: { folders: 1, locations: 1, worktrees: 0, agents: 0 } });
+			network.respond = route => route.window === 'win-2' ? { ok: true, result: backend }
+				: { ok: false, reason: 'timeout', message: 'The window did not answer.', effects: 'unknown' };
+			const result = resultOf(await s.call(lead, 'list_agents'));
 			assert.deepStrictEqual(result.data.windows.map((each: { window_id: string }) => each.window_id), ['win-1', 'win-2']);
-			assert.deepStrictEqual(result.data.windows[1], backend);
+			assert.deepStrictEqual(result.data.windows[1], backend.window);
+			assert.deepStrictEqual(result.data.counts, { known_windows: 4, responding_windows: 2, folders: 2, locations: 3, worktrees: 1, agents: 3 });
 			assert.strictEqual(result.data.complete, false);
-			assert.deepStrictEqual(result.data.unavailable_windows, [
-				{ window_id: 'win-4', label: 'Newer build', reason: 'protocol_incompatible' },
-				{ window_id: 'win-3', label: 'Docs', reason: 'window_unavailable', message: 'The Facade window win-3 did not answer within 10 seconds: the request may have taken effect there.' }
-			]);
-			// Each other window asked once, within what is left of the query's ten seconds
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args, each.deadlineMs]), [['win-2', 'summary', {}, 9_993], ['win-3', 'summary', {}, 9_993]]);
+			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { reason: string }) => each.reason), ['protocol_incompatible', 'timeout']);
+			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'agents', 9993], ['win-3', 'agents', 9993]]);
 		});
 
-		test('the other windows that cannot be listed at all are one unavailable entry, and this window is still listed', async () => {
+		test('an unreadable directory preserves local facts and explicitly marks unknown windows', async () => {
 			const { lead } = team(s);
-			network.directoryError = new Error('the Facade Code Window Component did not list the open windows');
-			const result = resultOf(await s.call(lead, 'list_start_options', {}));
-			assert.deepStrictEqual([result.data.windows.map((each: { window_id: string }) => each.window_id), result.data.complete], [['win-1'], false]);
-			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { window_id: string; reason: string }) => [each.window_id, each.reason]), [['*', 'window_unavailable']]);
-			assert.deepStrictEqual(network.routed, []);
+			network.directoryError = new Error('No window directory');
+			const result = resultOf(await s.call(lead, 'list_agents'));
+			assert.strictEqual(result.data.windows[0].window_id, 'win-1');
+			assert.ok(result.data.windows[0].clis.length);
+			assert.strictEqual(result.data.complete, false);
+			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { window_id: string }) => each.window_id), ['*']);
+			assert.strictEqual(network.routed.length, 0);
 		});
 
-		test('another window\'s locations and CLIs are asked of that window, for the caller as its own window knows it', async () => {
+		test('a selected remote location is queried at its owner without guessing local CLIs', async () => {
 			const { lead } = team(s);
 			network.window(2, 'Backend');
-			network.respond = () => ({ ok: true, result: { result: success({ window_id: 'win-2', label: 'Backend', locations: [], complete: true }), headline: 'Window Backend has 0 working locations.' } });
-			const answer = await s.call(lead, 'list_start_options', { window_id: 'win-2' });
-			const result = resultOf(answer);
-			assert.deepStrictEqual([result.status, result.data.window_id, answer.text.split('\n')[0]], ['success', 'win-2', 'Window Backend has 0 working locations.']);
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'call', 9_993]]);
-			const routed = network.routed[0].args;
-			assert.deepStrictEqual([routed.tool, routed.arguments.window_id, routed.callId, routed.elapsedMs, routed.inline], ['list_start_options', 'win-2', 'call-1', 7, undefined]);
-			assert.deepStrictEqual(routed.caller, { id: lead.id, alias: '#a1', name: 'lead', root: lead.id, yolo: false, window: 'win-1', windowLabel: 'Design' });
+			network.respond = () => ({ ok: true, result: { result: success({ windows: [remoteSnapshot('win-2').window], agents: [], complete: true }) } });
+			const result = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', location_id: 'loc-9' }));
+			assert.strictEqual(result.data.windows.length, 1);
+			assert.strictEqual(result.data.windows[0].window_id, 'win-2');
+			assert.strictEqual(network.routed[0].args.arguments.location_id, 'loc-9');
+			assert.strictEqual(network.routed[0].args.caller.id, lead.id);
+			assert.strictEqual(network.routed[0].op, 'call');
 		});
+	});
 
-		test('a window no component lists is not found, before anything is routed - for a start as for a query', async () => {
-			const { lead } = team(s);
-			network.window(3, 'Docs');
-			const query = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-2' }));
-			assert.deepStrictEqual([query.error?.code, query.error?.reason], ['NOT_FOUND', 'not_found']);
-			const start = resultOf(await s.call(lead, 'start_agent', { name: 'child', window_id: 'win-2', location_id: 'loc-1', cli: 'claude' }));
-			assert.deepStrictEqual([start.error?.code, start.error?.reason, start.effects], ['NOT_FOUND', 'not_found', { outcome: 'none' }]);
-			assert.deepStrictEqual([network.routed.length, s.agents.launched.length], [0, 0]);
-			// Where the list itself cannot be read, the route is tried and says why
-			network.directoryError = new Error('no component');
-			network.respond = () => ({ ok: false, reason: 'window_unavailable', message: 'The Facade Code Window Component could not carry the request.', effects: 'none' });
-			assert.strictEqual(resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-2' })).error?.reason, 'window_unavailable');
-		});
-
-		test('a window that cannot be reached for a query fails with why, and the query had no effect', async () => {
-			const { lead } = team(s);
+	test('selected remote locations preserve known absence and cursor errors through the actual destination contract', async () => {
+		const { lead } = team(s);
+		const other = setUp();
+		try {
+			other.deps.window = { id: 'win-2', label: 'Backend', environment: 'local' };
+			const remote = createToolServices(other.deps);
 			network.window(2, 'Backend');
-			network.respond = () => ({ ok: false, reason: 'protocol_incompatible', message: 'The Facade window win-2 runs another version of Facade Code.', effects: 'unknown' });
-			const result = resultOf(await s.call(lead, 'list_start_options', { window_id: 'win-2', location_id: 'loc-9' }));
-			assert.deepStrictEqual([result.error?.code, result.error?.reason, result.effects, result.data], ['UNAVAILABLE', 'protocol_incompatible', { outcome: 'none' }, { window_id: 'win-2' }]);
-		});
+			network.respond = async route => ({ ok: true, result: await remote.serve({ from: 'win-1', op: route.op, args: route.args, deadlineMs: route.deadlineMs }) });
+			const absent = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', location_id: 'gone' }));
+			assert.deepStrictEqual([absent.error?.code, absent.error?.reason, absent.effects.outcome], ['NOT_FOUND', 'not_found', 'none']);
+			const invalid = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', cursor: 'bad' }));
+			assert.strictEqual(invalid.error?.reason, 'invalid_argument');
+			const first = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', limit: 1 }));
+			const next = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-2', limit: 1, cursor: first.data.next_cursor }));
+			assert.deepStrictEqual([...first.data.windows[0].locations, ...next.data.windows[0].locations].map(each => each.location_id), ['loc-1', 'loc-wt']);
+			assert.deepStrictEqual(next.data.agents, []);
+		} finally { other.dispose(); }
 	});
 
 	suite('start_agent', () => {
@@ -143,28 +163,28 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.window(2, 'Backend');
 			const early = { agent_id: runId(20), alias: '#a20', name: 'builder', window_id: 'win-2', created_at: new Date(1000).toISOString() };
 			const late = { agent_id: runId(21), alias: '#a21', name: 'tester', window_id: 'win-2', created_at: new Date(1500).toISOString() };
-			network.respond = () => ({ ok: true, result: { agents: [late, early] } });
+			network.respond = () => ({ ok: true, result: remoteSnapshot('win-2', [late, early]) });
 			const first = resultOf(await s.call(stranger, 'list_agents', { limit: 2 }));
-			assert.deepStrictEqual(first.data.agents.map((each: { alias: string }) => each.alias), ['#a20', '#a1']);
+			assert.deepStrictEqual(first.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a20', '#a1']);
 			assert.deepStrictEqual([first.data.complete, first.data.unavailable_windows], [true, []]);
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args, each.deadlineMs]), [
-				['win-2', 'agents', { caller: { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' }, include_ended: false }, 9_993]
+				['win-2', 'agents', { caller: { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' }, details: false }, 9_993]
 			]);
 			const second = resultOf(await s.call(stranger, 'list_agents', { limit: 2, cursor: first.data.next_cursor }));
-			assert.deepStrictEqual(second.data.agents.map((each: { alias: string }) => each.alias), ['#a2', '#a3']);
+			assert.deepStrictEqual(second.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a2', '#a3']);
 			const third = resultOf(await s.call(stranger, 'list_agents', { limit: 2, cursor: second.data.next_cursor }));
-			assert.deepStrictEqual([third.data.agents.map((each: { alias: string }) => each.alias), third.data.next_cursor], [['#a4', '#a21'], undefined]);
+			assert.deepStrictEqual([third.data.agents.map((each: { agent_id: string }) => each.agent_id), third.data.next_cursor], [['#a4', '#a21'], undefined]);
 		});
 
 		test('one window named lists that window alone: this one asks nobody, another is asked alone, one that is not open is not found', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend');
 			network.window(3, 'Docs');
-			network.respond = route => ({ ok: true, result: { agents: [{ agent_id: runId(10 * Number(route.window.slice(4))), alias: `#a${route.window.slice(4)}0`, created_at: new Date(0).toISOString() }] } });
+			network.respond = route => ({ ok: true, result: { result: success({ windows: [remoteSnapshot(route.window).window], agents: [{ agent_id: runId(10 * Number(route.window.slice(4))), window_id: route.window, alias: `#a${route.window.slice(4)}0`, created_at: new Date(0).toISOString() }] }) } });
 			const here = resultOf(await s.call(stranger, 'list_agents', { window_id: 'win-1' }));
-			assert.deepStrictEqual([here.data.agents.map((each: { alias: string }) => each.alias), network.routed.length], [['#a1', '#a2', '#a3', '#a4'], 0]);
+			assert.deepStrictEqual([here.data.agents.map((each: { agent_id: string }) => each.agent_id), network.routed.length], [['#a1', '#a2', '#a3', '#a4'], 0]);
 			const there = resultOf(await s.call(stranger, 'list_agents', { window_id: 'win-3' }));
-			assert.deepStrictEqual([there.data.agents.map((each: { alias: string }) => each.alias), network.routed.map(each => each.window)], [['#a30'], ['win-3']]);
+			assert.deepStrictEqual([there.data.agents.map((each: { agent_id: string }) => each.agent_id), network.routed.map(each => each.window)], [['#a30'], ['win-3']]);
 			const missing = resultOf(await s.call(stranger, 'list_agents', { window_id: 'win-9' }));
 			assert.deepStrictEqual([missing.error?.code, missing.error?.reason], ['NOT_FOUND', 'not_found']);
 		});
@@ -174,8 +194,8 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.window(2, 'Backend');
 			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 9.9 seconds.', effects: 'unknown' });
 			const result = resultOf(await s.call(lead, 'list_agents', {}));
-			assert.deepStrictEqual(result.data.agents.map((each: { alias: string }) => each.alias), ['#a1', '#a2', '#a3']);
-			assert.deepStrictEqual([result.data.complete, result.data.unavailable_windows], [false, [{ window_id: 'win-2', label: 'Backend', reason: 'window_unavailable', message: 'The Facade window win-2 did not answer within 9.9 seconds.' }]]);
+			assert.deepStrictEqual(result.data.agents.map((each: { agent_id: string }) => each.agent_id), ['#a1', '#a2', '#a3']);
+			assert.deepStrictEqual([result.data.complete, result.data.unavailable_windows], [false, [{ window_id: 'win-2', label: 'Backend', reason: 'timeout', message: 'The Facade window win-2 did not answer within 9.9 seconds.' }]]);
 		});
 	});
 
@@ -183,13 +203,13 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 
 		const STOPPED = success({ agent_id: runId(20), reference: '@builder #a20', process_state: 'terminated' }, { outcome: 'confirmed', agent_id: runId(20) });
 
-		test('a name another window lists, or its exact #aN, is routed there with the exact run ID; the answer comes back as that window gave it', async () => {
+		test('a name or exact #aN routes the full run ID, and the caller projects the returned facts', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder', cli: 'codex' })]);
 			network.respond = () => ({ ok: true, result: { result: STOPPED, headline: 'Closed @builder #a20 and ended its process.' } });
 			for (const reference of ['@builder', 'builder', '#a20', runId(20), 'builder #a20']) {
 				const answer = await s.call(stranger, 'stop_agent', { agent: reference });
-				assert.deepStrictEqual([resultOf(answer).status, answer.text.split('\n')[0]], ['success', 'Closed @builder #a20 and ended its process.'], reference);
+				assert.deepStrictEqual([resultOf(answer).status, resultOf(answer).data.agent_id, resultOf(answer).data.process_state], ['success', '#a20', 'terminated'], reference);
 			}
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args.tool, each.args.arguments, each.deadlineMs]), Array(5).fill(['win-2', 'call', 'stop_agent', { agent: runId(20) }, 130_000]));
 			assert.deepStrictEqual(network.routed[0].args.caller, { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' });
@@ -250,23 +270,22 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 		test('a long screen another window read comes back whole and is written here, where the caller can read it (COLLABORATION-4.2)', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
-			const text = 'x'.repeat(MESSAGE_LIMIT + 1);
+			const text = '[[' + 'x'.repeat(MESSAGE_LIMIT + 1) + ']]';
 			const frame = 'the last full-screen frame';
 			network.respond = () => ({
 				ok: true, result: {
-					result: success({ agent_id: runId(20), window_id: 'win-2', buffer: 'normal', line_count: 1, text, annotated: `[[${text}]]`, last_alternate_frame: { captured_at: '2026-10-28T21:00:00.000Z', line_count: 1, text: frame } }),
+					result: success({ agent_id: runId(20), window_id: 'win-2', buffer: 'normal', text_format: 'facade-styled', line_count: 1, text, last_alternate_frame: { captured_at: '2026-10-28T21:00:00.000Z', line_count: 1, text: frame } }),
 					headline: 'The screen of @builder #a20, captured 2026-10-28T22:00:00.000Z: 1 line of its normal buffer.'
 				}
 			});
 			const answer = await s.call(stranger, 'read_screen', { agent: '@builder' });
 			const result = resultOf(answer);
-			assert.deepStrictEqual(s.written.map(each => [each.home, each.kind, each.text]), [[s.deps.home, 'screen', `${text}\n`], [s.deps.home, 'screen', `${frame}\n`]]);
-			assert.deepStrictEqual(result.data, {
-				agent_id: runId(20), window_id: 'win-2', buffer: 'normal', line_count: 1,
-				file: { path: `${s.deps.home}/results/screen-1.txt`, size: MESSAGE_LIMIT + 2, code_points: MESSAGE_LIMIT + 1 },
-				last_alternate_frame: { captured_at: '2026-10-28T21:00:00.000Z', line_count: 1, file: { path: `${s.deps.home}/results/screen-2.txt`, size: frame.length + 1, code_points: frame.length } }
-			});
-			assert.match(answer.text.split('\n')[0], /more than 8,000 code points, so its complete plain text is in the file .*screen-1\.txt/);
+			assert.strictEqual(s.written.length, 1);
+			const stored = JSON.parse(s.written[0].text);
+			assert.deepStrictEqual([stored.text, stored.text_format, stored.last_alternate_frame.text], [text, 'facade-styled', frame]);
+			assert.deepStrictEqual(result.data.file, { path: `${s.deps.home}/results/screen-1.txt`, size: Buffer.byteLength(s.written[0].text), code_points: [...s.written[0].text].length, format: 'json' });
+			assert.strictEqual(result.data.last_alternate_frame, undefined);
+
 		});
 
 		test('type_text and press_keys reach a live agent of another window by name, an ended one of that name aside', async () => {
@@ -291,7 +310,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, route.args.to, DELIVERED), requestId: route.args.requestId } } });
 			const replies = await Promise.all([20, 21].map(id => s.call(stranger, 'send_message', { to: runId(id), text: 'Only once.', request_id: 'one-target' })));
 			assert.strictEqual(network.routed.length, 1);
-			assert.deepStrictEqual(replies.map(answer => [resultOf(answer).data.message_id, resultOf(answer).data.target]), [['m-1', runId(20)], ['m-1', runId(20)]]);
+			assert.deepStrictEqual(replies.map(answer => [resultOf(answer).data.message_id, resultOf(answer).data.target]), [['#m1', '#a20'], ['#m1', '#a20']]);
 		});
 
 		test('@human checks reachable agents in other windows; #human stays an unambiguous local notification', async () => {
@@ -333,9 +352,8 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 				to: runId(20), text: 'Please check the build.', callId: 'call-1', elapsedMs: 507
 			});
 			assert.deepStrictEqual([result.status, result.data, result.effects], ['success', {
-				message_id: 'm-1', alias: '#m1', target: runId(20), target_reference: '@builder #a20', length: 23, window_id: 'win-2', disposition: 'submitted_to_cli'
+				message_id: '#m1', target: '#a20', window_id: 'win-2', disposition: 'submitted_to_cli'
 			}, { outcome: 'confirmed', text_written: 'full', enter_written: true }]);
-			assert.strictEqual(answer.text.split('\n')[0], 'Message #m1 was submitted to @builder #a20\'s CLI.');
 			assert.deepStrictEqual(s.messages.kept.map(each => [each.id, each.delivery.status]), [['m-1', 'success']]);
 			// Not sent through this window's own delivery
 			assert.deepStrictEqual(s.messages.sent, []);
@@ -348,7 +366,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const pending: MessageRecord['delivery'] = { status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, deadline: Date.UTC(2026, 9, 28, 22, 0, 15), attempts: 1 };
 			network.respond = route => ({ ok: true, result: { status: 'accepted', obstacle: 'input_draft', record: { ...recordOf(route.args.id, stranger.id, runId(20), pending), replyTo: route.args.replyTo } } });
 			const later = resultOf(await s.call(stranger, 'send_message', { to: '#a20', text: 'Hi', reply_to: earlier.alias }));
-			assert.deepStrictEqual([later.status, later.data.deadline, later.data.obstacle, later.data.reply_to, later.effects.outcome], ['accepted', '2026-10-28T22:00:15.000Z', 'input_draft', earlier.id, 'pending']);
+			assert.deepStrictEqual([later.status, later.data.deadline, later.data.obstacle, later.data.reply_to, later.effects.outcome], ['accepted', '2026-10-28T22:00:15.000Z', 'input_draft', earlier.alias, 'pending']);
 			assert.strictEqual(network.routed[0].args.replyTo, earlier.id);
 			const failed: MessageRecord['delivery'] = { status: 'failure', reason: 'unsupported', effects: { outcome: 'none', text_written: 'none', enter_written: false }, attempts: 0 };
 			network.respond = route => ({ ok: true, result: { status: 'failure', reason: 'unsupported', record: recordOf(route.args.id, stranger.id, runId(20), failed) } });
@@ -368,10 +386,10 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.strictEqual(s.messages.kept.length, 0);
 			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 3 seconds.', effects: 'unknown' });
 			const unknown = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-1' }));
-			assert.deepStrictEqual([unknown.data.message_id, unknown.error?.reason, unknown.effects], ['m-3', 'window_unavailable', { outcome: 'unknown', text_written: 'unknown', enter_written: null }]);
+			assert.deepStrictEqual([unknown.data.message_id, unknown.error?.reason, unknown.effects], ['#m3', 'timeout', { outcome: 'unknown', text_written: 'unknown', enter_written: null }]);
 			network.respond = () => ({ ok: true, result: { status: 'delivered' } });
 			const unreadable = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
-			assert.deepStrictEqual([unreadable.error?.code, unreadable.error?.reason, unreadable.effects.outcome], ['FAILED', 'internal_error', 'unknown']);
+			assert.deepStrictEqual([unreadable.error?.code, unreadable.error?.reason, unreadable.effects.outcome], ['FAILED', 'invalid_response', 'unknown']);
 			// What may have gone in there is kept here, its outcome not known: a retry asks that window, as its history shows it
 			assert.deepStrictEqual(s.messages.kept.map(copy => [copy.id, copy.window, copy.environment, copy.fromWindow, copy.to.run, copy.requestId, copy.delivery.status, copy.delivery.effects]), [
 				['m-3', 'win-2', 'ssh-remote+box', 'win-1', runId(20), 'ask-1', 'pending', { outcome: 'unknown', text_written: 'unknown', enter_written: null }],
@@ -391,8 +409,7 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, runId(20), DELIVERED), at: NOW, requestId: route.args.requestId } } });
 			const again = await s.call(stranger, 'send_message', args);
 			const asked = resultOf(again);
-			assert.deepStrictEqual([asked.status, asked.data.message_id, asked.data.repeated, asked.data.window_id], ['success', 'm-1', true, 'win-2']);
-			assert.match(again.text, /^Request ask-2 sent message #m1 to @builder #a20 already: nothing was sent again\. It was delivered\./);
+			assert.deepStrictEqual([asked.status, asked.data.message_id, asked.data.repeated, asked.data.window_id], ['success', '#m1', true, 'win-2']);
 			assert.deepStrictEqual(network.routed.map(route => [route.window, route.op, route.args.id, route.args.to, route.args.requestId]), [['win-2', 'deliver', 'm-1', runId(20), 'ask-2'], ['win-2', 'deliver', 'm-1', runId(20), 'ask-2']]);
 			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
 			// Once known, the copy answers: nothing is routed
@@ -403,10 +420,10 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			await s.call(stranger, 'send_message', { ...args, request_id: 'ask-3' });
 			network.respond = () => ({ ok: false, reason: 'window_unavailable', message: 'No open Facade window win-2 is on this computer: the request had no effect.', effects: 'none' });
 			const gone = resultOf(await s.call(stranger, 'send_message', { ...args, request_id: 'ask-3' }));
-			assert.deepStrictEqual([gone.status, gone.error?.reason, gone.data.message_id, gone.data.repeated, gone.effects.outcome], ['failure', 'window_unavailable', 'm-2', true, 'unknown']);
+			assert.deepStrictEqual([gone.status, gone.error?.reason, gone.data.message_id, gone.data.repeated, gone.effects.outcome], ['failure', 'window_unavailable', '#m2', true, 'unknown']);
 		});
 
-		test('a delivery the other window refuses before recording it - its agent gone - is not found, with no effect, and settles the copy of a lost reply (MCP-1.2)', async () => {
+		test('a delivery the other window refuses before recording it - its agent gone - is not found, with no effect on this attempt; an earlier lost reply stays unknown (MCP-1.2)', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
 			const refusal = { status: 'failure', error: { code: 'NOT_FOUND', reason: 'not_found', message: `No agent ${runId(20)} that the sender reaches is in this window.` } };
@@ -414,13 +431,14 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const refused = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi' }));
 			assert.deepStrictEqual([refused.error?.code, refused.error?.reason, refused.effects], ['NOT_FOUND', 'not_found', { outcome: 'none', text_written: 'none', enter_written: false }]);
 			assert.strictEqual(s.messages.kept.length, 0);
-			// A lost reply, then the window says it never had it: not delivered, nothing went in
+			// The target vanished after a lost reply. This does not prove what happened to the earlier delivery.
 			network.respond = () => ({ ok: false, reason: 'timeout', message: 'The Facade window win-2 did not answer within 3 seconds.', effects: 'unknown' });
 			await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-4' });
 			network.respond = () => ({ ok: true, result: refusal });
 			const settled = resultOf(await s.call(stranger, 'send_message', { to: '@builder', text: 'Hi', request_id: 'ask-4' }));
-			assert.deepStrictEqual([settled.error?.reason, settled.data.repeated, settled.effects.outcome], ['not_found', true, 'none']);
-			assert.deepStrictEqual(s.messages.kept.at(-1)?.delivery, { status: 'failure', reason: 'not_found', effects: { outcome: 'none', text_written: 'none', enter_written: false }, deadline: s.messages.kept[0].delivery.deadline, attempts: 0 });
+			assert.deepStrictEqual([settled.error?.reason, settled.data.repeated, settled.effects.outcome], ['not_found', true, 'unknown']);
+			assert.strictEqual(s.messages.kept.at(-1)?.delivery.effects.outcome, 'unknown');
+			assert.strictEqual(s.messages.allocated.length, 2, 'the retry never allocates another message');
 		});
 
 		test('an ended agent of another window takes no message, and #human is the person in this window, never routed', async () => {
@@ -435,11 +453,22 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 
 	suite('what this window serves for other windows', () => {
 
+		test('missing, older and future routed tool protocols fail before launching', async () => {
+			for (const protocol of [undefined, 2, 3, TOOL_PROTOCOL + 1]) {
+				const reply = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: {
+					protocol, tool: 'start_agent', arguments: { name: 'child', window_id: 'win-1', location_id: 'loc-1', cli: 'claude' },
+					caller: guestOf(30), callId: 'wrong-version', elapsedMs: 0
+				} }) as { result: { error: { reason: string }; effects: unknown } };
+				assert.deepStrictEqual([reply.result.error.reason, reply.result.effects], ['protocol_incompatible', { outcome: 'none' }]);
+			}
+			assert.deepStrictEqual(s.agents.launched, []);
+		});
+
 		test('a routed start runs here for the guest: its child joins the guest\'s tree, names its creator, and its prompt is the guest\'s message', async () => {
 			const guest = guestOf(30, { name: 'planner', root: runId(29), yolo: true, window: 'win-forged' });
 			const served = await services.serve({
 				from: 'win-2', op: 'call', deadlineMs: 130_000,
-				args: { tool: 'start_agent', arguments: { name: 'child', window_id: 'win-1', location_id: 'loc-1', cli: 'claude', prompt: 'Build the API.\nThen test it.' }, caller: guest, callId: 'c-9', elapsedMs: 5 }
+				args: { protocol: TOOL_PROTOCOL, tool: 'start_agent', arguments: { name: 'child', window_id: 'win-1', location_id: 'loc-1', cli: 'claude', prompt: 'Build the API.\nThen test it.' }, caller: guest, callId: 'c-9', elapsedMs: 5 }
 			}) as { result: { status: string; data: { agent_id: string; creator: string; root: string; prompt: { status: string } } }; headline: string };
 			assert.strictEqual(served.result.status, 'success');
 			const [launched] = s.agents.launched;
@@ -459,12 +488,16 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			const guest = guestOf(30, { name: 'planner' });
 			const served = await services.serve({
 				from: 'win-2', op: 'call', deadlineMs: 130_000,
-				args: { tool: 'start_agent', arguments: { name: 'child', window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }, caller: guest, callId: 'c-10', elapsedMs: 0 }
-			}) as { result: { status: string; data: { agent_id: string } } };
+				args: { protocol: TOOL_PROTOCOL, tool: 'start_agent', arguments: { name: 'child', window_id: 'win-1', location_id: 'loc-1', cli: 'claude' }, caller: guest, callId: 'c-10', elapsedMs: 0 }
+			}) as { result: { status: string; data: { agent_id: string; result_message_id: string } } };
 			assert.strictEqual(served.result.status, 'accepted');
+			assert.match(served.result.data.result_message_id, /^m-\d+$/);
+			assert.deepStrictEqual(s.messages.records, [], 'a reservation is not a fake inbox item in either window');
 			const child = served.result.data.agent_id;
 			s.agents.settle(child, { state: 'running' });
 			await waitFor(() => network.routed.length > 0);
+			assert.strictEqual(network.routed[0].args.id, served.result.data.result_message_id);
+			assert.deepStrictEqual(network.routed[0].args.operation, { tool: 'start_agent', window: 'win-1' });
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs, each.args.to, each.args.callId, each.args.agent]), [['win-2', 'result', 15_000, runId(30), 'c-10', { run: child, alias: s.agents.get(child)!.alias, name: 'child' }]]);
 			assert.match(network.routed[0].args.text, /^Started @child #a\d+ \(run-[0-9a-f]+\) with claude/);
 			assert.deepStrictEqual(s.messages.reports, []);
@@ -473,18 +506,18 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 		test('a guest\'s call is validated and resolved here like any other: a start for another window is not found, its own reach applies', async () => {
 			const { lead } = team(s);
 			const outsider = guestOf(30);
-			const elsewhere = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { tool: 'start_agent', arguments: { name: 'child', window_id: 'win-5', location_id: 'loc-1', cli: 'claude' }, caller: outsider, callId: 'c-1', elapsedMs: 0 } }) as { result: { status: string; error: { reason: string } } };
+			const elsewhere = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { protocol: TOOL_PROTOCOL, tool: 'start_agent', arguments: { name: 'child', window_id: 'win-5', location_id: 'loc-1', cli: 'claude' }, caller: outsider, callId: 'c-1', elapsedMs: 0 } }) as { result: { status: string; error: { reason: string } } };
 			assert.deepStrictEqual([elsewhere.result.status, elsewhere.result.error.reason], ['failure', 'not_found']);
-			const outOfTree = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { tool: 'stop_agent', arguments: { agent: lead.id }, caller: outsider, callId: 'c-2', elapsedMs: 0 } }) as { result: { status: string; error: { reason: string } } };
+			const outOfTree = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { protocol: TOOL_PROTOCOL, tool: 'stop_agent', arguments: { agent: lead.id }, caller: outsider, callId: 'c-2', elapsedMs: 0 } }) as { result: { status: string; error: { reason: string } } };
 			assert.deepStrictEqual([outOfTree.result.status, outOfTree.result.error.reason], ['failure', 'out_of_tree']);
-			const invalid = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { tool: 'stop_agent', arguments: {}, caller: outsider, callId: 'c-3', elapsedMs: 0 } }) as { result: { status: string; error: { reason: string } } };
+			const invalid = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { protocol: TOOL_PROTOCOL, tool: 'stop_agent', arguments: {}, caller: outsider, callId: 'c-3', elapsedMs: 0 } }) as { result: { status: string; error: { reason: string } } };
 			assert.deepStrictEqual([invalid.result.status, invalid.result.error.reason], ['failure', 'missing_argument']);
 			assert.deepStrictEqual([s.agents.launched, s.agents.closed, network.routed], [[], [], []]);
 			// One in its tree is stopped here
 			const member = guestOf(30, { root: lead.id });
-			const stopped = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { tool: 'stop_agent', arguments: { agent: lead.id }, caller: member, callId: 'c-4', elapsedMs: 0 } }) as { result: { status: string } };
+			const stopped = await services.serve({ from: 'win-2', op: 'call', deadlineMs: 130_000, args: { protocol: TOOL_PROTOCOL, tool: 'stop_agent', arguments: { agent: lead.id }, caller: member, callId: 'c-4', elapsedMs: 0 } }) as { result: { status: string } };
 			assert.deepStrictEqual([stopped.result.status, s.agents.closed], ['success', [lead.id]]);
-			await assert.rejects(services.serve({ from: 'win-2', op: 'call', deadlineMs: 1_000, args: { tool: 'stop_agent', arguments: {}, callId: 'c-5', elapsedMs: 0 } }), /incomplete/);
+			await assert.rejects(services.serve({ from: 'win-2', op: 'call', deadlineMs: 1_000, args: { protocol: TOOL_PROTOCOL, tool: 'stop_agent', arguments: {}, callId: 'c-5', elapsedMs: 0 } }), /incomplete/);
 		});
 
 		test('a delivered message is sent here as the guest\'s, under its own ID and header label, to an agent the guest reaches alone', async () => {
@@ -519,25 +552,32 @@ suite('Contract: the nine tools across the windows of this computer (COLLABORATI
 			assert.strictEqual(s.messages.reports.length, 1);
 		});
 
-		test('this window\'s agents and summary as other windows ask for them: within the guest\'s reach, ended ones on request', async () => {
+		test('a routed operation keeps its execution window and original call through the receiving inbox', async () => {
+			const { lead } = team(s);
+			const agent = { run: runId(20), alias: '#a20', name: 'closed target' };
+			const operation = { tool: 'stop_agent', window: 'win-2' };
+			await services.serve({ from: 'win-2', op: 'result', deadlineMs: 15000, args: { id: 'm-42', to: lead.id, text: 'It has stopped.', callId: 'stop-original', operation, agent, result: { status: 'success', data: {}, effects: { outcome: 'confirmed' } } } });
+			const receipt = resultOf(await s.call(lead, 'read_messages', { ids: ['#m42'] })).data.messages[0];
+			assert.deepStrictEqual([receipt.message_id, receipt.call_id, receipt.agent, receipt.operation], ['#m42', 'stop-original', '#a20', operation]);
+			await assert.rejects(services.serve({ from: 'win-2', op: 'result', deadlineMs: 15000, args: { to: lead.id, text: 'Unreadable', operation: { tool: 'guessed', window: 'win-2' } } }), /invalid operation/);
+			assert.strictEqual(s.messages.records.length, 1);
+		});
+
+		test('this window\'s agents and window facts as other windows ask for them: within the guest\'s reach, ended ones on request', async () => {
 			const { lead } = team(s);
 			s.agents.add(runFacts(6, { name: 'gone', root: lead.id, lifecycle: 'ended' }));
 			const inTree = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { root: lead.id }) } }) as { agents: { alias: string; window_id: string; created_at: string }[] };
 			assert.deepStrictEqual(inTree.agents.map(each => each.alias), ['#a1', '#a2', '#a3']);
 			assert.deepStrictEqual([inTree.agents[0].window_id, inTree.agents[0].created_at], ['win-1', new Date(1001).toISOString()]);
-			const withEnded = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { root: lead.id }), include_ended: true } }) as { agents: { alias: string }[] };
-			assert.deepStrictEqual(withEnded.agents.map(each => each.alias), ['#a1', '#a2', '#a3', '#a6']);
+			const withEnded = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { root: lead.id }), agent: runId(6) } }) as { agents: { alias: string }[] };
+			assert.deepStrictEqual(withEnded.agents.map(each => each.alias), ['#a6']);
 			const yolo = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: { caller: guestOf(30, { yolo: true }) } }) as { agents: { alias: string }[] };
 			assert.deepStrictEqual(yolo.agents.map(each => each.alias), ['#a1', '#a2', '#a3', '#a4']);
 			await assert.rejects(services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9_000, args: {} }), /names no caller/);
-			assert.deepStrictEqual(await services.serve({ from: 'win-2', op: 'summary', deadlineMs: 9_000, args: {} }), {
-				window_id: 'win-1', label: 'Design', environment: 'local', available: true, locations: s.locations.map(each => locationOf(each, false))
-			});
-			// A window with no folder is listed too, as one nobody can start an agent in (MCP-2.1)
+			// A folderless window is still in the topology, with no invented destination.
 			s.locations = [];
-			assert.deepStrictEqual(await services.serve({ from: 'win-2', op: 'summary', deadlineMs: 9_000, args: {} }), {
-				window_id: 'win-1', label: 'Design', environment: 'local', available: false, reason: 'No folder is open in this window, so no agent can start in it.', locations: []
-			});
+			const empty = await services.serve({ from: 'win-2', op: 'agents', deadlineMs: 9000, args: { caller: guestOf(30) } }) as { window: { locations: unknown[]; clis: unknown[] }; agents: unknown[] };
+			assert.deepStrictEqual([empty.window.locations, empty.window.clis, empty.agents], [[], [], []]);
 			await assert.rejects(services.serve({ from: 'win-2', op: 'unknown', deadlineMs: 9_000, args: {} }), /serves no "unknown"/);
 		});
 	});

@@ -9,11 +9,14 @@ import { isEqualPath, isInsideFolder, realFolderOf } from '../../base/files';
 import { conversationId } from '../../core/ports';
 import type { Catalog, ConversationDiscoveryPort, ConversationEntry, ConversationKey, ConversationPager, HumanPort, Location, LocationPort, RunId } from '../../core/ports';
 import { locationLabel } from '../cardView';
-import { ago, cliIcon, plainText } from '../presentation';
+import { ago, cliDisplayName, cliIcon, plainText } from '../presentation';
 import { BACK, Flow } from './stepping';
+import { matchesCliSearch } from './search';
 
 export interface ResumeDeps {
 	readonly conversations: ConversationDiscoveryPort;
+	/** Existing Facade name only; browsing a history never assigns one (D161). */
+	readonly savedName: (key: ConversationKey) => string | undefined;
 	readonly locations: Pick<LocationPort, 'snapshot'>;
 	/**
 	 * What is read before the conversations are: this window's agents, its locations and the conversations other windows hold. The
@@ -65,7 +68,7 @@ type Item = vscode.QuickPickItem & { readonly entry?: ConversationEntry; readonl
 export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	const picker = vscode.window.createQuickPick<Item>();
 	picker.title = vscode.l10n.t("Resume Agent");
-	picker.placeholder = vscode.l10n.t("Search saved conversations by title or location");
+	picker.placeholder = vscode.l10n.t("Search by title, name, CLI or location");
 	picker.matchOnDescription = true;
 	picker.matchOnDetail = true;
 	// Shown at once, busy until the conversations are there to read (UX-1.1)
@@ -76,19 +79,23 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	let catalog: Catalog = { locations: [], folders: [], pending: false };
 	let reals: readonly { readonly location: Location; readonly real: string }[] = [];
 	const entries: ConversationEntry[] = [];
+	const names = new Map<string, string | undefined>();
 	const seen = new Set<string>();
 	let done = false;
 	let open = true;
 	let reading: Promise<void> | undefined;
 	const places = new Map<string, string>();
 	const placeIn = (cwd: string) => places.get(cwd) ?? places.set(cwd, placeOf(cwd, reals, catalog)).get(cwd)!;
-	// One line (LIFECYCLE-3.2, D64): its icon names its CLI; when, then where - what a long title cuts off last comes first
-	const itemOf = (entry: ConversationEntry): Item => ({
-		label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled conversation")),
-		description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).join(', ')].filter(Boolean).map(text => plainText(text!)).join(' · '),
-		iconPath: cliIcon(deps.media, entry.key.cli),
-		entry
-	});
+	// One line (D161): title first, then when, where and its saved name. Equal name/title fields remain independent.
+	const itemOf = (entry: ConversationEntry): Item => {
+		const item: Item = {
+			label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled conversation")),
+			description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).join(', '), names.get(conversationId(entry.key))].filter(Boolean).map(text => plainText(text!)).join(' · '),
+			iconPath: cliIcon(deps.media, entry.key.cli),
+			entry
+		};
+		return { ...item, alwaysShow: matchesCliSearch(picker.value, entry.key.cli, cliDisplayName(entry.key.cli), item) };
+	};
 	const show = () => {
 		const active = picker.activeItems[0]?.entry;
 		picker.items = entries.map(itemOf);
@@ -115,6 +122,7 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 					// One that cannot be resumed now - its folder gone, its CLI off or not installed (D64) - or already runs is not offered (D69)
 					if (!seen.has(id) && entry.unavailable === undefined && !deps.running(entry.key)) {
 						seen.add(id);
+						names.set(id, deps.savedName(entry.key)?.trim());
 						entries.push(entry);
 					}
 				}
@@ -169,7 +177,7 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	return new Promise(resolve => {
 		let accepting = false;
 		const subscriptions: vscode.Disposable[] = [
-			picker.onDidChangeValue(() => void readAll()),
+			picker.onDidChangeValue(() => { if (pager) { show(); } void readAll(); }),
 			picker.onDidChangeActive(([active]) => {
 				if (!done && active && picker.items.indexOf(active) >= picker.items.length - READ_AHEAD) {
 					void readNext();

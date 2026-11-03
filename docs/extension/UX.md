@@ -110,8 +110,14 @@ No global shortcuts are preassigned; existing commands are bindable through norm
 
 Languages: `zh-cn`, `zh-tw`, `pt-br`, `es`, `ru`, `de`, `ja`, `fr`, `ko`, `tr`, `pl`. Use VS Code's language selection
 and English fallback. Facade Code, Facade, CLI, MCP and YOLO are not translated. Use Microsoft's established editor terms;
-Chinese uses `agent`, `工作树` / `工作樹`. Relative times use `Intl.RelativeTimeFormat`; full timestamps are localized in
-human details, UTC ISO strings in APIs/journals. Locale updates refresh text; API IDs/paths never change with locale.
+Chinese uses `agent`, `工作树` / `工作樹`. Resume and message-history list times follow VS Code's short `fromNow` wording
+and rounding, with `ago` retained: `now` below 30 rounded seconds, then seconds, minutes, hours, days, weeks, months
+and years (D162). Use the editor's translated singular/plural phrases. Units change at 60 seconds, 60 minutes,
+24 hours, 7 days, 30 days and 365 days; round the selected unit as VS Code does. Do not replace elapsed days with
+calendar labels or automatically switch old history to dates. A future source timestamp is shown as a localized
+absolute time instead of an invented recent activity. Panel hover relative times use `Intl.RelativeTimeFormat`;
+full timestamps are localized in human details, UTC ISO strings in APIs/journals. Locale updates refresh text;
+API IDs/paths never change with locale.
 Translations cover settings, pickers, errors, menus, access labels and empty states in the same implementation change.
 Facade's own failure reasons - CLI configuration and worktree problems - reach the person in their language through one
 presentation shared by pickers, notifications and cards; logs and API text stay English.
@@ -260,6 +266,7 @@ Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remai
 
 ## Change log
 
+- 2026-11-02: D162 aligns history-list relative times with VS Code's short localized wording and unit rounding.
 - 2026-11-01: Removed the tab-separator dependency after LIFECYCLE-2.2 changed editor tabs to icon plus name (D130).
 - 2026-11-01: 2.1 gives reliable idle its own neutral theme colour and reserves yellow for native blockers (D127).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.

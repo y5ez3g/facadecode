@@ -51,7 +51,7 @@ function agentLines({ facts, input, screen }: DiagnosedAgent): string[] {
 	const state = [
 		facts.lifecycle === 'starting' ? `starting (${facts.phase})` : facts.lifecycle,
 		...facts.lifecycle === 'ended' ? [] : [`${facts.activity}${facts.activitySince !== undefined ? ` since ${iso(facts.activitySince)}` : ''}${facts.reporting ? '' : ', its CLI not reporting'}`],
-		...facts.blocker ? [`waiting on its ${facts.blocker.kind}${facts.blocker.text ? ` (${JSON.stringify(facts.blocker.text)})` : ''}`] : []
+		...facts.blocker ? [`${facts.blocker.kind === 'unknown' ? 'waiting for attention' : `waiting on its ${facts.blocker.kind}`}${facts.blocker.text ? ` (${JSON.stringify(facts.blocker.text)})` : ''}`] : []
 	].join(', ');
 	const tools = `tools ${facts.tools}${facts.toolsReason ? ` (${facts.toolsReason})` : ''}`;
 	const reader = `input reader ${facts.inputAdapter ?? 'none'}${input ? `, reads ${input}` : ''}`;
@@ -92,6 +92,7 @@ function withHomeAsTilde(text: string, home: string, platform: NodeJS.Platform):
 export function diagnosticsText(diagnostics: Diagnostics, platform: NodeJS.Platform = process.platform): string {
 	const lines = [
 		`Facade Code diagnostics, ${iso(diagnostics.at)}`,
+		'Scope: this window and execution environment only; other windows\' logs are not collected.',
 		diagnostics.about.join('; '),
 		`Collaboration through Facade's tools: ${diagnostics.collaboration ? 'on' : 'off'}`,
 		'',

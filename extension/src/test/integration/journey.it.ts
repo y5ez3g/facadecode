@@ -9,6 +9,7 @@ import { pathToFileURL } from 'url';
 import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
 import { piSessionFolderName } from '../../clis/history/pi';
+import { SUGGESTED_NAMES } from '../../core/names';
 import type { PanelState } from '../../webview/protocol';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
@@ -149,6 +150,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, 'terminal');
 		} else {
 			assert.deepStrictEqual(card.avatar, { file: AVATAR });
+			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, `facade-cli-${CLI}`);
 		}
 		const launch = JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] };
 		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);
@@ -190,9 +192,12 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 		});
 		assert.strictEqual(reported.dot, 'idle');
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
-		for (const title of ['✳ Checking responsive layout', '● 检查标题更新 | workspace']) {
-			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title }));
+		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
+			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
 			await until('the CLI title in the panel', async () => (await state()).cards.find(each => each.runId === card.runId)?.line === title ? true : undefined);
+			// The activity report follows the OSC title in the same write cycle; it must not replace it a moment later.
+			await new Promise(resolve => setTimeout(resolve, 250));
+			assert.strictEqual((await state()).cards.find(each => each.runId === card.runId)?.line, title);
 			assert.strictEqual(terminal.name, card.name, 'CLI titles never change the native terminal name');
 			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && tab.label === card.name) ? true : undefined);
@@ -244,7 +249,7 @@ suite(`Journey: a person starts and closes ${CLI} (J01, J07)`, () => {
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			return undefined;
 		});
-		assert.strictEqual(card.name, 'Resume integration fixture');
+		assert.ok(SUGGESTED_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
 		const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
 		const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 		assert.ok(sameFolder(launch.cwd, cwd));

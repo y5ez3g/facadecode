@@ -12,6 +12,14 @@ import { tempDir } from './util';
 import { withModules } from './withModules';
 
 suite('ptyd transport boundaries', () => {
+	test('lost screen evidence is accepted only as an explicit pending status with a known reason', () => {
+		const status = (more: Record<string, unknown>) => isPtydEvent({ event: 'status', run: 'r', status: { state: 'pending', at: 1, ...more } });
+		assert.deepStrictEqual([
+			status({ unavailable: 'screen_reset' }), status({ unavailable: 'screen_unrecognized' }),
+			status({ unavailable: ['screen_reset'] }), status({ unavailable: 'future' }),
+			status({ state: 'working', unavailable: 'screen_reset' })
+		], [true, true, false, false, false]);
+	});
 	test('an attempted write that fails remains uncertain even when the peer received its complete request', async () => {
 		const temp = tempDir('fc-write-result-');
 		const socketPath = ptydSocketPath(temp.dir);

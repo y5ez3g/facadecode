@@ -103,9 +103,11 @@ than silently changing modes.
 
 **The CLI owns model/effort defaults and saved session state; Facade passes only explicit current overrides.**
 
-Startup discovery includes previously successful model/effort values for that CLI/environment plus any reliable native
-catalog, labeled complete/partial/unknown with its source. Past success is a useful choice, not a promise of current
-availability or an exhaustive allowlist. Do not invent model IDs or require not_applicable placeholder objects.
+Current CLI availability and explicit override support are returned by list_agents for the actual destination.
+Facade records requested model/effort and process-start outcomes as structured diagnostic events. Historical values
+are neither defaults nor an exhaustive allowlist. Actual model selections, available models/efforts and model responses
+remain in the native CLI's own controls/history; Facade maintains no model-choice catalog or success statistics.
+An omitted value is unknown to Facade unless the native CLI separately reports it. Do not invent model IDs.
 An explicit model or effort in a `start_agent` call is passed through the CLI's own option for this launch only. An
 omitted field adds no override: the CLI's native default or saved session state applies. The call's explicit choice
 takes precedence over the matching mapped option in `.launch.arguments`; remove that configured option and its value, in
@@ -151,6 +153,12 @@ a tab as four (D118). Codex 0.166.0 draws a status at the right
 end of its hints row, `⚠ 1 warning · f2 to view`, alone there while a draft hides the hints, when `-c` overrides run it
 outside its background server: Facade starts it with `--no-daemon`, and its reader takes that row either way.
 
+Antigravity's accept-edits and plan modes draw a colored, non-dim initial placeholder. Recognize its exact mode
+sentence (or the CLI's width-truncated prefix ending in `...`) only inside its one-line frame with the empty-input
+`? for shortcuts` footer and the cursor at the input start. The same words typed or pasted by a person hide that
+footer hint and remain a draft, even with the cursor moved back to the start. Color or matching words alone never
+prove the input empty (D157).
+
 Each reader also reports a draft as it is drawn, so that a delivery knows its own (RULES-1.6): its rows' text, or the
 placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N lines]` counting the lines after the
 first, Antigravity's `[Pasted text #1 +N lines]` and Pi's `[paste #1 +N lines]` counting every line, Codex's and Muse
@@ -179,10 +187,10 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | --- | --- | --- | --- |
 | Claude Code | Per-run `--mcp-config` file | Per-run `--plugin-dir` plugin | `--allowedTools mcp__facade` |
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
-| Antigravity | Project plugin `.agents/plugins/facade`, shared | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
-| Muse Code | Per-run `-c mcpServers.facade`, optional, on Windows too, where Facade starts its native program; one that starts through cmd.exe gets a `facade` entry merged into the project's `.mcp.json`, shared, with no `mode`, which Muse Code 1.4.14 refuses there (D147) | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
+| Antigravity | Project plugin `.agents/plugins/facade`, shared; its PreInvocation hook supplies run-private ephemeral initialization context through the run environment | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
+| Muse Code | Per-run `-c mcpServers.facade`, optional, on Windows too, where Facade starts its native program; one that starts through cmd.exe gets a `facade` entry merged into the project's `.mcp.json`, shared, with no `mode`, which Muse Code 1.4.14 refuses there (D147); private initialization context through its SessionStart hook | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
 | OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
-| Pi | Per-run extension, `-e`, that registers it with its tools given directly | Per-run `--skill` folder | It has no approvals |
+| Pi | Per-run extension, `-e`, that registers it with its tools given directly and supplies the same initialization instructions in its own native prompt section under MCP-6.2 | Its resource-discovery hook supplies the per-run skill only when Pi has not already loaded identical Facade instructions | It has no approvals |
 
 These approvals cover Facade's own tools alone, in either YOLO mode; the CLI's own commands and edits keep the mode
 RULES-4.3 chose (D90). An entry shared by a folder's runs holds no run's identity: the run's variables reach the server
@@ -203,6 +211,12 @@ waits up to 10 s for its optional servers before its first model request, so a s
 first turn (D101). The server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
 orchestration is off, inject no Facade server, skill or approval into that new process.
 
+Pi automatically discovers the project skill Codex or Muse Code may have written in the same folder. On each native
+startup or resource reload, inspect Pi's loaded skill commands and their source files. Reuse a loaded `facade` skill
+only when its complete bytes match the run's bundled skill; otherwise supply the per-run file through Pi's
+`resources_discover` hook. If the project copy disappears, the next reload loads the per-run copy. Different content
+retains Pi's native collision diagnostic: do not suppress warnings, overwrite it, or disable other skills (D158).
+
 Before a project write, snapshot exact original bytes/existence, lock the path across runs, merge only owned content,
 and record content hashes/reference counts. An existing different `facade` server/skill is a conflict; fail integration
 while preserving the CLI where it can launch safely. Never overwrite malformed user config or unknown values. On cleanup
@@ -216,7 +230,11 @@ authentication mechanism is introduced.
 **Only root-process reports and tested adapter evidence change displayed activity or input availability.**
 
 Support the existing OSC 7501 adapter where verified: `working` → working; `idle|done|blocked` → not_working; `error` →
-known error; `clear`, reset or pending probe → unknown. Activity reporting is verified for a run when that run's CLI
+known error; `clear`, reset or pending probe → unknown. A `blocked` report remains blocked even without a known kind.
+Reports follow the [Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status): each replaces
+the whole root record, so omitted or empty titles clear that report's title. Malformed or unknown-state reports are
+discarded without changing the last valid record; capability replies advertise only the states implemented here.
+Activity reporting is verified for a run when that run's CLI
 answers the OSC 7501 capability probe or sends valid reports, independent of CLI version; CLI-specific quirks remain
 version-scoped evidence. OpenCode reports from its 2.x line; its 1.x line, which sends no reports, is not started
 (D78, D145). Ignore worker reports carrying a distinct worker ID. Respond to capability probes only for
@@ -227,21 +245,33 @@ report - none at all, or a probe answered and no report since - is a red status 
 line, not a neutral dot; a report the CLI clears is one at once. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A supported terminal
 animation may establish working, but its absence supplies no idle proof.
 
-Muse Code sends no reports on Windows, so its adapter names a screen reader that ptyd applies to a run whose CLI has
-neither asked nor reported (D80): working while Muse Code's own working row - a mark, then `… esc to interrupt)` - shows
-above its input frame; not working, ready for input, while its input frame - a rule, labeled where it offers voice
-input, its `❯` prompt row and the plain rule under it - shows without that row, empty or holding a draft; blocked on
-sign-in at its sign-in choice and on permission at its workspace trust question, each shown in place of that frame. A
-screen it reads as none of these, or one still being drawn, leaves the status as it was. Its own reports always take precedence: once the CLI asks or reports, the screen is no longer read.
+Muse Code's observed Windows versions send no reports, so its adapter names a screen reader that ptyd applies to a run
+whose CLI has neither asked nor reported (D80). It reads logical lines, joining terminal soft wraps without guessing
+where hard line breaks belong. A recognized working indicator above its complete input frame establishes working.
+Idle requires the complete known input/footer layout and a recognized surrounding region, retaining native text styling
+where it distinguishes an answer marker from a working indicator; an unknown indicator,
+clipped region or unfamiliar dialog never supplies idle evidence. Drafts remain separate from activity. Its sign-in
+choice and workspace trust question establish their corresponding blockers only when replacing the input frame.
+An unrecognized completed screen revokes prior screen evidence; a full reset does too. A synchronized update still
+being drawn is not observed. Its own reports always take precedence: once the CLI asks or reports, the screen is no longer read.
 Evidence becomes stale after route loss/reset;
 title/status from a new run does not update a previous one. A status episode starts on state/kind/reason change;
 progress-only updates keep its start time.
 
-Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes, reject controls and malformed reports; sanitize
-invisible formatting, trim and cap displayed title/status at 300 Unicode code points with ellipsis. Prefer a report's
-nonempty title over OSC 0/2. Preserve the CLI's visible title, including status symbols, decorations, CLI/folder/agent
+Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes and titles up to 192 decoded bytes; reject controls
+and malformed reports. Sanitize invisible formatting and whitespace without stripping visible decorations. Keep the
+bounded terminal title (up to 4096 UTF-16 units) and protocol text available to the hover; do not discard them at a
+300-character preview limit. Display previews may be shortened, always between complete graphemes. Prefer the CLI's
+nonempty terminal title from OSC 0/2; use a status report's title only when no terminal title is available (D160).
+A later activity report must not replace a terminal title or suppress its decoration-only updates. Preserve the CLI's
+visible title, including status symbols, decorations, CLI/folder/agent
 names and default session titles, even when the card already provides the same information (D126). There is no
 adapter-specific title filtering or rewriting; the owner deferred content cleanup to retain the original CLI display.
+When both current title sources are empty, discard the previous title and use PANEL-1.4's fallback, including after
+reattachment. A lost connection alone does not clear the last known title. Native CLIs may omit decorations after
+status-protocol negotiation or shorten their own titles; Facade preserves what they actually send.
+This choice applies when the card displays a CLI title. Startup, blocker, error and unavailable-tool messages retain
+PANEL-1.4's precedence; message delivery and notifications are unaffected.
 Terminal emoji width follows tested Unicode cell tables;
 wide-character/wrapped-line reading and bracketed paste modes are verified per terminal backend.
 
@@ -486,6 +516,13 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
 
 ## Change log
 
+- 2026-11-02: Complete-record status titles, protocol-compliant unknown-state handling, full bounded hover text and grapheme-safe previews; logical screen lines and marker styling with explicit evidence loss (D164).
+
+- 2026-11-02: Replace model-choice catalogs with requested settings in startup logs and current override support in list_agents.
+
+- 2026-11-02: Empty current titles clear stale card text after live updates and reattachment; native title formatting remains the CLI's choice.
+- 2026-11-02: The CLI's actual terminal title takes precedence over a status report's title, preserving its native decorations (D160).
+
 - 2026-11-01: 2.2 gives Muse Code on Windows its server by `-c` as elsewhere: its project `.mcp.json` entry's `mode` made
   Muse Code 1.4.14 turn off its MCP, at the owner's report (D147).
 - 2026-11-01: 1.1 and 2.3 refuse OpenCode's 1.x line with how to update, at the owner's decision, and 2.2 gives every
@@ -505,6 +542,7 @@ See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state
   titles, at the owner's request to defer title cleanup (D126); report precedence and safe display bounds remain.
 - 2026-10-31: D123 completes the six built-in history/identity adapters, preserves user integration settings, and records native Linux evidence and platform limits. Antigravity multi-folder metadata retains its cwd ambiguity.
 
+- 2026-11-01: Pi supplies run-private initialization instructions through its native prompt section when direct MCP namespace instructions do not reach the model (MCP-6.2, D152).
 - 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
 
 - 2026-10-31: 2.1 reads Antigravity's and Pi's scrolled drafts and Pi's `[paste #N C chars]` (D118).

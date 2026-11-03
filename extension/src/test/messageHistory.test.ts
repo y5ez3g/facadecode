@@ -86,6 +86,40 @@ const flush = () => new Promise(resolve => setImmediate(resolve));
 
 suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1.2, 3.1)', () => {
 
+	test('an operation receipt shows the recorded action/target and keeps long identity below the unchanged body', () => {
+		const { history } = fakeEditor();
+		const receipt = record(42, { kind: 'result', from: { run: 'facade' }, to: ada, agent: bob,
+			operation: { tool: 'stop_agent', window: 'win-backend' }, callId: 'stop-original', requestId: 'request-original', text: 'Bob has stopped.',
+			result: { status: 'success', data: { closed: true }, effects: { outcome: 'confirmed' } },
+			delivery: { status: 'failure', reason: 'ended', effects: { outcome: 'none' }, attempts: 0 } }, T);
+		const text = history.recordText(receipt, 'en');
+		assert.ok(text.includes('Operation: Stop agent\nAgent: Bob #a2\nDelivery: Not delivered'));
+		assert.ok(text.includes('Bob has stopped.\n\nTechnical details\ncall_id: stop-original'));
+		assert.ok(text.includes('request_id: request-original') && text.includes('window: win-backend'));
+		assert.ok(text.includes('status: success'), 'a lost receipt does not turn the successful operation into a failed one');
+		const absent = history.recordText({ ...receipt, operation: undefined, about: 'm-999', agent: undefined }, 'en');
+		assert.ok(absent.includes('About message: #m999'));
+		assert.ok(!absent.includes('Operation:'), 'prose never manufactures an operation or missing original');
+	});
+
+	test('unconfirmed native acceptance is not displayed as delivered or still being delivered', () => {
+		const { history } = fakeEditor();
+		const native = { ...RECORDS[0], delivery: { status: 'unknown' as const, effects: { outcome: 'unknown' as const }, via: 'launch' as const, attempts: 0 } };
+		const text = history.recordText(native, 'en');
+		assert.ok(text.includes('Delivery: Facade could not confirm that the agent received the message\n'));
+		assert.ok(!text.includes('Delivery: Delivered') && !text.includes('Delivery: Being delivered'));
+	});
+
+	test('machine outcome facts do not replace the readable history body or change older receipts', () => {
+		const { history } = fakeEditor();
+		const old = record(42, { kind: 'result', from: { run: 'facade' }, to: ada, about: 'm-1', text: 'Your message was submitted to its CLI.' }, T);
+		const current = { ...old, result: { status: 'success', data: { message_id: '#m1', disposition: 'submitted_to_cli' }, effects: { outcome: 'confirmed' } } };
+		assert.ok(!history.recordText(old, 'en').includes('submitted_to_cli'));
+		assert.ok(history.recordText(current, 'en').includes('outcome: confirmed'));
+		assert.ok(history.recordText(current, 'en').includes(old.text));
+		assert.ok(history.recordText(current, 'en').includes('submitted_to_cli'));
+	});
+
 	test('one-to-one conversations, most recently active first; a Facade result goes with the message it reports on', () => {
 		const { history } = fakeEditor();
 		const conversations = history.conversationsOf(RECORDS);
@@ -101,9 +135,9 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		const { history } = fakeEditor();
 		const conversation = history.conversationsOf(RECORDS).find(each => each.records.some(record => record.id === 'm-7'))!;
 		const text = history.conversationText(conversation, 'en');
-		assert.ok(text.includes('#m7 · ') && text.includes('Status: Delivered when the agent checked its messages\n'), text);
-		assert.ok(text.includes('Status: Delivered as the agent\'s first task\n'), text);
-		assert.ok(text.includes('Status: Delivered to the agent\n'), text);
+		assert.ok(text.includes('#m7 · ') && text.includes('Delivery: Delivered when the agent checked its messages\n'), text);
+		assert.ok(text.includes('Delivery: Delivered as the agent\'s first task\n'), text);
+		assert.ok(text.includes('Delivery: Delivered to the agent\n'), text);
 	});
 
 	test('a conversation\'s document: source, recipient, time, reply, outcome and Facade results, then the text as text, its command links inert', () => {
@@ -112,9 +146,9 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		const text = history.conversationText(conversation, 'en');
 		const time = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'medium' }).format(T + 1_000);
 		assert.ok(text.startsWith('Message History: Ada #a1 ↔ Bob #a2\nRead-only. Messages are shown as they were sent; links in them cannot run editor commands.\n'), text);
-		assert.ok(text.includes(`#m1 · ${time}\nFrom: Ada #a1\nTo: Bob #a2\nStatus: Delivered to the agent\nResult reported in: #m3\n\nSee [docs](command​:workbench.action.quit) now.\n`), text);
-		assert.ok(text.includes('From: Bob #a2\nTo: Ada #a1\nIn reply to: #m1\nStatus: Not delivered: there was unsent text in the agent\'s input box\n'), text);
-		assert.ok(text.includes('From: Facade\nTo: Ada #a1\nAbout message: #m1\nStatus: Delivered to the agent\n'), text);
+		assert.ok(text.includes(`#m1 · ${time}\nFrom: Ada #a1\nTo: Bob #a2\nDelivery: Delivered to the agent\nResult reported in: #m3\n\nSee [docs](command​:workbench.action.quit) now.\n`), text);
+		assert.ok(text.includes('From: Bob #a2\nTo: Ada #a1\nIn reply to: #m1\nDelivery: Not delivered: there was unsent text in the agent\'s input box\n'), text);
+		assert.ok(text.includes('From: Facade\nTo: Ada #a1\nAbout message: #m1\nDelivery: Delivered to the agent\n'), text);
 		assert.ok(!text.includes('command:'), text);
 	});
 
@@ -175,7 +209,7 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		assert.strictEqual(editor.opened.length, 1);
 		assert.ok(editor.opened[0].text.startsWith('Message #m9 from Ada #a1\n\n'), editor.opened[0].text);
 		assert.ok(editor.opened[0].text.includes(`${'é'.repeat(400)}\n`), 'the complete message');
-		assert.ok(editor.opened[0].text.includes('Status: Shown to you as a notification'), editor.opened[0].text);
+		assert.ok(editor.opened[0].text.includes('Delivery: Shown to you as a notification'), editor.opened[0].text);
 		port.dispose();
 	});
 

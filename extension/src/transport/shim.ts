@@ -9,9 +9,10 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { lineReader } from '../base/lines';
-import { SHIM_AGENT, SHIM_PTYD, SHIM_RUN } from './launch';
+import { SHIM_AGENT, SHIM_CONTEXT, SHIM_PTYD, SHIM_RUN } from './launch';
 import { McpShim } from './mcpServer';
 import { PtydLink } from './ptydLink';
+import { antigravityContext } from './contextHook';
 
 /** The extension's version, from the manifest beside `dist/`; `unknown` where there is none to read. */
 function versionOf(): string {
@@ -24,23 +25,31 @@ function versionOf(): string {
 }
 
 const log = (line: string) => process.stderr.write(`facade: ${line}\n`);
-const link = new PtydLink(process.env[SHIM_PTYD] ?? '', process.env[SHIM_RUN] ?? '');
-const shim = new McpShim({
-	alias: process.env[SHIM_AGENT] ?? '',
-	// Started without a run's variables - by a CLI the person started in a folder a running agent's server entry is in - it serves none
-	serving: !!process.env[SHIM_RUN] && !!process.env[SHIM_PTYD],
-	version: versionOf(),
-	link,
-	write: message => process.stdout.write(JSON.stringify(message) + '\n'),
-	log
-});
 
-// Its client gone, nothing it writes is read: it ends
-process.stdout.on('error', () => process.exit(0));
-// A request longer than one line may be is answered and skipped; the requests after it are read as ever
-process.stdin.on('data', lineReader(line => shim.receive(line), err => shim.oversized(err), { oversized: 'skip' }));
-// The client closed its input: what it asked is answered, written out, and the shim ends (calls a window took go on there)
-process.stdin.on('end', () => void shim.idle().then(() => {
-	link.dispose();
-	process.stdout.write('', () => process.exit(0));
-}));
+if (process.argv.includes('--antigravity-context')) {
+	// Consume the native hook's input without retaining it; the process environment already identifies the run.
+	process.stdin.resume();
+	process.stdin.on('end', () => process.stdout.end(JSON.stringify(antigravityContext(process.env))));
+} else {
+	const link = new PtydLink(process.env[SHIM_PTYD] ?? '', process.env[SHIM_RUN] ?? '');
+	const shim = new McpShim({
+		context: process.env[SHIM_CONTEXT],
+		alias: process.env[SHIM_AGENT] ?? '',
+		// Started without a run's variables - by a CLI the person started in a folder a running agent's server entry is in - it serves none
+		serving: !!process.env[SHIM_RUN] && !!process.env[SHIM_PTYD],
+		version: versionOf(),
+		link,
+		write: message => process.stdout.write(JSON.stringify(message) + '\n'),
+		log
+	});
+
+	// Its client gone, nothing it writes is read: it ends
+	process.stdout.on('error', () => process.exit(0));
+	// A request longer than one line may be is answered and skipped; the requests after it are read as ever
+	process.stdin.on('data', lineReader(line => shim.receive(line), err => shim.oversized(err), { oversized: 'skip' }));
+	// The client closed its input: what it asked is answered, written out, and the shim ends (calls a window took go on there)
+	process.stdin.on('end', () => void shim.idle().then(() => {
+		link.dispose();
+		process.stdout.write('', () => process.exit(0));
+	}));
+}

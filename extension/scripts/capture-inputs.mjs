@@ -8,7 +8,7 @@
 // updates: a failed check is a reader or a placeholder to update, and the screens it saved are the new recorded cases.
 //
 //   npm run compile
-//   node scripts/capture-inputs.mjs <claude|codex|agy|muse|opencode|pi> [--path <program>] [--home <temporary folder>] [--cwd <temporary folder>] [--out <folder>] [--rows <n>]
+//   node scripts/capture-inputs.mjs <claude|codex|agy|muse|opencode|pi> [--path <program>] [--home <temporary folder>] [--cwd <temporary folder>] [--out <folder>] [--rows <n>] [--case <name,name>]
 //
 // `--rows` sets the terminal's height, 40 by default: an editor panel's terminal is often 20 to 30 rows, where an input box that
 // grows with its text may scroll.
@@ -36,7 +36,7 @@ const { Unicode11Addon } = require('@xterm/addon-unicode11');
 const { inputScreenOf, readInput } = require(path.join(out, 'ptyd', 'composer.js'));
 const { isOwnDraft } = require(path.join(out, 'ptyd', 'drafts.js'));
 const { pasteSequence } = require(path.join(out, 'ptyd', 'keys.js'));
-const { MESSAGE_LEAD } = require(path.join(out, 'core', 'messages.js'));
+const { MESSAGE_LEAD, formatMessage, formatResult } = require(path.join(out, 'core', 'messages.js'));
 const { codexAdapter } = require(path.join(out, 'clis', 'codex.js'));
 const { assertTemporaryState, probeEnvironment } = require(path.join(out, 'test', 'integration', 'probeState.js'));
 
@@ -51,7 +51,8 @@ const CLIS = {
 	pi: { command: 'pi', adapter: 'pi-frame', args: ['--approve'] }
 };
 
-const message = (n, body) => `[Facade message #m${n} | from @probe #a0 | window Probe]\n${body}\n[/Facade message #m${n}]`;
+const message = (n, text) => formatMessage({ alias: `#m${n}`, from: { run: 'probe', name: 'probe', alias: '#a0' }, text }, '');
+const notice = (n, text, about) => formatResult({ alias: `#m${n}`, text, about });
 const long = Array.from({ length: 100 }, (_, line) => `${String(line + 1).padStart(3, '0')} ${'abcdefghij'.repeat(7)}`).join('\n');
 
 /** The cases: what goes into the input, typed or pasted, and what the reader is to read; a pasted one is to read as its own draft. */
@@ -60,6 +61,8 @@ const CASES = [
 	{ name: 'typed', type: 'hello there', expect: 'draft' },
 	{ name: 'pasted', paste: 'first pasted line\nsecond pasted line\nthird pasted line', expect: 'draft', own: true },
 	{ name: 'message-pasted', paste: message(1, 'Reply with exactly the word ACK-TWO and nothing else.'), expect: 'draft', own: true },
+	{ name: 'notice-pasted', paste: notice(7, 'Your message #m6 has been passed on to Ada (#a7).', 'm-6'), expect: 'draft', own: true },
+	{ name: 'notice-batch', paste: [notice(8, 'Ada (#a7) has stopped.'), notice(9, 'Your message #m6 has been passed on to Ben (#a8).', 'm-6')].join('\n\n'), expect: 'draft', own: true },
 	{ name: 'cjk-pasted', paste: message(2, '请检查 login 流程 🚀\nそして結果を報告してください。'), expect: 'draft', own: true },
 	{ name: 'long-pasted', paste: message(3, long), expect: 'draft', own: true },
 	// Taller than an input box a third of a small terminal high, under the line counts CLIs fold a paste from
@@ -80,6 +83,10 @@ const option = name => {
 	return at >= 0 ? args[at + 1] : undefined;
 };
 const program = option('--path') ?? cli.command;
+const selected = option('--case')?.split(',');
+if (selected?.some(name => !CASES.some(each => each.name === name && (!each.lead || cli.lead)))) {
+	throw new Error('--case must name cases available for this CLI, separated by commas.');
+}
 const overrides = probeEnvironment(JSON.parse(process.env.FACADE_CAPTURE_ENV ?? '{}'), false);
 const temporary = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fcp-')));
 const children = new Set();
@@ -109,6 +116,9 @@ if (args[0] === 'codex') {
 		cli.args.push('--no-daemon');
 	}
 }
+for (const name of ['CODEX_HOME', 'CLAUDE_CONFIG_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME', 'XDG_STATE_HOME']) {
+	fs.mkdirSync(state[name], { recursive: true });
+}
 const rows = Number(option('--rows') ?? 40);
 if (!Number.isInteger(rows) || rows < 10) {
 	console.error('--rows takes a whole number of rows, 10 or more.');
@@ -122,7 +132,7 @@ const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /** The CLI started in a pseudo-terminal drawn by a headless one, answering what a terminal answers its program. */
 function start() {
-	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CLAUDE|CODEX_|GEMINI_|ANTIGRAVITY_|MUSE_|OPENCODE_|PI_|ANTHROPIC_|OPENAI_|QWEN_|FACADE_|MCP_|XDG_|HOME$|USERPROFILE$|ELECTRON_RUN_AS_NODE$|VSCODE_)/i.test(name)));
+	const env = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(CLAUDE|CODEX_|GEMINI_|ANTIGRAVITY_|MUSE_|OPENCODE_|PI_|ANTHROPIC_|OPENAI_|OPENROUTER_|QWEN_|FACADE_|MCP_|XDG_|HOME$|USERPROFILE$|ELECTRON_RUN_AS_NODE$|VSCODE_)/i.test(name)));
 	const term = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 2000 });
 	term.loadAddon(new Unicode11Addon());
 	term.unicode.activeVersion = '11';
@@ -208,6 +218,7 @@ function compact(name, expect, term) {
 
 const results = [];
 for (const each of CASES) {
+	if (selected && !selected.includes(each.name)) { continue; }
 	if (each.lead && !cli.lead) {
 		continue;
 	}
@@ -227,11 +238,12 @@ for (const each of CASES) {
 		fs.writeFileSync(path.join(saved, `${each.name}.blocked.txt`), masked(text));
 		results.push({ name: each.name, ok: false, why: run.exited() ? `it exited (${JSON.stringify(run.exited())})` : `its input never read usable: ${ready?.state} (${ready?.evidence}); its screen is in ${each.name}.blocked.txt` });
 		run.child.kill();
-		continue;
+		break; // A blocked launch cannot exercise any subsequent draft case. Keep its first screen as evidence.
 	}
 	// What a person would see settle before typing
 	await sleep(800);
 	const lead = each.lead ? MESSAGE_LEAD : undefined;
+	const pasted = lead && each.paste?.startsWith(lead) ? each.paste.slice(lead.length) : each.paste;
 	if (each.type !== undefined) {
 		for (const char of each.type) {
 			run.child.write(char);
@@ -239,16 +251,16 @@ for (const each of CASES) {
 		}
 	}
 	if (each.paste !== undefined) {
-		run.child.write(`${lead ?? ''}${pasteSequence(true, each.paste)}`);
+		run.child.write(`${lead ?? ''}${pasteSequence(true, pasted)}`);
 	}
 	// As long as a paste of its size takes, and its CLI to draw it
 	await sleep(1_500 + Math.ceil(Buffer.byteLength(each.paste ?? '') / 64));
 	const read = await run.reading();
-	const own = each.paste !== undefined && read.draft !== undefined && isOwnDraft(read.draft, each.paste, cli.adapter, lead, read.hidden);
+	const own = each.paste !== undefined && read.draft !== undefined && isOwnDraft(read.draft, pasted, cli.adapter, lead, read.hidden);
 	const ok = read.state === each.expect && (each.own === undefined || own === each.own);
 	results.push({ name: each.name, ok, read: read.state, evidence: read.evidence, ...each.own ? { own } : {}, ...ok ? {} : { draft: read.draft } });
 	// A paste's text kept with its screen, so that a test checks it reads as its own draft (RULES-1.6)
-	fs.writeFileSync(path.join(saved, `${each.name}.json`), JSON.stringify({ ...compact(each.name, each.expect, run.term), ...each.paste !== undefined ? { paste: each.paste, ...lead ? { lead } : {} } : {} }));
+	fs.writeFileSync(path.join(saved, `${each.name}.json`), JSON.stringify({ ...compact(each.name, each.expect, run.term), ...each.paste !== undefined ? { paste: pasted, ...lead ? { lead } : {} } : {} }));
 	run.child.kill();
 	await sleep(300);
 }

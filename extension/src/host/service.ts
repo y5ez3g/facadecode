@@ -14,6 +14,7 @@ import { ConversationFile } from '../record/conversations';
 import { WorkspacePins } from './pins';
 import { isDamagedWindowIdentity, isUnreadableWindowIdentity, WINDOW_TERMINALS_COMMAND } from '../base/windowIdentity';
 import { createToolServices } from '../contract/tools';
+import { deliveryReceipt } from '../contract/facts';
 import { AgentService } from '../core/agents';
 import { AttentionNotices } from '../core/attention';
 import type { MessageRecord } from '../core/messagePorts';
@@ -27,11 +28,11 @@ import { registerWorktreeCommands } from '../ui/commands/worktree';
 import { AgentExecution } from './execution/agentExecution';
 import { RECONCILE_MS } from './execution/executionSession';
 import { AliasCounter } from '../record/aliases';
-import { ChoiceStore } from '../record/choices';
 import { AgentLog } from '../record/log';
 import { MessageCounter, MessageFile } from '../record/messages';
 import { facadeHome } from '../record/paths';
 import { pruneResults, writeResult } from '../record/results';
+import { instructionsFor, launchContextText } from '../schema/instructions';
 import { RetainedFile } from '../record/retained';
 import { nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { keepWindowKey, keepWorkspaceUri, workspaceRecord } from '../record/workspace';
@@ -135,7 +136,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		throw new ActivationError(vscode.l10n.t('Could not restore agents for this window. Reload the window to try again.'));
 	}
 	const agentLog = new AgentLog(record.dir);
-	const log: LogPort = { event: text => agentLog.event(text) };
+	let eventContext: Readonly<Record<string, unknown>> = {};
+	const log: LogPort = { event: text => agentLog.event(text), fact: (event, fields) => agentLog.fact(event, { ...eventContext, ...fields }) };
 	// A proven handover or an exact-URI takeover uses the shared owner's state, including in a fresh profile. A stale
 	// Memento at a previously visited destination cannot overwrite the current order and choices beside those runs.
 	const carried = record.key === handedOver || record.binding.key === record.key;
@@ -166,7 +168,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		shimScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'shim.js').fsPath
 	});
 	const worktrees = createWorktreeService(locations, log);
-	const clis = new HostClis({ log: line => log.event(line), home });
+	const clis = new HostClis({ log: line => log.event(line), fact: (event, fields) => log.fact?.(event, fields), home });
 	// This window on the client network, through its local component: without it, the tools reach this window alone (COLLABORATION-1.1)
 	const address = await networkAddress(session);
 	const network = address !== undefined ? new ClientNetwork(address, session) : undefined;
@@ -205,7 +207,15 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		// Facade's own reasons in the person's language: a worktree's problem, a CLI's configuration (UX-2.4)
 		describe: (err, english) => worktreeProblemText(err, err instanceof PlanError ? reasonText(err.said, english) : english),
 		// The run's own shim, where orchestration is on for this start (RULES-4.4, MCP-6.1)
-		tools: run => clis.collaborationEnabled() ? execution.shimLaunch(run) : undefined,
+		tools: (run, facts, location) => {
+			if (!clis.collaborationEnabled()) { return undefined; }
+			const context = launchContextText({
+				creator: { id: facts.creator ? /#a\d+$/.exec(facts.creatorLabel ?? '')?.[0] ?? facts.creator : '#human', label: facts.creatorLabel },
+				window: window.label, windowId: window.id, locationId: location.id, logFile: agentLog.eventsFile, location,
+				...(facts.promptId ? { initialMessage: facts.promptId.replace(/^m-/, '#m') } : {})
+			});
+			return { ...execution.shimLaunch(run, facts.alias, context), instructions: instructionsFor(facts.alias, context) };
+		},
 		// What a start types before its first turn goes ahead of every message to it (COLLABORATION-2.2); `input` exists by any launch
 		warmUp: (run, warmUp): Promise<void> => input.warmUp(run, warmUp),
 		newRunId: () => `run-${crypto.randomBytes(16).toString('hex')}`
@@ -214,6 +224,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	// The name of a window that has no folder or workspace open, as agents and message headers name it
 	const window = { id: address ?? `win-${crypto.randomBytes(8).toString('hex')}`, label: vscode.workspace.name ?? vscode.l10n.t('Window') };
 	const environment = editorEnvironment();
+	eventContext = { window_id: window.id, window: window.label, environment };
+	log.fact?.('window_attached', { workspace: uri });
 	const contact = new WindowContact(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
 	const input: OrdinaryInput = new OrdinaryInput({
 		get: run => agents.get(run),
@@ -231,6 +243,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	};
 	const messages = new MessageService({
 		agents,
+		receipt: deliveryReceipt,
 		input,
 		human: contact,
 		store: new MessageFile<MessageRecord>(home),
@@ -238,7 +251,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		sent: new MessageFile<MessageRecord>(home, Date.now, path.join('messages', 'sent')),
 		results: {
 			report: async (other, result) => {
-				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.callId !== undefined ? { callId: result.callId } : {} }, STAGE_MS)
+				const response = await (network?.route(other, 'result', { to: result.to, text: result.text, about: result.about, ...result.result !== undefined ? { result: result.result } : {}, ...result.callId !== undefined ? { callId: result.callId } : {} }, STAGE_MS)
 					?? Promise.resolve({ ok: false as const, reason: 'window_unavailable' as const, message: 'No network', effects: 'none' as const }));
 				return response.ok;
 			}
@@ -280,7 +293,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			// Deliveries to the agents shown now go on, within their own deadlines (RULES-1.9)
 			.then(() => disposed ? undefined : messages.resume()).catch(err => log.event(`Could not go on with this window's deliveries: ${messageOf(err)}`));
 	});
-	// The nine tools, for every run of this window whose shim calls in (MCP-1.1, 6.1)
+	// The eight tools, for every run of this window whose shim calls in (MCP-1.1, 6.1)
 	const services = createToolServices({
 		window: { ...window, environment },
 		agents,
@@ -290,12 +303,13 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		terminal,
 		home,
 		writeResult,
-		choices: new ChoiceStore(home),
+		historyLog: agentLog.eventsFile,
 		timeout: () => waitSeconds(readSetting, text => log.event(text)),
 		yolo,
 		input,
 		clock: { now: Date.now },
 		log: text => log.event(text),
+		recordEvent: (event, fields) => log.fact?.(event, fields),
 		// A call from a run this window is still reattaching waits for it (RULES-4.1)
 		ready,
 		...network ? { network } : {}
@@ -310,6 +324,20 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	} catch (err) {
 		log.event(`Could not remove expired result files: ${messageOf(err)}`);
 	}
+	// Reuse location/configuration events; unchanged scans are not repeated in history. No polling or CLI processes.
+	let lastLocations = '';
+	const scanLocations = () => {
+		if (disposed) { return; }
+		const catalog = locations.snapshot();
+		const fields = { folders: catalog.folders.map(({ name, uri, path }) => ({ name, uri, path })),
+			locations: catalog.locations.map(({ id, path, kind, branch, isMain }) => ({ location_id: id, path, kind, branch, is_main: isMain })), pending: catalog.pending };
+		const signature = JSON.stringify(fields);
+		if (signature !== lastLocations) { lastLocations = signature; log.fact?.('locations_scanned', fields); }
+		for (const location of catalog.locations) {
+			void clis.list(location).catch(err => log.fact?.('cli_scan_failed', { location_id: location.id, reason: messageOf(err) }));
+		}
+	};
+	scanLocations();
 	const diagnostics: DiagnosticsDeps = {
 		agents,
 		locations,
@@ -322,8 +350,13 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		home: os.homedir()
 	};
 	const disposables: vscode.Disposable[] = [
+		locations.onDidChange(scanLocations),
+		vscode.workspace.onDidChangeConfiguration(event => {
+			if (event.affectsConfiguration('facade') || event.affectsConfiguration('terminal.integrated')) { scanLocations(); }
+		}),
 		...registerUi({
 			agents,
+			savedName: key => conversations.get(key)?.name,
 			conversations: new VendorHistory({
 				knownCwd: key => conversations.get(key)?.cwd,
 				arguments: () => clis.storeArguments(),
@@ -352,6 +385,11 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		// without the system clipboard; compiled out of the shipped extension
 		...typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [
 			vscode.commands.registerCommand('facade.screen', (run: string, lines = 40) => execution.readScreen(run, lines)),
+			vscode.commands.registerCommand('facade.testPaste', (run: string, text: string, lead?: string) => execution.typeText(run, text, false, lead)),
+			vscode.commands.registerCommand('facade.messageInput', async (run: string, own?: string, lead?: string) => {
+				await agents.warmedUp(run);
+				return input.inspect(run, own, lead);
+			}),
 			vscode.commands.registerCommand('facade.diagnostics', () => diagnosticsOf(diagnostics))
 		] : [],
 		serveRoutes(route => services.serve(route)),
@@ -360,6 +398,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	context.subscriptions.push(...disposables);
 	return async () => {
 		disposed = true;
+		log.fact?.('window_detached', {});
 		// Its state's changes waiting to be written together are written now, while this activation may own them
 		workspaceState.flush();
 		clearTimeout(restoreRetry);

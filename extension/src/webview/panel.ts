@@ -34,6 +34,7 @@ status.setAttribute('aria-live', 'polite');
 document.body.append(status);
 
 let state: PanelState = { revision: 0, loading: true, cards: [], cardCount: 0, capabilities: { remote: false } };
+let stateReceivedAt = performance.now();
 /** Where the person was when this view last hid: restored on the first list drawn, without taking input focus (PANEL-3.1). */
 let restoring = savedBrowsing();
 
@@ -54,6 +55,7 @@ const isState: Check = value => isShaped(value, {
 	capabilities: value => isShaped(value, { remote: isBoolean })
 }, {
 	filter: value => isShaped(value, { kind: value => value === 'location' || value === 'folder', id: isString, label: isString }),
+	clockAt: isNumber,
 	empty: value => EMPTY.includes(value),
 	exited: isStrings
 });
@@ -94,6 +96,7 @@ window.addEventListener('message', event => {
 	switch (message.type) {
 		case 'state':
 			state = message.state as PanelState;
+			stateReceivedAt = performance.now();
 			render();
 			break;
 		case 'outcome':
@@ -513,8 +516,9 @@ document.fonts.addEventListener('loadingdone', fitPlaces);
  */
 function hoverOf(card: Card): string {
 	const { startedAt, workingSince } = card;
-	const working = workingSince === undefined ? [] : [strings.workingSince.replace('{0}', relativeTime(workingSince))];
-	const started = startedAt === undefined ? [] : [strings.started.replace('{0}', relativeTime(startedAt))];
+	const now = state.clockAt === undefined ? Date.now() : state.clockAt + Math.max(0, performance.now() - stateReceivedAt);
+	const working = workingSince === undefined ? [] : [strings.workingSince.replace('{0}', relativeTime(workingSince, now))];
+	const started = startedAt === undefined ? [] : [strings.started.replace('{0}', relativeTime(startedAt, now))];
 	return [...card.tooltip, ...working, ...started, card.location.full].join('\n');
 }
 

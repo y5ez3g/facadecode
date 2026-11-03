@@ -1,11 +1,11 @@
 # MCP contract
 
-Layer 4. Protocol **2** defines the target contract. [Rules](../RULES.md) owns effects and
+Layer 4. Protocol **5** defines the target contract. [Rules](../RULES.md) owns effects and
 [Collaboration](../features/COLLABORATION.md) owns message experience. This document does not certify implementation.
 
 | Group | Decides |
 | --- | --- |
-| 1 Common contract | Nine tools, outcomes, waits and validation |
+| 1 Common contract | Eight tools, outcomes, waits and validation |
 | 2 Discover and start | Startup choices, required identity/location and optional prompt |
 | 3 Inspect and stop | Scoped agent lists and single-agent stop |
 | 4 Messages and history | One recipient, result reports and own inbox |
@@ -16,9 +16,9 @@ Layer 4. Protocol **2** defines the target contract. [Rules](../RULES.md) owns e
 
 ### 1.1 Tools and validation
 
-**Expose nine English tool contracts; validate complete arguments before effects.**
+**Expose eight English tool contracts; validate complete arguments before effects.**
 
-Tools in order: `list_start_options`, `start_agent`, `list_agents`, `stop_agent`, `send_message`,
+Tools in order: `start_agent`, `list_agents`, `stop_agent`, `send_message`,
 `read_messages`, `read_screen`, `type_text`, `press_keys`.
 Do not expose get_operation, cancel_message, rename, independent worktree creation/deletion or batch stop.
 
@@ -52,6 +52,20 @@ chunk large data, but no transport-frame limit becomes a total-content limit on 
 
 **Every result provides English text and equivalent structured facts without overstating effects.**
 
+Agent-facing results use one compact JSON object as both structured content and serialized text, without an additional
+narrative headline. Keep the envelope below, meaningful field names, all actual effects and useful error diagnostics.
+Public agent/message identities use their directly callable short references where known, with the full ID as a fallback;
+do not repeat alias/reference variants. Internal routing and stored records retain their complete identities. Project
+only at the caller's public result boundary, after cross-window routing and caller-side file transfer. This contract
+is tool protocol 5. All callers use this contract; earlier tool protocols fail explicitly before effects, with no
+parallel result format or automatic downgrade.
+
+Do not echo ordinary input bodies, routine character counts or requested key arrays in operation receipts. Preserve
+pending deadlines/obstacles, repeated-request facts, prompt outcomes and partial/unknown effects. List detail under
+3.1 keeps infrequent facts retrievable. Message and screen bodies are complete, inline or through the existing file
+mechanism. Explicit false, null, empty and unknown values are not removed as though they were absent. Human-facing
+history and notifications keep their own presentation; their wording is not the machine result contract (D148).
+
 ```ts
 type Result<T> = {
   status: "success" | "failure" | "accepted";
@@ -61,6 +75,7 @@ type Result<T> = {
     reason: string;
     message: string;
   };
+  recovery?: { action: string; check?: { tool: string; arguments: object }; request_id?: string; condition?: "within_original_hour" };
   effects: {
     outcome: "none" | "confirmed" | "partial" | "unknown" | "pending";
     text_written?: "none" | "partial" | "full" | "unknown";
@@ -73,6 +88,8 @@ type Result<T> = {
 ```
 
 Failure sets MCP isError; accepted means finite work continues, not success. Unknown is not false/no effect.
+Process and tools facts use `process_state` and `tools_state` consistently across starts, lists, repeated requests and
+receipts. Activity remains separate; idle, delivery and input writes never establish task completion.
 For native initial-prompt acceptance, use confirmed outcome without inventing terminal text/Enter writes; omit those
 optional fields when that path did not use them. RULES-1.3 defines delivery for every path.
 Agent and message IDs identify public objects; no public operation-query identity is required.
@@ -85,8 +102,19 @@ RULES-1.5. A reader that does not recognize the input box leaves it untouched; t
 A request refused before it reached its effect reports no effect: a routed message the destination refuses before
 recording it - its agent gone or out of reach - is `NOT_FOUND`, and direct text or keys that never reached the terminal's
 runtime are `UNAVAILABLE` (D132).
-CLI/Git/transport errors retain their actual useful diagnostic. Error results do not instruct agents how to organize,
-retry or escalate work. Agent-operation errors never create an automatic human notification.
+A failed route preserves timeout versus unavailable versus malformed-response reasons and the known destination.
+Unreachable windows do not prove absent agents. Lost answers to pure queries report no agent/message-state effect;
+read_messages is different because handoff can mark messages delivered. A malformed reply or disconnected route after
+forwarding a mutation leaves its effect unknown. A failed lookup of an earlier uncertain request cannot erase that
+uncertainty merely because its target is now gone. Only an authoritative original record can settle the earlier effect.
+CLI/Git/transport errors retain their actual useful diagnostic. Exceptional results may include compact `recovery`
+facts: an `action` naming correction, target/capability/blocker inspection, effect inspection, original-request reuse,
+reconnection or tool update; an optional read-only `check` names an existing tool and its arguments. Only original-request
+reuse includes `request_id` and `condition: within_original_hour`; it never restarts that hour. Partial/unknown effects
+never authorize automatic input replay, replacement starts, worktree deletion or escalation. A final failed request
+remains failed when retrieved with the same ID; a deliberate new effect requires a new request after addressing its cause.
+Normal success has no recovery object. Prompt-level failure/uncertainty keeps its recovery alongside that prompt.
+A closed target has no invented state/screen check. These are API mechanics, not instructions to organize or escalate work. Agent-operation errors never create an automatic human notification.
 
 ### 1.3 Waits, progress and async completion
 
@@ -96,38 +124,44 @@ Queries use a ten-second route deadline and report unavailable windows rather th
 `facade.collaboration.waitSeconds` is 1–3600 seconds, default 120, for startup/stop/control waiting. Completion can return sooner.
 A CLI that times its MCP calls is given 3660 seconds for one of Facade's - the longest wait and a minute for the call's
 own route and answer - so that it never gives up on a call Facade is still answering within its wait (D132).
+Every forwarding layer charges connection and queue time to the same remaining route budget. A budget exhausted before
+forwarding writes no request; a forwarded request whose reply is lost remains uncertain. Transport timeouts end waiting,
+not the destination's operation. Locally measured elapsed time uses a monotonic clock; process clocks are never subtracted
+across environments. Query deadlines do not make delivery-confirming reads side-effect-free.
 An actual continuing operation may return accepted with its run/effects; later completion returns to its initiating
 agent through a Facade system result. The accepted response and later result identify the same originating tool call
 and target run, using existing call correlation facts so concurrent calls, including calls to the same target, are
-distinguishable. This adds no public operation object or query API. Result handoff follows
+distinguishable. Accepted start/stop results expose `result_message_id`, reserved from the existing message namespace before acceptance.
+The later receipt has that same ID. The full `call_id` stays in structured data and records; a same-request start lookup
+keeps both original IDs, including after reload. Reservation creates no inbox item and promises no durable delivery. The original prompt/message ID identifies
+prompt delivery separately. Message records retain originating-call correlation while delivery resumes after reload.
+Local and routed receipts retain the target's known name and short reference even after its card closes; rendering
+does not depend on looking up that removed target again.
+This adds no public operation object or query API. Result handoff follows
 RULES-1.7, including no duplicate receipt for an immediate final result and no human fallback when handoff fails.
-Use list_agents for current run state; there is no separate operation inspection API.
+Use list_agents for current run state; there is no separate operation inspection API. A pending operation continues
+without another send/start. Final system results request no reply. Unknown outcomes with no active operation promise
+no later verification. Receipt delivery remains finite and may end when its initiator is unreachable.
+An earlier returned message deadline can extend under RULES-1.5; its passing or an empty inbox alone proves no final outcome.
 send_message always uses the initial-response and delivery-stage budgets owned by RULES-1.2 and RULES-1.5.
 A slow operation never keeps a closed card/terminal visible or extends a message budget. Native MCP progress may
 describe a continuing call; it does not produce progress popups.
 
 ## 2 Discover and start
 
-### 2.1 list_start_options
+### 2.1 Launch context and history
 
-**Query startup choices without side effects, including open windows that have no agents.**
+**Current launch destinations and CLI availability are part of list_agents; historical facts are read from logs.**
 
-Arguments, optional: `window_id:string`, `location_id:string`, `cli:string`.
-Without window_id, list every open Facade window on this client computer: window IDs/labels, environments when
-present, location summaries and availability. With window_id, list the shared WORKTREES-1.2 location catalog. With
-location_id, list its installed CLIs and any catalog configuration problems, each naming its setting. A malformed
-custom catalog must not silently appear empty; valid built-ins remain available. With cli, include model/effort choices and actual operation capabilities. A
-subordinate selection must identify its parent; do not silently choose a window/location. A window without a folder
-has zero locations and cannot start an agent. Known absence differs from an unreachable runtime; include complete and
-unavailable_windows where applicable.
+There is no separate startup-discovery tool. MCP-3.1 returns empty windows too, their folders and worktrees, and compact
+CLI availability scoped to actual locations. An agent's startup context supplies its own window/location IDs and the
+absolute diagnostic-history path in its execution environment. Existing IDs can be used without another discovery call.
+The execution-time checks of start_agent remain authoritative; a snapshot reserves nothing.
 
-Model/effort catalogs contain previously successful values and any reliable local vendor catalog, with source and
-complete/partial/unknown status. Omitting a startup value adds no per-call override; CLIS-1.4 owns precedence over
-the CLI's native defaults. Do not advertise a stale hardcoded list as complete or require a made-up not_applicable
-object. Capabilities include activity, ordinary message input (whether the CLI has an input reader, with the version
-Facade found), screen/input and native initial prompt. Report supported/unavailable/unverified with the reason.
-Window/location discovery is not restricted to places already containing the caller's tree. Existing-agent data is
-scoped under RULES-4.3. Selection is revalidated at start, without reservations.
+CLIS-1.4 owns model/effort values. Facade logs requested settings and actual startup results under ARCHITECTURE-3.3;
+it does not aggregate model histories, count model successes or mirror native transcripts. The skill explains how to
+filter recent structured log events, when native history is useful, and how to inspect a CLI's own model/effort controls
+when a new choice is needed. Defaults and already specified values require no exploratory launch or history query.
 
 ### 2.2 start_agent arguments
 
@@ -156,7 +190,7 @@ the caller cannot pass permissions/yolo to choose a mode. No unattended override
 ```
 
 For new-worktree creation, add for example `"worktree":{"branch":"review-api","base_ref":"HEAD"}`.
-Previously successful models/efforts are choices, not an exhaustive allowlist where the CLI accepts literal overrides.
+Historical requested models/efforts are observations, not an exhaustive allowlist or proof of native acceptance.
 Omitting either field leaves the CLI's native defaults in control under CLIS-1.4. Report ignored/rejected requested
 overrides honestly. Do not substitute another CLI, path or conversation.
 
@@ -164,9 +198,16 @@ overrides honestly. Do not substitute another CLI, path or conversation.
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-Return agent_id/reference/name, window/environment, location, creator/tree, yolo, process_state, tools_state and
+Return agent_id/name, window/environment, location, creator/tree, yolo, process_state, tools_state and
 requested/observed model/effort where known. For prompt include message_id, the native or post-start path with its
-capability state, and pending/success/failure with actual input effects under RULES-1.3 and MCP-1.2.
+capability state, and pending/success/failure/unknown with actual input effects under RULES-1.3 and MCP-1.2.
+An unverified native prompt has unknown acceptance, with no invented pending delivery or promised later receipt.
+Its message record retains that uncertainty and can be delivered by an explicit inbox read without another paste.
+The run retains its original prompt message ID. A repeated start returns that record's current outcome, or explicit
+unknown where the record is absent; it never replays the prompt or uses replacement prompt text from the retry.
+Startup closed midway retains any known created-worktree path in its final effects and reports `closed:true` with
+`process_state:unknown`. Closure alone does not establish that no process was started or that it exited.
+For a delivered post-start prompt, include `delivered_via` so terminal submission and an inbox read remain distinct.
 COLLABORATION-2.2 owns native/post-start prompt selection and budget start.
 If the process has started but prompt delivery is still pending, return that separation and later report the final
 prompt outcome to the caller with the same message ID and target run under 1.3. A successful process-start result
@@ -180,16 +221,35 @@ There is no task object, task_operation_id, completion expectation or automatic 
 
 ### 3.1 list_agents
 
-**List current run facts within the caller's normal YOLO/creation-tree scope.**
+**One query returns current windows, launch locations, CLI availability and agents within the caller's reach.**
 
-Arguments: `window_id?:string`, `include_ended?:boolean=false`, `cursor?:string`, `limit?:integer=100` (1–200).
-Default searches connected windows within permitted reach: YOLO all; non-YOLO only the same creation tree, including
-siblings/ancestors/descendants. Do not return unrelated agents and then ask the caller to ignore them.
-Return ID/reference/name, window/environment/location, CLI, creator/tree, yolo, process/activity/tools/input facts,
-observation time/stale flag, title and actual error/exit where present. No task summaries, delegation credentials or
-public pending-operation-query fields. Ended records never imply a live terminal.
-Pagination returns next_cursor; unavailable peers are explicit and complete:false is not an empty successful lookup.
-read_messages remains limited to the caller's inbox even if list_agents can see another agent.
+Arguments: `window_id?:string`, `location_id?:string`, `agent?:string`, `details?:boolean=false`,
+`cursor?:string`, `limit?:integer=100` (1–200). A location filter requires its window. A single-agent selection excludes
+cursor; conflicting window/location filters fail explicitly. Default agent rows exclude ended records; targeted lookup
+can return a retained terminal outcome for recovery. Bulk ended-agent history is read from logs instead.
+
+Return `windows`, compact `agents`, `counts`, `complete`, `unavailable_windows` and `next_cursor` when paged.
+Every responding window is represented, including windows without agents or folders. Its record contains ID, label,
+environment, folders, locations, CLI choices, counts and source observation time. Count folders as workspace folders,
+worktrees as non-main checkouts, and agents within the caller's reach. Deduplicate locations and agents rather than
+nesting copies beneath every associated folder. Main checkout and plain-folder locations remain launchable locations.
+Window CLI rows contain ID, name, availability and explicit model/effort override support. Equal choices across all
+locations are represented once; a differing choice names the exact location IDs it applies to. No model catalog or
+historical usage statistics are returned. Configuration problems and an incomplete Git catalog remain explicit.
+
+Unreachable windows are not empty: retain their identity and reason, with their counts unknown. Aggregate counts are
+for responding windows and the caller's scope, never an implied complete machine census. YOLO permits every agent;
+otherwise only the creation tree is visible. Window/location/CLI discovery is not restricted to that tree.
+Agent rows include callable ID, name, window/location/path, CLI, requested_model/requested_effort where recorded,
+process/activity/blocker, tools/input facts, actual error/exit and observation freshness. Requested settings do not claim
+the native CLI's current effective model. details:true adds creator/tree, creation time, window label, title and activity
+reason. Unknown-activity and failed-input reasons remain visible in compact rows. A targeted lookup reads only that
+agent's window and avoids unrelated CLI discovery.
+
+Agents and locations page with the same opaque cursor, bound to selection, limit and reach. Counts describe the whole matched
+scope, not the page. Pages observe changing state, not an atomic distributed snapshot. `complete` describes response
+and catalog coverage, independently of pagination. state_observed_at comes from the source state episode; observed_at
+is observation time. Reload/query never freshens source activity. Disconnection, not age alone, determines stale.
 
 ### 3.2 stop_agent
 
@@ -201,6 +261,8 @@ Do not stop children. Already-ended known runs can return already_ended; missing
 while the agent's process is being started answers how that start's cleanup ended, never that none started (D131).
 Return agent_id, actual process/cleanup state and effects. Accepted/unknown cleanup is not proof of exit, but does not
 restore a Stopping card. Self-stop may end the caller before it receives a result; no public recovery tool is added.
+Once removal occurred, `closed:true` records the closed card and terminal. Continuing cleanup is accepted; completed
+but unconfirmed cleanup fails with `termination_unconfirmed` and partial effects, never a successful stop.
 Errors go to the invoking agent, with no automatic human popup. External location deletion is observed separately.
 
 ## 4 Messages and history
@@ -229,12 +291,12 @@ Human contact means notification handoff in the sender's window; no migration to
 All A-to-B delivery/reply/system-result errors remain with agents or end if nobody can receive them.
 
 ```json
-{"status":"success","data":{"message_id":"m-42","target":"run-b","disposition":"submitted_to_cli"},
+{"status":"success","data":{"message_id":"#m42","target":"#a2","disposition":"submitted_to_cli"},
  "effects":{"outcome":"confirmed","text_written":"full","enter_written":true}}
 ```
 
 ```json
-{"status":"accepted","data":{"message_id":"m-42","target":"run-b",
+{"status":"accepted","data":{"message_id":"#m42","target":"#a2",
  "deadline":"2026-10-28T23:00:15Z","obstacle":"input_draft"},
  "effects":{"outcome":"pending","text_written":"none","enter_written":false}}
 ```
@@ -250,13 +312,21 @@ were not pasted. all:true pages every retained incoming record. IDs accept messa
 agent references. Lookup by ID is still inside that inbox, including for YOLO. An unavailable ID reports not_found
 without exposing another recipient's record. Multiple read IDs are a query, not a multiple-recipient send.
 
-Return records oldest first: message ID, sender/recipient, time, optional reply relation, message/system kind, exact
-body and length, delivery state, how it was delivered and input effects. Once the result is handed back, every record
+Return records oldest first: message ID, sender, time, optional reply relation, message/system kind, exact
+body, delivery state, how it was delivered and input effects. Once the result is handed back, every record
 in it is delivered (RULES-1.3): its sender's result says it was delivered through read_messages. RULES-1.5 cancels
 unstarted pastes and permits only completion of an already pasted owned draft. An uncertain return may repeat the same record without starting another paste to the
 terminal. Above 8,000 combined code points, return the complete selected content in a file readable in the caller
 environment, with path/size and per-message metadata. COLLABORATION-4.2 defines transfer and expiry.
-No instructions to print, answer, escalate or follow a workflow are embedded in results.
+An empty result describes only this read's snapshot. A next_cursor continues the same all/default selection and limit.
+The tool's own description states that this is not a wait operation and that automatic delivery needs no polling.
+An empty snapshot includes a short factual notice that messages are delivered automatically, including after a turn
+ends; it neither promises a pending task will finish nor asks the model to end its turn.
+No instructions to poll, end a turn, print, answer, escalate or follow a workflow are embedded in results.
+The compact projection omits duplicate identity spellings, the already-known recipient, routine length and delivery
+attempt counts. A system result with structured operation facts returns those as `result` instead of repeating its
+human-readable body; ordinary message bodies and old text-only system results remain exact. Large-result files carry
+the same selected machine content, with message boundaries and correlation, and are still marked delivered only at handoff.
 
 ## 5 Terminal operations
 
@@ -267,9 +337,15 @@ No instructions to print, answer, escalate or follow a workflow are embedded in 
 Required `agent:string`; optional `lines:integer=50` (1–2000). Enforce normal tree reach.
 Return run/window, observation time, process state, stale flag, buffer mode and logical lines/text. Empty live output
 is successful empty output. Retained ended output is dated and not described as live.
-Inverse/dim annotations may accompany an unannotated text field. Do not execute escape sequences. Include an available
-last alternate-screen frame separately from final normal output. Above 8,000 code points, return a complete readable
-temporary file under COLLABORATION-4.2 rather than truncating the requested result.
+The single `text` body uses `text_format:"facade-styled"`: `[[...]]` marks inverse video and `{{...}}` marks dim text;
+both together nest as `[[{{...}}]]`. A backslash escapes each literal backslash, bracket or brace in the source text,
+so literal marker-like content remains unambiguous. Removing style marks and decoding these escapes restores the exact
+rendered text, including spaces and Unicode. Cues come directly from terminal cells; the model need not count character
+offsets to locate a highlight. A surviving older runtime that supplies no cues explicitly reports `styles_unavailable:true`;
+absence of evidence never invents unstyled output. New launches use the current runtime. Do not execute escape sequences.
+An available `last_alternate_frame` uses the same text format with its own observation time, separate
+from current output. Above 8,000 code points in the complete serialized screen result, return a complete UTF-8 JSON
+file under COLLABORATION-4.2, preserving the same body, cues and metadata without truncation.
 
 ### 5.2 type_text and press_keys
 
@@ -331,8 +407,13 @@ which every turn of every agent pays for (D111).
 **Use one schema source for tools, descriptions and wire validation, and report incompatible protocols plainly.**
 
 Text/structured results express the same facts. No incompatible old call is silently translated into another action.
+Parsing the text as JSON yields exactly the structured object. Unsupported tool protocols, including protocol 2, fail
+explicitly before effects. Cross-window calls carry the current tool protocol without a missing-version fallback.
+A system receipt carries the same
+operation facts as an immediate result, with its message/call correlation; human-readable history text is kept
+separately. A text-only historical receipt is not parsed or guessed into structured state.
 Connection recovery reuses only actual surviving runs and unexpired work under RULES; it never replays closed-run mail.
-The bundled skill teaches the nine tools, required startup fields, optional defaults, RULES-4.3's launch/reach policy,
+The bundled skill teaches the eight tools, required startup fields, optional defaults, RULES-4.3's launch/reach policy,
 normal creation trees, unique-name resolution, `#human`, own inbox, that read_messages without arguments returns the
 messages not yet received and that all:true returns every retained one, and finite delivery. It explicitly tells the
 model: “The same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo
@@ -340,6 +421,36 @@ work for that same message. A new send call has a new ID, even if its text match
 message is a separate kind of information, not another copy of that message's instruction.”
 This is model-side handling of transport duplicates, not a Facade deduplication database or an exactly-once guarantee.
 The skill does not prescribe project workflow, mandatory replies or escalation to a person.
+Its frontmatter is valid YAML with string name/description fields. Quote descriptions so punctuation such as a colon
+cannot become YAML structure; verify native skill loading separately from an MCP connection or successful tool call.
+Initialization owns private launch facts and cross-tool delivery/reach semantics; each tool's description and parameters
+own its use, effects and success/retry boundaries; the skill provides cross-tool examples and occasional reference.
+Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
+lack of draft protection, and bounded optional request-ID reuse. The skill does not duplicate the eight argument schemas.
+Tools publish standard human-readable titles and conservative annotations under the
+[MCP tool schema](https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations).
+Only list_agents and read_screen are read-only business-state queries. read_messages acknowledges
+delivery. Optional request IDs do not make start/send unconditionally idempotent. Mutating tools retain conservative
+destructive/open-world defaults; annotations are hints, never permissions or a reason to change native approval behavior.
+Tool names, argument schemas and the native private-context paths stay identical across presentation changes.
+Per-run initialization instructions identify the agent, its creator (or person), initial message ID when present, and
+launch window/environment/location including folder and worktree. A creator's short ID is a callable send_message
+address, never a reporting requirement. Context is private to the run's launch and survives shim reconnect/reload.
+The creator is named explicitly with its address; a general explanation of #human must not substitute for that fact.
+The MCP launch explicitly carries the caller's short ID; a client's filtered child environment must not erase it.
+Initialization explains that terminal delivery continues after a model turn ends, while read_messages is an immediate
+snapshot rather than a wait operation. It tells agents not to poll inboxes or screens for automatic delivery, without
+prescribing project workflow or a particular turn ending.
+Shared skill/config files contain no personalized context. A client that does not expose server instructions to the
+model receives the same instructions through its run-private native context hook; Pi uses a dedicated system-prompt
+section in its existing per-run extension, Muse uses SessionStart additionalContext from its private session hook,
+and Antigravity uses a PreInvocation ephemeral message from its shared plugin hook. That hook contains no run identity;
+the same run environment as its MCP server supplies the private context, including after native resume. Transient
+context must not accumulate in conversation history across invocations.
+These preserve existing instructions and hooks and add no user message or model turn.
+A proven client limitation may use the same initial message as fallback, never an extra welcome turn.
+Missing facts stay absent, and launch context never claims to track shell cd.
+
 Old task workflows, operation-query/deletion tools, input_policy and authentication instructions are absent.
 No migration guide for already-published user skills is required: this is the first release of the contract.
 
@@ -358,9 +469,22 @@ No migration guide for already-published user skills is required: this is the fi
 
 ## Change log
 
+- 2026-11-02: Consolidate current window/location/CLI discovery in list_agents, remove list_start_options and model-history catalogs, and use structured event logs for history.
+
+- 2026-11-01: D151 exposes original-call correlation for continuing starts/stops and preserves it through message
+  reloads; async and inbox guidance distinguishes continuation, uncertainty, final receipts and empty snapshots.
+
+- 2026-11-01: D150 permits compact recovery facts based on actual effects, retaining diagnostics and original request identity.
+
+- 2026-11-01: D149 makes native prompt uncertainty and unconfirmed termination explicit, preserves prompt outcomes on
+  repeated starts, and unifies process/tool field names under tool protocol 4.
+
 - 2026-11-01: From the owner-requested release review: 1.1 retries a cross-window send whose answer was lost through the
   window holding it; 1.2 reports refusals before any effect as no effect; 3.2 answers a stop during a start with its
   actual cleanup (D131, D132).
+- 2026-11-01: D148: compact machine results with equivalent JSON/text, one current tool protocol, targeted agent
+  detail, and separate machine/human system-result representations; no change to operation or delivery effects.
+
 - 2026-11-01: Describe competitive-analysis findings without naming individual products or their implementation identifiers; API behavior is unchanged.
 - 2026-10-31: Request IDs cover concurrent calls, lost route replies and removed runs; read delivery does not orphan
   a complete Facade draft (D119).

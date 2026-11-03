@@ -153,6 +153,8 @@ interface FrameLayout {
 	readonly upper: RegExp;
 	/** The row right under its lower rule, where only a frame with it is its CLI's. */
 	readonly footer?: RegExp;
+	/** Known non-dim placeholders, accepted only with the empty-input footer cue and a one-line frame. */
+	readonly placeholder?: { readonly texts: readonly string[]; readonly footer: RegExp };
 	/** Its native menus, which it draws with no frame. */
 	readonly menu: Menu;
 }
@@ -196,6 +198,10 @@ const AGY_FRAME: FrameLayout = {
 	prompt: '>',
 	gap: ' ',
 	upper: /^─+$/,
+	placeholder: {
+		texts: ['Accept-edits mode: file edits auto-approved (shift+tab to cycle)', 'Plan mode: research & plan only (shift+tab to cycle)'],
+		footer: /^\? for shortcuts(?:\s|$)/
+	},
 	menu: { selected: /^> (?!\/)\S/, next: /^ {2}\S/, hint: { row: /^ {2}↑\/↓ Navigate · /, within: 8 } }
 };
 
@@ -227,6 +233,19 @@ function readFrame(screen: InputScreen, layout: FrameLayout): InputReading {
 	}
 	if (lower >= rows.length || (layout.footer && !layout.footer.test(textOf(rows[lower + 1])))) {
 		return noInput(rows, layout.menu, why);
+	}
+	// Antigravity's colored mode hint is not dim. Its empty-only footer distinguishes the hint from the exact same
+	// words pasted by a person, even when their cursor is back at the beginning (CLIS-2.1, D157).
+	const placeholder = layout.placeholder;
+	if (placeholder && lower === prompt + 1 && placeholder.footer.test(textOf(rows[lower + 1]))) {
+		const text = textOf(rows[prompt].slice(2)).trimEnd();
+		const matches = placeholder.texts.some(value => text === value || (text.endsWith('...')
+			&& text.length > value.indexOf(':') + 4 && text.length < value.length && value.startsWith(text.slice(0, -3))));
+		if (matches) {
+			return cursor.x === 2 && cursor.y === prompt
+				? { state: 'usable', evidence: `the input frame at row ${prompt + 1} has its mode placeholder and empty-input footer` }
+				: { state: 'unknown', evidence: `the input frame at row ${prompt + 1} has its mode placeholder, its cursor away from where the input starts` };
+		}
 	}
 	return contentOf(rows, prompt, lower, cursor, 'the input frame');
 }

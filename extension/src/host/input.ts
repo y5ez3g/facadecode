@@ -52,8 +52,9 @@ const TEXT_ONLY: InputEffects = { outcome: 'partial', text_written: 'full', ente
  * showed before as the placeholder `seen`, that same placeholder, its paste's number too: a person's later paste of its size is not.
  */
 function holds(reading: InputReading, text: string, adapter: string, lead?: string, seen?: string): boolean {
-	return reading.state === 'draft' && reading.draft !== undefined && isOwnDraft(reading.draft, text, adapter, lead, reading.hidden)
-		&& (seen === undefined || isSameDraft(reading.draft, seen, text, lead, reading.hidden));
+	const pasted = lead && TAKES_LEAD.has(adapter) && text.startsWith(lead) ? text.slice(lead.length) : text;
+	return reading.state === 'draft' && reading.draft !== undefined && isOwnDraft(reading.draft, pasted, adapter, lead, reading.hidden)
+		&& (seen === undefined || isSameDraft(reading.draft, seen, pasted, lead, reading.hidden));
 }
 
 /** What ordinary message input needs of the window: the run's facts, ptyd's reading of its input and its serialized terminal input. */
@@ -276,7 +277,7 @@ export class OrdinaryInput implements InputPort {
 		const typed = lead !== undefined && TAKES_LEAD.has(adapter) ? lead : undefined;
 		let pasted: InputEffect;
 		try {
-			pasted = await this.deps.typeText(run, text, false, typed);
+			pasted = await this.deps.typeText(run, typed && text.startsWith(typed) ? text.slice(typed.length) : text, false, typed);
 		} catch (err) {
 			if (err instanceof PtydNotSent) {
 				return { effects: NOTHING, shown: false };

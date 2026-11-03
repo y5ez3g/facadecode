@@ -13,7 +13,6 @@ import { ArgumentSchema, ToolName, TOOLS } from './tools';
 
 /** Each tool's arguments once valid: defaults filled in, `ids` and `keys` as lists, keys named as ptyd names them. */
 export interface ToolArguments {
-	readonly list_start_options: { readonly window_id?: string; readonly location_id?: string; readonly cli?: string };
 	readonly start_agent: {
 		readonly name: string;
 		readonly window_id: string;
@@ -25,7 +24,7 @@ export interface ToolArguments {
 		readonly worktree?: { readonly branch: string; readonly base_ref: string };
 		readonly request_id?: string;
 	};
-	readonly list_agents: { readonly window_id?: string; readonly include_ended: boolean; readonly cursor?: string; readonly limit: number };
+	readonly list_agents: { readonly window_id?: string; readonly location_id?: string; readonly agent?: string; readonly details: boolean; readonly cursor?: string; readonly limit: number };
 	readonly stop_agent: { readonly agent: string };
 	readonly send_message: { readonly to: string; readonly text: string; readonly reply_to?: string; readonly request_id?: string };
 	readonly read_messages: { readonly ids?: readonly string[]; readonly all: boolean; readonly cursor?: string; readonly limit: number };
@@ -265,7 +264,6 @@ type Value = { [key: string]: unknown };
 const KNOWN_KEYS = 'press_keys knows Enter (or Return), Escape (or Esc), Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right (or ArrowUp, ArrowDown, ArrowLeft, ArrowRight), Home, End, PageUp, PageDown, Space, Ctrl+A to Ctrl+Z, and any one printable character; type_text types text.';
 
 const CHECKS: { readonly [T in ToolName]: (value: Value, given: { readonly [key: string]: unknown }, problems: Collector) => void } = {
-	list_start_options: () => undefined,
 	start_agent: (value, _given, problems) => {
 		const args = value as Partial<ToolArguments['start_agent']>;
 		checkNotBlank('model', args.model, problems, '; leave it out to use the launch configuration and the CLI default');
@@ -276,7 +274,12 @@ const CHECKS: { readonly [T in ToolName]: (value: Value, given: { readonly [key:
 			checkBody('prompt', args.prompt, problems);
 		}
 	},
-	list_agents: () => undefined,
+	list_agents: (value, _given, problems) => {
+		if (value.location_id !== undefined && value.window_id === undefined) { problems.missing.push('window_id'); }
+		if (value.agent !== undefined && value.cursor !== undefined) {
+			problems.invalid.push({ field: 'cursor', problem: '`cursor` cannot be combined with a single `agent` selection.' });
+		}
+	},
 	stop_agent: () => undefined,
 	send_message: (value, _given, problems) => {
 		const text = (value as Partial<ToolArguments['send_message']>).text;

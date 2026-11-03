@@ -10,6 +10,8 @@ import { WINDOW_NETWORK_PROTOCOL, type DirectoryAgent, type ServedRoute } from '
 import { NotServed, windowAddress, WindowNetwork, type WindowNetworkOptions, windowSocketPath } from '../host/windowNetwork';
 import { registerWindow, registryOf } from '../record/windowRegistry';
 import { tempDir } from './util';
+import { withModules } from './withModules';
+import { connectWithin } from '../base/connect';
 
 const TOKEN_A = '11111111-1111-4111-8111-111111111111';
 const TOKEN_B = '22222222-2222-4222-8222-222222222222';
@@ -164,15 +166,38 @@ suite('Window network: window components register and carry requests between win
 		});
 		await a.start();
 		await b.start();
-		const response = await a.route({ to: b.window, op: 'agents', args: { include_ended: true }, deadlineMs: 5_000 });
-		assert.deepStrictEqual(response, { ok: true, result: { agents: [AGENT], echoed: { include_ended: true } } });
-		assert.deepStrictEqual(served, [{ from: a.window, op: 'agents', args: { include_ended: true }, deadlineMs: 5_000 }]);
+		const response = await a.route({ to: b.window, op: 'agents', args: { details: true }, deadlineMs: 5_000 });
+		assert.deepStrictEqual(response, { ok: true, result: { agents: [AGENT], echoed: { details: true } } });
+		assert.deepStrictEqual(served.map(({ deadlineMs: _, ...rest }) => rest), [{ from: a.window, op: 'agents', args: { details: true } }]);
+		assert.ok(served[0].deadlineMs > 0 && served[0].deadlineMs < 5_000, 'connecting spends the original budget');
 		// The connection is kept and used again, answers matched to their requests
 		const [first, second] = await Promise.all([
 			a.route({ to: b.window, op: 'summary', args: 1, deadlineMs: 5_000 }),
 			a.route({ to: b.window, op: 'summary', args: 2, deadlineMs: 5_000 })
 		]);
 		assert.deepStrictEqual([first, second], [{ ok: true, result: { agents: [AGENT], echoed: 1 } }, { ok: true, result: { agents: [AGENT], echoed: 2 } }]);
+	});
+
+	test('an expired connection wait never forwards later; a subsequent caller can use the shared connection', async () => {
+		let release!: () => void;
+		const gate = new Promise<void>(resolve => release = resolve);
+		const delayed = withModules({ '../base/connect': { connectWithin: async (...args: Parameters<typeof connectWithin>) => { await gate; return connectWithin(...args); } } })<typeof import('../host/windowNetwork')>(require.resolve('../host/windowNetwork'));
+		const a = new delayed.WindowNetwork({ home: home.dir, token: TOKEN_A, label: () => 'A', environment: 'local', serve: async () => undefined, log: () => undefined });
+		networks.push(a);
+		const served: ServedRoute[] = [];
+		const b = windowOf(TOKEN_B, 'B', async request => { served.push(request); return 'only once'; });
+		await a.start(); await b.start();
+		const expired = await a.route({ to: b.window, op: 'call', args: { elapsedMs: 20 }, deadlineMs: 10 });
+		assert.ok(!expired.ok && expired.reason === 'timeout' && expired.effects === 'none');
+		release();
+		const next = await a.route({ to: b.window, op: 'call', args: { elapsedMs: 20 }, deadlineMs: 1000 });
+		assert.deepStrictEqual(next, { ok: true, result: 'only once' });
+		assert.strictEqual(served.length, 1, 'the expired call is never replayed');
+		assert.ok((served[0].args as { elapsedMs: number }).elapsedMs > 20);
+		assert.ok(served[0].deadlineMs < 1000);
+		const zero = await a.route({ to: b.window, op: 'call', args: {}, deadlineMs: 0 });
+		assert.ok(!zero.ok && zero.effects === 'none');
+		assert.strictEqual(served.length, 1);
 	});
 
 	test('a window is listed by the name its workspace extension publishes - a remote window\'s with its host - not the folder name its component sees', async () => {

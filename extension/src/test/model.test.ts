@@ -13,7 +13,7 @@ import { TestEmitter } from './withModules';
 const WORDS: CardWords = {
 	worktreeFailure: reason => reason, pinned: 'Pinned',
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', working: 'Working', notWorking: 'Idle', error: reason => `Error: ${reason}`,
-	activityUnavailable: 'Activity unavailable', readyForInput: 'Ready for input', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
+	activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, window: label => `Window: ${label}`,
 	toolsUnavailable: problem => `Can't work with other agents: ${problem}`, startedBy: creator => `Started by ${creator}`,
 	exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'

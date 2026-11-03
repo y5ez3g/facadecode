@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { ChildProcess, spawn } from 'child_process';
+import { ChildProcess, spawn, spawnSync } from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as net from 'net';
@@ -12,15 +12,37 @@ import * as path from 'path';
 import { lineReader } from '../base/lines';
 import { RUN_VARIABLE } from '../clis/environment';
 import { PTYD_PROTOCOL } from '../ptyd/protocol';
-import { instructionsFor } from '../schema/instructions';
+import { instructionsFor, launchContextText } from '../schema/instructions';
 import { TOOL_PROTOCOL, type ToolAnswer } from '../schema/protocol';
 import { QUERY_ROUTE_MS, TOOLS } from '../schema/tools';
-import { SHIM_AGENT, SHIM_PTYD, SHIM_RUN, shimLaunch } from '../transport/launch';
+import { SHIM_AGENT, SHIM_CONTEXT, SHIM_PTYD, SHIM_RUN, shimLaunch } from '../transport/launch';
 import { McpShim } from '../transport/mcpServer';
 import { CallFailed, PtydLink } from '../transport/ptydLink';
 
 /** The shim as compiled: run as its CLI runs it, with Node, over stdio. */
 const SHIM = path.join(__dirname, '..', 'transport', 'shim.js');
+
+suite('Native context hook (MCP-6.2)', () => {
+	test('the shared Antigravity command supplies only its run context without MCP traffic or a user turn', () => {
+		const run = (env: Record<string, string>) => {
+			const result = spawnSync(process.execPath, [SHIM, '--antigravity-context'], {
+				env: { ...process.platform === 'win32' ? { SystemRoot: process.env.SystemRoot } : {}, ...env },
+				input: JSON.stringify({ conversationId: crypto.randomUUID(), invocationNum: 2 }), encoding: 'utf8', timeout: 5000
+			});
+			assert.strictEqual(result.status, 0, result.stderr);
+			assert.strictEqual(result.stderr, '', 'the hook neither connects to ptyd nor starts the MCP server');
+			return JSON.parse(result.stdout);
+		};
+		assert.deepStrictEqual(run({}), {}, 'an ordinary session outside Facade gets no personalized context');
+		for (const alias of ['#a1', '#a2']) {
+			const env = { [SHIM_AGENT]: alias, [SHIM_RUN]: `run-${alias}`, [SHIM_PTYD]: '/absent.sock', [SHIM_CONTEXT]: `Creator for ${alias}` };
+			const expected = { injectSteps: [{ ephemeralMessage: instructionsFor(alias, env[SHIM_CONTEXT]) }] };
+			assert.deepStrictEqual(run(env), expected);
+			assert.deepStrictEqual(run(env), expected, 'repeated invocations and resumed processes keep one transient section');
+			assert.deepStrictEqual(run({ ...env, [SHIM_RUN]: '' }), {});
+		}
+	});
+});
 
 /** A JSON-RPC message as the shim writes it. */
 interface Message {
@@ -188,7 +210,9 @@ const until = async <T>(what: string, check: () => T | undefined | false, ms = 5
 /** The facts of a transport failure as the shim reports one: an error result whose text is its message. */
 const failureOf = (result: any) => {
 	assert.strictEqual(result.isError, true);
-	assert.deepStrictEqual(result.content, [{ type: 'text', text: result.structuredContent.error.message }]);
+	assert.strictEqual(result.content.length, 1);
+	assert.strictEqual(result.content[0].type, 'text');
+	assert.deepStrictEqual(JSON.parse(result.content[0].text), result.structuredContent);
 	const { status, data, error, effects } = result.structuredContent;
 	assert.deepStrictEqual([status, data], ['failure', {}]);
 	return [error.code, error.reason, effects.outcome];
@@ -224,9 +248,9 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 	};
 	/** The shim of `run` as its CLI starts it, from the launch a window gives. */
 	const shimOf = (run: string, more: { readonly [name: string]: string } = {}) => {
-		const launch = shimLaunch({ runtime: process.execPath, script: SHIM, socket: socketPath, run });
+		const launch = shimLaunch({ runtime: process.execPath, script: SHIM, socket: socketPath, run, alias: '#a7' });
 		assert.deepStrictEqual([launch.command, launch.args], [process.execPath, [SHIM]]);
-		const shim = new McpClient({ ...launch.env, [SHIM_AGENT]: '#a7', ...more });
+		const shim = new McpClient({ ...launch.env, ...more });
 		shims.push(shim);
 		return shim;
 	};
@@ -236,17 +260,30 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		return link;
 	};
 
-	test('its launch names the run and ptyd\'s socket, and it reads the run\'s #aN from the variable the CLIs set', () => {
+	test('its launch explicitly carries the run, short ID and ptyd socket through clients that filter their child environment', () => {
 		assert.strictEqual(SHIM_AGENT, RUN_VARIABLE);
-		assert.deepStrictEqual(shimLaunch({ runtime: '/editor/node', script: '/ext/dist/shim.js', socket: '/tmp/ptyd.sock', run: 'run-9' }), {
+		assert.deepStrictEqual(shimLaunch({ runtime: '/editor/node', script: '/ext/dist/shim.js', socket: '/tmp/ptyd.sock', run: 'run-9', alias: '#a9' }), {
 			command: '/editor/node',
 			args: ['/ext/dist/shim.js'],
-			env: { ELECTRON_RUN_AS_NODE: '1', [SHIM_RUN]: 'run-9', [SHIM_PTYD]: '/tmp/ptyd.sock' }
+			env: { ELECTRON_RUN_AS_NODE: '1', [SHIM_RUN]: 'run-9', [SHIM_AGENT]: '#a9', [SHIM_PTYD]: '/tmp/ptyd.sock' }
 		});
 		assert.deepStrictEqual([SHIM_RUN, SHIM_PTYD], ['FACADE_RUN', 'FACADE_PTYD']);
 	});
 
-	test('the handshake: the client\'s protocol version where the shim speaks it, else the newest; the nine tools in order; ping; notifications unanswered; unknown methods and unreadable lines refused', async () => {
+	test('per-run launch context reaches initialization on every shim connection', async () => {
+		const context = launchContextText({ creator: { id: '#a3', label: 'Ben #a3' }, window: 'Backend',
+			location: { path: '/work/app.worktrees/feature', label: 'feature', branch: 'feature', kind: 'checkout', folders: [{ name: 'app' }], environment: 'local' }, initialMessage: '#m42' });
+		const launch = shimLaunch({ runtime: '/node', script: '/shim.js', socket: '/ptyd.sock', run: 'run-9', alias: '#a9', context });
+		assert.strictEqual(launch.env[SHIM_CONTEXT], context);
+		for (let n = 0; n < 2; n++) {
+			const shim = shimOf(`run-context-${n}`, { [SHIM_CONTEXT]: context, [SHIM_PTYD]: path.join(socketDir, 'nothing.sock') });
+			const init = await shim.request('initialize', { protocolVersion: '2025-03-26' });
+			assert.strictEqual(init.result.instructions, instructionsFor('#a7', context));
+			assert.match(init.result.instructions, /send_message with to="#a3"/);
+		}
+	});
+
+	test('the handshake: the client\'s protocol version where the shim speaks it, else the newest; the eight tools in order; ping; notifications unanswered; unknown methods and unreadable lines refused', async () => {
 		const shim = shimOf('run-1', { [SHIM_PTYD]: path.join(socketDir, 'nothing.sock') });
 		const init = await shim.request('initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'test', version: '1' } });
 		assert.deepStrictEqual(init.result, {
@@ -268,11 +305,11 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		assert.strictEqual(shim.messages.length, before + 1);
 		const listed = (await shim.request('tools/list', {})).result;
 		assert.deepStrictEqual(listed.tools.map((tool: { name: string }) => tool.name), [
-			'list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'
+			'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'
 		]);
 		// No pagination: the whole list, and nothing else
 		// Each given to the model directly where a CLI otherwise loads tools on demand, as Antigravity does (CLIS-2.2)
-		assert.deepStrictEqual(listed, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema, _meta: { 'antigravity/alwaysLoad': true } })) });
+		assert.deepStrictEqual(listed, { tools: TOOLS.map(tool => ({ ...tool, _meta: { 'antigravity/alwaysLoad': true } })) });
 		assert.deepStrictEqual((await shim.request('resources/list', {}, 9)).error?.code, -32601);
 		assert.strictEqual((await shim.request('tools/call', { arguments: {} }, 10)).error?.code, -32602);
 		shim.writeLine('{ not json');
@@ -333,7 +370,7 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		const odd = shim.call('list_agents', {}, 'odd');
 		await until('the fourth call', () => fake.calls().length === 4);
 		fake.answer(fake.calls()[3], { text: 'no structure' });
-		assert.deepStrictEqual(failureOf(await odd), ['UNAVAILABLE', 'protocol_incompatible', 'unknown']);
+		assert.deepStrictEqual(failureOf(await odd), ['UNAVAILABLE', 'protocol_incompatible', 'none']);
 	});
 
 	test('arguments and answers of several megabytes go whole both ways', async () => {

@@ -23,7 +23,7 @@ import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
 import type * as HostClisModule from '../host/clis';
 import type * as SettingsModule from '../host/settings';
 import { instructionsFor } from '../schema/instructions';
-import { FACADE_SKILL } from '../schema/skill';
+import { FACADE_SKILL, SKILL_DESCRIPTION } from '../schema/skill';
 import { TOOLS } from '../schema/tools';
 import { tempDir } from './util';
 import { withModules } from './withModules';
@@ -64,6 +64,25 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 
 	const plan = (input: Partial<PlanInput> & { readonly cli: string }, where = destination) =>
 		planLaunch(catalogOf(() => undefined), { alias: '#a1', cwd, yolo: true, ...input }, where);
+
+	test('two runs in one directory keep personalized context out of every shared skill and server file', () => {
+		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
+			program(path.join(temp.dir, 'bin'), `${cli}.${cli === 'muse' ? 'cmd' : 'exe'}`);
+			for (const platform of ['darwin', 'win32'] as const) {
+				const inject = (n: number) => plan({ cli, alias: `#a${n}`, tools: { ...tools, runDir: runDirOf(path.join(temp.dir, 'home'), `run-${n}`),
+					server: { ...SERVER, instructions: `private-instructions-${n}`, env: { ...SERVER.env, FACADE_RUN: `run-${n}`, FACADE_LAUNCH_CONTEXT: `private-launch-${n}` } } } }, { ...destination, platform });
+				const first = inject(1), second = inject(2);
+				assert.deepStrictEqual(first.injection?.project, second.injection?.project, `${cli}/${platform}: shared files must be identical`);
+				assert.ok(!JSON.stringify(first.injection?.project).includes('private-launch-'), cli);
+				assert.ok(!JSON.stringify(first.injection?.project).includes('private-instructions-'), cli);
+				for (const [n, planned] of [[1, first], [2, second]] as const) {
+					const privateLaunch = JSON.stringify([planned.args, planned.env, planned.injection?.runFiles]);
+					assert.ok(privateLaunch.includes(`private-launch-${n}`), `${cli}/${platform}: context reaches the private launch`);
+					assert.ok(!privateLaunch.includes(`private-launch-${3 - n}`), cli);
+				}
+			}
+		}
+	});
 
 	test('an explicit MCP model and effort replace configured defaults while other options stay before the initial prompt', () => {
 		const catalog = catalogOf(name => name === 'facade.claude.launch' ? { arguments: ['--model', 'configured', '--effort=low', '--verbose'] } : undefined);
@@ -150,10 +169,11 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([planned.injection!.runFiles, planned.tools], [[], { state: 'injected' }]);
 	});
 
-	test('Pi: the server registered for the session by a per-run extension, -e, its tools declared to the model directly, and the skill in a per-run --skill folder; nothing in the project', async () => {
+	test('Pi: the server and conditional skill discovery use a per-run extension, -e; nothing in the project', async () => {
 		const planned = plan({ cli: 'pi', tools });
 		const extension = path.join(tools.runDir, 'facade-pi.mjs');
-		assert.deepStrictEqual(planned.args.slice(0, 4), ['-e', extension, '--skill', path.join(tools.runDir, 'skills', 'facade')]);
+		assert.deepStrictEqual(planned.args.slice(0, 2), ['-e', extension]);
+		assert.ok(!planned.args.includes('--skill'), 'an explicit second copy would collide with a project skill');
 		assert.deepStrictEqual([planned.tools, planned.injection!.project, planned.injection!.env, planned.warmUp], [{ state: 'injected' }, [], {}, undefined]);
 		const files = Object.fromEntries(planned.injection!.runFiles.map(each => [path.relative(tools.runDir, each.path), each.content]));
 		assert.deepStrictEqual(Object.keys(files), ['facade-pi.mjs', path.join('skills', 'facade', 'SKILL.md')]);
@@ -165,8 +185,65 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		// A real dynamic import: the compiled tests are CommonJS, whose import() becomes require
 		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
 		const loaded = await importModule(pathToFileURL(extension).href);
-		loaded.default({ registerMcpServer: (name: string, config: unknown) => registered.push([name, config]) });
+		loaded.default({ registerMcpServer: (name: string, config: unknown) => registered.push([name, config]), on: () => {} });
 		assert.deepStrictEqual(registered, [['facade', { command: SERVER.command, args: SERVER.args, env: SERVER.env, exposure: 'direct', timeout: 3660, description: 'Facade Code: start, stop and list agents, send and read messages, and read or type into agent terminals.' }]]);
+	});
+
+	test('Pi supplies each run\'s initialization to the model without changing other prompt sections or adding messages', async () => {
+		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
+		for (const alias of ['#a7', '#a8']) {
+			const instructions = `You are Facade Code agent ${alias}.\nAda (#a1) started this session.\nLaunch path: "a \\"quoted\\" folder".`;
+			const runTools = { ...tools, runDir: path.join(tools.runDir, alias.slice(1)), server: { ...SERVER, instructions } };
+			const planned = plan({ cli: 'pi', tools: runTools });
+			const file = planned.injection!.runFiles.find(each => each.path.endsWith('facade-pi.mjs'))!;
+			fs.mkdirSync(path.dirname(file.path), { recursive: true });
+			fs.writeFileSync(file.path, file.content);
+			const handlers = new Map<string, (event: { systemPromptOptions: { sections: Record<string, string> } }) => unknown>();
+			const loaded = await importModule(pathToFileURL(file.path).href);
+			loaded.default({ registerMcpServer: () => {}, on: (event: string, handler: (event: { systemPromptOptions: { sections: Record<string, string> } }) => unknown) => handlers.set(event, handler) });
+			assert.deepStrictEqual([...handlers.keys()], ['before_agent_start', 'resources_discover']);
+			const event = { systemPromptOptions: { sections: { other: 'Keep the other extension.', facade: 'An earlier turn.' } } };
+			assert.strictEqual(handlers.get('before_agent_start')!(event), undefined, 'no extra message or full prompt replacement');
+			assert.deepStrictEqual(event.systemPromptOptions.sections, { other: 'Keep the other extension.', facade: instructions });
+			handlers.get('before_agent_start')!(event);
+			assert.strictEqual(event.systemPromptOptions.sections.facade, instructions, 'each turn replaces its own section without accumulation');
+			assert.deepStrictEqual(planned.injection!.project, []);
+		}
+	});
+
+	test('Pi reuses only a loaded identical skill, and restores its private copy after the project file disappears (D158)', async () => {
+		const planned = plan({ cli: 'pi', tools });
+		for (const file of planned.injection!.runFiles) {
+			fs.mkdirSync(path.dirname(file.path), { recursive: true });
+			fs.writeFileSync(file.path, file.content);
+		}
+		const file = path.join(tools.runDir, 'facade-pi.mjs');
+		const own = path.join(tools.runDir, 'skills', 'facade', 'SKILL.md');
+		const project = path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md');
+		fs.mkdirSync(path.dirname(project), { recursive: true });
+		fs.writeFileSync(project, FACADE_SKILL);
+		let commands: { source: string; name: string; sourceInfo: { path: string } }[] = [];
+		let discover!: () => { skillPaths: string[] } | undefined;
+		const importModule = new Function('url', 'return import(url)') as (url: string) => Promise<{ default: (pi: unknown) => void }>;
+		(await importModule(pathToFileURL(file).href)).default({
+			registerMcpServer: () => {}, getCommands: () => commands,
+			on: (event: string, handler: typeof discover) => { if (event === 'resources_discover') discover = handler; }
+		});
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'a file merely present but not loaded is insufficient');
+		commands = [{ source: 'skill', name: 'skill:facade', sourceInfo: { path: project } }];
+		assert.strictEqual(discover(), undefined, 'reuse the skill Pi actually loaded');
+		assert.strictEqual(textOf(project), FACADE_SKILL, 'discovery never rewrites the project file');
+		fs.unlinkSync(project);
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'its other CLI ended before resource reload');
+		commands = [];
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'no project skill on the next reload');
+		commands = [{ source: 'skill', name: 'skill:facade', sourceInfo: { path: own } }];
+		assert.strictEqual(discover(), undefined, 'a second discovery does not add the same private file');
+		fs.writeFileSync(project, FACADE_SKILL + '\nDifferent instructions.\n');
+		commands = [{ source: 'skill', name: 'skill:facade', sourceInfo: { path: project } }];
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'different content keeps the native conflict visible');
+		commands = [{ source: 'extension', name: 'skill:facade', sourceInfo: { path: own } }];
+		assert.deepStrictEqual(discover(), { skillPaths: [own] }, 'another command is no loaded skill');
 	});
 
 	test('Antigravity: a plugin in the folder\'s .agents/plugins/facade, shared, the run\'s variables in its environment; its tools allowed for the session beside the person\'s own rules; its MCP panel opened before the first turn', () => {
@@ -181,7 +258,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.ok(!planned.args.includes('--dangerously-skip-permissions'), 'YOLO off keeps its own approvals');
 		assert.strictEqual(fs.readFileSync(settings, 'utf8'), before, 'planning writes nothing');
 		const plugin = path.join('.agents', 'plugins', 'facade');
-		assert.deepStrictEqual(planned.injection!.project.map(each => each.path), [path.join(plugin, 'plugin.json'), path.join(plugin, 'mcp_config.json'), path.join(plugin, 'skills', 'facade', 'SKILL.md')]);
+		assert.deepStrictEqual(planned.injection!.project.map(each => each.path), [path.join(plugin, 'plugin.json'), path.join(plugin, 'mcp_config.json'), path.join(plugin, 'hooks.json'), path.join(plugin, 'skills', 'facade', 'SKILL.md')]);
 		const config = planned.injection!.project[1] as Extract<ProjectWrite, { kind: 'file' }>;
 		// A shared entry holds no run's identity: the run's variables reach the server through the CLI's environment
 		assert.deepStrictEqual(JSON.parse(config.content), { mcpServers: { facade: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1' } } } });
@@ -641,6 +718,25 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 	teardown(() => temp.remove());
 
 	const clis = (log: string[] = []) => new HostClis({ read: name => settings[name], destination: () => destination, home, log: line => log.push(line) });
+
+	test('one current scan provides availability and override facts, logging only changes without launch arguments', async () => {
+		let composed = 0;
+		const host = new Proxy(destination.host as { [name: string]: string }, { ownKeys: target => { composed++; return Reflect.ownKeys(target); } });
+		const events: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
+		const catalog = new HostClis({ read: name => settings[name], destination: () => ({ ...destination, host }), home,
+			fact: (event, fields) => events.push({ event, fields }) });
+		const first = await catalog.list(location);
+		assert.strictEqual(composed, first.clis.length, 'availability and capabilities reuse the same discovery');
+		assert.ok(first.launches.find(each => each.cli === 'claude')?.takes?.model);
+		await catalog.list(location);
+		assert.strictEqual(events.length, 1, 'unchanged observations do not flood history');
+		settings['facade.codex.enabled'] = false;
+		const changed = await catalog.list(location);
+		assert.ok(!changed.clis.some(each => each.id === 'codex'));
+		assert.strictEqual(events.length, 2);
+		assert.strictEqual(events[1].event, 'cli_scan');
+		assert.ok(!JSON.stringify(events).includes('environment'), 'the environment values are never copied to scan history');
+	});
 	const request = (cli: string, run: string, extra: Partial<PlanRequest> = {}): PlanRequest => ({ run, alias: '#a1', name: 'n', cli, location, yolo: true, tools: SERVER, ...extra });
 
 	test('orchestration is on by default, off where the setting is false, and off for a value that is no boolean, said; the timeout is 1-3600 seconds, 120 otherwise, said', () => {
@@ -749,13 +845,20 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 
 suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 
-	test('the skill teaches the nine tools, startup fields, reach, references, own inbox and finite delivery, and gives the repeated-message sentences verbatim', () => {
+	test('the generated skill has parseable YAML metadata and preserves its complete description', () => {
+		const { load } = require('js-yaml') as { load(source: string): unknown };
+		const metadata = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(FACADE_SKILL);
+		assert.ok(metadata, 'native loaders require frontmatter delimiters');
+		assert.deepStrictEqual(load(metadata[1]), { name: 'facade', description: SKILL_DESCRIPTION });
+	});
+
+	test('the skill teaches the eight tools, startup fields, reach, references, own inbox and finite delivery, and gives the repeated-message sentences verbatim', () => {
 		const verbatim = 'The same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo work for '
 			+ 'that same message. A new send call has a new ID, even if its text matches. A Facade system result about a message is a '
 			+ 'separate kind of information, not another copy of that message\'s instruction.';
 		assert.ok(FACADE_SKILL.includes(verbatim));
 		assert.match(FACADE_SKILL, /^---\nname: facade\ndescription: .+\n---\n/);
-		assert.deepStrictEqual(TOOLS.map(tool => tool.name).filter(name => !FACADE_SKILL.includes(`\`${name}\``)), []);
+		assert.deepStrictEqual(TOOLS.map(tool => tool.name).filter(name => !FACADE_SKILL.includes(name)), []);
 		for (const fact of ['`model`', '`effort`', '`prompt`', '`facade.yolo`', 'creation tree', 'Delivery is finite', '`request_id`']) {
 			assert.ok(FACADE_SKILL.includes(fact), fact);
 		}
@@ -767,11 +870,11 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 	});
 
 	test('what every turn of every agent pays for stays within its budget: the tool list, the instructions and the skill (MCP-6.1, D111)', () => {
-		// As T3 Code's AgentContextBudget test does: text that grows must be made to fit, or the budget raised on purpose
+		// Standard human titles/annotations add up to 800 bytes (D154); bootstrap and optional reference budgets shrink.
 		const bytes = (text: string) => Buffer.byteLength(text, 'utf8');
-		assert.ok(bytes(JSON.stringify(TOOLS)) <= 7_000, `the tool list is ${bytes(JSON.stringify(TOOLS))} bytes`);
-		assert.ok(bytes(instructionsFor('#a999')) <= 1_500, `the instructions are ${bytes(instructionsFor('#a999'))} bytes`);
-		assert.ok(bytes(FACADE_SKILL) <= 6_200, `the skill is ${bytes(FACADE_SKILL)} bytes`);
+		assert.ok(bytes(JSON.stringify(TOOLS)) <= 7_800, `the tool list is ${bytes(JSON.stringify(TOOLS))} bytes`);
+		assert.ok(bytes(instructionsFor('#a999')) <= 1_200, `the instructions are ${bytes(instructionsFor('#a999'))} bytes`);
+		assert.ok(bytes(FACADE_SKILL) <= 5_000, `the skill is ${bytes(FACADE_SKILL)} bytes`);
 	});
 
 	test('the instructions name the run and the Facade Code tools, briefly, with the repeated-message rule', () => {

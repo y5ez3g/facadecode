@@ -84,6 +84,12 @@ async function script(alias: string, steps: readonly Step[], ms = 90_000): Promi
 		const read = linesOf(alias).filter(line => line.phase === phase);
 		return read.some(line => line.step === 'done') ? read : undefined;
 	}, ms);
+	for (const line of lines) {
+		const result = line.answer?.result;
+		if (result?.structuredContent !== undefined) {
+			assert.deepStrictEqual(JSON.parse(result.content![0].text!), result.structuredContent, `${line.step}: both MCP representations agree`);
+		}
+	}
 	const answer = (tool: string, nth = 0) => lines.filter(line => line.step === tool)[nth]?.answer?.result;
 	return { answer, content: (tool: string, nth = 0) => answer(tool, nth)?.structuredContent };
 }
@@ -113,6 +119,22 @@ function received(alias: string): string[] {
 	return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as string) : [];
 }
 
+/** Correlate a receipt inside a possibly batched terminal paste before checking its machine outcome. */
+function receiptFacts(blocks: string, about: string): any {
+	assert.ok(blocks.includes('🔔 ') && blocks.includes(about), `No receipt about ${about}: ${blocks}`);
+	const directory = path.join(process.env.FACADE_HOME!, 'extension', 'messages');
+	const records = fs.readdirSync(directory).filter(file => file.endsWith('.json')).map(file => JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8')));
+	const receipt = records.find(record => record.kind === 'result' && record.about === about.replace('#m', 'm-'));
+	assert.ok(receipt?.result, `No machine receipt for ${about}`);
+	return receipt.result;
+}
+
+async function closePublicAgent(alias: string): Promise<void> {
+	const card = (await state()).cards.find(each => each.alias === alias);
+	assert.ok(card, `No card for ${alias}`);
+	await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+}
+
 function argsOf(alias: string): { readonly cwd: string; readonly args: string[]; readonly env: { readonly [name: string]: string } } {
 	return JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8'));
 }
@@ -129,7 +151,8 @@ function assertTools(alias: string): void {
 	switch (CLI) {
 		case 'claude': {
 			const server = JSON.parse(fs.readFileSync(after(args, '--mcp-config'), 'utf8')).mcpServers.facade;
-			assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_PTYD', 'FACADE_RUN']);
+			assert.deepStrictEqual(Object.keys(server.env).sort(), ['ELECTRON_RUN_AS_NODE', 'FACADE_AGENT', 'FACADE_LAUNCH_CONTEXT', 'FACADE_PTYD', 'FACADE_RUN']);
+			assert.strictEqual(server.env.FACADE_AGENT, alias, 'the MCP child receives its own short ID explicitly');
 			assert.ok(fs.existsSync(path.join(after(args, '--plugin-dir'), 'skills', 'facade', 'SKILL.md')), 'its own skill plugin');
 			assert.strictEqual(after(args, '--allowedTools'), 'mcp__facade', 'Facade\'s own tools never ask for approval (D90)');
 			break;
@@ -164,7 +187,8 @@ function assertTools(alias: string): void {
 		}
 		case 'pi':
 			assert.ok(fs.readFileSync(after(args, '-e'), 'utf8').includes('"exposure":"direct"'), 'its own extension');
-			assert.ok(fs.existsSync(path.join(after(args, '--skill'), 'SKILL.md')), 'its own skill folder');
+			assert.ok(!args.includes('--skill'), 'the native resource hook avoids a duplicate project skill');
+			assert.ok(fs.existsSync(path.join(path.dirname(after(args, '-e')), 'skills', 'facade', 'SKILL.md')), 'its private skill remains available to the hook');
 			break;
 		default:
 			assert.fail(`no check for ${CLI}`);
@@ -177,16 +201,16 @@ const NATIVE: { readonly [cli: string]: string | undefined } = { claude: '--', c
 const INPUT: { readonly [cli: string]: string } = { claude: 'claude-frame', codex: 'codex-prompt', agy: 'agy-frame', muse: 'muse-frame', opencode: 'opencode-frame', pi: 'pi-frame' };
 
 /**
- * A message block as a CLI is given it (COLLABORATION-2.1): its header, the whole text, its footer. The window's label is escaped
+ * A message block as a CLI is given it (COLLABORATION-2.1): its header and the whole text. The window's label is escaped
  * text there, its delimiters after a backslash - as in an SSH window's `app [SSH: host]`.
  */
 function block(id: string, from: string, window: string, text: string): RegExp {
 	const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 	const label = window.replace(/[\\|[\]#]/g, '\\$&');
-	return new RegExp(`\\[Facade message ${escaped(id)} \\| from @[^\\]|]* ${escaped(from)} \\| window ${escaped(label)}\\]\\n${escaped(text)}\\n\\[/Facade message ${escaped(id)}\\]`);
+	return new RegExp(String.raw`📨 Message from [^\n]*\(${escaped(from)}\) · ${escaped(id)}(?: · From ${escaped(label)})?\n${escaped(text)}$`);
 }
 
-const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
+const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'read_messages', 'read_screen', 'type_text', 'press_keys'];
 
 // A custom CLI starts exactly as configured and has no MCP injection; its launch is checked by journey.it.ts.
 (!PEER && BUILT_IN_ADAPTERS.some(adapter => adapter.id === CLI) ? suite : suite.skip)(`Journey: ${CLI} uses its Facade tools in this window (J12, M02, M03, M07, M15, M17)`, () => {
@@ -203,13 +227,15 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const initialize = lines.find(line => line.step === 'initialize')?.answer?.result;
 		assert.strictEqual(initialize?.serverInfo?.name, 'facade');
 		assert.ok(initialize?.instructions?.includes(alias), 'the instructions name the agent');
-		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), NINE);
+		assert.ok(initialize?.instructions?.includes('Launch IDs: window_id='));
+		assert.ok(initialize?.instructions?.includes('Facade history log ('));
+		assert.deepStrictEqual(lines.find(line => line.step === 'tools/list')?.answer?.result?.tools?.map(tool => tool.name), EIGHT);
 
 		const window = vscode.workspace.name!;
 		const ran = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
+			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Reviewer', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Review the README.' }, save: { child: 'data.agent_id' } },
-			{ tool: 'list_agents', arguments: {} },
+			{ tool: 'list_agents', arguments: { details: true } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', wait: 30_000 },
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'typed by its creator' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'typed by its creator' },
@@ -217,9 +243,12 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			// Keys sent is not a redraw barrier: wait for the CLI to consume Ctrl+U and paint its now-empty input.
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Review the README.', untilAbsent: 'typed by its creator' }
 		]);
-		const options = ran.content('list_start_options');
+		const options = ran.content('list_agents');
 		assert.strictEqual(options?.status, 'success', JSON.stringify(options));
 		assert.strictEqual(options.data.windows[0].label, window);
+		const logFile = options.data.windows[0].history_log.path as string;
+		const events = () => fs.readFileSync(logFile, 'utf8').trim().split('\n').map(line => JSON.parse(line));
+		for (const event of ['window_attached', 'locations_scanned', 'cli_scan']) { assert.ok(events().some(each => each.event === event), event); }
 
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
@@ -227,12 +256,19 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		// fallback is checked separately; it must not change what this direct launch can carry as a native prompt.
 		const native = NATIVE[CLI];
 		assert.deepStrictEqual([started.data.prompt.path, started.data.yolo, started.data.creator], [native ? 'native' : 'post_start', true, card.runId]);
-		// After startup it may still be on its way when the start answers - a CLI slow to draw its input - and is delivered then (MCP-2.3)
-		assert.ok(native ? started.data.prompt.status === 'success' : ['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));
+		// A native argument alone does not verify acceptance. Post-start delivery may still be under way (MCP-2.3).
+		if (native) {
+			assert.deepStrictEqual([started.data.prompt.capability.state, started.data.prompt.status, started.data.prompt.effects.outcome], ['unverified', 'unknown', 'unknown']);
+			assert.strictEqual(started.data.prompt.delivered_via, undefined);
+		} else {
+			assert.ok(['success', 'pending'].includes(started.data.prompt.status), JSON.stringify(started.data.prompt));
+		}
 		const child = started.data.agent_id as string;
-		const childAlias = started.data.alias as string;
+		const childAlias = started.data.agent_id as string;
+		for (const event of ['agent_start_requested', 'agent_started']) { assert.ok(events().some(each => each.event === event && each.alias === childAlias), event); }
+		assert.ok(!fs.readFileSync(logFile, 'utf8').includes('Review the README.'), 'history excludes prompt bodies');
 		// The prompt is the caller's message as any message goes: its header, the whole text and its footer (COLLABORATION-2.1)
-		const prompt = new RegExp(`^${block(started.data.prompt.alias, alias, window, 'Review the README.').source}$`);
+		const prompt = new RegExp(`^${block(started.data.prompt.message_id, alias, window, 'Review the README.').source}$`);
 		if (native) {
 			const [option, given] = argsOf(childAlias).args.slice(-2);
 			assert.strictEqual(option, native);
@@ -242,10 +278,10 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			await until('its first message', () => received(childAlias).some(each => prompt.test(each)) ? true : undefined, 30_000);
 		}
 		// The child's card opens in the background, says who started it, and the person's focus stays (LIFECYCLE-2.2, PANEL-1.5)
-		const childCard = (await state()).cards.find(each => each.runId === child);
+		const childCard = (await state()).cards.find(each => each.alias === child);
 		assert.ok(childCard, 'the child has a card in this window');
 		assert.ok(childCard.tooltip.includes(`Started by ${card.name} ${alias}`), childCard.tooltip.join(' | '));
-		const listed = ran.content('list_agents')?.data.agents as { agent_id: string; creator?: string; root: string }[];
+		const listed = ran.content('list_agents', 1)?.data.agents as { agent_id: string; creator?: string; root: string }[];
 		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.creator, each.root]), [[card.runId, card.runId]], 'the child joins its creator\'s tree');
 
 		assert.ok(JSON.stringify(ran.content('read_screen')).includes('Review the README.'), 'its screen is read, its first task on it');
@@ -271,14 +307,14 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		for (const each of [alias, childAlias]) {
 			assert.match(diagnostics, inputLine(each), diagnostics);
 		}
-		for (const tool of ['list_start_options', 'start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
-			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms$`, 'm'), `${tool} is logged`);
+		for (const tool of ['start_agent', 'list_agents', 'read_screen', 'type_text', 'press_keys']) {
+			assert.match(diagnostics, new RegExp(`^\\S+ Tool ${tool} by ${alias}: success in \\d+ ms; `, 'm'), `${tool} is logged`);
 		}
 		assert.ok(!diagnostics.includes(os.homedir()), 'the home folder is written ~');
 
 		const stop = await script(alias, [{ tool: 'stop_agent', arguments: { agent: child } }, { tool: 'list_agents', arguments: {} }]);
 		assert.strictEqual(stop.content('stop_agent')?.status, 'success', JSON.stringify(stop.content('stop_agent')));
-		await until('the child card to go', async () => (await state()).cards.some(each => each.runId === child) ? undefined : true);
+		await until('the child card to go', async () => (await state()).cards.some(each => each.alias === child) ? undefined : true);
 		assert.ok(!(stop.content('list_agents')?.data.agents as { agent_id: string }[]).some(each => each.agent_id === child), 'a stopped child is no longer listed');
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
@@ -289,8 +325,8 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const { card, alias } = await personAgent();
 		const window = vscode.workspace.name!;
 		const first = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
-			{ tool: 'start_agent', arguments: { name: 'Listener', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.alias' } },
+			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
+			{ tool: 'start_agent', arguments: { name: 'Listener', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } },
 			// Its box is drawn, its first task taken: an ordinary message can go in now (RULES-1.4)
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello from your creator.\nTwo lines, one message.' } },
@@ -303,21 +339,21 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		]);
 		const started = first.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		const childAlias = started.data.alias as string;
+		const childAlias = started.data.agent_id as string;
 
 		const sent = first.content('send_message');
 		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
 		assert.deepStrictEqual([sent.effects.outcome, sent.effects.text_written, sent.effects.enter_written, sent.data.disposition], ['confirmed', 'full', true, 'submitted_to_cli']);
-		const message = sent.data.alias as string;
+		const message = sent.data.message_id as string;
 		assert.ok(received(childAlias).some(each => block(message, alias, window, 'Hello from your creator.\nTwo lines, one message.').test(each)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
-		assert.ok(JSON.stringify(first.content('read_screen', 1)).includes(`[/Facade message ${message}]`), 'its screen shows the message block');
+		assert.ok(JSON.stringify(first.content('read_screen', 1)).includes(message), 'its screen shows the message block');
 
 		const waiting = first.content('send_message', 1);
 		assert.strictEqual(waiting?.status, 'accepted', JSON.stringify(waiting));
 		assert.deepStrictEqual([waiting.data.obstacle, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'pending', 'none']);
 		// Held by the draft: its deadline ten minutes on, not fifteen seconds (D106)
 		assert.ok(Date.parse(waiting.data.deadline) - Date.now() > 500_000, waiting.data.deadline);
-		const second = waiting.data.alias as string;
+		const second = waiting.data.message_id as string;
 
 		const human = first.content('send_message', 2);
 		assert.strictEqual(human?.status, 'success', JSON.stringify(human));
@@ -326,13 +362,13 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		// Past fifteen seconds it still waits: nothing typed over the draft, and no failure for its sender
 		await new Promise(resolve => setTimeout(resolve, 18_000));
 		assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
-		assert.ok(!received(alias).some(each => each.includes(`about ${second}`)), 'its sender heard of no outcome yet');
+		assert.ok(!received(alias).some(each => each.includes(`message ${second}`)), 'its sender heard of no outcome yet');
 		// The draft goes: the message goes in at the next slot, alone, and its sender hears it was submitted
 		await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
 		await until('the waiting message in its box', () => received(childAlias).find(each => each.includes('Second message.')), 20_000);
 		assert.ok(received(childAlias).every(each => !each.includes('half-written')), 'the person\'s draft was never submitted');
-		const delivered = await until('the delivery result in the sender\'s box', () => received(alias).find(each => each.includes(`about ${second}`)), 20_000);
-		assert.ok(delivered.includes('was submitted to its CLI') && delivered.includes('This is a Facade result, not a reply from the recipient.'), delivered);
+		const delivered = await until('the delivery result in the sender\'s box', () => received(alias).find(each => each.includes(`message ${second}`)), 20_000);
+		assert.strictEqual(receiptFacts(delivered, second).data.disposition, 'submitted_to_cli');
 
 		// An input its reader cannot recognize: after its fifteen seconds the sender hears it failed (RULES-1.5, 1.7)
 		fs.writeFileSync(`${RECORD}.quirks.${childAlias}`, JSON.stringify({ garble: true }));
@@ -341,24 +377,32 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Third message.' } }
 		])).content('send_message');
 		assert.deepStrictEqual([third?.status, third?.data.obstacle], ['accepted', 'input_unknown'], JSON.stringify(third));
-		const result = await until('the failure result in the sender\'s box', () => received(alias).find(each => each.includes(`about ${third.data.alias}`)), 40_000);
-		assert.match(result, /^\[Facade result #m\d+ \| about #m\d+/);
-		assert.ok(result.includes('was not delivered') && result.includes('(input_unknown)') && result.includes('This is a Facade result, not a reply from the recipient.'), result);
+		const result = await until('the failure result in the sender\'s box', () => received(alias).find(each => each.includes(`message ${third.data.message_id}`)), 40_000);
+		assert.match(result, /^🔔 .*#m\d+/);
+		assert.deepStrictEqual([receiptFacts(result, third.data.message_id).status, receiptFacts(result, third.data.message_id).error.reason], ['failure', 'input_unknown']);
 		fs.rmSync(`${RECORD}.quirks.${childAlias}`);
 
-		// The recipient reads what never reached it: delivered by that read, and only once (COLLABORATION-3.1, D88)
+		// A native first prompt is also unconfirmed until this explicit handoff; it is never pasted again (MCP-2.3).
+		const unconfirmedPrompt = started.data.prompt.status === 'unknown' ? started.data.prompt.message_id as string : undefined;
+		const initialPastes = received(childAlias).filter(each => each.includes('Wait for my messages.')).length;
+		const readIds = [...unconfirmedPrompt ? [unconfirmedPrompt] : [], third.data.message_id];
+		// The recipient reads what is failed or unconfirmed: delivered by that read, and only once (COLLABORATION-3.1, D88).
 		const read = await script(childAlias, [
 			{ tool: 'read_messages', arguments: {} },
-			{ tool: 'read_messages', arguments: {}, until: 'Nothing is waiting', wait: 5_000 },
-			{ tool: 'read_messages', arguments: { ids: [third.data.message_id] } }
+			{ tool: 'read_messages', arguments: {}, until: '"messages":[]', wait: 5_000 },
+			{ tool: 'read_messages', arguments: { ids: readIds } }
 		]);
-		const unread = read.content('read_messages')?.data.messages as { alias: string; text: string; delivery: { status: string; reason?: string } }[];
-		assert.deepStrictEqual(unread.map(each => [each.alias, each.text, each.delivery.status, each.delivery.reason]), [[third.data.alias, 'Third message.', 'failure', 'input_unknown']], JSON.stringify(unread));
+		const unread = read.content('read_messages')?.data.messages as { message_id: string; text: string; delivery: { status: string; reason?: string } }[];
+		assert.deepStrictEqual(unread.map(each => [each.message_id, each.text, each.delivery.status, each.delivery.reason]), [
+			...unconfirmedPrompt ? [[unconfirmedPrompt, 'Wait for my messages.', 'unknown', 'submission_unconfirmed']] : [],
+			[third.data.message_id, 'Third message.', 'failure', 'input_unknown']
+		], JSON.stringify(unread));
 		assert.deepStrictEqual(read.content('read_messages', 1)?.data.messages, [], JSON.stringify(read.content('read_messages', 1)));
-		const again = read.content('read_messages', 2)?.data.messages as { delivery: { status: string; delivered_via?: string } }[];
-		assert.deepStrictEqual(again.map(each => [each.delivery.status, each.delivery.delivered_via]), [['success', 'read']]);
+		const again = read.content('read_messages', 2)?.data.messages as { message_id: string; delivery: { status: string; delivered_via?: string } }[];
+		assert.deepStrictEqual(again.map(each => [each.message_id, each.delivery.status, each.delivery.delivered_via]), readIds.map(id => [id, 'success', 'read']));
+		assert.strictEqual(received(childAlias).filter(each => each.includes('Wait for my messages.')).length, initialPastes, 'the inbox handoff starts no second prompt paste');
 
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: started.data.agent_id });
+		await closePublicAgent(started.data.agent_id);
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	});
 
@@ -366,12 +410,12 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		this.timeout(120_000);
 		const { card, alias } = await personAgent();
 		const first = await script(alias, [
-			{ tool: 'list_start_options', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
-			{ tool: 'start_agent', arguments: { name: 'Slow', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.alias' } },
+			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
+			{ tool: 'start_agent', arguments: { name: 'Slow', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 }
 		]);
 		const started = first.content('start_agent');
-		const childAlias = started.data.alias as string;
+		const childAlias = started.data.agent_id as string;
 		const quirks = `${RECORD}.quirks.${childAlias}`;
 		const once = (text: string) => received(childAlias).filter(each => each.includes(text)).length;
 		for (const [quirk, text] of [[{ slowMs: 4_500 }, 'Taken slowly.'], [{ swallow: 1 }, 'Enter missed once.']] as const) {
@@ -383,12 +427,12 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 			await new Promise(resolve => setTimeout(resolve, 10_000));
 			assert.strictEqual(once(text), 1, JSON.stringify(received(childAlias)));
 			if (sent.status === 'accepted') {
-				const result = await until(`the result about ${text}`, () => received(alias).find(each => each.includes(`about ${sent.data.alias}`)), 20_000);
-				assert.ok(result.includes('was submitted to its CLI'), result);
+				const result = await until(`the result about ${text}`, () => received(alias).find(each => each.includes(`message ${sent.data.message_id}`)), 20_000);
+				assert.strictEqual(receiptFacts(result, sent.data.message_id).data.disposition, 'submitted_to_cli');
 			}
 			fs.rmSync(quirks, { force: true });
 		}
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: started.data.agent_id });
+		await closePublicAgent(started.data.agent_id);
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	});
 });
@@ -404,10 +448,12 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		const { alias } = await personAgent();
 		const window = vscode.workspace.name!;
 		// Listed and available: a window that is still starting is listed as unavailable
-		const found = await script(alias, [{ tool: 'list_start_options', arguments: {}, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
-		const options = found.content('list_start_options');
-		const peer = (options?.data.windows as { window_id: string; label: string; environment: string; locations: { location_id: string; path: string }[] }[]).find(each => each.label === PEER);
+		const found = await script(alias, [{ tool: 'list_agents', arguments: {}, until: `"label":${JSON.stringify(PEER)},"environment"`, wait: 30_000 }]);
+		const options = found.content('list_agents');
+		const peer = (options?.data.windows as { window_id: string; label: string; environment: string; counts: { agents: number }; clis: { cli: string; available: boolean }[]; locations: { location_id: string; path: string }[] }[]).find(each => each.label === PEER);
 		assert.ok(peer, `the other window is listed: ${JSON.stringify(options)}`);
+		assert.strictEqual(peer.counts.agents, 0, 'an empty window remains a launch destination');
+		assert.ok(peer.clis.some(each => each.cli === 'claude' && each.available), 'the destination supplies its own CLI availability');
 		const location = peer.locations.find(each => each.path === PEER_DIR) ?? peer.locations[0];
 		assert.ok(location, JSON.stringify(peer));
 
@@ -427,34 +473,34 @@ const NINE = ['list_start_options', 'start_agent', 'list_agents', 'stop_agent', 
 		if (sent.status === 'success') {
 			assert.deepStrictEqual([sent.effects.text_written, sent.effects.enter_written], ['full', true]);
 		} else {
-			const result = await until(`the result about ${sent.data.alias}`, () => received(alias).find(each => each.includes(`about ${sent.data.alias}`)), 30_000);
-			assert.ok(result.includes('was submitted to its CLI'), result);
+			const result = await until(`the result about ${sent.data.message_id}`, () => received(alias).find(each => each.includes(`message ${sent.data.message_id}`)), 30_000);
+			assert.strictEqual(receiptFacts(result, sent.data.message_id).data.disposition, 'submitted_to_cli');
 		}
 		const after = await script(alias, [
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
-			{ tool: 'list_agents', arguments: {} },
+			{ tool: 'list_agents', arguments: { details: true } },
 			{ tool: 'stop_agent', arguments: { agent: '$child' } },
 			{ tool: 'list_agents', arguments: {} }
 		], 90_000);
 		const child = started.data.agent_id as string;
-		const childAlias = started.data.alias as string;
-		assert.ok(!(await state()).cards.some(each => each.runId === child), 'its card is in its own window, not this one');
+		const childAlias = started.data.agent_id as string;
+		assert.ok(!(await state()).cards.some(each => each.alias === child), 'its card is in its own window, not this one');
 		const listed = after.content('list_agents')?.data.agents as { agent_id: string; window_id: string; cwd: string; environment: string }[];
 		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.window_id, each.cwd, each.environment]), [[peer.window_id, location.path, peer.environment]],
 			'its CLI runs in the other window\'s folder and environment');
 		// Its first task and the message, each whole, on its screen as this window reads it
 		const first = JSON.stringify(ran.content('read_screen'));
-		assert.ok(first.includes('Help from afar.') && first.includes(`[/Facade message ${started.data.prompt.alias}]`), first);
+		assert.ok(first.includes('Help from afar.') && first.includes(started.data.prompt.message_id), first);
 
 		const screen = JSON.stringify(after.content('read_screen'));
-		assert.ok(screen.includes('Hello across windows.') && screen.includes(`[/Facade message ${sent.data.alias}]`), screen);
+		assert.ok(screen.includes('Hello across windows.') && screen.includes(sent.data.message_id), screen);
 		if (!PEER_ELSEWHERE) {
 			const launch = argsOf(childAlias);
 			assert.strictEqual(launch.cwd, location.path, 'its CLI runs in the other window\'s folder');
 			const [dash, given] = launch.args.slice(-2);
 			assert.strictEqual(dash, '--');
-			assert.match(given, block(started.data.prompt.alias, alias, window, 'Help from afar.'), 'its first task names its sender\'s window');
-			assert.ok(received(childAlias).some(each => block(sent.data.alias, alias, window, 'Hello across windows.').test(each)), JSON.stringify(received(childAlias)));
+			assert.match(given, block(started.data.prompt.message_id, alias, window, 'Help from afar.'), 'its first task names its sender\'s window');
+			assert.ok(received(childAlias).some(each => block(sent.data.message_id, alias, window, 'Hello across windows.').test(each)), JSON.stringify(received(childAlias)));
 		}
 
 		assert.strictEqual(after.content('stop_agent')?.status, 'success', JSON.stringify(after.content('stop_agent')));

@@ -2,12 +2,14 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { tailStyles } from '../base/screenStyle';
+import { truncateText } from '../base/text';
 import type { IPty } from 'node-pty';
 import { InputReading, inputScreenOf, readInput } from './composer';
 import { InputEffect, InputQueue } from './input';
 import { KeyModes, keySequence, pasteSequence } from './keys';
 import type { RunExit, RunInfo, RunStatus, ScreenFrame, ScreenRead, SpawnParams, Termination } from './protocol';
-import { MOST_SCREEN_LINES, readScreen } from './screen';
+import { MOST_SCREEN_LINES, readScreen, readStatusLines } from './screen';
 import { ScreenReader, screenReaderOf } from './screenStatus';
 import { parseStatus, ProgramStatus, STATUS_REPLY } from './status';
 
@@ -92,14 +94,9 @@ const KILL_CONFIRM_MS = 2_000;
 /** The longest terminal title kept: a tab shows far less, and no message of a run may outgrow ptyd's frames (ARCHITECTURE-2.4). */
 const MOST_TITLE = 4096;
 
-/** `title` cut to {@link MOST_TITLE} code units, at a whole character. */
+/** `title` cut to {@link MOST_TITLE} code units, between complete graphemes. */
 function boundedTitle(title: string): string {
-	if (title.length <= MOST_TITLE) {
-		return title;
-	}
-	const cut = title.slice(0, MOST_TITLE);
-	// A character of two code units is not halved
-	return /[\ud800-\udbff]$/.test(cut) ? cut.slice(0, -1) : cut;
+	return truncateText(title, MOST_TITLE);
 }
 
 /** How long a Windows console's output pipe may still bring what its program wrote last once it ended: node-pty's own flush time. */
@@ -196,6 +193,7 @@ export class Run {
 	private title = '';
 	private lastOutput: number | undefined;
 	private exited: RunExit | undefined;
+	private endedAt: number | undefined;
 	/** Set as node-pty reports the exit, before what it wrote last is drawn: from then on its PID is never signalled. */
 	private reaped = false;
 	/** The exit code node-pty reported: on Windows, where a program never started, the system's error. */
@@ -237,7 +235,8 @@ export class Run {
 		this.screenReader = screenReaderOf(params.screenStatus);
 		const { Terminal } = loadXterm();
 		const { SerializeAddon } = loadSerialize();
-		const terminal = this.terminal = new Terminal({ cols: params.cols, rows: params.rows, scrollback: scrollbackRows(params.cols), allowProposedApi: true });
+		const terminal = this.terminal = new Terminal({ cols: params.cols, rows: params.rows, scrollback: scrollbackRows(params.cols), allowProposedApi: true,
+			reflowCursorLine: true });
 		this.serializer = new SerializeAddon();
 		terminal.loadAddon(this.serializer as never);
 		// Characters as wide as the window's terminal draws them, by Unicode 11: an emoji takes two cells
@@ -316,6 +315,7 @@ export class Run {
 	/** It ended with `exit`: its input ends, and its claimant and every waiter for its exit are told. */
 	private ended(exit: RunExit): void {
 		this.queue.end();
+		this.endedAt = Date.now();
 		this.exited = exit;
 		this.holders.clear();
 		this.listener?.exit(exit);
@@ -448,6 +448,7 @@ export class Run {
 		}
 		this.pty?.resize(cols, rows);
 		this.terminal.resize(cols, rows);
+		this.readScreenSoon();
 		this.terminal.options.scrollback = scrollbackRows(cols);
 	}
 
@@ -554,10 +555,10 @@ export class Run {
 		const frame = screen.buffer === 'normal' ? this.frame : undefined;
 		return {
 			...screen,
-			capturedAt: Date.now(),
+			capturedAt: this.endedAt ?? Date.now(),
 			...(this.lastOutput !== undefined ? { lastOutput: this.lastOutput } : {}),
 			exited: !!this.exited,
-			...(frame ? { frame: { lines: frame.lines.slice(-count), text: frame.text.slice(-count), capturedAt: frame.capturedAt } } : {})
+			...(frame ? { frame: { lines: frame.lines.slice(-count), text: frame.text.slice(-count), styles: tailStyles(frame.text, frame.styles, count), capturedAt: frame.capturedAt } } : {})
 		};
 	}
 
@@ -575,8 +576,8 @@ export class Run {
 
 	/** Keeps the alternate screen as it stands as the last frame its program drew there. */
 	private keepFrame(): void {
-		const { lines, text } = readScreen(this.terminal as never, MOST_SCREEN_LINES, 'alternate');
-		this.frame = { lines, text, capturedAt: Date.now() };
+		const { lines, text, styles } = readScreen(this.terminal as never, MOST_SCREEN_LINES, 'alternate');
+		this.frame = { lines, text, styles, capturedAt: Date.now() };
 	}
 
 	/** Ends what is left of it: ptyd itself is going, or a window forgot it. */
@@ -772,26 +773,14 @@ export class Run {
 			if (this.programStatus.takesPart || this.exited) {
 				return;
 			}
-			if (this.terminal.modes.synchronizedOutputMode) {
+			if (this.drawing.length || this.terminal.modes.synchronizedOutputMode) {
 				this.readScreenSoon();
 				return;
 			}
-			const reading = this.screenReader!(this.screenRows());
-			if (reading) {
-				this.programStatus.observed(reading);
-			}
+			const screen = readStatusLines(this.terminal);
+			this.programStatus.observed(this.screenReader!(screen.lines, screen.clippedStart, screen.boldHeads));
 		}, SCREEN_READ_MS);
 		this.screenRead.unref?.();
-	}
-
-	/** The rows its terminal shows now, top to bottom, each without the spaces at its end. */
-	private screenRows(): string[] {
-		const buffer = this.terminal.buffer.active;
-		const rows: string[] = [];
-		for (let y = 0; y < this.terminal.rows; y++) {
-			rows.push(buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '');
-		}
-		return rows;
 	}
 
 	/**
