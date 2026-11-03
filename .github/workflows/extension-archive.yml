@@ -4,10 +4,6 @@ on:
   push:
     tags:
       - 'extension/[0-9]*'
-    paths:
-      - '.github/workflows/extension-archive.yml'
-      - 'extension/archive/**'
-      - 'extension/scripts/archive*.mjs'
   workflow_dispatch:
     inputs:
       through:

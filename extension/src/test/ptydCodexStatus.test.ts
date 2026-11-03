@@ -37,6 +37,22 @@ suite('Codex 0.166.0 interactive turns with retained background commands (CLIS-2
 			[undefined, 'codex-0.166', undefined, undefined, undefined]);
 	});
 
+	test('a footer cropped at any width is its native prefix, a crop ending on a space included, as a row keeps no trailing spaces', () => {
+		const background = completed.lines.findIndex(line => line.startsWith('  1 background'));
+		const footer = completed.lines[background];
+		const croppedAt = (cols: number): Capture => ({ ...completed, cols, lines: completed.lines.map((line, index) => index === background ? footer.slice(0, cols).trimEnd() : line) });
+		// From the width that still shows all of its count's words on
+		const legible = '  1 background terminal running'.length;
+		for (let cols = legible; cols < footer.length; cols++) {
+			assert.deepStrictEqual(read(croppedAt(cols)), { state: 'idle' }, `${cols} columns: ${JSON.stringify(croppedAt(cols).lines[background])}`);
+		}
+		// Narrower, it no longer says that a command is running: nothing is read from it
+		assert.strictEqual(read(croppedAt(legible - 1)), undefined);
+		// Cut shorter than the width it was drawn at is no native crop
+		const short: Capture = { ...completed, cols: 60, lines: completed.lines.map((line, index) => index === background ? footer.slice(0, 40) : line) };
+		assert.strictEqual(read(short), undefined);
+	});
+
 	test('a background footer, available input, old summary, output words or an incomplete layout alone never prove idle', () => {
 		const summary = completed.lines.findIndex(line => line.includes('Worked for'));
 		const background = completed.lines.findIndex(line => line.startsWith('  1 background'));

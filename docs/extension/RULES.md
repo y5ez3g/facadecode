@@ -293,7 +293,7 @@ as a CLI between two steps does not blink; a blocker or a problem is shown at on
 working indicator does not prove idle. Screen evidence is invalidated by a full reset or an unrecognized completed
 layout; incomplete synchronized drawing supplies no new observation. A turn ending removes the dot without a
 notification or a task-completion claim. Recovery clears only the corresponding error. Reduced motion removes breathing,
-never the accessible state description.  Activity describes the agent's interactive turn: a command left running after
+never the accessible state description. Activity describes the agent's interactive turn: a command left running after
 that turn, such as a development server, does not by itself keep the agent working. A tested adapter may tell that case
 apart from a CLI's broader process report under CLIS-2.3. Available input, a quiet terminal and an earlier answer alone
 never prove idle.

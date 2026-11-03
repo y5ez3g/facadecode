@@ -133,8 +133,9 @@ export const codexCompletedBackground: ScreenReader = (rows, clippedStart = fals
 	const count = /^ {2}([1-9]\d*) background terminals? running/u.exec(rows[background] ?? '')?.[1];
 	if (!count || !dimLines?.has(background)) { return undefined; }
 	const footer = `  ${count} background terminal${count === '1' ? '' : 's'} running · /ps to view · /stop to close`;
-	// Its footer is cropped, not soft-wrapped, at the right edge. Only that exact native prefix is known.
-	if (rows[background] !== footer && (cols === undefined || rows[background] !== footer.slice(0, cols))) { return undefined; }
+	// Its footer is cropped, not soft-wrapped, at the right edge. Only that exact native prefix is known; a row keeps no trailing
+	// spaces, so a crop that ends on one compares without them
+	if (rows[background] !== footer && (cols === undefined || rows[background] !== footer.slice(0, cols).trimEnd())) { return undefined; }
 	let summary = background - 1;
 	while (summary >= 0 && rows[summary] === '') { summary--; }
 	if (summary < 0 || summary === 0 && clippedStart || !dimLines.has(summary)
