@@ -11,14 +11,14 @@ import { Catalog, catalogOf, entryOf } from '../clis/catalog';
 import { claudeAdapter } from '../clis/claude';
 import { codexAdapter } from '../clis/codex';
 import { antigravityAdapter } from '../clis/antigravity';
-import { museAdapter } from '../clis/muse';
+import { museAdapter, museProjectMcpFiles } from '../clis/muse';
 import { openCodeAdapter } from '../clis/opencode';
 import { piAdapter } from '../clis/pi';
 import { acquireProject, injectedRecordOf, markPlanned, PLANNED_ALIVE_MS, reconcileRuns, releaseProject, releaseRun } from '../clis/injected';
 import { sessionDirOf, sessionFileOf } from '../clis/identity';
-import { CliPlanError, DestinationEnvironment, discoverEntry, inputOf, PlanInput, planLaunch, takesThrough } from '../clis/plan';
+import { CliPlanError, DestinationEnvironment, discoverEntry, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough } from '../clis/plan';
 import { INPUT_ADAPTERS } from '../ptyd/composer';
-import { isFacadeContent, laterVersion, markedSkill, McpServer, ProjectWrite, runDirOf, skillVersionOf, ToolsInput } from '../clis/tools';
+import { Injection, isFacadeContent, laterVersion, markedSkill, McpServer, ProjectWrite, runDirOf, skillVersionOf, ToolsConflict, ToolsInput } from '../clis/tools';
 import type { LaunchPlan, Location, PlanRequest } from '../core/ports';
 import type * as HostClisModule from '../host/clis';
 import type * as SettingsModule from '../host/settings';
@@ -41,6 +41,24 @@ const SERVER: McpServer = { command: '/Applications/Code.app/runtime', args: ['/
 /** The text of a file, or undefined where there is none. */
 function textOf(file: string): string | undefined {
 	return fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : undefined;
+}
+
+/** What an adapter gives a launch, which is to be the tools, not a conflict. */
+function injected(offered: Injection | ToolsConflict): Injection {
+	assert.ok(!('conflict' in offered), JSON.stringify(offered));
+	return offered;
+}
+
+/** The Facade Code IDE's own entry, as its agent extension merges it into a folder's `.mcp.json` (CLIS-2.2). */
+const IDE_ENTRY = {
+	command: 'C:\\Users\\me\\AppData\\Local\\Programs\\Facade Code\\Facade Code.exe',
+	args: ['c:\\Users\\me\\AppData\\Local\\Programs\\Facade Code\\resources\\app\\extensions\\facade-agents\\dist\\shim.js', 'mcp', '--agent'],
+	env: { ELECTRON_RUN_AS_NODE: '1', FACADE_AGENTS_RECORD: '${FACADE_AGENTS_RECORD:-}', FACADE_AGENTS_PIPE: '${FACADE_AGENTS_PIPE:-}' }
+};
+
+/** Whether `planned` gives Muse Code its server by `-c`, which it refuses beside another of the name (CLIS-2.2). */
+function museArgument(planned: Pick<PlannedLaunch, 'args'>): boolean {
+	return planned.args.some(arg => arg.startsWith('mcpServers.facade='));
 }
 
 suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
@@ -287,13 +305,76 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual([planned.env.FACADE_ELECTRON_RUN_AS_NODE, planned.env.FACADE_RUN, planned.env.FACADE_PTYD, planned.env.FACADE_AGENT, planned.env.ELECTRON_RUN_AS_NODE], ['1', 'run-1', '/tmp/ptyd.sock', '#a1', undefined]);
 		assert.deepStrictEqual(planned.prompt?.path, 'native');
 		// On Windows its installed native program, which Facade starts directly, takes the entry as an argument too, as its hooks' (CLIS-2.2)
-		const native = museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: false });
-		assert.deepStrictEqual([native.args, native.project.map(each => each.path)], [museAdapter.tools!.inject({ ...tools, platform: 'darwin' }).args, [path.join('.agents', 'skills', 'facade', 'SKILL.md')]]);
+		const native = injected(museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: false }));
+		assert.deepStrictEqual([native.args, native.project.map(each => each.path)], [injected(museAdapter.tools!.inject({ ...tools, platform: 'darwin' })).args, [path.join('.agents', 'skills', 'facade', 'SKILL.md')]]);
 		// Through cmd.exe, which cannot carry it, a shared project entry - with no mode: Muse Code 1.4.14 takes a project's .mcp.json with
 		// one for a configuration error, and turns off all its MCP servers
-		const windows = museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: true });
+		const windows = injected(museAdapter.tools!.inject({ ...tools, platform: 'win32', throughCmd: true }));
 		assert.deepStrictEqual([windows.args, windows.project[0]], [undefined, { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } } }]);
 		assert.deepStrictEqual(windows.env, { FACADE_RUN: 'run-1', FACADE_PTYD: '/tmp/ptyd.sock' });
+	});
+
+	test('Muse Code refuses a -c server beside another of its name, or beside a project MCP file it cannot load: where the folder\'s .mcp.json names one, the shared project entry instead; otherwise no tools, and no -c (CLIS-2.2)', () => {
+		const mcp = path.join(cwd, '.mcp.json');
+		const sharedEntry = { kind: 'entry', path: '.mcp.json', keys: ['mcpServers', 'facade'], value: { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } } };
+		// Other servers alone, by url too and with members Muse Code does not know: by -c, as ever
+		fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { other: { url: 'http://127.0.0.1:9/mcp', headers: {} }, mine: { command: 'x' } }, more: true }));
+		const beside = plan({ cli: 'muse', tools });
+		assert.deepStrictEqual([museArgument(beside), beside.tools], [true, { state: 'injected' }]);
+		// The Facade Code IDE's entry in the folder's own file: the shared project entry, which takes its place there (CLIS-2.2)
+		fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { facade: IDE_ENTRY } }, undefined, '\t'));
+		const ide = plan({ cli: 'muse', tools, prompt: 'Fix the build' });
+		assert.ok(!museArgument(ide), ide.args.join(' '));
+		assert.deepStrictEqual([ide.tools, ide.injection!.project], [{ state: 'injected' }, [sharedEntry, { kind: 'file', path: path.join('.agents', 'skills', 'facade', 'SKILL.md'), content: FACADE_SKILL }]]);
+		assert.deepStrictEqual([ide.env.FACADE_RUN, ide.env.FACADE_PTYD, ide.env.FACADE_AGENT, ide.env.FACADE_ELECTRON_RUN_AS_NODE, ide.args.slice(-2)], ['run-1', '/tmp/ptyd.sock', '#a1', undefined, ['--', 'Fix the build']]);
+		// A person's own facade server there takes the same way, where writing the entry is the conflict (CLIS-2.2)
+		fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { facade: { command: 'my-own-server' } } }));
+		assert.deepStrictEqual(plan({ cli: 'muse', tools }).injection!.project[0], sharedEntry);
+		// A project file Muse Code cannot load: no tools, and no -c, which it would refuse to run with
+		for (const text of ['﻿{"mcpServers":{}}', '{\n\t// mine\n\t"mcpServers": {}\n}', '{"mcpServers":{"a":{"command":"x"},}}', '', '[]', '{"mcpServers":[]}', '{"mcpServers":{"other":null}}', '{"mcpServers":{"other":{"command":5}}}', '{"mcpServers":{"other":{}}}']) {
+			fs.writeFileSync(mcp, text);
+			const refused = plan({ cli: 'muse', tools });
+			assert.deepStrictEqual([refused.tools.state, refused.tools.problem, refused.tools.file, refused.injection, museArgument(refused)], ['unavailable', 'conflict', '.mcp.json', undefined, false], JSON.stringify(text));
+			assert.match(refused.tools.reason!, /Muse Code refuses to run with Facade's server beside a project MCP file it cannot load; Facade leaves it as it is$/);
+		}
+		fs.rmSync(mcp);
+		// A facade server in the person's own settings, read as Muse Code reads them, comments allowed
+		const settings = path.join(temp.dir, '.config', 'muse', 'settings.json');
+		fs.mkdirSync(path.dirname(settings), { recursive: true });
+		fs.writeFileSync(settings, '{\n\t// theirs\n\t"schema_version": 1,\n\t"mcpServers": { "facade": { "command": "mine" } },\n}\n');
+		const theirs = plan({ cli: 'muse', tools });
+		assert.deepStrictEqual([theirs.tools.state, theirs.tools.problem, theirs.tools.file, theirs.injection, museArgument(theirs)], ['unavailable', 'conflict', settings, undefined, false]);
+		assert.match(theirs.tools.reason!, /names a facade server in mcpServers, beside which Muse Code refuses to run with Facade's; Facade leaves it as it is$/);
+		fs.writeFileSync(settings, '{ "schema_version": 1, "mcpServers": { "other": { "command": "mine" } } }');
+		assert.ok(museArgument(plan({ cli: 'muse', tools })));
+	});
+
+	test('Muse Code reports malformed project configuration without quoting its contents (ARCHITECTURE-3.3)', () => {
+		const mcp = path.join(cwd, '.mcp.json');
+		const content = 'private-mcp-value';
+		fs.writeFileSync(mcp, content);
+		const refused = plan({ cli: 'muse', tools });
+		assert.deepStrictEqual([refused.tools.state, refused.tools.problem, refused.tools.file, museArgument(refused)], ['unavailable', 'conflict', '.mcp.json', false]);
+		assert.ok(!refused.tools.reason!.includes(content), refused.tools.reason);
+		assert.strictEqual(textOf(mcp), content);
+	});
+
+	test('Muse Code reads the .mcp.json of each folder up to the top of its repository, and outside one its own folder\'s alone: a facade server above is a conflict (CLIS-2.2)', () => {
+		const sub = path.join(cwd, 'packages', 'app');
+		fs.mkdirSync(sub, { recursive: true });
+		fs.writeFileSync(path.join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { facade: IDE_ENTRY } }));
+		const inSub = () => planLaunch(catalogOf(() => undefined), { cli: 'muse', alias: '#a1', cwd: sub, yolo: true, tools }, destination);
+		assert.deepStrictEqual(museProjectMcpFiles(sub), [path.join(sub, '.mcp.json')]);
+		assert.ok(museArgument(inSub()), 'a file above, outside a repository, is not read');
+		fs.mkdirSync(path.join(cwd, '.git'));
+		assert.deepStrictEqual(museProjectMcpFiles(sub), [path.join(sub, '.mcp.json'), path.join(cwd, 'packages', '.mcp.json'), path.join(cwd, '.mcp.json')]);
+		const above = inSub();
+		assert.deepStrictEqual([above.tools.state, above.tools.problem, above.tools.file, museArgument(above)], ['unavailable', 'conflict', path.join(cwd, '.mcp.json'), false]);
+		assert.match(above.tools.reason!, /names a facade server in mcpServers, beside which Muse Code refuses to run with Facade's in /);
+		// A worktree's .git is a file
+		fs.rmSync(path.join(cwd, '.git'), { recursive: true });
+		fs.writeFileSync(path.join(cwd, '.git'), 'gitdir: /elsewhere\n');
+		assert.strictEqual(inSub().tools.state, 'unavailable');
 	});
 
 	test('a choice cmd.exe cannot carry is not offered where the CLI runs through it: Muse Code\'s effort, a JSON string, before any effect (CLIS-1.4)', () => {
@@ -879,6 +960,35 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		assert.match(codex.tools.reason!, /already exists with other content/);
 		assert.ok(!codex.args.some(arg => arg.includes('mcp_servers')), 'the launch without the tools');
 		assert.deepStrictEqual([fs.existsSync(path.join(home, 'runs', 'run-1')), textOf(path.join(location.path, '.agents', 'skills', 'facade', 'SKILL.md'))], [false, 'someone else\'s facade skill\n']);
+	});
+
+	test('Muse Code where the folder\'s .mcp.json names a facade server: the Facade Code IDE\'s gives way to Facade\'s own entry while its agents run, which goes after the last; a person\'s own leaves it as it is, the agent starting without the tools or a -c it would refuse (CLIS-2.2)', async () => {
+		program(path.join(temp.dir, 'bin'), 'muse');
+		const mcp = path.join(location.path, '.mcp.json');
+		fs.writeFileSync(mcp, JSON.stringify({ mcpServers: { facade: IDE_ENTRY } }, undefined, '\t'));
+		const planner = clis();
+		const first = await planner.plan(request('muse', 'run-1'));
+		const second = await planner.plan(request('muse', 'run-2'));
+		for (const muse of [first, second]) {
+			assert.deepStrictEqual([muse.tools, museArgument(muse)], [{ state: 'injected' }, false], muse.args.join(' '));
+		}
+		assert.deepStrictEqual(JSON.parse(textOf(mcp)!).mcpServers.facade, { command: SERVER.command, args: SERVER.args, env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: '${FACADE_RUN:-}', FACADE_PTYD: '${FACADE_PTYD:-}', FACADE_AGENT: '${FACADE_AGENT:-}' } });
+		await planner.release('run-1');
+		assert.ok(JSON.parse(textOf(mcp)!).mcpServers.facade, 'the other run still uses it');
+		await planner.release('run-2');
+		// What goes back is the file without the IDE's entry, never the entry it replaced (CLIS-2.2)
+		assert.deepStrictEqual(JSON.parse(textOf(mcp)!), { mcpServers: {} });
+		// A person's own facade server stays theirs
+		const mine = '{\n\t"mcpServers": { "facade": { "command": "my-own-server" } }\n}\n';
+		fs.writeFileSync(mcp, mine);
+		const own = await clis().plan(request('muse', 'run-3'));
+		assert.deepStrictEqual([own.tools.state, own.tools.problem, own.tools.file, museArgument(own)], ['unavailable', 'conflict', '.mcp.json', false]);
+		assert.match(own.tools.reason!, /already names another facade server in mcpServers; Facade leaves it as it is/);
+		assert.deepStrictEqual([textOf(mcp), fs.existsSync(path.join(home, 'runs', 'run-3'))], [mine, false]);
+		// No facade server there at all: by -c, the person's file left as it is
+		fs.writeFileSync(mcp, '{ "mcpServers": {} }');
+		const plain = await clis().plan(request('muse', 'run-4'));
+		assert.deepStrictEqual([plain.tools, museArgument(plain), textOf(mcp)], [{ state: 'injected' }, true, '{ "mcpServers": {} }']);
 	});
 
 	test('a start whose project write cannot be recorded - the record unreadable - goes ahead without the tools, says why, and leaves the record as it is', async () => {

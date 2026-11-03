@@ -336,17 +336,20 @@ current screen/UI usable during output flood using ordinary backpressure and sna
 direct-input limit. Real disk/memory/storage exhaustion fails the requesting operation; there is no product cap of 100
 agents or a lifetime operation-count quota that disables an otherwise usable session.
 
-Existing processes are not killed because the extension or its protocol is updated. Compatible reconnect preserves
-their actual identity; incompatible tools report unavailable. Each ptyd protocol has its own socket, and a build speaks
-every protocol a released build used, dropping none: a window joins each such ptyd that holds runs of its workspace -
-never starting one - claims them there, and shows and operates them through it as its own: cards, terminals, input,
-resizing, closing, ends and their agents' Facade tool calls, which it answers; a tool protocol it does not speak is
-refused as `protocol_incompatible`, with no effect (MCP-6.2). A request a later protocol added goes to no older ptyd:
-0.0.1's, protocol 8, takes no screen read, typing, keys or input reading, and they fail before anything is sent. A run
-whose older ptyd is gone ended with it, how is not known. A run whose kept details name no creation tree is a root of
-its own, its Facade tools not injected. Agents and messages started after an update are numbered past the older
-build's numbers (1.1). Once none of the window's runs is left in such a ptyd the window lets it go, to exit once idle.
-New starts use current settings/protocol, in the window's own ptyd.
+Existing processes are not killed because the extension or its protocol is updated. Compatible reconnect preserves their
+actual identity; incompatible tools report unavailable. Each ptyd protocol has its own socket, and a build speaks every
+protocol a released build used, dropping none: a window joins each such ptyd that holds runs of its workspace - never
+starting one - claims them there, and shows and operates them through it as its own: cards, terminals, input, resizing,
+closing, ends and their agents' Facade tool calls, which it answers on that ptyd's own connection, at the first join and
+at every reconnect; a tool protocol it does not speak is refused as `protocol_incompatible`, with no effect (MCP-6.2). A
+request a later protocol added goes to no older ptyd: 0.0.1's, protocol 8, takes no screen read, typing, keys or input
+reading, and they fail before anything is sent. A run whose older ptyd is gone ended with it, how is not known. A run
+whose kept details name no creation tree is a root of its own, its Facade tools not injected. Agents and messages
+started after an update are numbered past the older build's numbers (1.1). Once none of the window's runs is left in
+such a ptyd the window lets it go, to exit once idle. New starts use current settings/protocol, in the window's own
+ptyd. A change of ptyd's behavior or of its packaged native backend advances its protocol even where requests keep their
+shape, so that after an update new starts go to a ptyd of the installed backend, never to one whose installation the
+editor removed with the update, while earlier runs stay with the ptyd that holds them.
 
 ## 3 Data and safety
 
@@ -499,11 +502,12 @@ compatibility engine.
 **Ship the runtime component with tested platform artifacts and an honest minimum-editor capability matrix.**
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
-feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace
-and Open VSX only when the owner asks. Both components carry one version, the published one - 0.0.2 - which the
-changelog's heading names; the version moves past it only when the next version is published, and the build refuses a
-window component of another version.
-[Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
+feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
+Open VSX only when the owner asks. Both components carry one version, the published one - 0.0.3, published to the
+Marketplace for darwin-arm64, linux-x64 and win32-x64 with its window component, each built by the extension checks on
+its own runner - which the changelog's heading names; the version moves past it only when the next version is published,
+and the build refuses a window component of another version. [Official manifest
+reference](https://code.visualstudio.com/api/references/extension-manifest).
 
 Bundle runtime dependencies and third-party notices, test commands excluded; package both components from build output
 with vsce pinned at 4.1.0. The workspace manifest installs its local window component through `extensionPack`, not
@@ -597,7 +601,7 @@ what was tested and what remains. Task assignments, pauses and discussion author
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.3 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package |
-| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; pressure/upgrades from each released build (0.0.1, 0.0.2) with agents running |
+| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; pressure/upgrades from each released build (0.0.1, 0.0.2, 0.0.3) with agents running |
 | 3.1–3.3 | Storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |
 | 5.1–5.4 | Evidence and command logs, isolated profile/config paths, dirty-tree preservation, no unrequested Git publication |

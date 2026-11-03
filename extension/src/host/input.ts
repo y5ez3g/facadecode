@@ -9,7 +9,7 @@ import { FacadeError } from '../core/errors';
 import type { InputEffects, InputPort, Submission } from '../core/messagePorts';
 import type { CapabilityState, LaunchPlan, RunFacts, RunId } from '../core/ports';
 import { PtydNotSent } from './execution/ptydClient';
-import { isOwnDraft, isSameDraft } from '../ptyd/drafts';
+import { drawnAs, isOwnDraft, isSameDraft } from '../ptyd/drafts';
 import type { InputEffect, InputReading, InputState, ScreenRead } from '../ptyd/protocol';
 
 /** How often the input is read again while a submission waits for it to change. */
@@ -27,10 +27,10 @@ const PASTE_BYTES_PER_MS: { readonly win32: number; readonly other: number } = {
 const LINE_SETTLE_MS: { readonly [adapter: string]: number } = { 'agy-frame': 45 };
 /**
  * How long more a CLI needs for each character of a paste where it reads its input one key at a time: Codex on Windows reads console
- * input records, not a bracketed paste, which Orca measured at 21.1 s for 9,249 characters and gives 3 ms each. A character is a
- * UTF-16 code unit there, one key event each (CLIS-2.1).
+ * input records, not a bracketed paste, which Orca measured at 21.1 s for 9,249 characters and gives 3 ms each (CLIS-2.1); Muse Code on
+ * Windows took 7,533 in 4.9 s, and gets 1 ms each (CLIS-2.1). A character is a UTF-16 code unit there, one key event each.
  */
-const CHAR_SETTLE_MS: { readonly [adapter: string]: { readonly [platform: string]: number } } = { 'codex-prompt': { win32: 3 } };
+const CHAR_SETTLE_MS: { readonly [adapter: string]: { readonly [platform: string]: number } } = { 'codex-prompt': { win32: 3 }, 'muse-frame': { win32: 1 } };
 /** How long type_text's Enter waits after its text at least, so that its CLI reads them apart (MCP-5.2). */
 const DIRECT_ENTER_MS = 100;
 
@@ -48,13 +48,15 @@ const CONFIRMED: InputEffects = { outcome: 'confirmed', text_written: 'full', en
 const TEXT_ONLY: InputEffects = { outcome: 'partial', text_written: 'full', enter_written: false };
 
 /**
- * Whether `reading`, by the reader `adapter`, is `text` alone as its input's draft, after `lead` where that was typed - and, where it
- * showed before as the placeholder `seen`, that same placeholder, its paste's number too: a person's later paste of its size is not.
+ * Whether `reading`, by the reader `adapter`, is `text` alone as its input's draft, after `lead` where that was typed - as its CLI
+ * draws it on `platform`, without the characters it loses there (CLIS-2.1) - and, where it showed before as the placeholder `seen`, that
+ * same placeholder, its paste's number too: a person's later paste of its size is not.
  */
-function holds(reading: InputReading, text: string, adapter: string, lead?: string, seen?: string): boolean {
+function holds(reading: InputReading, text: string, adapter: string, platform: NodeJS.Platform, lead?: string, seen?: string): boolean {
 	const pasted = lead && TAKES_LEAD.has(adapter) && text.startsWith(lead) ? text.slice(lead.length) : text;
-	return reading.state === 'draft' && reading.draft !== undefined && isOwnDraft(reading.draft, pasted, adapter, lead, reading.hidden)
-		&& (seen === undefined || isSameDraft(reading.draft, seen, pasted, lead, reading.hidden));
+	const draft = reading.draft;
+	return reading.state === 'draft' && draft !== undefined && drawnAs(pasted, adapter, platform).some(drawn =>
+		isOwnDraft(draft, drawn, adapter, lead, reading.hidden) && (seen === undefined || isSameDraft(draft, seen, drawn, lead, reading.hidden)));
 }
 
 /** What ordinary message input needs of the window: the run's facts, ptyd's reading of its input and its serialized terminal input. */
@@ -117,7 +119,7 @@ export class OrdinaryInput implements InputPort {
 			return 'unknown';
 		}
 		const reading = await this.read(run, adapter);
-		if (own !== undefined && holds(reading, own, adapter, lead, seen)) {
+		if (own !== undefined && holds(reading, own, adapter, this.platform, lead, seen)) {
 			return 'own';
 		}
 		if (reading.state !== 'usable') {
@@ -138,7 +140,7 @@ export class OrdinaryInput implements InputPort {
 			}
 			// Read again in this turn: only the message's own draft, alone, gets Enter (RULES-1.6), and none once stopped meanwhile
 			const reading = await this.read(run, adapter);
-			if (signal?.aborted || !holds(reading, text, adapter, lead, seen)) {
+			if (signal?.aborted || !holds(reading, text, adapter, this.platform, lead, seen)) {
 				return NOTHING;
 			}
 			return this.enterNow(run, adapter, text, signal);
@@ -292,7 +294,7 @@ export class OrdinaryInput implements InputPort {
 		const showMs = DRAFT_MS + this.pasteMs(text) + this.charactersMs(adapter, text);
 		let seen: string | undefined;
 		const shows = (reading: InputReading) => {
-			if (!holds(reading, text, adapter, typed)) {
+			if (!holds(reading, text, adapter, this.platform, typed)) {
 				return false;
 			}
 			seen = reading.draft;
@@ -383,7 +385,7 @@ export class OrdinaryInput implements InputPort {
 		return adapter ? (LINE_SETTLE_MS[adapter] ?? 0) * text.split(/\r\n|\r|\n/u).length : 0;
 	}
 
-	/** The time the CLI of the reader `adapter` needs on this platform to read a paste of `text` a key at a time: Codex on Windows (CLIS-2.1). */
+	/** The time the CLI of the reader `adapter` needs on this platform to read a paste of `text` a key at a time: Codex and Muse Code on Windows (CLIS-2.1). */
 	private charactersMs(adapter: string | undefined, text: string): number {
 		return adapter ? (CHAR_SETTLE_MS[adapter]?.[this.platform] ?? 0) * text.length : 0;
 	}

@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **Fixed: smaller things the specification review found.** A pinned card's pin shows its tooltip again. Facade's own reasons - another window owning the workspace, a working location that is gone - are in your language and never show an internal ID. A pin or unpin that cannot be saved, from the card or the tab, says so. An agent with an empty name is `#aN` everywhere. Chinese writes Agent the same way everywhere. A busy tab's spinner follows the system's reduced-motion setting. Show Agent Launch... shows everything Facade adds to a start, and says when no folder trust is written. Without its Window Component, Facade's commands explain what to install instead of failing.
+- **Fixed: agents retained across an update could not use their Facade tools.** Their terminal connections now carry tool calls and replies again, including after reconnection.
+- **Fixed: Muse Code agents ended as they started.** A Muse Code agent in a folder whose `.mcp.json` already had a `facade` server - the Facade Code app leaves one - ended at once with "-c mcpServers.facade: refusing run: the server name is reserved", as Muse Code will not run with a second server of that name. Facade now takes the place of the app's entry there, as it does the app's other files; where the server is your own, or Muse Code would refuse to run for another reason in your configuration, the agent starts without working with other agents and says why.
+- **Fixed: missing emoji and messages that were never delivered on Windows.** Newly started Codex and Muse Code agents keep emoji in typed and pasted text, including 📨 and 🔔 in messages. Long messages remain recognizable when the CLI shows the first character separately from its paste placeholder. Facade also waits for Muse Code to finish reading a long message. Existing agents keep their original terminal backend; start or resume an agent to use the corrected input handling.
+- **Fixed: new agents failed after installing an update.** New starts use the updated terminal backend, so removal of the previous extension installation does not leave them with `Cannot create process`. Existing agents remain connected to their original processes.
+
+## 0.0.3
+
+Pin from the start, a calmer status display, and fixes from daily use.
+
 - **Closing an agent's tab closes it.** Closing a running agent's terminal tab yourself - its close button, Close, Close Editor - no longer asks first. Facade still asks once when tabs close together, as with Close All or Close Others.
 - **New agents join at the bottom.** New cards go to the bottom of the list, and a card you pin to the bottom of the pinned cards; a card you unpin goes to the top of the others, just below the pinned cards. Move Up and Move Down still reorder them.
 - **Pin any time.** An agent can be pinned before its first message, and a resumed conversation as soon as it starts. Until its CLI names the conversation, the Pin keeps the agent's CLI, name and folder: a workspace opened before then starts a new conversation there.

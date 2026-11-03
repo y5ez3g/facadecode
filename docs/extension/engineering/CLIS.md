@@ -193,17 +193,23 @@ Code's `[Pasted Content N chars]`, OpenCode's `[Pasted ~N lines]` from three lin
 logged. A message's lead - the start of its header, typed for Claude Code, which takes a paste alone as pasted material
 rather than a request (COLLABORATION-2.1) - goes ahead of the paste in the same write; the other CLIs take the paste
 alone, as Codex drops typed text that shares a paste's write. The draft is the message's own with the lead, or without
-it where the run's older ptyd types none (ARCHITECTURE-2.4). Use complete paste plus Enter for ordinary messages. A paste
-takes its bytes at 4 KB a millisecond, ConPTY's 64 bytes a millisecond on Windows, counted in whole tenths of a second.
-The message's own draft has 2 seconds and that time to show - on Windows 3 ms a character (UTF-16 code unit) more for
-Codex, which reads console input one key at a time, 21.1 s for 9,249 characters. Enter goes only over that draft - for
-Antigravity, which takes seconds to expand a long paste, 45 ms a line after the draft shows - and delivery is confirmed
-once the input box is empty again, within 3 seconds and the paste's time. The same times extend the stage's deadlines
-(RULES-1.5) and type_text's wait before its Enter (MCP-5.2). State actual full/partial/unknown effects. A later attempt
-never types the text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require a
-reconciliation API. An unknown version still starts its terminal, and its activity can still be verified per run under
-2.3. A CLI that never shows its activity is red, with its reason, once the run's startup bound passed (2.3). Every CLI
-advertised as fully supported must actually demonstrate the required capabilities on its stated platform.
+it where the run's older ptyd types none (ARCHITECTURE-2.4). Use complete paste plus Enter for ordinary messages. In
+Windows win32 input mode a character outside the Basic Multilingual Plane goes as its two UTF-16 halves in key-down
+records together, with no key releases between them, which Codex and Muse Code would pair with each half and lose the
+character by; this holds for the person's input, direct text and keys and messages alike. Their long-paste placeholder
+may follow the text's first non-ASCII character drawn as it is: the draft is the message's own only where that exact
+character and the count of the rest match. A run held by an older ptyd can still lose such characters, and its draft is
+the message's own without them too. A paste takes its bytes at 4 KB a millisecond, ConPTY's 64 bytes a millisecond on
+Windows, counted in whole tenths of a second. The message's own draft has 2 seconds and that time to show - on Windows a
+character (UTF-16 code unit) more, 3 ms for Codex and 1 ms for Muse Code, which read console input one key at a time:
+21.1 s for 9,249 characters, and 4.9 s for 7,533. Enter goes only over that draft - for Antigravity, which takes seconds
+to expand a long paste, 45 ms a line after the draft shows - and delivery is confirmed once the input box is empty
+again, within 3 seconds and the paste's time. The same times extend the stage's deadlines (RULES-1.5) and type_text's
+wait before its Enter (MCP-5.2). State actual full/partial/unknown effects. A later attempt never types the text again;
+it presses Enter only over the message's own draft (RULES-1.6). Do not require a reconciliation API. An unknown version
+still starts its terminal, and its activity can still be verified per run under 2.3. A CLI that never shows its activity
+is red, with its reason, once the run's startup bound passed (2.3). Every CLI advertised as fully supported must
+actually demonstrate the required capabilities on its stated platform.
 
 The reader also reads what the person submits. An Enter the person types into an agent's terminal waits for the reader's
 reading of the input - at most 150 ms, after 30 ms for typing sent with that Enter to be drawn - before it reaches the
@@ -224,7 +230,7 @@ Each built-in receives the `facade` server, the skill and an approval of Facade'
 | Claude Code | Per-run `--mcp-config` file | Per-run `--plugin-dir` plugin | `--allowedTools mcp__facade` |
 | Codex | Per-run `-c mcp_servers.facade.*` overrides | Project `.agents/skills/facade/SKILL.md` | `default_tools_approval_mode="approve"` |
 | Antigravity | Project plugin `.agents/plugins/facade`, shared; its PreInvocation hook supplies run-private ephemeral initialization context through the run environment | In that plugin | `mcp(facade_facade/*)` added to the person's own rules in its session `--settings` |
-| Muse Code | Per-run `-c mcpServers.facade` with `"mode": "optional"`, on Windows too, where Facade starts its native program (2.4); where its program starts through cmd.exe, which cannot carry that JSON, a `facade` entry merged into the project's `.mcp.json`, shared, without `mode`, which in a project file Muse Code takes for a configuration error that turns off all its servers. Its SessionStart hook supplies the run-private initialization context, except through cmd.exe | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
+| Muse Code | Per-run `-c mcpServers.facade` with `"mode": "optional"`, on Windows too, where Facade starts its native program (2.4); where its program starts through cmd.exe, which cannot carry that JSON, a `facade` entry merged into the project's `.mcp.json`, shared, without `mode`, which in a project file Muse Code takes for a configuration error that turns off all its servers; the same entry takes the place of a `facade` server the run's own folder's `.mcp.json` already names, beside which Muse Code refuses a `-c` one. Its SessionStart hook supplies the run-private initialization context, except through cmd.exe | Project `.agents/skills/facade/SKILL.md` | Its own approvals: it has no rule for one server's tools |
 | OpenCode | Per-run `OPENCODE_CONFIG_CONTENT`, on the person's own, with `--standalone` | Per-run file as `instructions` | `facade_*` allowed, after the person's own rules |
 | Pi | Per-run extension, `-e`, that registers it with its tools given directly and supplies the same initialization instructions in its own native prompt section under MCP-6.2 | Its resource-discovery hook supplies the per-run skill only when Pi has not already loaded a byte-identical Facade skill | It has no approvals |
 
@@ -234,7 +240,12 @@ and edits keep the mode RULES-4.3 chose. An entry shared by a folder's runs hold
 reach the server through the CLI's environment, and a server started without them - by a session the person starts in
 that folder - offers no tools (MCP-6.1). Muse Code's per-run entry names its variables only by references to that
 environment. Its project entry, through cmd.exe, uses `${NAME:-}` references, empty in a session the person starts there
-by hand - an unset plain reference would turn off every server of theirs. Claude Code's run settings disable a project's
+by hand - an unset plain reference would turn off every server of theirs. Muse Code refuses to run with a `-c` server of
+a name its own settings or a project MCP file it reads already gives one - the `.mcp.json` of each folder from the run's
+up to the top of its repository, of the run's alone outside one - and beside a project MCP file it cannot load, so
+Facade looks first: where the run's own folder's `.mcp.json` names a `facade` server, the shared project entry takes its
+place there, a Facade's brought up to date and a person's a conflict; anything else in the way is a conflict, and the
+CLI starts without the tools, which are reported unavailable with why. Claude Code's run settings disable a project's
 `facade` entry, which would otherwise ask about it at its start. Antigravity's `--settings` replaces a settings key
 whole for its session, so the person's own permission rules are read and kept in it. OpenCode's background service,
 which the person's sessions share, would not read a run's own configuration, so a run with the tools has its own server

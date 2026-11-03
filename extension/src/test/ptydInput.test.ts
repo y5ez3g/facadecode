@@ -5,6 +5,41 @@
 import * as assert from 'assert';
 import { InputEffect, InputQueue } from '../ptyd/input';
 import { DEFAULT_KEY_MODES, isAgentKey, keySequence, pasteSequence } from '../ptyd/keys';
+import { withModules } from './withModules';
+
+suite('Windows Unicode input through the run (CLIS-2.1)', () => {
+	for (const platform of ['win32', 'linux'] as const) {
+		test(`${platform}: human input, automated paste and printable keys preserve supplementary characters in the requested input mode`, async () => {
+			let output!: (data: string) => void;
+			const written: string[] = [];
+			const pty = { pid: 1, onData(listener: typeof output) { output = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); } };
+			const { Run } = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/run')>(require.resolve('../ptyd/run'));
+			const original = Object.getOwnPropertyDescriptor(process, 'platform')!;
+			Object.defineProperty(process, 'platform', { value: platform });
+			const run = new Run({ run: 'unicode', owner: 'test', file: 'fixture', args: [], cwd: '/unused', env: {}, cols: 80, rows: 24, meta: {} });
+			try {
+				run.write('🚀');
+				assert.deepStrictEqual(written.splice(0), ['🚀'], 'no unrequested input protocol');
+				output('\x1b[?9001h\x1b[?2004h');
+				await run.snapshot();
+				run.write('中文 · 🚀');
+				await run.type('a\n🚀\x1b[201~', false);
+				await run.keys(['🚀', 'Enter']);
+				const rocket = platform === 'win32' ? '\x1b[0;0;55357;1;0;1_\x1b[0;0;56960;1;0;1_' : '🚀';
+				assert.deepStrictEqual(written.splice(0), [
+					`中文 · ${rocket}`,
+					`\x1b[200~a\r${rocket}\u241b[201~\x1b[201~`,
+					rocket,
+					'\x1b[13;0;13;1;0;1_\x1b[13;0;13;0;0;1_'
+				]);
+				output('\x1b[?9001l');
+				await run.snapshot();
+				run.write('🚀');
+				assert.deepStrictEqual(written, ['🚀'], 'the program can turn the encoding off again');
+			} finally { run.dispose(); Object.defineProperty(process, 'platform', original); }
+		});
+	}
+});
 
 suite('ptyd input (COLLABORATION-1.2, RULES-1.10)', () => {
 

@@ -37,14 +37,27 @@ const counted = (pattern: RegExp, counts: (text: string) => readonly number[], s
 	})
 });
 
+/** Codex and Muse can draw the first non-ASCII character literally, then fold the rest of the same paste (CLIS-2.1). */
+const afterFirstCharacter: Placeholder = {
+	matches: (draft, lead, text) => {
+		const first = [...text][0];
+		if (!first || first.codePointAt(0)! <= 0x7f || /\s/u.test(first)) { return false; }
+		return bodiesOf(draft, lead).some(body => {
+			if (!body.startsWith(first)) { return false; }
+			const count = /^\[PastedContent(\d+)chars?\]$/u.exec(body.slice(first.length))?.[1];
+			return count !== undefined && charsOf(text.slice(first.length)).includes(Number(count));
+		});
+	}
+};
+
 /** Each CLI's placeholders for a long paste, by its input reader, as squeezed (CLIS-2.1). */
 export const PLACEHOLDERS: { readonly [adapter: string]: readonly Placeholder[] } = {
 	// Claude Code's `[Pasted text #1 +N lines]` counts the lines after the first
 	'claude-frame': [counted(/^\[Pastedtext#\d+\+(\d+)lines?\]$/u, text => [linesOf(text) - 1])],
 	'agy-frame': [counted(/^\[Pastedtext#\d+\+(\d+)lines?\]$/u, text => [linesOf(text)])],
 	// `[Pasted Content N chars]`
-	'codex-prompt': [counted(/^\[PastedContent(\d+)chars?\]$/u, charsOf)],
-	'muse-frame': [counted(/^\[PastedContent(\d+)chars?\]$/u, charsOf)],
+	'codex-prompt': [counted(/^\[PastedContent(\d+)chars?\]$/u, charsOf), afterFirstCharacter],
+	'muse-frame': [counted(/^\[PastedContent(\d+)chars?\]$/u, charsOf), afterFirstCharacter],
 	'pi-frame': [
 		// `[paste #1 +N lines]` for more than ten lines
 		counted(/^\[paste#\d+\+(\d+)lines?\]$/u, text => [linesOf(text)]),
@@ -55,6 +68,27 @@ export const PLACEHOLDERS: { readonly [adapter: string]: readonly Placeholder[] 
 	// `[Pasted ~N lines]`, from three lines on
 	'opencode-frame': [counted(/^\[Pasted~(\d+)lines?\]$/u, text => [linesOf(text)])]
 };
+
+/** A character outside the Basic Multilingual Plane: two UTF-16 units, as an emoji is. */
+const ASTRAL = /[\u{10000}-\u{10FFFF}]/gu;
+
+/**
+ * The characters a CLI on an earlier supervisor can lose from a paste, by its input reader (CLIS-2.1). Codex and Muse Code on Windows read a paste as
+ * console key records - each UTF-16 unit pressed and let go, as the ConPTY ptyd starts them on gives them - and each pairs a
+ * character's two halves outside the Basic Multilingual Plane with their own releases, so it drops each such character: an emoji,
+ * a message's 📨 too.
+ */
+const LOST_CHARACTERS: { readonly [adapter: string]: { readonly [platform: string]: RegExp } } = {
+	'codex-prompt': { win32: ASTRAL },
+	'muse-frame': { win32: ASTRAL }
+};
+
+/** `text` as the CLI of the reader `adapter` draws it on `platform`: as it is, then without the characters it loses there, if any. */
+export function drawnAs(text: string, adapter: string, platform: NodeJS.Platform): string[] {
+	const lost = Object.hasOwn(LOST_CHARACTERS, adapter) ? LOST_CHARACTERS[adapter][platform] : undefined;
+	const without = lost ? text.replace(lost, '') : text;
+	return without === text ? [text] : [text, without];
+}
 
 /** A draft as squeezed, and the same after `lead` where it begins with it: a ptyd from before leads types none. */
 function bodiesOf(draft: string, lead: string | undefined): string[] {

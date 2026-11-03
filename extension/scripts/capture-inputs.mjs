@@ -35,7 +35,7 @@ const { Terminal } = require('@xterm/headless');
 const { Unicode11Addon } = require('@xterm/addon-unicode11');
 const { inputScreenOf, readInput } = require(path.join(out, 'ptyd', 'composer.js'));
 const { isOwnDraft } = require(path.join(out, 'ptyd', 'drafts.js'));
-const { pasteSequence } = require(path.join(out, 'ptyd', 'keys.js'));
+const { pasteSequence, win32Text } = require(path.join(out, 'ptyd', 'keys.js'));
 const { MESSAGE_LEAD, formatMessage, formatResult } = require(path.join(out, 'core', 'messages.js'));
 const { codexAdapter } = require(path.join(out, 'clis', 'codex.js'));
 const { assertTemporaryState, probeEnvironment } = require(path.join(out, 'test', 'integration', 'probeState.js'));
@@ -59,6 +59,7 @@ const long = Array.from({ length: 100 }, (_, line) => `${String(line + 1).padSta
 const CASES = [
 	{ name: 'empty', expect: 'usable' },
 	{ name: 'typed', type: 'hello there', expect: 'draft' },
+	{ name: 'unicode-typed', type: '中文 · 📨 🚀 👩‍💻', expect: 'draft' },
 	{ name: 'pasted', paste: 'first pasted line\nsecond pasted line\nthird pasted line', expect: 'draft', own: true },
 	{ name: 'message-pasted', paste: message(1, 'Reply with exactly the word ACK-TWO and nothing else.'), expect: 'draft', own: true },
 	{ name: 'notice-pasted', paste: notice(7, 'Your message #m6 has been passed on to Ada (#a7).', 'm-6'), expect: 'draft', own: true },
@@ -136,7 +137,15 @@ function start() {
 	const term = new Terminal({ cols, rows, allowProposedApi: true, scrollback: 2000 });
 	term.loadAddon(new Unicode11Addon());
 	term.unicode.activeVersion = '11';
-	const child = pty.spawn(program, cli.args, { name: 'xterm-256color', cols, rows, cwd, env: { ...env, ...state, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'vscode' } });
+	let win32Input = false;
+	for (const [final, enabled] of [['h', true], ['l', false]]) {
+		term.parser.registerCsiHandler({ prefix: '?', final }, values => { if (values.includes(9001)) { win32Input = enabled; } return false; });
+	}
+	term.parser.registerEscHandler({ final: 'c' }, () => { win32Input = false; return false; });
+	// On Windows the ConPTY ptyd starts agents on, node-pty's own: Windows' own gives a program other key records for a character not
+	// on the keyboard, and so other drafts (CLIS-2.1)
+	const child = pty.spawn(program, cli.args, { name: 'xterm-256color', cols, rows, cwd, ...process.platform === 'win32' ? { useConptyDll: true } : {}, env: { ...env, ...state, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'vscode' } });
+	const write = data => child.write(process.platform === 'win32' && win32Input ? win32Text(data) : data);
 	children.add(child);
 	let exited;
 	child.onData(data => {
@@ -157,7 +166,7 @@ function start() {
 		await flush();
 		return readInput(inputScreenOf(term), cli.adapter);
 	};
-	return { term, child, reading, exited: () => exited, flush };
+	return { term, child, write, reading, exited: () => exited, flush };
 }
 
 // What identifies a person on a recorded screen - a CLI draws its account's email address, and a path can carry the user name - is
@@ -246,18 +255,23 @@ for (const each of CASES) {
 	const pasted = lead && each.paste?.startsWith(lead) ? each.paste.slice(lead.length) : each.paste;
 	if (each.type !== undefined) {
 		for (const char of each.type) {
-			run.child.write(char);
+			run.write(char);
 			await sleep(15);
 		}
 	}
 	if (each.paste !== undefined) {
-		run.child.write(`${lead ?? ''}${pasteSequence(true, pasted)}`);
+		run.write(`${lead ?? ''}${pasteSequence(true, pasted)}`);
 	}
-	// As long as a paste of its size takes, and its CLI to draw it
-	await sleep(1_500 + Math.ceil(Buffer.byteLength(each.paste ?? '') / 64));
+	// As long as a paste of its size takes, and its CLI to draw it: Codex and Muse Code on Windows read it a key at a time, 3 ms and
+	// 1 ms a UTF-16 unit, as delivery waits for them (CLIS-2.1)
+	const keyMs = process.platform === 'win32' ? { 'codex-prompt': 3, 'muse-frame': 1 }[cli.adapter] ?? 0 : 0;
+	const keyAtATime = keyMs * (each.paste ?? '').length;
+	await sleep(1_500 + Math.ceil(Buffer.byteLength(each.paste ?? '') / 64) + keyAtATime);
 	const read = await run.reading();
+	// Current input must preserve the original characters; compatibility with older supervisors never makes a capture pass.
 	const own = each.paste !== undefined && read.draft !== undefined && isOwnDraft(read.draft, pasted, cli.adapter, lead, read.hidden);
-	const ok = read.state === each.expect && (each.own === undefined || own === each.own);
+	const typed = each.type === undefined || read.draft !== undefined && isOwnDraft(read.draft, each.type, cli.adapter, undefined, read.hidden);
+	const ok = read.state === each.expect && typed && (each.own === undefined || own === each.own);
 	results.push({ name: each.name, ok, read: read.state, evidence: read.evidence, ...each.own ? { own } : {}, ...ok ? {} : { draft: read.draft } });
 	// A paste's text kept with its screen, so that a test checks it reads as its own draft (RULES-1.6)
 	fs.writeFileSync(path.join(saved, `${each.name}.json`), JSON.stringify({ ...compact(each.name, each.expect, run.term), ...each.paste !== undefined ? { paste: pasted, ...lead ? { lead } : {} } : {} }));
