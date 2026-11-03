@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.5
 
 - **Fixed: every new agent failed with `Cannot create process` after updating to 0.0.4.** 0.0.4 kept starting agents in the background process of the version it replaced, whose files the update had removed. Each installation now starts agents in its own background process, whatever the update changed, while agents an earlier version started keep running there until they end; that process is then let go. You need not end anything by hand after updating. Where an installation is removed under a process still using it, Facade says so and asks you to reload the window, rather than `Cannot create process`.
 - **Fixed: Codex agents stayed green after their turn.** A Codex 0.166.0 agent that left a command running, such as a development server, kept its working dot after it finished; its dot now follows the turn. Agents started before this version keep the old behavior.
