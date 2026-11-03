@@ -59,6 +59,25 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 	}
 }
 
+/**
+ * Whether a saved Pin of this window's workspaces restores `session`: a Pin made before its CLI named its conversation takes it once
+ * the window hears it (LIFECYCLE-3.4, D182), and a window closed before that restores a new conversation instead.
+ */
+function pinHolds(session: string): boolean {
+	const root = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
+	const saved = (dir: string): unknown => {
+		try { return (JSON.parse(fs.readFileSync(path.join(root, dir, 'workspace-state.json'), 'utf8')) as Record<string, unknown>)['facade.pins']; } catch { return undefined; }
+	};
+	try {
+		return fs.readdirSync(root).some(dir => {
+			const pins = saved(dir);
+			return Array.isArray(pins) && pins.some(pin => (pin as { conversation?: { sessionId?: unknown } } | null)?.conversation?.sessionId === session);
+		});
+	} catch {
+		return false;
+	}
+}
+
 /** Finish a native turn before closing: a preallocated ID alone is not a persisted conversation. */
 async function nativeTurn(runId: string, name: string): Promise<void> {
 	await until('native CLI input', async () => await vscode.commands.executeCommand('facade.messageInput', runId) === 'usable' ? true : undefined, 60_000);
@@ -113,7 +132,7 @@ export async function activate(): Promise<void> {
 			if (NATIVE) {
 				await nativeTurn(card.runId, card.name);
 			}
-			await until('its native session identity', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined, NATIVE ? 60_000 : 20_000);
+			await until('Pin offered', async () => (await state()).cards.find(each => each.runId === card.runId)?.menu.pin || undefined, NATIVE ? 60_000 : 20_000);
 			await vscode.commands.executeCommand('facade.pinAgent', { run_id: card.runId });
 			await pinState(card.runId, true);
 			const session = await until('the persisted native session ID', async () => {
@@ -122,6 +141,8 @@ export async function activate(): Promise<void> {
 					return typeof id === 'string' && id ? id : undefined;
 				} catch { return undefined; }
 			}, NATIVE ? 60_000 : 20_000);
+			// Pin is offered before the CLI names its conversation (D182): its record takes the session once the window hears it
+			await until('the Pin to take the session', async () => pinHolds(session) || undefined, NATIVE ? 60_000 : 20_000);
 			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session });
 			// Reload tears down this host, which may cancel its command promise after the window accepted the request.
 			void vscode.commands.executeCommand(REOPEN ? 'workbench.action.closeWindow' : 'workbench.action.reloadWindow').then(undefined, () => undefined);
