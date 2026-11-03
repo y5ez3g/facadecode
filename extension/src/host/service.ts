@@ -173,6 +173,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		owner: record.key,
 		claim,
 		ptydScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'ptyd.js').fsPath,
+		version: String(context.extension.packageJSON.version),
 		home,
 		media: vscode.Uri.joinPath(context.extensionUri, 'media'),
 		log: line => agentLog.event(line),

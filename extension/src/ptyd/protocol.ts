@@ -169,7 +169,7 @@ export interface Requests {
 	 * The protocol each side speaks: a window of another protocol reports the difference and ends nothing (ARCHITECTURE-2.4). A
 	 * run's shim says it is one, and for which run; ptyd refuses a shim of another protocol and closes its connection.
 	 */
-	hello: { params: { readonly protocol: number; readonly role?: 'window' | 'shim'; readonly run?: string }; result: { readonly protocol: number; readonly pid: number } };
+	hello: { params: { readonly protocol: number; readonly role?: 'window' | 'shim'; readonly run?: string }; result: { readonly protocol: number; readonly pid: number; readonly build?: string } };
 	/** Takes the workspace once, or resumes this activation. Older activations cannot claim it again. */
 	claim: { params: OwnerClaim; result: void };
 	/** Starts a run, claimed by this connection. */

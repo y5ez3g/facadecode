@@ -23,9 +23,9 @@ import { failureAnswer, isToolAnswer } from '../../transport/failure';
 import { McpServerLaunch, shimLaunch as launchShim } from '../../transport/launch';
 import { AgentTerminals, type AgentTerminal } from './agentTerminals';
 import { ExecutionSession, RECONCILE_MS } from './executionSession';
-import { PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from './ptydClient';
+import { PtydClient, PtydGone, PtydLost, PtydNotSent, within } from './ptydClient';
 import { submittedDraft, taken, TypedEnters } from './submissions';
-import { EARLIER_PROTOCOLS, PTYD_PROTOCOL } from '../../ptyd/protocol';
+import { PTYD_PROTOCOL } from '../../ptyd/protocol';
 
 /** How long a CLI has to end on the hang-up before ptyd kills its process group (LIFECYCLE-4.2): no UI waits for it. */
 const GRACE_MS = 3_000;
@@ -56,6 +56,8 @@ export interface AgentExecutionOptions {
 	readonly claim?: OwnerClaim;
 	/** ptyd's script, started detached by the first window that needs it. */
 	readonly ptydScript: string;
+	/** The installation's version: with the script, the build this window's own ptyd runs (ARCHITECTURE-2.4). */
+	readonly version?: string;
 	/** The execution environment's Facade data directory: ptyd's socket key and log (ARCHITECTURE-3.1). */
 	readonly home: string;
 	/** The extension's `media` folder, where the CLIs' logos are. */
@@ -90,7 +92,9 @@ function isToolCall(value: unknown): value is ToolCall {
 /** One run's pair as this window shows it: its terminal, and its process once it has one. */
 interface Pair {
 	readonly run: RunId;
-	/** The protocol of the ptyd that holds its process: this window's own, or an earlier one's (ARCHITECTURE-2.4). */
+	/** The ptyd that holds its process, by its socket: this window's own, or another - of an earlier protocol or build (ARCHITECTURE-2.4). */
+	holder: string;
+	/** The protocol that ptyd speaks, which decides what may be asked of it. */
 	protocol: number;
 	facts: PairFacts;
 	readonly terminal: AgentTerminal;
@@ -168,15 +172,15 @@ function isRunMeta(value: { readonly [key: string]: unknown }): value is { reado
 export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	private readonly pairs = new Map<RunId, Pair>();
-	/** The protocol of the ptyd each run listed in one of an earlier protocol is held by, until it is forgotten (ARCHITECTURE-2.4). */
-	private readonly where = new Map<RunId, number>();
+	/** The other ptyd each run listed in one is held by, by its socket, until it is forgotten (ARCHITECTURE-2.4). */
+	private readonly where = new Map<RunId, string>();
 	/** Each run's cleanup, started once by whichever of removePair and terminate comes first (LIFECYCLE-3.1). */
 	private readonly cleanups = new Map<RunId, Promise<CleanupResult>>();
 	private readonly pendingCleanup = new Set<RunId>();
 	/** Runs whose ptyd was not told to forget them yet: told again at each check, so that none stays listed for good. */
 	private readonly pendingForget = new Set<RunId>();
-	/** The ptyds a check is listing now, each by its protocol: one that does not answer is not asked again meanwhile. */
-	private readonly listing = new Set<number>();
+	/** The ptyds a check is listing now, each by its socket: one that does not answer is not asked again meanwhile. */
+	private readonly listing = new Set<string>();
 	/** Whether the first restore is over: runs a ptyd lists that no pair shows are told from then on. */
 	private restored = false;
 	/** When each run a ptyd lists and no pair shows was last told, to tell it once a while. */
@@ -219,9 +223,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		// Acquire the activation claim before subscribing any editor resources.
 		this.session = new ExecutionSession({
 			...options,
-			connectionLost: protocol => this.connectionLost(protocol),
-			// A ptyd of an earlier protocol is not let go while a run of it is being closed or forgotten through it
-			busy: protocol => [...this.cleanups.keys(), ...this.pendingCleanup, ...this.pendingForget].some(run => this.protocolOf(run) === protocol),
+			connectionLost: socket => this.connectionLost(socket),
+			// Another ptyd is not let go while a run of it is being closed or forgotten through it
+			busy: socket => [...this.cleanups.keys(), ...this.pendingCleanup, ...this.pendingForget].some(run => this.holderOf(run) === socket),
 			transferred: () => this.transferred(),
 			reconnect: () => this.reclaim(),
 			reconcile: () => this.reconcile(),
@@ -251,8 +255,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 */
 	async conversations(): Promise<readonly ConversationKey[]> {
 		const held = [...await this.ask('conversations', {})];
-		for (const protocol of EARLIER_PROTOCOLS.filter(value => value >= 9)) {
-			const client = await PtydClient.join(ptydSocketPath(this.options.home, protocol), protocol);
+		for (const other of this.session.others().filter(each => each.protocol >= 9)) {
+			const client = await PtydClient.join(other.socket, other.protocol);
 			if (!client) { continue; }
 			try {
 				held.push(...(await within(client.request('list', {}))).flatMap(run => {
@@ -295,12 +299,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		});
 	}
 
-	/** How `run`'s CLI starts the run's MCP shim (MCP-6.1): this extension host's runtime as Node, the bundled shim, ptyd's socket. */
+	/** How `run`'s CLI starts the run's MCP shim (MCP-6.1): this extension host's runtime as Node, the bundled shim, the socket of this window's own ptyd, which starts the run. */
 	shimLaunch(run: RunId, alias: string, context?: string): McpServerLaunch {
 		return launchShim({
 			runtime: process.execPath,
 			script: this.options.shimScript ?? path.join(path.dirname(this.options.ptydScript), 'shim.js'),
-			socket: ptydSocketPath(this.options.home),
+			socket: this.session.own,
 			run, alias, context
 		});
 	}
@@ -316,8 +320,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	/** Global discovery also sees the previous release's live runs; observing another workspace never claims it. */
 	private async allRuns(): Promise<readonly RunInfo[]> {
 		const runs = [...await this.ask('list', {})];
-		for (const protocol of EARLIER_PROTOCOLS.filter(value => value >= 9)) {
-			const client = await PtydClient.join(ptydSocketPath(this.options.home, protocol), protocol);
+		for (const other of this.session.others().filter(each => each.protocol >= 9)) {
+			const client = await PtydClient.join(other.socket, other.protocol);
 			if (!client) { continue; }
 			try { runs.push(...await within(client.request('list', {}))); }
 			finally { client.dispose(); }
@@ -352,6 +356,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	/** Asks ptyd `method`, connecting where this window is not: rejects plainly where ptyd cannot be reached, nothing asked. */
 	private async ask<M extends Method>(method: M, params: Requests[M]['params']): Promise<Requests[M]['result']> {
 		const run = 'run' in params && typeof params.run === 'string' ? params.run : undefined;
+		const holder = run === undefined ? this.session.own : this.holderOf(run);
 		const protocol = run === undefined ? PTYD_PROTOCOL : this.protocolOf(run);
 		// Protocol 9 added MCP input/screen requests. An earlier run remains usable in its existing terminal; never
 		// send these requests to the window's newer ptyd, which does not own it, or to an older ptyd that cannot serve them.
@@ -360,7 +365,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 		let client: PtydClient;
 		try {
-			client = await this.session.client(protocol);
+			client = await this.session.client(holder);
 		} catch (err) {
 			throw err instanceof PtydNotSent ? err : new PtydNotSent(`The agent runtime (ptyd) cannot be reached: ${messageOf(err)}`);
 		}
@@ -507,12 +512,13 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.inputAdapter = typeof live.meta.inputAdapter === 'string' ? live.meta.inputAdapter : undefined;
 		// Tools not connected yet as its window went: its startup still waits for them, within its bound (RULES-3.2)
 		pair.toolsPending = live.meta.tools === 'connecting';
-		// Through the ptyd that holds it: this window's own, or one of an earlier protocol that still does (ARCHITECTURE-2.4)
-		pair.protocol = this.where.get(live.run) ?? PTYD_PROTOCOL;
+		// Through the ptyd that holds it: this window's own, or another - of an earlier protocol or build - that still does (ARCHITECTURE-2.4)
+		pair.holder = this.where.get(live.run) ?? this.session.own;
+		pair.protocol = this.session.protocolOf(pair.holder);
 		let client: PtydClient;
 		let attached: { readonly info: RunInfo; readonly screen: string; readonly seq: number };
 		try {
-			client = await this.session.client(pair.protocol);
+			client = await this.session.client(pair.holder);
 			if (this.pairs.get(live.run) !== pair || this.session.closed) {
 				throw new Error('The agent was closed while reattaching.');
 			}
@@ -676,7 +682,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	setMeta(run: RunId, meta: RunMeta): void {
-		void this.session.client(this.protocolOf(run)).then(client => client.request('setMeta', { run, meta: { ...meta } })).catch(err => this.options.log(`Could not keep the new details of ${run} with its process: ${messageOf(err)}`));
+		void this.session.client(this.holderOf(run)).then(client => client.request('setMeta', { run, meta: { ...meta } })).catch(err => this.options.log(`Could not keep the new details of ${run} with its process: ${messageOf(err)}`));
 	}
 
 	/**
@@ -685,24 +691,24 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 */
 	async live(): Promise<readonly LiveRun[]> {
 		const client = await this.session.client();
-		const listed: (readonly [number, RunInfo])[] = (await client.request('list', { owner: this.options.owner })).map(run => [PTYD_PROTOCOL, run]);
-		for (const [protocol, earlier] of await this.session.earlierClients()) {
+		const listed: (readonly [string, RunInfo])[] = (await client.request('list', { owner: this.options.owner })).map(run => [this.session.own, run]);
+		for (const [socket, earlier] of await this.session.earlierClients()) {
 			try {
 				// One that does not answer now holds up no run of this window's own: its runs are shown by a later restore
-				listed.push(...(await within(earlier.request('list', { owner: this.options.owner }))).map(run => [protocol, run] as const));
+				listed.push(...(await within(earlier.request('list', { owner: this.options.owner }))).map(run => [socket, run] as const));
 			} catch (err) {
-				this.options.log(`Could not list the agents the ptyd of protocol ${protocol} holds for this window yet: ${messageOf(err)}`);
+				this.options.log(`Could not list the agents the ptyd at ${socket} holds for this window yet: ${messageOf(err)}`);
 			}
 		}
 		const runs: LiveRun[] = [];
 		const closing = this.closing();
-		for (const [protocol, run] of listed) {
+		for (const [socket, run] of listed) {
 			// One run ID is one run: this window's own ptyd first, as it starts no run in another
 			if (!isRunMeta(run.meta) || runs.some(each => each.run === run.run)) {
 				continue;
 			}
-			if (protocol !== PTYD_PROTOCOL) {
-				this.where.set(run.run, protocol);
+			if (socket !== this.session.own) {
+				this.where.set(run.run, socket);
 			}
 			if (closing.has(run.run)) {
 				// The person closed it before a reload, and ptyd had not confirmed it: it ends now, and is not shown (ARCHITECTURE-2.3)
@@ -728,17 +734,18 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	async endWindow(): Promise<void> {
 		// Each ptyd told on its own: its own one not answering keeps no earlier one from ending this window's runs
-		const own = await this.session.client().then(client => [[PTYD_PROTOCOL, client] as const], err => {
+		const own = await this.session.client().then(client => [[this.session.own, client] as const], err => {
 			this.options.log(`Could not end the agent processes of this window: ${messageOf(err)}`);
 			return [];
 		});
-		const ptyds: readonly (readonly [number, PtydClient])[] = [...own, ...this.session.earlierHeld];
-		for (const [protocol, client] of ptyds) {
+		const ptyds: readonly (readonly [string, PtydClient])[] = [...own, ...this.session.earlierHeld];
+		for (const [socket, client] of ptyds) {
+			const where = socket === this.session.own ? '' : ` in the ptyd at ${socket}`;
 			try {
 				const ended = await client.request('endWindow', { owner: this.options.owner, graceMs: GRACE_MS });
-				this.options.log(`Ending ${ended} agent processes${protocol === PTYD_PROTOCOL ? '' : ` in the ptyd of protocol ${protocol}`}: their window closed.`);
+				this.options.log(`Ending ${ended} agent processes${where}: their window closed.`);
 			} catch (err) {
-				this.options.log(`Could not end the agent processes of this window${protocol === PTYD_PROTOCOL ? '' : ` in the ptyd of protocol ${protocol}`}: ${messageOf(err)}`);
+				this.options.log(`Could not end the agent processes of this window${where}: ${messageOf(err)}`);
 			}
 		}
 	}
@@ -764,16 +771,21 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		this.finds.clear();
 	}
 
-	/** The protocol of the ptyd that holds `run`: its pair's, else the one it was listed in, else this window's own. */
+	/** The ptyd that holds `run`, by its socket: its pair's, else the one it was listed in, else this window's own. */
+	private holderOf(run: RunId): string {
+		return this.pairs.get(run)?.holder ?? this.where.get(run) ?? this.session.own;
+	}
+
+	/** The protocol of the ptyd that holds `run`, which decides what may be asked of it. */
 	private protocolOf(run: RunId): number {
-		return this.pairs.get(run)?.protocol ?? this.where.get(run) ?? PTYD_PROTOCOL;
+		return this.pairs.get(run)?.protocol ?? this.session.protocolOf(this.holderOf(run));
 	}
 
 	/** Each run owns its abort scope and a terminal resource; the native tab may wait for an attach snapshot. */
 	private create(facts: PairFacts, reveal: boolean, deferTerminal = false): Pair {
 		const terminal = this.terminals.create(facts, reveal);
 		const pair: Pair = {
-			run: facts.run, protocol: PTYD_PROTOCOL, facts, terminal, lifetime: new AbortController(), cli: facts.cli, terminalTitle: '', enters: new TypedEnters()
+			run: facts.run, holder: this.session.own, protocol: PTYD_PROTOCOL, facts, terminal, lifetime: new AbortController(), cli: facts.cli, terminalTitle: '', enters: new TypedEnters()
 		};
 		this.pairs.set(facts.run, pair);
 		if (!deferTerminal) {
@@ -1020,7 +1032,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		let cleanup = this.cleanups.get(run);
 		if (!cleanup) {
 			// Through the ptyd that holds it; one of an earlier protocol that went took it with it
-			cleanup = this.session.client(this.protocolOf(run)).then(
+			cleanup = this.session.client(this.holderOf(run)).then(
 				client => client.request('terminate', { run, graceMs: GRACE_MS }).then(
 					result => result,
 					err => err instanceof PtydLost || err instanceof PtydNotSent ? 'unconfirmed' as const : /^No run /.test(messageOf(err)) ? 'already_exited' as const : 'failed' as const),
@@ -1052,7 +1064,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	private async forget(run: RunId): Promise<void> {
 		try {
-			await (await this.session.client(this.protocolOf(run))).request('forget', { run });
+			await (await this.session.client(this.holderOf(run))).request('forget', { run });
 		} catch (err) {
 			if (!(err instanceof PtydGone)) {
 				// Told again at the next check: a run its ptyd keeps listing would keep that ptyd held, and be found unshown
@@ -1081,12 +1093,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	/**
-	 * The connection to the ptyd of `protocol` is lost: what each live run's CLI there reports is not heard until it is claimed again,
+	 * The connection to the ptyd at `socket` is lost: what each live run's CLI there reports is not heard until it is claimed again,
 	 * so its activity is not known meanwhile, and its card says why (RULES-3.1, 3.2).
 	 */
-	private connectionLost(protocol: number): void {
+	private connectionLost(socket: string): void {
 		for (const pair of this.pairs.values()) {
-			if ((!pair.process && !pair.starting) || pair.exited || pair.protocol !== protocol) {
+			if ((!pair.process && !pair.starting) || pair.exited || pair.holder !== socket) {
 				continue;
 			}
 			this.tellLost(pair);
@@ -1130,7 +1142,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				continue;
 			}
 			try {
-				const holder = pair.protocol === PTYD_PROTOCOL ? client : await this.session.client(pair.protocol);
+				const holder = pair.holder === this.session.own ? client : await this.session.client(pair.holder);
 				if (this.pairs.get(pair.run) !== pair || this.session.closed) {
 					continue;
 				}
@@ -1200,19 +1212,20 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 		const shown = [...this.pairs.values()].filter(pair => pair.process && !pair.exited && !pair.lost);
 		const connection = this.session.current;
-		// Each ptyd holding runs this window shows: its own and those of earlier protocols; once restored, its own too where it shows
-		// none of them, so that a run it lists and shows no pair of is shown after all (RULES-4.1)
-		const ptyds: (readonly [number, Promise<PtydClient>])[] = [
-			...connection && (this.restored || shown.some(pair => pair.protocol === PTYD_PROTOCOL)) ? [[PTYD_PROTOCOL, connection] as const] : [],
-			...this.session.earlierHeld.map(([protocol, client]) => [protocol, Promise.resolve(client)] as const)
+		// Each ptyd holding runs this window shows: its own and the others; once restored, its own too where it shows none of them,
+		// so that a run it lists and shows no pair of is shown after all (RULES-4.1)
+		const own = this.session.own;
+		const ptyds: (readonly [string, Promise<PtydClient>])[] = [
+			...connection && (this.restored || shown.some(pair => pair.holder === own)) ? [[own, connection] as const] : [],
+			...this.session.earlierHeld.map(([socket, client]) => [socket, Promise.resolve(client)] as const)
 		];
 		const unshown: RunId[] = [];
-		const listed: number[] = [];
-		for (const [protocol, holder] of ptyds) {
-			if (this.listing.has(protocol)) {
+		const listed: string[] = [];
+		for (const [socket, holder] of ptyds) {
+			if (this.listing.has(socket)) {
 				continue;
 			}
-			const mine = shown.filter(pair => pair.protocol === protocol);
+			const mine = shown.filter(pair => pair.holder === socket);
 			try {
 				const client = await holder;
 				// What each pair heard before it asked: an event heard since - before the answer, or in the same chunk after it, its
@@ -1220,10 +1233,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				const heard = new Map(mine.map(pair => [pair, pair.heard ?? 0]));
 				// One listing at a time for each ptyd, until it is answered: one that does not answer is not asked again meanwhile
 				const request = client.request('list', { owner: this.options.owner });
-				this.listing.add(protocol);
-				void request.catch(() => undefined).finally(() => this.listing.delete(protocol));
+				this.listing.add(socket);
+				void request.catch(() => undefined).finally(() => this.listing.delete(socket));
 				const runs = new Map((await within(request, RECONCILE_MS)).map(run => [run.run, run]));
-				listed.push(protocol);
+				listed.push(socket);
 				for (const pair of mine) {
 					const run = runs.get(pair.run);
 					if (this.pairs.get(pair.run) !== pair) {
@@ -1242,8 +1255,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				// Not those being closed or forgotten: the person ended them
 				const ending = (run: RunId) => this.cleanups.has(run) || this.pendingCleanup.has(run) || this.pendingForget.has(run);
 				unshown.push(...[...runs.values()].filter(run => !run.claimedElsewhere && !this.pairs.has(run.run) && !ending(run.run) && isRunMeta(run.meta)).map(run => {
-					if (protocol !== PTYD_PROTOCOL) {
-						this.where.set(run.run, protocol);
+					if (socket !== own) {
+						this.where.set(run.run, socket);
 					}
 					return run.run;
 				}));
@@ -1258,11 +1271,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 * Tells the composition root of the runs a ptyd lists that this window shows no pair of, once the first restore is over, each at
 	 * most once in {@link UNSHOWN_AGAIN_MS}: it restores again, which shows each the person neither closed nor saw end (RULES-4.1).
 	 */
-	private tellUnshown(runs: readonly RunId[], listed: readonly number[]): void {
+	private tellUnshown(runs: readonly RunId[], listed: readonly string[]): void {
 		const now = performance.now();
 		// Shown since, or gone, by the ptyds that answered: one not listed now keeps what was told of it
 		for (const run of [...this.unshownTold.keys()]) {
-			if (!runs.includes(run) && listed.includes(this.protocolOf(run))) {
+			if (!runs.includes(run) && listed.includes(this.holderOf(run))) {
 				this.unshownTold.delete(run);
 			}
 		}

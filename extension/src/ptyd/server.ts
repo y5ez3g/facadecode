@@ -231,6 +231,12 @@ export class PtydServer {
 	private startLine: Promise<void> = Promise.resolve();
 	private nextCall = 1;
 
+	/**
+	 * The installed build it runs from, as its window named it (ARCHITECTURE-2.4): told in hello, so that a window never takes a
+	 * ptyd of another build for its own. None for one started without it.
+	 */
+	build: string | undefined;
+
 	/** `speaks` is the protocol it answers hello with: its own, or for a test the earlier one it stands for. */
 	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock, private readonly speaks = PTYD_PROTOCOL) {
 		this.owners = new OwnerClaims((owner, previous) => {
@@ -422,7 +428,7 @@ export class PtydServer {
 					}
 					this.shimConnected(connection, typeof run === 'string' ? run : '');
 				}
-				return { protocol: this.speaks, pid: process.pid };
+				return { protocol: this.speaks, pid: process.pid, ...this.build ? { build: this.build } : {} };
 			}
 			case 'call':
 				this.call(params as Requests['call']['params'], connection, receivedAt, request.id);

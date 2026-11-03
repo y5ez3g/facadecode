@@ -90,7 +90,7 @@ suite('Earlier supervisor connections across asynchronous boundaries', () => {
 				}
 			}, error => socket.destroy(error)));
 		});
-		const held = new EarlierPtyds(directory, { owner: 'window', generation: 1, token: 'claim' }, {
+		const held = new EarlierPtyds(directory, path.join(directory, 'own.sock'), { owner: 'window', generation: 1, token: 'claim' }, {
 			log: () => undefined, lost: () => undefined, ownerLost: () => undefined, busy: () => busy
 		});
 		try {

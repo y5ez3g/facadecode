@@ -5,9 +5,10 @@
 import * as path from 'path';
 import { messageOf } from '../../base/errors';
 import type { OwnerClaim } from '../../base/ownership';
+import { ptydBuild } from '../../base/ptydRegistry';
 import { PTYD_PROTOCOL } from '../../ptyd/protocol';
 import { nextOwnerClaim } from '../../record/ownership';
-import { EarlierPtyds, PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
+import { EarlierPtyds, OtherPtyd, otherPtyds, ownPtydSocket, PtydClient, PtydNotSent } from './ptydClient';
 
 /** Cadence for checking live processes and retrying recovery (UX-5.2). */
 export const RECONCILE_MS = 2_000;
@@ -17,11 +18,13 @@ interface SessionOptions {
 	readonly claim?: OwnerClaim;
 	readonly home: string;
 	readonly ptydScript: string;
+	/** The installation's version, which with its ptyd script names the build its own ptyd runs (ARCHITECTURE-2.4). */
+	readonly version?: string;
 	readonly log: (line: string) => void;
-	/** The connection to the ptyd of `protocol` - this window's own, or an earlier one's - was lost. */
-	readonly connectionLost: (protocol: number) => void;
-	/** Whether requests through the ptyd of the earlier protocol `protocol` are under way, for which it is not let go. */
-	readonly busy?: (protocol: number) => boolean;
+	/** The connection to the ptyd at `socket` - this window's own, or another's - was lost. */
+	readonly connectionLost: (socket: string) => void;
+	/** Whether requests through the other ptyd at `socket` are under way, for which it is not let go. */
+	readonly busy?: (socket: string) => boolean;
 	readonly transferred: () => void;
 	readonly reconnect: () => Promise<void>;
 	readonly reconcile: () => Promise<void>;
@@ -41,11 +44,16 @@ export class ExecutionSession {
 	private readonly earlier: EarlierPtyds;
 	private readonly reconcileTimer: ReturnType<typeof setInterval>;
 	private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+	/** This window's own ptyd, by its build: the only one it starts runs in (ARCHITECTURE-2.4). */
+	readonly own: string;
+	private readonly build: string;
 
 	constructor(private readonly options: SessionOptions) {
 		this.claim = options.claim ?? nextOwnerClaim(options.owner, options.home);
-		this.earlier = new EarlierPtyds(options.home, this.claim, {
-			log: options.log, lost: protocol => this.lose(protocol), ownerLost: () => this.transfer(), ...options.busy ? { busy: options.busy } : {},
+		this.build = ptydBuild(options.ptydScript, options.version ?? '');
+		this.own = ownPtydSocket(options.home, options.ptydScript, options.version);
+		this.earlier = new EarlierPtyds(options.home, this.own, this.claim, {
+			log: options.log, lost: socket => this.lose(socket), ownerLost: () => this.transfer(), ...options.busy ? { busy: options.busy } : {},
 			...options.connected ? { connected: options.connected } : {}
 		});
 		this.reconcileTimer = setInterval(() => void options.reconcile(), RECONCILE_MS);
@@ -57,15 +65,19 @@ export class ExecutionSession {
 	get ownerClaim(): OwnerClaim { return this.claim; }
 	get ownershipLost(): boolean { return this.transferredAway; }
 	get current(): Promise<PtydClient> | undefined { return this.connection; }
+	/** The protocol the ptyd at `socket` speaks: this window's own's, or what another answered when it was found; 0 where unknown. */
+	protocolOf(socket: string): number { return socket === this.own ? PTYD_PROTOCOL : this.earlier.protocolOf(socket) ?? 0; }
+	/** The other ptyds that may hold this window's runs, each with its protocol (ARCHITECTURE-2.4). */
+	others(): readonly OtherPtyd[] { return otherPtyds(this.options.home, this.own); }
 	get needsRecovery(): boolean { return this.lost; }
 
-	/** The ptyds of earlier protocols this window holds now, each with its protocol. */
-	get earlierHeld(): readonly (readonly [number, PtydClient])[] {
+	/** The other ptyds this window holds now, each by its socket. */
+	get earlierHeld(): readonly (readonly [string, PtydClient])[] {
 		return this.closed ? [] : this.earlier.clients;
 	}
 
-	/** The ptyds of earlier protocols that hold this window's runs, each with its protocol: looked for first (ARCHITECTURE-2.4). */
-	async earlierClients(): Promise<readonly (readonly [number, PtydClient])[]> {
+	/** The other ptyds that hold this window's runs, each by its socket: looked for first (ARCHITECTURE-2.4). */
+	async earlierClients(): Promise<readonly (readonly [string, PtydClient])[]> {
 		if (this.closed) {
 			return [];
 		}
@@ -74,19 +86,18 @@ export class ExecutionSession {
 	}
 
 	/**
-	 * The connection to the ptyd of `protocol`, made where there is none: this window's own, a lost one replaced and this window's
-	 * runs claimed again; or that of an earlier protocol, joined again where it was lost (ARCHITECTURE-2.4).
+	 * The connection to the ptyd at `socket`, made where there is none: this window's own, a lost one replaced and this window's
+	 * runs claimed again; or another one, joined again where it was lost (ARCHITECTURE-2.4).
 	 */
-	client(protocol = PTYD_PROTOCOL): Promise<PtydClient> {
+	client(socket: string = this.own): Promise<PtydClient> {
 		if (this.closed) {
 			return Promise.reject(new PtydNotSent('The window is closing.'));
 		}
-		if (protocol !== PTYD_PROTOCOL) {
-			return this.earlier.client(protocol);
+		if (socket !== this.own) {
+			return this.earlier.client(socket);
 		}
 		if (!this.connection) {
-			const socket = ptydSocketPath(this.options.home);
-			const connection = this.connection = PtydClient.connect(socket, this.options.ptydScript, path.join(this.options.home, 'ptyd', 'ptyd.log')).then(async client => {
+			const connection = this.connection = PtydClient.connect(this.own, this.options.ptydScript, path.join(this.options.home, 'ptyd', 'ptyd.log'), { build: this.build }).then(async client => {
 				client.onDidLoseOwner(owner => { if (owner === this.options.owner) { this.transfer(); } });
 				try {
 					await client.request('claim', this.claim);
@@ -109,7 +120,7 @@ export class ExecutionSession {
 						this.connection = undefined;
 						if (!this.closed) {
 							this.options.log('The connection to ptyd closed: agents keep running, and this window claims them again.');
-							this.lose(PTYD_PROTOCOL);
+							this.lose(this.own);
 						}
 					}
 				});
@@ -124,13 +135,13 @@ export class ExecutionSession {
 		return this.connection;
 	}
 
-	/** The connection to the ptyd of `protocol` is lost: its runs are told so, and claimed again soon (RULES-3.1, 4.1). */
-	private lose(protocol: number): void {
+	/** The connection to the ptyd at `socket` is lost: its runs are told so, and claimed again soon (RULES-3.1, 4.1). */
+	private lose(socket: string): void {
 		if (this.closed) {
 			return;
 		}
 		this.lost = true;
-		this.options.connectionLost(protocol);
+		this.options.connectionLost(socket);
 		clearTimeout(this.reconnectTimer);
 		this.reconnectTimer = setTimeout(() => void this.options.reconnect(), 1_000);
 		this.reconnectTimer.unref?.();

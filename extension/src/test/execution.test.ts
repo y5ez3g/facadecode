@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { ptydBuild, ptydRecords, recordedPtyds, recordPtyd } from '../base/ptydRegistry';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -10,9 +11,9 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { ActivityReport, ExitReport, LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
-import { EarlierPtyds, PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from '../host/execution/ptydClient';
+import { EarlierPtyds, otherPtyds, ownPtydSocket, PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from '../host/execution/ptydClient';
 import { lineReader } from '../base/lines';
-import { EARLIER_PROTOCOLS, type Method, type Requests } from '../ptyd/protocol';
+import { EARLIER_PROTOCOLS, PTYD_PROTOCOL, type Method, type Requests } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import { programEnv } from './ptydPlace';
 import { nextOwnerClaim } from '../record/ownership';
@@ -69,12 +70,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	/** How many reaches of a ptyd of an earlier protocol fail next, as one not taking a connection now would. */
 	let failEarlierClients: number;
 	class FlakyEarlierPtyds extends EarlierPtyds {
-		override async client(protocol: number): Promise<PtydClient> {
+		override async client(socket: string): Promise<PtydClient> {
 			if (failEarlierClients > 0) {
 				failEarlierClients--;
 				throw new PtydNotSent('injected: the ptyd of an earlier protocol took no connection now');
 			}
-			return super.client(protocol);
+			return super.client(socket);
 		}
 	}
 	let spawns: number;
@@ -90,7 +91,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 
 	setup(async () => {
 		home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-exec-'));
-		server = new PtydServer(ptydSocketPath(home));
+		server = new PtydServer(ownPtydSocket(home, '/nonexistent/ptyd.js'));
+		server.build = ptydBuild('/nonexistent/ptyd.js', '');
 		assert.strictEqual(await server.listen(), true);
 		terminals = [];
 		activeChanged = new TestEmitter();
@@ -217,7 +219,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
-		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect, join: PtydClient.join.bind(PtydClient) }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
+		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect, join: PtydClient.join.bind(PtydClient) }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, otherPtyds, ownPtydSocket, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
 	});
 
 	teardown(() => {
@@ -986,7 +988,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		// ptyd stays away past the first try to connect again, which gives up; it comes back, and a later check claims the run again
 		await new Promise(resolve => setTimeout(resolve, 7_000));
 		assert.deepStrictEqual(exits, []);
-		server = new PtydServer(ptydSocketPath(home));
+		server = new PtydServer(ownPtydSocket(home, '/nonexistent/ptyd.js'));
+		server.build = ptydBuild('/nonexistent/ptyd.js', '');
 		assert.strictEqual(await server.listen(), true);
 		// The new ptyd does not hold it: it is gone, how is not known
 		await until('the run found gone', () => exits.length === 1, 10_000);
@@ -1057,7 +1060,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		closed.fire(Object.assign(terminals[0], { exitStatus: { reason: EXIT_REASON.Extension, code: undefined } }));
 		assert.deepStrictEqual(closes, []);
 		assert.strictEqual(await port.terminate('run-6'), 'terminated');
-		const observer = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(observer);
 		await until('ptyd to forget it', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
 		assert.throws(() => process.kill(pid, 0), /ESRCH/);
@@ -1069,7 +1072,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const starting = port.spawn('run-7', plan(ECHO), meta('run-7'));
 		port.removePair('run-7');
 		await assert.rejects(starting, /closed before its CLI started/);
-		const observer = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(observer);
 		await until('ptyd to end and forget it', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
 	});
@@ -1124,7 +1127,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		failTerminateOnce = true;
 		port.removePair('pending-close');
 		assert.strictEqual(await port.terminate('pending-close'), 'unconfirmed');
-		const observer = await PtydClient.connect(ptydSocketPath(home), '/unused', '/unused');
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/unused', '/unused');
 		extraClients.push(observer);
 		assert.strictEqual((await observer.request('list', { owner: 'workspace-1' }))[0].pid, started.pid);
 		await until('the pending close to be reconciled', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
@@ -1237,7 +1240,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			port.openPair(facts('run-new'), { reveal: false });
 			open(terminals[1]);
 			await port.spawn('run-new', plan(ECHO), meta('run-new'));
-			const own = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+			const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 			const old = (await PtydClient.join(earlier.socket, protocol))!;
 			extraClients.push(own, old);
 			const runsOf = async (client: PtydClient) => (await client.request('list', { owner: 'workspace-1' })).map(run => run.run);
@@ -1247,6 +1250,85 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			assert.deepStrictEqual(await runsOf(old), []);
 		} finally {
 			earlier.server.close();
+		}
+	});
+
+	/**
+	 * A ptyd of this same protocol but another build - at the name builds used before they named their ptyds, as 0.0.4's did, or at
+	 * `build`'s own name, recorded as it records itself - holding `run` where one is given (ARCHITECTURE-2.4).
+	 */
+	const otherBuildWith = async (run: RunId | undefined, build?: string): Promise<{ readonly server: PtydServer; readonly socket: string }> => {
+		const socket = ptydSocketPath(home, PTYD_PROTOCOL, build);
+		const server = new PtydServer(socket, () => undefined);
+		server.build = build;
+		assert.strictEqual(await server.listen(), true);
+		if (build) {
+			recordPtyd(ptydRecords(path.join(home, 'ptyd')), { protocol: PTYD_PROTOCOL, build, socket, pid: process.pid });
+		}
+		if (run) {
+			const before = (await PtydClient.join(socket, PTYD_PROTOCOL))!;
+			await before.request('claim', nextOwnerClaim('workspace-1', home));
+			await before.request('spawn', {
+				run, owner: 'workspace-1', file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: { ...meta(run) }
+			});
+			before.dispose();
+		}
+		return { server, socket };
+	};
+
+	for (const [kind, build] of [['named no build, as 0.0.4\'s', undefined], ['another build that recorded itself', 'abcdef0123']] as const) {
+		test(`ARCHITECTURE-2.4: a run in a ptyd of this protocol and ${kind} is shown and operated there; a new agent starts in this window's own ptyd alone`, async function () {
+			this.timeout(20_000);
+			const other = await otherBuildWith('run-kept', build);
+			try {
+				const port = portOf();
+				const live = await port.live();
+				assert.deepStrictEqual(live.map(run => [run.run, run.claimedElsewhere]), [['run-kept', false]]);
+				const attaching = port.attach(live[0], facts('run-kept'));
+				const terminal = await until('its terminal', () => terminals[0]);
+				open(terminal);
+				await attaching;
+				await until('its screen', () => screenOf(terminal).includes('ready'));
+				terminal.options.pty.handleInput!('kept');
+				await until('its answer, through the other build\'s ptyd', () => screenOf(terminal).includes('got kept'));
+				assert.ok((await port.readScreen('run-kept', 20)).lines.some(line => line.includes('got kept')), 'its screen is read there');
+				port.openPair(facts('run-new'), { reveal: false });
+				open(terminals[1]);
+				await port.spawn('run-new', plan(ECHO), meta('run-new'));
+				const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+				const old = (await PtydClient.join(other.socket, PTYD_PROTOCOL))!;
+				extraClients.push(own, old);
+				const runsOf = async (client: PtydClient) => (await client.request('list', { owner: 'workspace-1' })).map(run => run.run);
+				assert.deepStrictEqual([await runsOf(own), await runsOf(old)], [['run-new'], ['run-kept']]);
+				assert.strictEqual(await port.terminate('run-kept'), 'terminated');
+				assert.deepStrictEqual(await runsOf(old), []);
+			} finally {
+				other.server.close();
+			}
+		});
+	}
+
+	test('ARCHITECTURE-2.4: a ptyd of another build that holds none of this window\'s runs is not held, a new agent starting in this window\'s own; a record nothing listens at any more is taken out', async () => {
+		const other = await otherBuildWith(undefined, 'abcdef0123');
+		const records = ptydRecords(path.join(home, 'ptyd'));
+		const staleSocket = ptydSocketPath(home, PTYD_PROTOCOL, '0123abcdef');
+		recordPtyd(records, { protocol: PTYD_PROTOCOL, build: '0123abcdef', socket: staleSocket, pid: 999_999 });
+		try {
+			const port = portOf();
+			assert.deepStrictEqual(await port.live(), []);
+			assert.deepStrictEqual((port as unknown as { session: { earlierHeld: readonly unknown[] } }).session.earlierHeld, [], 'no other ptyd is held');
+			assert.ok(!recordedPtyds(records).some(record => record.socket === staleSocket), 'the stale record is taken out');
+			assert.ok(recordedPtyds(records).some(record => record.socket === other.socket), 'a live one stays');
+			port.openPair(facts('run-new'), { reveal: false });
+			open(terminals[0]);
+			await port.spawn('run-new', plan(ECHO), meta('run-new'));
+			const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+			const old = (await PtydClient.join(other.socket, PTYD_PROTOCOL))!;
+			extraClients.push(own, old);
+			const runsOf = async (client: PtydClient) => (await client.request('list', {})).map(run => run.run);
+			assert.deepStrictEqual([await runsOf(own), await runsOf(old)], [['run-new'], []]);
+		} finally {
+			other.server.close();
 		}
 	});
 
@@ -1329,7 +1411,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('its exit', () => exits.length === 1);
 		failForgetOnce = true;
 		port.removePair('run-forget');
-		const own = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(own);
 		const listed = async () => (await own.request('list', { owner: 'workspace-1' })).some(run => run.run === 'run-forget');
 		await new Promise(resolve => setTimeout(resolve, 200));

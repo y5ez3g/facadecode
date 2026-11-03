@@ -337,19 +337,27 @@ direct-input limit. Real disk/memory/storage exhaustion fails the requesting ope
 agents or a lifetime operation-count quota that disables an otherwise usable session.
 
 Existing processes are not killed because the extension or its protocol is updated. Compatible reconnect preserves their
-actual identity; incompatible tools report unavailable. Each ptyd protocol has its own socket, and a build speaks every
-protocol a released build used, dropping none: a window joins each such ptyd that holds runs of its workspace - never
-starting one - claims them there, and shows and operates them through it as its own: cards, terminals, input, resizing,
+actual identity; incompatible tools report unavailable. A window starts runs only in its own build's ptyd. That ptyd's
+socket is named by its protocol, the Facade directory and its build - the installation's version, the path of its ptyd
+script and that file's modification time - so that the windows of one installation share one ptyd while an update, a
+second installation of the same version or a script rebuilt in place has a ptyd of its own, and no run starts in a ptyd
+whose installation an update removed. A ptyd records its protocol, build, socket and process ID in `ptyd/sockets/` while
+it listens and removes the record as it exits; a window that finds nothing listening at a recorded socket removes that
+record. A build speaks every protocol a released build used, dropping none. Every other ptyd - each earlier protocol's,
+each recorded one of another build of this protocol or an earlier one, and one at the name a protocol's ptyd had before
+ptyds were named by build, which is never this build's - a window joins where it holds runs of its workspace, never
+starting one, claims them there, and shows and operates them through it as its own: cards, terminals, input, resizing,
 closing, ends and their agents' Facade tool calls, which it answers on that ptyd's own connection, at the first join and
 at every reconnect; a tool protocol it does not speak is refused as `protocol_incompatible`, with no effect (MCP-6.2). A
 request a later protocol added goes to no older ptyd: 0.0.1's, protocol 8, takes no screen read, typing, keys or input
-reading, and they fail before anything is sent. A run whose older ptyd is gone ended with it, how is not known. A run
+reading, and they fail before anything is sent. A run whose other ptyd is gone ended with it, how is not known. A run
 whose kept details name no creation tree is a root of its own, its Facade tools not injected. Agents and messages
 started after an update are numbered past the older build's numbers (1.1). Once none of the window's runs is left in
-such a ptyd the window lets it go, to exit once idle. New starts use current settings/protocol, in the window's own
-ptyd. A change of ptyd's behavior or of its packaged native backend advances its protocol even where requests keep their
-shape, so that after an update new starts go to a ptyd of the installed backend, never to one whose installation the
-editor removed with the update, while earlier runs stay with the ptyd that holds them.
+such a ptyd, or it holds none as the window finds it, the window lets it go and asks it no more, so that it exits once
+idle. New starts use current settings/protocol, in the window's own ptyd. A change of ptyd's behavior or of its packaged
+native backend still advances its protocol even where requests keep their shape, so that a window knows how each ptyd it
+joins behaves. A ptyd whose installation is gone - its script, or on Windows node-pty's console worker - starts no
+program and says that its installation was removed, never that a process could not be created.
 
 ## 3 Data and safety
 
@@ -361,7 +369,7 @@ editor removed with the update, while earlier runs stay with the ptyd that holds
 | --- | --- |
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
 | Execution supervisor's memory | Processes, screens, output sequences and input effects, for as long as ptyd runs (2.3) |
-| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
+| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
 | Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs, its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
 | Vendor CLI store | Its own conversations, credentials and settings |

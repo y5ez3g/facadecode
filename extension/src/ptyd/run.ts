@@ -2,6 +2,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { tailStyles } from '../base/screenStyle';
 import { truncateText } from '../base/text';
 import type { IPty } from 'node-pty';
@@ -22,7 +24,34 @@ function loadPty(): typeof import('node-pty') {
 	return pty ??= require('node-pty') as typeof import('node-pty');
 }
 
+/**
+ * What of this ptyd's installation is gone, where an update or uninstall removed it while ptyd ran on: its own script, or on
+ * Windows node-pty's console worker, which node-pty loads for every program it starts and without which each start ends with
+ * code -1 before it has a PID (ARCHITECTURE-2.4). Undefined while all of it is there.
+ */
+export function installationGone(script = process.argv[1], platform = process.platform, exists = fs.existsSync): string | undefined {
+	if (script && !exists(script)) {
+		return script;
+	}
+	if (platform === 'win32') {
+		let worker: string | undefined;
+		try {
+			worker = path.join(path.dirname(require.resolve('node-pty')), 'worker', 'conoutSocketWorker.js');
+		} catch {
+			// node-pty itself cannot be found: loading it says so
+		}
+		if (worker && !exists(worker)) {
+			return worker;
+		}
+	}
+	return undefined;
+}
+
 function spawnPty(params: SpawnParams): IPty {
+	const gone = installationGone();
+	if (gone) {
+		throw new Error(`This agent runtime's installation was removed - ${gone} is gone, as an update or uninstall does - so it starts no program. Reload the window to start agents in the installed one.`);
+	}
 	const native = loadPty();
 	const options = {
 		...(process.platform === 'win32' ? { useConptyDll: !conptyDllMissing } : {}),

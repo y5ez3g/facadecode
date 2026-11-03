@@ -10,9 +10,10 @@ import * as path from 'path';
 import { performance } from 'perf_hooks';
 import type * as vscode from 'vscode';
 import { lineReader } from '../base/lines';
+import { ptydBuild } from '../base/ptydRegistry';
 import type { LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
-import { PtydClient, PtydNotSent, ptydSocketPath } from '../host/execution/ptydClient';
+import { PtydClient, PtydNotSent, ownPtydSocket, ptydSocketPath } from '../host/execution/ptydClient';
 import { PtydServer } from '../ptyd/server';
 import { EARLIER_PROTOCOLS } from '../ptyd/protocol';
 import { nextOwnerClaim } from '../record/ownership';
@@ -34,7 +35,8 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 
 	setup(async () => {
 		home = fs.mkdtempSync(path.join(os.tmpdir(), 'fc-tools-'));
-		server = new PtydServer(ptydSocketPath(home));
+		server = new PtydServer(ownPtydSocket(home, '/ext/dist/ptyd.js'));
+		server.build = ptydBuild('/ext/dist/ptyd.js', '');
 		assert.strictEqual(await server.listen(), true);
 		const never = new TestEmitter<unknown>();
 		class TabInputTerminal { }
@@ -127,7 +129,7 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 		assert.deepStrictEqual(portOf().shimLaunch('run-1', '#a1'), {
 			command: process.execPath,
 			args: [path.join('/ext/dist', 'shim.js')],
-			env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: 'run-1', FACADE_AGENT: '#a1', FACADE_PTYD: ptydSocketPath(home) }
+			env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: 'run-1', FACADE_AGENT: '#a1', FACADE_PTYD: ownPtydSocket(home, '/ext/dist/ptyd.js') }
 		});
 		assert.deepStrictEqual(portOf({ shimScript: SHIM }).shimLaunch('run-2', '#a2').args, [SHIM]);
 	});
@@ -194,9 +196,9 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 		cleanups.push(() => shim.dispose());
 		await shim.request('hello', { protocol, role: 'shim', run });
 		// Restore uses the same execution-session connection that must also serve the retained shim.
-		const session = (port as unknown as { session: { client(protocol: number): Promise<PtydClient> } }).session;
+		const session = (port as unknown as { session: { client(socket: string): Promise<PtydClient> } }).session;
 		for (const callId of ['after-upgrade', 'after-reconnect']) {
-			const client = await session.client(protocol);
+			const client = await session.client(socket);
 			await client.request('attach', { run });
 			const query = callId === 'after-upgrade';
 			const answer = await shim.request('call', { protocol: TOOL_PROTOCOL, caller: run, tool: query ? 'list_agents' : 'send_message', arguments: query ? {} : { to: '#a2', text: 'hello' }, callId, elapsedMs: 0, ...query ? { routeDeadlineMs: 2_000 } : {} });
@@ -212,7 +214,7 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 		const port = portOf();
 		await started(port, 'run-4', `process.stdin.setRawMode(true); process.stdout.write('ready\\r\\n'); process.stdin.on('data', d => process.stdout.write('got ' + JSON.stringify(d.toString()) + '\\r\\n')); setInterval(() => {}, 1000);`);
 		await started(port, 'run-5', 'process.exit(0)');
-		const other = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		const other = await PtydClient.connect(ownPtydSocket(home, '/ext/dist/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		cleanups.push(() => other.dispose());
 		await other.request('claim', { owner: 'workspace-2', generation: 1, token: 'other' });
 		await other.request('spawn', { run: 'run-6', owner: 'workspace-2', ...program(IDLE), cwd: os.tmpdir(), cols: 80, rows: 24, meta: {} });

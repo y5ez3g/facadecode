@@ -15,6 +15,9 @@ import * as runModule from '../ptyd/run';
 import { eachLine, finish, IDLE, program, programEnv, ptydPlace } from './ptydPlace';
 import { withModules } from './withModules';
 
+/** A socket no earlier ptyd listens on, standing for the window's own (ARCHITECTURE-2.4). */
+const OWN_SOCKET = path.join(os.tmpdir(), 'facade-test-own-ptyd.sock');
+
 /** Whether a process `pid` still exists. */
 function alive(pid: number): boolean {
 	try {
@@ -143,11 +146,11 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		let connections = 0;
 		(earlier as unknown as { readonly server: net.Server }).server.on('connection', () => connections++);
 		const said: string[] = [];
-		const lost: number[] = [];
+		const lost: string[] = [];
 		// Whether the window is closing a run through it
 		let busy = false;
-		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: line => said.push(line), lost: each => lost.push(each), ownerLost: () => assert.fail('No newer activation took the workspace.'), busy: () => busy });
-		const other = new EarlierPtyds(home, { owner: 'w2', generation: 1, token: 'other' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: line => said.push(line), lost: each => lost.push(each), ownerLost: () => assert.fail('No newer activation took the workspace.'), busy: () => busy });
+		const other = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w2', generation: 1, token: 'other' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
 		try {
 			// The window before the update starts a run there, and goes as it reloads into this build
 			const before = (await PtydClient.join(earlierSocket, protocol))!;
@@ -157,20 +160,20 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			before.dispose();
 			await until('ptyd to wait for its owner', () => waits.size === 1);
 			// Another workspace's window finds none of its runs there, and does not ask again
-			await assert.rejects(other.client(protocol), PtydGone);
+			await assert.rejects(other.client(earlierSocket), PtydGone);
 			const asked = connections;
 			await other.find();
-			await assert.rejects(other.client(protocol), PtydGone);
+			await assert.rejects(other.client(earlierSocket), PtydGone);
 			assert.strictEqual(connections, asked);
 			// The reloaded window joins it in its protocol and claims the run there, once, asked again on a reconnect
 			await hold.find();
 			await hold.find();
 			assert.strictEqual(waits.size, 0, 'no wait is left to end it five minutes later');
 			assert.ok(alive(pid));
-			assert.deepStrictEqual(hold.clients.map(([each]) => each), [protocol]);
-			assert.deepStrictEqual(said, [`1 agents an earlier Facade Code started are in a ptyd of protocol ${protocol}: this window shows them and keeps them running until it closes.`]);
+			assert.deepStrictEqual(hold.clients.map(([each]) => each), [earlierSocket]);
+			assert.deepStrictEqual(said, [`1 agents an earlier Facade Code started are in the ptyd ${path.basename(earlierSocket)} (protocol ${protocol}): this window shows them and keeps them running until it closes, and starts none there.`]);
 			// And operates it there: its screen, what is typed, what it answers
-			const client = await hold.client(protocol);
+			const client = await hold.client(earlierSocket);
 			const events = eventsOf(client, 'run-kept');
 			const { screen } = await client.request('attach', { run: 'run-kept' });
 			assert.ok(screen.includes('ready'), screen);
@@ -191,14 +194,14 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			assert.deepStrictEqual([said.length, hold.clients.length], [1, 1], 'not let go with a close under way');
 			busy = false;
 			await hold.check();
-			assert.strictEqual(said[1], `The agents an earlier Facade Code started in a ptyd of protocol ${protocol} have ended: this window lets that ptyd go.`);
+			assert.strictEqual(said[1], `The agents an earlier Facade Code started in the ptyd ${path.basename(earlierSocket)} (protocol ${protocol}) have ended: this window lets that ptyd go.`);
 			assert.deepStrictEqual([hold.clients, lost], [[], []], 'letting it go is no loss');
 			await until('ptyd to wait for its owner again', () => waits.size === 1);
 			// Let go, it is not asked again: nothing puts off its idle exit
 			const released = connections;
 			await hold.find();
 			await hold.check();
-			await assert.rejects(hold.client(protocol), PtydGone);
+			await assert.rejects(hold.client(earlierSocket), PtydGone);
 			assert.strictEqual(connections, released);
 		} finally {
 			hold.dispose();
@@ -216,20 +219,20 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const earlierSocket = ptydSocketPath(home, protocol);
 		const earlier = new PtydServer(earlierSocket, () => undefined, undefined, protocol);
 		assert.strictEqual(await earlier.listen(), true);
-		const lost: number[] = [];
-		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: each => lost.push(each), ownerLost: () => undefined });
+		const lost: string[] = [];
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: each => lost.push(each), ownerLost: () => undefined });
 		const odd = new PtydServer(ptydSocketPath(home, protocol), () => undefined);
 		try {
 			const before = (await PtydClient.join(earlierSocket, protocol))!;
 			await before.request('claim', { owner: 'w1', generation: 1, token: 'before' });
 			await spawn(before, 'run-taken', IDLE);
 			before.dispose();
-			await hold.client(protocol);
+			await hold.client(earlierSocket);
 			// Its ptyd goes - it ended, or was ended - and the window hears so
 			earlier.close();
 			await until('the loss told', () => lost.length === 1);
-			assert.deepStrictEqual(lost, [protocol]);
-			await assert.rejects(hold.client(protocol), PtydGone);
+			assert.deepStrictEqual(lost, [earlierSocket]);
+			await assert.rejects(hold.client(earlierSocket), PtydGone);
 			// A ptyd of this build's protocol on that socket - none would listen there - is not joined as the earlier one
 			assert.strictEqual(await odd.listen(), true);
 			await assert.rejects(PtydClient.join(earlierSocket, protocol), new RegExp(`for protocol ${protocol} speaks protocol ${PTYD_PROTOCOL}: this window does not join it`));
@@ -251,7 +254,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		assert.strictEqual(await earlier.listen(), true);
 		const refused = { text: 'protocol_incompatible', structured: { status: 'failure', error: { code: 'UNAVAILABLE', reason: 'protocol_incompatible' }, effects: { outcome: 'none' } }, isError: true };
 		const heard: unknown[] = [];
-		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined,
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined,
 			connected: client => client.onCall(event => { heard.push(event.call); void client.request('answer', { id: event.id, answer: refused }); }) });
 		let shim: net.Socket | undefined;
 		try {
@@ -260,7 +263,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			await spawn(before, 'run-kept', IDLE);
 			before.dispose();
 			// The reloaded window shows the run through that ptyd, which makes it the run's window there
-			await (await hold.client(protocol)).request('attach', { run: 'run-kept' });
+			await (await hold.client(earlierSocket)).request('attach', { run: 'run-kept' });
 			// The run's shim, as the build before the update made it, calls a tool
 			const connection = shim = net.connect(earlierSocket);
 			await new Promise(resolve => connection.once('connect', resolve));
@@ -273,7 +276,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			assert.deepStrictEqual([heard.length, (heard[0] as { callId?: string }).callId, answered.result], [1, 'c-1', refused]);
 		} finally {
 			shim?.destroy();
-			await hold.client(protocol).then(client => client.request('terminate', { run: 'run-kept', graceMs: 50 })).catch(() => undefined);
+			await hold.client(earlierSocket).then(client => client.request('terminate', { run: 'run-kept', graceMs: 50 })).catch(() => undefined);
 			hold.dispose();
 			earlier.close();
 			fs.rmSync(home, { recursive: true, force: true });
@@ -288,13 +291,13 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const taken: net.Socket[] = [];
 		const silent = net.createServer(connection => { taken.push(connection); connection.on('data', () => undefined); });
 		await new Promise<void>(resolve => silent.listen(socket, resolve));
-		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
 		try {
 			const started = Date.now();
-			await assert.rejects(hold.client(protocol), PtydNotSent);
+			await assert.rejects(hold.client(socket), PtydNotSent);
 			assert.ok(Date.now() - started < 8_000, `answered in ${Date.now() - started} ms`);
 			const asked = taken.length;
-			await assert.rejects(hold.client(protocol), PtydNotSent);
+			await assert.rejects(hold.client(socket), PtydNotSent);
 			assert.ok(taken.length > asked, 'asked again');
 		} finally {
 			hold.dispose();
