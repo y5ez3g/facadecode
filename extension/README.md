@@ -193,6 +193,24 @@ both VSIX files under `build/vsix/`. Install the window component on the client 
 workspace runs; unpublished test installations supply both packages. Integration tests load both components and use a
 separate `build/extension-it/` for execution fixtures. A local build does not establish support on another platform.
 
+### Snapshot archives
+
+GitHub Packages stores the extension's snapshots as `@y5ez3g/extension`. Each version contains the three original
+platform VSIX files, the universal Window Component, `checksums.json` and `snapshot.json` with source and verification
+evidence. This npm package is an artifact archive: it has no install hook or executable. IDE downloads remain in GitHub
+Releases. Extension tags use `extension/<version>` and do not require an IDE build.
+
+The archive catalog is `archive/catalog.json`. Prepare and verify its original published files with
+`node scripts/archive.mjs --through 0.0.4`; `--input-dir <directory>` uses the same named files from a tested local build
+instead. Output is under `build/archive/`. The `Extension archive` tag workflow uses its repository token to publish
+catalog versions through the tagged version and downloads each npm package again to verify its files and VSIX hashes.
+It checks existing versions before reuse. No marketplace publication is part of that workflow. Later publication to
+VS Code Marketplace or Open VSX uses the archived VSIX files directly, after checking their SHA-256 values.
+
+Historical backfills preserve the published bytes. In particular, `0.0.2`'s original CI source used version `0.2.0`;
+the shipped VSIX files say `0.0.2`, with matching runtime bundles and platform native files. Its snapshot records that
+version override and the original CI commit rather than claiming a newly rebuilt historical release.
+
 <!-- repository-only:end -->
 
 ## Feedback

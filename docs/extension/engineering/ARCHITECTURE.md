@@ -441,6 +441,17 @@ feature-detected or raise the declared minimum, never called unguarded. Publish 
 only when the owner asks.
 [Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
 
+GitHub Packages stores the extension's build snapshots as `@y5ez3g/extension`, separately from IDE downloads in GitHub
+Releases. Each snapshot contains the original platform VSIX files and window component, their SHA-256 checksums and
+source/evidence metadata; it has no installer or runtime scripts. Tags use `extension/<version>`. Archiving and later
+marketplace publication reuse the verified VSIX bytes without rebuilding either product. Historical backfills retain
+the published files and explicitly record source or release-metadata differences. The catalog in `extension/archive/`
+pins the artifacts and evidence. `node scripts/archive.mjs --through <version>` prepares and checks them under
+`build/archive/`; `--input-dir <directory>` reads already tested local VSIX files instead of downloading the catalog's
+published originals. `--publish` additionally uploads to GitHub Packages and verifies the downloaded package contents.
+The dedicated tag workflow publishes catalog entries through the tagged version with its repository-scoped token;
+existing versions are checked before reuse. It runs no IDE or extension compilation and publishes to neither marketplace.
+
 Bundle runtime dependencies and third-party notices, test commands excluded; package both components from build output
 with pinned vsce. The workspace manifest installs its local window component through `extensionPack`, not
 `extensionDependencies`: in a remote window the editor installs the remote extension and activates it before it
@@ -532,6 +543,9 @@ what was tested and what remains. Task assignments, pauses and discussion author
 See [Verification](VERIFICATION.md). G2 is not asserted solved by writing this design.
 
 ## Change log
+
+- 2026-11-03: Archive original extension VSIX files in the separate GitHub npm package, with source tags, checksums,
+  historical metadata differences and a dedicated publication workflow; no product rebuild or marketplace publication.
 
 - 2026-11-03: Advance the supervisor generation with runtime/backend changes so new starts use the installed backend after an update (D192).
 

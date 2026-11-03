@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.0.4
 
 - **Fixed: agents retained across an update could not use their Facade tools.** Their terminal connections now carry tool calls and replies again, including after reconnection.
 - **Fixed: Muse Code agents ended as they started.** A Muse Code agent in a folder whose `.mcp.json` already had a `facade` server - the Facade Code app leaves one - ended at once with "-c mcpServers.facade: refusing run: the server name is reserved", as Muse Code will not run with a second server of that name. Facade now takes the place of the app's entry there, as it does the app's other files; where the server is your own, or Muse Code would refuse to run for another reason in your configuration, the agent starts without working with other agents and says why.
