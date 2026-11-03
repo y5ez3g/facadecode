@@ -358,8 +358,8 @@ started after an update are numbered past the older build's numbers (1.1). Once 
 such a ptyd, or it holds none as the window finds it, the window lets it go and asks it no more, so that it exits once
 idle. A window's listing of every workspace's runs - as it activates, releasing the project files of agents gone
 everywhere (CLIS-2.2), and as Resume Agent lists what it may start - asks every other ptyd anew, so that no conversation
-an agent holds is started twice (LIFECYCLE-3.2). A ptyd of a build from before ptyds were named by build starts its five
-minutes again at every connection, so it exits five minutes after its last window and the last of those listings. New
+an agent holds is started twice (LIFECYCLE-3.2). A ptyd of a build from before ptyds were named by build exits after
+five minutes with no live run and no connection, a wait every connection to it - a listing's too - starts again. New
 starts use current settings/protocol, in the window's own ptyd. A change of ptyd's behavior or of its packaged native
 backend still advances its protocol even where requests keep their shape, so that a window knows how each ptyd it joins
 behaves. A ptyd whose installation is gone - its script, or on Windows node-pty's console worker - starts no program and
