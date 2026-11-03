@@ -300,11 +300,13 @@ the UI never waits for it. On Windows a console is ended once, as a second end r
 console node-pty never made ready is ended through its agent. A run is let go of one way, whatever ends or drops it - a
 failed start, a close or an exit - so nothing of it stays held. If remote cleanup is unreachable, record the pending
 outcome and reconcile the original run on reconnect; do not claim a proven remote exit or kill an unrelated process. The
-pending close is recorded beside the window's runs, in `workspaces/<key>/closing.json` under its ownership claim, so that
-a reload ends that run rather than showing it again. A window starts its ptyd only where none is there - no socket, or
-on POSIX one nothing listens on; a ptyd slow to take a connection, as a busy Windows pipe can be, is waited for up to
-five seconds and never replaced, as a second ptyd would leave every run of the first unclaimed. A ptyd with no live run
-and no connection exits after five minutes; a window starts one again when it needs it.
+pending close is recorded beside the window's runs, in `workspaces/<key>/closing.json` under its ownership claim, so
+that a reload ends that run rather than showing it again. A window starts its ptyd only where none is there - no socket,
+or on POSIX one nothing listens on; a ptyd slow to take a connection, as a busy Windows pipe can be, is waited for up to
+five seconds and never replaced, as a second ptyd would leave every run of the first unclaimed. A ptyd exits five
+minutes after its last live run and its last window - a connection that claimed a workspace - went; a connection that
+claims nothing, listing runs or finding none of its window's there, neither keeps it nor starts its five minutes again.
+A window starts one again when it needs it.
 
 A run is there as soon as its start is asked for; the supervisor creates one run's program at a time, in the order the
 starts were asked, each start's ten-second wait for its program counting from its turn: on Windows node-pty creates a
@@ -354,10 +356,14 @@ reading, and they fail before anything is sent. A run whose other ptyd is gone e
 whose kept details name no creation tree is a root of its own, its Facade tools not injected. Agents and messages
 started after an update are numbered past the older build's numbers (1.1). Once none of the window's runs is left in
 such a ptyd, or it holds none as the window finds it, the window lets it go and asks it no more, so that it exits once
-idle. New starts use current settings/protocol, in the window's own ptyd. A change of ptyd's behavior or of its packaged
-native backend still advances its protocol even where requests keep their shape, so that a window knows how each ptyd it
-joins behaves. A ptyd whose installation is gone - its script, or on Windows node-pty's console worker - starts no
-program and says that its installation was removed, never that a process could not be created.
+idle. A ptyd of a build from before ptyds were named by build starts its five minutes again at every connection, so a
+window's listing of every workspace's runs, as for Resume Agent, asks one that listed no live run no more until the
+window activates again: it exits five minutes after the last window activation that asked it. The one such listing as a
+window activates, which releases the project files of agents gone everywhere (CLIS-2.2), asks every other ptyd. New
+starts use current settings/protocol, in the window's own ptyd. A change of ptyd's behavior or of its packaged native
+backend still advances its protocol even where requests keep their shape, so that a window knows how each ptyd it joins
+behaves. A ptyd whose installation is gone - its script, or on Windows node-pty's console worker - starts no program and
+says that its installation was removed, never that a process could not be created.
 
 ## 3 Data and safety
 

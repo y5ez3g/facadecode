@@ -6,11 +6,13 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { performance } from 'perf_hooks';
 import { forgetPtyd, ptydBuild, ptydRecords, recordedPtyds, recordPtyd } from '../base/ptydRegistry';
 import { ownPtydSocket, PtydClient, ptydSocketPath } from '../host/execution/ptydClient';
 import { PTYD_PROTOCOL } from '../ptyd/protocol';
 import { installationGone } from '../ptyd/run';
 import { PtydServer } from '../ptyd/server';
+import { nextOwnerClaim } from '../record/ownership';
 
 suite('Each installation runs its own ptyd (ARCHITECTURE-2.4)', () => {
 	let temp: string;
@@ -68,6 +70,49 @@ suite('Each installation runs its own ptyd (ARCHITECTURE-2.4)', () => {
 			await assert.rejects(PtydClient.connect(socket, '/unused/ptyd.js', path.join(temp, 'ptyd.log'), { build: 'abcdef0123', start: false }), /runs build unnamed/);
 			const own = await PtydClient.connect(socket, '/unused/ptyd.js', path.join(temp, 'ptyd.log'), { start: false });
 			own.dispose();
+		} finally {
+			server.close();
+		}
+	});
+
+	test('only a window or a live run keeps an idle ptyd: a connection that claims nothing neither keeps it nor starts its five minutes again (ARCHITECTURE-2.3)', async function () {
+		this.timeout(20_000);
+		const home = path.join(temp, 'home');
+		const socket = ptydSocketPath(home, PTYD_PROTOCOL, 'abcdef0123');
+		const idleMs = 1_000;
+		const listed = async () => {
+			const client = (await PtydClient.join(socket, PTYD_PROTOCOL))!;
+			await client.request('list', {});
+			client.dispose();
+			return performance.now();
+		};
+		let server = new PtydServer(socket, () => undefined);
+		server.idleMs = idleMs;
+		let idled = new Promise<number>(resolve => server.idle = () => resolve(performance.now()));
+		assert.strictEqual(await server.listen(), true);
+		try {
+			const listening = performance.now();
+			// Windows of other builds list its runs while it waits: its five minutes run on from its last window, never from them
+			let last = listening;
+			while (last - listening < idleMs * 0.6) {
+				last = await listed();
+			}
+			const at = await idled;
+			assert.ok(at - last < idleMs * 0.8, `it went ${Math.round(at - last)} ms after the last listing, its wait counting from ${Math.round(last - listening)} ms before it`);
+			// A window that claims a workspace keeps it however long it waits; its five minutes start as it goes
+			server = new PtydServer(socket, () => undefined);
+			server.idleMs = idleMs;
+			let went = false;
+			idled = new Promise<number>(resolve => server.idle = () => { went = true; resolve(performance.now()); });
+			assert.strictEqual(await server.listen(), true);
+			const window = (await PtydClient.join(socket, PTYD_PROTOCOL))!;
+			await window.request('claim', nextOwnerClaim('workspace-1', home));
+			await new Promise(resolve => setTimeout(resolve, idleMs * 1.5));
+			assert.strictEqual(went, false, 'kept while a window is there');
+			await listed();
+			const closed = performance.now();
+			window.dispose();
+			assert.ok(await idled - closed >= idleMs * 0.9, 'its wait starts as its window goes');
 		} finally {
 			server.close();
 		}

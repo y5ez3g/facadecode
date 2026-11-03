@@ -294,6 +294,11 @@ export interface EarlierEvents {
 export interface OtherPtyd {
 	readonly socket: string;
 	readonly protocol: number;
+	/**
+	 * The process its record names. None for a ptyd at the name a protocol's ptyd had before ptyds were named by build: one of an
+	 * earlier build, which every connection keeps another five minutes (ARCHITECTURE-2.4).
+	 */
+	readonly pid?: number;
 }
 
 /**
@@ -302,17 +307,18 @@ export interface OtherPtyd {
  * protocol or an earlier one. A ptyd that names no build is never this build's.
  */
 export function otherPtyds(home: string, own: string): readonly OtherPtyd[] {
-	const found = new Map<string, number>();
+	const found = new Map<string, OtherPtyd>();
 	for (const protocol of [...EARLIER_PROTOCOLS, PTYD_PROTOCOL]) {
-		found.set(ptydSocketPath(home, protocol), protocol);
+		const socket = ptydSocketPath(home, protocol);
+		found.set(socket, { socket, protocol });
 	}
 	for (const record of recordedPtyds(ptydRecords(path.join(home, 'ptyd')))) {
 		if (record.protocol === PTYD_PROTOCOL || EARLIER_PROTOCOLS.includes(record.protocol)) {
-			found.set(record.socket, record.protocol);
+			found.set(record.socket, { socket: record.socket, protocol: record.protocol, pid: record.pid });
 		}
 	}
 	found.delete(own);
-	return [...found].map(([socket, protocol]) => ({ socket, protocol }));
+	return [...found.values()];
 }
 
 /** How a log line names the ptyd at `socket`. */
@@ -406,7 +412,7 @@ export class EarlierPtyds {
 	}
 
 	private async search(): Promise<void> {
-		for (const { socket, protocol } of otherPtyds(this.home, this.own)) {
+		for (const { socket, protocol, pid } of otherPtyds(this.home, this.own)) {
 			if (this.disposed) {
 				return;
 			}
@@ -415,7 +421,7 @@ export class EarlierPtyds {
 				continue;
 			}
 			try {
-				await this.join(socket, protocol);
+				await this.join(socket, protocol, pid);
 				this.unheld.delete(socket);
 			} catch (err) {
 				this.unheld.set(socket, err instanceof PtydGone ? err : new PtydNotSent(`Could not join ${named(socket, protocol)}: ${messageOf(err)}`));
@@ -424,11 +430,13 @@ export class EarlierPtyds {
 	}
 
 	/** Joins the ptyd at `socket`, of `protocol`, and claims this window's runs there, where it holds any. */
-	private async join(socket: string, protocol: number): Promise<void> {
+	private async join(socket: string, protocol: number, pid: number | undefined): Promise<void> {
 		const client = await PtydClient.join(socket, protocol);
 		if (!client) {
-			// Its record, where it left one, outlived it
-			forgetPtyd(ptydRecords(path.join(this.home, 'ptyd')), socket);
+			// Its record outlived it: that record goes, never one a ptyd listening there since made
+			if (pid !== undefined) {
+				forgetPtyd(ptydRecords(path.join(this.home, 'ptyd')), socket, pid);
+			}
 			throw new PtydGone(`Nothing listens for ${named(socket, protocol)}.`);
 		}
 		// Heard from the start: the workspace can go to a newer activation in the same answer as the claim

@@ -62,6 +62,8 @@ class Connection {
 	role: 'window' | 'shim' = 'window';
 	/** The run a shim said hello for. */
 	shimRun: string | undefined;
+	/** It claimed a workspace: a window, which keeps ptyd, as a connection that only lists runs does not (ARCHITECTURE-2.3). */
+	claimed = false;
 	private waiting = 0;
 	private readonly waitingByRun = new Map<Run, number>();
 	private readonly requests = new Map<number, { readonly body: string; readonly result: Promise<unknown>; bytes: number }>();
@@ -237,6 +239,10 @@ export class PtydServer {
 	 */
 	build: string | undefined;
 
+	/** How long it waits, with nothing left to do, before it goes, and how it goes once closed: the process ends, unless a test says. */
+	idleMs = IDLE_EXIT_MS;
+	idle: () => void = () => process.exit(0);
+
 	/** `speaks` is the protocol it answers hello with: its own, or for a test the earlier one it stands for. */
 	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock, private readonly speaks = PTYD_PROTOCOL) {
 		this.owners = new OwnerClaims((owner, previous) => {
@@ -312,7 +318,6 @@ export class PtydServer {
 	private connected(socket: net.Socket): void {
 		const connection = new Connection(socket);
 		this.connections.add(connection);
-		clearTimeout(this.idleTimer);
 		socket.setEncoding('utf8');
 		socket.on('data', lineReader(line => {
 			// When ptyd read it: a shim's call adds the time it spends here to how long it has been under way (RULES-1.2)
@@ -450,6 +455,8 @@ export class PtydServer {
 			}
 			case 'claim':
 				this.owners.claim(params as Requests['claim']['params'], connection);
+				connection.claimed = true;
+				this.scheduleIdleExit();
 				return undefined;
 			case 'conversations':
 				return [...this.runs.values()].flatMap(run => {
@@ -779,17 +786,25 @@ export class PtydServer {
 
 
 
-	/** Goes once nothing is left for it to do: no live run, and no window connected, for a while. */
+	/**
+	 * Goes once nothing is left for it to do: five minutes after its last live run and its last window - a connection that claimed a
+	 * workspace - went. A connection that claims nothing, listing runs or finding none of its window's here, neither keeps it nor
+	 * starts its five minutes again, so that windows of other builds asking it never keep it (ARCHITECTURE-2.3).
+	 */
 	private scheduleIdleExit(): void {
-		clearTimeout(this.idleTimer);
-		if (this.connections.size || [...this.runs.values()].some(run => !run.hasExited)) {
+		if ([...this.connections].some(connection => connection.claimed) || [...this.runs.values()].some(run => !run.hasExited)) {
+			clearTimeout(this.idleTimer);
+			this.idleTimer = undefined;
+			return;
+		}
+		if (this.idleTimer || this.closing) {
 			return;
 		}
 		this.idleTimer = setTimeout(() => {
 			this.log('No runs and no windows: ptyd exits.');
 			this.close();
-			process.exit(0);
-		}, IDLE_EXIT_MS);
+			this.idle();
+		}, this.idleMs);
 		this.idleTimer.unref?.();
 	}
 }

@@ -1332,6 +1332,44 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		}
 	});
 
+	test('ARCHITECTURE-2.4: global discovery asks a ptyd of a build from before ptyds were named by build no more once it listed no live run, for it to exit; a recorded build\'s, and one with a live run, are asked every time', async function () {
+		this.timeout(20_000);
+		const empty = await earlierWith('run-done', EARLIER_PROTOCOLS.at(-1)!, 'workspace-3');
+		const busy = await earlierWith('run-busy', EARLIER_PROTOCOLS.at(-2)!, 'workspace-2', { sessionId: 'busy-session', cli: 'claude', environment: 'local' });
+		const recorded = await otherBuildWith(undefined, 'abcdef0123');
+		const connections = new Map<string, number>();
+		for (const [name, other] of [['empty', empty], ['busy', busy], ['recorded', recorded]] as const) {
+			connections.set(name, 0);
+			(other.server as unknown as { readonly server: net.Server }).server.on('connection', () => connections.set(name, connections.get(name)! + 1));
+		}
+		const asked = async (discover: () => Promise<unknown>) => {
+			const before = new Map(connections);
+			await discover();
+			return [...connections].filter(([name, count]) => count > before.get(name)!).map(([name]) => name).sort();
+		};
+		try {
+			// Its one run there ends: none is live
+			const done = (await PtydClient.join(empty.socket, EARLIER_PROTOCOLS.at(-1)!))!;
+			await done.request('claim', nextOwnerClaim('workspace-3', home));
+			await done.request('terminate', { run: 'run-done', graceMs: 0 });
+			await until('the run there ended', async () => (await done.request('list', {})).every(run => run.exited));
+			done.dispose();
+			const port = portOf();
+			// This window's own search of the other ptyds for its runs is over: none of them holds any
+			assert.deepStrictEqual(await port.live(), []);
+			assert.deepStrictEqual(await asked(() => port.conversations()), ['busy', 'empty', 'recorded']);
+			assert.deepStrictEqual(await port.conversations(), [{ sessionId: 'busy-session', cli: 'claude', environment: 'local' }]);
+			assert.deepStrictEqual(await asked(() => port.conversations()), ['busy', 'recorded'], 'the quiet one is asked no more');
+			// The one listing of every workspace's runs, as files of agents gone everywhere are released, passes none by
+			assert.deepStrictEqual(await asked(() => port.allRunIds()), ['busy', 'empty', 'recorded']);
+			assert.ok((await port.allRunIds()).includes('run-busy'));
+		} finally {
+			empty.server.close();
+			busy.server.close();
+			recorded.server.close();
+		}
+	});
+
 	test('the ptyd of an earlier protocol going takes the window\'s runs there with it: each is told ended, how not known, and its terminal says so - never left out (RULES-3.3, 4.1)', async function () {
 		this.timeout(20_000);
 		const earlier = await earlierWith('run-gone');
