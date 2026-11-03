@@ -195,7 +195,7 @@ separate `build/extension-it/` for execution fixtures. A local build does not es
 
 ### Snapshot archives
 
-GitHub Packages stores the extension's snapshots as `@y5ez3g/extension`. Each version contains the three original
+GitHub Packages stores the extension's snapshots as `@y5ez3g/facade-extension`. Each version contains the three original
 platform VSIX files, the universal Window Component, `checksums.json` and `snapshot.json` with source and verification
 evidence. This npm package is an artifact archive: it has no install hook or executable. IDE downloads remain in GitHub
 Releases. Extension tags use `extension/<version>` and do not require an IDE build.

@@ -20,7 +20,7 @@ const compareVersions = (a, b) => {
 
 export function validateCatalog(catalog) {
 	assert.equal(catalog.schemaVersion, 1, 'Unsupported archive catalog');
-	assert.equal(catalog.name, '@y5ez3g/extension', 'Unexpected snapshot package');
+	assert.equal(catalog.name, '@y5ez3g/facade-extension', 'Unexpected snapshot package');
 	assert.equal(catalog.repository, 'https://github.com/y5ez3g/facadecode.git');
 	assert.ok(Array.isArray(catalog.releases) && catalog.releases.length, 'No releases');
 	const versions = new Set();
@@ -109,7 +109,7 @@ export async function prepareRelease(catalog, release, { out, inputDir, resolveS
 		verifyVsix(release, artifact, file);
 	}
 	const checksums = Object.fromEntries(release.artifacts.map(a => [a.file, a.sha256]));
-	const snapshot = { schemaVersion: 1, version: release.version, tag: release.tag, sourceCommit,
+	const snapshot = { schemaVersion: 1, package: catalog.name, version: release.version, tag: release.tag, sourceCommit,
 		repository: catalog.repository, evidence: release.evidence, artifacts: release.artifacts };
 	const manifest = { name: catalog.name, version: release.version,
 		description: 'Facade Code extension snapshots: original VSIX installers, source records and checksums.',
@@ -139,7 +139,7 @@ export function verifyTarball(prepared, tarball) {
 	assert.deepEqual(entries, prepared.files, 'Unexpected archive package contents');
 	const read = name => execFileSync('tar', ['-xOf', tarball, `package/${name}`], { maxBuffer: 16 * 1024 * 1024 });
 	const manifest = JSON.parse(read('package.json'));
-	assert.equal(manifest.name, '@y5ez3g/extension');
+	assert.equal(manifest.name, '@y5ez3g/facade-extension');
 	assert.equal(manifest.version, prepared.version);
 	assert.ok(!manifest.scripts && !manifest.bin && !manifest.dependencies, 'A snapshot must not install or run code');
 	assert.deepEqual(JSON.parse(read('snapshot.json')), prepared.snapshot, 'Source/evidence metadata changed');

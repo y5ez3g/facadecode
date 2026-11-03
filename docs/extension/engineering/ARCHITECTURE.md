@@ -441,7 +441,7 @@ feature-detected or raise the declared minimum, never called unguarded. Publish 
 only when the owner asks.
 [Official manifest reference](https://code.visualstudio.com/api/references/extension-manifest).
 
-GitHub Packages stores the extension's build snapshots as `@y5ez3g/extension`, separately from IDE downloads in GitHub
+GitHub Packages stores the extension's build snapshots as `@y5ez3g/facade-extension`, separately from IDE downloads in GitHub
 Releases. Each snapshot contains the original platform VSIX files and window component, their SHA-256 checksums and
 source/evidence metadata; it has no installer or runtime scripts. Tags use `extension/<version>`. Archiving and later
 marketplace publication reuse the verified VSIX bytes without rebuilding either product. Historical backfills retain

@@ -58,6 +58,13 @@ jobs:
             fi
           fi
           node scripts/archive.mjs --through "$ARCHIVE_THROUGH" --publish
+      - name: Record GitHub package details
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PACKAGE_NAME="$(node -p 'require("./archive/catalog.json").name.split("/")[1]')"
+          gh api "users/${GITHUB_REPOSITORY_OWNER}/packages/npm/${PACKAGE_NAME}" > build/archive/github-package.json
+          gh api "users/${GITHUB_REPOSITORY_OWNER}/packages/npm/${PACKAGE_NAME}/versions?per_page=100" > build/archive/github-package-versions.json
       - name: Keep archive verification and tarballs
         if: always()
         uses: actions/upload-artifact@v4
@@ -65,5 +72,6 @@ jobs:
           name: extension-archive-${{ github.run_id }}
           path: |
             extension/build/archive/summary.json
+            extension/build/archive/github-package*.json
             extension/build/archive/*.tgz
           if-no-files-found: ignore
