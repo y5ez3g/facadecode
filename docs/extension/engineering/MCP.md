@@ -321,11 +321,12 @@ ended, never that none started. The call waits up to `facade.collaboration.waitS
 `already_ended` (success, with `already_ended: true`); `not_started` (success: closed before its process was asked for,
 so it never starts); `pending` (accepted, `process_state: stopping`, with `call_id` and `result_message_id`, its outcome
 later under 1.3 - except where the window cannot take a number for that result (RULES-2.2): the answer then has no
-`result_message_id`, no later result comes, and list_agents shows the end); `unconfirmed` (FAILED
-`termination_unconfirmed`); or `failed` (FAILED `cleanup_failed`). Both failures have partial effects and
-`process_state: unknown`, never a successful stop. Accepted/unknown cleanup is not proof of exit, but does not restore a
-Stopping card. Self-stop may end the caller before it receives a result; no public recovery tool is added. Errors go to
-the invoking agent, with no automatic human popup. External location deletion is observed separately.
+`result_message_id` and reports the cleanup as still pending, and no later result comes; the closed agent is no longer
+listed, which is no proof that its process ended); `unconfirmed` (FAILED `termination_unconfirmed`); or `failed` (FAILED
+`cleanup_failed`). Both failures have partial effects and `process_state: unknown`, never a successful stop.
+Accepted/unknown cleanup is not proof of exit, but does not restore a Stopping card. Self-stop may end the caller before
+it receives a result; no public recovery tool is added. Errors go to the invoking agent, with no automatic human popup.
+External location deletion is observed separately.
 
 ## 4 Messages and history
 

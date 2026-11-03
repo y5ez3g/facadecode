@@ -952,11 +952,11 @@ class ToolService {
 			resultMessageId = this.deps.messages.reserveResult();
 		} catch (err) {
 			// No number for a later result can be taken now (RULES-2.2), and the card is gone already: the stop answers as still ending,
-			// within its wait (MCP-3.2), and no later result comes - list_agents tells its end
+			// within its wait (MCP-3.2), and no later result comes: its end is not reported
 			this.deps.log?.(`Could not number the later result of the stop of ${target.alias}; none will follow: ${errorText(err)}`);
 			return {
 				result: accepted({ agent_id: target.id, reference: referenceOf(target), call_id: call.callId, closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
-				headline: `Closed ${shown}'s card and terminal; its process is still being ended, and no later result can be numbered: list_agents shows its end.`
+				headline: `Closed ${shown}'s card and terminal; its process is still being ended, and no later result can be numbered, so how its cleanup ends is not reported.`
 			};
 		}
 		void closing.then(late => {
