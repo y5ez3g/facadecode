@@ -22,7 +22,7 @@ card loading. Title actions in order: Filter by Working Location (`filter`, fill
 (Facade's own copy of the `new-session` codicon, shipped with the extension, D85), so New Agent is rightmost.
 The view's native `Views and More Actions...` (`…`) menu holds
 Add Folder to Workspace... (the editor's command), then New Worktree... when a workspace folder is open, followed by
-Configure Agents... in a separate group. Message History..., Go to Agent..., Show Agent Launch and Show Agents Log
+Configure Agents... in a separate group. Message History..., Go to Agent..., Show Agent Launch... and Show Agents Log
 are Command Palette entries, not view-menu items (D83, D129). Facade commands
 use the titles and flows in UX-3.1. The badge counts this window's cards, including starting, retained-error and temporarily disconnected
 records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does not change the underlying card count.
@@ -95,7 +95,7 @@ Priority: retained failure or specific connection/status error; known native blo
 explanation; unavailable Facade tools; active startup stage, active until the CLI first shows its activity (CLIS-2.3);
 CLI title; creation prompt first line; fallback. When a known native blocker coexists with unavailable activity, lead with
 the blocker and retain the status explanation, for example `Sign-in required · Activity unavailable`.
-A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file} in this folder`,
+A CLI that runs without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file}`,
 or `Cannot work with other agents: its Facade tools stopped` once its tools went away (D136), and stays usable. A creation prompt's first line describes an agent that another agent started until its CLI reports a
 title. Fallbacks: `Working`, `Idle`, `Activity unavailable`. Idle alone proves neither an empty composer nor usable input;
 there is no separate first-message readiness claim. Never `Done, waiting for you` from a turn end. Normal work/idle shows the CLI title or
@@ -270,6 +270,9 @@ fully visible row count minus one (minimum one).
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
+
+- 2026-11-02: Applied owner-approved copy polish to the launch inspection command name and the collaboration-failure
+  example; status evidence, priority and the screenshot-reviewed layout remain unchanged.
 
 - 2026-11-02: Use Idle without an input-readiness promise, expose not-yet-connected tools and retain generic blockers and full bounded hover text (D164).
 

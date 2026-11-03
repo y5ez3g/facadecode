@@ -103,7 +103,7 @@ function sourceIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location | und
  */
 async function choosePlan(deps: WorktreeCommandDeps): Promise<WorktreePlan | undefined> {
 	if (!deps.locations.snapshot().folders.length) {
-		deps.notifyError(vscode.l10n.t("New Worktree needs a working location in a Git repository with a commit."), {});
+		deps.notifyError(vscode.l10n.t("New Worktree requires a working location in a Git repository with at least one commit."), {});
 		return undefined;
 	}
 	const flow = new Flow();
@@ -130,7 +130,7 @@ async function choosePlan(deps: WorktreeCommandDeps): Promise<WorktreePlan | und
 			if (!found || state === undefined || !state.available) {
 				flow.close();
 				if (!found) {
-					deps.notifyError(vscode.l10n.t("New Worktree needs a working location in a Git repository with a commit."), {});
+					deps.notifyError(vscode.l10n.t("New Worktree requires a working location in a Git repository with at least one commit."), {});
 				} else if (state !== undefined && !state.available) {
 					// Report the requested operation's missing prerequisite; cancellation has no effect (WORKTREES-2.3).
 					deps.notifyError(vscode.l10n.t("New Worktree is unavailable: {0}", worktreeProblemText(state, state.reason)), {});

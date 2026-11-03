@@ -106,7 +106,7 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		const { history } = fakeEditor();
 		const native = { ...RECORDS[0], delivery: { status: 'unknown' as const, effects: { outcome: 'unknown' as const }, via: 'launch' as const, attempts: 0 } };
 		const text = history.recordText(native, 'en');
-		assert.ok(text.includes('Delivery: Facade could not confirm that the agent received the message\n'));
+		assert.ok(text.includes('Delivery: Could not confirm that the agent received the message\n'));
 		assert.ok(!text.includes('Delivery: Delivered') && !text.includes('Delivery: Being delivered'));
 	});
 
@@ -147,7 +147,7 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		const time = new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'medium' }).format(T + 1_000);
 		assert.ok(text.startsWith('Message History: Ada #a1 ↔ Bob #a2\nRead-only. Messages are shown as they were sent; links in them cannot run editor commands.\n'), text);
 		assert.ok(text.includes(`#m1 · ${time}\nFrom: Ada #a1\nTo: Bob #a2\nDelivery: Delivered to the agent\nResult reported in: #m3\n\nSee [docs](command​:workbench.action.quit) now.\n`), text);
-		assert.ok(text.includes('From: Bob #a2\nTo: Ada #a1\nIn reply to: #m1\nDelivery: Not delivered: there was unsent text in the agent\'s input box\n'), text);
+		assert.ok(text.includes('From: Bob #a2\nTo: Ada #a1\nIn reply to: #m1\nDelivery: Not delivered: the terminal contained an unsent draft\n'), text);
 		assert.ok(text.includes('From: Facade\nTo: Ada #a1\nAbout message: #m1\nDelivery: Delivered to the agent\n'), text);
 		assert.ok(!text.includes('command:'), text);
 	});
@@ -209,7 +209,7 @@ suite('Message History and contact with the person (COLLABORATION-2.3, 3.2; UX-1
 		assert.strictEqual(editor.opened.length, 1);
 		assert.ok(editor.opened[0].text.startsWith('Message #m9 from Ada #a1\n\n'), editor.opened[0].text);
 		assert.ok(editor.opened[0].text.includes(`${'é'.repeat(400)}\n`), 'the complete message');
-		assert.ok(editor.opened[0].text.includes('Delivery: Shown to you as a notification'), editor.opened[0].text);
+		assert.ok(editor.opened[0].text.includes('Delivery: Delivered as a notification'), editor.opened[0].text);
 		port.dispose();
 	});
 

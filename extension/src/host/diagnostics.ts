@@ -113,6 +113,6 @@ export async function diagnosticsOf(deps: DiagnosticsDeps): Promise<string> {
 export function registerDiagnostics(deps: DiagnosticsDeps): vscode.Disposable[] {
 	return [vscode.commands.registerCommand(COPY_DIAGNOSTICS_COMMAND, async () => {
 		await vscode.env.clipboard.writeText(await diagnosticsOf(deps));
-		void vscode.window.showInformationMessage(vscode.l10n.t("Facade's diagnostics are copied. They include your agents' screens, which can show code or keys: read them before you share them."));
+		void vscode.window.showInformationMessage(vscode.l10n.t("Facade diagnostics copied. They include agent screens, which may contain sensitive code or keys; review before sharing."));
 	})];
 }

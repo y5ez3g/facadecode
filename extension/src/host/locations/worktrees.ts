@@ -382,10 +382,10 @@ function englishOf(problem: WorktreeProblem): [message: string, reason: string] 
 		case 'not_repository': return [`${problem.path} is not in a Git repository.`, 'repository_required'];
 		case 'no_commit': return [`${problem.path} has no commits yet.`, 'commit_required'];
 		case 'git_failed': return [`Git could not read ${problem.path}: ${problem.detail}`, 'git_failed'];
-		case 'git_extension_missing': return ['The editor\'s Git extension is not available, so worktrees cannot be created.', 'unavailable'];
+		case 'git_extension_missing': return ["Git extension is not available; worktrees cannot be created.", 'unavailable'];
 		case 'git_extension_failed': return [`The editor's Git extension is not available: ${problem.detail}`, 'unavailable'];
 		case 'no_native_creation': return ['This editor\'s Git extension cannot create worktrees: its API has no worktree creation.', 'unavailable'];
-		case 'repository_not_open': return ['The editor\'s Git extension has not opened this repository, so no worktree of it can be created.', 'unavailable'];
+		case 'repository_not_open': return ["The Git extension has not opened this repository; cannot create worktree.", 'unavailable'];
 		case 'creation_failed': return [`Git could not create the worktree: ${clauseOf(problem.detail)}.`, 'creation_failed'];
 		case 'creation_unconfirmed': return [problem.detail === undefined
 			? `Git could not create the worktree: the editor reported ${problem.path}, but Git does not list a worktree there.`

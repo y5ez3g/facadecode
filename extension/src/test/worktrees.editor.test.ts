@@ -253,11 +253,11 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 	test('a failure goes to the person with what it actually left, kept', async () => {
 		const editor = fakeEditor();
 		const errors: string[] = [];
-		const worktrees = fakeWorktrees({ create: async () => { throw new editor.ports.WorktreeError('Git could not create the worktree: fatal: disk full.', 'creation_failed', { branchCreated: true, destinationCreated: '/w/repo.worktrees/feat' }); } });
+		const worktrees = fakeWorktrees({ create: async () => { throw new editor.ports.WorktreeError('Git reported: fatal: disk full.', 'creation_failed', { branchCreated: true, destinationCreated: '/w/repo.worktrees/feat' }); } });
 		editor.commands.registerWorktreeCommands({ locations: catalogOf([REPO_FOLDER], REPO), worktrees, agents: NO_AGENTS, notifyError: text => errors.push(text), log: quiet });
 
 		assert.strictEqual(await editor.handlers.get('facade.newWorktree')!({ location_id: REPO.id, branch: 'feat', base_ref: 'main' }), undefined);
-		assert.deepStrictEqual(errors, ['Could not create worktree: Git could not create the worktree: fatal: disk full. Branch feat and folder /w/repo.worktrees/feat were created and kept.']);
+		assert.deepStrictEqual(errors, ['Could not create worktree: Git reported: fatal: disk full. Branch feat and folder /w/repo.worktrees/feat were created and kept.']);
 	});
 
 	test('without arguments in a window of one folder: no folder step; the branch, prefilled with git.branchPrefix and planned as it is typed, then branch, base and destination shown before anything is made', async () => {
@@ -480,7 +480,7 @@ suite('Worktrees: New Worktree in this window (UX-3.1; WORKTREES-2.1, 4.3)', () 
 		await editor.handlers.get('facade.newWorktree')!();
 		await editor.handlers.get('facade.newWorktree')!({ location_id: REPO.id, branch: 'feat' });
 
-		assert.deepStrictEqual(errors, ['New Worktree is unavailable: This editor\'s Git extension cannot create worktrees.', 'Could not create worktree: This editor\'s Git extension cannot create worktrees.']);
+		assert.deepStrictEqual(errors, ['New Worktree is unavailable: Git extension cannot create worktrees.', 'Could not create worktree: Git extension cannot create worktrees.']);
 	});
 });
 

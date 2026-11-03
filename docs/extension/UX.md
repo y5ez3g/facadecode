@@ -57,6 +57,13 @@ MCP server, capability, adapter, route, protocol or broker; an agent's own refer
 person needs to tell agents apart. A failure says what did not happen and what the person can do, not which internal
 part failed.
 
+Edited English uses serial commas, direct imperative picker hints and concise status phrases, which may omit articles.
+Facade's terminal notices use objective prose without first-person narration or contractions; call the CLI's message
+entry surface its terminal input. Keep failure reasons grammatical when inserted into a surrounding sentence, with
+no repeated failure prefix. Short fixed phrases fit their surface; a character budget never truncates a full title,
+path, dynamic diagnostic or message that the owning rule requires to remain available. Localized prose follows each
+language's natural grammar while preserving placeholders, product names and the same known or uncertain outcome.
+
 ## 2 Look and access
 
 ### 2.1 Theme and geometry
@@ -152,7 +159,7 @@ run and are validated against current state, without falling back to the selecti
 | `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
 | `clearFilter` | Clear Filter | Active filter; card/empty state | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
-| `showAgentLaunch` | Show Agent Launch | Always; Command Palette | CLIS-4.1 |
+| `showAgentLaunch` | Show Agent Launch... | Always; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 | `copyDiagnostics` | Copy Diagnostics | Always; Command Palette | ARCHITECTURE-3.3 |
@@ -265,6 +272,9 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
 
 ## Change log
+
+- 2026-11-02: Owner accepted the copy-polish report independently of the screenshot IA proposals. Added the launch
+  inspection command's ellipsis and clarified concise, objective wording without imposing a dynamic-text length cap.
 
 - 2026-11-02: D162 aligns history-list relative times with VS Code's short localized wording and unit rounding.
 - 2026-11-01: Removed the tab-separator dependency after LIFECYCLE-2.2 changed editor tabs to icon plus name (D130).

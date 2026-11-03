@@ -57,7 +57,7 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 - **Filter**: Show only the agents in one working location or workspace folder with **Filter by Working Location...** in the panel's title bar, or with **Filter by This Location** or **Filter by This Folder** in a card's context menu. **Clear Filter** shows every agent again; the panel's badge always counts them all.
 - **Resume Agent...**: Search Claude Code, Codex, Antigravity, Muse Code, OpenCode 2.x and Pi histories for this workspace, its subfolders and worktrees. Resume the exact conversation in its original CLI and folder, with current launch settings.
 - **Pin and Unpin**: Pin a conversation in any of the six built-in CLIs to restore it in the background when this workspace opens again. Pinned cards stay above other agents, and the native terminal tab follows the same Pin/Unpin state. Unpin keeps the agent running; closing an agent removes its Pin. Pin becomes available once the native CLI identifies a saved, resumable conversation. An empty new session is not pinned as if it were saved.
-- **Show Agent Launch and Show Agents Log**: In the Command Palette. **Show Agent Launch** shows how each CLI would start in a working location - its program, environment, arguments, YOLO, sandbox, approvals and folder trust - without starting it, with secrets hidden. **Show Agents Log** opens Facade's own log.
+- **Show Agent Launch... and Show Agents Log**: In the Command Palette. **Show Agent Launch...** shows how each CLI would start in a working location - its program, environment, arguments, YOLO, sandbox, approvals and folder trust - without starting it, with secrets hidden. **Show Agents Log** opens Facade's own log.
 
 ### Folders and worktrees
 
@@ -131,7 +131,7 @@ Facade runs the infrastructure, the CLIs do the work, and you decide the goals a
 | `facade.opencode.path` | Empty | Path to OpenCode. Leave empty to use `opencode` from the terminal environment's PATH. |
 | `facade.pi.path` | Empty | Path to Pi. Leave empty to use `pi` from the terminal environment's PATH. |
 | `facade.<cli>.enabled` | On | Controls whether the CLI is offered for new agents. Turning it off does not stop agents that are running. |
-| `facade.<cli>.launch` | `{}` | Advanced: additional command-line `arguments` and `environment` variables for the CLI. **Show Agent Launch** shows what each agent starts with. |
+| `facade.<cli>.launch` | `{}` | Advanced: additional command-line `arguments` and `environment` variables for the CLI. **Show Agent Launch...** shows what each agent starts with. |
 | `facade.custom` | `{}` | Your own CLIs, by ID, each with a `path` and a `launch`: `start` for a new conversation, `resume` for a saved one (required; it must contain `${sessionId}`), and `environment`. An ID cannot be a built-in one: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi`. |
 
 `<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. These are machine settings: for a remote window, set them in the remote host's settings.

@@ -42,14 +42,14 @@ suite('Notifications retain the facts needed to decide what to do (COLLABORATION
 
 	test('a draft blocks input without implying any text was entered', () => {
 		const text = delivery('failure', { outcome: 'none' }, { reason: 'input_draft' });
-		assert.ok(text.includes('draft in the terminal, and it was left untouched'));
+		assert.ok(text.includes('draft in the terminal was left untouched'));
 		assert.ok(!text.includes('passed on'));
 	});
 
 	test('a lost route explains uncertainty without claiming failed delivery or automatic replay', () => {
-		assert.strictEqual(delivery('unknown', { outcome: 'unknown' }, { reason: 'window_unavailable' }), "I couldn't get a reply from the destination window, so I can't confirm whether your message #m42 reached Ada (#a7).");
-		assert.strictEqual(delivery('failure', { outcome: 'none' }, { reason: 'window_unavailable' }), "Your message #m42 couldn't be sent to Ada (#a7). The destination window couldn't be reached. Nothing was entered.");
-		assert.strictEqual(delivery('failure', { outcome: 'none' }, { reason: 'not_found' }), "Your message #m42 couldn't be sent. Ada (#a7) is no longer available in the destination window.");
+		assert.strictEqual(delivery('unknown', { outcome: 'unknown' }, { reason: 'window_unavailable' }), "Could not get a reply from the destination window; cannot confirm whether your message #m42 reached Ada (#a7).");
+		assert.strictEqual(delivery('failure', { outcome: 'none' }, { reason: 'window_unavailable' }), "Your message #m42 could not be sent to Ada (#a7). The destination window could not be reached. Nothing was entered.");
+		assert.strictEqual(delivery('failure', { outcome: 'none' }, { reason: 'not_found' }), "Your message #m42 could not be sent. Ada (#a7) is no longer available in the destination window.");
 		assert.match(delivery('unknown', { outcome: 'partial', text_written: 'partial', enter_written: false }, { reason: 'window_unavailable' }), /Only part of the message was entered/);
 	});
 
@@ -73,7 +73,7 @@ suite('Notifications retain the facts needed to decide what to do (COLLABORATION
 	test('startup, connecting tools, pending first message and a created worktree remain separate facts', () => {
 		const text = operationText({ data: { process_state: 'running', tools_state: 'connecting', prompt: { message_id: '#m42', status: 'pending', obstacle: 'input_draft' } },
 			effects: { outcome: 'confirmed', worktree_created: '/work/app.worktrees/fix' } }, AGENT);
-		assert.ok(text.includes('session has started'));
+		assert.ok(text.includes('has started'));
 		assert.ok(text.includes('tools are still connecting'));
 		assert.ok(text.includes('initial message #m42 is still being delivered'));
 		assert.ok(text.includes('draft in the terminal; it will be left untouched'));
@@ -85,7 +85,7 @@ suite('Notifications retain the facts needed to decide what to do (COLLABORATION
 		for (const outcome of ['unknown', 'confirmed']) {
 			const text = operationText({ data: { process_state: 'running', prompt: { path: 'native', message_id: '#m42', status: 'failure', effects: { outcome } } } }, AGENT);
 			assert.ok(text.includes('was supplied at launch'));
-			assert.ok(text.includes(outcome === 'unknown' ? "acceptance couldn't be confirmed" : "delivery record couldn't be saved"));
+			assert.ok(text.includes(outcome === 'unknown' ? "acceptance could not be confirmed" : "delivery record could not be saved"));
 			assert.ok(!text.includes('Enter'));
 		}
 	});
@@ -93,7 +93,7 @@ suite('Notifications retain the facts needed to decide what to do (COLLABORATION
 	test('uncertain post-start input never claims that delivery definitely failed or is safe to repeat', () => {
 		const effects = { outcome: 'unknown', text_written: 'full', enter_written: null } as const;
 		const text = operationText({ data: { process_state: 'running', prompt: { path: 'post_start', message_id: '#m42', status: 'failure', effects } } }, AGENT);
-		assert.ok(text.includes("Delivery of your initial message #m42 couldn't be confirmed"));
+		assert.ok(text.includes("Delivery of your initial message #m42 could not be confirmed"));
 		assert.ok(text.includes(inputEffectText(effects)));
 	});
 
@@ -103,7 +103,7 @@ suite('Notifications retain the facts needed to decide what to do (COLLABORATION
 			assert.ok(text.includes('Ada (#a7)'));
 			if (cleanup === 'terminated') { assert.ok(text.includes('has stopped')); }
 			else if (cleanup.startsWith('already_')) { assert.ok(text.includes('had already stopped')); }
-			else if (cleanup === 'not_started') { assert.ok(text.includes("before its process started. It won't be started")); }
+			else if (cleanup === 'not_started') { assert.ok(text.includes("before its process started. It will not be started")); }
 			else { assert.ok(text.includes('may still be running')); assert.ok(!text.includes('has stopped')); }
 		});
 	}

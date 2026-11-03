@@ -68,7 +68,7 @@ type Item = vscode.QuickPickItem & { readonly entry?: ConversationEntry; readonl
 export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	const picker = vscode.window.createQuickPick<Item>();
 	picker.title = vscode.l10n.t("Resume Agent");
-	picker.placeholder = vscode.l10n.t("Search by title, name, CLI or location");
+	picker.placeholder = vscode.l10n.t("Search by title, name, CLI, or location");
 	picker.matchOnDescription = true;
 	picker.matchOnDetail = true;
 	// Shown at once, busy until the conversations are there to read (UX-1.1)

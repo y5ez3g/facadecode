@@ -35,7 +35,7 @@
 	"config.collaboration.waitSeconds": "Agent 等待另一個 Agent 啟動或停止的秒數。超過此時間後，該 Agent 稍後會透過訊息收到結果。",
 	"command.filter": "依工作位置篩選...",
 	"command.clearFilter": "清除篩選",
-	"command.showAgentLaunch": "顯示 Agent 啟動方式",
+	"command.showAgentLaunch": "顯示 Agent 啟動方式...",
 	"command.showAgentsLog": "顯示 Agent 記錄",
 	"command.filterByLocation": "依此位置篩選",
 	"command.filterByFolder": "依此資料夾篩選",

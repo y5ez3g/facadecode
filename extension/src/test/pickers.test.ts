@@ -731,7 +731,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([unavailable, device, git], [
 				'/main has no commits yet.',
-				'"nul" is a name Windows keeps for a device, so a folder cannot have it.',
+				'"nul" is a reserved device name on Windows.',
 				'Git could not read /main: fatal: bad object'
 			]);
 		});
@@ -971,7 +971,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			worktreeProblemText({ problem: { kind: 'worktree_left', name: 'feat', folder: 'C:\\repo.worktrees\\feat' } }, 'English')
 		], [
 			'Cannot delete worktree "feat": it contains a link to another folder (node_modules\\dep), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.',
-			'Deleted worktree "feat", but Git left its folder C:\\repo.worktrees\\feat behind.'
+			'Deleted worktree "feat", but folder C:\\repo.worktrees\\feat was left behind.'
 		]);
 	});
 

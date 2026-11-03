@@ -35,7 +35,7 @@
 	"config.collaboration.waitSeconds": "エージェントが別のエージェントの起動または停止を待機する秒数。この時間を過ぎると、エージェントは後でメッセージで結果を受け取ります。",
 	"command.filter": "作業場所でフィルター...",
 	"command.clearFilter": "フィルターの解除",
-	"command.showAgentLaunch": "Agent の起動構成を表示",
+	"command.showAgentLaunch": "Agent の起動構成を表示...",
 	"command.showAgentsLog": "Agent のログを表示",
 	"command.filterByLocation": "この作業場所でフィルター",
 	"command.filterByFolder": "このフォルダーでフィルター",

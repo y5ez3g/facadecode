@@ -420,9 +420,9 @@ restoration; the definition requirement never becomes a claim that an untested i
 
 ## 4 Inspection and design
 
-### 4.1 Show Agent Launch
+### 4.1 Show Agent Launch...
 
-**Show Agent Launch displays the current effective configuration and actual known choices without running a CLI.**
+**Show Agent Launch... displays the current effective configuration and actual known choices without running a CLI.**
 
 Show executable/environment source, cwd, literal argument order, resulting YOLO, native sandbox/approval facts, how
 the folder is trusted and configuration errors. Use one launch configuration and RULES-4.3's YOLO source. A chosen
@@ -515,6 +515,9 @@ not this product contract. This revision makes no fresh claim about a vendor's l
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.
 
 ## Change log
+
+- 2026-11-02: Owner-approved copy polish adds the ellipsis to the launch inspection command title; location selection,
+  configuration facts and secret redaction retain their existing behavior.
 
 - 2026-11-02: Complete-record status titles, protocol-compliant unknown-state handling, full bounded hover text and grapheme-safe previews; logical screen lines and marker styling with explicit evidence loss (D164).
 
