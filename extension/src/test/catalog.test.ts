@@ -94,7 +94,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
-				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedResumable && !facade.agentSelectedPinned' },
+				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedPinnable && !facade.agentSelectedPinned' },
 				{ command: 'facade.unpinAgent', when: 'facade.agentSelectedPinned' }
 			]
 		});

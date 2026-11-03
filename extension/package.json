@@ -256,7 +256,7 @@
 				},
 				{
 					"command": "facade.pinAgent",
-					"when": "facade.agentSelected && facade.agentSelectedResumable && !facade.agentSelectedPinned"
+					"when": "facade.agentSelected && facade.agentSelectedPinnable && !facade.agentSelectedPinned"
 				},
 				{
 					"command": "facade.unpinAgent",

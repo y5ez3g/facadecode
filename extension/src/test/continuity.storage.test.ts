@@ -111,6 +111,14 @@ suite('Exact conversation identity and durable restoration intent (CLIS-2.4, RUL
 			assert.deepStrictEqual(new WorkspacePins(carried).list(), [pin]);
 			pins.reorder(['pin-a', 'pin-a']);
 			assert.strictEqual(pins.list().length, 1);
+			// One made before its CLI named a conversation has none yet, and is kept as such (D182); an empty session is no Pin
+			const early = { id: 'pin-b', name: 'Early', cwd: temp.dir, location: 'loc-a', conversation: { environment: 'local', cli: 'claude' } };
+			pins.save(early);
+			assert.deepStrictEqual(new WorkspacePins(new KeptWorkspaceState(memory, path.join(temp.dir, 'state.json'), true, () => undefined)).list(), [pin, early]);
+			const damaged = new Map<string, unknown>([['facade.pins', [early, { ...early, id: 'pin-c', conversation: { ...early.conversation, sessionId: '' } }]]]);
+			const damagedMemory = { keys: () => [...damaged.keys()], get: <T>(key: string) => damaged.get(key) as T, update: async () => undefined };
+			assert.deepStrictEqual(new WorkspacePins(new KeptWorkspaceState(damagedMemory, path.join(temp.dir, 'other.json'), false, () => undefined)).list(), [early]);
+			pins.remove(early.id);
 			pins.remove(pin.id);
 			assert.deepStrictEqual(pins.list(), []);
 		} finally { temp.remove(); }

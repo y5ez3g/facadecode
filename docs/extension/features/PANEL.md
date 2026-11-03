@@ -143,8 +143,8 @@ announcements are polite, coalesced, and do not repeatedly announce spinner/prog
 **The list is two manually reorderable queues, Pins first; state changes do not move cards.**
 
 A card goes last in the area it enters (D173): a new card, whether a person or an agent started it, last in the ordinary
-area; Pin moves it last among the Pins; Unpin moves it last in the ordinary area. A new card the person started, which
-is selected, scrolls into view; one an agent started does not move the list.
+area; Pin moves it last among the Pins; Unpin moves it first in the ordinary area, just below the Pins it left (D181). A
+new card the person started, which is selected, scrolls into view; one an agent started does not move the list.
 Move Up/Down works within both the Pin and ordinary areas; hidden cards retain their relative positions. Persist Pin
 order by Pin ID so restoration keeps it. Explicit close removes a card immediately; no stopping card remains.
 There are no batch actions or automatic creation-tree grouping.
@@ -283,6 +283,7 @@ Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an is
 
 ## Change log
 
+- 2026-11-02: 2.1 moves an unpinned card first among the other cards, just below the Pins, where it was last (D181).
 - 2026-11-02: 2.1 puts a card last in the area it enters - new and unpinned cards last among the others, a new Pin last
   among the Pins - and scrolls a new card the person started into view (D173); 2.2 and 2.3 remove the card's Copy Agent
   Reference, Filter by This Location, Filter by This Folder and Clear Filter, and 1.1 Message History... (D174); 1.3 fits a

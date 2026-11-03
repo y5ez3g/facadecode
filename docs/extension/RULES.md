@@ -326,7 +326,8 @@ exception.
 
 **Resume and Pin restore the exact conversation, original location in a new run.**
 
-Pin stores the conversation key, original location, name and order. Keep the conversation/location
+Pin stores the conversation key - none yet for an agent pinned before its CLI named one (LIFECYCLE-3.4, D182) - original
+location, name and order. Keep the conversation/location
 association for non-pinned Facade conversations too; short-lived message cleanup must not erase it. No copied account
 credentials. Use current CLI startup configuration and 4.3's YOLO rule for the new run. The CLI restores its native model/effort unless current launch arguments override it; Facade does not maintain a second saved model/effort configuration to restore.
 Existing processes keep their actual plan.
@@ -414,6 +415,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 
 ## Change log
 
+- 2026-11-02: 4.2 lets a Pin wait for its conversation's key, where its agent was pinned before its CLI named one (D182).
 - 2026-11-02: Retain blockers with unknown kinds and invalidate lost screen evidence without guessing idle (D164).
 
 - 2026-11-01: D149 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.

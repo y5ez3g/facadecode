@@ -327,6 +327,8 @@ export interface RunMeta {
 	readonly pin?: string;
 	readonly sessionId?: string;
 	readonly exactResume?: boolean;
+	/** Whether its conversation is known to be saved - Facade resumed it, or its CLI named it - so that it can be pinned (D180). */
+	readonly resumable?: boolean;
 	readonly alias: string;
 	readonly name: string;
 	readonly cli: string;
@@ -374,6 +376,12 @@ export interface ConversationKey {
 	readonly sessionId: string;
 }
 
+/**
+ * The conversation a Pin restores: without a session where its agent was pinned before its CLI named one. That Pin starts a new
+ * conversation of the CLI and takes the one the CLI names (LIFECYCLE-3.4, D182).
+ */
+export type PinnedConversation = Omit<ConversationKey, 'sessionId'> & { readonly sessionId?: string };
+
 export function conversationId(key: ConversationKey): string {
 	return `${key.environment}\u0000${key.cli}\u0000${key.sessionId}`;
 }
@@ -419,7 +427,7 @@ export interface ConversationStore {
 export interface Pin {
 	/** `pin-<hex>`: identifies the Pin across runs; the panel orders the Pin area by it (PANEL-2.1). */
 	readonly id: string;
-	readonly conversation: ConversationKey;
+	readonly conversation: PinnedConversation;
 	readonly location: LocationId;
 	readonly cwd: string;
 	readonly name: string;
@@ -496,6 +504,11 @@ export interface RunError {
 export interface RunFacts {
 	readonly sessionId?: string;
 	readonly resumable?: boolean;
+	/**
+	 * Whether it can be pinned (LIFECYCLE-3.4): its conversation is known to be saved, or it runs a CLI that names the conversation
+	 * it holds, also before it has one (D180, D182).
+	 */
+	readonly pinnable?: boolean;
 	readonly pin?: string;
 	readonly id: RunId;
 	/** `#aN` (LIFECYCLE-2.1, RULES-2.3): unique across the client network and never reassigned. */

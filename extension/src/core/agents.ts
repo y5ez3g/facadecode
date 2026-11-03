@@ -75,6 +75,22 @@ function keyOf(facts: RunFacts): ConversationKey | undefined {
 	return facts.sessionId ? { environment: facts.environment, cli: facts.cli, sessionId: facts.sessionId } : undefined;
 }
 function sameConversation(a: ConversationKey, b: ConversationKey): boolean { return conversationId(a) === conversationId(b); }
+/** The conversation a Pin restores, where its CLI named one (D182). */
+function pinKey(pin: Pin): ConversationKey | undefined {
+	const { sessionId } = pin.conversation;
+	return sessionId ? { ...pin.conversation, sessionId } : undefined;
+}
+function pinsConversation(pin: Pin, key: ConversationKey): boolean {
+	const pinned = pinKey(pin);
+	return !!pinned && sameConversation(pinned, key);
+}
+/**
+ * Whether a run can be pinned (LIFECYCLE-3.4): its conversation is known to be saved, or, not ended, its CLI names the conversation
+ * it holds - also before it has one, where the Pin takes the one it names later (D180, D182).
+ */
+function pinnableOf(facts: RunFacts, exactResume: boolean | undefined): boolean {
+	return !!facts.resumable || (!!exactResume && facts.lifecycle !== 'ended');
+}
 const RESTORE_CONCURRENCY = 2;
 /** How long a failed listing of the running conversations waits before it is asked again, at first and at most. */
 const CONVERSATIONS_RETRY_MS = 2_000;
@@ -296,6 +312,7 @@ export class AgentService implements Agents, Disposable {
 			const facts: RunFacts = {
 				...factsOf(each.run, each.meta),
 				...this.restoredPin(each.meta) ? { pin: this.restoredPin(each.meta)!.id } : {},
+				...each.meta.exactResume || each.meta.resumable ? { pinnable: true } : {},
 				lifecycle: 'running',
 				phase: 'running',
 				pid: each.pid,
@@ -546,11 +563,14 @@ export class AgentService implements Agents, Disposable {
 		}
 		run.exactResume = plan.exactResume;
 		const sessionId = plan.sessionId ?? run.facts.sessionId;
+		// A conversation it resumes is saved already: it can be pinned from the start, its Pin following its CLI should that name
+		// another (LIFECYCLE-3.4, D180). A new one, an ID given it or not, waits for its CLI to name it.
+		const resumed = !!options.resume && !!plan.exactResume && sessionId === options.resume.key.sessionId;
 		if (plan.prompt) {
 			run.prompt = plan.prompt;
 		}
 		this.update(run, {
-			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: false,
+			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: resumed,
 			...(plan.version !== undefined ? { version: plan.version } : {}),
 			tools: plan.tools.state === 'injected' ? 'connecting' : plan.tools.state === 'unavailable' ? 'unavailable' : 'not_injected',
 			...(plan.tools.state === 'unavailable' && plan.tools.reason ? { toolsReason: plan.tools.reason } : {}),
@@ -794,17 +814,20 @@ export class AgentService implements Agents, Disposable {
 		if (!run) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
-		const key = keyOf(run.facts);
-		if (!run.facts.resumable || !key) {
+		if (!run.facts.pinnable) {
 			throw new FacadeError('INVALID', 'unsupported', `${run.facts.name}'s CLI cannot resume this exact conversation, so it cannot be pinned.`);
 		}
 		if (run.facts.pin) {
 			return;
 		}
+		// Pinned before its CLI named a conversation, it has none yet: the Pin takes the one the CLI names, and restores a new one of
+		// the same CLI, name and location until then (D182)
+		const key = run.facts.resumable ? keyOf(run.facts) : undefined;
 		// One Pin a conversation (RULES-4.2): one its CLI resumed by itself may be pinned already - that Pin is this card's now, rather
 		// than a second one an Unpin would leave behind to restore
-		const earlier = this.pinOf(key);
-		const pin: Pin = { id: earlier?.id ?? this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`, conversation: key, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
+		const earlier = key && this.pinOf(key);
+		const conversation = key ?? { environment: run.facts.environment, cli: run.facts.cli };
+		const pin: Pin = { id: earlier ? earlier.id : this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`, conversation, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
 		this.pinStore.save(pin);
 		if (earlier) {
 			// Pin moves it last among the Pins (PANEL-2.1, D173), as a new Pin goes; where that order cannot be saved, the Pin still is
@@ -860,22 +883,24 @@ export class AgentService implements Agents, Disposable {
 		// A Pin a card already holds - running, or retained red after an abnormal exit or a failed restore - is not started again
 		// on a reload: restoration happens once per opening, without a restart loop (RULES-4.2)
 		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
-		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holding(pin.conversation));
+		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holdingPin(pin));
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
 		const failed: { readonly id: RunId; readonly name: string; readonly reason: string }[] = [];
 		const restoreOne = async (pin: Pin): Promise<void> => {
 			// One whose location was removed is no failure to show: its removal unpins it, even where that write failed (RULES-2.4)
-			if (!this.pins().some(saved => saved.id === pin.id) || this.holding(pin.conversation) || this.deps.locations.removalOf(pin.location)) { return; }
+			if (!this.pins().some(saved => saved.id === pin.id) || this.holdingPin(pin) || this.deps.locations.removalOf(pin.location)) { return; }
 			const location = this.locationFor(pin.location, pin.cwd);
 			if (!location || location.environment !== pin.conversation.environment) {
 				const reason = `Its working location ${pin.cwd} is not available in this window.`;
 				failed.push({ id: this.unrestorable(pin, reason), name: pin.name, reason });
 				return;
 			}
+			// One pinned before its CLI named a conversation starts a new one, which its Pin takes once named (D182)
+			const key = pinKey(pin);
 			const id = this.accept(
 				{ name: pin.name, location: location.id, cli: pin.conversation.cli, origin: 'human' },
 				location,
-				{ resume: { key: pin.conversation }, reveal: false, remember: false, pin: pin.id, restoring: true }
+				{ ...key ? { resume: { key } } : {}, reveal: false, remember: false, pin: pin.id, restoring: true }
 			);
 			await this.runs.get(id)?.settled;
 			this.restoring.delete(id);
@@ -907,8 +932,9 @@ export class AgentService implements Agents, Disposable {
 		const facts: RunFacts = {
 			id, root: id, origin: 'human', tools: 'not_injected', alias: this.deps.aliases.next(), name: pin.name, cli: pin.conversation.cli, displayName: pin.conversation.cli, command: pin.conversation.cli,
 			location: pin.location, cwd: pin.cwd, environment: pin.conversation.environment, yolo: this.deps.yolo(),
-			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false, resumable: true,
-			sessionId: pin.conversation.sessionId, pin: pin.id, end: { kind: 'failed', at }, error: { reason, source: 'location', at }
+			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false,
+			...pin.conversation.sessionId ? { sessionId: pin.conversation.sessionId, resumable: true, pinnable: true } : {},
+			pin: pin.id, end: { kind: 'failed', at }, error: { reason, source: 'location', at }
 		};
 		const run: Run = { facts, exactResume: true, settled: Promise.resolve() };
 		this.runs.set(id, run);
@@ -930,6 +956,12 @@ export class AgentService implements Agents, Disposable {
 		return this.elsewhere.has(conversationId(key)) ? 'elsewhere' : undefined;
 	}
 
+	/** The run holding the conversation a Pin restores; none for a Pin whose CLI named none yet, which only its own card holds (D182). */
+	private holdingPin(pin: Pin): RunId | 'elsewhere' | undefined {
+		const key = pinKey(pin);
+		return key && this.holding(key);
+	}
+
 	private locationFor(id: LocationId | undefined, cwd: string): Location | undefined {
 		const known = id ? this.deps.locations.resolve(id) : undefined;
 		if (known && known.path === cwd) {
@@ -947,7 +979,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	private pinOf(key: ConversationKey): Pin | undefined {
-		return this.pins().find(pin => sameConversation(pin.conversation, key));
+		return this.pins().find(pin => pinsConversation(pin, key));
 	}
 
 	private unpinned(run: Run): void {
@@ -965,7 +997,7 @@ export class AgentService implements Agents, Disposable {
 		try {
 			if (!pinned) {
 				this.unpin(id);
-			} else if (run.facts.resumable) {
+			} else if (run.facts.pinnable) {
 				this.pin(id);
 			} else {
 				this.deps.log.event(`${run.facts.alias}'s tab was pinned, but its CLI cannot resume this exact conversation; no restoration intent was saved`);
@@ -981,7 +1013,10 @@ export class AgentService implements Agents, Disposable {
 	private identified(id: RunId, sessionId: string | null, cwd?: string): void {
 		if (this.disposed || this.ownershipLost) { return; }
 		const run = this.runs.get(id);
-		if (!run || run.facts.lifecycle === 'ended' || (run.facts.sessionId === sessionId && run.facts.resumable && (!cwd || cwd === run.facts.cwd))) {
+		// Nothing to follow where the record, and its Pin, name this session already: a Pin whose update failed earlier still follows
+		const pinned = run?.facts.pin ? this.pins().find(each => each.id === run.facts.pin) : undefined;
+		if (!run || run.facts.lifecycle === 'ended' || (run.facts.sessionId === sessionId && run.facts.resumable && (!cwd || cwd === run.facts.cwd)
+			&& (!pinned || pinned.conversation.sessionId === sessionId))) {
 			return;
 		}
 		// Keep the last saved key while a native new/home screen has no conversation. Its existing Pin stays associated across reload.
@@ -992,7 +1027,7 @@ export class AgentService implements Agents, Disposable {
 				const key = keyOf(run.facts)!;
 				this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: key });
 				// One Pin a conversation (RULES-4.2): another Pin of the one it switched to goes, as this card's names it now
-				for (const other of this.pins().filter(each => each.id !== pin.id && sameConversation(each.conversation, key))) {
+				for (const other of this.pins().filter(each => each.id !== pin.id && pinsConversation(each, key))) {
 					this.pinStore.remove(other.id);
 					for (const holder of this.runs.values()) { if (holder.facts.pin === other.id) { this.losePin(holder); } }
 				}
@@ -1106,6 +1141,11 @@ export class AgentService implements Agents, Disposable {
 				(next as Record<string, unknown>)[key] = value;
 			}
 		}
+		if (pinnableOf(next, run.exactResume)) {
+			next.pinnable = true;
+		} else {
+			delete next.pinnable;
+		}
 		run.facts = next;
 		if (kind === 'lifecycle') {
 			this.rememberRequest(next);
@@ -1157,8 +1197,11 @@ function isRequestRun(value: unknown): value is RunFacts & { readonly requestOnl
 /** A retained record as this build keeps runs: one an earlier build wrote is a root of its own, without tools (ARCHITECTURE-4.2). */
 function retainedFacts(kept: RunFacts): RunFacts {
 	const record = kept as RunFacts & { readonly [key: string]: unknown };
+	// Ended, it can be pinned where its conversation is saved (D182)
+	const { pinnable: _pinnable, ...facts } = kept;
 	return {
-		...kept,
+		...facts,
+		...kept.resumable ? { pinnable: true } : {},
 		root: typeof record.root === 'string' && record.root ? record.root : kept.id,
 		origin: record.origin === 'agent' ? 'agent' : 'human',
 		tools: record.tools === 'connecting' || record.tools === 'available' || record.tools === 'unavailable' ? record.tools : 'not_injected'
@@ -1169,7 +1212,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 	return {
 		id,
 		alias: meta.alias,
-		...(meta.sessionId ? { sessionId: meta.sessionId, resumable: false } : {}),
+		...(meta.sessionId ? { sessionId: meta.sessionId, resumable: !!meta.resumable && !!meta.exactResume } : {}),
 		name: meta.name,
 		cli: meta.cli,
 		displayName: meta.displayName,
@@ -1209,6 +1252,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 	return {
 		alias: facts.alias,
 		exactResume: !!exactResume,
+		...facts.resumable ? { resumable: true } : {},
 		...facts.pin ? { pin: facts.pin } : {},
 		...(facts.sessionId ? { sessionId: facts.sessionId } : {}),
 		name: facts.name,
