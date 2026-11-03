@@ -37,6 +37,9 @@ jobs:
       - run: npm ci
       - run: npm run compile
       - run: npm test
+      - name: Archive script tests
+        if: runner.os == 'Linux'
+        run: node --test scripts/archive.test.mjs
       - run: node scripts/l10n.mjs check
       - run: python ../docs/extension/audit/check_spec.py
       - run: npm run package

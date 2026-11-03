@@ -1,0 +1,74 @@
+name: Extension archive
+
+on:
+  push:
+    tags:
+      - 'extension/[0-9]*'
+    paths:
+      - '.github/workflows/extension-archive.yml'
+      - 'extension/archive/**'
+      - 'extension/scripts/archive*.mjs'
+  workflow_dispatch:
+    inputs:
+      through:
+        description: Archive catalog versions through this version
+        required: true
+        default: '0.0.4'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: extension-archive
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    name: Preserve original extension VSIX files
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: extension/.nvmrc
+          registry-url: https://npm.pkg.github.com
+          scope: '@y5ez3g'
+      - name: Check archive validation
+        run: node --test scripts/archive.test.mjs
+      - name: Archive and verify packages
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARCHIVE_THROUGH: ${{ inputs.through }}
+        run: |
+          if [ -z "$ARCHIVE_THROUGH" ]; then
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              ARCHIVE_THROUGH="${GITHUB_REF_NAME#extension/}"
+            else
+              ARCHIVE_THROUGH="$(node -p 'require("./package.json").version')"
+            fi
+          fi
+          node scripts/archive.mjs --through "$ARCHIVE_THROUGH" --publish
+      - name: Record GitHub package details
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PACKAGE_NAME="$(node -p 'require("./archive/catalog.json").name.split("/")[1]')"
+          gh api "users/${GITHUB_REPOSITORY_OWNER}/packages/npm/${PACKAGE_NAME}" > build/archive/github-package.json
+          gh api "users/${GITHUB_REPOSITORY_OWNER}/packages/npm/${PACKAGE_NAME}/versions?per_page=100" > build/archive/github-package-versions.json
+      - name: Keep archive verification and tarballs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extension-archive-${{ github.run_id }}
+          path: |
+            extension/build/archive/summary.json
+            extension/build/archive/github-package*.json
+            extension/build/archive/*.tgz
+          if-no-files-found: ignore

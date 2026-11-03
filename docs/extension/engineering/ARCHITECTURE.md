@@ -503,11 +503,22 @@ compatibility engine.
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
 feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
-Open VSX only when the owner asks. Both components carry one version, the published one - 0.0.3, published to the
+Open VSX only when the owner asks. Both components carry one version, the published one - 0.0.4, published to the
 Marketplace for darwin-arm64, linux-x64 and win32-x64 with its window component, each built by the extension checks on
 its own runner - which the changelog's heading names; the version moves past it only when the next version is published,
 and the build refuses a window component of another version. [Official manifest
 reference](https://code.visualstudio.com/api/references/extension-manifest).
+
+GitHub Packages stores the extension's build snapshots as `@y5ez3g/facade-extension`, separately from IDE downloads in GitHub
+Releases. Each snapshot contains the original platform VSIX files and window component, their SHA-256 checksums and
+source/evidence metadata; it has no installer or runtime scripts. Tags use `extension/<version>`. Archiving and later
+marketplace publication reuse the verified VSIX bytes without rebuilding either product. Historical backfills retain
+the published files and explicitly record source or release-metadata differences. The catalog in `extension/archive/`
+pins the artifacts and evidence. `node scripts/archive.mjs --through <version>` prepares and checks them under
+`build/archive/`; `--input-dir <directory>` reads already tested local VSIX files instead of downloading the catalog's
+published originals. `--publish` additionally uploads to GitHub Packages and verifies the downloaded package contents.
+The dedicated tag workflow publishes catalog entries through the tagged version with its repository-scoped token;
+existing versions are checked before reuse. It runs no IDE or extension compilation and publishes to neither marketplace.
 
 Bundle runtime dependencies and third-party notices, test commands excluded; package both components from build output
 with vsce pinned at 4.1.0. The workspace manifest installs its local window component through `extensionPack`, not
@@ -551,12 +562,13 @@ that check. Do not depend on a developer's temporary language-pack files for rel
 **Implementation acceptance requires type checks, relevant unit tests, build, integration and affected runtime scenarios.**
 
 Required commands: `npx tsc -p ./`, `npx tsc -p ./src/webview` (both run by `npm run compile`), `npm test`, `node
-scripts/l10n.mjs check`, the specification audit (`python3 -I -B ../docs/extension/audit/check_spec.py`), `npm run
-bundle`, `npm run package`, `npm run test:package`, and integration against the editor version actually used. Record
-version and result. Add meaningful regression tests for behavioral fixes and check sibling CLIs/platforms/entrypoints
-for the same defect. For UI-only reversible iteration do not run every suite each small edit; run complete gates at
-milestones. Docs-only changes need the specification audit, not a fake code-test pass. VERIFICATION defines additional
-release scenarios and distinguishes unrun from passed.
+scripts/l10n.mjs check`, `node --test scripts/archive.test.mjs` where the archive tooling changed, the specification
+audit (`python3 -I -B ../docs/extension/audit/check_spec.py`), `npm run bundle`, `npm run package`, `npm run
+test:package`, and integration against the editor version actually used. Record version and result. Add meaningful
+regression tests for behavioral fixes and check sibling CLIs/platforms/entrypoints for the same defect. For UI-only
+reversible iteration do not run every suite each small edit; run complete gates at milestones. Docs-only changes need
+the specification audit, not a fake code-test pass. VERIFICATION defines additional release scenarios and distinguishes
+unrun from passed.
 
 ### 5.2 Editor isolation
 
@@ -601,7 +613,7 @@ what was tested and what remains. Task assignments, pauses and discussion author
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.3 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package |
-| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; pressure/upgrades from each released build (0.0.1, 0.0.2, 0.0.3) with agents running |
+| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; pressure/upgrades from each released build (0.0.1 to 0.0.4) with agents running |
 | 3.1–3.3 | Storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |
 | 5.1–5.4 | Evidence and command logs, isolated profile/config paths, dirty-tree preservation, no unrequested Git publication |
