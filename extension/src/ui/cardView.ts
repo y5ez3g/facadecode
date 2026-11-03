@@ -7,6 +7,15 @@ import type { AvatarColor, Card, CardMenu } from '../webview/protocol';
 
 /** The words a card is said in, in the person's language. */
 export interface CardWords {
+	readonly agent: (value: string) => string;
+	readonly title: (value: string) => string;
+	readonly prompt: (value: string) => string;
+	readonly status: (value: string) => string;
+	readonly reason: (value: string) => string;
+	readonly tools: (value: string) => string;
+	readonly location: (value: string) => string;
+	readonly path: (value: string) => string;
+
 	readonly pinned?: string;
 	readonly worktreeFailure: (reason: string, effects: WorktreeCreationEffects) => string;
 	readonly starting: string;
@@ -33,7 +42,7 @@ export interface CardWords {
 	readonly window: (label: string) => string;
 	/** Why an agent cannot work with other agents - its Facade tools are not there - in plain words; it runs on without them (PANEL-1.4). */
 	readonly toolsUnavailable: (problem: ToolsProblem | undefined, file: string | undefined) => string;
-	/** `Started by {0}`, {0} the reference of the agent that started it (PANEL-1.5). */
+	/** `Started by: {0}`, {0} the reference of the agent that started it (PANEL-1.5). */
 	readonly startedBy: (creator: string) => string;
 	/** The person's language, as a custom CLI's initial is uppercased in it (UX-2.1). */
 	readonly locale: string;
@@ -47,8 +56,9 @@ export interface CardPlace {
 	readonly folderPrefix?: string;
 	/** The location with its workspace folder: what the accessible label says. */
 	readonly qualified: string;
-	/** The qualified location with its environment and path: the hover's last line. */
-	readonly full: string;
+	/** The qualified location with its non-local environment, kept separate from its path. */
+	readonly context: string;
+	readonly path: string;
 }
 
 /**
@@ -196,12 +206,12 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 	const tools = facts.tools === 'unavailable' && !gone ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile)
 		: facts.tools === 'connecting' && facts.lifecycle !== 'ended' ? words.toolsConnecting : undefined;
 	const tooltip = [
-		[facts.name, facts.alias, facts.displayName].filter(Boolean).join(' · '),
-		...described ? [described] : [],
-		status.stateText,
-		...status.reason && status.reason !== described ? [status.reason] : [],
+		words.agent([facts.name, facts.alias, facts.displayName].filter(Boolean).join(' · ')),
+		...described ? [facts.title ? words.title(described) : words.prompt(described)] : [],
+		words.status(status.stateText),
+		...status.reason && status.reason !== described ? [words.reason(status.reason)] : [],
 		// The card's row may cut this line short: the hover says it whole (PANEL-1.5)
-		...tools ? [tools] : [],
+		...tools ? [words.tools(tools)] : [],
 		...facts.origin === 'agent' && (facts.creatorLabel ?? facts.creator) ? [words.startedBy((facts.creatorLabel ?? facts.creator)!)] : []
 	];
 	const label = [facts.name, facts.alias, ...(facts.pin && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
@@ -213,7 +223,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		name: facts.name,
 		alias: facts.alias,
 		...(avatar ? { avatar } : {}),
-		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: input.window ? `${place.full}\n${words.window(input.window)}` : place.full },
+		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: [words.location(place.context), words.path(place.path), ...input.window ? [words.window(input.window)] : []].join('\n') },
 		dot: status.dot,
 		stateText: status.stateText,
 		line: status.line,

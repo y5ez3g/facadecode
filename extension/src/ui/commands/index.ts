@@ -49,6 +49,14 @@ export interface UiDeps {
 /** The words a card is said in, in the window's language (PANEL-1.4). */
 function cardWords(): CardWords {
 	return {
+		agent: value => vscode.l10n.t("Agent: {0}", value),
+		title: value => vscode.l10n.t("Title: {0}", value),
+		prompt: value => vscode.l10n.t("Prompt: {0}", value),
+		status: value => vscode.l10n.t("Status: {0}", value),
+		reason: value => vscode.l10n.t("Reason: {0}", value),
+		tools: value => vscode.l10n.t("Tools: {0}", value),
+		location: value => vscode.l10n.t("Location: {0}", value),
+		path: value => vscode.l10n.t("Path: {0}", value),
 		worktreeFailure: withWorktreeEffects,
 		pinned: vscode.l10n.t("Pinned"),
 		starting: vscode.l10n.t("Starting"),
@@ -86,7 +94,7 @@ function cardWords(): CardWords {
 						? vscode.l10n.t("Cannot work with other agents: its Facade tools stopped")
 						: vscode.l10n.t("Cannot work with other agents: could not create files"),
 		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
-		startedBy: creator => vscode.l10n.t("Started by {0}", creator),
+		startedBy: creator => vscode.l10n.t("Started by: {0}", creator),
 		locale: vscode.env.language
 	};
 }

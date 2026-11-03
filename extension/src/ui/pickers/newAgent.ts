@@ -99,7 +99,7 @@ export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promis
 			return;
 		}
 		if (picked.does === 'name') {
-			const typed = await flow.text({ title, value: name, placeholder: vscode.l10n.t("Agent name"), back: true });
+			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: name, placeholder: vscode.l10n.t("Agent name"), back: true });
 			if (typed === undefined) {
 				return;
 			}
@@ -107,7 +107,11 @@ export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promis
 				name = normalizeName(typed);
 			}
 		} else if (picked.does === 'location') {
-			const chosen = await chooseLocation(flow, deps, title, destination);
+			const chosen = await chooseLocation(flow, deps, {
+				folder: vscode.l10n.t("New Agent · Select Folder"),
+				location: vscode.l10n.t("New Agent · Working Location"),
+				branch: vscode.l10n.t("New Agent · New Worktree")
+			}, destination);
 			if (chosen === undefined) {
 				return;
 			}

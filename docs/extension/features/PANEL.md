@@ -117,14 +117,20 @@ motion is static. Hover explicitly says `Starting`, `Working`, `Idle`, the nativ
 
 **Every fact cut from a card remains readable without relying on color.**
 
-Card tooltip lines, one fact per line: name, short run ID and CLI; full title or creation prompt; state and reason; for
-a working agent, how long ago its CLI reported that work, `Reported working 25 min. ago` - the CLI's last word, which a long
-silence leaves for the person to judge rather than turning it into idle or done, following competitive analysis of
-last-update indicators (D114). This uses the source observation for the current working episode, preserved through
+Card tooltip lines use a localized `Label: value` format throughout: `Agent:` for name, short run ID and CLI;
+`Title:` for a full title or `Prompt:` for the creation prompt; `Status:` and a distinct `Reason:` when present.
+Use `Tools:` for unavailable or connecting collaboration tools, retaining 1.4's conditions and omitting a disconnected
+tools explanation caused by normal process exit. Empty names create no empty identity separator. Keep title-over-prompt
+priority and suppress a reason identical to the description. For a working agent, `Reported working:` shows how long
+ago its CLI reported that work, for example `Reported working: 25 min. ago`. This is the CLI's last word; a long silence
+leaves the person to judge it rather than turning it into idle or done, following competitive analysis of last-update
+indicators (D114). This uses the source observation for the current working episode, preserved through
 title changes and reload, not the host's report-receipt or API-query time. Missing source time omits the line.
 Relative times use the source clock; an observation ahead of that clock shows its absolute time instead;
-started relative time and, for an agent started by an agent, its creator; qualified location; its path, the home folder
-written `~` except on Windows; window. Accessible label: name, short run
+`Started:` for started relative time and, for an agent started by an agent, `Started by:` for its creator;
+`Location:` for qualified location including non-local environment context; `Path:` for its complete path, the home
+folder written `~` except on Windows; `Window:` for the window. Preserve case and every path component, allowing
+native wrapping. Do not repeat natural-language prefixes after labels. Missing facts omit their lines. Accessible label: name, short run
 ID, state, location, CLI, second line. Use a listbox named `Agents`,
 options with `aria-selected`, decorative icons hidden, one roving Tab stop. Update labels in place. State-change
 announcements are polite, coalesced, and do not repeatedly announce spinner/progress ticks.
@@ -160,7 +166,10 @@ revalidated against current host state under 3.1, never the selected row by fall
 Filter by Working Location opens native Quick Pick steps by folder (D82). In each step one separator follows the first
 item, then come the folders or locations that have cards (including starting and retained failures) or hold the
 current filter, each with its count. In a window of several folders the first step lists All Locations, then the
-folders. A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
+folders. Every folder row keeps its name as label and shows `{agent count} · {parent path}` as description, with
+the count first and the parent path using the existing home-relative representation. Do not shorten this path
+artificially; native clipping may still occur. Location rows retain their existing names, icons and counts.
+A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
 (WORKTREES-1.2) - where two or more of its locations are listed, or where the filtered location is one of several it
 has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its
 first item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog no longer
@@ -270,6 +279,8 @@ fully visible row count minus one (minimum one).
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
 
 ## Change log
+
+- 2026-11-02: Applied the owner's screenshot decisions: count-first parent paths in folder filters and uniform labeled hover facts (D166).
 
 - 2026-11-02: Applied owner-approved copy polish to the launch inspection command name and the collaboration-failure
   example; status evidence, priority and the screenshot-reviewed layout remain unchanged.

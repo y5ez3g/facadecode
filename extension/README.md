@@ -62,7 +62,7 @@ Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64).
 ### Folders and worktrees
 
 - **Any folder**: Start agents in any folder of a single-folder or multi-root workspace. Ordinary folders, repositories and worktrees work alike. See [`WORKTREES.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/WORKTREES.md).
-- **New Worktree**: Create a Git worktree while starting an agent, or on its own from the panel's `...` menu.
+- **New Worktree**: Create a Git worktree from the chosen working location's current commit while starting an agent, or from the selected workspace folder's current checkout through the panel's `...` menu. In the standalone flow, review the source and path in the branch input and confirm to create directly. Prepare worktrees from other starting commits with Git; Facade discovers them too.
 - **Workspace folders and worktrees**: In **Change Working Location...**, add a folder to the workspace, remove one (its files stay on disk), or delete a linked worktree that is not a workspace folder and has no uncommitted changes (its branch is kept).
 
 ### Agents keep running

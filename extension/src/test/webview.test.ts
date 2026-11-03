@@ -52,7 +52,7 @@ suite('The agent panel in Chromium', function () {
 	let tested: string;
 	let css: string;
 	/** The page's words: each its own key, the templates as the extension gives them. */
-	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}', workingSince: 'Reported working {0}' };
+	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started: {0}', workingSince: 'Reported working: {0}' };
 	/** Loads a new page of the panel, as the view does each time it shows. */
 	const load = async (bundle = shipped, saved?: unknown) => {
 		await call('Page.navigate', { url: 'about:blank' });
@@ -138,14 +138,14 @@ suite('The agent panel in Chromium', function () {
 			agents[0] = newCard(1, { dot: 'idle', stateText: 'Idle', line: 'Fix the login', label: 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', tooltip: ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle'] });
 			redraw({ revision: 2 });
 			return [card === document.querySelector('.agent'), dot === card.querySelector('.dot'), face === card.querySelector('.face'), dot.className, dot.title, card.querySelector('.title').textContent, card.getAttribute('aria-label'), card.title.split('\\n')];
-		})()`), [true, true, true, 'dot not-working', 'Idle', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle', 'Started now', 'project · /project']]);
+		})()`), [true, true, true, 'dot not-working', 'Idle', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle', 'Started: now', 'project · /project']]);
 	});
 
 	test('PANEL-1.5: a card\'s hover says how long ago it started, then its location and window', async () => {
 		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { location: { label: 'project', full: 'project · /project · Window: shop' } }), newCard(2)])`) });
 		assert.deepStrictEqual(await evaluate(`[window.errors, [...document.querySelectorAll('.agent')].map(card => card.title.split('\\n').slice(-2))]`), [[], [
-			['Started now', 'project · /project · Window: shop'],
-			['Started now', 'project · /project']
+			['Started: now', 'project · /project · Window: shop'],
+			['Started: now', 'project · /project']
 		]]);
 	});
 
@@ -153,12 +153,12 @@ suite('The agent panel in Chromium', function () {
 		const sourceNow = Date.UTC(2020, 0, 1, 12);
 		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { workingSince: ${sourceNow - 25 * 60_000}, startedAt: ${sourceNow - 40 * 60_000} })], { clockAt: ${sourceNow} })`) });
 		const title = await evaluate(`document.querySelector('.agent').title`);
-		assert.match(title, /Reported working 25 min/);
-		assert.match(title, /Started 40 min/);
+		assert.match(title, /Reported working: 25 min/);
+		assert.match(title, /Started: 40 min/);
 		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { workingSince: ${sourceNow + 60_000} })], { revision: 2, clockAt: ${sourceNow} })`) });
 		const future = await evaluate(`document.querySelector('.agent').title`);
 		assert.match(future, /2020/);
-		assert.ok(!future.includes('Reported working now'));
+		assert.ok(!future.includes('Reported working: now'));
 	});
 
 	test('the dot\'s cut-out ring is the colour the row shows: a translucent hover or selection colour over the side bar, never over the avatar (PANEL-1.3)', async () => {
