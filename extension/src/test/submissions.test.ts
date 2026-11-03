@@ -70,7 +70,10 @@ suite('An agent\'s tab spins while it works (LIFECYCLE-2.2, D185)', () => {
 	test('a frame turns before its name while it works, and the name shows alone once it stops; the frames are no rename of the person\'s', async () => {
 		const { pty, names } = load();
 		pty.spin(true);
-		await new Promise(resolve => setTimeout(resolve, 250));
+		// Until it turned twice, however late a busy machine runs its timers
+		for (const end = Date.now() + 5_000; names.length < 4 && Date.now() < end;) {
+			await new Promise(resolve => setTimeout(resolve, 20));
+		}
 		pty.spin(false);
 		const frames = names.slice(1, -1);
 		assert.ok(frames.length >= 2, JSON.stringify(names));
