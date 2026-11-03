@@ -114,10 +114,10 @@ not an intended unsupported theme.
 One roving Tab stop; Tab/Shift+Tab leave. Up/Down/Home/End/Page Up/Page Down move focus, scroll minimally into view.
 Typeahead combines characters within 750 ms and wraps to the next matching name; a Space within that time continues the
 typeahead. Otherwise Enter/Space opens, F2 renames; native context-menu key opens the current card's menu. A click or
-right-click focuses without a keyboard outline, and the card a context menu is open on gets no frame, unlike the
-editor's own lists. Escape closes transient UI. Use semantic listbox/options, aria-selected and current state labels. No
-unbounded live-region chatter. No global shortcuts are preassigned; existing commands are bindable through normal
-Keyboard Shortcuts.
+right-click focuses without a keyboard outline, and the card a context menu is open on gets no other frame than its
+keyboard outline, unlike the editor's own lists (2.1). Escape closes transient UI. Use semantic listbox/options,
+aria-selected and current state labels. No unbounded live-region chatter. No global shortcuts are preassigned; existing
+commands are bindable through normal Keyboard Shortcuts.
 
 ### 2.4 Languages and times
 

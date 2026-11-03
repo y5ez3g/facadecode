@@ -1177,7 +1177,8 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		await world.agents.restorePins();
 		const added = world.agents.list().filter(run => run.pin !== undefined);
 		assert.deepStrictEqual(added.map(run => [run.name, run.pin, run.error?.source]), [['', 'pin-empty', 'location']], 'the next Pin keeps its red card');
-		assert.deepStrictEqual(world.failures.map(failure => [failure.kind, (failure as { count?: number }).count]), [['restore', 2]], 'one notification for the opening, the refused Pin counted');
+		assert.deepStrictEqual(world.failures.map(failure => [failure.kind, failure.name, (failure as { count?: number }).count]), [['restore', 'Refused', 1]], 'one notification for the opening: the refused Pin, which has no card to show why, with its reason');
+		assert.match(world.failures[0].reason ?? '', /facade\.yolo must be true or false/);
 		assert.ok(world.pins().some(pin => pin.id === 'pin-refused'), 'the refused Pin is kept for the next opening');
 		assert.ok(world.log.some(line => line.startsWith('Could not restore the Pin of Refused: facade.yolo must be true or false')), world.log.join('\n'));
 		// Told alone, the empty-named one is named by its #aN

@@ -973,9 +973,11 @@ export class AgentService implements Agents, Disposable {
 		});
 		await Promise.all(workers);
 		if (failed.length && !this.ownershipLost && !this.disposed) {
-			// A known failure no agent is responsible for: one notification for this opening (RULES-1.8)
-			const [first] = failed;
-			this.deps.human.failed({ kind: 'restore', name: first.name, reason: first.reason, count: failed.length }, first.id && this.runs.has(first.id) ? { show: first.id } : {});
+			// A known failure no agent is responsible for: one notification for this opening (RULES-1.8). A Pin refused before any card
+			// has no card to show why, and its reason - the window's numbers, its facade.yolo - holds for the others: it is the one told
+			const cardless = failed.find(each => !each.id || !this.runs.has(each.id));
+			const told = cardless ?? failed[0];
+			this.deps.human.failed({ kind: 'restore', name: told.name, reason: told.reason, count: cardless ? 1 : failed.length }, told.id && this.runs.has(told.id) ? { show: told.id } : {});
 		}
 	}
 
