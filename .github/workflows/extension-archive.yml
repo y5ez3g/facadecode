@@ -2,8 +2,15 @@ name: Extension archive
 
 on:
   push:
+    # Bootstrap the requested backfill before this workflow reaches the default branch.
+    branches:
+      - 'feature/85-extension-release-0.0.4'
     tags:
       - 'extension/[0-9]*'
+    paths:
+      - '.github/workflows/extension-archive.yml'
+      - 'extension/archive/**'
+      - 'extension/scripts/archive*.mjs'
   workflow_dispatch:
     inputs:
       through:
@@ -44,7 +51,11 @@ jobs:
           ARCHIVE_THROUGH: ${{ inputs.through }}
         run: |
           if [ -z "$ARCHIVE_THROUGH" ]; then
-            ARCHIVE_THROUGH="${GITHUB_REF_NAME#extension/}"
+            if [ "$GITHUB_REF_TYPE" = tag ]; then
+              ARCHIVE_THROUGH="${GITHUB_REF_NAME#extension/}"
+            else
+              ARCHIVE_THROUGH="$(node -p 'require("./package.json").version')"
+            fi
           fi
           node scripts/archive.mjs --through "$ARCHIVE_THROUGH" --publish
       - name: Keep archive verification and tarballs
