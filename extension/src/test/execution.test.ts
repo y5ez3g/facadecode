@@ -392,7 +392,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	});
 
 	test('D183: a run whose Facade tools were injected is still starting after its CLI reports, until they connect or its bound passes; work that stops is told a second later', async () => {
-		const port = portOf(1_500);
+		// A bound a slow runner's process start and first report fit in well, as its tools never connect here
+		const port = portOf(6_000);
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
 		port.openPair(facts('run-tools'), { reveal: false });
@@ -403,8 +404,10 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await port.spawn('run-tools', { ...plan(program), tools: { state: 'injected' } }, meta('run-tools'));
 		await until('its idle report', () => reports.some(report => report.activity === 'not_working'));
 		const idle = reports.find(report => report.activity === 'not_working')!;
-		assert.strictEqual(idle.awaitingActivity, true, 'its tools not connected yet, it is still starting');
-		await until('its bound', () => reports.at(-1)?.activity === 'not_working' && !reports.at(-1)?.awaitingActivity, 4_000);
+		assert.strictEqual(idle.awaitingActivity, true, `its tools not connected yet, it is still starting: ${JSON.stringify(reports)}`);
+		// Past its bound with its tools still not connected, it did not start properly
+		const late = await until('its bound', () => reports.find(report => report.notReady), 12_000);
+		assert.deepStrictEqual([late.activity, late.awaitingActivity], ['not_working', undefined]);
 		terminals[0].options.pty.handleInput!('w');
 		await until('its work', () => reports.at(-1)?.activity === 'working');
 		const stopped = performance.now();
