@@ -275,11 +275,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		return held;
 	}
 
-	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void {
+	openPair(facts: PairFacts, options: { readonly reveal: boolean; readonly hidden?: boolean }): void {
 		if (this.pairs.has(facts.run)) {
 			return;
 		}
-		this.create(facts, options.reveal);
+		// A hidden one has its card alone until the person opens it, its run drawing at START_COLUMNS by START_ROWS (LIFECYCLE-2.2)
+		this.create(facts, options.reveal, options.hidden === true);
 	}
 
 	/** The initial restoration batch is complete; a recreated local registry may retire its predecessor's UI resources. */

@@ -1063,6 +1063,19 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(terminals.length, 3);
 	});
 
+	test('a hidden pair - an agent another agent starts - has no tab: its run starts and works at 120 by 30, and its tab opens, on its screen, as the person opens it (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		port.openPair(facts('run-hid'), { reveal: false, hidden: true });
+		const { pid } = await port.spawn('run-hid', plan(`process.stdout.write('size ' + process.stdout.columns + 'x' + process.stdout.rows + '\\n'); ${ECHO}`), meta('run-hid'));
+		assert.ok(pid > 0);
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.strictEqual(terminals.length, 0, 'no tab opened');
+		assert.strictEqual(await port.reveal('run-hid', { preserveFocus: false }), true);
+		assert.strictEqual(terminals.length, 1);
+		open(terminals[0]);
+		await until('its screen', () => screenOf(terminals[0]).includes('size 120x30'));
+	});
+
 	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
 		const port = portOf();
 		const closes: { readonly run: RunId; readonly marked: boolean }[] = [];

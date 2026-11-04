@@ -70,7 +70,8 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
 	readonly onDidDisconnectTools = this.toolDisconnections.event;
-	openPair(facts: PairFacts, options: { reveal: boolean }): void { this.pairs.set(facts.run, facts); this.reveals.set(facts.run, options.reveal); }
+	readonly hidden = new Set<RunId>();
+	openPair(facts: PairFacts, options: { reveal: boolean; hidden?: boolean }): void { this.pairs.set(facts.run, facts); this.reveals.set(facts.run, options.reveal); if (options.hidden) { this.hidden.add(facts.run); } }
 	note(run: RunId, text: string): void { this.notes.push({ run, text }); }
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ pid: number; startedAt: number }> {
 		await this.spawnGate;
@@ -451,6 +452,14 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.execution.spawned.length, 1);
 		assert.deepStrictEqual(world.remembered, [{ location: 'loc-1', cli: 'claude' }], 'a human launch remembers its CLI and location once the process starts');
 		assert.strictEqual(world.execution.reveals.get(id), true, 'a human New Agent shows its terminal');
+		assert.strictEqual(world.execution.hidden.has(id), false);
+	});
+
+	test('an agent another agent starts has its card alone: its tab is not opened, and it covers nothing and takes no focus (LIFECYCLE-2.2)', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' } });
+		await settle();
+		assert.deepStrictEqual([world.execution.pairs.has(id), world.execution.hidden.has(id), world.execution.reveals.get(id), world.agents.get(id)?.lifecycle], [true, true, false, 'running']);
 	});
 
 	test('names are labels: empty strings, spaces, duplicates and human are accepted with distinct run IDs (LIFECYCLE-2.1)', () => {

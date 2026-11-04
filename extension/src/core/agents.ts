@@ -618,8 +618,9 @@ export class AgentService implements Agents, Disposable {
 		this.rememberRequest(facts, true);
 		if (options.restoring) { this.restoring.add(id); }
 		this.runs.set(id, run);
-		// The person's own launch shows its terminal; an agent's opens in the background, the person's focus kept (LIFECYCLE-2.2)
-		this.deps.execution.openPair(pairOf(facts), { reveal: options.reveal !== false && !byAgent });
+		// The person's own launch shows its terminal; an agent another agent starts has its card alone, its tab opening only as the
+		// person opens it - covering nothing, taking no focus (LIFECYCLE-2.2)
+		this.deps.execution.openPair(pairOf(facts), byAgent ? { reveal: false, hidden: true } : { reveal: options.reveal !== false });
 		if (options.pin) { this.deps.execution.pinTab?.(id, true); }
 		this.emit({ run: id, kind: 'added' });
 		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]${byAgent ? ` for agent ${byAgent.run}` : ''}`);

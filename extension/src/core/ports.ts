@@ -292,8 +292,11 @@ export interface ExecutionPort {
 	/** Turns the spinner on the run's tab while its card's dot is green, and stops it otherwise (LIFECYCLE-2.2). */
 	spin?(run: RunId, busy: boolean): void;
 	conversations?(): Promise<readonly ConversationKey[]>;
-	/** Creates the run's editor terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). */
-	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void;
+	/**
+	 * Creates the run's terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). Its tab opens
+	 * then - `hidden`, as for an agent another agent starts, it opens only as the person opens the agent (LIFECYCLE-2.2).
+	 */
+	openPair(facts: PairFacts, options: { readonly reveal: boolean; readonly hidden?: boolean }): void;
 	/** Writes a line of startup progress or failure into the run's terminal (UX-1.1: existing surfaces). */
 	note(run: RunId, text: string): void;
 	/** Starts the planned process in the run's existing terminal. Rejects with the actual error when it cannot. */
