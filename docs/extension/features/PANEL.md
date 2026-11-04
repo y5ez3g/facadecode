@@ -99,22 +99,22 @@ smaller than the name's letters.
 **The second line says what was last sent to the agent, unless its dot is red or its CLI waits for the person.**
 
 It says the last message sent to the agent: the person's text after a nonempty Enter, slash commands included, as the
-CLI's input reader read the draft that Enter submitted (CLIS-2.1); a message or Facade result that Facade typed into
-its input, as typed, its `📨` or `🔔` line first; or the task it was started with, its creation prompt's first line. A
-CLI without an input reader has no typed text to show. Before any, it says its CLI title's words: the title CLIS-2.3
-keeps, without the spinner frame or state symbol a CLI puts before its words, for every CLI. Once a message was sent, a
-title never replaces it; the hover's `Title:` shows the title as CLIS-2.3 keeps it. The last message is kept across a
-reload. Two cases say something else while they last: a red dot says why (RULES-3.2) - the error, the Facade tools it
-cannot use or the start not ready - and a native blocker says what it waits for.
-A CLI without its Facade tools says so in plain words, for example
-`Cannot work with other agents: move or rename {file}`, or `Cannot work with other agents: its Facade tools stopped`
-once its tools went away, and stays usable. Fallbacks, before any message or title: the startup stage, `Working`,
-`Idle`, `Activity unavailable`. Idle alone proves neither an empty composer nor usable input; there is no separate
-first-message readiness claim. Never `Done, waiting for you` from a turn end. Normal work/idle shows the message or
-title directly, without a repeated `Working`/`Idle` prefix. Native blockers lead with `Needs permission`,
-`Sign-in required` or `Waiting for an answer`, followed by the CLI's original words when present. A reported blocker
-with no recognized kind says `Needs attention`, preserving its original words. Errors lead with `Error: {reason}`; why
-activity is unavailable is the hover's. No popup solely for a native blocker.
+CLI's input reader read the draft that Enter submitted (CLIS-2.1); a message Facade typed into its input, its own text
+without the `📨` line that introduces it; a Facade result as typed, its `🔔` line first; or the task it was started with,
+its creation prompt's first line. A CLI without an input reader has no typed text to show. Before any, it says its CLI
+title's words: the title CLIS-2.3 keeps, without the spinner frame or state symbol a CLI puts before its words, for
+every CLI. Once a message was sent, a title never replaces it; the hover's `Title:` shows the title as CLIS-2.3 keeps
+it. The last message is kept across a reload. Two cases say something else while they last: a red dot says why
+(RULES-3.2) - the error, the Facade tools it cannot use or the start not ready - and a native blocker says what it waits
+for. A CLI without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename
+{file}`, or `Cannot work with other agents: its Facade tools stopped` once its tools went away, and stays usable.
+Fallbacks, before any message or title: the startup stage, `Working`, `Idle`, `Activity unavailable`. Idle alone proves
+neither an empty composer nor usable input; there is no separate first-message readiness claim. Never `Done, waiting for
+you` from a turn end. Normal work/idle shows the message or title directly, without a repeated `Working`/`Idle` prefix.
+Native blockers lead with `Needs permission`, `Sign-in required` or `Waiting for an answer`, followed by the CLI's
+original words when present. A reported blocker with no recognized kind says `Needs attention`, preserving its original
+words. Errors lead with `Error: {reason}`; why activity is unavailable is the hover's. No popup solely for a native
+blocker.
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
 dot or notification rules. Tools injected but not yet connected say `Not connected to other agents yet` in the hover;

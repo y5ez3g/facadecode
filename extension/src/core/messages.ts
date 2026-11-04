@@ -595,7 +595,7 @@ export class MessageService implements Messages, Disposable {
 				stage.attempts++;
 				if (attempt.kind === 'submitted') {
 					if (attempt.effects.outcome === 'confirmed') {
-						this.deps.said?.(stage.target, typeof text === 'string' ? text : text());
+						this.deps.said?.(stage.target, this.saidText(stage, typeof text === 'string' ? text : text()));
 						return { status: 'success', effects: attempt.effects, attempts: stage.attempts, via: 'terminal' };
 					}
 					stage.effects = telling(stage.effects, attempt.effects);
@@ -866,6 +866,15 @@ export class MessageService implements Messages, Disposable {
 	}
 
 	/** The record's current version with `changes`, written and told. */
+	/**
+	 * What a delivered stage sent, as the recipient's card says it (PANEL-1.4): a message's own text, without the `📨` line that
+	 * introduces it; a Facade result as typed, its `🔔` line being all it says.
+	 */
+	private saidText(stage: Stage, typed: string): string {
+		const record = this.live.get(stage.message) ?? this.deps.store.list().find(each => each.id === stage.message);
+		return record?.kind === 'message' && !stage.batch ? record.text : typed;
+	}
+
 	private update(id: string, changes: Partial<MessageRecord>): MessageRecord {
 		const current = this.live.get(id) ?? this.deps.store.list().find(record => record.id === id);
 		if (!current) {

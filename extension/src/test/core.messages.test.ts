@@ -124,6 +124,7 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	let owned = true;
 	const stored = new Map<string, MessageRecord>();
 	const log: string[] = [];
+	const said: [RunId, string][] = [];
 	let n = 0;
 	let spent = 0;
 	const deps: MessageServiceDeps = {
@@ -147,11 +148,14 @@ function setUp(options: { readonly createMs?: number } = {}) {
 		window: { id: 'win-1', label: 'Design' },
 		environment: 'local',
 		workspace: 'ws-1',
-		log: { event: text => log.push(text) }
+		log: { event: text => log.push(text) },
+		said: (run, text) => void said.push([run, text])
 	};
 	let service = new MessageService(deps);
 	return {
 		service, runs, input, contacts, stored, log,
+		/** What each recipient's card was told was sent to it, as each delivery went in (PANEL-1.4). */
+		said,
 		/** The window reloads: its message service goes, and a new one opens on the same records. */
 		reload: () => {
 			service.dispose();
@@ -800,6 +804,15 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		unreachable();
 		const failed = await service.send({ from: A, to: '@human', text: 'Again', elapsedMs: 0 });
 		assert.deepStrictEqual([failed.status, failed.reason, contacts.length], ['failure', 'window_unavailable', 2]);
+	});
+
+	test('PANEL-1.4: a recipient\'s card is told a message\'s own text, without the 📨 line that introduces it; a Facade result as typed, its 🔔 line being all it says', async () => {
+		const { service, input, said } = setUp();
+		input.states.set(B, ['draft', 'usable']);
+		await settled(service.send({ from: A, to: B, text: 'Review the API.\nThen the tests.', elapsedMs: 0 }));
+		await sleep(15_000);
+		assert.deepStrictEqual(input.submitted.map(each => [each.run, each.text.split('\n')[0]]), [[B, '📨 Message from Ada (#a1) · #m1'], [A, '🔔 Your message #m1 has been passed on to Bob (#a2).']]);
+		assert.deepStrictEqual(said, [[B, 'Review the API.\nThen the tests.'], [A, '🔔 Your message #m1 has been passed on to Bob (#a2).']]);
 	});
 
 	test('report: a Facade result about another operation goes to its run with the call and agent named, ending quietly if it cannot', async () => {
