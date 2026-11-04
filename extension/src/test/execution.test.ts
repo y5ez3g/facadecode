@@ -86,6 +86,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let loseAttach: boolean;
 	/** Where the next listing's answer waits, once had, until opened: what the run says meanwhile reaches the window first. */
 	let listGate: { entered(): void; readonly open: Promise<void> } | undefined;
+	/** Where the next spawn waits, once had, until opened; and each request's method in order. */
+	let spawnGate: { entered(): void; readonly open: Promise<void> } | undefined;
+	let requested: string[];
 	const ports: AgentExecution[] = [];
 	const extraClients: PtydClient[] = [];
 
@@ -116,6 +119,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		connections = [];
 		delayAttach = 0;
 		loseAttach = false;
+		spawnGate = undefined;
+		requested = [];
 		listGate = undefined;
 		const vscodeApi = {
 			TabInputTerminal,
@@ -178,6 +183,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			return {
 				request: async <M extends Method>(method: M, params: Requests[M]['params']): Promise<Requests[M]['result']> => {
 					if (method === 'spawn') { spawns++; }
+					requested.push(method);
+					if (method === 'spawn' && spawnGate) {
+						const gate = spawnGate;
+						spawnGate = undefined;
+						gate.entered();
+						await gate.open;
+					}
 					if (method === 'terminate' && failTerminateOnce) {
 						failTerminateOnce = false;
 						throw new PtydNotSent('injected request that did not arrive');
@@ -1076,6 +1088,24 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(observer);
 		await until('ptyd to end and forget it', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
+	});
+
+	test('details that change while a run starts are kept with its process once ptyd holds it, never sent before its spawn answers (ARCHITECTURE-2.3)', async () => {
+		let entered!: () => void, open!: () => void;
+		const reached = new Promise<void>(resolve => entered = resolve);
+		spawnGate = { entered, open: new Promise<void>(resolve => open = resolve) };
+		const port = portOf();
+		port.openPair(facts('run-meta'), { reveal: false });
+		const starting = port.spawn('run-meta', plan(ECHO), meta('run-meta'));
+		await reached;
+		port.setMeta('run-meta', { ...meta('run-meta'), name: 'first' });
+		port.setMeta('run-meta', { ...meta('run-meta'), name: 'renamed' });
+		open();
+		await starting;
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		extraClients.push(observer);
+		const held = await until('ptyd to keep the details', async () => (await observer.request('list', { owner: 'workspace-1' })).find(each => each.run === 'run-meta' && each.meta.name === 'renamed'));
+		assert.deepStrictEqual([held.meta.name, requested.filter(method => method === 'spawn' || method === 'setMeta')], ['renamed', ['spawn', 'setMeta']]);
 	});
 
 	test('close while the initial handshake is pending sends no spawn and creates no file effect', async () => {

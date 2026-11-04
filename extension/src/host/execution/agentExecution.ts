@@ -103,6 +103,8 @@ interface Pair {
 	readonly lifetime: AbortController;
 	/** Spawn was sent, but its outcome is not known yet. Closure must reconcile it even before a PID is returned. */
 	starting?: boolean;
+	/** Its details changed while it started, kept for ptyd once it holds the run, which it does not before its spawn answers. */
+	pendingMeta?: RunMeta;
 	/** The CLI whose adapter reads its reports and exit. */
 	cli: string;
 	process?: { readonly pid: number; readonly startedAt: number };
@@ -441,6 +443,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		let info: RunInfo;
 		let snapshot: { readonly screen: string; readonly seq: number } | undefined;
 		pair.starting = true;
+		// The details spawn carries are the latest: a change from now on waits for the run to be held
+		pair.pendingMeta = undefined;
 		try {
 			info = await client.request('spawn', {
 				run, owner: this.options.owner, file: plan.executable, args: plan.args, cwd: plan.cwd, env: plan.env,
@@ -472,6 +476,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.status = info.status;
 		pair.terminalTitle = info.title;
 		pair.terminal.pty.bind(this.binding(client, run), snapshot);
+		this.keepPendingMeta(pair);
 		this.tell(pair);
 		if (info.exited) {
 			this.ended(pair, info.exited);
@@ -574,6 +579,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.status = info.status;
 		pair.terminalTitle = info.title;
 		pair.terminal.pty.bind(this.binding(client, live.run), { screen, seq });
+		this.keepPendingMeta(pair);
 		if (info.exited) {
 			pair.terminal.pty.exited(this.endLine(info.exited));
 		}
@@ -691,7 +697,22 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 	}
 
+	/** Sends the details that changed while the run was not held yet, now that ptyd holds it. */
+	private keepPendingMeta(pair: Pair): void {
+		const pending = pair.pendingMeta;
+		pair.pendingMeta = undefined;
+		if (pending) {
+			this.setMeta(pair.run, pending);
+		}
+	}
+
+	/** Keeps `meta` with the run's process in ptyd - once ptyd holds it: a change while its spawn is under way goes after it. */
 	setMeta(run: RunId, meta: RunMeta): void {
+		const pair = this.pairs.get(run);
+		if (pair && !pair.process) {
+			pair.pendingMeta = meta;
+			return;
+		}
 		void this.session.client(this.holderOf(run)).then(client => client.request('setMeta', { run, meta: { ...meta } })).catch(err => this.options.log(`Could not keep the new details of ${run} with its process: ${messageOf(err)}`));
 	}
 
