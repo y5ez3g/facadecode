@@ -537,10 +537,12 @@ suite('The agent panel in Chromium', function () {
 	test('PANEL-3.1: a page made as the view shows again restores the still-valid scroll position and keyboard card from its saved state, without taking focus', async () => {
 		await call('Emulation.setFocusEmulationEnabled', { enabled: true });
 		await evaluate(`document.querySelector('[data-run="run-12"]').focus(); (document.scrollingElement ?? document.documentElement).scrollTop = 400; document.activeElement.blur()`);
-		await wait(80);
+		// The page keeps where the person was as the scroll's event comes, a frame or more later on a busy machine: waited for, not timed
+		await until(() => evaluate(`window.saved?.scrollTop === 400`)).catch(() => undefined);
 		const saved = await evaluate('window.saved');
 		await load(shipped, saved);
-		await wait(30);
+		// Restored on the first list drawn
+		await until(() => evaluate(`(document.scrollingElement ?? document.documentElement).scrollTop === 400`)).catch(() => undefined);
 		const back = await evaluate(`[(document.scrollingElement ?? document.documentElement).scrollTop, document.activeElement === document.body, [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0).map(card => card.dataset.run)]`);
 		// A scroll beyond the list is kept within it; a card no longer there, or what an earlier build saved beside it, is nothing
 		await load(shipped, { scrollTop: 1e6, target: 'run-99', focused: 'run-12' });
