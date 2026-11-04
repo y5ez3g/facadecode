@@ -8,6 +8,7 @@
 - **OpenCode agents show their own session alone.** OpenCode's session tab strip, which listed every session of the folder - other agents' among them - is turned off for the agents Facade starts. Your OpenCode configuration is unchanged.
 - **Smoother avatars and status dots.** An agent's avatar no longer shows a pale ring round a coloured or dark icon, and the dot on a selected agent no longer a light rim, on a display scaled to 125% or 150%.
 - **Fixed: "Cannot work with other agents: move or rename .agents/plugins/facade/plugin.json".** Antigravity agents could not work with other agents where the Facade Code app had taken its own part out of the plugin file Facade wrote. Facade now recognizes any file of its plugin folder that holds only what a Facade writes, whatever was taken out of it; a file with anything of yours in it is still left alone.
+- **Fixed: messages to Muse Code agents often came back as 🔔 results.** Facade pressed Enter a moment too soon after pasting a message, and Muse Code took that Enter as a new line in the message; the message went in only with a second Enter three seconds later, too late to confirm at once, so its sender got a 🔔 result instead. Facade now leaves Muse Code a quarter of a second before Enter.
 
 ## 0.0.5
 
