@@ -228,6 +228,15 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.deepStrictEqual(waits, []);
 	});
 
+	test('a message to Muse Code waits a quarter of a second more before its Enter, which Muse Code takes soon after a paste for a line break in it; other CLIs\' do not (CLIS-2.1)', async () => {
+		const muse = setUp({ inputAdapter: 'muse-frame' });
+		assert.deepStrictEqual(await effects(muse.input.submit(RUN, 'Review the API.')), CONFIRMED);
+		assert.deepStrictEqual([muse.terminal.calls.filter(call => !call.startsWith('read')), muse.waits], [['type "Review the API."', 'keys Enter'], [250]]);
+		const claude = setUp();
+		assert.deepStrictEqual(await effects(claude.input.submit(RUN, 'Review the API.')), CONFIRMED);
+		assert.deepStrictEqual(claude.waits, []);
+	});
+
 	test('it waits for the draft and for the empty input, reading every 100 ms: busy or idle, an emptied input is the CLI\'s acceptance', async () => {
 		const { input, terminal, waits } = setUp();
 		terminal.showsPasteAfter = 4;
