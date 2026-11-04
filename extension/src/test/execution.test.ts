@@ -1307,6 +1307,21 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([held.meta.name, requested.filter(method => method === 'spawn' || method === 'setMeta')], ['renamed', ['spawn', 'setMeta']]);
 	});
 
+	test('a change of a run\'s details while its start waits for ptyd\'s connection goes with its spawn, which carries the latest (ARCHITECTURE-2.3)', async () => {
+		const port = portOf();
+		port.openPair(facts('run-early'), { reveal: false });
+		// An earlier change, made before the start was asked for, is older than the details the start carries
+		port.setMeta('run-early', { ...meta('run-early'), name: 'stale' });
+		const starting = port.spawn('run-early', plan(ECHO), meta('run-early'));
+		// While its start waits for the connection: a change of its tab, its second line, its name
+		port.setMeta('run-early', { ...meta('run-early'), name: 'early' });
+		await starting;
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		extraClients.push(observer);
+		const held = await until('ptyd to hold it', async () => (await observer.request('list', { owner: 'workspace-1' })).find(each => each.run === 'run-early'));
+		assert.deepStrictEqual([held.meta.name, requested.filter(method => method === 'spawn' || method === 'setMeta')], ['early', ['spawn']]);
+	});
+
 	test('close while the initial handshake is pending sends no spawn and creates no file effect', async () => {
 		let release!: () => void;
 		connectGate = new Promise(resolve => release = resolve);

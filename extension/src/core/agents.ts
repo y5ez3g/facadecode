@@ -717,9 +717,11 @@ export class AgentService implements Agents, Disposable {
 			this.update(run, run.facts.lifecycle === 'ended'
 				? { pid: started.pid, startedAt: started.startedAt }
 				: { lifecycle: 'running', phase: 'running', pid: started.pid, startedAt: started.startedAt }, 'lifecycle');
-			// A rename while it started is kept with its process too, as a later one is: a reload shows it (LIFECYCLE-2.1, 3.5)
-			if (run.facts.name !== meta.name || run.facts.sessionId !== meta.sessionId) {
-				this.deps.execution.setMeta(run.facts.id, metaOf(run.facts, run.exactResume));
+			// What changed while it started - a rename, its tab, its second line, its tools - is kept with its process too, as a later
+			// change is: a reload shows it (LIFECYCLE-2.1, 3.5)
+			const now = metaOf(run.facts, run.exactResume);
+			if (JSON.stringify(now) !== JSON.stringify(meta)) {
+				this.deps.execution.setMeta(run.facts.id, now);
 			}
 			this.remember(run);
 			if (options.resume) { this.deps.locations.rememberLocation?.(run.facts.cwd); }

@@ -452,6 +452,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		if (!pair) {
 			throw new Error('The agent was closed before its CLI started.');
 		}
+		// The details its start is asked with are the latest now: a change kept from before is older
+		pair.pendingMeta = undefined;
 		let client = await this.session.client();
 		if (this.pairs.get(run) !== pair || this.session.closed) {
 			throw new Error('The agent was closed before its CLI started.');
@@ -466,12 +468,14 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		let info: RunInfo;
 		let snapshot: { readonly screen: string; readonly seq: number } | undefined;
 		pair.starting = true;
-		// The details spawn carries are the latest: a change from now on waits for the run to be held
+		// The details spawn carries are the latest - a change while it waited for the connection among them; one from now on goes once
+		// the run is held
+		const latest = pair.pendingMeta ?? meta;
 		pair.pendingMeta = undefined;
 		try {
 			const spawned = client.request('spawn', {
 				run, owner: this.options.owner, file: plan.executable, args: plan.args, cwd: plan.cwd, env: plan.env,
-				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...meta },
+				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...latest },
 				...plan.screenStatus ? { screenStatus: plan.screenStatus } : {}
 			});
 			pair.spawnSent = true;

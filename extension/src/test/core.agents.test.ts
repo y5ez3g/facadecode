@@ -682,6 +682,20 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.execution.metas.get(id)?.name, 'Grace');
 	});
 
+	test('its tab opened and what was typed in while its CLI starts are kept with its process too: a reload shows the tab where it is and the line (LIFECYCLE-3.5, PANEL-1.4)', async () => {
+		const world = setUp();
+		let release!: () => void;
+		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.execution.placements.fire({ run: id, place: { column: 2, activeAt: 7 } });
+		world.agents.said(id, 'check the build');
+		release();
+		await settle();
+		const kept = world.execution.metas.get(id);
+		assert.deepStrictEqual([kept?.tab, kept?.said], [{ column: 2, activeAt: 7 }, 'check the build']);
+	});
+
 	test('a CLI a signal ended is abnormal though its code is 0 - as node-pty reports a process killed on Linux and macOS - and keeps its red pair; the person\'s own close is not (RULES-3.3)', async () => {
 		const world = setUp();
 		const killed = world.agents.launch({ name: 'K', location: 'loc-1', cli: 'claude', origin: 'human' });
