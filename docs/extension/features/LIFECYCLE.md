@@ -189,19 +189,25 @@ cannot tell - a name two open agent tabs bear, or several copies at once, as Cop
 most one unpinned agent terminal per group draws, besides the pinned ones, while ptyd keeps every agent's process and
 screen (ARCHITECTURE-2.3).
 
-The tab shows only the agent name beside the CLI's theme-appropriate logo; custom CLIs use a terminal icon. While its
-card's dot is green (RULES-3.2), a spinner frame turns between the logo and the name every 100 ms, for every CLI: the
-braille frames `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`. Editor tabs draw no icon in a label, so the frame is text before the name in the tab's
-title; the spinner's frames are never taken for a rename. When the agent is not busy the tab shows its name alone,
-keeping no blank space for the frame. Under reduced motion - `workbench.reduceMotion` `on`, or `auto` with the system
-asking for it - the tab keeps one frame still (UX-2.2). Built-in tab logos use contributed native icons, with their
-brand colors and theme foreground for monochrome marks. They remain recognizable in light, dark and high-contrast
-themes, including after a theme change or terminal restoration. This uses the public icon API; it does not patch editor
-styles or change the person's theme. CLI titles and other status remain in PANEL-1.4's second line, never appended to
-the tab name. Do not add a name length limit or change the editor's tab-width settings. Native tab renames synchronize
-the complete display name when valid, without removing text that resembles a CLI title. Match terminals by actual
-identity, never by a duplicate title. Facade never offers panel placement as an alternative. An agent's terminal passes
-the person's input to its CLI as typed, except a mouse report the editor could not measure. The editor reports a click's
+The tab shows only the agent name beside the CLI's theme-appropriate logo - custom CLIs use a terminal icon - with
+` #aN` after the name where PANEL-1.3's cards show it, `#aN` alone for an empty name. An open tab follows as a duplicate
+appears or goes, in any group; a hidden one is not opened for it, and its next opening has the current title. A native
+tab keeps its own font and width, which may clip it. While its card's dot is green (RULES-3.2), a spinner frame turns
+between the logo and the name every 100 ms, for every CLI: the braille frames `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`. Editor tabs draw no icon in
+a label, so the frame is text before the name in the tab's title; the spinner's frames are never taken for a rename.
+When the agent is not busy the tab shows its name alone, keeping no blank space for the frame. Under reduced motion -
+`workbench.reduceMotion` `on`, or `auto` with the system asking for it - the tab keeps one frame still (UX-2.2).
+Built-in tab logos use contributed native icons, with their brand colors and theme foreground for monochrome marks. They
+remain recognizable in light, dark and high-contrast themes, including after a theme change or terminal restoration.
+This uses the public icon API; it does not patch editor styles or change the person's theme. CLI titles and other status
+remain in PANEL-1.4's second line, never appended to the tab name. Do not add a name length limit or change the editor's
+tab-width settings. Native tab renames synchronize the complete display name when valid, without removing text that
+resembles a CLI title, apart from the tab's own short ID: on `#a12`'s tab, `auditor` and `auditor #a12` both mean the
+name `auditor`, and `#a12` alone an empty name - at most one trailing occurrence of its own ID, whatever the duplicates
+are by then; no other `#aN` is touched. A name that is to end in that tab's own ID is given through Rename Agent, whose
+input holds the stored name alone. Facade's own title changes never become a rename. Match terminals by actual identity,
+never by a duplicate title. Facade never offers panel placement as an alternative. An agent's terminal passes the
+person's input to its CLI as typed, except a mouse report the editor could not measure. The editor reports a click's
 release after it opens a clicked link, and a link opened over an editor terminal takes the terminal out of the page
 first: the release then has no position (`ESC[<0;NaN;NaNm` in the SGR encoding), which a CLI shows as typed text. Such a
 report, in any mouse encoding, takes the position of the report before it - for a release, its press; one with none
@@ -309,7 +315,8 @@ follows `tabGroups` pin changes on that agent's tab. Facade-to-native sync appli
 `workbench.action.pinEditor` or `workbench.action.unpinEditor` command when that agent's tab next becomes the active
 editor, never stealing focus or revealing a tab just to pin it (ARCHITECTURE-1.2). Ordinary files and external terminals
 do not become agents. A close the editor reports as the person's, of an agent tab showing its pin mark - its Close,
-Close Editors and Group, Close All Groups, Kill All Terminals - Unpins the agent and hides its tab; an Unpin that cannot
+Close Editors and Group, Close All Groups, Kill All Terminals - Unpins the agent and hides its tab, the terminal naming
+its agent and the mark being the one its tab last showed, also where a move left that tab unknown; an Unpin that cannot
 be saved opens the tab again, pinned, and says `Could not unpin {0}: {1}`. A pinned agent's tab whose mark is still to
 follow shows none, and its close hides it alone, keeping the Pin. Closing a floating editor window closes its tabs,
 marked ones included, as the person's closes do, so a marked one there Unpins as well. The editor's Close All and Close

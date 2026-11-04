@@ -56,14 +56,15 @@ automatically launch an agent. This prerequisite step does not ask the person to
 
 ### 1.3 Card geometry and identity
 
-**A card is two lines beside a CLI avatar and status dot; the first line identifies the agent.**
+**A card is two lines beside a CLI avatar and status dot; the first line identifies the agent and shows its Pin at the
+right.**
 
 | Element | Value |
 | --- | --- |
 | Card | Minimum 44 px tall; padding 8 px top/bottom/left, 9 px right; 4 px corners |
 | Avatar | 28 px circle, 8 px before text, 1 px inner edge of the theme foreground at 14 % opacity - high contrast: its contrast border - never an opaque border over the icon |
-| First line | Name 13 px, the Pin after it; no location |
-| Pin | 14 px icon box 4 px after the name as shown, its ellipsis included; adds no card height |
+| First line | Name 13 px at the left; its short ID where its name repeats, 12 px in the quieter color, 4 px after it; the Pin at the right; no location |
+| Pin | Nonshrinking 14 px icon box at the first line's right content edge, inside the card's right padding, at least 4 px from the name and ID; adds no card height |
 | Second line | 12 px, quieter, single line with ellipsis |
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
@@ -75,16 +76,21 @@ first line is the agent's name, a shortened location being no help to read, and 
 accessible label's in full (1.5). A location's label there is alias/branch/folder, prefixed by workspace folder in a
 multi-folder window unless it is named that folder's name already, as a plain folder is; a related worktree can be
 outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
-temporarily disconnected location is retained. Reserve the Pin's measured width and spacing when present, and give the
-name the rest: a long name ellipsizes at the end between whole graphemes, its width that of the text it shows as drawn,
-so that a Pin follows the ellipsis as closely as it follows a whole name. Measure in the displayed font and available
-pixels, not a fixed character count; refit on resize, font changes and rename. Avatar/dot do not shrink. The panel
-header is unchanged.
+temporarily disconnected location is retained. Where two or more of this window's cards have exactly the same stored
+name after trimming - compared whole and case-sensitively, among its starting, disconnected and retained-error cards too
+and those the filter hides, other windows' never - each adds its own short ID after the name; an empty name shows its
+short ID alone, in the name's style. A duplicate appearing, going or being renamed updates every card affected, changing
+no stored name, order, selection or focus. Reserve the whole ID where present, and the Pin's width and gap, and give the
+name the rest: a long name ellipsizes at the end between whole graphemes, and a short name and its ID stay together at
+their natural widths, the spare space before the Pin. Unpinned cards reserve no Pin box. The Pin and its hover box stay
+clear of the overlay scrollbar at every width and zoom, and neither the scrollbar's showing nor pointer or keyboard
+focus moves them. Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font
+changes and rename. Avatar/dot do not shrink. The panel header is unchanged.
 
-Pinned cards show the Pin beside the name. Hovering the Pin shows its own tooltip with its restoration meaning: the
-conversation is restored when the workspace opens again. Its color follows the quieter text, including the selected
-foreground at 80% opacity; high-contrast selections use full opacity. The icon's internal space keeps its visible shape
-smaller than the name's letters.
+Pinned cards show the Pin at the first line's right; it is passive, with no click or Tab stop. Hovering the Pin shows
+its own tooltip with its restoration meaning: the conversation is restored when the workspace opens again. Its color
+follows the quieter text, including the selected foreground at 80% opacity; high-contrast selections use full opacity.
+The icon's internal space keeps its visible shape smaller than the name's letters.
 
 ### 1.4 Second line and dot
 

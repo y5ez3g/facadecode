@@ -98,16 +98,17 @@ while the panel is still open. It is given up, typing nothing, where the input f
 within those thirty seconds, or the CLI is working, and Enter is not pressed where `/mcp` does not show alone: the
 person's own first turn then starts the tools for the turns after it. Its creation prompt goes after that, as its first
 message, its budget starting as that preparation is done or given up - never sooner because the start answered, which it
-does once the process runs (MCP-2.3). Until that prompt is delivered or given up, its preparation included, the run's
-input is held for it (RULES-1.10): a message sent meanwhile goes after it, held from its stage's start, so that its
-deadline is ten minutes from then (RULES-1.5). A blocked input box consumes the normal attempts. Both paths use
-RULES-1.3's meaning of delivery; native acceptance does not require a terminal Enter effect. Report process startup and
-prompt input separately. Failed prompt submission leaves the started agent available. An unverified native prompt
-remains unconfirmed in its record; it is neither confirmed delivery nor a continuing background delivery. Reading its
-complete record through read_messages then delivers it without another paste. MCP-2.3 owns the final report when prompt
-input remains pending after process startup. A native prompt, confirmed or not, is never sent again through the
-post-start path, and no prompt is typed twice (RULES-1.6). There is no task, task result, child completion report or
-replay of a creation prompt.
+does once the process runs (MCP-2.3). A window reloaded during the preparation skips what is left of it, as it is kept
+in memory alone: the prompt goes as the input allows, and that first turn may lack the tools. Until that prompt is
+delivered or given up, its preparation included, the run's input is held for it (RULES-1.10): a message sent meanwhile
+goes after it, held from its stage's start, so that its deadline is ten minutes from then (RULES-1.5). A blocked input
+box consumes the normal attempts. Both paths use RULES-1.3's meaning of delivery; native acceptance does not require a
+terminal Enter effect. Report process startup and prompt input separately. Failed prompt submission leaves the started
+agent available. An unverified native prompt remains unconfirmed in its record; it is neither confirmed delivery nor a
+continuing background delivery. Reading its complete record through read_messages then delivers it without another
+paste. MCP-2.3 owns the final report when prompt input remains pending after process startup. A native prompt, confirmed
+or not, is never sent again through the post-start path, and no prompt is typed twice (RULES-1.6). There is no task,
+task result, child completion report or replay of a creation prompt.
 
 ### 2.3 Contacting the person
 
