@@ -18,6 +18,8 @@ export interface AgentTerminal {
 	/** Closes its tab, the run and its pseudoterminal going on: opened again, it draws the run's screen (LIFECYCLE-2.2). */
 	hide(): boolean;
 	rename(name: string): void;
+	/** Its agent's short ID, and whether its tab shows it (LIFECYCLE-2.2). */
+	label(alias: string, shown: boolean): void;
 	dispose(): void;
 }
 
@@ -252,6 +254,7 @@ export class AgentTerminals implements vscode.Disposable {
 				pair.name = name;
 				pty.rename(name);
 			},
+			label: (alias, shown) => pty.label(alias, shown),
 			dispose: () => this.remove(pair)
 		};
 	}

@@ -455,6 +455,20 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.execution.hidden.has(id), false);
 	});
 
+	test('a name repeating among the window\'s cards shows each one\'s short ID on its tab, an empty name its ID alone; a duplicate going takes it away (LIFECYCLE-2.2)', async () => {
+		const world = setUp();
+		const labels = new Map<RunId, [string, boolean]>();
+		(world.execution as unknown as { tabLabel: (run: RunId, alias: string, shown: boolean) => void }).tabLabel = (run, alias, shown) => labels.set(run, [alias, shown]);
+		const first = world.agents.launch({ name: 'reviewer', location: 'loc-1', cli: 'claude', origin: 'human' });
+		assert.deepStrictEqual(labels.get(first)?.[1], false);
+		const second = world.agents.launch({ name: 'reviewer', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const empty = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		assert.deepStrictEqual([labels.get(first), labels.get(second), labels.get(empty)?.[1]], [['#a1', true], ['#a2', true], true]);
+		world.agents.rename(second, 'auditor');
+		assert.deepStrictEqual([labels.get(first)?.[1], labels.get(second)?.[1]], [false, false]);
+	});
+
 	test('an agent another agent starts has its card alone: its tab is not opened, and it covers nothing and takes no focus (LIFECYCLE-2.2)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' } });

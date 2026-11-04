@@ -97,6 +97,12 @@ function cardWords(): CardWords {
 						: vscode.l10n.t("Cannot work with other agents: could not create files"),
 		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
 		startedBy: creator => vscode.l10n.t("Started by: {0}", creator),
+		from: sender => vscode.l10n.t("From: {0}", sender),
+		sourceWindow: label => vscode.l10n.t("Source window: {0}", label),
+		// {0} the agent that sent it, with its window where that is another; {1} its text
+		saidByAgent: (sender, line) => vscode.l10n.t("Last message from agent {0}: {1}", sender, line),
+		saidByPerson: line => vscode.l10n.t("Your last input: {0}", line),
+		saidByFacade: line => vscode.l10n.t("Facade result: {0}", line),
 		locale: vscode.env.language
 	};
 }

@@ -125,6 +125,7 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	const stored = new Map<string, MessageRecord>();
 	const log: string[] = [];
 	const said: [RunId, string][] = [];
+	const sources: unknown[] = [];
 	/** Runs whose post-start creation prompt is still to go in (RULES-1.10). */
 	const creating = new Set<RunId>();
 	let n = 0;
@@ -151,13 +152,15 @@ function setUp(options: { readonly createMs?: number } = {}) {
 		environment: 'local',
 		workspace: 'ws-1',
 		log: { event: text => log.push(text) },
-		said: (run, text) => void said.push([run, text])
+		said: (run, text, source) => { said.push([run, text]); sources.push(source); }
 	};
 	let service = new MessageService(deps);
 	return {
 		service, runs, input, contacts, stored, log, creating,
 		/** What each recipient's card was told was sent to it, as each delivery went in (PANEL-1.4). */
 		said,
+		/** Who the record says sent each of them (PANEL-1.4). */
+		sources,
 		/** The window reloads: its message service goes, and a new one opens on the same records. */
 		reload: () => {
 			service.dispose();
@@ -251,6 +254,17 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		reload().resume();
 		await sleep(3_000);
 		assert.deepStrictEqual([stored.get(prompt.id)!.delivery.status, input.submitted.map(each => each.text.split('\n')[1])], ['failure', ['Hello']]);
+	});
+
+	test('what a card is told was sent says who sent it, from the record: an agent, with its window where that is another, or Facade for a result (PANEL-1.4, 1.5)', async () => {
+		const { service, input, sources } = setUp();
+		input.states.set(B, ['usable']);
+		input.states.set(A, ['usable']);
+		await settled(service.send({ from: A, to: B, text: '📨 looks like a mark', elapsedMs: 0 }));
+		await settled(service.send({ from: A, sender: { party: { run: C, alias: '#a9', name: 'Far' }, window: 'win-2', label: 'Design' }, to: B, text: 'From afar', elapsedMs: 0 }));
+		service.report({ to: A, text: 'A result.' });
+		await sleep(1_000);
+		assert.deepStrictEqual(sources, [{ kind: 'agent', name: 'Ada', alias: '#a1' }, { kind: 'agent', name: 'Far', alias: '#a9', window: 'Design' }, { kind: 'facade' }]);
 	});
 
 	test('a reserved receipt makes no inbox item, retains its ID and cannot be handed over twice', async () => {

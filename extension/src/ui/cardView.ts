@@ -46,6 +46,14 @@ export interface CardWords {
 	readonly toolsUnavailable: (problem: ToolsProblem | undefined, file: string | undefined) => string;
 	/** `Started by: {0}`, {0} the reference of the agent that started it (PANEL-1.5). */
 	readonly startedBy: (creator: string) => string;
+	/** `From: {0}`, {0} the agent that sent the message the second line says (PANEL-1.5). */
+	readonly from: (sender: string) => string;
+	/** `Source window: {0}`, {0} the sender's window, where that is another (PANEL-1.5). */
+	readonly sourceWindow: (label: string) => string;
+	/** What a screen reader hears of the second line, its source in words, not its mark (PANEL-1.5). */
+	readonly saidByAgent: (sender: string, line: string) => string;
+	readonly saidByPerson: (line: string) => string;
+	readonly saidByFacade: (line: string) => string;
 	/** The person's language, as a custom CLI's initial is uppercased in it (UX-2.1). */
 	readonly locale: string;
 }
@@ -95,6 +103,17 @@ export interface CardStatus {
 	readonly stateText: string;
 	readonly line: string;
 	readonly reason?: string;
+	/** What the second line says where that is what was last sent, and who sent it. */
+	readonly said?: CardSaid;
+}
+
+/** What was last sent to a run, as its card says it (`line`) and in itself (`text`), and its source (PANEL-1.4, 1.5). */
+export interface CardSaid {
+	readonly line: string;
+	readonly text: string;
+	readonly kind: 'agent' | 'person' | 'facade';
+	readonly sender?: string;
+	readonly window?: string;
 }
 
 /**
@@ -129,9 +148,31 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	const reason = !working && !starting && !idle ? facts.activityReason?.trim() : undefined;
 	// The last message sent to it - the task it was started with being the first - else its CLI's title without the state symbol
 	// before its words (PANEL-1.4)
-	const conversation = facts.said || facts.promptLine || titleText(facts.title);
 	const fallback = working ? words.working : starting ? (facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName)) : stateText;
-	return { dot, stateText, line: conversation || fallback, ...reason && reason !== stateText ? { reason } : {} };
+	const said = saidOf(facts);
+	return { dot, stateText, line: said?.line ?? (titleText(facts.title) || fallback), ...said ? { said } : {}, ...reason && reason !== stateText ? { reason } : {} };
+}
+
+/**
+ * What was last sent to the run and by whom (PANEL-1.4): another agent's message - the task an agent-started run was started with
+ * among them - marked `📨`, from who its record says sent it, never from its text; a Facade result, or the person's input, as it is.
+ */
+function saidOf(facts: RunFacts): CardSaid | undefined {
+	if (facts.said) {
+		const source = facts.saidSource;
+		if (source?.kind === 'agent') {
+			const sender = source.name ? `${source.name}${source.alias ? ` (${source.alias})` : ''}` : source.alias;
+			return { line: `\u{1F4E8} ${facts.said}`, text: facts.said, kind: 'agent', ...sender ? { sender } : {}, ...source.window ? { window: source.window } : {} };
+		}
+		return { line: facts.said, text: facts.said, kind: source?.kind === 'facade' ? 'facade' : 'person' };
+	}
+	if (facts.promptLine) {
+		const creator = facts.creatorLabel ?? facts.creator;
+		// The label a start keeps is `name #aN`
+		const sender = creator?.replace(/^(.+) (#a\d+)$/u, '$1 ($2)');
+		return { line: `\u{1F4E8} ${facts.promptLine}`, text: facts.promptLine, kind: 'agent', ...sender ? { sender } : {} };
+	}
+	return undefined;
 }
 
 /** Why a run is in error: an abnormal exit in the person's words, from how it ended (RULES-3.3); any other reason as it was given. */
@@ -200,7 +241,7 @@ function upper(text: string, locale: string): string {
  * the state and its reason (the page adds the start time, and the qualified location with the window); and an accessible label of
  * name, short run ID, state, location, CLI and second line.
  */
-export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly placeShown?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly window?: string }): Card {
+export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly repeated?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly window?: string }): Card {
 	const { place, words } = input;
 	const status = statusOf(facts, words);
 	const described = facts.title || facts.promptLine;
@@ -215,9 +256,14 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		...status.reason && status.reason !== described ? [words.reason(status.reason)] : [],
 		// The card's row may cut this line short: the hover says it whole (PANEL-1.5)
 		...tools ? [words.tools(tools)] : [],
+		...status.said?.sender ? [words.from(status.said.sender)] : [],
+		...status.said?.window ? [words.sourceWindow(status.said.window)] : [],
 		...facts.origin === 'agent' && (facts.creatorLabel ?? facts.creator) ? [words.startedBy((facts.creatorLabel ?? facts.creator)!)] : []
 	];
-	const label = [facts.name, facts.alias, ...(facts.pin && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [status.line] : []].filter(Boolean).join(', ');
+	const heard = status.said?.kind === 'agent' ? words.saidByAgent([status.said.sender, status.said.window].filter(Boolean).join(', '), status.said.text)
+		: status.said?.kind === 'facade' ? words.saidByFacade(status.said.text)
+			: status.said ? words.saidByPerson(status.said.text) : status.line;
+	const label = [facts.name, facts.alias, ...(facts.pin && words.pinned ? [words.pinned] : []), status.stateText, place.qualified, facts.displayName, ...status.line !== status.stateText ? [heard] : []].filter(Boolean).join(', ');
 	const avatar = avatarOf(facts.cli, facts.displayName, words.locale);
 	return {
 		runId: facts.id,
@@ -225,8 +271,10 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		selected: input.selected,
 		name: facts.name,
 		alias: facts.alias,
+		// Its short ID beside a name another card of this window has too (PANEL-1.3)
+		...(input.repeated && facts.name.trim() ? { repeated: true as const } : {}),
 		...(avatar ? { avatar } : {}),
-		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), ...input.placeShown === false ? { hidden: true as const } : {}, full: [words.location(place.context), words.path(place.path), ...input.window ? [words.window(input.window)] : []].join('\n') },
+		location: { full: [words.location(place.context), words.path(place.path), ...input.window ? [words.window(input.window)] : []].join('\n') },
 		dot: status.dot,
 		stateText: status.stateText,
 		line: status.line,

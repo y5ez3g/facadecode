@@ -684,6 +684,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		return pair;
 	}
 
+	/** `run`'s short ID, and whether its tab shows it: its name repeats among this window's cards, or it has none (LIFECYCLE-2.2). */
+	tabLabel(run: RunId, alias: string, shown: boolean): void {
+		this.pairs.get(run)?.terminal.label(alias, shown);
+	}
+
 	/** Closes `run`'s tab, its agent going on, until the person opens it again (LIFECYCLE-2.2). */
 	hideTab(run: RunId): boolean {
 		return this.pairs.get(run)?.terminal.hide() ?? false;

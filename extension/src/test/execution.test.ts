@@ -1111,6 +1111,30 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([terminals[1].disposed, terminals[2].disposed, closes], [true, false, []]);
 	});
 
+	test('a repeated name shows its short ID on its tab, and a native rename takes that ID off what was typed - the tab\'s own, once - whatever the duplicates are by then (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const renames: unknown[] = [];
+		port.onDidRenameTab(rename => renames.push(rename));
+		port.openPair(facts('run-r'), { reveal: false });
+		const tab = terminals[0];
+		open(tab);
+		const reset = (name: string) => { tab.name = name; tabsChanged.fire({ opened: [], closed: [], changed: [tab.tab] }); };
+		reset(tab.options.name as string);
+		port.tabLabel('run-r', '#a12', true);
+		assert.strictEqual(tab.names.at(-1), 'Ada #a12');
+		reset('Ada #a12');
+		assert.deepStrictEqual(renames, [], 'its own title is no rename');
+		for (const [typed, name] of [['auditor', 'auditor'], ['auditor #a12', 'auditor'], ['#a12', ''], ['auditor #a13', 'auditor #a13']] as const) {
+			renames.length = 0;
+			reset(typed);
+			assert.deepStrictEqual(renames, [{ run: 'run-r', name }], typed);
+			port.rename('run-r', 'Ada');
+			reset(tab.names.at(-1)!);
+		}
+		port.tabLabel('run-r', '#a12', false);
+		assert.strictEqual(tab.names.at(-1), 'Ada');
+	});
+
 	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
 		const port = portOf();
 		const closes: { readonly run: RunId; readonly marked: boolean }[] = [];

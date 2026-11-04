@@ -39,7 +39,7 @@ const WORDS: CardWords = {
 	endedBySignal: signal => `Durch Signal ${signal} beendet`,
 	window: label => `Window: ${label}`,
 	toolsUnavailable: problem => `Can't work with other agents: ${problem}`,
-	startedBy: creator => `Started by: ${creator}`,
+	from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, startedBy: creator => `Started by: ${creator}`,
 	exitUnknown: 'Getrennt; Exit-Ursache unbekannt',
 	locale: 'en'
 };
@@ -112,7 +112,27 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			line({ title: '✳ Fixing the login bug', promptLine: 'Implement the parser', said: 'and the tests' }),
 			line({ title: '⠋' }),
 			line({})
-		], ['Fixing the login bug', '/clear', 'Implement the parser', 'and the tests', 'Idle', 'Idle']);
+		], ['Fixing the login bug', '/clear', '📨 Implement the parser', 'and the tests', 'Idle', 'Idle']);
+	});
+
+	test('PANEL-1.4, 1.5: another agent\'s message is marked 📨 by who its record says sent it - never by its text - with its sender in the hover and its source in words for a screen reader; the person\'s input and a Facade result have no sender', () => {
+		const cardWith = (facts: Partial<RunFacts>) => cardOf(run({ activity: 'not_working', ...facts }), { place, selected: false, menu, words: WORDS });
+		const agent = cardWith({ said: 'Fix the login', saidSource: { kind: 'agent', name: 'Time-pi-3', alias: '#a65' } });
+		assert.strictEqual(agent.line, '📨 Fix the login');
+		assert.ok(agent.tooltip.includes('From: Time-pi-3 (#a65)') && !agent.tooltip.some(line => line.startsWith('Source window:')), agent.tooltip.join('|'));
+		assert.ok(agent.label.endsWith('Last message from agent Time-pi-3 (#a65): Fix the login'), agent.label);
+		const away = cardWith({ said: 'Fix it', saidSource: { kind: 'agent', alias: '#a7', window: 'Design' } });
+		assert.ok(away.tooltip.includes('From: #a7') && away.tooltip.includes('Source window: Design'), away.tooltip.join('|'));
+		assert.ok(away.label.endsWith('Last message from agent #a7, Design: Fix it'), away.label);
+		const person = cardWith({ said: '📨 a person typed this' });
+		assert.deepStrictEqual([person.line, person.tooltip.some(line => line.startsWith('From:')), person.label.endsWith('Your last input: 📨 a person typed this')], ['📨 a person typed this', false, true]);
+		const result = cardWith({ said: '🔔 Your message #m42 has been passed on.', saidSource: { kind: 'facade' } });
+		assert.deepStrictEqual([result.line, result.tooltip.some(line => line.startsWith('From:')), result.label.endsWith('Facade result: 🔔 Your message #m42 has been passed on.')], ['🔔 Your message #m42 has been passed on.', false, true]);
+		// A creation prompt is its creator's message, on either path; a question or an error takes the line, and the sender goes with it
+		const task = cardWith({ promptLine: 'Implement the parser', origin: 'agent', creatorLabel: 'Maker #a7' });
+		assert.deepStrictEqual([task.line, task.tooltip.includes('From: Maker (#a7)')], ['📨 Implement the parser', true]);
+		const asked = cardWith({ said: 'Fix it', saidSource: { kind: 'agent', name: 'A', alias: '#a2' }, blocker: { kind: 'question' } });
+		assert.strictEqual(asked.tooltip.some(line => line.startsWith('From:')), false);
 	});
 
 	test('connecting tools are said in the hover; a start not ready by its bound says them on its red second line (RULES-3.2), and actual connection removes them', () => {
@@ -248,7 +268,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([
 			statusOf(run({ title: undefined, promptLine: 'Implement the parser' }), WORDS).line,
 			statusOf(run({ activity: 'not_working', title: undefined, promptLine: 'Implement the parser' }), WORDS).line
-		], ['Implement the parser', 'Implement the parser'], 'the creation prompt is direct too, with no normal-state prefix');
+		], ['📨 Implement the parser', '📨 Implement the parser'], 'the creation prompt is direct too, with no normal-state prefix');
 	});
 
 	test('U06: the hover names the agent with its short run ID and CLI, then the full title, the state and an unsaid reason; the label says name, short ID, state, location, CLI and second line', () => {
@@ -258,7 +278,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual([working.tooltip, working.label, working.selected, working.startedAt, working.location, working.menu], [
 			['Agent: Ada · #a1 · Claude Code', 'Title: Fix the login flow', 'Status: Working'],
 			'Ada, #a1, Working, shop · main, Claude Code, Fix the login flow',
-			true, 2000, { label: 'main', folderPrefix: 'shop', full: 'Location: shop · main\nPath: /app' }, menu
+			true, 2000, { full: 'Location: shop · main\nPath: /app' }, menu
 		]);
 		assert.deepStrictEqual([blocked.tooltip, blocked.label], [['Agent: Ada · #a1 · Claude Code', 'Title: Fix the login flow', 'Status: Waiting for an answer'], 'Ada, #a1, Waiting for an answer, shop · main, Claude Code']);
 		// The second line saying no more than the state is not said twice
@@ -295,10 +315,10 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 			activity: 'unknown', reporting: false, activityReason: title });
 		const remote = { ...place, context: 'shop · main · SSH: remote', path: '/Case/one\nTwo' };
 		const card = cardOf(facts, { place: remote, selected: false, menu, words: WORDS, window: 'Remote' });
-		assert.deepStrictEqual(card.tooltip, ['Agent: #a1 · Claude Code', `Title: ${title}`, 'Status: Activity unavailable', 'Started by: Maker #a7']);
+		assert.deepStrictEqual(card.tooltip, ['Agent: #a1 · Claude Code', `Title: ${title}`, 'Status: Activity unavailable', 'From: Maker (#a7)', 'Started by: Maker #a7']);
 		assert.strictEqual(card.location.full, 'Location: shop · main · SSH: remote\nPath: /Case/one\nTwo\nWindow: Remote');
 		const prompt = cardOf({ ...facts, title: undefined, activityReason: 'No status' }, { place: remote, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual(prompt.tooltip, ['Agent: #a1 · Claude Code', 'Prompt: Initial task', 'Status: Activity unavailable', 'Reason: No status', 'Started by: Maker #a7']);
+		assert.deepStrictEqual(prompt.tooltip, ['Agent: #a1 · Claude Code', 'Prompt: Initial task', 'Status: Activity unavailable', 'Reason: No status', 'From: Maker (#a7)', 'Started by: Maker #a7']);
 	});
 
 	test('avatars: each built-in\'s maker avatar, a file of media/agents; a custom CLI\'s initial on the colour its name picks (PANEL-1.3, UX-2.1)', () => {

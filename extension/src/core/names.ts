@@ -40,3 +40,19 @@ export function labelOf(agent: { readonly name: string; readonly alias: string }
 export function normalizeName(raw: string): string {
 	return raw.trim();
 }
+
+/**
+ * The names two or more of `runs` have, whole and case-sensitively after trimming: each of those agents shows its short ID on its card
+ * and its open tab (PANEL-1.3, LIFECYCLE-2.2). An empty name is none: it shows its ID anyway.
+ */
+export function repeatedNames(runs: readonly { readonly name: string }[]): ReadonlySet<string> {
+	const seen = new Set<string>();
+	const repeated = new Set<string>();
+	for (const { name } of runs) {
+		const trimmed = name.trim();
+		if (trimmed) {
+			(seen.has(trimmed) ? repeated : seen).add(trimmed);
+		}
+	}
+	return repeated;
+}

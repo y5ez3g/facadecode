@@ -279,7 +279,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		environment,
 		workspace: record.key,
 		log,
-		said: (run, text) => agents.said(run, text)
+		said: (run, text, source) => agents.said(run, text, source)
 	});
 	// An agent another agent started, waiting on its CLI's own question, is reported to that creator (RULES-1.8)
 	const attention = new AttentionNotices({ agents, messages, log: text => log.event(text) });

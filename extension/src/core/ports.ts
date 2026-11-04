@@ -283,6 +283,12 @@ export interface LiveRun {
 
 export type CleanupResult = 'terminated' | 'already_exited' | 'unconfirmed' | 'failed';
 
+/**
+ * Who sent what a card's second line says, as its record keeps it: another agent - its name, short ID and, from another window, that
+ * window's label - or Facade, for a result; none is the person's own input (PANEL-1.4, 1.5).
+ */
+export type SaidSource = { readonly kind: 'agent'; readonly name?: string; readonly alias?: string; readonly window?: string } | { readonly kind: 'facade' };
+
 export interface ExecutionPort {
 	readonly onDidIdentify?: Event<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>;
 	readonly onDidPinTab?: Event<{ readonly run: RunId; readonly pinned: boolean }>;
@@ -335,6 +341,8 @@ export interface ExecutionPort {
 	readonly onDidClosePair?: Event<{ readonly run: RunId; readonly marked: boolean }>;
 	/** Closes the run's terminal tab, its agent going on: false where it has none open (LIFECYCLE-2.2). */
 	hideTab?(run: RunId): boolean;
+	/** The run's short ID, and whether its tab shows it: its name repeats among this window's cards, or it has none (LIFECYCLE-2.2). */
+	tabLabel?(run: RunId, alias: string, shown: boolean): void;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */
@@ -385,6 +393,8 @@ export interface RunMeta {
 	readonly promptLine?: string;
 	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4). */
 	readonly said?: string;
+	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
+	readonly saidSource?: SaidSource;
 	/** Its ordinary-message input as its launch planned it, kept across a reload. */
 	readonly inputAdapter?: string;
 	readonly inputCapability?: CapabilityState;
@@ -574,6 +584,8 @@ export interface RunFacts {
 	 * delivered. Its card's second line says it from then on, never the CLI's title again.
 	 */
 	readonly said?: string;
+	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
+	readonly saidSource?: SaidSource;
 	/** The unresolved error that makes the card red (RULES-3.2): launch failure, abnormal exit, reported error. */
 	readonly error?: RunError;
 	/** How the process ended, where it ended and the pair is retained (abnormal exit or failed launch, RULES-3.3). */

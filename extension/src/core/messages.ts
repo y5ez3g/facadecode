@@ -11,7 +11,7 @@ import { deliveryText, notificationName, operationText } from './notificationTex
 import { REQUEST_MS } from './requests';
 import { messageTrace } from './messageTrace';
 import type { HumanContactPort, InboxPage, InboxQuery, InputEffects, InputPort, MessageRecord, Messages, ResultReport, SendRequest, SendResult } from './messagePorts';
-import type { Agents, CapabilityState, Clock, Disposable, LogPort, RunChange, RunFacts, RunId } from './ports';
+import type { Agents, CapabilityState, Clock, Disposable, LogPort, RunChange, RunFacts, RunId, SaidSource } from './ports';
 
 /** The message records, kept in the execution environment's Facade directory for thirty days (RULES-5.3, ARCHITECTURE-3.1). */
 export interface MessageStore {
@@ -59,7 +59,7 @@ export interface MessageServiceDeps {
 	/** Waits `ms`, rejecting as soon as `signal` aborts. */
 	readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 	/** A message its recipient's CLI took from its input: what that agent's card says on its second line (PANEL-1.4). */
-	readonly said?: (run: RunId, text: string) => void;
+	readonly said?: (run: RunId, text: string, source: SaidSource) => void;
 }
 
 /** The first response comes within this long of the request reaching Facade (RULES-1.2). */
@@ -616,7 +616,7 @@ export class MessageService implements Messages, Disposable {
 				stage.attempts++;
 				if (attempt.kind === 'submitted') {
 					if (attempt.effects.outcome === 'confirmed') {
-						this.deps.said?.(stage.target, this.saidText(stage, typeof text === 'string' ? text : text()));
+						this.tellSaid(stage, typeof text === 'string' ? text : text());
 						return { status: 'success', effects: attempt.effects, attempts: stage.attempts, via: 'terminal' };
 					}
 					stage.effects = telling(stage.effects, attempt.effects);
@@ -903,9 +903,15 @@ export class MessageService implements Messages, Disposable {
 	 * What a delivered stage sent, as the recipient's card says it (PANEL-1.4): a message's own text, without the `📨` line that
 	 * introduces it; a Facade result as typed, its `🔔` line being all it says.
 	 */
-	private saidText(stage: Stage, typed: string): string {
+	private tellSaid(stage: Stage, typed: string): void {
 		const record = this.live.get(stage.message) ?? this.deps.store.list().find(each => each.id === stage.message);
-		return record?.kind === 'message' && !stage.batch ? record.text : typed;
+		if (record?.kind === 'message' && !stage.batch) {
+			const { name, alias } = record.from;
+			const window = record.fromWindow !== undefined ? record.label ?? record.fromWindow : undefined;
+			this.deps.said?.(stage.target, record.text, { kind: 'agent', ...name ? { name } : {}, ...alias ? { alias } : {}, ...window !== undefined ? { window } : {} });
+		} else {
+			this.deps.said?.(stage.target, typed, { kind: 'facade' });
+		}
 	}
 
 	private update(id: string, changes: Partial<MessageRecord>): MessageRecord {

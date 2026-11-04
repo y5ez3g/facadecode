@@ -4,6 +4,7 @@
 
 import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
+import { repeatedNames } from '../core/names';
 import type { CardMenu, PanelFilter, PanelState } from '../webview/protocol';
 import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel, onePlaceOf } from './cardView';
 import { arranged, atEnd, atStart, moved, PanelPrefs, withNew } from './order';
@@ -342,7 +343,8 @@ export class PanelModel implements Disposable {
 		const filter = this.filter && this.labeled(this.filter, catalog);
 		const shown = ids.filter(id => this.matches(byId.get(id), filter));
 		const shownSet = new Set(shown);
-		const placeShown = this.placesShown(catalog);
+		// Counted among all of this window's cards, those the filter hides too (PANEL-1.3)
+		const repeated = repeatedNames(runs);
 		const visible = (id: string) => shownSet.has(id);
 		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
@@ -353,7 +355,7 @@ export class PanelModel implements Disposable {
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
 				moveDown: moved(ids, id, 1, withinArea) !== undefined
 			};
-			return cardOf(facts, { place: this.placeOf(facts, catalog), placeShown, selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.window ? { window: this.deps.window } : {} });
+			return cardOf(facts, { place: this.placeOf(facts, catalog), repeated: repeated.has(facts.name.trim()), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.window ? { window: this.deps.window } : {} });
 		});
 		const exited = [...this.exited];
 		this.exited.clear();

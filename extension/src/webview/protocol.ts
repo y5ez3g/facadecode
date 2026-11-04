@@ -31,7 +31,10 @@ export interface Card {
 	 * then gives its path and window as localized Label: value lines (PANEL-1.5).
 	 */
 	/** `hidden` where every agent works in the window's one place to work: the card's line does not say it, its hover does (PANEL-1.3). */
-	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly hidden?: true; readonly full: string };
+	/** Its short ID shows beside its name: another card of this window has that name too (PANEL-1.3). */
+	readonly repeated?: true;
+	/** The hover's and accessible label's alone: no card shows its location (PANEL-1.3). */
+	readonly location: { readonly full: string };
 	/** Green for work, red for an error, none for anything else (RULES-3.2). */
 	readonly dot: 'working' | 'error' | 'none';
 	/** The state in words, dot or none: startup, work, idle, the native blocker's kind, an error or unavailable activity. */

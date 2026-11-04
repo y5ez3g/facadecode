@@ -62,6 +62,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	private readonly writeEmitter = new vscode.EventEmitter<string>();
 	readonly onDidWrite = this.writeEmitter.event;
+	/** Its agent's short ID, and whether its tab shows it (LIFECYCLE-2.2). */
+	private alias: string | undefined;
+	private idShown = false;
 	private readonly nameEmitter = new vscode.EventEmitter<string>();
 	readonly onDidChangeName = this.nameEmitter.event;
 	private opened = false;
@@ -224,9 +227,26 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 	}
 
-	/** The tab's name (LIFECYCLE-2.2): only the agent's display name, which its tab shows after the spinner while it is busy (LIFECYCLE-2.2). */
+	/**
+	 * The short ID of its agent, and whether its tab shows it: its name repeats among the window's cards, or it has none. A change says
+	 * the new title on an open tab; a hidden one has it as it next opens (LIFECYCLE-2.2).
+	 */
+	label(alias: string, shown: boolean): void {
+		const before = this.tabName();
+		this.alias = alias;
+		this.idShown = shown;
+		if (this.tabName() !== before) {
+			this.resetDue = false;
+			this.say();
+		}
+	}
+
+	/**
+	 * The tab's name (LIFECYCLE-2.2): the agent's display name, with its short ID where that shows, which its tab shows after the
+	 * spinner while it is busy.
+	 */
 	tabName(): string {
-		return this.name;
+		return this.idShown && this.alias ? (this.name ? `${this.name} ${this.alias}` : this.alias) : this.name;
 	}
 
 	/** Spins a frame before the agent's name on its tab while it is busy, and shows the name alone once it is not (LIFECYCLE-2.2). */
@@ -270,7 +290,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	/** What its tab is given to show: the name, after the spinner's frame while the agent is busy (LIFECYCLE-2.2). */
 	private titled(): string {
-		return this.spinning ? `${FRAMES[this.frame]} ${this.name}` : this.name;
+		return this.spinning ? `${FRAMES[this.frame]} ${this.tabName()}` : this.tabName();
 	}
 
 	/** The native terminal's initial name, set before VS Code opens the pseudoterminal. */
@@ -304,10 +324,24 @@ export class AgentPty implements vscode.Pseudoterminal {
 			this.said.splice(0, at);
 			return undefined;
 		}
-		if (spun !== undefined && spun === shownAs(this.name)) {
+		if (spun !== undefined && spun === shownAs(this.tabName())) {
 			return undefined;
 		}
-		return { renamed: named };
+		return { renamed: this.withoutOwnId(named) };
+	}
+
+	/**
+	 * A name typed on the tab, without the tab's own short ID at its end, once: that is the tab's decoration, whatever the duplicates are
+	 * by then, and no other `#aN` is touched. A name that is to end so is given through Rename Agent (LIFECYCLE-2.2).
+	 */
+	private withoutOwnId(named: string): string {
+		if (!this.alias) {
+			return named;
+		}
+		if (named === this.alias) {
+			return '';
+		}
+		return named.endsWith(` ${this.alias}`) ? named.slice(0, -this.alias.length - 1) : named;
 	}
 
 	open(dimensions: vscode.TerminalDimensions | undefined): void {

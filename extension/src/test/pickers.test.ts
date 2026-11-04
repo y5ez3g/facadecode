@@ -1596,7 +1596,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
 				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`,
 				agent: (value: string) => `Agent: ${value}`, title: (value: string) => `Title: ${value}`, prompt: (value: string) => `Prompt: ${value}`, status: (value: string) => `Status: ${value}`, reason: (value: string) => `Reason: ${value}`, tools: (value: string) => `Tools: ${value}`, location: (value: string) => `Location: ${value}`, path: (value: string) => `Path: ${value}`,
-				toolsUnavailable: (problem?: string) => `Can't work with other agents: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`,
+				toolsUnavailable: (problem?: string) => `Can't work with other agents: ${problem}`, from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, startedBy: (creator: string) => `Started by: ${creator}`,
 				exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
 			};
 			const done = goToAgent({
@@ -1667,7 +1667,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				tools: (value: string) => `Tools: ${value}`,
 				location: (value: string) => `Location: ${value}`,
 				path: (value: string) => `Path: ${value}`,
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
+				from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
 			};
 			const done = goToAgent({
 				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => true },
@@ -1708,7 +1708,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				tools: (value: string) => `Tools: ${value}`,
 				location: (value: string) => `Location: ${value}`,
 				path: (value: string) => `Path: ${value}`,
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
+				from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
 			};
 			const done = goToAgent({
 				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => true },

@@ -24,7 +24,7 @@ const WORDS: CardWords = {
 	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', working: 'Working', notWorking: 'Idle', error: reason => `Error: ${reason}`,
 	activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
 	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, window: label => `Window: ${label}`,
-	toolsUnavailable: problem => `Can't work with other agents: ${problem}`, startedBy: creator => `Started by: ${creator}`,
+	toolsUnavailable: problem => `Can't work with other agents: ${problem}`, from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, startedBy: creator => `Started by: ${creator}`,
 	exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
 };
 
@@ -343,7 +343,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		]);
 	});
 
-	test('a card says its location by branch or folder, its workspace folder first in a multi-folder window - and keeps it while the location is only unlisted (PANEL-1.3)', async () => {
+	test('a card\'s hover says its location by branch or folder, its workspace folder first in a multi-folder window - and keeps it while the location is only unlisted (PANEL-1.3)', async () => {
 		const model = make();
 		agents.add(run(1, { location: LOGIN.id, cwd: LOGIN.path }));
 		await tick();
@@ -352,8 +352,8 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		locations.changed.fire();
 		await tick();
 		assert.deepStrictEqual([multi, model.state().cards[0].location], [
-			{ label: 'login-fix', folderPrefix: 'shop', full: 'Location: shop · login-fix\nPath: /login-fix' },
-			{ label: 'login-fix', full: 'Location: login-fix\nPath: /login-fix' }
+			{ full: 'Location: shop · login-fix\nPath: /login-fix' },
+			{ full: 'Location: login-fix\nPath: /login-fix' }
 		]);
 	});
 
@@ -365,11 +365,11 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(2, { location: MAIN.id, cwd: MAIN.path }));
 		await tick();
 		assert.deepStrictEqual(model.state().cards.map(card => card.location), [
-			{ label: 'docs', full: 'Location: docs\nPath: /docs' }, { label: 'main', folderPrefix: 'shop', full: 'Location: shop · main\nPath: /main' }
+			{ full: 'Location: docs\nPath: /docs' }, { full: 'Location: shop · main\nPath: /main' }
 		]);
 	});
 
-	test('PANEL-1.3, LIFECYCLE-1.3: in the window\'s one place to work cards say no location - their hover does - until a second place holds an agent or Git finds a repository there; while Git reads it, it is said', async () => {
+	test('LIFECYCLE-1.3: the window has its one place to work until a second place holds an agent or Git finds a repository there; while Git reads it, it has none; a card\'s hover says the location all along', async () => {
 		const ORCA: WorkspaceFolderInfo = { index: 0, name: 'orca', uri: 'file:///orca', path: '/orca' };
 		const plain: Location = { ...location('loc-orca', 'orca', ORCA), kind: 'folder', git: 'none', opened: true };
 		const one: Catalog = { locations: [plain], folders: [ORCA], pending: false };
@@ -396,9 +396,23 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(3, { location: 'loc-elsewhere', cwd: '/elsewhere' }));
 		await tick();
 		const elsewhere = seen()[1];
-		const hidden = { label: 'orca', hidden: true, full: 'Location: orca\nPath: /orca' };
-		const said = { label: 'orca', full: 'Location: orca\nPath: /orca' };
-		assert.deepStrictEqual([alone, reading, repository, elsewhere], [[[hidden, hidden], false], [[said, said], true], true, true]);
+		const said = { full: 'Location: orca\nPath: /orca' };
+		assert.deepStrictEqual([alone, reading, repository, elsewhere], [[[said, said], false], [[said, said], true], true, true]);
+	});
+
+	test('PANEL-1.3: equal names among all of this window\'s cards each show their short ID, those the filter hides counted; a duplicate going removes it; empty names are no duplicates', async () => {
+		const model = make();
+		agents.add(run(1, { name: 'reviewer', location: LOGIN.id, cwd: LOGIN.path }));
+		agents.add(run(2, { name: 'reviewer' }));
+		agents.add(run(3, { name: 'Reviewer' }));
+		agents.add(run(4, { name: '' }));
+		agents.add(run(5, { name: '' }));
+		await tick();
+		const repeated = () => model.state().cards.map(card => !!card.repeated);
+		assert.deepStrictEqual(repeated(), [true, true, false, false, false]);
+		agents.update(id(2), { name: 'auditor' }, 'renamed');
+		await tick();
+		assert.deepStrictEqual(repeated(), [false, false, false, false, false]);
 	});
 
 	test('PANEL-1.5: the hover names the window; a rename is shown at once; the state carries only the remote capability', async () => {

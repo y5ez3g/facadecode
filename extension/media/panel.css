@@ -380,9 +380,10 @@ body.vscode-reduce-motion .dot.working::after {
 	min-width: 0;
 }
 
-/* The name and where it works on one baseline, as a chat app sets a contact's name and the time */
+/* The name, and its short ID where it repeats, on one baseline; its Pin at the line's end */
 .line.top {
 	align-items: baseline;
+	gap: 4px;
 }
 
 .line.bottom {
@@ -394,7 +395,6 @@ body.vscode-reduce-motion .dot.working::after {
  * a letter has above its capitals or below its baseline still shows: its ellipsis clips that much further out.
  */
 .name,
-.place,
 .title {
 	text-box: trim-both cap alphabetic;
 	padding-block: 4px;
@@ -414,12 +414,12 @@ body.vscode-reduce-motion .dot.working::after {
 	text-overflow: ellipsis;
 }
 
-/* A status beside the name: its visible glyph stays smaller than the letters without thinning to a tiny mark. */
+/* A status at the line's right: its visible glyph stays smaller than the letters without thinning to a tiny mark. */
 .pin {
 	flex: 0 0 auto;
 	align-self: center;
 	margin-block: -3px;
-	margin-left: -2px;
+	margin-left: auto;
 	color: var(--facade-dim);
 }
 
@@ -430,35 +430,12 @@ body.vscode-reduce-motion .dot.working::after {
 	display: block;
 }
 
-/*
- * Name and location keep a short label whole and share the remaining width; the page measures their displayed fonts and assigns
- * the widths (PANEL-1.3). Location stays at the line's end, its folder and worktree ellipsized separately in the middle.
- */
-.place {
+/* Its short ID, beside a name another card has too: quieter than the name, whole, the name giving way first (PANEL-1.3) */
+.short-id {
 	flex: 0 0 auto;
-	min-width: 0;
-	margin-left: auto;
-	overflow: hidden;
 	white-space: nowrap;
-	text-overflow: ellipsis;
 	font-size: var(--facade-label);
 	color: var(--facade-dim);
-}
-
-/*
- * Keep the folder and worktree as separate labels, their separator visible even when either label needs an ellipsis (PANEL-1.3).
- */
-.place {
-	display: flex;
-	align-items: baseline;
-}
-
-.place > span {
-	flex: 0 0 auto;
-	min-width: 0;
-	overflow: hidden;
-	white-space: pre;
-	text-overflow: ellipsis;
 	text-box: trim-both cap alphabetic;
 	padding-block: 4px;
 	margin-block: -4px;
@@ -474,7 +451,7 @@ body.vscode-reduce-motion .dot.working::after {
 }
 
 /* Chosen, its name in the list's selected colour and the rest a little quieter in it, as VS Code's lists keep a label's description */
-.item.selected .place,
+.item.selected .short-id,
 .item.selected .title,
 .item.selected .pin {
 	color: inherit;
@@ -593,8 +570,8 @@ body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:hover:no
 	outline-offset: -1px;
 }
 
-body.vscode-high-contrast .item.selected :is(.place, .title, .pin),
-body.vscode-high-contrast-light .item.selected :is(.place, .title, .pin) {
+body.vscode-high-contrast .item.selected :is(.short-id, .title, .pin),
+body.vscode-high-contrast-light .item.selected :is(.short-id, .title, .pin) {
 	opacity: 1;
 }
 

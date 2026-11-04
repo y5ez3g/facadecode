@@ -8,13 +8,13 @@ import { isJsonObject } from '../base/json';
 import { displayLine } from '../base/text';
 import { FacadeError, invalid, OWNERSHIP_LOST } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
-import { labelOf, normalizeName, suggestName } from './names';
+import { labelOf, normalizeName, repeatedNames, suggestName } from './names';
 import { REQUEST_MS } from './requests';
 import { dotOf } from './status';
 import {
 	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, LocationId,
 	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
-	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError,
+	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError, SaidSource,
 	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
 
@@ -930,13 +930,13 @@ export class AgentService implements Agents, Disposable {
 	 * A message sent to the run: what its CLI took from its input after the person's Enter, or a message Facade delivered. Its card's
 	 * second line says the last one, its CLI's title no more (PANEL-1.4); kept with its process across a reload.
 	 */
-	said(id: RunId, text: string): void {
+	said(id: RunId, text: string, source?: SaidSource): void {
 		const run = this.runs.get(id);
 		const said = displayLine(text, MOST_LINE);
-		if (!run || run.facts.lifecycle === 'ended' || !said || said === run.facts.said) {
+		if (!run || run.facts.lifecycle === 'ended' || !said || (said === run.facts.said && JSON.stringify(source) === JSON.stringify(run.facts.saidSource))) {
 			return;
 		}
-		this.update(run, { said }, 'reported');
+		this.update(run, { said, saidSource: source }, 'reported');
 		if (run.facts.pid !== undefined) {
 			this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 		}
@@ -1313,6 +1313,14 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	private emit(change: RunChange): void {
+		// A name repeating or no longer repeating among the window's cards shows or takes away their short IDs on their tabs (LIFECYCLE-2.2)
+		if (change.kind === 'added' || change.kind === 'removed' || change.kind === 'renamed') {
+			const facts = [...this.runs.values()].map(each => each.facts);
+			const repeated = repeatedNames(facts);
+			for (const each of facts) {
+				this.deps.execution.tabLabel?.(each.id, each.alias, !each.name.trim() || repeated.has(each.name.trim()));
+			}
+		}
 		// Its tab spins while its dot is green, by the same rule (LIFECYCLE-2.2)
 		const run = this.runs.get(change.run);
 		const busy = !!run && dotOf(run.facts) === 'working';
@@ -1374,6 +1382,12 @@ function retainedFacts(kept: RunFacts): RunFacts {
 	};
 }
 
+function isSaidSource(value: unknown): value is SaidSource {
+	const source = value as SaidSource | undefined;
+	return source?.kind === 'facade' || (source?.kind === 'agent'
+		&& [source.name, source.alias, source.window].every(each => each === undefined || typeof each === 'string'));
+}
+
 function factsOf(id: RunId, meta: RunMeta): RunFacts {
 	return {
 		id,
@@ -1410,6 +1424,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
 		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
 		...(typeof meta.said === 'string' && meta.said ? { said: meta.said } : {}),
+		...(isSaidSource(meta.saidSource) ? { saidSource: meta.saidSource } : {}),
 		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),
 		...(isCapability(meta.inputCapability) ? { inputCapability: meta.inputCapability } : {})
 	};
@@ -1448,6 +1463,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.toolsFile !== undefined ? { toolsFile: facts.toolsFile } : {}),
 		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
 		...(facts.said !== undefined ? { said: facts.said } : {}),
+		...(facts.saidSource !== undefined ? { saidSource: facts.saidSource } : {}),
 		...(facts.inputAdapter !== undefined ? { inputAdapter: facts.inputAdapter } : {}),
 		...(facts.inputCapability !== undefined ? { inputCapability: facts.inputCapability } : {})
 	};
