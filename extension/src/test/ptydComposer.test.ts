@@ -214,10 +214,15 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		}
 	});
 
-	test('another CLI\'s screen is nothing a reader vouches for: unknown, never usable', () => {
+	test('another CLI\'s screen is nothing a reader vouches for: unknown, never usable, but where their boxes are drawn alike (VERIFICATION G3)', () => {
+		// Claude Code's emptied box and Muse Code's empty one are each `❯` alone between two rules, the cursor after it: one's reader
+		// may take the other's as its own
+		const alike = (each: Probed, other: string) => [each.adapter, other].every(adapter => adapter === 'claude-frame' || adapter === 'muse-frame')
+			&& readInput(each.screen, each.adapter).state === 'usable' && each.screen.rows[each.screen.cursor.y].map(cell => cell.chars).join('').trim() === '❯';
 		for (const each of PROBED) {
 			for (const other of INPUT_ADAPTERS.filter(adapter => adapter !== each.adapter)) {
-				assert.strictEqual(readInput(each.screen, other).state, 'unknown', `${label(each)} read by ${other}`);
+				const state = readInput(each.screen, other).state;
+				assert.ok(state === 'unknown' || (alike(each, other) && state === 'usable'), `${label(each)} read by ${other}: ${state}`);
 			}
 		}
 	});

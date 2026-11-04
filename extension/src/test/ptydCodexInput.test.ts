@@ -104,17 +104,32 @@ suite('Codex passive transcript footers keep ordinary input separate from active
 		}
 	});
 
-	test('placeholder words are not a whitelist; complete model, blank separator, prompt and cursor evidence are still required', () => {
+	test('placeholder words are not a whitelist; the model line, the blank row above it, the prompt and the cursor are still required', () => {
 		const screen = screenOf(capture('new-activity-empty'));
 		const prompt = screen.cursor.y, model = screen.rows.length - 2, footer = model + 1;
 		assert.strictEqual(read(changedRow(screen, prompt, '› Ask Codex to do anything')).state, 'draft', 'the same words typed by a person');
 		assert.strictEqual(read({ ...screen, rows: screen.rows.map((row, y) => y === prompt ? row.map(cell => cell.x === 2 ? { ...cell, inverse: true } : cell) : row) }).state, 'usable', 'a dim placeholder with a block cursor');
 		for (const changed of [
 			changedRow(screen, model, ''), changedRow(screen, model - 1, '  Not a separator'), changedRow(screen, prompt, '> '),
-			changedRow(screen, footer, '  enter confirm · esc cancel'), changedRow(screen, footer, '  New activity · enter copy & follow · esc clear'),
-			changedRow(screen, footer, '  New activity · enter/esc latest · unexpected action'),
 			{ ...screen, cursor: { x: 2, y: footer } }, { ...screen, cursor: { x: 3, y: prompt } }, { ...screen, drawing: true }
 		]) assert.strictEqual(read(changed).state, 'unknown');
+	});
+
+	test('a draft with blank lines, its cursor moved up to its empty first line, is a draft: the input ends at the blank row above the model line (CLIS-2.1)', () => {
+		const screen = screenOf(capture('new-activity-empty'));
+		const prompt = screen.cursor.y;
+		const drafted = changedRow(changedRow(changedRow(screen, prompt - 2, '› '), prompt - 1, ''), prompt, '  hello');
+		const reading = read({ ...drafted, cursor: { x: 2, y: prompt - 2 } });
+		assert.deepStrictEqual([reading.state, reading.draft], ['draft', '\n\nhello']);
+	});
+
+	test('nothing under the model line is read: a changed or unknown passive footer leaves the input usable (CLIS-2.1, VERIFICATION U17)', () => {
+		const screen = screenOf(capture('new-activity-empty'));
+		const footer = screen.rows.length - 1;
+		for (const text of ['  New activity · Earlier messages available.  enter/esc latest · ? shortcuts', '  Earlier messages available.  esc latest',
+			'  New activity · enter/esc latest · unexpected action', '  Something Codex adds later', '']) {
+			assert.strictEqual(read(changedRow(screen, footer, text)).state, 'usable', JSON.stringify(text));
+		}
 	});
 
 	test('an actual synchronized terminal drawing is unavailable until its complete frame arrives', async () => {
