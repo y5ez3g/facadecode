@@ -8,7 +8,7 @@
 // profile or agents.
 
 import { runTests } from '@vscode/test-electron';
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -24,6 +24,13 @@ const BUILT_INS: readonly { readonly id: string; readonly segment: string; reado
 	{ id: 'opencode', segment: 'opencode', avatar: 'avatar-opencode.png' },
 	{ id: 'pi', segment: 'pi', avatar: 'avatar-pi.png' }
 ];
+
+/** The command line of the editor at `executable`, which installs a package into a profile (VERIFICATION E05). */
+function editorCli(executable: string): string {
+	const dir = path.dirname(executable);
+	return process.platform === 'darwin' ? path.join(dir, '..', 'Resources', 'app', 'bin', 'code')
+		: path.join(dir, 'bin', process.platform === 'win32' ? 'code.cmd' : 'code');
+}
 
 /** The custom CLI's ID: a key of `facade.custom`, never a built-in's (CLIS-3.4). */
 const CUSTOM_CLI = 'my-cli';
@@ -81,6 +88,9 @@ async function main(): Promise<void> {
 	// asks before each of Facade's with YOLO off, and on Windows first sets up its sandbox, which a new home has not
 	const realYolo = process.env.FACADE_IT_REAL_YOLO === 'on';
 	const modelDecisions = process.env.FACADE_IT_REAL_DECISIONS === '1';
+	// The update journey's packages: a released build's, FACADE_IT_RELEASED, and the ones it updates to, FACADE_IT_CURRENT - else this build's
+	const released = process.env.FACADE_IT_RELEASED;
+	const current = process.env.FACADE_IT_CURRENT;
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	// A prepared temporary home may be used directly, or copied from an isolated state template.
 	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
@@ -318,6 +328,134 @@ async function main(): Promise<void> {
 		}
 	};
 	/**
+	 * An update from a released build with a running agent, then a reload (VERIFICATION E05, J17): the released build's two packages
+	 * installed in an isolated profile, an agent started there with its tab open, the current packages installed over them and the
+	 * window reloaded. The agent stays with its released ptyd, its tab hidden, and each question its CLI asks its terminal is answered
+	 * once: with its tab open by the editor, the window passing the answer on; hidden, by the window's headless terminal; open again,
+	 * by the editor once more (ARCHITECTURE-2.3, LIFECYCLE-3.5). It needs the released packages and runs only when asked.
+	 */
+	const update = async () => {
+		if (!released) {
+			throw new Error('FACADE_IT_ONLY=update installs a released build: set FACADE_IT_RELEASED to a folder holding its facadecode and window VSIX files.');
+		}
+		const packages = (dir: string) => {
+			const files = fs.readdirSync(dir).filter(name => name.endsWith('.vsix'));
+			const component = files.find(name => name.includes('-window-')), main = files.find(name => !name.includes('-window-'));
+			if (!component || !main) {
+				throw new Error(`${dir} must hold a facadecode and a window VSIX file.`);
+			}
+			// The window component first: the other's extension pack names it
+			return [path.join(dir, component), path.join(dir, main)];
+		};
+		const from = packages(released), to = packages(current ?? path.resolve(__dirname, '..', '..', '..', 'vsix'));
+		const folder = path.join(root, 'update');
+		newRepository(folder);
+		const user = path.join(root, 'u-upd'), extensions = path.join(root, 'x-upd'), shared = path.join(root, 's-upd');
+		const facade = path.join(home, 'update'), out = path.join(root, 'update.jsonl'), driver = path.join(root, 'driver-update');
+		for (const dir of [path.join(user, 'User'), facade, driver]) {
+			fs.mkdirSync(dir, { recursive: true });
+		}
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
+			...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])),
+			'extensions.autoUpdate': false, 'extensions.autoCheckUpdates': false, 'update.mode': 'none' }));
+		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'update-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
+		fs.copyFileSync(path.join(__dirname, 'updateDriver.js'), path.join(driver, 'extension.js'));
+		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
+			fs.rmSync(path.join(root, file));
+		}
+		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_UPDATE: out, CLAUDE_CONFIG_DIR: claudeConfig };
+		const install = (files: readonly string[]) => {
+			for (const file of files) {
+				execFileSync(editorCli(executable), ['--user-data-dir', user, '--extensions-dir', extensions, '--install-extension', file, '--force'], { env, stdio: 'pipe', shell: process.platform === 'win32' });
+			}
+		};
+		install(from);
+		let editorOutput = '';
+		const editor = spawn(executable, [folder, '--new-window', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+			`--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { stdio: ['ignore', 'pipe', 'pipe'], env });
+		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
+		editor.stdout?.on('data', append);
+		editor.stderr?.on('data', append);
+		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
+		const phase = async (name: string, ms = 120_000) => {
+			const end = Date.now() + ms;
+			for (;;) {
+				const line = lines().find(each => each.phase === name);
+				const failed = lines().find(each => each.phase === 'error');
+				if (failed) {
+					throw new Error(`The update driver failed: ${failed.message}: ${JSON.stringify(lines())}`);
+				}
+				if (line) {
+					return line;
+				}
+				if (Date.now() > end) {
+					throw new Error(`Timed out waiting for the update journey's ${name}: ${JSON.stringify(lines())}`);
+				}
+				await new Promise(resolve => setTimeout(resolve, 250));
+			}
+		};
+		const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+		/**
+		 * What its CLI asks, then each kind of answer it got after, by how many came within a few seconds - and what it got unasked
+		 * since the last time it asked, which is to be nothing: the window's own questions' answers are the window's (ARCHITECTURE-2.3).
+		 */
+		let asked = 0;
+		let answered = 0;
+		const ask = async (alias: string) => {
+			const log = `${record}.stdin.${alias}`;
+			const since = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').length : 0;
+			const unasked = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(answered, since) : '').split('\n').filter(Boolean).map(line => (JSON.parse(line) as { data: string }).data).join('');
+			// Its cursor, the device attributes and its background colour
+			fs.writeFileSync(`${record}.quirks.${alias}`, JSON.stringify({ ask: '\x1b[6n\x1b[c\x1b]11;?\x1b\\', asked: ++asked }));
+			await new Promise(resolve => setTimeout(resolve, 4_000));
+			const got = (fs.existsSync(log) ? fs.readFileSync(log, 'utf8').slice(since) : '').split('\n').filter(Boolean).map(line => (JSON.parse(line) as { data: string }).data).join('');
+			answered = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').length : 0;
+			// eslint-disable-next-line no-control-regex
+			return { cursor: got.match(/\x1b\[\d+;\d+R/g)?.length ?? 0, attributes: got.match(/\x1b\[\?[\d;]*c/g)?.length ?? 0, colour: got.match(/\x1b\]11;rgb:[0-9a-fA-F/]+(?:\x07|\x1b\\)/g)?.length ?? 0, ...unasked ? { unasked } : {} };
+		};
+		const once = { cursor: 1, attributes: 1, colour: 1 };
+		try {
+			const started = await phase('started') as { phase: string; version: string; alias: string; tabs: string[][] };
+			const pid = Number(fs.readFileSync(`${record}.${started.alias}`, 'utf8').trim());
+			// What it got before it first asked - the released build's terminal opening - is not this journey's
+			answered = fs.existsSync(`${record}.stdin.${started.alias}`) ? fs.readFileSync(`${record}.stdin.${started.alias}`, 'utf8').length : 0;
+			const before = await ask(started.alias);
+			install(to);
+			fs.writeFileSync(`${out}.reload`, '');
+			const updated = await phase('updated') as { phase: string; version: string; tabs: string[][] };
+			const hidden = await ask(started.alias);
+			fs.writeFileSync(`${out}.open`, '');
+			const opened = await phase('opened') as { phase: string; tabs: string[][] };
+			await new Promise(resolve => setTimeout(resolve, 2_000));
+			const shown = await ask(started.alias);
+			console.log(`  Journey: update from ${started.version} to ${updated.version} with a running agent, then a reload (E05, J17)\n    ${JSON.stringify({ started, before, updated, hidden, opened, shown })}`);
+			const problems = [
+				...updated.version === started.version ? ['the window did not reload into the update'] : [],
+				...JSON.stringify(before) !== JSON.stringify(once) ? [`with its tab open in the released build its questions were answered ${JSON.stringify(before)}`] : [],
+				...updated.tabs.flat().length ? [`its tab came back open after the update: ${JSON.stringify(updated.tabs)}`] : [],
+				...JSON.stringify(hidden) !== JSON.stringify(once) ? [`with its tab hidden its questions were answered ${JSON.stringify(hidden)}`] : [],
+				...opened.tabs.flat().length !== 1 ? [`Go to Agent did not open its one tab: ${JSON.stringify(opened.tabs)}`] : [],
+				...JSON.stringify(shown) !== JSON.stringify(once) ? [`with its tab open again its questions were answered ${JSON.stringify(shown)}`] : [],
+				...alive(pid) ? [] : ['its process did not survive the update']
+			];
+			if (problems.length) {
+				throw new Error(`The update journey failed: ${problems.join('; ')}.`);
+			}
+			console.log('    ✔ the agent kept its process; its tab came back hidden; each question was answered once - by the editor, by the window\'s headless terminal while hidden, and by the editor again');
+		} catch (error) {
+			console.error(`Editor output for the update journey (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
+			throw error;
+		} finally {
+			try {
+				await endEditors([editor]);
+			} finally {
+				endMatching(user);
+				endMatching(extensions);
+				endMatching(path.join(facade, 'extension', 'ptyd'));
+			}
+		}
+	};
+	/**
 	 * Real agents of one built-in working together (VERIFICATION G3): YOLO off, the suite's real journey alone. Each launch trusts its
 	 * folder in the CLI's own configuration where it keeps trust in a file (CLIS-3.3) - Claude Code's, or Antigravity's in the home folder
 	 * its terminals have: the run takes that back, Antigravity's file restored as it was.
@@ -380,6 +518,10 @@ async function main(): Promise<void> {
 		if (!only || only === 'expiry') {
 			// The shared supervisor's real local grace, not a shortened fixture timer.
 			await conversion(BUILT_INS[0], true, true);
+		}
+		// Never unasked: it installs a released build's packages
+		if (only === 'update') {
+			await update();
 		}
 		// Never unasked: it signs in and uses an account's usage
 		if (only === 'real') {
