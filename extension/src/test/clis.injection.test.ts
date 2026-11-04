@@ -811,6 +811,42 @@ suite('CLIs: project files Facade owns (CLIS-2.2)', () => {
 		assert.strictEqual(isFacadeContent('plugin.json', JSON.stringify({ name: 'facade', version: '1.0.0' })), false);
 	});
 
+	test('CLIS-2.2: what is left of Facade\'s plugin files once a Facade took its own part out of them is Facade\'s too: brought up to date, never a conflict', () => {
+		// The IDE took its `name` out of this extension's manifest and left the rest, as found on 2026-11-03: byte for byte that file
+		const description = 'The Facade Code tools: start agents, send and read messages, and read or type into agent terminals.';
+		const plugin = path.join('.agents', 'plugins', 'facade');
+		placed(path.join(cwd, plugin, 'plugin.json'), `${JSON.stringify({ description }, undefined, 2)}\n`);
+		placed(path.join(cwd, plugin, 'mcp_config.json'), JSON.stringify({ mcpServers: {} }, undefined, '\t'));
+		placed(path.join(cwd, plugin, 'hooks.json'), '{}');
+		const writes: ProjectWrite[] = [
+			{ kind: 'file', path: path.join(plugin, 'plugin.json'), content: `${JSON.stringify({ name: 'facade', description }, undefined, 2)}\n` },
+			{ kind: 'file', path: path.join(plugin, 'mcp_config.json'), content: `${JSON.stringify({ mcpServers: { facade: { command: '/new/node', args: ['/new/dist/shim.js'], env: {} } } }, undefined, 2)}\n` },
+			{ kind: 'file', path: path.join(plugin, 'hooks.json'), content: `${JSON.stringify({ facade: { PreInvocation: [{ type: 'command', command: "'/new/node' '/new/dist/shim.js' '--antigravity-context'" }] } }, undefined, 2)}\n` }
+		];
+		assert.strictEqual(acquireProject(record, 'run-a', cwd, writes), undefined);
+		const now = writes.map(write => fs.readFileSync(path.join(cwd, write.path), 'utf8'));
+		assert.deepStrictEqual(releaseProject(record, 'run-a'), []);
+		assert.deepStrictEqual([now, writes.map(write => fs.existsSync(path.join(cwd, write.path)))], [writes.map(write => write.kind === 'file' ? write.content : ''), [false, false, false]]);
+		// Each a Facade's by every member it has, whichever Facade wrote it or what it took out
+		for (const [file, value] of [
+			['plugin.json', { name: 'facade' }], ['plugin.json', { description }], ['plugin.json', { name: 'facade', description }], ['plugin.json', {}],
+			['mcp_config.json', { mcpServers: { facade: { command: 'node', args: ['C:\\old\\dist\\shim.js'] } } }], ['mcp_config.json', { mcpServers: {} }], ['mcp_config.json', {}],
+			['hooks.json', { facade: { PreInvocation: [{ type: 'command', command: 'node /old/dist/shim.js --antigravity-context' }] } }], ['hooks.json', {}]
+		] as const) {
+			assert.strictEqual(isFacadeContent(file, JSON.stringify(value)), true, `${file} ${JSON.stringify(value)}`);
+		}
+		// A member of anyone else's makes it the person's, kept as it is
+		for (const [file, value] of [
+			['plugin.json', { description, version: '1.0.0' }], ['plugin.json', { name: 'mine' }], ['plugin.json', { description: 'My own tools' }],
+			['mcp_config.json', { mcpServers: { mine: { command: 'my-server' } } }], ['mcp_config.json', { mcpServers: { facade: { command: 'my-facade-server' } } }],
+			['mcp_config.json', { mcpServers: {}, other: true }], ['hooks.json', { mine: [] }], ['hooks.json', { facade: { PreInvocation: [{ type: 'command', command: 'my-hook' }] } }]
+		] as const) {
+			assert.strictEqual(isFacadeContent(file, JSON.stringify(value)), false, `${file} ${JSON.stringify(value)}`);
+		}
+		placed(path.join(cwd, plugin, 'plugin.json'), `${JSON.stringify({ description, version: '1.0.0' }, undefined, 2)}\n`);
+		assert.match(acquireProject(record, 'run-b', cwd, writes.slice(0, 1)) ?? '', /already exists with other content/);
+	});
+
 	test('CLIS-2.2: a facade server another installation left in .mcp.json is brought up to date beside the person\'s own servers, and taken out alone after the last run; a facade server of theirs stays a conflict', () => {
 		const file = path.join(cwd, '.mcp.json');
 		const theirs = { mine: { command: 'my-server' } };
