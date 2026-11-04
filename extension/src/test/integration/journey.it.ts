@@ -221,7 +221,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		this.timeout(90_000);
 		const seen = () => JSON.stringify({
 			groups: vscode.window.tabGroups.all.map(group => ({ column: group.viewColumn, active: group.isActive, tabs: group.tabs.map(tab => [tab.input instanceof vscode.TabInputTerminal ? 'terminal' : 'other', unspun(tab.label), tab.isActive]) })),
-			terminals: vscode.window.terminals.map(each => [each.name, Object.keys(each.creationOptions)])
+			// What the editor says of each terminal's start: a copy has neither a shell nor a pseudoterminal of its own (LIFECYCLE-2.2)
+			terminals: vscode.window.terminals.map(each => [each.name, Object.fromEntries(Object.entries(each.creationOptions).map(([key, value]) => [key, key === 'env' ? (value ? 'set' : value) : key === 'pty' ? 'pty' : value]))])
 		});
 		const cards: string[] = [];
 		try {
@@ -229,8 +230,20 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			cards.push(first.runId);
 			await until('its tab active', async () => vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTerminal ? true : undefined);
 			const before = seen();
+			// What terminals the editor opens for the split: VS Code 1.105 opens none - its split of a terminal tab is an empty group
+			const opened: vscode.Terminal[] = [];
+			const listening = vscode.window.onDidOpenTerminal(terminal => opened.push(terminal));
 			await vscode.commands.executeCommand('workbench.action.splitEditorRight');
-			const second = await until('an agent started in the copy\'s place', async () => (await state()).cards.find(card => card.runId !== first.runId), 30_000);
+			const copied = await until('a copy, or none', async () => opened.length ? true : (await state()).cards.length > 1 ? true : undefined, 5_000).catch(() => false);
+			listening.dispose();
+			if (!copied) {
+				// No copy reported, so none to start an agent in place of: the first agent stays as it was, alone (LIFECYCLE-2.2)
+				console.log(`  split: this editor makes no copy of a terminal tab it splits: ${seen()}`);
+				assert.deepStrictEqual([(await state()).cards.map(card => card.runId), vscode.window.terminals.length], [[first.runId], 1]);
+				return;
+			}
+			const second = await until('an agent started in the copy\'s place', async () => (await state()).cards.find(card => card.runId !== first.runId), 30_000)
+				.catch(err => { throw new Error(`${(err as Error).message}: before ${before}, after ${seen()}`); });
 			cards.push(second.runId);
 			let last = '';
 			try {
