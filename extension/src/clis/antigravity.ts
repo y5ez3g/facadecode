@@ -4,10 +4,10 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { canonicalFolder, readJsonFile } from '../base/files';
+import { readJsonFile } from '../base/files';
 import { isJsonObject, JsonObject } from '../base/json';
 import { CliAdapter, sigintExit } from './adapter';
-import { Environment, variableOf } from './environment';
+import { Environment } from './environment';
 import { homeOf } from './executable';
 import { nodeHookCommand } from './identity';
 import { mcpConfigText, pluginManifest, SERVER_NAME, sharedServer, SKILL_FILE, ToolsIntegration } from './tools';
@@ -66,28 +66,12 @@ export function antigravityPermissions(env: Environment | undefined, platform: N
 }
 
 /**
- * The folder a run of Antigravity, a Go program, takes for its working directory when started in `cwd` with the environment `env`:
- * on Windows `cwd` as it is given; elsewhere the `PWD` its environment carries where that names the same folder, else the real path
- * the system gives.
+ * The folder a run of Antigravity, a Go program, takes for its working directory when started in `cwd`: the `PWD` its terminal
+ * carries wherever that names the folder, which node-pty sets to `cwd` as the launch gives it - so that folder, never its real path
+ * where a link or another letter case names it (CLIS-3.3); on Windows `cwd` as it is given.
  */
-function workingDirectoryOf(cwd: string, env: Environment, platform: NodeJS.Platform): string {
-	const folder = path.resolve(cwd);
-	if (platform === 'win32') {
-		return folder;
-	}
-	const pwd = variableOf(env, 'PWD', platform);
-	try {
-		if (pwd !== undefined && path.isAbsolute(pwd)) {
-			// Compared whole: a 64-bit inode number loses its last digits as a JavaScript number, and two folders could seem one
-			const [named, actual] = [fs.statSync(pwd, { bigint: true }), fs.statSync(folder, { bigint: true })];
-			if (named.ino === actual.ino && named.dev === actual.dev) {
-				return pwd;
-			}
-		}
-	} catch {
-		// Its PWD names nothing there
-	}
-	return canonicalFolder(folder);
+function workingDirectoryOf(cwd: string, platform: NodeJS.Platform): string {
+	return platform !== 'win32' && path.isAbsolute(cwd) ? cwd : path.resolve(cwd);
 }
 
 /**
@@ -150,7 +134,7 @@ export const antigravityAdapter: CliAdapter = {
 	warmUp: { text: '/mcp', typed: '^> /mcp\\s*$', ready: `✓\\s+${PLUGIN_SERVER}\\b`, opened: '^MCP Servers\\s*$|\\besc Exit\\b', close: 'Escape' },
 	promptAfterStart: 'Antigravity starts the Facade tools of a folder only with its first turn, so its first task goes in as its first message once they are ready',
 	trustTarget: (cwd, env, platform): TrustTarget => {
-		const folder = workingDirectoryOf(cwd, env, platform);
+		const folder = workingDirectoryOf(cwd, platform);
 		return { file: antigravitySettingsFile(env, platform), keys: ['trustedWorkspaces'], entry: { item: folder }, folder };
 	},
 	// Its input, recorded on macOS with Antigravity 1.4.12 (VERIFICATION G3): read by its layout, whatever the version (CLIS-2.1)
