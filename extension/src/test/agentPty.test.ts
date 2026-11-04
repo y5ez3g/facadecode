@@ -144,6 +144,23 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		assert.ok(drawn.join('').endsWith('screen at 2'));
 	});
 
+	test('a screen taken for an opening before the last is not drawn: the last opening\'s screen and what came after it are (ARCHITECTURE-2.3)', async () => {
+		const { pty, drawn, taken, binding } = load();
+		pty.bind(binding);
+		pty.open({ columns: 80, rows: 24 });
+		pty.close();
+		pty.open({ columns: 80, rows: 24 });
+		assert.strictEqual(taken.length, 2);
+		taken[0]('<S1>', 1);
+		pty.output(2, '<A>');
+		pty.output(3, '<B>');
+		taken[1]('<S1A>', 2);
+		await settled();
+		pty.output(4, '<C>');
+		const shown = drawn.join('');
+		assert.ok(shown.endsWith('<S1A><B><C>') && !shown.includes('<S1>'), JSON.stringify(shown));
+	});
+
 	test('it asks the editor\'s terminal for its colours as it opens; what the editor answers for the program reaches the run but keys, and its colours go to the window', async () => {
 		const learned: string[] = [];
 		const vscode = { EventEmitter: TestEmitter };
@@ -241,10 +258,32 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		pty.bind(binding);
 		taken[0]('', 0);
 		await settled();
+		// The editor answers the window's own colour questions, asked as it opened, first: those are the window's alone
+		pty.handleInput(`${ANSWERED}\x1b]12;rgb:bfbf/bfbf/bfbf\x1b\\`);
 		pty.output(1, COLOURS);
 		pty.handleInput(ANSWERED);
 		pty.handleInput('\x1b[?1;2c');
 		pty.handleInput('hello\r');
-		assert.deepStrictEqual([typed, learned], [[ANSWERED, '\x1b[?1;2c', 'hello\r'], ['10 cccc/cccc/cccc', '11 1919/1a1a/1b1b']]);
+		assert.deepStrictEqual([typed, learned], [[ANSWERED, '\x1b[?1;2c', 'hello\r'], ['10 cccc/cccc/cccc', '11 1919/1a1a/1b1b', '12 bfbf/bfbf/bfbf', '10 cccc/cccc/cccc', '11 1919/1a1a/1b1b']]);
+	});
+
+	test('the editor\'s answers to the window\'s own colour questions - as a tab opens, as the theme changes - reach no program, whichever its ptyd (ARCHITECTURE-2.3)', async () => {
+		for (const answersQueries of [false, true]) {
+			const vscode = { EventEmitter: TestEmitter };
+			const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+			const pty = new module.AgentPty('Ada', () => undefined);
+			made.push(pty);
+			const { taken, typed, binding } = load(answersQueries);
+			pty.bind(binding);
+			pty.open({ columns: 80, rows: 24 });
+			taken[0]('', 0);
+			await settled();
+			const own = `${ANSWERED}\x1b]12;rgb:bfbf/bfbf/bfbf\x1b\\`;
+			pty.handleInput(own);
+			// A theme change asks again
+			pty.askColours();
+			pty.handleInput(own);
+			assert.deepStrictEqual(typed, [], `answersQueries ${answersQueries}`);
+		}
 	});
 });

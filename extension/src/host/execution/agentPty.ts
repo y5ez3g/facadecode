@@ -88,6 +88,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private early: { seq: number; data: string }[] | undefined;
 	/** Whether the run's screen must be taken anew as the terminal opens. */
 	private stale = false;
+	/** Which screen taken is the one to draw: each taking, and each close, makes those taken before it stale. */
+	private ticket = 0;
 	/** Whether a screen of the run was drawn: drawing another starts from a reset terminal. */
 	private drawn = false;
 	private ended = false;
@@ -130,6 +132,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	 */
 	askColours(): void {
 		if (this.opened) {
+			// Its answers are the window's, whatever the run's supervisor: never typed into the program (ARCHITECTURE-2.3)
+			this.replies.askedColours();
 			this.writeEmitter.fire(COLOUR_QUESTIONS);
 		}
 	}
@@ -410,6 +414,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.early = undefined;
 		this.applied = undefined;
 		this.stale = true;
+		// A screen still being taken was for the terminal that went
+		this.ticket++;
 		// The questions written to the terminal that went are answered by none that opens later (ARCHITECTURE-2.3)
 		this.replies.reset();
 		// Its tab gone, what the run asks its terminal is the window's to answer where its supervisor leaves that to it (ARCHITECTURE-2.3)
@@ -465,9 +471,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 	 */
 	handleInput(data: string): void {
 		if (this.binding && !this.ended) {
-			// Read for the colours it teaches either way; kept from the program only where its ptyd answers instead
-			const filtered = this.replies.typed(data, Date.now());
-			const typed = this.mouse.repair(this.binding.answersQueries ? filtered : data);
+			// Read for the colours it teaches either way; the answers to the window's own questions kept from the program always, the
+			// others only where its ptyd answers instead
+			const typed = this.mouse.repair(this.replies.typed(data, Date.now(), !this.binding.answersQueries));
 			if (typed) {
 				this.binding.input(typed);
 			}
@@ -519,8 +525,10 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}
 		this.stale = false;
 		this.early = [];
+		const ticket = ++this.ticket;
 		binding.snapshot().then(({ screen, seq }) => {
-			if (this.binding !== binding) {
+			// A screen taken for an earlier opening is not this one's: drawn, it would reset what the later one draws (ARCHITECTURE-2.3)
+			if (this.binding !== binding || this.ticket !== ticket) {
 				return;
 			}
 			if (this.opened) {
@@ -531,6 +539,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 				this.stale = true;
 			}
 		}, err => {
+			if (this.ticket !== ticket) {
+				return;
+			}
 			this.early = undefined;
 			this.log(`Could not show the run's screen: ${messageOf(err)}`);
 			// The tab draws nothing more of the run: a stand-in answers on

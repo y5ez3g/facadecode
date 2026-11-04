@@ -53,6 +53,8 @@ export class TerminalReplies {
 	private readonly asked = new Map<string, number[]>();
 	/** How many cursor questions were written that no answer took yet. */
 	private cursors = 0;
+	/** The window's own colour questions written to the terminal, by OSC, that no answer took yet: their answers are the window's. */
+	private readonly own = new Map<string, number>();
 
 	/** `learn` hears each colour the editor reports - OSC 10, 11 or 12 and its `rgb` - which is the window's to tell ptyd. */
 	constructor(private readonly learn: (osc: '10' | '11' | '12', rgb: string) => void = () => undefined) { }
@@ -61,6 +63,14 @@ export class TerminalReplies {
 	reset(): void {
 		this.asked.clear();
 		this.cursors = 0;
+		this.own.clear();
+	}
+
+	/** The window asked the terminal its colours itself, OSC 10, 11 and 12: their answers reach no program, whichever answers its own. */
+	askedColours(): void {
+		for (const osc of ['10', '11', '12']) {
+			this.own.set(osc, (this.own.get(osc) ?? 0) + 1);
+		}
 	}
 
 	/** `data` was written to the terminal at `at`: the questions in it are what its answers may answer. */
@@ -77,11 +87,12 @@ export class TerminalReplies {
 	}
 
 	/**
-	 * `data`, as the terminal typed it at `at`, without the answers the program is not to have: every answer ptyd gives itself - its
-	 * colour reports too, which teach the window its colours - and one only the editor gives that does not answer a question of its
-	 * kind written within {@link FRESH_REPLY_MS}. Keys, pastes and mouse reports go through as typed.
+	 * `data`, as the terminal typed it at `at`, without the answers the program is not to have: the answers to the window's own colour
+	 * questions, always; every answer ptyd gives itself - its colour reports too, which teach the window its colours - and one only the
+	 * editor gives that does not answer a question of its kind written within {@link FRESH_REPLY_MS}, unless `passAnswers` - a ptyd of an
+	 * earlier protocol answers none, and the editor's answers are the program's then. Keys, pastes and mouse reports go through as typed.
 	 */
-	typed(data: string, at: number): string {
+	typed(data: string, at: number, passAnswers = false): string {
 		if (!data.includes('\x1b')) {
 			return data;
 		}
@@ -89,8 +100,21 @@ export class TerminalReplies {
 			if (rgb !== undefined) {
 				if (colour === '10' || colour === '11' || colour === '12') {
 					this.learn(colour, rgb);
+					// The window asked it: the first answers of its kind are those, answered in the order asked
+					const own = this.own.get(colour) ?? 0;
+					if (own > 0) {
+						if (own === 1) {
+							this.own.delete(colour);
+						} else {
+							this.own.set(colour, own - 1);
+						}
+						return '';
+					}
 				}
-				return '';
+				return passAnswers ? answer : '';
+			}
+			if (passAnswers) {
+				return answer;
 			}
 			const kind = editorKind(answer);
 			if (kind !== undefined) {
