@@ -305,6 +305,11 @@ export class Run {
 	/** Set once a window removed it: no window lists it again, and it is dropped as it ends. */
 	removed = false;
 	/**
+	 * Set where its grace ended it and that end was not confirmed: it is listed again, uncertain, holding its conversation, until it
+	 * ends (ARCHITECTURE-2.2, LIFECYCLE-3.5).
+	 */
+	uncertain = false;
+	/**
 	 * When its program was created - the process start a run's startup counts from (CLIS-2.3) - or, until its turn, now: a window that sees
 	 * it before then gives its startup no less time than it has (ARCHITECTURE-2.3).
 	 */
@@ -489,6 +494,7 @@ export class Run {
 			...(status ? { status } : {}),
 			seq: this.seq,
 			claimedElsewhere,
+			...(this.uncertain ? { uncertain: true } : {}),
 			meta: this.meta
 		};
 	}

@@ -79,6 +79,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} ne désigne aucun commit dans {1}.",
 	"The working location is no longer available.": "L’emplacement de travail n’est plus disponible.",
 	"The working location {0} is not available in this window.": "L’emplacement de travail {0} n’est pas disponible dans cette fenêtre.",
+	"Could not confirm that it stopped": "Impossible de confirmer qu’il s’est arrêté",
 	"Git is not available in this environment.": "Git n’est pas disponible dans cet environnement.",
 	"{0} is not in a Git repository.": "{0} n'est pas dans un dépôt Git.",
 	"{0} has no commits yet.": "{0} n'a pas encore de commit.",

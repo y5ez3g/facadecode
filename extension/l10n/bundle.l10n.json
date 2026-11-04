@@ -309,6 +309,7 @@
 	"No CLI {0} is configured.": "No CLI {0} is configured.",
 	"Its CLI cannot resume this exact conversation, so it cannot be pinned.": "Its CLI cannot resume this exact conversation, so it cannot be pinned.",
 	"The working location {0} is not available in this window.": "The working location {0} is not available in this window.",
+	"Could not confirm that it stopped": "Could not confirm that it stopped",
 	"1 agent": "1 agent",
 	"{0} agents": "{0} agents",
 	"Configure Agents": "Configure Agents",

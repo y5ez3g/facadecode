@@ -79,6 +79,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} は {1} のどのコミットも指していません。",
 	"The working location is no longer available.": "この作業場所はもう使用できません。",
 	"The working location {0} is not available in this window.": "作業場所 {0} はこのウィンドウでは使用できません。",
+	"Could not confirm that it stopped": "停止したことを確認できませんでした",
 	"Git is not available in this environment.": "この環境では Git を使用できません。",
 	"{0} is not in a Git repository.": "{0} は Git リポジトリ内にありません。",
 	"{0} has no commits yet.": "{0} にはまだコミットがありません。",

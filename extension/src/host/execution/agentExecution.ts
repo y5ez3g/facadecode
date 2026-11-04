@@ -753,6 +753,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				pid: run.pid,
 				startedAt: run.startedAt,
 				...(run.exited ? { exited: this.exitOf(String(run.meta.cli), run.exited) } : {}),
+				...(run.uncertain ? { uncertain: true } : {}),
 				claimedElsewhere: run.claimedElsewhere
 			});
 		}

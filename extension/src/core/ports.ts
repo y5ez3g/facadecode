@@ -274,6 +274,11 @@ export interface LiveRun {
 	readonly exited?: { readonly code?: number; readonly signal?: string; readonly interruptVerified: boolean };
 	/** Whether another connected window of this workspace currently claims it. */
 	readonly claimedElsewhere: boolean;
+	/**
+	 * Whether its grace ended it and the end is not confirmed: shown red, never reattached, holding its conversation until its exit is
+	 * heard (LIFECYCLE-3.5).
+	 */
+	readonly uncertain?: boolean;
 }
 
 export type CleanupResult = 'terminated' | 'already_exited' | 'unconfirmed' | 'failed';

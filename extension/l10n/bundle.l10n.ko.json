@@ -79,6 +79,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0}은(는) {1}에서 어떤 커밋도 가리키지 않습니다.",
 	"The working location is no longer available.": "작업 위치를 더 이상 사용할 수 없습니다.",
 	"The working location {0} is not available in this window.": "작업 위치 {0}은(는) 이 창에서 사용할 수 없습니다.",
+	"Could not confirm that it stopped": "중지되었는지 확인할 수 없습니다",
 	"Git is not available in this environment.": "이 환경에서는 Git을 사용할 수 없습니다.",
 	"{0} is not in a Git repository.": "{0}은(는) Git 리포지토리에 있지 않습니다.",
 	"{0} has no commits yet.": "{0}에 아직 커밋이 없습니다.",

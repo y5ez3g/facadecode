@@ -439,6 +439,46 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	test('a run its grace ended without that end confirmed stays listed, uncertain, holding its conversation and never reattached, until it ends (ARCHITECTURE-2.2, LIFECYCLE-3.5)', async function () {
+		this.timeout(20_000);
+		const place = ptydPlace('fd-uncertain-');
+		const graces: (() => void)[] = [];
+		// An end that is not confirmed: the process goes on, as one Windows could not end
+		class UnconfirmedEnd extends runModule.Run {
+			override async terminate(): Promise<'unconfirmed'> { return 'unconfirmed'; }
+		}
+		const Graced = withModules({ './run': { ...runModule, Run: UnconfirmedEnd } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const graced = new Graced(place.socket, () => undefined, { after: (_ms, run) => { graces.push(run); return { dispose: () => undefined }; } });
+		let pid = 0;
+		try {
+			assert.strictEqual(await graced.listen(), true);
+			const window = async (generation: number) => {
+				const client = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, local: true });
+				return client;
+			};
+			const meta = { name: 'stuck', sessionId: 's-stuck', cli: 'claude', environment: 'local' };
+			const first = await window(1);
+			({ pid } = await spawn(first, 'stuck', IDLE, { meta }));
+			first.dispose();
+			await until('its grace to start', () => graces.length === 1);
+			graces[0]();
+			const claimed = await window(2);
+			const [listed] = await claimed.request('list', { owner: 'w1' });
+			assert.deepStrictEqual([listed.run, listed.uncertain, await claimed.request('conversations', {})], ['stuck', true, [{ environment: 'local', cli: 'claude', sessionId: 's-stuck' }]]);
+			await assert.rejects(claimed.request('attach', { run: 'stuck' }), /No run stuck/);
+			await assert.rejects(spawn(claimed, 'again', IDLE, { meta }), /already running in Facade/);
+			// Its exit heard, it is listed no more
+			process.kill(pid);
+			await until('it to be let go', async () => (await claimed.request('list', { owner: 'w1' })).length === 0);
+		} finally {
+			if (pid && alive(pid)) { process.kill(pid); }
+			graced.close();
+			fs.rmSync(place.dir, { recursive: true, force: true });
+		}
+	});
+
 	test('a newer activation takes the same process immediately and fences every stale effect and later reconnect', async () => {
 		const first = await connect();
 		const before = await spawn(first, 'r3', IDLE);

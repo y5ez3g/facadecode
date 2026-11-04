@@ -82,7 +82,8 @@ class FakeExecution implements ExecutionPort {
 		if (this.namesAtSpawn && plan.exactResume && plan.sessionId) { this.identities.fire({ run, sessionId: plan.sessionId }); }
 		return { pid: 4242, startedAt: 1000 };
 	}
-	async attach(live: LiveRun, facts: PairFacts): Promise<void> { this.pairs.set(live.run, facts); }
+	readonly attachedRuns: RunId[] = [];
+	async attach(live: LiveRun, facts: PairFacts): Promise<void> { this.attachedRuns.push(live.run); this.pairs.set(live.run, facts); }
 	async terminate(run: RunId): Promise<CleanupResult> { this.terminated.push(run); return this.cleanup; }
 	removePair(run: RunId): void { this.pairs.delete(run); this.removed.push(run); }
 	async reveal(): Promise<boolean> { return true; }
@@ -107,6 +108,8 @@ function setUp(options: {
 	tools?: boolean;
 	/** What the window does with a start's typing before its first turn: recorded, and settled as the test says. */
 	warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
+	/** How the service waits before it looks again: the test's own, released as it says. */
+	wait?: (ms: number) => Promise<void>;
 } = {}) {
 	const execution = new FakeExecution();
 	execution.failSpawnFor = options.failSpawnFor;
@@ -197,6 +200,7 @@ function setUp(options: {
 		} } : {}),
 		...(options.describe ? { describe: options.describe } : {}),
 		...(options.warmUp ? { warmUp: options.warmUp } : {}),
+		...(options.wait ? { wait: options.wait } : {}),
 		newRunId: () => `run-${(++next).toString(16).padStart(32, '0')}`
 	});
 	const changes: RunChange[] = [];
@@ -205,6 +209,13 @@ function setUp(options: {
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+/** Settles once `check` holds, looking again after each turn of the event loop. */
+const until = async (check: () => boolean): Promise<void> => {
+	for (let turns = 0; !check(); turns++) {
+		if (turns > 1_000) { throw new Error('Timed out waiting.'); }
+		await settle();
+	}
+};
 
 
 suite('Structured lifecycle facts', () => {
@@ -381,6 +392,29 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual(world.agents.list().map(run => run.id), [live], 'the live agent is shown again');
 		assert.ok(world.log.some(line => /Could not remove the kept record of run-1+: EBUSY/.test(line)), 'the failed cleanup is said in the log');
 		assert.strictEqual(world.agents.requested(creator, 'old'), undefined, 'a request lookup is not failed by the same cleanup');
+	});
+
+	test('a run its grace ended without that end confirmed is a red card that says so, holding its Pin and never reattached; once it is no longer listed it goes and its Pin is restored (LIFECYCLE-3.5)', async () => {
+		const looks: (() => void)[] = [];
+		const world = setUp({ sessions: true, wait: () => new Promise<void>(resolve => looks.push(resolve)) });
+		const uncertain = 'run-' + '9'.repeat(32);
+		const meta = { alias: '#a9', name: 'Stuck', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local' as const, yolo: true, createdAt: 5, sessionId: 's-stuck', exactResume: true };
+		world.execution.liveRuns = [{ run: uncertain, meta, pid: 99, startedAt: 6, claimedElsewhere: false, uncertain: true }];
+		await world.agents.restore();
+		const card = world.agents.get(uncertain);
+		assert.deepStrictEqual([card?.lifecycle, card?.error?.reason, card?.error?.source, world.execution.notes.map(note => note.text)],
+			['running', 'Could not confirm that it stopped', 'cleanup', ['Could not confirm that it stopped']]);
+		assert.ok(!world.execution.attachedRuns.includes(uncertain), 'never reattached');
+		// Still listed: it stays
+		await until(() => looks.length === 1);
+		looks.shift()!();
+		await until(() => looks.length === 1);
+		assert.ok(world.agents.get(uncertain));
+		// No longer listed: its exit was heard, and it goes
+		world.execution.liveRuns = [];
+		looks.shift()!();
+		await until(() => !world.agents.get(uncertain));
+		assert.deepStrictEqual([world.execution.removed.includes(uncertain), world.changes.some(change => change.run === uncertain && change.kind === 'removed' && change.cause === 'exit')], [true, true]);
 	});
 
 	test('a damaged retained record is ignored without stopping restoration, said once however often the window restores (ARCHITECTURE-4.2)', async () => {

@@ -79,6 +79,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0}, {1} konumunda hiçbir işlemeyi göstermiyor.",
 	"The working location is no longer available.": "Çalışma konumu artık kullanılamıyor.",
 	"The working location {0} is not available in this window.": "{0} çalışma konumu bu pencerede kullanılamıyor.",
+	"Could not confirm that it stopped": "Durduğu doğrulanamadı",
 	"Git is not available in this environment.": "Git bu ortamda kullanılamıyor.",
 	"{0} is not in a Git repository.": "{0} bir Git deposunda değil.",
 	"{0} has no commits yet.": "{0} henüz bir işlemeye sahip değil.",

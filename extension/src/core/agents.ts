@@ -67,6 +67,8 @@ interface Run {
 	 * preparation included, and a message sent meanwhile goes after it (RULES-1.10, COLLABORATION-2.2).
 	 */
 	creationPending?: boolean;
+	/** Whether its grace ended it and the end is not confirmed: red, holding its conversation, never reattached (LIFECYCLE-3.5). */
+	uncertain?: boolean;
 	/** Whether its tab was told to spin: while its dot is green (LIFECYCLE-2.2). */
 	spinning?: boolean;
 }
@@ -111,6 +113,8 @@ const MOST_CONVERSATIONS_RETRY_MS = 30_000;
  */
 const LOCATION_GONE: FacadeReason = { kind: 'location_gone', values: [] };
 const locationNotHere = (path: string): FacadeReason => ({ kind: 'location_not_here', values: [path] });
+/** How often a run whose grace end is not confirmed is looked for again, until its exit is heard (LIFECYCLE-3.5). */
+const UNCERTAIN_CHECK_MS = 5_000;
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -125,6 +129,8 @@ export class AgentService implements Agents, Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	private ownershipLost = false;
 	private disposed = false;
+	/** Whether runs whose grace end was not confirmed are being looked for again (LIFECYCLE-3.5). */
+	private watchingUncertain = false;
 	/** Aborted as the service is disposed: what waits on a timer stops waiting. */
 	private readonly stopping = new AbortController();
 	private readonly elsewhere = new Set<string>();
@@ -328,6 +334,10 @@ export class AgentService implements Agents, Disposable {
 				elsewhere++;
 				continue;
 			}
+			if (each.uncertain) {
+				this.showUncertain(each);
+				continue;
+			}
 			const facts: RunFacts = {
 				...factsOf(each.run, each.meta),
 				...this.restoredPin(each.meta) ? { pin: this.restoredPin(each.meta)!.id } : {},
@@ -361,7 +371,73 @@ export class AgentService implements Agents, Disposable {
 			}
 		}
 		this.settlePins();
+		this.watchUncertain();
 		return elsewhere;
+	}
+
+	/**
+	 * A run its grace ended without that end confirmed (LIFECYCLE-3.5): a red card that says so, holding its conversation and Pin -
+	 * its Pin is not restored beside it - and never reattached. Close Agent ends it again.
+	 */
+	private showUncertain(each: LiveRun): void {
+		const english = 'Could not confirm that it stopped';
+		const reason = this.deps.describe?.(new FacadeError('FAILED', 'termination_unconfirmed', english, { kind: 'end_unconfirmed', values: [] }), english) ?? english;
+		const pin = this.restoredPin(each.meta);
+		const facts: RunFacts = {
+			...factsOf(each.run, each.meta),
+			...pin ? { pin: pin.id } : {},
+			...each.meta.exactResume || each.meta.resumable ? { pinnable: true } : {},
+			lifecycle: 'running',
+			phase: 'running',
+			pid: each.pid,
+			startedAt: each.startedAt,
+			error: { reason, ...reason !== english ? { english } : {}, source: 'cleanup', at: this.deps.clock.now() }
+		};
+		this.runs.set(each.run, { facts, exactResume: each.meta.exactResume, settled: Promise.resolve(), uncertain: true });
+		this.deps.execution.openPair(pairOf(facts), { reveal: false });
+		this.deps.execution.note(each.run, reason);
+		this.emit({ run: each.run, kind: 'added' });
+	}
+
+	/**
+	 * Looks again, every few seconds, for the runs whose grace end was not confirmed: one no longer listed has ended - its card goes,
+	 * and its Pin is restored as an ended run's (LIFECYCLE-3.5).
+	 */
+	private watchUncertain(): void {
+		if (this.watchingUncertain || ![...this.runs.values()].some(run => run.uncertain)) {
+			return;
+		}
+		this.watchingUncertain = true;
+		const wait = this.deps.wait ?? ((ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms)));
+		void (async () => {
+			try {
+				while (!this.disposed && !this.ownershipLost && [...this.runs.values()].some(run => run.uncertain)) {
+					await wait(UNCERTAIN_CHECK_MS);
+					let listed: Set<RunId>;
+					try {
+						listed = new Set((await this.deps.execution.live()).filter(each => each.uncertain).map(each => each.run));
+					} catch {
+						continue;
+					}
+					let ended = false;
+					for (const [id, run] of [...this.runs]) {
+						if (run.uncertain && !listed.has(id) && !this.disposed) {
+							this.runs.delete(id);
+							this.released.add(id);
+							this.deps.execution.removePair(id);
+							this.emit({ run: id, kind: 'removed', cause: 'exit' });
+							this.deps.log.event(`${run.facts.alias}, whose end was not confirmed, has ended`);
+							ended = true;
+						}
+					}
+					if (ended && !this.disposed) {
+						await this.restorePins();
+					}
+				}
+			} finally {
+				this.watchingUncertain = false;
+			}
+		})().catch(err => this.deps.log.event(`Could not look again for agents whose end was not confirmed: ${messageOf(err)}`));
 	}
 
 	/**

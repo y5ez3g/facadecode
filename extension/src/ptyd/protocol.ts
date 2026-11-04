@@ -128,6 +128,11 @@ export interface RunInfo {
 	readonly seq: number;
 	/** Whether another connected window claims it: a window shows only the runs it claims (RULES-4.1). */
 	readonly claimedElsewhere: boolean;
+	/**
+	 * Whether its grace ended it and that end is not confirmed: listed still, holding its conversation, never reattached, until its exit
+	 * is heard (ARCHITECTURE-2.2, LIFECYCLE-3.5).
+	 */
+	readonly uncertain?: boolean;
 	readonly meta: { readonly [key: string]: unknown };
 }
 

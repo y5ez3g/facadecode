@@ -79,6 +79,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} 在 {1} 中不指向任何提交。",
 	"The working location is no longer available.": "此工作位置已不可用。",
 	"The working location {0} is not available in this window.": "工作位置 {0} 在此窗口中不可用。",
+	"Could not confirm that it stopped": "无法确认它已停止",
 	"Git is not available in this environment.": "Git 在此环境中不可用。",
 	"{0} is not in a Git repository.": "{0} 不在 Git 仓库中。",
 	"{0} has no commits yet.": "{0} 仓库尚无任何提交。",

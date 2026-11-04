@@ -79,6 +79,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} не указывает ни на одну фиксацию в {1}.",
 	"The working location is no longer available.": "Рабочее расположение больше недоступно.",
 	"The working location {0} is not available in this window.": "Рабочее расположение {0} недоступно в этом окне.",
+	"Could not confirm that it stopped": "Не удалось подтвердить, что он остановлен",
 	"Git is not available in this environment.": "Git недоступен в этой среде.",
 	"{0} is not in a Git repository.": "{0} не находится в репозитории Git.",
 	"{0} has no commits yet.": "{0} пока не содержит коммитов.",
