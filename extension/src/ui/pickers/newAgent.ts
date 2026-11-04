@@ -167,16 +167,16 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		const inFolder = now.locations.filter(each => each.folders.some(folder => folder.uri === location.folders[0]?.uri));
 		const changeable = now.folders.length > 1 || inFolder.length > 1 || inFolder.some(each => each.kind === 'checkout') || !!worktree;
 		return [
-			// A labeled line: the editor draws one without a label as all but invisible. The location said as a label is its own line.
-			...!changeable
-				? [{ label: plainText(where), kind: vscode.QuickPickItemKind.Separator }]
-				: [{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator }, {
-					label: vscode.l10n.t("Change Working Location..."),
-					description: plainText(where),
-					iconPath: new vscode.ThemeIcon('folder'),
-					alwaysShow: true,
-					does: 'location' as const
-				}],
+			// A labeled line: the editor draws one without a label as all but invisible, and a label right of the item below it
+			{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator },
+			// Nothing to change the location to: the title says it, and no item offers a change that does nothing (LIFECYCLE-1.3)
+			...!changeable ? [] : [{
+				label: vscode.l10n.t("Change Working Location..."),
+				description: plainText(where),
+				iconPath: new vscode.ThemeIcon('folder'),
+				alwaysShow: true,
+				does: 'location' as const
+			}],
 			{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
 		];
 	};

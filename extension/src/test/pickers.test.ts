@@ -453,7 +453,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			], []]);
 		});
 
-		test('LIFECYCLE-1.3: a lone folder Git has not read yet is a label; Change Working Location comes once Git finds a repository there, the CLI in focus kept', async () => {
+		test('LIFECYCLE-1.3: a lone folder Git has not read yet offers no location change; Change Working Location comes once Git finds a repository there, the CLI in focus kept', async () => {
 			const SHOP_FOLDER = place('loc-shop', 'shop', SHOP, { kind: 'folder', git: 'pending', opened: true, uri: SHOP.uri, path: SHOP.path });
 			catalog = { locations: [SHOP_FOLDER], folders: [SHOP], pending: true };
 			last = { location: SHOP_FOLDER.id, cli: 'claude' };
@@ -467,7 +467,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			picker.hide();
 			await done;
 			assert.deepStrictEqual([pending, read, launched], [
-				[['Claude Code', 'shop', 'Change Name...'], ['Claude Code']],
+				[['Claude Code', 'Options', 'Change Name...'], ['Claude Code']],
 				[['Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Claude Code']],
 				[]
 			]);
@@ -541,12 +541,12 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([offered, planned, chosen], ['from login-fix', ['loc-login feat/api'], 'New worktree feat/api from login-fix']);
 		});
 
-		test('LIFECYCLE-1.3: a lone plain folder is said as a label, never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
+		test('LIFECYCLE-1.3: a lone plain folder offers no location change - the title says it, under Options only Change Name - never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
 			catalog = { locations: [GUIDE], folders: [DOCS], pending: false };
 			last = { location: GUIDE.id, cli: 'claude' };
 			let done = start();
 			await settle();
-			const plain = ui.current!.labels();
+			const plain = [ui.current!.title, ui.current!.labels()];
 			ui.current!.hide();
 			await done;
 			catalog = { locations: [MAIN], folders: [SHOP], pending: false };
@@ -563,7 +563,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.hide();
 			await done;
 			assert.deepStrictEqual([plain, step, stayed], [
-				['Claude Code', 'guide', 'Change Name...'],
+				['New Agent · Ada · guide', ['Claude Code', 'Options', 'Change Name...']],
 				['Select a branch or worktree', ['main', '', 'New Worktree...'], '/main has no commits yet.'],
 				'Select a branch or worktree'
 			]);

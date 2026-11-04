@@ -20,28 +20,27 @@ With a folder open, use `New Agent · {name} · {location}` as the title; placeh
 window, prefix a checkout's location with its workspace folder; do not repeat a plain folder's name. A proposed worktree
 appears as `{branch} (new)` in the title, with the folder prefix in a multi-folder window. Append the environment only
 when it is remote, named as VS Code's remote indicator names it: `SSH: {host}`, `WSL: {distro}` or `Dev Container`;
-another remote is named by its remote authority's kind. Only the local window component sees the remote authority, so
-it reports it with the window identity; location identities do not change. This summary remains visible while CLI
-choices are filtered or scrolled, including when 1.2 has fallen back to another location. Put the last successfully
-used CLI first and preselect it; never execute it without selection. The CLI step lists nothing until the CLIs are
-found, so an Enter while they load starts nothing: the editor keeps the focused position as items change. Other
-installed/enabled CLIs follow CLIS-1.1 order, then configured custom CLIs. CLIs that cannot start here - a
-configuration error, a configured program that is not found, a version Facade does not start - follow under a
-separator labeled `Unavailable`, each with its reason as detail and a `Configure Agents` button; choosing one opens
-Configure Agents too. Errors of `facade.custom` that belong to no CLI are listed there under their setting. A built-in
-that is not installed, or is turned off, is not listed. The bottom items, under a separator labeled `Options`, are
-`Change Working Location...` and `Change Name...`; where the location is only a label, that label is the line. The
-location item's description shows the full current working location, including `New worktree {branch} from {source}`
-for a proposed worktree, and its environment when that is not this machine. The name item's description shows the full
-current name. These items edit the values; they are not the only place the current choices appear. A person can accept
-the suggested name or leave it empty; an empty name keeps its title segment (`New Agent ·  · main`). Change Name uses
-the title `New Agent · Change Name` and the placeholder `Agent name`, and prefills the current name with no prompt of its
-own; the editor supplies the Enter/Escape instructions.
-With no usable CLI, `Configure Agents...` has the detail `Install a supported CLI in this environment, or configure its
-path.`; where the CLIs cannot be listed at all, it carries that failure as its detail. With no folder, use PANEL-1.2's
-Open Folder prerequisite picker and its wording instead of the CLI step.
-Missing optional Git does not block creation or trigger a Git initialization suggestion. Cancel closes without effects
-or changing successful-launch history.
+another remote is named by its remote authority's kind. Only the local window component sees the remote authority, so it
+reports it with the window identity; location identities do not change. This summary remains visible while CLI choices
+are filtered or scrolled, including when 1.2 has fallen back to another location. Put the last successfully used CLI
+first and preselect it; never execute it without selection. The CLI step lists nothing until the CLIs are found, so an
+Enter while they load starts nothing: the editor keeps the focused position as items change. Other installed/enabled
+CLIs follow CLIS-1.1 order, then configured custom CLIs. CLIs that cannot start here - a configuration error, a
+configured program that is not found, a version Facade does not start - follow under a separator labeled `Unavailable`,
+each with its reason as detail and a `Configure Agents` button; choosing one opens Configure Agents too. Errors of
+`facade.custom` that belong to no CLI are listed there under their setting. A built-in that is not installed, or is
+turned off, is not listed. The bottom items, under a separator labeled `Options`, are `Change Working Location...` and
+`Change Name...`; where nothing can be chosen (1.3) `Change Name...` is alone there. The location item's description
+shows the full current working location, including `New worktree {branch} from {source}` for a proposed worktree, and
+its environment when that is not this machine. The name item's description shows the full current name. These items edit
+the values; they are not the only place the current choices appear. A person can accept the suggested name or leave it
+empty; an empty name keeps its title segment (`New Agent ·  · main`). Change Name uses the title `New Agent · Change
+Name` and the placeholder `Agent name`, and prefills the current name with no prompt of its own; the editor supplies the
+Enter/Escape instructions. With no usable CLI, `Configure Agents...` has the detail `Install a supported CLI in this
+environment, or configure its path.`; where the CLIs cannot be listed at all, it carries that failure as its detail.
+With no folder, use PANEL-1.2's Open Folder prerequisite picker and its wording instead of the CLI step. Missing
+optional Git does not block creation or trigger a Git initialization suggestion. Cancel closes without effects or
+changing successful-launch history.
 
 ### 1.2 Human location history
 
@@ -61,14 +60,14 @@ without an unavailable-location note.
 **Change Working Location selects folder, then location, and returns to the same CLI picker.**
 
 Use workspace-folder order and skip a single-choice step. Inside a folder, use WORKTREES-1.2's catalog. An ordinary
-folder is a normal choice. In a folder inside a Git repository, the location step offers New Worktree, its row
-`New Worktree...` naming its source as `from {branch}` (WORKTREES-2.1); where a prerequisite is missing - no commit yet,
-no native creation - that row shows why as its detail and cannot be chosen (WORKTREES-2.3). The step shows at once and
-adds the row when its check completes. A folder in no repository, or where Git is missing, is a plain folder and has no
-New Worktree row; when nothing can be chosen - one folder whose only location is a plain folder - the picker shows the
-location as a label, not as an action that does nothing. Retain Back/selections; Escape cancels the launch. A proposed
-new branch/location is only created when the person accepts a CLI. There is no Git initialization or initial-commit
-path.
+folder is a normal choice. In a folder inside a Git repository, the location step offers New Worktree, its row `New
+Worktree...` naming its source as `from {branch}` (WORKTREES-2.1); where a prerequisite is missing - no commit yet, no
+native creation - that row shows why as its detail and cannot be chosen (WORKTREES-2.3). The step shows at once and adds
+the row when its check completes. A folder in no repository, or where Git is missing, is a plain folder and has no New
+Worktree row; when nothing can be chosen - one folder whose only location is a plain folder - the picker offers no
+location change, as an action that does nothing would be, and its title alone shows the location. Retain
+Back/selections; Escape cancels the launch. A proposed new branch/location is only created when the person accepts a
+CLI. There is no Git initialization or initial-commit path.
 
 The creation substeps use `New Agent · Select Folder`, `New Agent · Working Location`, and
 `New Agent · New Worktree` as titles. A plain folder is still a working location. The main CLI picker retains
