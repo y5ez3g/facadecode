@@ -379,6 +379,29 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		assert.ok(!outputOf(events).includes('before'));
 	});
 
+	test('a local window gone, another window opening its workspace ends its runs: the claim is answered once they ended, and lists none of them; a remote window\'s are taken over (RULES-4.1)', async () => {
+		const window = async (generation: number, address: string, local: boolean) => {
+			const client = await PtydClient.connect(socketPath, '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			clients.push(client);
+			await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, window: address, local });
+			return client;
+		};
+		const first = await window(1, 'win-a', true);
+		const { pid } = await spawn(first, 'closed-1', IDLE, { meta: { name: 'closed-1', sessionId: 's-closed', cli: 'claude', environment: 'local' } });
+		first.dispose();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		const reopened = await window(2, 'win-b', true);
+		assert.strictEqual(alive(pid), false, 'its process ended before the claim was answered');
+		assert.deepStrictEqual([await reopened.request('list', { owner: 'w1' }), await reopened.request('conversations', {})], [[], []]);
+		// A remote window's runs wait for it, and a reopened window takes them over as before
+		const remote = await window(3, 'win-c', false);
+		await spawn(remote, 'kept-1', IDLE);
+		remote.dispose();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		const again = await window(4, 'win-d', false);
+		assert.deepStrictEqual((await again.request('list', { owner: 'w1' })).map(run => [run.run, run.exited]), [['kept-1', undefined]]);
+	});
+
 	test('a newer activation takes the same process immediately and fences every stale effect and later reconnect', async () => {
 		const first = await connect();
 		const before = await spawn(first, 'r3', IDLE);

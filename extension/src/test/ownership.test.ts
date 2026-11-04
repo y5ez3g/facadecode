@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { OwnerClaims, OWNER_GRACE_MS, type OwnerClock } from '../ptyd/ownership';
+import { LOCAL_OWNER_GRACE_MS, OwnerClaims, OWNER_GRACE_MS, type OwnerClock } from '../ptyd/ownership';
 import { isCurrentOwner, nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { tempDir } from './util';
 
@@ -19,7 +19,7 @@ function fixture() {
 		timers.push(timer);
 		return { dispose: () => timer.canceled = true };
 	} };
-	const owners = new OwnerClaims<string>((owner, connection) => events.push(`transfer ${owner} ${connection}`), owner => events.push(`expire ${owner}`), clock);
+	const owners = new OwnerClaims<string>((owner, connection) => events.push(`transfer ${owner} ${connection}`), (owner, why) => events.push(why === 'absent' ? `expire ${owner}` : `expire ${owner} ${why}`), clock);
 	const claim = (generation: number, owner = 'workspace') => ({ owner, generation, token: `activation-${generation}` });
 	return { owners, timers, events, claim };
 }
@@ -75,6 +75,53 @@ suite('Workspace ownership: one activation, fenced reconnect and five-minute cle
 		owners.claim(claim(1), 'remote-extension-host');
 		assert.deepStrictEqual(timers, []);
 		owners.assert('workspace', 'remote-extension-host');
+	});
+
+	// The owner closed a local window and opened its workspace again seconds later: its agents were still there, taken over by the
+	// new window as a reload's would be. Five minutes are for a remote window's lost network, never for a local window (2026-11-03)
+	test('a local window gone and another window opening its workspace: that one was closed, and its runs end at once, never taken over (RULES-4.1)', () => {
+		const { owners, timers, events, claim } = fixture();
+		const local = (generation: number, window: string) => ({ ...claim(generation), window, local: true });
+		owners.claim(local(1, 'win-a'), 'first');
+		owners.disconnect('first');
+		assert.deepStrictEqual(timers.map(timer => timer.ms), [LOCAL_OWNER_GRACE_MS], 'a local window\'s grace is the reload\'s, not five minutes');
+		owners.claim(local(2, 'win-b'), 'second');
+		assert.deepStrictEqual(events, ['expire workspace closed'], 'ended, not transferred');
+		assert.strictEqual(timers[0].canceled, true);
+		owners.assert('workspace', 'second');
+		// Its queued timer cannot end the new window's
+		timers[0].callback();
+		assert.deepStrictEqual(events, ['expire workspace closed']);
+	});
+
+	test('a local window reloaded - the same window, gone a moment - claims its runs again; one still connected hands them to another window (RULES-4.1)', () => {
+		const reload = fixture();
+		const local = (generation: number, window: string) => ({ ...reload.claim(generation), window, local: true });
+		reload.owners.claim(local(1, 'win-a'), 'before');
+		reload.owners.disconnect('before');
+		reload.owners.claim(local(2, 'win-a'), 'after');
+		reload.owners.assert('workspace', 'after');
+		assert.deepStrictEqual([reload.events, reload.timers.map(timer => timer.canceled)], [[], [true]]);
+		// Two windows of one workspace, the first still there: the second takes its runs over, ending none
+		const both = fixture();
+		both.owners.claim({ ...both.claim(1), window: 'win-a', local: true }, 'first');
+		both.owners.claim({ ...both.claim(2), window: 'win-b', local: true }, 'second');
+		assert.deepStrictEqual(both.events, ['transfer workspace first']);
+	});
+
+	test('a remote window keeps its five minutes, and a reopened window takes its runs over as before; a window that cannot know its identity too (RULES-4.1)', () => {
+		const remote = fixture();
+		remote.owners.claim({ ...remote.claim(1), window: 'win-a', local: false }, 'remote-extension-host');
+		remote.owners.disconnect('remote-extension-host');
+		remote.owners.claim({ ...remote.claim(2), window: 'win-b', local: false }, 'reopened');
+		assert.deepStrictEqual([remote.timers.map(timer => [timer.ms, timer.canceled]), remote.events], [[[OWNER_GRACE_MS, true]], []]);
+		remote.owners.assert('workspace', 'reopened');
+		const unknown = fixture();
+		unknown.owners.claim({ ...unknown.claim(1), local: true }, 'no-identity');
+		unknown.owners.disconnect('no-identity');
+		unknown.owners.claim({ ...unknown.claim(2), window: 'win-b', local: true }, 'next');
+		assert.deepStrictEqual(unknown.events, []);
+		assert.throws(() => unknown.owners.claim({ ...unknown.claim(3), window: 7 } as never, 'odd'), /Invalid workspace ownership claim/);
 	});
 
 	test('the same generation with a different token is refused, and disposal disarms queued timers', () => {

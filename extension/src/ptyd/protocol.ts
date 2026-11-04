@@ -22,8 +22,9 @@ export const PTYD_PROTOCOL = 15;
  * 11 lacks 12's screen-evidence invalidation, logical-line status reading and complete record replacement.
  * 12 lacks 13's Windows Unicode input and draft handling; its backend may belong to a removed installation (CLIS-2.1, ARCHITECTURE-2.4).
  * 13 lacks 14's Codex completed-turn correction (CLIS-2.3).
- * 14 lacks 15's answers to a program's terminal queries while a window claims its run - its colours among them - and its OSC 7501
- * probe answered before a window has its output (ARCHITECTURE-2.3, CLIS-2.3).
+ * 14 lacks 15's answers to a program's terminal queries while a window claims its run - its colours among them - its OSC 7501
+ * probe answered before a window has its output, and a local window's end at another window's claim and after its own grace
+ * (ARCHITECTURE-2.2, 2.3, CLIS-2.3): it ignores the window a claim names.
  * New runs go to none of these.
  */
 export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13, 14];

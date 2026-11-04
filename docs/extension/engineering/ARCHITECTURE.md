@@ -166,21 +166,27 @@ not a product workflow.
 ### 2.2 Window lifetime is a proof obligation
 
 **Keep a window's runs across reload, extension-host restart and temporary disconnect by demonstrated editor behavior,
-and end them only by RULES-4.1's five-minute policy.**
+and end them only by RULES-4.1's grace policy.**
 
-RULES-4.1 owns the contract: closure ends that window's runs, reload reconnects them and temporary remote loss does
-not itself terminate them. ptyd applies RULES-4.1's five minutes from the moment the owning extension host's connection
-closes; a successor activation's claim cancels it, and a remote network outage that leaves the remote extension host
-connected starts no timer. A stable workspace key is not enough to identify a particular live window; two windows can
-share it. Route-staleness timers can detect loss, not prove closure. A window ID is the routing address the window
-component derives from the window's handover identity when it registers the window; it may change after reload. The
-runtime reattaches the original runs, with the same run IDs, to the reloaded window. RULES-2.2's Window row is the
-conceptual identity, not this address. Record enough current window/run association to reconnect the actual process.
-No durable message handover is required solely for a closing sender; RULES-1.9 permits natural termination of work
-still owned by that side. The workspace key that runs are claimed under is derived from the workspace's URI once and
-then kept in the editor's workspace storage for reloads. Folder-to-multi-root conversion and Save Workspace As can
-replace extension workspace state; remote conversion also reloads the window and changes `env.sessionId`. Session ID
-alone cannot carry this state.
+RULES-4.1 owns the contract: closure ends that window's runs, reload reconnects them and temporary remote loss does not
+itself terminate them. ptyd applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
+seconds where the claim says its window is local, five minutes otherwise; a successor activation's claim cancels it, and
+a remote network outage that leaves the remote extension host connected starts no timer. Each claim names its window's
+address, derived from the window's handover identity and so the same across its reloads, and whether the window is
+local. A claim of a local window whose address differs from that of a local owner gone ends that owner's runs at once -
+its window was closed - and is answered once they ended, so that the new window's Pin restoration never runs beside
+them; a claim that names no address, or a remote window's, takes the runs over as before. A stable workspace key is not
+enough to identify a particular live window; two windows can share it. Route-staleness timers can detect loss, not prove
+closure. A window ID is the routing address the window component derives from the window's handover identity when it
+registers the window: the same across the window's reloads while that identity's record lasts, and another where the
+record is gone and replaced (below) - a local window whose record was so replaced is taken at its reload for another
+window, and its agents end (RULES-4.1). The runtime reattaches the original runs, with the same run IDs, to the
+reloaded window. RULES-2.2's Window row is the conceptual identity, not this address. Record enough current
+window/run association to reconnect the actual process. No durable message handover is required solely for a closing
+sender; RULES-1.9 permits natural termination of work still owned by that side. The workspace key that runs are claimed
+under is derived from the workspace's URI once and then kept in the editor's workspace storage for reloads.
+Folder-to-multi-root conversion and Save Workspace As can replace extension workspace state; remote conversion also
+reloads the window and changes `env.sessionId`. Session ID alone cannot carry this state.
 
 The local window component keeps a random handover identity in its own directory supplied by public
 `ExtensionContext.logUri`. It neither parses the URI nor reads editor storage internals. On the verified desktop editor,
@@ -257,10 +263,10 @@ workspace conversion outside test mode, which refuses to enter a workspace.
 
 Gate G2 needs isolated traces for reload, extension-host restart, remote loss, close-one, close-last and immediate
 reopen. Deactivation, terminal closure, `sessionId`, a missing-heartbeat timer, a hidden terminal's death or the
-Shutdown exit reason does not alone prove a close, so Facade reports no closure from them and RULES-4.1's five minutes
-are the cleanup. A mechanism proven on the editor can take the place of a derived design; it cannot silently redefine
-RULES-4.1's behavior. This rule is a proof obligation, not a claim that every supported editor supplies a complete
-mechanism.
+Shutdown exit reason does not alone prove a close, so Facade reports no closure from them and RULES-4.1's grace is the
+cleanup, but for a local window another window's claim shows closed. A mechanism proven on the editor can take the place
+of a derived design; it cannot silently redefine RULES-4.1's behavior. This rule is a proof obligation, not a claim that
+every supported editor supplies a complete mechanism.
 
 ### 2.3 Execution ownership and input deadlines
 
@@ -324,8 +330,8 @@ Until its turn a run is listed, claimed and closable and keeps its details, size
 automated input, has no process ID and counts its start from the moment it was seen, which a window reloaded meanwhile
 keeps for it. One closed meanwhile ends with no program ever created. A start reads what the supervisor heard before it
 gives up its wait, so that a busy supervisor never takes a program that started for one that did not. Do not add
-expiring security leases or automatic process killing on temporary disconnection; RULES-4.1's five minutes after the
-owning extension host disconnects is the only timed cleanup. Native preparation jobs are not owned by this cleanup.
+expiring security leases or automatic process killing on temporary disconnection; RULES-4.1's grace after the owning
+extension host disconnects is the only timed cleanup. Native preparation jobs are not owned by this cleanup.
 
 ### 2.4 Journals, pressure and upgrades
 
@@ -553,7 +559,7 @@ editor reports the component installed later. If it does not appear, the window 
 which the component reads, so it cannot tell which agents are its own and shows and starts none (RULES-4.1): the panel
 and one notification explain in plain words that the Facade Code Window Component must be installed and enabled on this
 computer, with an action that shows it in the Extensions view, Facade's commands repeat that explanation, and a reload
-is offered once the component is installed. The window's running agents go on for RULES-4.1's five minutes, so that
+is offered once the component is installed. The window's running agents go on for RULES-4.1's grace, so that
 installing the component and reloading in time shows them again. A window component without the client network, too old
 to carry requests, leaves its window's agents shown and usable: they reach this window's agents alone, list_agents and
 name resolution report the other windows unavailable (`complete: false`, MCP-3.1), and a new start or send is refused,
