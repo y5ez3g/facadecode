@@ -237,8 +237,11 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const copied = await until('a copy, or none', async () => opened.length ? true : (await state()).cards.length > 1 ? true : undefined, 5_000).catch(() => false);
 			listening.dispose();
 			if (!copied) {
-				// No copy reported, so none to start an agent in place of: the first agent stays as it was, alone (LIFECYCLE-2.2)
-				console.log(`  split: this editor makes no copy of a terminal tab it splits: ${seen()}`);
+				// No copy reported, so none to start an agent in place of: the first agent stays as it was, alone (LIFECYCLE-2.2). Only an
+				// editor before 1.144 may make none - 1.105 opens an empty group - so that a later one making none is a regression seen
+				const [major, minor] = vscode.version.split('.').map(Number);
+				assert.ok(major === 1 && minor < 144, `VS Code ${vscode.version} copies a terminal tab it splits, and no copy was seen: ${seen()}`);
+				console.log(`  split: VS Code ${vscode.version} makes no copy of a terminal tab it splits: ${seen()}`);
 				assert.deepStrictEqual([(await state()).cards.map(card => card.runId), vscode.window.terminals.length], [[first.runId], 1]);
 				return;
 			}
