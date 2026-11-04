@@ -203,8 +203,10 @@ still lose such characters, and its draft is the message's own without them too.
 millisecond, ConPTY's 64 bytes a millisecond on Windows, counted in whole tenths of a second. The message's own draft
 has 2 seconds and that time to show - on Windows a character (UTF-16 code unit) more, 3 ms for Codex and 1 ms for Muse
 Code, which read console input one key at a time: 21.1 s for 9,249 characters, and 4.9 s for 7,533. Enter goes only over
-that draft - for Antigravity, which takes seconds to expand a long paste, 45 ms a line after the draft shows - and
-delivery is confirmed once the input box is empty again, within 3 seconds and the paste's time. The same times extend
+that draft - for Antigravity, which takes seconds to expand a long paste, 45 ms a line after the draft shows; for Muse
+Code 250 ms after, as it takes an Enter that soon after its paste for a line break in it (it did 15 ms after, and
+submitted 100 ms after) - and delivery is confirmed once the input box is empty again, within 3 seconds and the paste's
+time. The same times extend
 the stage's deadlines (RULES-1.5) and type_text's wait before its Enter (MCP-5.2). State actual full/partial/unknown
 effects. A later attempt never types the text again; it presses Enter only over the message's own draft (RULES-1.6). Do
 not require a reconciliation API. An unknown version still starts its terminal, and its activity can still be verified
