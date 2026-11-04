@@ -183,7 +183,7 @@
     {
       "version": "0.0.5",
       "tag": "extension/0.0.5",
-      "sourceRevision": "8646461d699482ccb88aa3f790f50e257834d02e",
+      "sourceRevision": "extension/0.0.5",
       "evidence": {
         "verification": "Original Marketplace files match, byte for byte, the packages the Extension checks run built and tested at the source revision; each was published as that run uploaded it.",
         "runtimeBaseCommit": "8646461d699482ccb88aa3f790f50e257834d02e",
