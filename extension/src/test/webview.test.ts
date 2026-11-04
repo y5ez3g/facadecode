@@ -161,12 +161,15 @@ suite('The agent panel in Chromium', function () {
 		assert.ok(!future.includes('Reported working: now'));
 	});
 
-	test('the dot\'s cut-out ring is the colour the row shows: a translucent hover or selection colour over the side bar, never over the avatar (PANEL-1.3)', async () => {
-		await evaluate(`document.documentElement.style.cssText = '--vscode-sideBar-background:#202020;--vscode-list-activeSelectionBackground:rgba(0, 120, 255, 0.3)';`);
-		const rings = await evaluate(`(() => { agents[0] = newCard(1, { selected: true }); redraw({ revision: 2 }); const cards = document.querySelectorAll('.agent'); return [cards[0], cards[1]].map(card => { const dot = card.querySelector('.dot'); return [getComputedStyle(dot).boxShadow, getComputedStyle(dot, '::after').backgroundImage.startsWith('linear-gradient')]; }); })()`);
+	// Two shadows stacked the same size each smoothed their edge, and the side bar's under the row's showed through it at 125%: a light
+	// rim round the dot of a card selected in blue (2026-11-03). The ring is the dot's own border, painted with it as one shape
+	test('the dot\'s cut-out ring is the colour the row shows: a translucent hover or selection colour over the side bar, never over the avatar, painted as the dot\'s own border (PANEL-1.3)', async () => {
+		await evaluate(`document.documentElement.style.cssText = '--vscode-charts-green:#00ff00;--vscode-sideBar-background:#202020;--vscode-list-activeSelectionBackground:rgba(0, 120, 255, 0.3)';`);
+		const rings = await evaluate(`(() => { agents[0] = newCard(1, { selected: true }); redraw({ revision: 2 }); const cards = document.querySelectorAll('.agent'); return [cards[0], cards[1]].map(card => { const dot = card.querySelector('.dot'), style = getComputedStyle(dot); return [style.backgroundImage, style.backgroundClip, style.borderTopWidth, style.width, style.boxShadow, getComputedStyle(dot, '::after').backgroundImage.startsWith('linear-gradient')]; }); })()`);
+		const layers = (row: string) => `linear-gradient(rgb(0, 255, 0), rgb(0, 255, 0)), linear-gradient(${row}, ${row}), linear-gradient(rgb(32, 32, 32), rgb(32, 32, 32))`;
 		assert.deepStrictEqual(rings, [
-			['rgba(0, 120, 255, 0.3) 0px 0px 0px 2px, rgb(32, 32, 32) 0px 0px 0px 2px', true],
-			['rgb(32, 32, 32) 0px 0px 0px 2px, rgb(32, 32, 32) 0px 0px 0px 2px', true]
+			[layers('rgba(0, 120, 255, 0.3)'), 'padding-box, border-box, border-box', '2px', '14px', 'none', true],
+			[layers('rgb(32, 32, 32)'), 'padding-box, border-box, border-box', '2px', '14px', 'none', true]
 		]);
 	});
 
@@ -210,7 +213,7 @@ suite('The agent panel in Chromium', function () {
 		await evaluate(`document.body.classList.remove('vscode-reduce-motion')`);
 		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
 		assert.strictEqual(await evaluate(`document.getAnimations().some(animation => animation.playState === 'running')`), false);
-		assert.strictEqual(await evaluate(`getComputedStyle(document.querySelector('.dot')).backgroundColor`), 'rgb(137, 209, 133)');
+		assert.strictEqual(await evaluate(`getComputedStyle(document.querySelector('.dot')).backgroundImage.match(/rgba?\\([^)]+\\)/)[0]`), 'rgb(137, 209, 133)');
 	});
 
 	test('UX-2.2: a new card opens in 180 ms, but not on the first draw, a change of filter or with reduced motion; a card that goes is removed at once, never animated out', async () => {
@@ -425,7 +428,7 @@ suite('The agent panel in Chromium', function () {
 							const n = name.getBoundingClientRect(), p = place.getBoundingClientRect(), t = top.getBoundingClientRect();
 							return { gap: p.left - n.right, over: p.right - t.right, folder: place.querySelector('.folder').textContent, separator: place.querySelector('.bullet').textContent, tree: place.querySelector('.tree').textContent, hidden: getComputedStyle(place.querySelector('.folder')).display === 'none' };
 						});
-						return { rows, overflow: document.documentElement.scrollWidth > window.innerWidth, errors: window.errors, colours: [...document.querySelectorAll('.dot')].slice(0, 4).map(dot => getComputedStyle(dot).display === 'none' ? 'none' : getComputedStyle(dot).backgroundColor) };
+						return { rows, overflow: document.documentElement.scrollWidth > window.innerWidth, errors: window.errors, colours: [...document.querySelectorAll('.dot')].slice(0, 4).map(dot => getComputedStyle(dot).display === 'none' ? 'none' : getComputedStyle(dot).backgroundImage.match(/rgba?\\([^)]+\\)/)[0]) };
 					})()`);
 					const context = `${theme.name}, ${width}px, zoom ${zoom}: ${JSON.stringify(result)}`;
 					assert.ok(result.rows.every((row: { gap: number; over: number; folder: string; separator: string; tree: string; hidden: boolean }) => row.gap >= 5.5 && row.over <= 1 && row.folder && row.tree && row.separator === ' · ' && !row.hidden), context);

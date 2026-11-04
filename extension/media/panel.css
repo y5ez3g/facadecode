@@ -247,8 +247,10 @@ body.facade-modern {
 	--facade-row-background: var(--vscode-list-activeSelectionBackground);
 }
 
-/* The avatar: its maker's app icon - or a custom CLI's initial - 28px round, edged in the theme's border so that a dark one reads on a
-   dark theme (PANEL-1.3). */
+/* The avatar: its maker's app icon - or a custom CLI's initial - 28px round, edged so that a dark one reads on a dark theme and a light
+   one on a light theme (PANEL-1.3). The edge is the theme's foreground, translucent: an opaque border colour laid over the icon's own
+   edge showed as a pale halo round a coloured or dark icon at fractional display scales, where the circle's anti-aliasing and the
+   border's fall on the same pixels. */
 .avatar {
 	position: relative;
 	flex: 0 0 auto;
@@ -272,7 +274,7 @@ body.facade-modern {
 	position: absolute;
 	inset: 0;
 	border-radius: 50%;
-	box-shadow: inset 0 0 0 1px var(--vscode-widget-border, var(--vscode-panel-border));
+	box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--vscode-foreground) 14%, transparent);
 }
 
 .face img {
@@ -287,7 +289,7 @@ body.facade-modern {
  * name picks - none of the dot's - the theme's own colours throughout (UX-2.1). The colour is taken opaque - a theme may give it
  * transparent, as VS Code's own orange is - so that the circle is the colour the page measures, whatever row it is on. Where the
  * letter does not read on that tint, a fainter one is under it, and where it reads on neither, the side bar's own colour; the ring is
- * the theme's border, its contrast border in a high contrast theme. A colour the theme does not have leaves the circle clear.
+ * every avatar's, above. A colour the theme does not have leaves the circle clear.
  */
 .face.initial {
 	font-size: var(--facade-label);
@@ -311,20 +313,26 @@ body.facade-modern {
 /*
  * What is known of the agent, on its avatar's corner as a chat app's presence, cut out of the row so that it reads on any background
  * (RULES-3.2): green and breathing while it starts or works, red and still for an error, and none for anything else - idle, a native
- * blocker or unknown activity, which the hover says.
+ * blocker or unknown activity, which the hover says. The 2 px ring cut out of the row is the dot's own border, painted with it as
+ * one shape: the row's colour over the side bar's. Two shadows stacked the same size each smoothed their edge, and the lower one's
+ * showed through the upper's at fractional display scales - a light rim round a dot on a blue selected row, a dark one on a dark row.
  */
 .dot {
 	position: absolute;
-	right: -1px;
-	bottom: -1px;
-	width: 10px;
-	height: 10px;
+	right: -3px;
+	bottom: -3px;
+	width: 14px;
+	height: 14px;
+	border: 2px solid transparent;
 	border-radius: 50%;
-	box-shadow: 0 0 0 2px var(--facade-row-background), 0 0 0 2px var(--facade-base-background);
+	background:
+		linear-gradient(var(--facade-dot-color, transparent), var(--facade-dot-color, transparent)) padding-box,
+		linear-gradient(var(--facade-row-background), var(--facade-row-background)) border-box,
+		linear-gradient(var(--facade-base-background), var(--facade-base-background)) border-box;
 }
 
 .dot.working {
-	background: var(--vscode-charts-green);
+	--facade-dot-color: var(--vscode-charts-green);
 }
 .dot.working::after {
 	content: '';
@@ -335,7 +343,7 @@ body.facade-modern {
 	opacity: 0;
 	animation: facade-breathe 1.8s ease-in-out infinite;
 }
-.dot.error { background: var(--vscode-charts-red); }
+.dot.error { --facade-dot-color: var(--vscode-charts-red); }
 .dot.none { display: none; }
 
 /* Work: the dot fades towards the row and back - by opacity alone, its cut-out ring staying as it is (PANEL-1.4) */
@@ -588,4 +596,10 @@ body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:hover:no
 body.vscode-high-contrast .item.selected :is(.place, .title, .pin),
 body.vscode-high-contrast-light .item.selected :is(.place, .title, .pin) {
 	opacity: 1;
+}
+
+/* An avatar's edge in the theme's contrast border, as every edge here: a translucent one would fade it */
+body.vscode-high-contrast .face::after,
+body.vscode-high-contrast-light .face::after {
+	box-shadow: inset 0 0 0 1px var(--vscode-contrastBorder, var(--vscode-foreground));
 }
