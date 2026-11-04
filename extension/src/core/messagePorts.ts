@@ -163,6 +163,8 @@ export interface Messages {
 	reserveResult(): string;
 	/** A start's creation prompt went in natively: recorded as the caller's message to the child with its outcome (COLLABORATION-2.2). */
 	recordPrompt(request: Omit<SendRequest, 'elapsedMs'>, delivery: MessageRecord['delivery']): MessageRecord;
+	/** A creation prompt recorded pending whose send could not go: failed, and reported by its start, so that a reload never types it (MCP-2.3). */
+	giveUpPrompt?(id: string, reason: string): void;
 	/**
 	 * A Facade result about an operation other than a message - a start that completed after its accepted response (MCP-1.3): a
 	 * `result` record in `to`'s inbox, delivered with its own budget, ending quietly where it cannot be (RULES-1.7).

@@ -306,6 +306,13 @@ export class MessageService implements Messages, Disposable {
 		}, delivery, true, request.id);
 	}
 
+	giveUpPrompt(id: string, reason: string): void {
+		const record = this.deps.store.list().find(each => each.id === id && each.delivery.status === 'pending');
+		if (record) {
+			this.save(settledAt(record, reason));
+		}
+	}
+
 	reserveResult(): string { return `m-${this.deps.ids.next()}`; }
 
 	report(request: ResultReport): MessageRecord {
@@ -645,8 +652,9 @@ export class MessageService implements Messages, Disposable {
 
 	/** Whether `stage`'s run has a creation prompt recorded and still pending, which goes first - after a reload too (RULES-1.10). */
 	private creationRecorded(stage: Stage): boolean {
+		const now = this.deps.clock.now();
 		return this.deps.store.list().some(record => record.id !== stage.message && record.to.run === stage.target && record.initialPrompt?.path === 'post_start'
-			&& record.delivery.status === 'pending');
+			&& record.delivery.status === 'pending' && (record.delivery.deadline === undefined || record.delivery.deadline > now));
 	}
 
 	/** A stage stopped before its deadline: delivered meanwhile by the recipient's read, or its run ended or was closed. */

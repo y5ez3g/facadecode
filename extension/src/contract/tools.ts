@@ -79,7 +79,7 @@ export interface ToolServiceDeps {
 	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get' | 'requested' | 'creationPending' | 'creationSettled'>;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'resolve'>;
 	readonly clis: StartCatalog;
-	readonly messages: Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'>;
+	readonly messages: Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest' | 'giveUpPrompt'>;
 	readonly terminal: TerminalPort;
 	/** The execution environment's Facade directory, where long results are written. */
 	readonly home: string;
@@ -924,6 +924,10 @@ class ToolService {
 			record = sent.status === 'accepted' ? await later : sent.record;
 		} catch (err) {
 			const failed = errorResult(err, { effects: { outcome: 'unknown' } });
+			// What it recorded as the start answered is settled too: it holds no message back, and no reload types it (MCP-2.3)
+			if (promptId !== undefined) {
+				this.deps.messages.giveUpPrompt?.(promptId, failed.error!.reason);
+			}
 			return {
 				data: defined({ message_id: promptId, alias, ...base, status: 'failure', reason: failed.error!.reason, message: failed.error!.message, effects: failed.effects }),
 				headline: `Its prompt${alias ? ` ${alias}` : ''} could not be sent: ${failed.error!.message} The agent keeps running.`
