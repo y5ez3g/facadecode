@@ -15,6 +15,8 @@ export interface AgentTerminal {
 	readonly pty: AgentPty;
 	open(reveal: boolean): void;
 	reveal(preserveFocus: boolean): boolean;
+	/** Closes its tab, the run and its pseudoterminal going on: opened again, it draws the run's screen (LIFECYCLE-2.2). */
+	hide(): boolean;
 	rename(name: string): void;
 	dispose(): void;
 }
@@ -33,6 +35,8 @@ interface TerminalEntry {
 	applyingPin?: boolean;
 	/** A restored terminal opens behind the editor it covered; this is not a human activation. */
 	background?: { readonly since: number; readonly covered?: vscode.Tab };
+	/** Its tab is closing as Facade hid it: no close of the person's (LIFECYCLE-2.2). */
+	hiding?: boolean;
 }
 
 interface TerminalOptions {
@@ -40,7 +44,8 @@ interface TerminalOptions {
 	readonly log: (line: string) => void;
 	readonly terminalOwner?: TerminalOwner & { readonly remote: boolean };
 	readonly activated: (run: RunId | undefined) => void;
-	readonly closed: (run: RunId) => void;
+	/** The person closed `run`'s tab - `marked` where it showed its pin mark - as the editor reports a close of theirs (LIFECYCLE-2.2, 3.4). */
+	readonly closed: (run: RunId, marked: boolean) => void;
 	readonly pinned?: (run: RunId, pinned: boolean) => void;
 	readonly renamed: (run: RunId, name: string) => void;
 	/** The window's terminal colours, which each terminal reports as it opens and the theme changes (ARCHITECTURE-2.3). */
@@ -88,15 +93,20 @@ export class AgentTerminals implements vscode.Disposable {
 				if (!pair) {
 					return;
 				}
+				const marked = pair.observedPin === true;
 				pair.terminal = undefined;
 				pair.wantedPin ??= pair.observedPin;
 				pair.observedPin = undefined;
 				pair.tab = undefined;
 				this.opening = this.opening.filter(each => each.pair !== pair);
-				// The person closed the tab - not the window going - which they confirm for a live agent (LIFECYCLE-3.1). Its pair
-				// stays until then: kept, the same pseudoterminal opens in a new tab.
+				if (pair.hiding) {
+					pair.hiding = false;
+					return;
+				}
+				// The person closed the tab - not the window going: it is hidden, the agent going on, and the same pseudoterminal opens
+				// in a new tab as its card opens it (LIFECYCLE-2.2). A close of a tab showing its pin mark Unpins (3.4).
 				if (terminal.exitStatus?.reason !== vscode.TerminalExitReason.Shutdown) {
-					this.options.closed(pair.run);
+					this.options.closed(pair.run, marked);
 				}
 			})
 		);
@@ -178,6 +188,16 @@ export class AgentTerminals implements vscode.Disposable {
 				this.revealRequested = undefined;
 				pair.background = undefined;
 				pair.terminal.show(preserveFocus);
+				return true;
+			},
+			hide: () => {
+				const terminal = pair.terminal;
+				if (this.entries.get(pair.run) !== pair || !terminal) {
+					return false;
+				}
+				if (this.revealRequested?.pair === pair) { this.revealRequested = undefined; }
+				pair.hiding = true;
+				terminal.dispose();
 				return true;
 			},
 			rename: name => {

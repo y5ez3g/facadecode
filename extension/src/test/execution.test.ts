@@ -1015,7 +1015,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const closes: RunId[] = [];
 		const activations: (RunId | undefined)[] = [];
 		port.onDidExit(exit => exits.push(exit));
-		port.onDidClosePair!(run => closes.push(run));
+		port.onDidClosePair!(({ run }) => closes.push(run));
 		port.onDidActivate(run => activations.push(run));
 		port.openPair(facts('run-4'), { reveal: false });
 		open(terminals[0]);
@@ -1043,7 +1043,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	test('a run the person kept after closing its tab opens in a new tab - the same pseudoterminal, its screen drawn again - and so does revealing it (LIFECYCLE-3.1)', async () => {
 		const port = portOf();
 		const closes: RunId[] = [];
-		port.onDidClosePair!(run => closes.push(run));
+		port.onDidClosePair!(({ run }) => closes.push(run));
 		port.openPair(facts('run-7'), { reveal: false });
 		open(terminals[0]);
 		await port.spawn('run-7', plan(ECHO), meta('run-7'));
@@ -1060,10 +1060,35 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(terminals.length, 3);
 	});
 
+	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
+		const port = portOf();
+		const closes: { readonly run: RunId; readonly marked: boolean }[] = [];
+		port.onDidClosePair!(close => closes.push(close));
+		port.openPair(facts('run-h'), { reveal: false });
+		open(terminals[0]);
+		await port.spawn('run-h', plan(ECHO), meta('run-h'));
+		await until('its output', () => screenOf(terminals[0]).includes('ready'));
+		assert.strictEqual(port.hideTab('run-h'), true);
+		assert.strictEqual(terminals[0].disposed, true);
+		closed.fire(Object.assign(terminals[0], { exitStatus: { reason: EXIT_REASON.Extension, code: undefined } }));
+		assert.deepStrictEqual([closes, port.hideTab('run-h')], [[], false], 'hidden: nothing to hide again, nothing closed');
+		assert.strictEqual(await port.reveal('run-h', { preserveFocus: false }), true);
+		assert.strictEqual(terminals.length, 2);
+		open(terminals[1]);
+		await until('its screen drawn again', () => screenOf(terminals[1]).includes('ready'));
+		// Its tab, pinned: the person's close says so
+		const tab = { input: new TabInputTerminal(), isActive: true, isPinned: true, group: { viewColumn: 1, tabs: [] as unknown[] } };
+		activeTerminal = terminals[1];
+		activeChanged.fire(terminals[1]);
+		tabsChanged.fire({ opened: [tab], closed: [], changed: [] });
+		closed.fire(Object.assign(terminals[1], { exitStatus: { reason: EXIT_REASON.User, code: undefined } }));
+		assert.deepStrictEqual(closes, [{ run: 'run-h', marked: true }]);
+	});
+
 	test('removing a pair disposes its terminal at once - no close of the person\'s - ends a live process in the background and lets ptyd forget the run; removing it again does nothing', async () => {
 		const port = portOf();
 		const closes: RunId[] = [];
-		port.onDidClosePair!(run => closes.push(run));
+		port.onDidClosePair!(({ run }) => closes.push(run));
 		port.openPair(facts('run-6'), { reveal: false });
 		open(terminals[0]);
 		const { pid } = await port.spawn('run-6', plan(ECHO), meta('run-6'));
@@ -1565,7 +1590,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const port = portOf();
 		const closes: RunId[] = [];
 		const renames: { readonly run: RunId; readonly name: string }[] = [];
-		port.onDidClosePair(run => closes.push(run));
+		port.onDidClosePair(({ run }) => closes.push(run));
 		port.onDidRenameTab(rename => renames.push(rename));
 		const group = { viewColumn: 1, tabs: [] as unknown[] };
 		const file = { input: new TabInputText({ path: '/work/a.ts' }), isActive: true, isPreview: false, group };

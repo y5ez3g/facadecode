@@ -193,7 +193,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly reports = new Emitter<ActivityReport>();
 	private readonly exits = new Emitter<ExitReport>();
 	private readonly activations = new Emitter<RunId | undefined>();
-	private readonly closes = new Emitter<RunId>();
+	private readonly closes = new Emitter<{ readonly run: RunId; readonly marked: boolean }>();
 	private readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
 	private readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
 	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
@@ -244,7 +244,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			this.terminals = new AgentTerminals({
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
-				closed: run => this.closes.fire(run),
+				closed: (run, marked) => this.closes.fire({ run, marked }),
 				renamed: (run, name) => this.tabRenames.fire({ run, name }),
 			pinned: (run, pinned) => this.tabPins.fire({ run, pinned }),
 				colours: this.colours
@@ -677,6 +677,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		// Its conversation is not watched for a run this window does not show: one that failed to reattach, or went to another window
 		this.identity.untrack(run);
 		return pair;
+	}
+
+	/** Closes `run`'s tab, its agent going on, until the person opens it again (LIFECYCLE-2.2). */
+	hideTab(run: RunId): boolean {
+		return this.pairs.get(run)?.terminal.hide() ?? false;
 	}
 
 	async reveal(run: RunId, options: { readonly preserveFocus: boolean }): Promise<boolean> {

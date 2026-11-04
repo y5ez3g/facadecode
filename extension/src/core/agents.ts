@@ -178,7 +178,7 @@ export class AgentService implements Agents, Disposable {
 			this.subscriptions.push(execution.onDidSubmit(({ run, text }) => this.said(run, text)));
 		}
 		if (execution.onDidClosePair) {
-			this.subscriptions.push(execution.onDidClosePair(run => void this.tabClosed(run)));
+			this.subscriptions.push(execution.onDidClosePair(({ run, marked }) => this.tabClosed(run, marked)));
 		}
 		if (execution.onDidRenameTab) {
 			this.subscriptions.push(execution.onDidRenameTab(({ run, name }) => this.tabRenamed(run, name)));
@@ -864,34 +864,26 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	/**
-	 * The person closed a run's terminal tab, alone or with other editors (LIFECYCLE-3.1): a live agent ends only once they confirm it;
-	 * kept, it goes on and its terminal opens again. A starting or ended one closes at once.
+	 * The person closed a run's terminal tab (LIFECYCLE-2.2, 3.1): it is hidden, the agent going on, and its card opens it again - no
+	 * question, whatever closed it. A close of a tab that showed its pin mark Unpins as well; an Unpin that cannot be saved opens the
+	 * tab again, pinned, and says so (3.4, RULES-1.8).
 	 */
-	private async tabClosed(id: RunId): Promise<void> {
+	private tabClosed(id: RunId, marked: boolean): void {
 		const run = this.runs.get(id);
 		if (!run) {
 			return;
 		}
-		if (run.facts.lifecycle === 'running' && this.deps.human.confirmClose && !await this.deps.human.confirmClose({ run: id, label: labelOf(run.facts) })) {
-			if (this.runs.get(id) === run) {
-				this.deps.log.event(`Kept ${run.facts.alias} running: its terminal tab was closed and the person chose to keep it`);
-				this.deps.execution.reopen?.(id);
-			}
+		this.deps.log.event(`Hid ${run.facts.alias}'s tab: the person closed it`);
+		if (!marked || !run.facts.pin) {
 			return;
 		}
-		if (this.runs.get(id) === run) {
-			// Closing its tab is the person's Close Agent, and a process it could not end is said as there (LIFECYCLE-3.1, RULES-1.8)
-			const label = labelOf(run.facts);
-			await this.close(id).then(cleanup => {
-				if (cleanup === 'failed') { this.deps.human.failed({ kind: 'terminate', name: label }, {}); }
-			}, err => {
-				this.deps.log.event(`Could not close ${run.facts.alias} as its tab was closed: ${messageOf(err)}`);
-				if (this.runs.get(id) === run) {
-					// Kept, as its Unpin could not be saved: its terminal opens again, and the person who closed it is told (RULES-1.8)
-					this.deps.execution.reopen?.(id);
-					this.deps.human.failed({ kind: 'unpin', name: labelOf(run.facts), reason: this.wording(err) }, { show: id });
-				}
-			});
+		try {
+			this.unpin(id);
+		} catch (err) {
+			this.deps.log.event(`Could not unpin ${run.facts.alias} as its tab was closed: ${messageOf(err)}`);
+			this.deps.execution.pinTab?.(id, true);
+			this.deps.execution.reopen?.(id);
+			this.deps.human.failed({ kind: 'unpin', name: labelOf(run.facts), reason: this.wording(err) }, { show: id });
 		}
 	}
 

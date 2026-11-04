@@ -325,8 +325,13 @@ export interface ExecutionPort {
 	 * gave it. Whatever becomes of it, the tab then shows the agent's name.
 	 */
 	readonly onDidRenameTab?: Event<{ readonly run: RunId; readonly name: string }>;
-	/** The person closed a run's terminal tab natively: a close they confirm for a live agent (LIFECYCLE-3.1). */
-	readonly onDidClosePair?: Event<RunId>;
+	/**
+	 * The person closed a run's terminal tab natively, as the editor reports a close of theirs: it is hidden, the agent going on, and
+	 * `marked` where the tab showed its pin mark - such a close Unpins (LIFECYCLE-2.2, 3.4).
+	 */
+	readonly onDidClosePair?: Event<{ readonly run: RunId; readonly marked: boolean }>;
+	/** Closes the run's terminal tab, its agent going on: false where it has none open (LIFECYCLE-2.2). */
+	hideTab?(run: RunId): boolean;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */
@@ -628,11 +633,6 @@ export interface HumanPort {
 	failed(failure: HumanFailure, options: { readonly show?: RunId; readonly configure?: boolean }): void;
 	/** The same, for a human operation's error the UI has already worded. */
 	error(text: string, options: { readonly show?: RunId; readonly configure?: boolean }): void;
-	/**
-	 * The person closed a live agent's terminal tab, alone or with other editors (LIFECYCLE-3.1): whether they confirm ending it. Tabs
-	 * closed together are asked about once; the editor's `terminal.integrated.confirmOnKill` decides whether to ask at all.
-	 */
-	confirmClose?(agent: { readonly run: RunId; readonly label: string }): Promise<boolean>;
 }
 
 /** The person's last successful launch in this workspace (LIFECYCLE-1.2): written only once a human launch's CLI process starts. */
