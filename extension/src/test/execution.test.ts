@@ -1200,6 +1200,39 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([told.length, shared.disposed], [1, true]);
 	});
 
+	test('a copy\'s agent opens in the group of the copy\'s own tab - the one active with its terminal, else the one that opened with it - whatever other terminal tabs Facade cannot tell are open, a person\'s shell among them (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const told: { run: RunId; column?: number }[] = [];
+		port.onDidCopyTab(copy => told.push({ run: copy.run, ...copy.column !== undefined ? { column: copy.column } : {} }));
+		port.openPair(facts('run-g1'), { reveal: false });
+		open(terminals[0]);
+		tabsChanged.fire({ opened: [terminals[0].tab], closed: [], changed: [] });
+		const shellTab = { input: new TabInputTerminal(), isActive: false, isPinned: false, group: { viewColumn: 1 } };
+		const copyOf = (name: string) => ({ name, creationOptions: { name }, dispose() { } });
+		const wait = () => new Promise(resolve => setTimeout(resolve, 400));
+		const tabIn = (viewColumn: number, isActive: boolean) => ({ input: new TabInputTerminal(), isActive, isPinned: false, group: { viewColumn } });
+		// A split: the copy's tab opens in group 2, active with the copy's terminal
+		const first = copyOf('Ada'), firstTab = tabIn(2, true);
+		openedTerminal.fire(first);
+		visibleTabs = [terminals[0].tab, shellTab, firstTab];
+		tabsChanged.fire({ opened: [firstTab], closed: [], changed: [] });
+		activeTab = firstTab; activeTerminal = first; activeChanged.fire(first);
+		await wait();
+		// A copying drag into group 3 whose tab is not made active: the one that opened with it
+		const second = copyOf('Ada'), secondTab = tabIn(3, false);
+		openedTerminal.fire(second);
+		visibleTabs = [terminals[0].tab, shellTab, secondTab];
+		tabsChanged.fire({ opened: [secondTab], closed: [], changed: [] });
+		await wait();
+		// Two opened with it and neither active with it: it cannot be told, and the agent opens in the active group
+		const third = copyOf('Ada'), thirdTab = tabIn(4, false), otherTab = tabIn(5, false);
+		openedTerminal.fire(third);
+		visibleTabs = [terminals[0].tab, shellTab, thirdTab, otherTab];
+		tabsChanged.fire({ opened: [thirdTab, otherTab], closed: [], changed: [] });
+		await wait();
+		assert.deepStrictEqual(told, [{ run: 'run-g1', column: 2 }, { run: 'run-g1', column: 3 }, { run: 'run-g1' }]);
+	});
+
 	test('a mark changed on a tab Facade cannot tell wins once the tab is known where it came after the agent\'s last Pin or Unpin; else Facade\'s Pin stands and the mark follows (LIFECYCLE-3.4, J12)', async () => {
 		const port = portOf();
 		const changes: unknown[] = [];

@@ -92,6 +92,11 @@ export class AgentTerminals implements vscode.Disposable {
 	/** Copies of agents' tabs the editor made lately, attributed together once no other follows (LIFECYCLE-2.2). */
 	private copies: vscode.Terminal[] = [];
 	private copiesTimer: ReturnType<typeof setTimeout> | undefined;
+	/** When each copy's terminal opened, and its tab, as it became active with that terminal (LIFECYCLE-2.2). */
+	private readonly copyAt = new Map<vscode.Terminal, number>();
+	private readonly copyTabs = new Map<vscode.Terminal, vscode.Tab>();
+	/** Terminal tabs no agent's that opened lately: where a copy's tab became active with no terminal, the one that opened with it. */
+	private strayOpened: { readonly tab: vscode.Tab; readonly at: number }[] = [];
 	/** The group the next agent's tab opens in: a copy's, where an agent starts in its place (LIFECYCLE-2.2). */
 	private nextColumn: number | undefined;
 	/** Terminal tabs Facade cannot tell: the mark each showed last, and when it changed - a person's pin or unpin there (LIFECYCLE-3.4). */
@@ -327,6 +332,7 @@ export class AgentTerminals implements vscode.Disposable {
 			return;
 		}
 		this.copies.push(terminal);
+		this.copyAt.set(terminal, Date.now());
 		clearTimeout(this.copiesTimer);
 		this.copiesTimer = setTimeout(() => this.attributeCopies(), COPIES_MS);
 	}
@@ -339,18 +345,37 @@ export class AgentTerminals implements vscode.Disposable {
 		const copies = this.copies;
 		this.copies = [];
 		this.copiesTimer = undefined;
+		const tabs = new Map(copies.map(copy => [copy, this.copyTabOf(copy)] as const));
+		for (const copy of copies) {
+			this.copyAt.delete(copy);
+			this.copyTabs.delete(copy);
+		}
 		const name = copies.length === 1 ? (copies[0].creationOptions as vscode.TerminalOptions).name : undefined;
 		const sources = name === undefined ? [] : [...this.entries.values()].filter(pair => pair.terminal && pair.pty.createdName() === name);
 		if (sources.length === 1 && this.options.copied) {
-			// The copy's group: the one terminal tab no agent's is - the editor may not have made that group active yet
-			const strays = vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal && !this.pairOfTab(tab));
-			this.options.copied(sources[0].run, copies[0], strays.length === 1 ? strays[0].group?.viewColumn : undefined);
+			// In the copy's group, which the editor may not have made the active one yet; where its tab cannot be told, the active one
+			this.options.copied(sources[0].run, copies[0], tabs.get(copies[0])?.group?.viewColumn);
 			return;
 		}
 		this.options.log(`Closed ${copies.length === 1 ? 'a copy of an agent tab whose agent could not be told' : `${copies.length} copies of agent tabs made together`}; no agent started.`);
 		for (const copy of copies) {
 			copy.dispose();
 		}
+	}
+
+	/**
+	 * The tab of `copy`, from the editor's own reports, as an agent's is known (LIFECYCLE-2.2): the tab that became active with the
+	 * copy's terminal, else the one terminal tab no agent's that opened around the copy and is still open; none where several did.
+	 */
+	private copyTabOf(copy: vscode.Terminal): vscode.Tab | undefined {
+		const present = new Set(vscode.window.tabGroups.all.flatMap(group => group.tabs));
+		const known = this.copyTabs.get(copy);
+		if (known && present.has(known)) {
+			return known;
+		}
+		const since = (this.copyAt.get(copy) ?? Date.now()) - COPIES_MS;
+		const near = this.strayOpened.filter(each => each.at >= since && present.has(each.tab) && !this.pairOfTab(each.tab));
+		return near.length === 1 ? near[0].tab : undefined;
 	}
 
 	/** Opens the next agent's tab in `column`'s group: in a copy's place (LIFECYCLE-2.2). */
@@ -530,6 +555,9 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 			this.opening = [];
 		}
+		// What opened that is no agent's tab: a copy's among them (LIFECYCLE-2.2)
+		this.strayOpened = [...this.strayOpened.filter(each => now - each.at <= 3 * COPIES_MS),
+			...opened.filter(tab => !this.pairOfTab(tab)).map(tab => ({ tab, at: now }))];
 		// A mark changed on a tab Facade cannot tell is the person's: kept with that tab until it is known (LIFECYCLE-3.4)
 		for (const tab of [...event.opened, ...event.changed]) {
 			if (tab.input instanceof vscode.TabInputTerminal && !this.pairOfTab(tab)) {
@@ -597,6 +625,10 @@ export class AgentTerminals implements vscode.Disposable {
 		const terminal = vscode.window.activeTerminal;
 		const pair = terminal && this.pairOf(terminal);
 		const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+		// A copy's tab, active with the copy's terminal: where the agent started in its place opens (LIFECYCLE-2.2)
+		if (terminal && this.copies.includes(terminal) && tab?.input instanceof vscode.TabInputTerminal && !this.pairOfTab(tab)) {
+			this.copyTabs.set(terminal, tab);
+		}
 		if (!pair || !tab || !(tab.input instanceof vscode.TabInputTerminal)) {
 			return;
 		}
