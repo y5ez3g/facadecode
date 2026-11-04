@@ -52,7 +52,7 @@ suite('An editor terminal\'s answers reach the program only as the answer it wai
 suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITECTURE-2.3)', () => {
 	const made: { dispose(): void }[] = [];
 	teardown(() => { made.splice(0).forEach(each => each.dispose()); });
-	const load = () => {
+	const load = (answersQueries = true) => {
 		const vscode = { EventEmitter: TestEmitter };
 		const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
 		const pty = new module.AgentPty('Ada', () => undefined);
@@ -66,7 +66,8 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		const binding: RunBinding = {
 			snapshot: () => new Promise(resolve => taken.push((screen, seq) => resolve({ screen, seq }))),
 			input: data => typed.push(data),
-			resize: () => undefined
+			resize: () => undefined,
+			answersQueries
 		};
 		return { pty, drawn, taken, typed, binding };
 	};
@@ -150,5 +151,23 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		pty.handleInput('\x1b[?1;2c');
 		pty.handleInput('hello\r');
 		assert.deepStrictEqual([typed, learned], [['hello\r'], ['10 cccc/cccc/cccc', '11 1919/1a1a/1b1b']]);
+	});
+
+	test('a run of an earlier protocol\'s ptyd, which answers no query itself, gets the editor\'s answers as they come; its colours still go to the window (ARCHITECTURE-2.3)', async () => {
+		const learned: string[] = [];
+		const vscode = { EventEmitter: TestEmitter };
+		const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+		const pty = new module.AgentPty('Ada', () => undefined, () => false, (osc, rgb) => learned.push(`${osc} ${rgb}`));
+		made.push(pty);
+		const { taken, typed, binding } = load(false);
+		pty.open({ columns: 80, rows: 24 });
+		pty.bind(binding);
+		taken[0]('', 0);
+		await settled();
+		pty.output(1, COLOURS);
+		pty.handleInput(ANSWERED);
+		pty.handleInput('\x1b[?1;2c');
+		pty.handleInput('hello\r');
+		assert.deepStrictEqual([typed, learned], [[ANSWERED, '\x1b[?1;2c', 'hello\r'], ['10 cccc/cccc/cccc', '11 1919/1a1a/1b1b']]);
 	});
 });

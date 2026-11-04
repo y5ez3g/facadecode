@@ -26,7 +26,7 @@ import { AgentTerminals, type AgentTerminal } from './agentTerminals';
 import { ExecutionSession, RECONCILE_MS } from './executionSession';
 import { PtydClient, PtydGone, PtydLost, PtydNotSent, within } from './ptydClient';
 import { submittedDraft, taken, TypedEnters } from './submissions';
-import { PTYD_PROTOCOL } from '../../ptyd/protocol';
+import { PTYD_PROTOCOL, QUERY_ANSWERS_PROTOCOL } from '../../ptyd/protocol';
 
 /** How long a CLI has to end on the hang-up before ptyd kills its process group (LIFECYCLE-4.2): no UI waits for it. */
 const GRACE_MS = 3_000;
@@ -830,7 +830,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	/** How a run's terminal shows its process through `client`. */
 	private binding(client: PtydClient, run: RunId) {
+		const protocol = this.pairs.get(run)?.protocol ?? PTYD_PROTOCOL;
 		return {
+			answersQueries: protocol >= QUERY_ANSWERS_PROTOCOL,
 			snapshot: async () => {
 				const { screen, seq } = await client.request('attach', { run });
 				return { screen, seq };

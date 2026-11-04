@@ -23,11 +23,15 @@ export const PTYD_PROTOCOL = 15;
  * 12 lacks 13's Windows Unicode input and draft handling; its backend may belong to a removed installation (CLIS-2.1, ARCHITECTURE-2.4).
  * 13 lacks 14's Codex completed-turn correction (CLIS-2.3).
  * 14 lacks 15's answers to a program's terminal queries while a window claims its run - its colours among them - its OSC 7501
- * probe answered before a window has its output, and a local window's end at another window's claim and after its own grace
- * (ARCHITECTURE-2.2, 2.3, CLIS-2.3): it ignores the window a claim names.
+ * probe answered before a window has its output, a local window's 90 seconds, and a run its grace could not confirm ended listed as
+ * uncertain (ARCHITECTURE-2.2, 2.3, CLIS-2.3): it ignores whether a claim's window is local, and its window passes its terminal's
+ * answers on.
  * New runs go to none of these.
  */
 export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13, 14];
+
+/** The first protocol whose ptyd answers its runs' terminal queries itself: a window filters its editor terminal's answers (ARCHITECTURE-2.3). */
+export const QUERY_ANSWERS_PROTOCOL = 15;
 
 import type { ScreenStyle } from '../base/screenStyle';
 import type { OwnerClaim } from '../base/ownership';

@@ -38,6 +38,11 @@ export interface RunBinding {
 	/** What the person typed: straight to the process. */
 	input(data: string): void;
 	resize(columns: number, rows: number): void;
+	/**
+	 * Whether its ptyd answers the program's terminal queries itself: then the editor terminal's answers to them are kept from the
+	 * program. A ptyd of an earlier protocol answers none, and the editor's answers reach the program as they come (ARCHITECTURE-2.3).
+	 */
+	readonly answersQueries: boolean;
 }
 
 /** A line of Facade's own in the terminal: dim, one line per line of text, no escape sequence of the text's own. */
@@ -350,7 +355,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 	 */
 	handleInput(data: string): void {
 		if (this.binding && !this.ended) {
-			const typed = this.mouse.repair(this.replies.typed(data, Date.now()));
+			// Read for the colours it teaches either way; kept from the program only where its ptyd answers instead
+			const filtered = this.replies.typed(data, Date.now());
+			const typed = this.mouse.repair(this.binding.answersQueries ? filtered : data);
 			if (typed) {
 				this.binding.input(typed);
 			}
