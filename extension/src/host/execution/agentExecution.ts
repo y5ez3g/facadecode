@@ -34,6 +34,11 @@ const GRACE_MS = 3_000;
 /** How long restoring waits for one terminal to open before it restores the next: VS Code can leave a terminal unopened. */
 const OPEN_WAIT_MS = 10_000;
 
+/** The size `info` gives its run, where it gives one: a supervisor of any protocol may leave it out. */
+function sizeOf(info: RunInfo | undefined): { readonly cols?: number; readonly rows?: number } {
+	return typeof info?.cols === 'number' && typeof info.rows === 'number' && info.cols > 0 && info.rows > 0 ? { cols: info.cols, rows: info.rows } : {};
+}
+
 /** The size a run starts at where its terminal has not told its own yet: the CLI redraws as the terminal's arrives. */
 const START_COLUMNS = 120;
 const START_ROWS = 30;
@@ -598,7 +603,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.exited = info.exited;
 		pair.status = info.status;
 		pair.terminalTitle = info.title;
-		pair.terminal.pty.bind(this.binding(client, live.run), { screen, seq });
+		pair.terminal.pty.bind(this.binding(client, live.run), { screen, seq, ...sizeOf(info) });
 		this.keepPendingMeta(pair);
 		if (info.exited) {
 			pair.terminal.pty.exited(this.endLine(info.exited));
@@ -874,8 +879,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		return {
 			answersQueries: protocol >= QUERY_ANSWERS_PROTOCOL,
 			snapshot: async () => {
-				const { screen, seq } = await client.request('attach', { run });
-				return { screen, seq };
+				const { info, screen, seq } = await client.request('attach', { run });
+				return { screen, seq, ...sizeOf(info) };
 			},
 			input: (data: string) => this.typed(client, run, data),
 			resize: (columns: number, rows: number) => void client.request('resize', { run, cols: columns, rows }).catch(() => undefined)
@@ -1231,7 +1236,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 					continue;
 				}
 				pair.lost = false;
-				pair.terminal.pty.bind(this.binding(holder, pair.run), { screen, seq });
+				pair.terminal.pty.bind(this.binding(holder, pair.run), { screen, seq, ...sizeOf(info) });
 				if (info.exited) {
 					this.ended(pair, info.exited);
 				} else {

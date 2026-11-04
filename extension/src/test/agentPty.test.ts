@@ -153,6 +153,71 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		assert.deepStrictEqual([typed, learned], [['hello\r'], ['10 cccc/cccc/cccc', '11 1919/1a1a/1b1b']]);
 	});
 
+	/** A pty whose run's supervisor is of an earlier protocol, or not, with the window's colours. */
+	const earlier = (answersQueries = false) => {
+		const vscode = { EventEmitter: TestEmitter };
+		const module = withModules({ vscode })<typeof AgentPtyModule>(path.join(__dirname, '..', 'host', 'execution', 'agentPty.js'));
+		const pty = new module.AgentPty('Ada', () => undefined, () => false, () => undefined, () => ({ foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' }));
+		made.push(pty);
+		const { drawn, taken, typed, binding } = load(answersQueries);
+		pty.onDidWrite(data => { if (!data.startsWith('\x1b]10;?')) { drawn.push(data); } });
+		return { pty, drawn, taken, typed, binding };
+	};
+	const parsed = () => new Promise(resolve => setTimeout(resolve, 30));
+
+	test('a hidden tab of a run of an earlier supervisor has its queries answered once by a stand-in from the run\'s screen as it was hidden: the cursor where that screen leaves it, the device attributes, the window\'s colours - what only an editor knows aside (ARCHITECTURE-2.3, J17)', async () => {
+		const { pty, taken, typed, binding } = earlier();
+		pty.open({ columns: 80, rows: 24 });
+		pty.bind(binding);
+		taken[0]('', 0);
+		await settled();
+		pty.output(1, 'line one');
+		// Hidden: the stand-in takes the run's screen; what comes meanwhile is in that screen, its question asked again on it
+		pty.close();
+		assert.strictEqual(taken.length, 2);
+		pty.output(2, '\r\nab\x1b[6n');
+		taken[1]('line one\r\nab', 2);
+		pty.output(3, '\x1b[c\x1b]11;?\x1b\\\x1b[>q\x1b[?u\x1b[14t');
+		await parsed();
+		assert.deepStrictEqual(typed, ['\x1b[2;3R', '\x1b[?1;2c', '\x1b]11;rgb:1f1f/1f1f/1f1f\x1b\\']);
+		// Open again: what the screen it draws holds is answered by the stand-in, what follows it by the tab, then the stand-in goes
+		typed.length = 0;
+		pty.open({ columns: 80, rows: 24 });
+		assert.strictEqual(taken.length, 3);
+		pty.output(4, '\x1b[5n');
+		pty.output(5, 'after\x1b[5n');
+		taken[2]('the screen at 4', 4);
+		await parsed();
+		assert.deepStrictEqual(typed, ['\x1b[0n'], 'the question in the screen the tab drew, once, by the stand-in');
+		pty.output(6, '\x1b[6n');
+		await parsed();
+		assert.deepStrictEqual(typed, ['\x1b[0n'], 'what the tab draws, the tab answers');
+	});
+
+	test('a run of an earlier supervisor bound with its tab hidden - a reattach - has a stand-in from the screen it was claimed with, in the run\'s size; one of a supervisor answering itself has none (ARCHITECTURE-2.3)', async () => {
+		const hidden = earlier();
+		hidden.pty.expectScreen();
+		hidden.pty.output(4, 'cd\x1b[6n');
+		hidden.pty.bind(hidden.binding, { screen: 'ab', seq: 3, cols: 100, rows: 30 });
+		hidden.pty.output(5, '\x1b[99;200H\x1b[6n');
+		await parsed();
+		assert.deepStrictEqual([hidden.typed, hidden.taken.length], [['\x1b[1;5R', '\x1b[30;100R'], 0]);
+		// Its process ended: nothing is answered any more
+		hidden.pty.exited('[Agent process exited with code 0]');
+		hidden.pty.output(6, '\x1b[6n');
+		await parsed();
+		assert.strictEqual(hidden.typed.length, 2);
+		const current = earlier(true);
+		current.pty.open({ columns: 80, rows: 24 });
+		current.pty.bind(current.binding);
+		current.taken[0]('', 0);
+		await settled();
+		current.pty.close();
+		current.pty.output(1, '\x1b[6n');
+		await parsed();
+		assert.deepStrictEqual([current.typed, current.taken.length], [[], 1], 'ptyd answers it: no stand-in, no screen taken for one');
+	});
+
 	test('a run of an earlier protocol\'s ptyd, which answers no query itself, gets the editor\'s answers as they come; its colours still go to the window (ARCHITECTURE-2.3)', async () => {
 		const learned: string[] = [];
 		const vscode = { EventEmitter: TestEmitter };

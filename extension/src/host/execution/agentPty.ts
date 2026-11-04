@@ -7,6 +7,8 @@ import { messageOf } from '../../base/errors';
 import { MouseReports } from '../../base/mouseReports';
 import { TerminalReplies } from '../../base/terminalReplies';
 import { SPINNER_FRAMES as FRAMES, spunName } from '../../base/tabSpinner';
+import type { TerminalColours } from '../../ptyd/protocol';
+import { HiddenAnswers, type RunScreen } from './hiddenAnswers';
 
 /** The most output an unopened terminal keeps for its first draw; beyond it, the run's screen is taken anew as it opens. */
 const MOST_UNOPENED = 8 * 1024 * 1024;
@@ -33,8 +35,8 @@ export type TabShown = 'reset' | { readonly renamed: string };
 
 /** What an agent terminal shows of its run's process once it has one: its screen, and what it types. */
 export interface RunBinding {
-	/** The run's screen as it stands, with the number of the last output in it (ARCHITECTURE-2.3). */
-	snapshot(): Promise<{ readonly screen: string; readonly seq: number }>;
+	/** The run's screen as it stands, with the number of the last output in it and the run's size (ARCHITECTURE-2.3). */
+	snapshot(): Promise<RunScreen>;
 	/** What the person typed: straight to the process. */
 	input(data: string): void;
 	resize(columns: number, rows: number): void;
@@ -105,13 +107,16 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private spinning = false;
 	private frame = 0;
 	private spinner: ReturnType<typeof setInterval> | undefined;
+	/** For a run of an earlier supervisor, which leaves its queries to the window: what answers them while its tab is hidden (ARCHITECTURE-2.3). */
+	private standIn: HiddenAnswers | undefined;
 
 	/**
 	 * `still` says whether the editor is to reduce motion: the tab then shows one frame while the agent works (LIFECYCLE-2.2). `learn`
-	 * hears each colour the editor's terminal reports, the window's to tell ptyd (ARCHITECTURE-2.3).
+	 * hears each colour the editor's terminal reports, the window's to tell ptyd; `colours` are the window's, which a hidden tab's
+	 * stand-in answers with (ARCHITECTURE-2.3).
 	 */
 	constructor(private name: string, private readonly log: (message: string) => void, private readonly still: () => boolean = () => false,
-		learn?: (osc: '10' | '11' | '12', rgb: string) => void) {
+		learn?: (osc: '10' | '11' | '12', rgb: string) => void, private readonly colours: () => TerminalColours = () => ({})) {
 		this.created = name;
 		this.seen = name;
 		this.replies = new TerminalReplies(learn);
@@ -147,15 +152,20 @@ export class AgentPty implements vscode.Pseudoterminal {
 	 * which claimed the run - drawn where the terminal is open; else the screen is taken as the terminal opens, or now where it is
 	 * open. A terminal not open keeps none of the run's output for later, so it takes the screen anew as it opens.
 	 */
-	bind(binding: RunBinding, taken?: { readonly screen: string; readonly seq: number }): void {
+	bind(binding: RunBinding, taken?: RunScreen): void {
+		// A stand-in answered through the binding before; one this binding needs starts anew (ARCHITECTURE-2.3)
+		this.letStandInGo();
 		this.binding = binding;
 		this.applied = undefined;
 		if (taken && this.opened) {
 			this.draw(taken.screen, taken.seq);
 		} else {
+			const early = this.early;
 			this.early = undefined;
 			if (this.opened) {
 				this.take();
+			} else {
+				this.answerHidden(binding, taken, early);
 			}
 		}
 		if (this.opened && this.size) {
@@ -183,6 +193,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 	 * which holds no question (ARCHITECTURE-2.3).
 	 */
 	output(seq: number, data: string): void {
+		this.standIn?.output(seq, data);
 		if (this.early) {
 			this.early.push({ seq, data });
 		} else if (this.applied !== undefined && seq > this.applied) {
@@ -203,6 +214,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 	exited(text: string): void {
 		if (!this.ended) {
 			this.ended = true;
+			this.letStandInGo();
 			this.exitLine = `\r\n${noteLine(text)}`;
 			// With no screen of the run to come - none bound, as for a run whose supervisor went - it is written as Facade's other lines
 			if (!this.binding || (this.opened && this.applied !== undefined)) {
@@ -367,6 +379,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 			this.askColours();
 		}
 		this.say();
+		// The tab answers from the screen it draws on: what comes meanwhile waits in the stand-in, which answers what that screen holds
+		this.standIn?.hold();
 		if (this.binding && (reopened || this.applied === undefined && !this.early || this.stale)) {
 			// Relaunching the native terminal clears its renderer; the same live run needs its current screen drawn again.
 			this.take();
@@ -386,6 +400,51 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.early = undefined;
 		this.applied = undefined;
 		this.stale = true;
+		// Its tab gone, what the run asks its terminal is the window's to answer where its supervisor leaves that to it (ARCHITECTURE-2.3)
+		if (this.standIn) {
+			this.standIn.resume();
+		} else if (this.binding) {
+			this.answerHidden(this.binding);
+		}
+	}
+
+	/**
+	 * A run of an earlier supervisor, which leaves its queries to the window, has them answered while its tab is hidden by a headless
+	 * terminal the window keeps for it, from the run's screen as the tab is hidden - `taken`, else taken now - following the output
+	 * the window hears, `early` the output heard before (ARCHITECTURE-2.3).
+	 */
+	private answerHidden(binding: RunBinding, taken?: RunScreen, early?: readonly { readonly seq: number; readonly data: string }[]): void {
+		if (binding.answersQueries || this.ended || this.standIn) {
+			return;
+		}
+		const standIn = this.standIn = new HiddenAnswers(reply => {
+			if (this.binding === binding && !this.ended) {
+				binding.input(reply);
+			}
+		}, this.colours);
+		for (const each of early ?? []) {
+			standIn.output(each.seq, each.data);
+		}
+		const size = this.size ? { cols: this.size.columns, rows: this.size.rows } : undefined;
+		if (taken) {
+			standIn.begin(taken, size);
+			return;
+		}
+		binding.snapshot().then(screen => {
+			if (this.standIn === standIn) {
+				standIn.begin(screen, size);
+			}
+		}, err => {
+			if (this.standIn === standIn) {
+				this.letStandInGo();
+				this.log(`Could not answer the hidden run's terminal queries: ${messageOf(err)}`);
+			}
+		});
+	}
+
+	private letStandInGo(): void {
+		this.standIn?.dispose();
+		this.standIn = undefined;
 	}
 
 	/**
@@ -412,6 +471,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	dispose(): void {
 		this.completeOpen(false);
+		this.letStandInGo();
 		clearInterval(this.spinner);
 		this.spinner = undefined;
 		this.binding = undefined;
@@ -458,6 +518,10 @@ export class AgentPty implements vscode.Pseudoterminal {
 		}, err => {
 			this.early = undefined;
 			this.log(`Could not show the run's screen: ${messageOf(err)}`);
+			// The tab draws nothing more of the run: a stand-in answers on
+			if (this.binding === binding) {
+				this.standIn?.resume();
+			}
 			// No screen to follow: the line saying how it ended goes as Facade's other lines do
 			if (this.exitLine && this.binding === binding) {
 				this.write(this.exitLine);
@@ -467,6 +531,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	/** Draws the run's screen as it stood at output `seq`, then what came after it, then how its process ended where it did. */
 	private draw(screen: string, seq: number): void {
+		// The tab answers what follows this screen; a stand-in what came up to it (ARCHITECTURE-2.3)
+		this.standIn?.handOver(seq);
+		this.standIn = undefined;
 		const later = (this.early ?? []).filter(each => each.seq > seq);
 		this.early = undefined;
 		// A redraw - the connection came back - starts from a reset terminal; Facade's own lines are scrolled away first, so that

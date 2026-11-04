@@ -198,6 +198,9 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 		if (this.revealRequested?.pair === pair) { this.revealRequested = undefined; }
 		pair.hiding = true;
+		// Closed for the run now rather than as the editor says so later: what the run writes meanwhile is answered by a stand-in where
+		// its supervisor leaves its queries to the window, not lost to a terminal going (ARCHITECTURE-2.3)
+		pair.pty.close();
 		terminal.dispose();
 		return true;
 	}
@@ -247,7 +250,8 @@ export class AgentTerminals implements vscode.Disposable {
 
 	/** Register the pseudoterminal first; the coordinator opens the native tab after registering its run. */
 	create(facts: Pick<PairFacts, 'run' | 'name' | 'cli' | 'pinned'>, reveal: boolean): AgentTerminal {
-		const pty = new AgentPty(facts.name, line => this.options.log(line), () => this.still(), (osc, rgb) => this.options.colours?.learn(osc, rgb));
+		const pty = new AgentPty(facts.name, line => this.options.log(line), () => this.still(), (osc, rgb) => this.options.colours?.learn(osc, rgb),
+			() => this.options.colours?.current() ?? {});
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
 		const pair: TerminalEntry = {
 			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(), ...facts.pinned ? { pinned: true } : {},
