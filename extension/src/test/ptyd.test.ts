@@ -757,7 +757,12 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		// Much drawn first, then the question and the terminal's own identification (DA1) at once, as Claude Code asks them
 		const program = `const fs = require('fs'); process.stdin.setRawMode(true); let got = ''; process.stdin.on('data', d => { got += d.toString('latin1'); fs.writeFileSync(${JSON.stringify(file)}, got); }); process.stdout.write('x'.repeat(2000000) + '\\x1b]7501;?\\x1b\\\\\\x1b[c'); setInterval(() => {}, 1000);`;
 		let answered = false;
+		// Where each question was in the output the window heard: the order the terminal gave them in
+		let heard = '';
 		client.onRunEvent('r-ask', event => {
+			if (event.event === 'output') {
+				heard += event.data.replace(/x+/g, 'x');
+			}
 			// The window answers the identification the moment it sees it
 			if (!answered && event.event === 'output' && event.data.includes('\x1b[c')) {
 				answered = true;
@@ -774,7 +779,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 					return false;
 				}
 			}, 15_000);
-			assert.ok(got.indexOf('\x1b]7501;?:states=') < got.indexOf('\x1b[?62;22c'), JSON.stringify(got));
+			assert.ok(got.indexOf('\x1b]7501;?:states=') < got.indexOf('\x1b[?62;22c'), JSON.stringify({ got, heard: heard.slice(-400), question: heard.indexOf('\x1b]7501;?'), identification: heard.indexOf('\x1b[c') }));
 			assert.strictEqual(got.split('\x1b]7501;?:states=').length - 1, 1, 'answered once, not again as its parse reaches the question');
 		} finally {
 			fs.rmSync(file, { force: true });
