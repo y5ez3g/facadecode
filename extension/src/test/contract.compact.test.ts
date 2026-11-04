@@ -82,10 +82,12 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		s.agents.add(lead);
 		s.messages.respond = () => ({ status: 'failure', reason: 'input_unknown' });
 		const result = resultOf(await s.call(lead, 'start_agent', { ...START, prompt: 'Initial instruction.' }));
-		assert.strictEqual(result.status, 'success');
-		assert.strictEqual(result.data.process_state, 'running');
-		assert.strictEqual(result.data.prompt.status, 'failure');
+		assert.deepStrictEqual([result.status, result.data.process_state, result.data.prompt.status], ['success', 'running', 'pending']);
 		assert.match(result.data.prompt.message_id, /^#m\d+$/);
+		// Its outcome is the start's one later result (MCP-2.3)
+		await waitFor(() => s.messages.reports.length === 1);
+		const later = s.messages.reports[0].result as { status: string; data: { process_state: string; prompt: { status: string; message_id: string } } };
+		assert.deepStrictEqual([later.status, later.data.process_state, later.data.prompt.status, later.data.prompt.message_id], ['success', 'running', 'failure', result.data.prompt.message_id]);
 	});
 
 	test('a retained screen preserves exact text, selection cues and capture state in both channels', async () => {

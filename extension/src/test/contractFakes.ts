@@ -168,7 +168,7 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reser
 	/** What recording a prompt throws, where it is to fail. */
 	recordError: Error | undefined;
 	readonly prompts: { readonly request: Omit<SendRequest, 'elapsedMs'>; readonly delivery: MessageRecord['delivery'] }[] = [];
-	readonly reports: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly text: string }[] = [];
+	readonly reports: Parameters<Messages['report']>[0][] = [];
 	/** Each markDelivered: the read IDs a handed-back read_messages delivered (COLLABORATION-3.1). */
 	readonly delivered: { readonly run: RunId; readonly ids: readonly string[] }[] = [];
 	respond: (request: SendRequest) => SendResponse = () => ({ status: 'success' });
@@ -229,6 +229,15 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reser
 	}
 
 	reserveResult(): string { return `m-${++this.n}`; }
+
+	/** Settles the accepted send `index` with `delivery`, as the message service does once its outcome is known. */
+	finishSent(index: number, delivery: MessageRecord['delivery']): void {
+		const request = this.sent[index];
+		const at = this.records.findIndex(record => record.id === (request.id ?? record.id) && record.text === request.text);
+		const record = { ...this.records[at], delivery };
+		this.records[at] = record;
+		request.settled?.(record);
+	}
 
 	report(request: Parameters<Messages['report']>[0]): MessageRecord {
 		this.reports.push(request);

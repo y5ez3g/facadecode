@@ -323,6 +323,19 @@ suite('A start\'s typing before the first turn (COLLABORATION-2.2)', () => {
 		await plain.agents.warmedUp(other);
 	});
 
+	test('a post-start creation prompt holds its run\'s input from its plan until it is settled; a native one never does (RULES-1.10)', async () => {
+		const world = setUp({ plan: { warmUp: WARM_UP, prompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } }, warmUp: async () => undefined });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' }, promptId: 'm-1', prompt: 'Go.', promptLine: 'Go.' });
+		await world.agents.started(id);
+		assert.strictEqual(world.agents.creationPending(id), true);
+		world.agents.creationSettled(id);
+		assert.strictEqual(world.agents.creationPending(id), false);
+		const native = setUp({ plan: { prompt: { path: 'native', capability: { state: 'supported', reason: 'verified' } } } });
+		const other = native.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' }, promptId: 'm-2', prompt: 'Go.', promptLine: 'Go.' });
+		await native.agents.started(other);
+		assert.strictEqual(native.agents.creationPending(other), false);
+	});
+
 	test('one the window could not do is logged and settles: the run goes on', async () => {
 		const world = setUp({ plan: { warmUp: WARM_UP }, warmUp: async () => { throw new Error('ptyd went away'); } });
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'human' });

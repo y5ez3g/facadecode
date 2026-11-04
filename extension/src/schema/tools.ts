@@ -49,7 +49,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 		name: 'start_agent',
 		title: 'Start an agent',
 		annotations: { readOnlyHint: false },
-		description: 'Start an agent in any window, in your creation tree. Success confirms startup; tools and prompt outcomes are separate. Accepted work continues; its receipt matches result_message_id.',
+		description: 'Start an agent in any window, in your creation tree. Success confirms startup; tools and prompt outcomes are separate. Accepted work, or a prompt still pending, continues; its one receipt matches result_message_id.',
 		inputSchema: {
 			type: 'object',
 			properties: {

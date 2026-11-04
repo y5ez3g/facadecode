@@ -96,6 +96,11 @@ export interface SendRequest {
 	/** The caller's request ID, kept with the record (MCP-1.1). */
 	readonly requestId?: string;
 	readonly initialPrompt?: MessageRecord['initialPrompt'];
+	/**
+	 * Where an accepted send's final record goes, in place of the Facade result the sender would get: a creation prompt's, which its
+	 * start reports as one later result with the start (MCP-2.3).
+	 */
+	readonly settled?: (final: MessageRecord) => void;
 }
 
 /** The first response to a send (RULES-1.2): success, failure, or accepted with its deadline and current obstacle. */

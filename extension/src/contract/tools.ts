@@ -76,7 +76,7 @@ export type ResultWriter = (home: string, kind: 'messages' | 'screen', text: str
 
 export interface ToolServiceDeps {
 	readonly window: ToolWindow;
-	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get' | 'requested'>;
+	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get' | 'requested' | 'creationPending' | 'creationSettled'>;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'resolve'>;
 	readonly clis: StartCatalog;
 	readonly messages: Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest'>;
@@ -718,8 +718,10 @@ class ToolService {
 	private startedBefore(facts: RunFacts, args: ToolArguments['start_agent']): Outcome {
 		const present = this.deps.agents.get(facts.id);
 		const prompt = facts.promptId !== undefined ? this.originalPrompt(facts) : undefined;
+		// Its later result is still to come while it starts, or while its prompt is pending after it started (MCP-2.3)
+		const later = facts.lifecycle === 'starting' || prompt?.status === 'pending';
 		const data = defined({ ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true,
-			...prompt ? { prompt } : {}, result_message_id: facts.lifecycle === 'starting' ? facts.resultMessageId : undefined, call_id: facts.lifecycle === 'starting' ? facts.startCallId : undefined });
+			...prompt ? { prompt } : {}, result_message_id: later ? facts.resultMessageId : undefined, call_id: later ? facts.startCallId : undefined });
 		const before = `Request ${args.request_id} started ${referenceOf(facts)} (${facts.id}) already, at ${isoOf(facts.createdAt)}: nothing was started again.`;
 		const effects: Effects = { outcome: 'none', agent_id: facts.id };
 		if (!present && facts.lifecycle !== 'ended') {
@@ -746,12 +748,33 @@ class ToolService {
 		const created = outcome.worktreeCreated ?? (args.worktree && facts && facts.location !== args.location_id ? facts.cwd : undefined);
 		const effects = (outcome: Effects['outcome']): Effects => defined({ outcome, agent_id: run, worktree_created: created });
 		if (outcome.state === 'running') {
-			const prompt = args.prompt !== undefined ? await this.startPrompt(start, args.prompt, outcome) : undefined;
-			const data = { ...this.startData(start, facts, 'running'), ...prompt ? { prompt: prompt.data } : {} };
-			return {
-				result: success(data, effects('confirmed')),
-				headline: `Started ${shown} with ${args.cli} in ${facts?.cwd ?? start.location.path}: its process is running.${prompt ? ` ${prompt.headline}` : ''}`
-			};
+			const started = `Started ${shown} with ${args.cli} in ${facts?.cwd ?? start.location.path}: its process is running.`;
+			const ran = (prompt: { readonly data: Data; readonly headline: string } | undefined, pending = false): Outcome => ({
+				result: success({ ...this.startData(start, facts, 'running', pending), ...prompt ? { prompt: prompt.data } : {} }, effects('confirmed')),
+				headline: `${started}${prompt ? ` ${prompt.headline}` : ''}`
+			});
+			if (args.prompt === undefined) {
+				return ran(undefined);
+			}
+			if ((outcome.prompt?.path ?? 'post_start') === 'native') {
+				return ran(this.nativePrompt(start, args.prompt, outcome));
+			}
+			// The prompt goes after the process runs - its preparation first - and the start answers now, not waiting on it: one later
+			// result reports it, under this call's result_message_id (MCP-2.3, COLLABORATION-2.2)
+			const delivery = this.postStartPrompt(start, args.prompt, outcome).finally(() => this.deps.agents.creationSettled?.(run));
+			if (start.answerBy === Infinity) {
+				// This is already that later result, for a start accepted while it was still starting: it waits for the prompt too
+				return ran(await delivery);
+			}
+			void delivery.then(prompt => {
+				const final = ran(prompt);
+				const now = this.deps.agents.get(run) ?? facts;
+				if (now) {
+					this.reportTo(start.caller, { id: start.resultMessageId, callId: start.call.callId, requestId: args.request_id, tool: 'start_agent', agent: now, text: receiptTextOf(final.result, final.headline),
+						result: answerOf(withRecovery('start_agent', compactResult('start_agent', final.result), args)).structured });
+				}
+			}).catch(err => this.deps.log?.(`Could not report the prompt of ${run} to ${start.caller.alias}: ${errorText(err)}`));
+			return ran(this.pendingPrompt(start, outcome), true);
 		}
 		if (outcome.state === 'failed') {
 			const reason = facts?.error?.source === 'worktree' ? 'worktree_failed' : 'launch_failed';
@@ -768,6 +791,10 @@ class ToolService {
 	/** A retry observes the original prompt, including its later inbox delivery, without replaying or replacing it. */
 	private originalPrompt(facts: RunFacts): Data {
 		const record = this.deps.messages.inbox(facts.id, { ids: [facts.promptId!], limit: 1 }).records[0];
+		if (!record && this.deps.agents.creationPending?.(facts.id)) {
+			// Still behind what its start types before its first turn: nothing of it typed yet (COLLABORATION-2.2)
+			return { message_id: facts.promptId, status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false } };
+		}
 		if (!record || record.from.run !== facts.creator || !record.initialPrompt) {
 			return { message_id: facts.promptId, status: 'unknown', reason: 'prompt_unrecorded', effects: { outcome: 'unknown' } };
 		}
@@ -787,7 +814,7 @@ class ToolService {
 	 * The start's facts (MCP-2.3): identity, place, the CLI that started - no other is substituted (MCP-2.2) - tree, YOLO, process and
 	 * tools, and what model and effort were asked for.
 	 */
-	private startData(start: Start, facts: RunFacts | undefined, state: 'starting' | 'running' | 'failed' | 'closed'): Data {
+	private startData(start: Start, facts: RunFacts | undefined, state: 'starting' | 'running' | 'failed' | 'closed', promptPending = false): Data {
 		const { run, args, caller, location } = start;
 		const { window } = this.deps;
 		return defined({
@@ -806,8 +833,8 @@ class ToolService {
 			yolo: facts?.yolo,
 			process_state: state === 'closed' ? 'unknown' : state,
 			closed: state === 'closed' ? true : undefined,
-			call_id: state === 'starting' ? facts?.startCallId ?? start.call.callId : undefined,
-			result_message_id: state === 'starting' ? facts?.resultMessageId ?? start.resultMessageId : undefined,
+			call_id: state === 'starting' || promptPending ? facts?.startCallId ?? start.call.callId : undefined,
+			result_message_id: state === 'starting' || promptPending ? facts?.resultMessageId ?? start.resultMessageId : undefined,
 			tools_state: facts?.tools,
 			tools_reason: facts?.toolsReason,
 			requested_model: args.model,
@@ -815,48 +842,69 @@ class ToolService {
 		});
 	}
 
-	/**
-	 * The creation prompt, once the process started (COLLABORATION-2.2): natively given, it is recorded with what that path can tell -
-	 * acceptance where its mapping is supported, an unknown outcome while it is used unverified (COLLABORATION-2.2); otherwise it goes now as the
-	 * caller's first ordinary message, its budget starting with the process, and the send's first response is reported - a pending
-	 * one's outcome comes to the caller from the message service. A failure leaves the agent running.
-	 */
-	private async startPrompt(start: Start, text: string, outcome: StartOutcome): Promise<{ readonly data: Data; readonly headline: string }> {
-		const { run, caller, call, promptId } = start;
-		const path = outcome.prompt?.path ?? 'post_start';
+	/** How the creation prompt goes, as its start planned it (MCP-2.3): its path and the native path's capability. */
+	private promptPath(outcome: StartOutcome): { readonly path: 'native' | 'post_start'; readonly capability: { readonly state: 'supported' | 'unverified' | 'unavailable'; readonly reason: string } } {
 		const capability = outcome.prompt?.capability ?? { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' };
-		const base = { path, capability: { state: capability.state, reason: capability.reason } };
+		return { path: outcome.prompt?.path ?? 'post_start', capability: { state: capability.state, reason: capability.reason } };
+	}
+
+	/**
+	 * The creation prompt the CLI was given with its start (COLLABORATION-2.2), recorded with what that path can tell: acceptance where
+	 * its mapping is supported, an unknown outcome while it is used unverified. A record that cannot be kept leaves the start standing.
+	 */
+	private nativePrompt(start: Start, text: string, outcome: StartOutcome): { readonly data: Data; readonly headline: string } {
+		const { run, caller, call, promptId } = start;
+		const base = this.promptPath(outcome);
 		const id = promptId !== undefined ? { id: promptId } : {};
 		const alias = promptId !== undefined ? `#m${promptId.slice(2)}` : undefined;
-		if (path === 'native') {
-			const verified = capability.state === 'supported';
-			const effects: Effects = { outcome: verified ? 'confirmed' : 'unknown' };
-			let record: MessageRecord;
-			try {
-				record = this.deps.messages.recordPrompt({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, callId: call.callId, initialPrompt: base },
-					{ status: verified ? 'success' : 'unknown', effects, attempts: 0, via: 'launch', ...verified ? { deliveredAt: this.now() } : { reason: 'submission_unconfirmed' } });
-			} catch (err) {
-				// The CLI has its prompt; only its record is missing, and the start stands (MCP-2.3)
-				const failed = errorResult(err);
-				return {
-					data: defined({ message_id: promptId, alias, ...base, status: 'failure', reason: failed.error!.reason, message: failed.error!.message, effects }),
-					headline: `Its prompt${alias ? ` ${alias}` : ''} went in with the CLI's native start argument, but it could not be recorded: ${failed.error!.message} The agent keeps running.`
-				};
-			}
+		const verified = base.capability.state === 'supported';
+		const effects: Effects = { outcome: verified ? 'confirmed' : 'unknown' };
+		let record: MessageRecord;
+		try {
+			record = this.deps.messages.recordPrompt({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, callId: call.callId, initialPrompt: base },
+				{ status: verified ? 'success' : 'unknown', effects, attempts: 0, via: 'launch', ...verified ? { deliveredAt: this.now() } : { reason: 'submission_unconfirmed' } });
+		} catch (err) {
+			// The CLI has its prompt; only its record is missing, and the start stands (MCP-2.3)
+			const failed = errorResult(err);
 			return {
-				data: { message_id: record.id, alias: record.alias, ...base, status: verified ? 'success' : 'unknown', effects },
-				headline: verified
-					? `Its prompt ${record.alias} went in with the CLI's native start argument, which its adapter verified.`
-					: `Its prompt ${record.alias} went in with the CLI's native start argument; that mapping is ${capability.state}, so whether the CLI accepted the prompt is not known.`
+				data: defined({ message_id: promptId, alias, ...base, status: 'failure', reason: failed.error!.reason, message: failed.error!.message, effects }),
+				headline: `Its prompt${alias ? ` ${alias}` : ''} went in with the CLI's native start argument, but it could not be recorded: ${failed.error!.message} The agent keeps running.`
 			};
 		}
-		let sent: SendResult;
+		return {
+			data: { message_id: record.id, alias: record.alias, ...base, status: verified ? 'success' : 'unknown', effects },
+			headline: verified
+				? `Its prompt ${record.alias} went in with the CLI's native start argument, which its adapter verified.`
+				: `Its prompt ${record.alias} went in with the CLI's native start argument; that mapping is ${base.capability.state}, so whether the CLI accepted the prompt is not known.`
+		};
+	}
+
+	/** A post-start creation prompt as its start answers, before it went in: pending, nothing typed yet (MCP-2.3). */
+	private pendingPrompt(start: Start, outcome: StartOutcome): { readonly data: Data; readonly headline: string } {
+		const alias = start.promptId !== undefined ? `#m${start.promptId.slice(2)}` : undefined;
+		return {
+			data: defined({ message_id: start.promptId, alias, ...this.promptPath(outcome), status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false } }),
+			headline: `Its prompt${alias ? ` ${alias}` : ''} goes in after startup, as its first message; its outcome is ${LATER}.`
+		};
+	}
+
+	/**
+	 * The creation prompt that goes after the process started (COLLABORATION-2.2): after what its start types before its first turn,
+	 * as the caller's first ordinary message, its budget starting there. Settles with its final outcome - the send's later outcome comes
+	 * here rather than as a result of its own (MCP-2.3). A failure leaves the agent running.
+	 */
+	private async postStartPrompt(start: Start, text: string, outcome: StartOutcome): Promise<{ readonly data: Data; readonly headline: string }> {
+		const { run, caller, call, promptId } = start;
+		const base = this.promptPath(outcome);
+		const id = promptId !== undefined ? { id: promptId } : {};
+		const alias = promptId !== undefined ? `#m${promptId.slice(2)}` : undefined;
+		let record: MessageRecord;
 		try {
-			// After what its start types before its first turn: that turn can use the tools then, and the prompt's budget starts there -
-			// but not past the call's own wait, which answers the caller in time; the prompt then waits behind that typing (MCP-1.3)
-			const warmed = this.deps.agents.warmedUp(run);
-			await (start.answerBy === Infinity ? warmed : within(warmed, Math.max(0, start.answerBy - Date.now())));
-			sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId, initialPrompt: base });
+			await this.deps.agents.warmedUp(run);
+			let settled!: (final: MessageRecord) => void;
+			const later = new Promise<MessageRecord>(resolve => settled = resolve);
+			const sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId, initialPrompt: base, settled });
+			record = sent.status === 'accepted' ? await later : sent.record;
 		} catch (err) {
 			const failed = errorResult(err, { effects: { outcome: 'unknown' } });
 			return {
@@ -864,24 +912,22 @@ class ToolService {
 				headline: `Its prompt${alias ? ` ${alias}` : ''} could not be sent: ${failed.error!.message} The agent keeps running.`
 			};
 		}
-		const { record } = sent;
-		const status = sent.status === 'accepted' ? 'pending' : sent.status;
-		const failedWith = sent.status === 'failure' ? sendFailureOf(sent.reason ?? record.delivery.reason) : undefined;
+		const { delivery } = record;
+		const failedWith = delivery.status === 'failure' ? sendFailureOf(delivery.reason) : undefined;
 		const data = defined({
 			message_id: record.id,
 			alias: record.alias,
 			...base,
-			status,
-			reason: failedWith?.reason,
+			status: delivery.status,
+			reason: failedWith?.reason ?? (delivery.status === 'unknown' ? delivery.reason : undefined),
 			message: failedWith?.message,
-			obstacle: sent.obstacle,
-			deadline: status === 'pending' && record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined,
-			delivered_via: record.delivery.via,
-			effects: defined({ ...record.delivery.effects })
+			delivered_via: delivery.status === 'success' ? delivery.via : undefined,
+			effects: defined({ ...delivery.effects })
 		});
-		const headline = status === 'success' ? record.delivery.via === 'read' ? `Its prompt ${record.alias} was delivered through read_messages after startup.` : `Its prompt ${record.alias} was submitted to its CLI after startup.`
-			: status === 'pending' ? `Its prompt ${record.alias} is still being delivered after startup; its outcome is ${LATER}.`
-				: `Its prompt ${record.alias} was not delivered: ${failedWith!.message} The agent keeps running.`;
+		const headline = delivery.status === 'success'
+			? delivery.via === 'read' ? `Its prompt ${record.alias} was delivered through read_messages after startup.` : `Its prompt ${record.alias} was submitted to its CLI after startup.`
+			: delivery.status === 'unknown' ? `Whether its prompt ${record.alias} went in after startup is not known. The agent keeps running.`
+				: `Its prompt ${record.alias} was not delivered: ${failedWith?.message ?? 'its delivery did not finish.'} The agent keeps running.`;
 		return { data, headline };
 	}
 

@@ -35,7 +35,7 @@ export interface ResultRoute {
 }
 
 export interface MessageServiceDeps {
-	readonly agents: Pick<Agents, 'get' | 'onDidChange' | 'owned'>;
+	readonly agents: Pick<Agents, 'get' | 'onDidChange' | 'owned' | 'creationPending'>;
 	readonly input: InputPort;
 	readonly human: HumanContactPort;
 	readonly store: MessageStore;
@@ -144,6 +144,8 @@ interface Stage {
 	heldUntil?: number;
 	/** The Facade results it types in one paste, where it delivers results; `message` is the first of them (RULES-1.7). */
 	readonly batch?: ResultBatch;
+	/** Whether it delivers its run's creation prompt, which the input is held for, not by (RULES-1.10, COLLABORATION-2.2). */
+	creation?: boolean;
 }
 
 const NO_EFFECTS: InputEffects = { outcome: 'none', text_written: 'none', enter_written: false };
@@ -249,6 +251,7 @@ export class MessageService implements Messages, Disposable {
 		const extra = this.deps.input.pasteTime?.(request.to, text) ?? 0;
 		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra, start: deadline - STAGE_MS } });
 		const stage = this.newStage(request.to, pending.id, start, extra);
+		stage.creation = request.initialPrompt !== undefined;
 		const delivered = Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.read]);
 		const first = await this.within(delivered, RESPONSE_BUDGET_MS - (this.mono() - start));
 		if (first !== 'deadline') {
@@ -259,7 +262,12 @@ export class MessageService implements Messages, Disposable {
 		void delivered.then(outcome => {
 			const final = this.finish(pending.id, outcome);
 			if (final && !this.disposed) {
-				this.reportOutcome(final, request.callId);
+				if (request.settled) {
+					// Its caller reports it, with what it belongs to (MCP-2.3): no result of its own besides
+					request.settled(final);
+				} else {
+					this.reportOutcome(final, request.callId);
+				}
 			}
 		});
 		return {
@@ -653,6 +661,10 @@ export class MessageService implements Messages, Disposable {
 		}
 		if (this.deps.input.capability(stage.target).state === 'unavailable') {
 			return { kind: 'unsupported' };
+		}
+		if (!stage.written && !stage.creation && this.deps.agents.creationPending?.(stage.target)) {
+			// Its creation prompt, its preparation included, goes first: the input is held for it, as by a draft (RULES-1.10)
+			return { kind: 'blocked', obstacle: 'input_draft' };
 		}
 		let input: Awaited<ReturnType<InputPort['inspect']>>;
 		try {

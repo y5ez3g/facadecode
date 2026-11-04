@@ -295,7 +295,10 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			const sent = await s.call(lead, 'send_message', { to: worker.id, text: 'Read this.' });
 			assert.strictEqual(resultOf(sent).data.disposition, 'read_messages');
 			const started = resultOf(await s.call(lead, 'start_agent', { ...START, prompt: 'Read the first task.' }));
-			assert.deepStrictEqual([started.data.prompt.path, started.data.prompt.status, started.data.prompt.delivered_via], ['post_start', 'success', 'read']);
+			assert.deepStrictEqual([started.data.prompt.path, started.data.prompt.status], ['post_start', 'pending']);
+			await waitFor(() => s.messages.reports.length === 1);
+			const later = s.messages.reports[0].result as { data: { prompt: { status: string; delivered_via: string } } };
+			assert.deepStrictEqual([later.data.prompt.status, later.data.prompt.delivered_via], ['success', 'read']);
 		});
 
 		test('a native prompt is the caller\'s headed message, its ID taken before the launch; used unverified, its outcome is unknown, never invented', async () => {
@@ -338,20 +341,30 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			});
 		});
 
-		test('without a native mapping the prompt goes after startup as the caller\'s ordinary message, reported as its first response', async () => {
+		test('without a native mapping the prompt goes after startup as the caller\'s ordinary message: the start answers it pending, and one later result settles it (MCP-2.3)', async () => {
 			const { lead } = team(s);
 			s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_unknown' });
 			const answer = await s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.' });
 			const result = resultOf(answer);
-			// The ID taken before the launch is the one it is sent with
-			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
-			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' } } }]);
 			assert.strictEqual(result.status, 'success');
+			assert.deepStrictEqual([result.data.call_id, result.data.result_message_id], ['call-1', '#m2']);
 			assert.deepStrictEqual(result.data.prompt, {
 				message_id: '#m1', path: 'post_start',
 				capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' },
-				status: 'pending', obstacle: 'input_unknown', deadline: '2026-10-28T23:00:15.000Z', effects: { outcome: 'pending', text_written: 'none', enter_written: false }
+				status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }
 			});
+			// The ID taken before the launch is the one it is sent with; its outcome comes to the start, not as a result of its own
+			await waitFor(() => s.messages.sent.length === 1);
+			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
+			const { settled, ...sent } = s.messages.sent[0];
+			assert.deepStrictEqual([sent, typeof settled], [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' } } }, 'function']);
+			assert.strictEqual(s.messages.reports.length, 0, 'no result of the prompt\'s own');
+			s.messages.finishSent(0, { status: 'success', effects: { outcome: 'confirmed', text_written: 'full', enter_written: true }, attempts: 2, via: 'terminal' });
+			await waitFor(() => s.messages.reports.length === 1);
+			const [report] = s.messages.reports;
+			const later = report.result as { status: string; data: { prompt: { status: string } } };
+			assert.deepStrictEqual([report.id, report.callId, later.status, later.data.prompt.status], ['m-2', 'call-1', 'success', 'success']);
+			assert.match(report.text, /Its prompt #m1 was submitted to its CLI after startup\./);
 		});
 
 		test('a prompt that goes after startup waits for what the start types before the first turn: its budget starts once the tools are ready (COLLABORATION-2.2)', async () => {
@@ -359,23 +372,22 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			let ready!: () => void;
 			s.agents.warmUps.set(runId(100), new Promise<void>(resolve => ready = resolve));
 			s.messages.respond = () => ({ status: 'success' });
-			const answering = s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.' });
+			const result = resultOf(await s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.' }));
+			assert.deepStrictEqual([result.data.prompt.path, result.data.prompt.status], ['post_start', 'pending']);
 			await new Promise(resolve => setTimeout(resolve, 10));
 			assert.deepStrictEqual(s.messages.sent, [], 'nothing is sent before the tools are ready');
 			ready();
-			const result = resultOf(await answering);
-			assert.deepStrictEqual([s.messages.sent.length, result.data.prompt.path, result.data.prompt.status], [1, 'post_start', 'success']);
+			await waitFor(() => s.messages.reports.length === 1);
+			assert.deepStrictEqual([s.messages.sent.length, (s.messages.reports[0].result as { data: { prompt: { status: string } } }).data.prompt.status], [1, 'success']);
 		});
 
-		test('the wait for that typing ends with the call\'s own wait: the prompt is sent then, the caller answered in time (MCP-1.3)', async () => {
+		test('the start answers once its process runs, never waiting on that typing: its prompt pending, with call_id and result_message_id (MCP-2.3)', async () => {
 			const { lead } = team(s);
-			s.timeout = 0.05;
 			s.agents.warmUps.set(runId(100), new Promise<void>(() => undefined));
-			s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_unknown' });
 			const began = Date.now();
 			const result = resultOf(await s.call(lead, 'start_agent', { ...START, prompt: 'Review the changes.' }));
-			assert.ok(Date.now() - began < 2_000, 'answered within its wait, not after the typing');
-			assert.deepStrictEqual([s.messages.sent.length, result.data.prompt.path, result.data.prompt.status], [1, 'post_start', 'pending']);
+			assert.ok(Date.now() - began < 1_000, 'answered at once, not after the typing');
+			assert.deepStrictEqual([result.status, s.messages.sent.length, result.data.prompt.status, result.data.call_id, result.data.result_message_id], ['success', 0, 'pending', 'call-1', '#m2']);
 		});
 
 		test('a failed prompt leaves the started agent running and its start a success', async () => {
@@ -383,8 +395,10 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			s.agents.startWith = { state: 'running', prompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'No mapping.' } } };
 			s.messages.respond = () => ({ status: 'failure', reason: 'unsupported' });
 			const result = resultOf(await s.call(lead, 'start_agent', { ...START, prompt: 'Go.' }));
-			assert.strictEqual(result.status, 'success');
-			assert.deepStrictEqual([result.data.prompt.status, result.data.prompt.reason], ['failure', 'unsupported']);
+			assert.deepStrictEqual([result.status, result.data.prompt.status], ['success', 'pending']);
+			await waitFor(() => s.messages.reports.length === 1);
+			const later = s.messages.reports[0].result as { status: string; data: { prompt: { status: string; reason: string } } };
+			assert.deepStrictEqual([later.status, later.data.prompt.status, later.data.prompt.reason], ['success', 'failure', 'unsupported']);
 			assert.strictEqual(s.agents.get(runId(100))?.lifecycle, 'running');
 			assert.deepStrictEqual(s.agents.closed, []);
 		});

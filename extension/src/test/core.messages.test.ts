@@ -125,10 +125,12 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	const stored = new Map<string, MessageRecord>();
 	const log: string[] = [];
 	const said: [RunId, string][] = [];
+	/** Runs whose post-start creation prompt is still to go in (RULES-1.10). */
+	const creating = new Set<RunId>();
 	let n = 0;
 	let spent = 0;
 	const deps: MessageServiceDeps = {
-		agents: { get: run => runs.get(run), onDidChange: changes.event, owned: () => owned },
+		agents: { get: run => runs.get(run), onDidChange: changes.event, owned: () => owned, creationPending: run => creating.has(run) },
 		input,
 		human: { contact: (record, lookup) => { contacts.push(record); saved = lookup; return reachable; } },
 		store: {
@@ -153,7 +155,7 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	};
 	let service = new MessageService(deps);
 	return {
-		service, runs, input, contacts, stored, log,
+		service, runs, input, contacts, stored, log, creating,
 		/** What each recipient's card was told was sent to it, as each delivery went in (PANEL-1.4). */
 		said,
 		/** The window reloads: its message service goes, and a new one opens on the same records. */
@@ -279,6 +281,24 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.at - start), [9_000]);
 		const original = service.history().find(record => record.id === 'm-1')!;
 		assert.deepStrictEqual([original.delivery.status, original.delivery.attempts, original.delivery.via, original.delivery.deliveredAt! - start], ['success', 4, 'terminal', 9_000]);
+	});
+
+	test('a message sent while its recipient\'s creation prompt is still to go in waits behind it, held from its start: accepted with ten minutes, then the prompt first (RULES-1.10, COLLABORATION-2.2)', async () => {
+		const { service, input, creating } = setUp();
+		creating.add(B);
+		input.states.set(B, ['usable']);
+		const start = Date.now();
+		const result = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, callId: 'call-7' }));
+		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.deadline], ['accepted', 'input_draft', start + 600_000]);
+		// The creation prompt itself is not held by its own hold, and goes in first
+		const prompt = await settled(service.send({ from: A, to: B, text: 'Your task.', elapsedMs: 0, initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } }));
+		assert.strictEqual(prompt.status, 'success');
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.text.split('\n')[1]), ['Your task.']);
+		await sleep(6_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).length, 1, 'held while the prompt is pending');
+		creating.delete(B);
+		await sleep(3_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.text.split('\n')[1]), ['Your task.', 'Hello']);
 	});
 
 	test('an accepted send\'s outcome comes back to its sender as a Facade result - in its inbox and its terminal, about the original and its call', async () => {

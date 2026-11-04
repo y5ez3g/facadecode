@@ -729,6 +729,10 @@ export interface Agents {
 	 * CLI needs none, or that this window does not hold.
 	 */
 	warmedUp(run: RunId): Promise<void>;
+	/** Whether the run's post-start creation prompt, its preparation included, is still to be delivered or given up (RULES-1.10). */
+	creationPending?(run: RunId): boolean;
+	/** Its post-start creation prompt was delivered or given up: its input is held for it no longer (RULES-1.10). */
+	creationSettled?(run: RunId): void;
 	/** Close Agent, the single close action for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
 	close(run: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */

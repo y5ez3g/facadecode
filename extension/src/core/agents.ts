@@ -62,6 +62,11 @@ interface Run {
 	prompt?: LaunchPlan['prompt'];
 	/** Settles once what its start types before its first turn is done or given up (COLLABORATION-2.2). */
 	warm?: Promise<void>;
+	/**
+	 * Whether its creation prompt goes after its start and is neither delivered nor given up yet: its input is held for it, its
+	 * preparation included, and a message sent meanwhile goes after it (RULES-1.10, COLLABORATION-2.2).
+	 */
+	creationPending?: boolean;
 	/** Whether its tab was told to spin: while its dot is green (LIFECYCLE-2.2). */
 	spinning?: boolean;
 }
@@ -432,6 +437,19 @@ export class AgentService implements Agents, Disposable {
 		return facts.lifecycle === 'running' ? { state: 'running', ...prompt, ...worktree } : { state: 'failed', ...(facts.error ? { error: facts.error.english ?? facts.error.reason } : {}), ...prompt, ...worktree };
 	}
 
+	/** Whether `id`'s post-start creation prompt, its preparation included, is still to be delivered or given up (RULES-1.10). */
+	creationPending(id: RunId): boolean {
+		return this.runs.get(id)?.creationPending === true;
+	}
+
+	/** Its post-start creation prompt was delivered or given up: its input is no longer held for it (RULES-1.10). */
+	creationSettled(id: RunId): void {
+		const run = this.runs.get(id);
+		if (run) {
+			run.creationPending = false;
+		}
+	}
+
 	async warmedUp(id: RunId): Promise<void> {
 		const run = this.runs.get(id);
 		if (run) {
@@ -587,6 +605,7 @@ export class AgentService implements Agents, Disposable {
 		const resumed = !!options.resume && !!plan.exactResume && sessionId === options.resume.key.sessionId;
 		if (plan.prompt) {
 			run.prompt = plan.prompt;
+			run.creationPending = plan.prompt?.path === 'post_start';
 		}
 		this.update(run, {
 			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: resumed,
