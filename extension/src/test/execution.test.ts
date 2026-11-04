@@ -1233,6 +1233,33 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(told, [{ run: 'run-g1', column: 2 }, { run: 'run-g1', column: 3 }, { run: 'run-g1' }]);
 	});
 
+	test('an agent opened before and opened again behind the person\'s editor waits for this opening of its terminal, not its first: nothing spins, and the editor it covered shows again once it opens (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		port.openPair(facts('run-u1'), { reveal: false });
+		open(terminals[0]);
+		tabsChanged.fire({ opened: [terminals[0].tab], closed: [], changed: [] });
+		port.hideTab!('run-u1');
+		closed.fire(terminals[0]);
+		// The person's file in front, then the agent's tab made anew behind it, opening active over it before its terminal opens
+		const file = { input: { uri: 'file:///work/app/README.md' }, isActive: true, isPinned: false, isPreview: false, group: { viewColumn: 1, tabs: [] as unknown[] } };
+		file.group.tabs.push(file);
+		activeTab = file;
+		port.reopen('run-u1');
+		const again = terminals[1];
+		const tab = { ...again.tab, isActive: true, group: file.group };
+		visibleTabs = [file, tab];
+		tabsChanged.fire({ opened: [tab], closed: [], changed: [] });
+		// While its terminal is not open yet, a timer still runs: nothing waits in a loop of its own
+		const before = Date.now();
+		await new Promise(resolve => setTimeout(resolve, 10));
+		const took = Date.now() - before;
+		assert.ok(took < 500, `a 10 ms timer ran after ${took} ms`);
+		assert.ok(!commands.includes('vscode.open'), 'nothing is shown before its terminal opens');
+		open(again);
+		await new Promise(resolve => setTimeout(resolve, 20));
+		assert.ok(commands.includes('vscode.open'), 'the covered editor is shown again once it opened');
+	});
+
 	test('a mark changed on a tab Facade cannot tell wins once the tab is known where it came after the agent\'s last Pin or Unpin; else Facade\'s Pin stands and the mark follows (LIFECYCLE-3.4, J12)', async () => {
 		const port = portOf();
 		const changes: unknown[] = [];

@@ -660,9 +660,10 @@ export class AgentTerminals implements vscode.Disposable {
 		if (this.entries.get(pair.run) !== pair || !covered || !tab.isActive || !this.opensBehind(pair) || covered === tab) {
 			return;
 		}
-		// Returning to the covered editor before xterm is ready can leave this terminal permanently unopened in VS Code.
+		// Returning to the covered editor before xterm is ready can leave this terminal permanently unopened in VS Code: this opening's
+		// open is waited for - not the first one's, which an agent opened before had long ago
 		if (!pair.pty.isOpen) {
-			void pair.pty.ready.then(opened => { if (opened) { this.uncover(pair, tab); } });
+			void pair.pty.nextOpen().then(opened => { if (opened) { this.uncover(pair, tab); } });
 			return;
 		}
 		pair.background = { since: pair.background!.since };

@@ -73,6 +73,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private completeOpen!: (opened: boolean) => void;
 	/** VS Code has installed its listeners and opened this pseudoterminal, or it was disposed before that. */
 	readonly ready = new Promise<boolean>(resolve => { this.completeOpen = resolve; });
+	/** What waits for its next opening: a tab opened anew opens it once more, which {@link ready} - its first - does not say. */
+	private openWaiters: ((opened: boolean) => void)[] = [];
 	private size: vscode.TerminalDimensions | undefined;
 	/** What waits for the terminal to open: VS Code drops what is written before. */
 	private unopened: string[] = [];
@@ -139,6 +141,11 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	get isOpen(): boolean {
 		return this.opened;
+	}
+
+	/** Whether VS Code opened it: at once where it is open, else as it next opens - its tab's terminal opened anew - or false as it goes. */
+	nextOpen(): Promise<boolean> {
+		return this.opened ? Promise.resolve(true) : new Promise(resolve => this.openWaiters.push(resolve));
 	}
 
 	/** Writes a dim line of startup progress or failure (UX-1.1). */
@@ -365,6 +372,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 		const reopened = this.opened;
 		this.opened = true;
 		this.completeOpen(true);
+		for (const waiter of this.openWaiters.splice(0)) {
+			waiter(true);
+		}
 		// The editor names the tab by the name it was created with once its process is ready, after each open - a relaunch's too
 		this.resetDue = true;
 		this.size = dimensions;
@@ -473,6 +483,9 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	dispose(): void {
 		this.completeOpen(false);
+		for (const waiter of this.openWaiters.splice(0)) {
+			waiter(false);
+		}
 		this.letStandInGo();
 		clearInterval(this.spinner);
 		this.spinner = undefined;

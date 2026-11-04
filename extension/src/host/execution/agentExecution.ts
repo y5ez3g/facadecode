@@ -265,7 +265,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 						copy.dispose();
 						return;
 					}
-					void Promise.race([pair.terminal.pty.ready, timeout(OPEN_WAIT_MS)]).finally(() => copy.dispose());
+					void Promise.race([pair.terminal.pty.nextOpen(), timeout(OPEN_WAIT_MS)]).finally(() => copy.dispose());
 				} }),
 				renamed: (run, name) => this.tabRenames.fire({ run, name }),
 			pinned: (run, pinned) => this.tabPins.fire({ run, pinned }),
@@ -637,7 +637,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			return;
 		}
 		pair.terminal.open(false, typeof place === 'object' ? place.column : undefined);
-		const opened = await Promise.race([pair.terminal.pty.ready, timeout(OPEN_WAIT_MS).then(() => undefined)]);
+		// This opening's: a run this window had already opened before has its first long ago
+		const opened = await Promise.race([pair.terminal.pty.nextOpen(), timeout(OPEN_WAIT_MS).then(() => undefined)]);
 		if (opened === false || this.pairs.get(run) !== pair) {
 			throw new Error('The agent was closed while reattaching.');
 		}
