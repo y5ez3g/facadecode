@@ -379,27 +379,64 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		assert.ok(!outputOf(events).includes('before'));
 	});
 
-	test('a local window gone, another window opening its workspace ends its runs: the claim is answered once they ended, and lists none of them; a remote window\'s are taken over (RULES-4.1)', async () => {
-		const window = async (generation: number, address: string, local: boolean) => {
+	test('a window opening the workspace within its grace takes its runs over, whichever window, local or remote - no claim ends them (RULES-4.1)', async () => {
+		const window = async (generation: number, local: boolean) => {
 			const client = await PtydClient.connect(socketPath, '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
 			clients.push(client);
-			await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, window: address, local });
+			await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, local });
 			return client;
 		};
-		const first = await window(1, 'win-a', true);
-		const { pid } = await spawn(first, 'closed-1', IDLE, { meta: { name: 'closed-1', sessionId: 's-closed', cli: 'claude', environment: 'local' } });
+		const first = await window(1, true);
+		const { pid } = await spawn(first, 'kept-local', IDLE);
 		first.dispose();
 		await new Promise(resolve => setTimeout(resolve, 300));
-		const reopened = await window(2, 'win-b', true);
-		assert.strictEqual(alive(pid), false, 'its process ended before the claim was answered');
-		assert.deepStrictEqual([await reopened.request('list', { owner: 'w1' }), await reopened.request('conversations', {})], [[], []]);
-		// A remote window's runs wait for it, and a reopened window takes them over as before
-		const remote = await window(3, 'win-c', false);
-		await spawn(remote, 'kept-1', IDLE);
-		remote.dispose();
+		const reopened = await window(2, true);
+		assert.deepStrictEqual([alive(pid), (await reopened.request('list', { owner: 'w1' })).map(run => [run.run, run.exited])], [true, [['kept-local', undefined]]]);
+		reopened.dispose();
 		await new Promise(resolve => setTimeout(resolve, 300));
-		const again = await window(4, 'win-d', false);
-		assert.deepStrictEqual((await again.request('list', { owner: 'w1' })).map(run => [run.run, run.exited]), [['kept-1', undefined]]);
+		const remote = await window(3, false);
+		assert.deepStrictEqual((await remote.request('list', { owner: 'w1' })).map(run => run.run), ['kept-local']);
+	});
+
+	test('a claim while its grace is ending its runs is answered once they ended: its window restores its Pins after them, never beside them (LIFECYCLE-3.5)', async function () {
+		this.timeout(20_000);
+		const place = ptydPlace('fd-grace-');
+		// The grace, run by hand, and each end held until the test lets it finish
+		const graces: (() => void)[] = [];
+		let release!: () => void;
+		const held = new Promise<void>(resolve => release = resolve);
+		class HeldEnd extends runModule.Run {
+			override async terminate(graceMs: number) {
+				await held;
+				return super.terminate(graceMs);
+			}
+		}
+		const Graced = withModules({ './run': { ...runModule, Run: HeldEnd } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const graced = new Graced(place.socket, () => undefined, { after: (_ms, run) => { graces.push(run); return { dispose: () => undefined }; } });
+		try {
+			assert.strictEqual(await graced.listen(), true);
+			const window = async (generation: number) => {
+				const client = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, local: true });
+				return client;
+			};
+			const first = await window(1);
+			const { pid } = await spawn(first, 'ending', IDLE);
+			first.dispose();
+			await until('its grace to start', () => graces.length === 1);
+			graces[0]();
+			let answered = false;
+			const claiming = window(2).then(client => { answered = true; return client; });
+			await new Promise(resolve => setTimeout(resolve, 300));
+			assert.strictEqual(answered, false, 'not answered while its run is still ending');
+			release();
+			const claimed = await claiming;
+			assert.deepStrictEqual([alive(pid), await claimed.request('list', { owner: 'w1' }), await claimed.request('conversations', {})], [false, [], []]);
+		} finally {
+			graced.close();
+			fs.rmSync(place.dir, { recursive: true, force: true });
+		}
 	});
 
 	test('a newer activation takes the same process immediately and fences every stale effect and later reconnect', async () => {

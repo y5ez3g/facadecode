@@ -53,7 +53,6 @@ import { readSetting, waitSeconds, yolo } from './settings';
 import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
-import { windowAddress } from './windowNetwork';
 import { KeptWorkspaceState } from './workspaceState';
 
 declare const FACADE_TEST_MODE: boolean;
@@ -172,9 +171,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const locations = createLocationService(workspaceState, log);
 	const execution = new AgentExecution({
 		owner: record.key,
-		// ptyd is told which window claims, by an address the same across its reloads, and whether it is local: a local window's runs end
-		// with it, at once where another window opens its workspace; a remote window's wait for its return (RULES-4.1)
-		claim: { ...claim, window: windowAddress(identity.token), local: vscode.env.remoteName === undefined },
+		// ptyd is told whether the claiming window is local: a local window's runs end 90 seconds after it goes, a remote window's five
+		// minutes after, unless a window of the workspace claims them first (RULES-4.1)
+		claim: { ...claim, local: vscode.env.remoteName === undefined },
 		ptydScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'ptyd.js').fsPath,
 		version: String(context.extension.packageJSON.version),
 		home,

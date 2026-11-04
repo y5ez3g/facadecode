@@ -257,13 +257,13 @@ async function main(): Promise<void> {
 				const reopenBy = Date.now() + (nativeLifecycle ? 150_000 : 45_000);
 				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
 				const after = lines().find(line => line.phase === 'reopened');
-				// A local window closed: reopened at once, the new window ends its process before it restores its Pin - never takes it over -
-				// and after its grace the process ended already; either way the exact session goes on in a new process (RULES-4.1)
-				if (!after || after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid))
+				// A local window closed and reopened within its 90 seconds takes its run over, as a reload does - no claim ends it; after its
+				// grace the process ended already and the Pin restores the exact session in a new process (RULES-4.1)
+				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid)) : after.runId !== before.runId || after.pid !== before.pid)
 					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))) {
-					throw new Error(`Closing and reopening did not end the closed window's process and restore the pinned conversation: ${JSON.stringify(lines())}`);
+					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
 				}
-				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace' : 'immediate reopen'} end the closed window's process and restore the exact pinned session in a new process, with one terminal: ${JSON.stringify(lines())}`);
+				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
 				return;
 			}
 			const said = lines();

@@ -11,14 +11,11 @@ import type { OwnerClaim } from './protocol';
 export const OWNER_GRACE_MS = 5 * 60_000;
 
 /**
- * A local window's: a reload or an extension host restart claims its runs again well within it, the activation's wait for its
- * window component (60 seconds, ARCHITECTURE-4.3) included; a closed window's runs end after it, or at once where another window
- * opens the workspace (RULES-4.1).
+ * A local window's: a reload or an extension host restart claims its runs again well within it; a closed window's runs end after
+ * it, unless a window opening the workspace within it takes them over, as a reload does - no claim ends another window's runs
+ * (RULES-4.1).
  */
 export const LOCAL_OWNER_GRACE_MS = 90_000;
-
-/** Why an owner's runs end: its window absent past its grace, or a local window shown closed by another window's claim. */
-export type OwnerEnd = 'absent' | 'closed';
 
 export interface OwnerClock {
 	after(ms: number, run: () => void): { dispose(): void };
@@ -40,7 +37,7 @@ export class OwnerClaims<C> {
 
 	constructor(
 		private readonly transferred: (owner: string, previous: C) => void,
-		private readonly expired: (owner: string, why: OwnerEnd) => void,
+		private readonly expired: (owner: string) => void,
 		private readonly clock: OwnerClock = {
 			after: (ms, run) => {
 				const timer = setTimeout(run, ms);
@@ -52,7 +49,7 @@ export class OwnerClaims<C> {
 
 	claim(claim: OwnerClaim, connection: C): void {
 		if (typeof claim.owner !== 'string' || !claim.owner || !Number.isSafeInteger(claim.generation) || claim.generation < 1 || typeof claim.token !== 'string' || !claim.token
-			|| (claim.window !== undefined && typeof claim.window !== 'string') || (claim.local !== undefined && typeof claim.local !== 'boolean')) {
+			|| (claim.local !== undefined && typeof claim.local !== 'boolean')) {
 			throw new Error('Invalid workspace ownership claim.');
 		}
 		const previous = this.owners.get(claim.owner);
@@ -60,16 +57,8 @@ export class OwnerClaims<C> {
 			(claim.generation === previous.claim.generation && (claim.token !== previous.claim.token || previous.expired)))) {
 			throw new Error('Workspace ownership was transferred or expired.');
 		}
+		// Within its grace any window of the workspace takes its runs over, a reloaded one or another: no claim ends them (RULES-4.1)
 		previous?.timer?.dispose();
-		// A local window gone, and another window opening its workspace: a reload keeps a window's address, so this one was closed, and
-		// its runs end now - its Pins are the new window's to restore - never taken over (RULES-4.1). A window still connected hands its
-		// runs over, as a remote window gone may: a lost network leaves its extension host running, and its reopened window takes them.
-		if (previous && previous.connection === undefined && !previous.expired && previous.claim.local === true && claim.local === true
-			&& !!previous.claim.window && !!claim.window && previous.claim.window !== claim.window) {
-			previous.expired = true;
-			previous.timer = undefined;
-			this.expired(claim.owner, 'closed');
-		}
 		this.owners.set(claim.owner, { claim, connection });
 		if (previous?.connection !== undefined && previous.connection !== connection) {
 			this.transferred(claim.owner, previous.connection);
@@ -94,7 +83,7 @@ export class OwnerClaims<C> {
 				}
 				owner.expired = true;
 				owner.timer = undefined;
-				this.expired(key, 'absent');
+				this.expired(key);
 			});
 		}
 	}

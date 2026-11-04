@@ -214,8 +214,11 @@ export class PtydServer {
 	/** Every run ID ptyd started, kept so that none is started twice (RULES-2.2). */
 	private readonly seen = new Set<string>();
 	private readonly claims = new Map<Run, Connection>();
-	/** The runs a claim ended, as another window showed their local window closed: that claim is answered once they did. */
-	private readonly closedWindows = new Map<string, Promise<unknown>>();
+	/**
+	 * Each owner whose grace ended and whose runs are still ending: a claim of it is answered once they ended, so that its window
+	 * restores its Pins after them, never beside them (LIFECYCLE-3.5).
+	 */
+	private readonly endings = new Map<string, Promise<unknown>>();
 	private readonly connections = new Set<Connection>();
 	private server: net.Server | undefined;
 	/** The socket this ptyd made at its path, on Unix: the one it may remove as it closes, never one another ptyd made there later. */
@@ -257,14 +260,14 @@ export class PtydServer {
 			}
 			previous.send({ event: 'ownerLost', owner });
 			this.log(`Workspace ${owner} transferred to a newer activation.`);
-		}, (owner, why) => {
-			const ended = this.endOwner(owner, 3_000, why === 'closed'
-				? 'its local window closed - another window opened its workspace'
-				: 'its owner connection was absent past its grace period');
-			if (why === 'closed') {
-				// The claim that ended them is answered once they did: the new window restores its Pins after, never beside them
-				this.closedWindows.set(owner, ended.ended);
-			}
+		}, owner => {
+			const ending = this.endOwner(owner, 3_000, 'its owner connection was absent past its grace period').ended;
+			this.endings.set(owner, ending);
+			void ending.then(() => {
+				if (this.endings.get(owner) === ending) {
+					this.endings.delete(owner);
+				}
+			});
 		}, clock);
 	}
 
@@ -474,11 +477,8 @@ export class PtydServer {
 				this.owners.claim(claim, connection);
 				connection.claimed = true;
 				this.scheduleIdleExit();
-				const closing = this.closedWindows.get(claim.owner);
-				if (closing) {
-					this.closedWindows.delete(claim.owner);
-					await closing;
-				}
+				// Runs its grace is ending: answered once they ended, within the seconds cleanup takes (LIFECYCLE-3.5, 4.2)
+				await this.endings.get(claim.owner);
 				return undefined;
 			}
 			case 'colours': {
