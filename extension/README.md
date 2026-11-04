@@ -202,7 +202,7 @@ evidence. This npm package is an artifact archive: it has no install hook or exe
 Releases. Extension tags use `extension/<version>` and do not require an IDE build.
 
 The archive catalog is `archive/catalog.json`. Prepare and verify its original published files with
-`node scripts/archive.mjs --through 0.0.5`; `--input-dir <directory>` uses the same named files from a tested local build
+`node scripts/archive.mjs --through 0.0.6`; `--input-dir <directory>` uses the same named files from a tested local build
 instead. Output is under `build/archive/`. The `Extension archive` tag workflow uses its repository token to publish
 catalog versions through the tagged version and downloads each npm package again to verify its files and VSIX hashes.
 It checks existing versions before reuse. No marketplace publication is part of that workflow. Later publication to
