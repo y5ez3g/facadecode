@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **OpenCode agents show their own session alone.** OpenCode's session tab strip, which listed every session of the folder - other agents' among them - is turned off for the agents Facade starts. Your OpenCode configuration is unchanged.
+
 ## 0.0.5
 
 - **Fixed: every new agent failed with `Cannot create process` after updating to 0.0.4.** 0.0.4 kept starting agents in the background process of the version it replaced, whose files the update had removed. Each installation now starts agents in its own background process, whatever the update changed, while agents an earlier version started keep running there until they end; that process is then let go. You need not end anything by hand after updating. Where an installation is removed under a process still using it, Facade says so and asks you to reload the window, rather than `Cannot create process`.

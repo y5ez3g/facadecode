@@ -387,10 +387,13 @@ All six built-ins support native history discovery and exact Resume: Claude Code
 OpenCode 2.x and Pi. Pin and Unpin require a maintained, process-bound session identity, including native new, switch,
 clear and fork operations; discovering history alone does not establish that identity. Each adapter uses its vendor's
 native per-launch hooks, extension interfaces or process registry without replacing user configuration, changing global
-hook trust, or selecting a session by recency. A run whose session integration is in place can be pinned from its
-start: a resumed conversation at once, a new one before its CLI names it, the Pin then taking the key the CLI names
-(LIFECYCLE-3.4). A run whose integration could not be installed cannot be pinned. Missing or disabled native
-integration cannot silently save a stale session.
+hook trust, or selecting a session by recency. A run whose session integration is in place can be pinned from its start:
+a resumed conversation at once, a new one before its CLI names it, the Pin then taking the key the CLI names
+(LIFECYCLE-3.4). A run whose integration could not be installed cannot be pinned. Missing or disabled native integration
+cannot silently save a stale session. OpenCode's session tabs are off in its runs, through the same per-run CLI
+configuration: they list every session of the working folder, other agents' among them, and a run's terminal shows its
+own session alone. Its `tabs.enabled` is off, and `tabs.mode` too where the person set one, which would take its place;
+the person's other settings stay as they are.
 
 Release verification covers each built-in's actual native history format, exact resume arguments, session changes,
 native tab synchronization and reload/reopen persistence. Reader fixtures establish format compatibility, not live
