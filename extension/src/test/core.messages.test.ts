@@ -882,6 +882,13 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(said, [[B, 'Review the API.\nThen the tests.'], [A, '🔔 Your message #m1 has been passed on to Bob (#a2).']]);
 	});
 
+	test('PANEL-1.4: a creation prompt that goes in after startup tells its card its first line, as before it went in and by the native path', async () => {
+		const { service, said } = setUp();
+		await settled(service.send({ from: A, to: B, text: '\n  Review the API.\nThen the tests.', elapsedMs: 0, initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } }));
+		await sleep(15_000);
+		assert.deepStrictEqual(said.filter(([run]) => run === B), [[B, 'Review the API.']]);
+	});
+
 	test('report: a Facade result about another operation goes to its run with the call and agent named, ending quietly if it cannot', async () => {
 		const { service, input, close } = setUp();
 		const record = service.report({ to: A, callId: 'call-9', agent: C, text: 'Cy started; its prompt was submitted.' });

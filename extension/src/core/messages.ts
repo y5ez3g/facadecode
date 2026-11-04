@@ -908,7 +908,9 @@ export class MessageService implements Messages, Disposable {
 		if (record?.kind === 'message' && !stage.batch) {
 			const { name, alias } = record.from;
 			const window = record.fromWindow !== undefined ? record.label ?? record.fromWindow : undefined;
-			this.deps.said?.(stage.target, record.text, { kind: 'agent', ...name ? { name } : {}, ...alias ? { alias } : {}, ...window !== undefined ? { window } : {} });
+			// A creation prompt says its first line, as it does on the card before it went in and by the native path (PANEL-1.4)
+			const text = record.initialPrompt ? record.text.split(/\r?\n/).map(line => line.trim()).find(line => !!line) ?? record.text : record.text;
+			this.deps.said?.(stage.target, text, { kind: 'agent', ...name ? { name } : {}, ...alias ? { alias } : {}, ...window !== undefined ? { window } : {} });
 		} else {
 			this.deps.said?.(stage.target, typed, { kind: 'facade' });
 		}
