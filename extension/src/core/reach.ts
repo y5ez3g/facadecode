@@ -13,9 +13,9 @@ export function reaches(caller: Pick<RunFacts, 'yolo' | 'root'>, target: Pick<Ru
 	return caller.yolo || caller.root === target.root;
 }
 
-/** A run's reference as Facade writes it (LIFECYCLE-2.1): `@name #aN`, the ID deciding. */
+/** A run's reference as Facade writes it (LIFECYCLE-2.1): `@name #aN`, the ID deciding; `#aN` alone for an empty name. */
 export function referenceOf(facts: Pick<RunFacts, 'name' | 'alias'>): string {
-	return `@${facts.name} ${facts.alias}`;
+	return facts.name ? `@${facts.name} ${facts.alias}` : facts.alias;
 }
 
 /** An ID that ends a reference: `#aN` or an exact run ID, alone or after a display name. */

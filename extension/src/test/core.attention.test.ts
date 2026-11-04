@@ -63,7 +63,7 @@ function setUp() {
 	return { runs, notices, waits, elapse, timers, told, changes, logged, failing };
 }
 
-suite('Attention: a started agent waiting on its CLI\'s question is reported to its creator (RULES-1.8, D109)', () => {
+suite('Attention: a started agent waiting on its CLI\'s question is reported to its creator (RULES-1.8)', () => {
 
 	test('after twenty seconds of a permission question, its creator is told once; again only once it stopped waiting and waits again', () => {
 		const { waits, elapse, timers, told } = setUp();
@@ -83,7 +83,7 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 		assert.strictEqual(told.length, 2);
 	});
 
-	test('a notice that cannot be recorded is logged, never thrown from its timer (D118)', () => {
+	test('a notice that cannot be recorded is logged, never thrown from its timer (RULES-1.5)', () => {
 		const { waits, elapse, told, logged, failing } = setUp();
 		failing.error = new Error('the disk is full');
 		waits(CHILD, { kind: 'question' });
@@ -103,6 +103,16 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 		assert.deepStrictEqual(timers.map(timer => timer.stopped), [true, true, false]);
 		elapse();
 		assert.deepStrictEqual(told.map(each => /needs the user to sign in/.test(each.text)), [true]);
+	});
+
+	test('RULES-1.8: a blocker of no kind Facade knows tells its creator nothing, however long it waits; one that turns into a known kind starts its count', () => {
+		const { waits, elapse, told } = setUp();
+		waits(CHILD, { kind: 'unknown', text: 'Something else' });
+		elapse();
+		assert.strictEqual(told.length, 0);
+		waits(CHILD, { kind: 'permission', text: 'Run the tests?' });
+		elapse();
+		assert.deepStrictEqual(told.map(each => each.text), ['Echo (#a2) is waiting for approval from the user.\nRun the tests?']);
 	});
 
 	test('an agent the person started, or whose creator ended or is not of this window, tells nobody', () => {
@@ -137,8 +147,7 @@ suite('Attention: a started agent waiting on its CLI\'s question is reported to 
 		assert.match(attentionText(run, { kind: 'permission' }), /waiting for approval from the user/);
 		assert.match(attentionText(run, { kind: 'question', text: 'Which branch?' }), /There's a question from Echo \(#a2\):\nWhich branch\?/);
 		assert.match(attentionText(run, { kind: 'auth' }), /needs the user to sign in/);
-		assert.strictEqual(attentionText(run, { kind: 'unknown', text: 'Check the terminal' }), "Echo (#a2) needs the user's attention.\nCheck the terminal");
-		for (const kind of ['permission', 'question', 'auth', 'unknown'] as const) {
+		for (const kind of ['permission', 'question', 'auth'] as const) {
 			const text = attentionText(run, { kind });
 			assert.doesNotMatch(text, /send_message|#human|tell them|tell the person|press_keys|type_text/);
 		}

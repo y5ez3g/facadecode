@@ -35,7 +35,7 @@ export function formsOf(folder: string): string[] {
 /**
  * The directories one reading of the stores lists conversations of, and every folder below them (LIFECYCLE-3.2). Each folder's real
  * path is resolved once for the reading, not once for every conversation compared with it: a store of hundreds of conversations
- * would otherwise resolve the same few folders thousands of times, synchronously (D177).
+ * would otherwise resolve the same few folders thousands of times, synchronously (LIFECYCLE-3.2).
  */
 export class Scope {
 	/** Each directory as given and as it really is. */

@@ -22,7 +22,7 @@ const CLOSE_BATCH_MS = 100;
 export class WindowHuman implements HumanPort, vscode.Disposable {
 	/** The agents whose tabs closed together, gathered before they are asked about. */
 	private closing: { readonly agents: { readonly run: RunId; readonly label: string }[]; readonly answer: Promise<boolean> } | undefined;
-	/** When the editor's tabs of any kind closed lately, one time for each: what tells a tab closed by itself (D172). */
+	/** When the editor's tabs of any kind closed lately, one time for each: what tells a tab closed by itself (LIFECYCLE-3.1). */
 	private closedTabs: number[] = [];
 	private readonly tabs: vscode.Disposable;
 
@@ -41,7 +41,7 @@ export class WindowHuman implements HumanPort, vscode.Disposable {
 
 	/**
 	 * Whether the person confirms ending live agents whose tabs closed (LIFECYCLE-3.1). A tab the person closed by itself - its close
-	 * button, Close, Close Editor - ends its agent without asking (D172); tabs the editor closed together, an agent's with other tabs,
+	 * button, Close, Close Editor - ends its agent without asking (LIFECYCLE-3.1); tabs the editor closed together, an agent's with other tabs,
 	 * are asked about once, in one modal warning. The editor does not say what closed a tab: one is closed by itself when no other tab
 	 * closes within CLOSE_BATCH_MS of it. As the editor asks before terminating an editor terminal's processes,
 	 * `terminal.integrated.confirmOnKill` set to `never` or `panel` ends them without asking.
@@ -81,7 +81,9 @@ export class WindowHuman implements HumanPort, vscode.Disposable {
 	}
 
 	failed(failure: HumanFailure, options: { readonly show?: RunId; readonly configure?: boolean }): void {
-		const text = failure.kind === 'pin' ? vscode.l10n.t("Could not pin {0}: {1}", failure.name, failure.reason) : failure.kind === 'restore'
+		const text = failure.kind === 'terminate' ? vscode.l10n.t("{0} was closed, but its process could not be terminated.", failure.name)
+			: failure.kind === 'pin' ? vscode.l10n.t("Could not pin {0}: {1}", failure.name, failure.reason)
+			: failure.kind === 'unpin' ? vscode.l10n.t("Could not unpin {0}: {1}", failure.name, failure.reason) : failure.kind === 'restore'
 			? (failure.count > 1 ? vscode.l10n.t("Could not restore {0} pinned agents. Their cards show why.", failure.count) : vscode.l10n.t("Could not restore {0}: {1}", failure.name, failure.reason))
 			: launchFailureText(failure.name, failure.reason, failure.worktree);
 		this.error(text, options);

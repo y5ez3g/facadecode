@@ -31,7 +31,7 @@ export interface Card {
 	 * then gives its path and window as localized Label: value lines (PANEL-1.5).
 	 */
 	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly full: string };
-	/** Green for work, red for an error, none for anything else (RULES-3.2, D183). */
+	/** Green for work, red for an error, none for anything else (RULES-3.2). */
 	readonly dot: 'working' | 'error' | 'none';
 	/** The state in words, dot or none: startup, work, idle, the native blocker's kind, an error or unavailable activity. */
 	readonly stateText: string;

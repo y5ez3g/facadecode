@@ -14,7 +14,7 @@ import { lineReader } from '../base/lines';
 import { isAgentKey } from './keys';
 import { CallEvent, CallRefusal, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
 import { OwnerClaims, type OwnerClock } from './ownership';
-import { MOST_RUN_BUFFER, Run, RunListener } from './run';
+import { InstallationGone, MOST_RUN_BUFFER, Run, RunListener } from './run';
 import { ensurePtydSocket } from './socket';
 
 /** How long ptyd stays up with no live run and no window: a window opening next starts it again. */
@@ -62,6 +62,8 @@ class Connection {
 	role: 'window' | 'shim' = 'window';
 	/** The run a shim said hello for. */
 	shimRun: string | undefined;
+	/** It claimed a workspace: a window, which keeps ptyd, as a connection that only lists runs does not (ARCHITECTURE-2.3). */
+	claimed = false;
 	private waiting = 0;
 	private readonly waitingByRun = new Map<Run, number>();
 	private readonly requests = new Map<number, { readonly body: string; readonly result: Promise<unknown>; bytes: number }>();
@@ -223,13 +225,23 @@ export class PtydServer {
 	/** Runs claimed by an attach not answered yet: their calls wait, for the window to know the run is its first (RULES-4.1). */
 	private readonly attaching = new Set<Run>();
 	/**
-	 * Where the next run's program waits its turn to be created (D146): once the program of the run asked before it was created, or
+	 * Where the next run's program waits its turn to be created (ARCHITECTURE-2.3): once the program of the run asked before it was created, or
 	 * failed to be. On Windows node-pty creates a program on this thread, and a check of a new command line - Microsoft Defender's
 	 * of a CLI's own, measured at 0.2-1 s each - holds it meanwhile: starts asked together held it for all of theirs, nothing else
 	 * heard, and the wait of each for its program ran out behind the others. The runs themselves are there as they are asked for.
 	 */
 	private startLine: Promise<void> = Promise.resolve();
 	private nextCall = 1;
+
+	/**
+	 * The installed build it runs from, as its window named it (ARCHITECTURE-2.4): told in hello, so that a window never takes a
+	 * ptyd of another build for its own. None for one started without it.
+	 */
+	build: string | undefined;
+
+	/** How long it waits, with nothing left to do, before it goes, and how it goes once closed: the process ends, unless a test says. */
+	idleMs = IDLE_EXIT_MS;
+	idle: () => void = () => process.exit(0);
 
 	/** `speaks` is the protocol it answers hello with: its own, or for a test the earlier one it stands for. */
 	constructor(private readonly socketPath: string, private readonly log: (message: string) => void = () => undefined, clock?: OwnerClock, private readonly speaks = PTYD_PROTOCOL) {
@@ -306,7 +318,6 @@ export class PtydServer {
 	private connected(socket: net.Socket): void {
 		const connection = new Connection(socket);
 		this.connections.add(connection);
-		clearTimeout(this.idleTimer);
 		socket.setEncoding('utf8');
 		socket.on('data', lineReader(line => {
 			// When ptyd read it: a shim's call adds the time it spends here to how long it has been under way (RULES-1.2)
@@ -329,7 +340,7 @@ export class PtydServer {
 				},
 				err => {
 					const refused = err instanceof CallRefused ? err : undefined;
-					connection.send({ id: request.id, error: messageOf(err), ...refused ? { reason: refused.reason, effects: refused.effects } : {} });
+					connection.send({ id: request.id, error: messageOf(err), ...refused ? { reason: refused.reason, effects: refused.effects } : {}, ...err instanceof InstallationGone ? { gone: err.gone } : {} });
 					if (refused?.close) {
 						connection.socket.end();
 					}
@@ -422,7 +433,7 @@ export class PtydServer {
 					}
 					this.shimConnected(connection, typeof run === 'string' ? run : '');
 				}
-				return { protocol: this.speaks, pid: process.pid };
+				return { protocol: this.speaks, pid: process.pid, ...this.build ? { build: this.build } : {} };
 			}
 			case 'call':
 				this.call(params as Requests['call']['params'], connection, receivedAt, request.id);
@@ -444,6 +455,8 @@ export class PtydServer {
 			}
 			case 'claim':
 				this.owners.claim(params as Requests['claim']['params'], connection);
+				connection.claimed = true;
+				this.scheduleIdleExit();
 				return undefined;
 			case 'conversations':
 				return [...this.runs.values()].flatMap(run => {
@@ -464,7 +477,7 @@ export class PtydServer {
 				this.seen.add(spawn.run);
 				const run = new Run(spawn, { later: true });
 				// There and claimed before its program starts: its window hears everything it writes from the first byte on, and may give it
-				// its details, its size, input or its close while it waits its turn (D146)
+				// its details, its size, input or its close while it waits its turn (ARCHITECTURE-2.3)
 				this.runs.set(run.id, run);
 				this.claim(run, connection);
 				run.onExit(exit => {
@@ -542,7 +555,7 @@ export class PtydServer {
 					throw new Error('Text to type must be a string.');
 				}
 				// A paste's end and an Enter read together may lose the Enter, as Claude Code does: its Enter goes in a request of its own,
-				// once the CLI can have read the text (MCP-5.2, D113)
+				// once the CLI can have read the text (MCP-5.2)
 				if (text && enter) {
 					throw new Error('Text and its Enter are typed in two requests: the Enter once the CLI can have read the text.');
 				}
@@ -626,7 +639,7 @@ export class PtydServer {
 		}
 	}
 
-	/** Runs `start` once every start asked before it has its program, or failed to (D146). */
+	/** Runs `start` once every start asked before it has its program, or failed to (ARCHITECTURE-2.3). */
 	private inLine<T>(start: () => Promise<T>): Promise<T> {
 		const turn = this.startLine.then(start);
 		this.startLine = turn.then(() => undefined, () => undefined);
@@ -773,17 +786,25 @@ export class PtydServer {
 
 
 
-	/** Goes once nothing is left for it to do: no live run, and no window connected, for a while. */
+	/**
+	 * Goes once nothing is left for it to do: five minutes after its last live run and its last window - a connection that claimed a
+	 * workspace - went. A connection that claims nothing, listing runs or finding none of its window's here, neither keeps it nor
+	 * starts its five minutes again, so that windows of other builds asking it never keep it (ARCHITECTURE-2.3).
+	 */
 	private scheduleIdleExit(): void {
-		clearTimeout(this.idleTimer);
-		if (this.connections.size || [...this.runs.values()].some(run => !run.hasExited)) {
+		if ([...this.connections].some(connection => connection.claimed) || [...this.runs.values()].some(run => !run.hasExited)) {
+			clearTimeout(this.idleTimer);
+			this.idleTimer = undefined;
+			return;
+		}
+		if (this.idleTimer || this.closing) {
 			return;
 		}
 		this.idleTimer = setTimeout(() => {
 			this.log('No runs and no windows: ptyd exits.');
 			this.close();
-			process.exit(0);
-		}, IDLE_EXIT_MS);
+			this.idle();
+		}, this.idleMs);
 		this.idleTimer.unref?.();
 	}
 }

@@ -17,7 +17,7 @@ export const SHIM_RUN = 'FACADE_RUN';
 export const SHIM_PTYD = 'FACADE_PTYD';
 
 /**
- * The run's short ID, `#aN`, explicitly supplied to the shim even where the CLI filters its environment (CLIS-1.2, D46): the CLIs' own
+ * The run's short ID, `#aN`, explicitly supplied to the shim even where the CLI filters its environment (CLIS-1.2): the CLIs' own
  * `RUN_VARIABLE`, which the layers keep this one from importing - a test holds the two equal.
  */
 export const SHIM_AGENT = 'FACADE_AGENT';

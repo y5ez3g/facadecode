@@ -3,13 +3,13 @@
 Layer 3. [Product](PRODUCT.md) prioritizes capability, familiarity and simplicity; [Rules](RULES.md) owns status/notification meaning.
 This document owns common surfaces, presentation, accessibility, commands and settings. Feature documents own behavior.
 
-| Group | Decides | Implementation evidence |
-| --- | --- | --- |
-| 1 Surfaces and words | Native controls, steps, progress and notification presentation | Pending |
-| 2 Look and access | Theme, geometry, motion, keyboard and languages | Pending |
-| 3 Commands | Titles, IDs, placement and target rules | Pending |
-| 4 Settings | Values, scopes and external settings | Pending |
-| 5 Technical design | Manifest, performance, localization and UI checks | Pending |
+| Group | Decides |
+| --- | --- |
+| 1 Surfaces and words | Native controls, steps, progress and notification presentation |
+| 2 Look and access | Theme, geometry, motion, keyboard and languages |
+| 3 Commands | Titles, IDs, placement and target rules |
+| 4 Settings | Values, scopes and external settings |
+| 5 Technical design | Manifest, performance, localization and UI checks |
 
 ## 1 Surfaces and words
 
@@ -28,18 +28,21 @@ immediate visual feedback without waiting for process/Git work. Routine errors k
 
 ### 1.2 Notifications and errors
 
-**A permitted notification says what happened in one short line and offers only relevant Show actions.**
+**A permitted notification says what happened in one short line and offers only relevant actions.**
 
 RULES-3.4 and RULES-1.8 decide eligibility and error ownership. Errors use native error notifications; explicit
 agent-to-person messages use native information notifications, even while that agent is viewed. No ordinary
 news/warning/progress toasts. Agent-operation errors return to the caller; no message-delivery or result-handoff failure
 creates a human popup. Show a permitted human notification only in its related window. There is no durable
 notification-recovery protocol. Example: `Could not start Ada: {CLI error}`. Show opens the exact source run or final
-screen. A message to the person reads `{agent name}: {first line of the message}` and offers `Show Agent`, which opens
-that agent's terminal, and `Open Message`, which opens the complete message read-only. No Retry or generic Learn More.
-Maximum 300 display code points including ellipsis; full diagnostic or message remains available. Escape/neutralize
-Markdown and command URI syntax in user/CLI/agent strings. Dismissal changes no lifecycle or operation result. No routine
-reminder or success popup is introduced, and no exactly-once error-popup guarantee is required.
+screen; a launch that failed on its CLI's configuration also offers Configure Agents, and ARCHITECTURE-4.3's
+missing-component notice offers Show Window Component, while Reload Window comes on a notice of its own once the
+component answers. A message to the person reads `{agent name}
+#aN: {first line of the message}` (`#aN: ...` for an empty name) and offers `Open Message`, which opens the complete
+message read-only, then `Show Agent`, which opens that agent's terminal. No Retry or generic Learn More. Maximum 300
+display code points including ellipsis; full diagnostic or message remains available. Escape/neutralize Markdown and
+command URI syntax in user/CLI/agent strings. Dismissal changes no lifecycle or operation result. No routine reminder or
+success popup is introduced, and no exactly-once error-popup guarantee is required.
 
 ### 1.3 Consistent wording
 
@@ -75,60 +78,67 @@ language's natural grammar while preserving placeholders, product names and the 
 | Text / secondary | `foreground` / `descriptionForeground` |
 | Hover | `list.hoverBackground` |
 | Selection | `list.activeSelectionBackground`, `list.activeSelectionForeground` even after panel loses focus |
-| Keyboard focus | 1 px `list.focusOutline` inside row; none on the card a context menu is open on (D175) |
-| Busy / problem dot | `charts.green` / `charts.red`; no dot for anything else (D183) |
+| Keyboard focus | 1 px `list.focusOutline` inside row, kept while a context menu is open; the card a menu is open on gets no other frame |
+| Busy / problem dot | `charts.green` / `charts.red`; no dot for anything else |
 | Status meaning and unknown evidence | RULES-3.2; second-line wording is PANEL-1.4 |
 | Controls | `button.*`, `input.*`, `inputValidation.*`, `scrollbarSlider.*` |
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
 | Corners/inset | 4 px rows/buttons, 2 px fields, 4 px list side inset |
 
-No contributed color palette. Custom avatars use a stable hash of the normalized CLI name to choose one of the editor's
-`charts` colors, paired with contrast-tested foreground/background; in high contrast use `foreground` on
-`sideBar.background` with `contrastBorder` if the chosen pair fails. Status colors are not reused as avatar meanings.
-High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never over keyboard focus. Do not
-fade high-contrast text. Other secondary selection text can use 80% opacity only if contrast remains adequate.
-Whole-pixel layout at supported zoom; preserve diacritics/descenders. Paragraphs wrap, card lines ellipsize with full
-accessible text.
+No contributed color palette. A custom CLI's avatar uses a stable hash of its normalized name to choose `charts.blue`,
+`charts.orange` or `charts.purple` as a 30% tint over `sideBar.background` behind `foreground`; in any theme where that
+pair has less than 4.5:1 contrast it falls back to a 12% tint, then to `sideBar.background` alone. Status colors are not
+reused as avatar meanings. High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never
+over keyboard focus. Do not fade high-contrast text. Other secondary selection text can use 80% opacity only if contrast
+remains adequate. Whole-pixel layout at supported zoom; preserve diacritics/descenders. Paragraphs wrap, card lines
+ellipsize with full accessible text.
 
 ### 2.2 Motion and responsive layout
 
 **Motion is brief, does not delay input, and disappears when reduced motion is requested.**
 
-Card insertion 180 ms and removal after a normal process exit 160 ms, `cubic-bezier(0.22,1,0.36,1)`; text fade 160 ms.
-No motion on first draw/filter change. Explicit close and confirmed location removal remove the card and terminal immediately, without
-animation. Dot and scrolling durations belong to PANEL. Long-running animation changes only opacity/transform. Follow
-both `workbench.reduceMotion` and system preference. Test 180, 260, 420 and 720 px view widths plus editor minimum; no
-overlap, horizontal overflow or hidden essential controls. Test zoom -1, 0, 2. Themes: Dark Modern, Light Modern, both
-High Contrast, and Solarized Light. A failed contrast/layout case is a defect, not an intended unsupported theme.
+Card insertion 180 ms and removal after a normal process exit 160 ms, `cubic-bezier(0.22,1,0.36,1)`; text changes in
+place. No motion on first draw/filter change. Explicit close and confirmed location removal remove the card and terminal
+immediately, without animation. Dot and scrolling durations belong to PANEL. Long-running animation changes only
+opacity/transform. The panel and a busy tab's spinner (LIFECYCLE-2.2) follow both `workbench.reduceMotion` and the
+system preference; as the extension host cannot read the system preference, the tab takes it from the panel's page, and
+under `auto` keeps one frame still until the page has reported that motion is allowed. Test 180, 260, 420 and 720 px
+view widths plus editor minimum; no overlap, horizontal overflow or hidden essential controls. Test zoom -1, 0, 2.
+Themes: Dark Modern, Light Modern, both High Contrast, and Solarized Light. A failed contrast/layout case is a defect,
+not an intended unsupported theme.
 
 ### 2.3 Keyboard and screen readers
 
 **The list follows familiar editor keyboard navigation and conveys every meaningful state without color or animation.**
 
 One roving Tab stop; Tab/Shift+Tab leave. Up/Down/Home/End/Page Up/Page Down move focus, scroll minimally into view.
-Typeahead combines characters within 750 ms and wraps to the next matching name. Enter/Space opens, F2 renames; native
-context-menu key opens the current card's menu. A click or right-click focuses without a keyboard outline, and the card a
-context menu is open on gets no frame (D175). Escape closes transient UI.
-Use semantic listbox/options, aria-selected and current state labels. No unbounded live-region chatter.
-No global shortcuts are preassigned; existing commands are bindable through normal Keyboard Shortcuts.
+Typeahead combines characters within 750 ms and wraps to the next matching name; a Space within that time continues the
+typeahead. Otherwise Enter/Space opens, F2 renames; native context-menu key opens the current card's menu. A click or
+right-click focuses without a keyboard outline, and the card a context menu is open on gets no other frame than its
+keyboard outline, unlike the editor's own lists (2.1). Escape closes transient UI. Use semantic listbox/options,
+aria-selected and current state labels. No unbounded live-region chatter. No global shortcuts are preassigned; existing
+commands are bindable through normal Keyboard Shortcuts.
 
 ### 2.4 Languages and times
 
 **All human-facing strings ship in English and eleven translated languages; the specification and API remain English.**
 
 Languages: `zh-cn`, `zh-tw`, `pt-br`, `es`, `ru`, `de`, `ja`, `fr`, `ko`, `tr`, `pl`. Use VS Code's language selection
-and English fallback. Facade Code, Facade, CLI, MCP and YOLO are not translated. Use Microsoft's established editor terms;
-Chinese uses `agent`, `工作树` / `工作樹`. Resume and message-history list times follow VS Code's short `fromNow` wording
-and rounding, with `ago` retained: `now` below 30 rounded seconds, then seconds, minutes, hours, days, weeks, months
-and years (D162). Use the editor's translated singular/plural phrases. Units change at 60 seconds, 60 minutes,
-24 hours, 7 days, 30 days and 365 days; round the selected unit as VS Code does. Do not replace elapsed days with
-calendar labels or automatically switch old history to dates. A future source timestamp is shown as a localized
-absolute time instead of an invented recent activity. Panel hover relative times use `Intl.RelativeTimeFormat`;
-full timestamps are localized in human details, UTC ISO strings in APIs/journals. Locale updates refresh text;
-API IDs/paths never change with locale.
-Translations cover settings, pickers, errors, menus, access labels and empty states in the same implementation change.
-Facade's own failure reasons - CLI configuration and worktree problems - reach the person in their language through one
-presentation shared by pickers, notifications and cards; logs and API text stay English.
+and English fallback. Facade Code, Facade, CLI, MCP and YOLO are not translated. Use Microsoft's established editor
+terms; Chinese keeps the English word `Agent`, capitalized in every string, and uses `工作树` / `工作樹`. Resume list times
+follow VS Code's short `fromNow` wording and rounding, with `ago` retained: `now` below 30 rounded seconds, then
+seconds, minutes, hours, days, weeks, months and years. Use the editor's translated singular/plural phrases. Units
+change at 60 seconds, 60 minutes, 24 hours, 7 days, 30 days and 365 days; round the selected unit as VS Code does. Do
+not replace elapsed days with calendar labels or automatically switch old history to dates. A future source timestamp is
+shown as a localized absolute time instead of an invented recent activity. Panel hover relative times use
+`Intl.RelativeTimeFormat`; full timestamps are localized in human details, UTC ISO strings in APIs/journals. Locale
+updates refresh text; API IDs/paths never change with locale. Translations cover settings, pickers, errors, menus,
+access labels and empty states in the same implementation change. Facade's own failure reasons - CLI configuration and
+worktree problems, another window owning the workspace, a working location gone or not in this window, no agent or
+message number, a window component too old, a conversation its CLI cannot pin, an installation an update or uninstall
+removed - reach the person in their language through one presentation shared by pickers, notifications and cards, never
+with an internal ID such as a location's; a system's, Git's or a CLI's own error keeps its own words. Logs and the text
+agents read stay English.
 
 ## 3 Commands
 
@@ -141,16 +151,16 @@ as menu-only. Arguments bypass a picker only
 when their schema fully identifies the target; invalid arguments fail without guessing. The table is the authoritative
 command inventory, not a second description of behavior.
 
-For Rename, Pin, Unpin and Close Agent, a palette invocation without an explicit target uses PANEL-2.1's
-current selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does
-not open a target picker. Rename still asks for the new name. Explicit arguments and card/tab context target that exact
-run and are validated against current state, without falling back to the selection.
+For Rename, Pin, Unpin and Close Agent, a palette invocation without an explicit target uses PANEL-2.1's current
+selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does not
+open a target picker. Rename still asks for the new name. Explicit arguments and the card menu target that exact run and
+are validated against current state, without falling back to the selection.
 
 | ID after `facade.` | Title | Availability / other surface | Owner |
 | --- | --- | --- | --- |
 | `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
 | `history` | Resume Agent... | Always; panel/empty state | LIFECYCLE-3.2 |
-| `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too (D182); card | LIFECYCLE-3.4 |
+| `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too; card | LIFECYCLE-3.4 |
 | `unpinAgent` | Unpin Agent | Pinned record; card | LIFECYCLE-3.4 |
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
@@ -162,29 +172,28 @@ run and are validated against current state, without falling back to the selecti
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
 
 PANEL-1.1 places the editor's own Add Folder to Workspace... command in the view menu; it is not another `facade.` command.
-Copy Agent Reference, Message History..., Clear Filter, Filter by This Location, Filter by This Folder and Copy Diagnostics
-are removed without aliases (D174): Go to Agent's item button still copies an agent's reference, the filter picker's first item
-and the filtered empty state's button clear a filter, and a message to the person opens from its notification.
-Refresh, New Agent Here, the former working-location rename/navigation/copy/terminal commands have no contributed entry or hidden compatibility alias. Facade Dots' `facade.agents.showLaunch` and
-`facade.agents.showLog` are not aliases of Show Agent Launch and Show Agents Log.
+This table and 3.2 list every command Facade contributes; there are no others and no aliases. Some actions are
+deliberately not commands: Go to Agent's item button copies an agent's reference (LIFECYCLE-2.3), the filter picker's
+first item and the filtered empty state's button clear a filter (PANEL-2.3, 1.2), and a message to the person opens from
+its notification (UX-1.2).
 
 ### 3.2 Context and internal commands
 
 **Context-only actions carry their actual target and never substitute the foreground agent.**
 
-Hidden from palette: `newWorktree` (view-menu creation), `moveUp`, `moveDown`,
-`filterOn` (the filled-icon alias of `filter`) and `revealAgent` (notification navigation)
-and `openMessage` (notification navigation to one message). The worktree command follows WORKTREES-4.3. Tab Rename/Copy
-entries are contributed only on editors/versions where public context can be resolved exactly; otherwise the
-card/palette remain available. No internal `$mid` terminal-context trick. There is no scripted-start command; UI and
-MCP use the same internal launch service. Retired `facade.nextAgent`, `facade.stopAgent` and `facade.startAgent`
-commands are not registered as hidden aliases.
+Hidden from palette: `newWorktree` (view-menu creation), `moveUp` (Move Up) and `moveDown` (Move Down) in the card menu,
+`filterOn` (the filled-icon form of `filter`, shown while a filter is active) and `revealAgent` (Show Agent,
+notification navigation). The worktree command follows WORKTREES-4.3. Facade contributes no terminal-tab context
+entries; the card menu and the palette's selected-agent actions cover renaming, pinning and closing, and no internal
+`$mid` terminal-context trick is used. There is no scripted-start command; UI and MCP use the same internal launch
+service.
 
 The two components exchange requests only through the uncontributed commands ARCHITECTURE-1.1 names: they validate
 every argument, appear in no palette or menu and are not a public API.
 
-Test commands `state`, `selectRow` (selects a card by run ID) and `probe` are registered only in test mode and excluded
-from production manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected`
+Test commands `state`, `selectRow` (selects a card by run ID), `probe`, `screen`, `testPaste`, `messageInput` and
+`diagnostics` (the diagnostics report, ARCHITECTURE-3.3) are registered only in test mode and excluded from production
+manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected`
 identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded`, `agentSelectedPinned`, `agentSelectedPinnable` and `filtered` reflect current state.
 
 ## 4 Settings
@@ -203,12 +212,15 @@ identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSel
 | `facade.<cli>.launch` | object; `{}` | machine in execution environment | CLIS-3 |
 | `facade.custom` | object; `{}` | machine in execution environment | CLIS-3.4 |
 
-`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. Settings sections in order: `Agents` (`facade.yolo`,
-`facade.collaboration.enabled`, `facade.collaboration.waitSeconds`), then one section per built-in CLI in CLIS-1.1
-order, then `Custom Agents` (`facade.custom`). Descriptions say what changes for the person, for example that agents can start, message and control other
-agents, and that a change applies to agents started afterwards. Read on use and apply live where RULES-4.4 allows. Do
-not add an “agent default CLI/model/worktree” setting. Local and remote values are clearly scoped in the editor. The
-window components' network has no settings; it shares the same OS-user desktop boundary.
+`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. Settings sections in order: `Agents`
+(`facade.yolo`, `facade.collaboration.enabled`, `facade.collaboration.waitSeconds`), then one section per built-in CLI
+in CLIS-1.1 order, then `Custom Agents` (`facade.custom`). Descriptions say what changes for the person, for example
+that agents can start, message and control other agents, and that a change applies to agents started afterwards. Read on
+use and apply live where RULES-4.4 allows. A value of the wrong type in `facade.yolo` refuses the launch with the
+reason, because the run's permissions depend on it; one in `facade.collaboration.enabled` starts agents without the
+Facade tools, and one in `facade.collaboration.waitSeconds` uses 120, each with the reason in the agents log. Do not add
+an “agent default CLI/model/worktree” setting. Local and remote values are clearly scoped in the editor. The window
+components' network has no settings; it shares the same OS-user desktop boundary.
 
 ### 4.2 Follow existing editor settings
 
@@ -216,13 +228,13 @@ window components' network has no settings; it shares the same OS-user desktop b
 
 | Editor setting | Owner/use |
 | --- | --- |
-| `terminal.integrated.confirmOnKill` | LIFECYCLE-3.1 close confirmation: `editor`/`always` ask, `never`/`panel` do not |
+| `terminal.integrated.confirmOnKill` | LIFECYCLE-3.1's question for live agents whose tabs close together with other tabs: `editor`/`always` ask, `never`/`panel` do not |
 | `terminal.integrated.env.osx/linux/windows`, configured default-profile env | CLIS-1.2 owns the shared discovery/launch environment; shell startup scripts are not evaluated |
-| Default terminal profile and shell | Ordinary Open Terminal Here terminals |
 | `git.path`, `git.branchPrefix` | WORKTREES executable and creation |
 | `git.worktreeIncludeFiles`, `git.worktreeSymlinkFolders` | WORKTREES setup where supported by editor version |
 | `git.detectWorktreesLimit` | Catalog pagination hint, never authorization or silent loss of locations |
 | `workbench.list.mouseWheelScrollSensitivity`, `fastScrollSensitivity`, `smoothScrolling`, `scrollByPage` | PANEL scrolling |
+| `workbench.experimental.modernUI` | PANEL-3.3 scrollbar appearance |
 | `window.zoomLevel`, `workbench.reduceMotion` | Layout/motion |
 
 Unsupported optional editor settings use the documented empty/default behavior and do not block plain-folder agent use.
@@ -246,10 +258,11 @@ settings objects strictly; an unknown key or wrong type produces the actual conf
 
 Panel state and update budgets follow PANEL-3.1. Card clicks select within one animation frame. Process supervisor
 liveness reconciliation may run every 2 s while runs exist; connection observations follow ARCHITECTURE-2; a timer never
-proves window closure. Metadata discovery follows WORKTREES/CLIS events. History reads happen only on picker/API request.
-Message checks occur only at RULES-1 attempt slots; no typing-timer loop. Long MCP calls can use native progress where
-supported, without a human popup. No idle polling when there are no open windows or active owned processes. Background
-output has bounded backpressure and no layout work per terminal byte. Record measured timings on release fixtures.
+proves window closure. Metadata discovery follows WORKTREES/CLIS events. History reads happen only on picker/API
+request. Message checks occur only at RULES-1 attempt slots; no typing-timer loop. An MCP call sends no progress
+notifications (MCP-1.3); it raises no human popup either. No idle polling when there are no open windows or active owned
+processes. Background output has bounded backpressure and no layout work per terminal byte. Record measured timings on
+release fixtures.
 
 ### 5.3 Visual acceptance
 
@@ -266,59 +279,7 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 | 1.1–1.3 | Native flows/cancel, no progress/success toasts, error wording/action target, message-to-person notification, plain words without internal terms, language and naming consistency |
 | 2.1–2.4 | Theme/width/zoom/motion/contrast, keyboard/screen reader, localization completeness |
 | 3.1–3.2 | Manifest/registration catalog, selected-run palette actions after focus leaves the agent terminal, exact context targeting, unavailable without a target, test commands absent in production |
-| 4.1–4.2 | Scope/default/type validation, future-only orchestration switch and timeout, live effects in local and remote windows |
+| 4.1–4.2 | Scope/default/type validation, future-only collaboration switch and wait setting, live effects in local and remote windows |
 | 5.1–5.3 | Localization/build audit, idle/update measurement and isolated visual evidence |
 
-Evidence: [Verification](engineering/VERIFICATION.md). All runtime results remain pending until recorded there.
-
-## Change log
-
-- 2026-11-02: 2.1 keeps the green busy and red problem dots alone (D183); 3.2's `agentSelectedResumable` is `agentSelectedPinnable` (D182).
-- 2026-11-02: 3.1 removes Copy Agent Reference, Message History..., Clear Filter and Copy Diagnostics, and 3.2 the card's
-  Filter by This Location and Filter by This Folder, at the owner's request (D174); 2.1 and 2.3 leave the card a context
-  menu is open on unframed (D175).
-
-- 2026-11-02: Owner accepted the copy-polish report independently of the screenshot IA proposals. Added the launch
-  inspection command's ellipsis and clarified concise, objective wording without imposing a dynamic-text length cap.
-
-- 2026-11-02: D162 aligns history-list relative times with VS Code's short localized wording and unit rounding.
-- 2026-11-01: Removed the tab-separator dependency after LIFECYCLE-2.2 changed editor tabs to icon plus name (D130).
-- 2026-11-01: 2.1 gives reliable idle its own neutral theme colour and reserves yellow for native blockers (D127).
-- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
-
-- 2026-10-31: 3.1 adds Copy Diagnostics (D116).
-- 2026-10-30: Step 2 of the Facade Code extension: 1.2 adds the notification for a message to the person; 1.3 adds the
-  owner's plain-language rule (D96); 3.1 adds Message History...; 3.2 adds message navigation and the components' private
-  commands; 4.1 adds `facade.collaboration.enabled` and `facade.collaboration.waitSeconds` to the Agents section (D95); 5.2 adds message
-  and history work budgets.
-- 2026-10-31: 2.1 gives custom CLIs their avatars' colors; 4.1 adds `facade.custom` in its own section, Custom Agents.
-
-- 2026-10-30: 3.1 adds Show Agent Launch (CLIS-4.1) and Show Agents Log (ARCHITECTURE-3.3), Command Palette
-  commands (D83); 4.1 adds each built-in's `.enabled` and `.launch`; 1.1 points long operation diagnostics to Show
-  Agents Log.
-
-- 2026-10-30: 3.1 adds Filter by Working Location... and Clear Filter (PANEL-2.3); 3.2 keeps the card's filters and
-  the filled-icon alias out of the palette and adds the `filtered` context key; 2.2 keeps a filter change still.
-
-- 2026-10-30: 4.1 adds the `.path` settings of Antigravity, Muse Code, OpenCode and Pi, each in its own section in
-  CLIS-1.1 order (D77).
-
-- 2026-10-30: 4.1 lists the step 1 settings for Claude Code and Codex, with `.enabled` and `.launch` in a later step;
-  3.2 removes two context keys nothing sets or uses.
-
-- 2026-10-30: Owner-approved: 4.2 follows `terminal.integrated.confirmOnKill` for LIFECYCLE-3.1's close confirmation;
-  2.4 sends Facade's own failure reasons through one translated presentation instead of English text from lower layers.
-
-- 2026-10-29: The owner clarifies that only the Command Palette entry is removed for New Worktree...; the view's
-  `…` menu and its existing standalone creation flow remain. This supersedes the removal of both entries below.
-
-- 2026-10-29: The owner removes standalone New Worktree... from the Command Palette and view menu. Git supplies
-  standalone worktree creation; New Agent's contextual worktree option remains under LIFECYCLE-1.3.
-
-- 2026-10-29: Applied the owner's IA-01 English entry review: Facade Code branding, the seven public command titles,
-  Configure Agents... and palette-only Go to Agent.... Removed retired commands from the active catalog; their removal
-  does not add replacement controls or change the settings schema. Other-language copy is outside this review.
-
-- 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots specification: the rules step 1
-  needs, each with its final number. Later steps add the others.
-  Category `Facade Code`; settings `facade.yolo` and `facade.claude.*`.
+Evidence: [Verification](engineering/VERIFICATION.md).

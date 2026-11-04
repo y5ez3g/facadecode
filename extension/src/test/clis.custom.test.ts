@@ -160,8 +160,15 @@ suite('CLIs: a custom CLI in the catalog, its discovery and its launch (CLIS-1.1
 		], [
 			['configuration_invalid', 'custom_resume_missing'],
 			['not_found', 'path_not_on_path'],
-			['not_found', 'No CLI "my-cli" is configured; the built-ins are claude, codex, agy, muse, opencode and pi; custom CLIs are configured in facade.custom, which has errors: facade.custom must be an object of custom CLIs by ID; received array'],
-			['not_found', 'No CLI "my-cli" is configured; the built-ins are claude, codex, agy, muse, opencode and pi, and custom CLIs are configured in facade.custom']
+			// Said to the person in their words (UX-2.4)
+			['not_found', 'cli_not_configured'],
+			['not_found', 'cli_not_configured']
+		]);
+		// The English an agent and the log are given names facade.custom's own errors, where it has any
+		const english = (custom: unknown) => { try { planLaunch(catalog(custom), input, destination); } catch (err) { return (err as Error).message; } return 'planned'; };
+		assert.deepStrictEqual([english(['my-cli']), english({})], [
+			'No CLI "my-cli" is configured; the built-ins are claude, codex, agy, muse, opencode and pi; custom CLIs are configured in facade.custom, which has errors: facade.custom must be an object of custom CLIs by ID; received array',
+			'No CLI "my-cli" is configured; the built-ins are claude, codex, agy, muse, opencode and pi, and custom CLIs are configured in facade.custom'
 		]);
 	});
 

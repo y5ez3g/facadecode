@@ -65,7 +65,7 @@ export interface CardPlace {
 
 /**
  * The workspace folder's name a location is said after (PANEL-1.3): in a multi-folder window, where same-named branches need it -
- * not where the location is named that folder's name already, as a plain folder is (D66).
+ * not where the location is named that folder's name already, as a plain folder is (PANEL-1.3).
  */
 export function folderPrefixOf(location: Pick<Location, 'label' | 'folders'>, catalog: Pick<Catalog, 'folders'>): string | undefined {
 	const folder = location.folders[0];
@@ -87,7 +87,7 @@ export interface CardStatus {
 }
 
 /**
- * What a card says of its run (RULES-3.2, PANEL-1.4, D183, D184): its dot by {@link dotOf}; its second line the last message sent
+ * What a card says of its run (RULES-3.2, PANEL-1.4): its dot by {@link dotOf}; its second line the last message sent
  * to it - before any, its CLI title's words, else its startup stage or state - unless the dot is red, when it says why, or the CLI
  * waits for the person, when it says what for. The state in words is the hover's. Never a completion claim.
  */
@@ -105,7 +105,7 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 		const said = detail && detail !== kind ? `${kind} · ${detail}` : kind;
 		return { dot, stateText: kind, line: said, ...detail && detail !== kind ? { reason: detail } : {} };
 	}
-	// Facade tools it cannot use, or a start that did not become ready: red, the second line saying why (D183)
+	// Facade tools it cannot use, or a start that did not become ready: red, the second line saying why (RULES-3.2)
 	if (dot === 'error') {
 		const why = facts.tools === 'unavailable' ? words.toolsUnavailable(facts.toolsProblem, facts.toolsFile)
 			: facts.tools === 'connecting' ? words.toolsConnecting : facts.activityReason?.trim() || words.activityUnavailable;
@@ -117,7 +117,7 @@ export function statusOf(facts: RunFacts, words: CardWords): CardStatus {
 	const stateText = working ? words.working : starting ? words.starting : idle ? words.notWorking : words.activityUnavailable;
 	const reason = !working && !starting && !idle ? facts.activityReason?.trim() : undefined;
 	// The last message sent to it - the task it was started with being the first - else its CLI's title without the state symbol
-	// before its words (D184)
+	// before its words (PANEL-1.4)
 	const conversation = facts.said || facts.promptLine || titleText(facts.title);
 	const fallback = working ? words.working : starting ? (facts.phase === 'creating_worktree' ? words.creatingWorktree : words.startingCli(facts.displayName)) : stateText;
 	return { dot, stateText, line: conversation || fallback, ...reason && reason !== stateText ? { reason } : {} };
@@ -136,11 +136,6 @@ function errorReasonOf(facts: RunFacts, words: CardWords): string {
 	}
 	const reason = facts.error?.reason.trim() || words.activityUnavailable;
 	return facts.error?.worktree ? words.worktreeFailure(reason, facts.error.worktree) : reason;
-}
-
-/** A run's reference, as a message names it (LIFECYCLE-2.1): `@name #aN`, the ID deciding. */
-export function referenceOf(facts: Pick<RunFacts, 'name' | 'alias'>): string {
-	return `@${facts.name} ${facts.alias}`;
 }
 
 /** The maker avatars of the built-in CLIs, by API ID, in `media/agents` (PANEL-1.3). */

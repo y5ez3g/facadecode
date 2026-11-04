@@ -85,6 +85,18 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 		assert.ok(!executed.includes(WINDOW_TERMINALS_COMMAND));
 	});
 
+	test('a window whose Facade could not start: each of its commands says why, as its notification does, never that the editor has no such command (ARCHITECTURE-4.3)', async () => {
+		const vscode = api();
+		const service = withModules({ vscode })<typeof import('../host/service')>(require.resolve('../host/service'));
+		const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '..', '..', 'package.json'), 'utf8')) as { contributes: { commands: { command: string }[] } };
+		const failure = new service.ActivationError('Could not restore agents for this window. Reload the window to try again.');
+		service.sayActivationFailed({ subscriptions: [] } as never, failure);
+		assert.deepStrictEqual(manifest.contributes.commands.map(each => each.command).filter(id => !commands.has(id)), [], 'every contributed command answers');
+		await vscode.commands.executeCommand('facade.newAgent');
+		await vscode.commands.executeCommand('facade.showActiveAgents');
+		assert.deepStrictEqual(shown, Array(3).fill({ text: failure.message, items: ['Reload Window'] }));
+	});
+
 	test('a missing window component uses its installation wait and missing-component explanation, without inventing an identity', async () => {
 		const vscode = api();
 		let missing = 0;

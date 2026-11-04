@@ -9,13 +9,13 @@ import { isEqualPath, isInsideFolder, realFolderOf } from '../../base/files';
 import { conversationId } from '../../core/ports';
 import type { Catalog, ConversationDiscoveryPort, ConversationEntry, ConversationKey, ConversationPager, HumanPort, Location, LocationPort, RunId } from '../../core/ports';
 import { locationLabel } from '../cardView';
-import { ago, cliDisplayName, cliIcon, plainText } from '../presentation';
+import { ago, cliDisplayName, cliIcon, plainText, reasonOf } from '../presentation';
 import { BACK, Flow } from './stepping';
 import { matchesCliSearch } from './search';
 
 export interface ResumeDeps {
 	readonly conversations: ConversationDiscoveryPort;
-	/** Existing Facade name only; browsing a history never assigns one (D161). */
+	/** Existing Facade name only; browsing a history never assigns one (LIFECYCLE-2.3). */
 	readonly savedName: (key: ConversationKey) => string | undefined;
 	readonly locations: Pick<LocationPort, 'snapshot'>;
 	/**
@@ -23,7 +23,7 @@ export interface ResumeDeps {
 	 * picker shows at once, busy, meanwhile (UX-1.1); a failure ends it and is said.
 	 */
 	readonly prepared?: Promise<unknown>;
-	/** Whether a run holds the conversation now, here or in another window: one already running is not offered again (D69). */
+	/** Whether a run holds the conversation now, here or in another window: one already running is not offered again (LIFECYCLE-3.2). */
 	readonly running: (key: ConversationKey) => boolean;
 	/** `agents.resume(entry, { reveal: true })`: a new run, or the run already holding that conversation (LIFECYCLE-3.2, 3.3). */
 	readonly resume: (entry: ConversationEntry) => RunId | { readonly running: RunId | 'elsewhere' };
@@ -86,7 +86,7 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	let reading: Promise<void> | undefined;
 	const places = new Map<string, string>();
 	const placeIn = (cwd: string) => places.get(cwd) ?? places.set(cwd, placeOf(cwd, reals, catalog)).get(cwd)!;
-	// One line (D161): title first, then when, where and its saved name. Equal name/title fields remain independent.
+	// One line (LIFECYCLE-2.3): title first, then when, where and its saved name. Equal name/title fields remain independent.
 	const itemOf = (entry: ConversationEntry): Item => {
 		const item: Item = {
 			label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled conversation")),
@@ -119,7 +119,7 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 				}
 				for (const entry of batch.entries) {
 					const id = conversationId(entry.key);
-					// One that cannot be resumed now - its folder gone, its CLI off or not installed (D64) - or already runs is not offered (D69)
+					// One that cannot be resumed now - its folder gone, its CLI off or not installed (LIFECYCLE-3.2) - or already runs is not offered (LIFECYCLE-3.2)
 					if (!seen.has(id) && entry.unavailable === undefined && !deps.running(entry.key)) {
 						seen.add(id);
 						names.set(id, deps.savedName(entry.key)?.trim());
@@ -209,7 +209,7 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 					}
 					result = deps.resume(entry);
 				} catch (err) {
-					deps.notifyError(vscode.l10n.t("Could not resume {0}: {1}", title, messageOf(err)), {});
+					deps.notifyError(vscode.l10n.t("Could not resume {0}: {1}", title, reasonOf(err)), {});
 					resolve();
 					return;
 				}

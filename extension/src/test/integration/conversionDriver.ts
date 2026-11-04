@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The conversion journey's driver, an extension beside Facade Code in an editor that runs no extension tests: the editor refuses
-// to enter a workspace in a test run, which is the journey (ARCHITECTURE-2.2, D70). In the folder window it checks Pin and Unpin
+// to enter a workspace in a test run, which is the journey (ARCHITECTURE-2.2). In the folder window it checks Pin and Unpin
 // across real reloads, then adds a folder. The editor restarts the extensions, this one with them, which then says what Facade
 // shows. Each step is a line of FACADE_IT_CONVERSION for the runner to judge; setup runs only on the first activation.
 
@@ -13,7 +13,7 @@ import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
 
 /**
- * A tab title without the spinner's frame a busy agent's tab shows before its name (D185). This driver is copied alone into the
+ * A tab title without the spinner's frame a busy agent's tab shows before its name (LIFECYCLE-2.2). This driver is copied alone into the
  * test window's extensions, so it imports nothing of the extension's at run time.
  */
 const unspun = (title: string) => title.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /u, '');
@@ -61,7 +61,7 @@ async function until<T>(what: string, probe: () => Promise<T | undefined>, ms = 
 
 /**
  * Whether a saved Pin of this window's workspaces restores `session`: a Pin made before its CLI named its conversation takes it once
- * the window hears it (LIFECYCLE-3.4, D182), and a window closed before that restores a new conversation instead.
+ * the window hears it (LIFECYCLE-3.4), and a window closed before that restores a new conversation instead.
  */
 function pinHolds(session: string): boolean {
 	const root = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
@@ -141,7 +141,7 @@ export async function activate(): Promise<void> {
 					return typeof id === 'string' && id ? id : undefined;
 				} catch { return undefined; }
 			}, NATIVE ? 60_000 : 20_000);
-			// Pin is offered before the CLI names its conversation (D182): its record takes the session once the window hears it
+			// Pin is offered before the CLI names its conversation (LIFECYCLE-3.4): its record takes the session once the window hears it
 			await until('the Pin to take the session', async () => pinHolds(session) || undefined, NATIVE ? 60_000 : 20_000);
 			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session });
 			// Reload tears down this host, which may cancel its command promise after the window accepted the request.

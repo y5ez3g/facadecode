@@ -15,6 +15,9 @@ import * as runModule from '../ptyd/run';
 import { eachLine, finish, IDLE, program, programEnv, ptydPlace } from './ptydPlace';
 import { withModules } from './withModules';
 
+/** A socket no earlier ptyd listens on, standing for the window's own (ARCHITECTURE-2.4). */
+const OWN_SOCKET = path.join(os.tmpdir(), 'facade-test-own-ptyd.sock');
+
 /** Whether a process `pid` still exists. */
 function alive(pid: number): boolean {
 	try {
@@ -143,11 +146,11 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		let connections = 0;
 		(earlier as unknown as { readonly server: net.Server }).server.on('connection', () => connections++);
 		const said: string[] = [];
-		const lost: number[] = [];
+		const lost: string[] = [];
 		// Whether the window is closing a run through it
 		let busy = false;
-		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: line => said.push(line), lost: each => lost.push(each), ownerLost: () => assert.fail('No newer activation took the workspace.'), busy: () => busy });
-		const other = new EarlierPtyds(home, { owner: 'w2', generation: 1, token: 'other' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: line => said.push(line), lost: each => lost.push(each), ownerLost: () => assert.fail('No newer activation took the workspace.'), busy: () => busy });
+		const other = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w2', generation: 1, token: 'other' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
 		try {
 			// The window before the update starts a run there, and goes as it reloads into this build
 			const before = (await PtydClient.join(earlierSocket, protocol))!;
@@ -157,20 +160,20 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			before.dispose();
 			await until('ptyd to wait for its owner', () => waits.size === 1);
 			// Another workspace's window finds none of its runs there, and does not ask again
-			await assert.rejects(other.client(protocol), PtydGone);
+			await assert.rejects(other.client(earlierSocket), PtydGone);
 			const asked = connections;
 			await other.find();
-			await assert.rejects(other.client(protocol), PtydGone);
+			await assert.rejects(other.client(earlierSocket), PtydGone);
 			assert.strictEqual(connections, asked);
 			// The reloaded window joins it in its protocol and claims the run there, once, asked again on a reconnect
 			await hold.find();
 			await hold.find();
 			assert.strictEqual(waits.size, 0, 'no wait is left to end it five minutes later');
 			assert.ok(alive(pid));
-			assert.deepStrictEqual(hold.clients.map(([each]) => each), [protocol]);
-			assert.deepStrictEqual(said, [`1 agents an earlier Facade Code started are in a ptyd of protocol ${protocol}: this window shows them and keeps them running until it closes.`]);
+			assert.deepStrictEqual(hold.clients.map(([each]) => each), [earlierSocket]);
+			assert.deepStrictEqual(said, [`1 agents an earlier Facade Code started are in the ptyd ${path.basename(earlierSocket)} (protocol ${protocol}): this window shows them and keeps them running until it closes, and starts none there.`]);
 			// And operates it there: its screen, what is typed, what it answers
-			const client = await hold.client(protocol);
+			const client = await hold.client(earlierSocket);
 			const events = eventsOf(client, 'run-kept');
 			const { screen } = await client.request('attach', { run: 'run-kept' });
 			assert.ok(screen.includes('ready'), screen);
@@ -191,14 +194,14 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			assert.deepStrictEqual([said.length, hold.clients.length], [1, 1], 'not let go with a close under way');
 			busy = false;
 			await hold.check();
-			assert.strictEqual(said[1], `The agents an earlier Facade Code started in a ptyd of protocol ${protocol} have ended: this window lets that ptyd go.`);
+			assert.strictEqual(said[1], `The agents an earlier Facade Code started in the ptyd ${path.basename(earlierSocket)} (protocol ${protocol}) have ended: this window lets that ptyd go.`);
 			assert.deepStrictEqual([hold.clients, lost], [[], []], 'letting it go is no loss');
 			await until('ptyd to wait for its owner again', () => waits.size === 1);
 			// Let go, it is not asked again: nothing puts off its idle exit
 			const released = connections;
 			await hold.find();
 			await hold.check();
-			await assert.rejects(hold.client(protocol), PtydGone);
+			await assert.rejects(hold.client(earlierSocket), PtydGone);
 			assert.strictEqual(connections, released);
 		} finally {
 			hold.dispose();
@@ -216,20 +219,20 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const earlierSocket = ptydSocketPath(home, protocol);
 		const earlier = new PtydServer(earlierSocket, () => undefined, undefined, protocol);
 		assert.strictEqual(await earlier.listen(), true);
-		const lost: number[] = [];
-		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: each => lost.push(each), ownerLost: () => undefined });
+		const lost: string[] = [];
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: each => lost.push(each), ownerLost: () => undefined });
 		const odd = new PtydServer(ptydSocketPath(home, protocol), () => undefined);
 		try {
 			const before = (await PtydClient.join(earlierSocket, protocol))!;
 			await before.request('claim', { owner: 'w1', generation: 1, token: 'before' });
 			await spawn(before, 'run-taken', IDLE);
 			before.dispose();
-			await hold.client(protocol);
+			await hold.client(earlierSocket);
 			// Its ptyd goes - it ended, or was ended - and the window hears so
 			earlier.close();
 			await until('the loss told', () => lost.length === 1);
-			assert.deepStrictEqual(lost, [protocol]);
-			await assert.rejects(hold.client(protocol), PtydGone);
+			assert.deepStrictEqual(lost, [earlierSocket]);
+			await assert.rejects(hold.client(earlierSocket), PtydGone);
 			// A ptyd of this build's protocol on that socket - none would listen there - is not joined as the earlier one
 			assert.strictEqual(await odd.listen(), true);
 			await assert.rejects(PtydClient.join(earlierSocket, protocol), new RegExp(`for protocol ${protocol} speaks protocol ${PTYD_PROTOCOL}: this window does not join it`));
@@ -242,6 +245,44 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	test('the tool calls of a run a ptyd of an earlier protocol holds reach the window that joined it, which answers them: none waits without end (ARCHITECTURE-2.4, MCP-6.1)', async function () {
+		this.timeout(20_000);
+		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-home-'));
+		const protocol = EARLIER_PROTOCOLS[EARLIER_PROTOCOLS.length - 1];
+		const earlierSocket = ptydSocketPath(home, protocol);
+		const earlier = new PtydServer(earlierSocket, () => undefined, undefined, protocol);
+		assert.strictEqual(await earlier.listen(), true);
+		const refused = { text: 'protocol_incompatible', structured: { status: 'failure', error: { code: 'UNAVAILABLE', reason: 'protocol_incompatible' }, effects: { outcome: 'none' } }, isError: true };
+		const heard: unknown[] = [];
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined,
+			connected: client => client.onCall(event => { heard.push(event.call); void client.request('answer', { id: event.id, answer: refused }); }) });
+		let shim: net.Socket | undefined;
+		try {
+			const before = (await PtydClient.join(earlierSocket, protocol))!;
+			await before.request('claim', { owner: 'w1', generation: 1, token: 'before' });
+			await spawn(before, 'run-kept', IDLE);
+			before.dispose();
+			// The reloaded window shows the run through that ptyd, which makes it the run's window there
+			await (await hold.client(earlierSocket)).request('attach', { run: 'run-kept' });
+			// The run's shim, as the build before the update made it, calls a tool
+			const connection = shim = net.connect(earlierSocket);
+			await new Promise(resolve => connection.once('connect', resolve));
+			const answers: { id: number; result?: unknown; error?: string }[] = [];
+			connection.setEncoding('utf8');
+			connection.on('data', lineReader(line => answers.push(JSON.parse(line)), err => { throw err; }));
+			connection.write(`${JSON.stringify({ id: 1, method: 'hello', params: { protocol, role: 'shim', run: 'run-kept' } })}\n`);
+			connection.write(`${JSON.stringify({ id: 2, method: 'call', params: { protocol: 2, caller: 'run-kept', tool: 'send_message', arguments: { to: '#a1', text: 'hi' }, callId: 'c-1', elapsedMs: 0 } })}\n`);
+			const answered = await until('the call answered', () => answers.find(each => each.id === 2));
+			assert.deepStrictEqual([heard.length, (heard[0] as { callId?: string }).callId, answered.result], [1, 'c-1', refused]);
+		} finally {
+			shim?.destroy();
+			await hold.client(earlierSocket).then(client => client.request('terminate', { run: 'run-kept', graceMs: 50 })).catch(() => undefined);
+			hold.dispose();
+			earlier.close();
+			fs.rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test('a ptyd of an earlier protocol that takes a connection and answers nothing is not taken for gone - its runs would be told ended - but asked again, each time in bounded time (ARCHITECTURE-2.4)', async function () {
 		this.timeout(20_000);
 		const home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-home-'));
@@ -250,13 +291,13 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const taken: net.Socket[] = [];
 		const silent = net.createServer(connection => { taken.push(connection); connection.on('data', () => undefined); });
 		await new Promise<void>(resolve => silent.listen(socket, resolve));
-		const hold = new EarlierPtyds(home, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
+		const hold = new EarlierPtyds(home, OWN_SOCKET, { owner: 'w1', generation: 2, token: 'after' }, { log: () => undefined, lost: () => undefined, ownerLost: () => undefined });
 		try {
 			const started = Date.now();
-			await assert.rejects(hold.client(protocol), PtydNotSent);
+			await assert.rejects(hold.client(socket), PtydNotSent);
 			assert.ok(Date.now() - started < 8_000, `answered in ${Date.now() - started} ms`);
 			const asked = taken.length;
-			await assert.rejects(hold.client(protocol), PtydNotSent);
+			await assert.rejects(hold.client(socket), PtydNotSent);
 			assert.ok(taken.length > asked, 'asked again');
 		} finally {
 			hold.dispose();
@@ -474,8 +515,8 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	});
 
 	// Twenty starts asked within seconds on Windows held ptyd for all their program creations at once - 0.2-1 s each - and the wait of
-	// the last for its program ran out behind the others: "did not start within 10 seconds" (D146)
-	test('programs are created in turn: a run\'s once the one asked before it has its own, the run there meanwhile - listed, its conversation running, its details, size and input kept - and none created once it was closed (D146)', async () => {
+	// the last for its program ran out behind the others: "did not start within 10 seconds" (ARCHITECTURE-2.3)
+	test('programs are created in turn: a run\'s once the one asked before it has its own, the run there meanwhile - listed, its conversation running, its details, size and input kept - and none created once it was closed (ARCHITECTURE-2.3)', async () => {
 		const events: string[] = [];
 		const consoles: { readonly cols: number; readonly rows: number; written: string }[] = [];
 		// Consoles whose programs start when the test lets them, as node-pty's do on Windows once their output is connected
@@ -609,7 +650,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		]);
 	});
 
-	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3, D80)', async function () {
+	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3)', async function () {
 		this.timeout(10_000);
 		const client = await connect();
 		const input = `── Voice input (Alt+V to start) ${'─'.repeat(30)}\r\n❯\r\n${'─'.repeat(60)}\r\n  muse-spark-1.3 · minimal · /work`;
@@ -669,6 +710,66 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('claimable snapshot is also unknown', async () => (await client.request('list', { owner: 'w1' })).find(run => run.run === 'screen-reset')?.status?.state === 'pending');
 		await send('w');
 		await until('a fresh screen recovers after reset', () => latest()?.state === 'working');
+	});
+
+	test('Codex completion and follow-up status reach events, list and reattach while its background process remains alive (CLIS-2.3)', async function () {
+		this.timeout(15_000);
+		const client = await connect();
+		const events = eventsOf(client, 'codex-background');
+		const captures: { label: string; lines: string[]; dimLines: number[] }[] = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../src/test/fixtures/screens/codex/0.166.0-background.json'), 'utf8'));
+		const frame = (label: string) => {
+			const capture = captures.find(each => each.label === label)!;
+			return '\x1b[2J\x1b[H' + capture.lines.map((line, index) => capture.dimLines.includes(index) ? `\x1b[2m${line}\x1b[22m` : line).join('\r\n');
+		};
+		const native = (body: string) => `\x1b]7501;${body}\x1b\\`;
+		const frames = {
+			i: frame('background-completed'), w: frame('follow-up-working'), t: frame('follow-up-streaming'),
+			s: '\x1b[?2026h' + frame('follow-up-working'), e: '\x1b[?2026l',
+			b: native('state=blocked:kind=permission') + frame('background-completed'),
+			f: native('state=error') + frame('background-completed'),
+			c: native('state=clear') + frame('background-completed'),
+			n: native('state=working') + frame('follow-up-working'),
+			r: '\x1bc' + frame('background-completed')
+		};
+		const pidFile = path.join(socketDir, 'background.pid');
+		const source = `process.stdin.setRawMode(true);
+		const child = require('child_process').spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+		require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(child.pid));
+		process.on('exit', () => child.kill());
+		const frames = ${JSON.stringify(frames)};
+		process.stdout.write(frames.n);
+		process.stdin.on('data', chunk => { for (const command of chunk.toString()) { process.stdout.write(frames[command] || ''); } });
+		setInterval(() => {}, 1000);`;
+		await spawn(client, 'codex-background', source, { cols: 120, rows: 40, screenStatus: 'codex-0.166' });
+		const latest = () => events.flatMap(event => event.event === 'status' && event.status ? [event.status] : []).at(-1);
+		const send = (data: string) => client.request('input', { run: 'codex-background', data });
+		await until('native working', () => latest()?.state === 'working');
+		await send('i');
+		await until('completed turn', () => latest()?.state === 'idle');
+		const firstCompletion = latest()!.at;
+		const backgroundPid = Number(fs.readFileSync(pidFile, 'utf8'));
+		assert.ok(alive(backgroundPid), 'the background process did not end with the interactive turn');
+		await send('s');
+		await new Promise(resolve => setTimeout(resolve, 250));
+		assert.strictEqual(latest()!.at, firstCompletion, 'a partial synchronized update is not a status observation');
+		await send('e');
+		await until('follow-up working without another native report', () => latest()?.state === 'working');
+		await send('t');
+		await new Promise(resolve => setTimeout(resolve, 250));
+		assert.strictEqual(latest()?.state, 'working', 'streaming has a background-only footer but no new completed-turn summary');
+		await send('i');
+		await until('next completion', () => latest()?.state === 'idle' && latest()!.at > firstCompletion);
+		for (const [command, expected] of [['b', 'blocked'], ['f', 'error'], ['c', 'pending'], ['n', 'working'], ['r', 'pending'], ['n', 'working'], ['i', 'idle']]) {
+			await send(command);
+			await until(`native precedence: ${command}`, () => latest()?.state === expected);
+		}
+		assert.ok(alive(backgroundPid));
+		const expected = latest();
+		client.dispose();
+		const recovered = await connect();
+		assert.deepStrictEqual((await recovered.request('list', { owner: 'w1' })).find(run => run.run === 'codex-background')?.status, expected);
+		assert.deepStrictEqual((await recovered.request('attach', { run: 'codex-background' })).info.status, expected);
+		await recovered.request('terminate', { run: 'codex-background', graceMs: 100 });
 	});
 
 	test('a window that does not take its output pauses the run once the output waiting for it passes the bound, and lets it go on once it is gone (ARCHITECTURE-2.4)', async function () {

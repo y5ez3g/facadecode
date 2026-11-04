@@ -297,7 +297,7 @@ export async function whyNotBranchName(git: string, folder: string, branch: stri
 }
 
 /**
- * Whether the worktree at `folder` holds anything not committed (D73): what `git status --porcelain` lists - a change or an
+ * Whether the worktree at `folder` holds anything not committed (LIFECYCLE-1.3): what `git status --porcelain` lists - a change or an
  * untracked file, whatever `status.showUntrackedFiles` says, and changes in submodules too, as `git worktree remove` checks - and a
  * file Git is told to assume unchanged or to skip whose content is not what its index holds, which `git status` does not show.
  */
@@ -392,7 +392,7 @@ export async function folderLinkIn(folder: string): Promise<string | undefined> 
 
 /**
  * Removes the linked worktree at `worktree` from the repository whose shared Git directory is `commonDir`: `git worktree remove`
- * without `--force`, so Git itself refuses one with changes, a locked one and the main worktree (WORKTREES-3.2, D73). Its branch
+ * without `--force`, so Git itself refuses one with changes, a locked one and the main worktree (WORKTREES-3.2). Its branch
  * is kept. Rejects with a `GitError` carrying Git's own words.
  */
 export async function removeWorktree(git: string, commonDir: string, worktree: string): Promise<void> {

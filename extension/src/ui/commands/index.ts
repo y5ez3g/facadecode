@@ -44,6 +44,8 @@ export interface UiDeps {
 	readonly window?: string;
 	/** The window's remote authority, as the local window component sees it: how its environment is named (LIFECYCLE-1.1). */
 	readonly remote?: string;
+	/** The system's reduced-motion preference, as the panel's page says it, which the extension host cannot read (LIFECYCLE-2.2). */
+	readonly motion?: (reduced: boolean) => void;
 }
 
 /** The words a card is said in, in the window's language (PANEL-1.4). */
@@ -165,7 +167,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				return undefined;
 		}
 	};
-	const view = new PanelView(deps.extensionUri, model, act, deps.log);
+	const view = new PanelView(deps.extensionUri, model, act, deps.log, deps.motion);
 	return [
 		model,
 		view,

@@ -1,7 +1,6 @@
 # Shared rules
 
 [Product](PRODUCT.md) sets scope. This document owns the meanings used by every feature and integration.
-The owner recalibrated these contracts on 2026-10-28. They are implementation targets, not runtime certification.
 
 | Group | Decides |
 | --- | --- |
@@ -21,10 +20,12 @@ There are no recipient arrays or aggregate sends. A caller sending to several ag
 Resolve the target once under 2.3; keep that target and message ID through internal attempts. An optional reply-to ID
 expresses a relationship, not a promise of a reply. Names and conversation IDs are not substitutes for the resolved run.
 A caller may give a send its own request ID: the same one again from that caller within an hour answers the message it
-sent, as it stands, and sends nothing again (D110). Each new send invocation without one gets a new message ID; internal
-attempts for an accepted message retain its ID. Message IDs, including their displayed aliases, are unique across the client
-network and never reassigned, including after reopening or history expiry. This uses ordinary ID allocation; a request ID is kept on its
-message record, not in a separate deduplication ledger. Report invalid content or an unavailable target before writing.
+sent, as it stands, and sends nothing again. Each new send invocation without one gets a new message ID; internal
+attempts for an accepted message retain its ID. Message IDs, including their displayed aliases, are unique across the
+client network and never reassigned, including after reopening or history expiry: a window that cannot take a number
+from the client network's counter refuses the send rather than give a number twice (ARCHITECTURE-1.1). A request ID is
+kept on its message record, not in a separate deduplication ledger. Report invalid content or an unavailable target
+before writing.
 
 ### 1.2 The first response has three outcomes
 
@@ -37,9 +38,10 @@ message record, not in a separate deduplication ledger. Report invalid content o
 | Accepted | Finite delivery continues; return the message ID and deadline, then report its outcome to the sender. |
 
 The two seconds start when the complete request reaches the Facade MCP shim or equivalent direct ingress. Internal
-forwarding, including forwarding to another window, consumes the same allowance; do not restart it at each hop. Return
-earlier when the result is known. An `accepted` response is not delivery, a model read or completed work. B's answer is
-a separate ordinary message.
+forwarding, including forwarding to another window, consumes the same allowance; do not restart it at each hop. A send
+to another window's agent gives that window what remains of the two seconds less half a second, kept for the answer's
+way back. Return earlier when the result is known. An `accepted` response is not delivery, a model read or completed
+work. B's answer is a separate ordinary message.
 
 ### 1.3 Delivery means the recipient has the complete message
 
@@ -67,7 +69,7 @@ Human notification handoff is defined separately in COLLABORATION-2.3.
 | Another draft present | Leave it untouched; wait for it to go (1.5). |
 | Menu, login, permission interaction or unusable input box | Do not type a message into it; wait for it to close (1.5). |
 | Draft/input state unknown, including an input box the reader does not recognize | Treat as unavailable, without guessing an empty input. |
-| Run still starting, its input reader not yet known | Treat as an unknown input at each slot; once its launch shows its CLI has no reader, fail at once (D132). |
+| Run still starting, its input reader not yet known | Treat as an unknown input at each slot; once its launch shows its CLI has no reader, fail at once. |
 | CLI without an input reader | Fail at once as a permanent obstacle; nothing is typed. |
 | Run ended or explicitly closed | Fail; do not restart it. |
 
@@ -86,38 +88,38 @@ protection.
 | Initial response | At most 2 seconds from Facade ingress |
 | Attempts per stage | At stage start, then every 3 seconds |
 | Deadline per stage | 15 seconds from that stage's start |
-| Input held by another draft or a native menu or question | The deadline moves on while it holds, to at most 10 minutes from the stage's start (D106) |
+| Input held by another draft or a native menu or question | Once held, the stage's deadline is 10 minutes from its start, whatever the input shows after |
 | Permanent obstacle | Finish immediately; do not wait out unused slots |
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
 or environments consume the same budget. No extra attempts on input-change events, indefinite retries, or bursts to catch
-missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for. Competitive
-analysis informed this behavior: Facade never submits the person's text with the message (D106). At the
+missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for, so that the
+person can finish typing or answering: Facade never submits the person's text with the message. At the
 deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage
 whose input was never held ends at fifteen seconds; once held, its deadline is ten minutes from its start, whatever the
 input shows after. A long paste adds the time it takes, at CLIS-2.1's paste rates, to each of its stage's deadlines, so
 that its Enter is never cut off by its own size; a part of a message's text in the input, which no wait makes its own, is
-not waited for (D118). An input still unavailable then means failure; delivery is not a promise to overcome a permanently
+not waited for. An input still unavailable then means failure; delivery is not a promise to overcome a permanently
 unavailable target. A read through read_messages delivers the message immediately and cancels any paste that has not
 begun. If text is already being written or remains as this message's own complete draft, the existing stage may finish
 its Enter within its original budget. It never types the text again, submits an edited draft or delays the read's result.
 Result handoff starts its own budget once the original result is known; a result joins others typed in one paste only
 while a whole stage's time is still before them, or when it comes within 50 ms of them - results of sends that ended
-together - the paste then keeping the newest one's whole stage; never a paste a read has already delivered (1.7, D118,
-D132). Window-close handling is 1.9 and does not extend a deadline.
+together - the paste then keeping the newest one's whole stage; never a paste a read has already delivered (1.7).
+Window-close handling is 1.9 and does not extend a deadline.
 
 ### 1.6 A message is typed at most once
 
 **Once a message's text went into the input whole, later attempts never type it again; they press Enter only over the message's own draft.**
 
-A submission the CLI takes slowly is not lost: competitive analysis identified duplicate delivery when a prompt is
-typed again before the CLI has processed it (D104). A later attempt of the same delivery reads the input: the message's
+A submission the CLI takes slowly is not lost, and typing a prompt again before the CLI has processed it would deliver it
+twice. A later attempt of the same delivery reads the input: the message's
 own draft alone - its text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
 this delivery confirms the submission; anything else is waited for under 1.4 and 1.5. A paste that never showed in the
 input is not typed again either: a CLI busy with its turn draws it late, and its own draft then gets Enter. A paste whose
 answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. Once a paste
 showed as its CLI's placeholder, a later Enter goes only over that same placeholder, its paste number included, as a
-person's later paste of the same size draws another (D118). Never press Enter over a draft that is not the message's own: a
+person's later paste of the same size draws another. Never press Enter over a draft that is not the message's own: a
 person's text is never submitted, nor appended to, nor erased. Report partial or uncertain effects honestly at the
 deadline: text without a confirmed submission is not delivery. A confirmed submission ends that stage. Internal effect
 records may help explain what happened; they are not caller request keys or a reconciliation API. No automatic content
@@ -130,16 +132,15 @@ instruction. Facade does not add an exactly-once execution or platform deduplica
 
 **Give an operation's result to its sender; an undeliverable system result ends quietly.**
 
-A returned immediate final result needs no second notification. An accepted asynchronous send gives A a clearly
-labeled Facade result with the original message ID, target and outcome - delivered, including delivery through
-read_messages, or not delivered - using the finite result budget if needed. The result is not authored by B and
-requests no response. Results that come for one terminal while none of them is typed yet go in one paste, one turn of its
-model for them all, following competitive analysis of batching completed-task results; a result read meanwhile is left out
-of it (D115). Failure to return it never resends the original message. A message whose result already said
-it was not delivered and that its recipient reads later becomes delivered without a second result.
-If A is gone or result delivery fails, finish the handoff; do not generate another error for B or a human popup.
-If B actually chooses to reply, B is that new send's caller: a closed A produces an error to B. If no agent can receive
-that error, drop the undeliverable report. There is no chain of receipts about receipts.
+A returned immediate final result needs no second notification. An accepted asynchronous send gives A a clearly labeled
+Facade result with the original message ID, target and outcome - delivered, including delivery through read_messages, or
+not delivered - using the finite result budget if needed. The result is not authored by B and requests no response.
+Results for one terminal that join under 1.5's condition go in one paste, one turn of its model for them all; a result
+read meanwhile is left out of it. Failure to return it never resends the original message. A message whose result
+already said it was not delivered and that its recipient reads later becomes delivered without a second result. If A is
+gone or result delivery fails, finish the handoff; do not generate another error for B or a human popup. If B actually
+chooses to reply, B is that new send's caller: a closed A produces an error to B. If no agent can receive that error,
+drop the undeliverable report. There is no chain of receipts about receipts.
 
 ### 1.8 When Facade notifies the person
 
@@ -157,14 +158,15 @@ that error, drop the undeliverable report. There is no chain of receipts about r
 
 A retained red card is not permission to duplicate an agent's operation error as a human popup. Do not automatically
 escalate because an agent has ended, remained idle or failed to respond. The agent's prompt/skill decides when it wants
-to contact a person. One fact does go to an agent: an agent another agent of the same window started, whose CLI has waited
-twenty seconds on its own permission, question or sign-in, is reported to that creator once each time it starts waiting, as
-a Facade result naming who can answer - the person's permission and sign-in are theirs (D109). Competitive analysis
-highlighted how a child waiting on an unseen question can stall its creator's work. A person is
-never told by it. The notice reports the blocker without asking its creator to contact the person, forward the notice or
-escalate it. Whether an agent contacts the person follows the person's task instructions, not this automatic notice.
-Permission and sign-in remain the person's to authorize or perform; reporting the blocker grants no authority to answer it.
-Each window shows only its own relevant notifications; no fallback to another window.
+to contact a person. One fact does go to an agent: an agent another agent of the same window started, whose CLI has
+waited twenty seconds on its own permission, question or sign-in, is reported to that creator - while the creator still
+runs, never a creator in another window or one that ended - once each time it starts waiting, as a Facade result naming
+who can answer - the person's permission and sign-in are theirs - because a child waiting on an unseen question can
+stall its creator's work. A person is never told by it. The notice reports the blocker without asking its creator to
+contact the person, forward the notice or escalate it. Whether an agent contacts the person follows the person's task
+instructions, not this automatic notice. Permission and sign-in remain the person's to authorize or perform; reporting
+the blocker grants no authority to answer it. Each window shows only its own relevant notifications; no fallback to
+another window.
 
 ### 1.9 Window closure and pending messages
 
@@ -180,7 +182,8 @@ deadline still apply; an expired operation does not get a fresh budget. A delive
 goes on once the window shows its recipient again, within its original deadline: a text that may already be in the
 input is never pasted again, and only its own draft gets Enter (1.6). One whose recipient is not shown yet waits for a
 later restoration within that deadline; one whose recipient ended, or whose deadline passed, ends, and its sender is
-told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries (D132, D138). A newly started agent receives only messages
+told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries. A newly
+started agent receives only messages
 addressed to its new run. Closing every window naturally ends the remaining volatile delivery work.
 No notification or message is scheduled for replay on the next opening.
 
@@ -190,7 +193,8 @@ No notification or message is scheduled for replay on the next opening.
 
 An ordinary message is one full paste plus Enter, not one Enter per line. Direct text/keys use the same serialization.
 While another delivery's text may still be in that input - written, neither confirmed nor ended - no message is pasted
-into it: that input is held for it, as by a draft (D118). Waiting in that sequence does not renew deadlines. Stop is independent of pending input and prevents further queued
+into it: that input is held for it, as by a draft. Waiting in that sequence does not renew deadlines. Stop is
+independent of pending input and prevents further queued
 input for the closed run. Use a simple bounded implementation; no agent workflow or general-purpose scheduler is added.
 
 ## 2 Identity and locations
@@ -217,6 +221,7 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | Conversation key | Execution environment, CLI and exact vendor session ID |
 | Pin | Saved intent to restore an exact conversation |
 | Agent/run ID | One accepted launch, unique across the client network and never reassigned |
+| Agent alias `#aN` | The run's short reference, numbered by the client network's counter: never given twice, also across an update from an earlier build |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
 
 Keep the same run ID through startup, rename and reattachment of the same process. A fresh start or Resume has a new run ID.
@@ -227,12 +232,17 @@ issuance or anti-impersonation system is required.
 
 **Use an exact ID, or a name that identifies one eligible agent; an ambiguous name requires an ID.**
 
-Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. Once
-resolved, the operation stays with that run through rename. An optional display name accompanying an ID is descriptive;
-the ID decides the target. A missing or ended ID is an error, not a request to find another same-named agent.
-`#human` is the person's reference and never names an agent. Because `human` is an allowed agent name
-(LIFECYCLE-2.1), `@human` names the person only when no agent in the caller's reach is named `human`; otherwise it is
-ambiguous like any other repeated name, and `#human` or the agent's ID decides.
+Names can repeat. Resolve within the caller's normal reach under 4.3 and return ambiguity instead of guessing. An exact
+ID of an agent in the caller's window needs no other window; a name is resolved among the agents of every window, so a
+name used in two windows is ambiguous as it is in one. While a window cannot be listed, a reference that is not the
+exact ID of a listed agent fails as unavailable rather than resolving among the windows that answered. Once resolved,
+the operation stays with that run through rename. An optional display name accompanying an ID is descriptive; the ID
+decides the target. A missing or ended ID is an error, not a request to find another same-named agent. `#human` is the
+person's reference and never names an agent. Because `human` is an allowed agent name (LIFECYCLE-2.1), `@human` names
+the person only when no agent in the caller's reach, in any window, is named `human`; otherwise it is ambiguous like any
+other repeated name, and `#human` or the agent's ID decides. While a window cannot be checked, `@human` fails as
+unavailable and `#human` still names the person. `human` without `@` is read as `@human`, and `human` and `#human` match
+whatever their case; any other name without `@` resolves as `@name` does.
 
 ### 2.4 Locations preserve the opened folder and execution authority
 
@@ -240,9 +250,9 @@ ambiguous like any other repeated name, and `#human` or the agent's ID decides.
 
 A plain folder is sufficient. Preserve the opened path for display and defaults; compare path components and canonical
 paths in the owning environment. Nested folders use the matching workspace association; related worktrees can be outside
-the folder. A successful Git read can discover worktrees made by any tool. Removing a workspace folder or actually
-deleting a worktree closes the agents belonging to that removed location. A failed Git read or temporary remote
-disconnect is not proof of deletion.
+the folder. A successful Git read can discover worktrees made by any tool. Removing a workspace folder, actually
+deleting a worktree, or finding a remembered Resume folder gone (WORKTREES-3.3) closes the agents belonging to that
+removed location. A failed Git read or temporary remote disconnect is not proof of deletion.
 
 ## 3 State and feedback
 
@@ -252,7 +262,7 @@ disconnect is not proof of deletion.
 
 | Axis | Values |
 | --- | --- |
-| Internal lifecycle | starting, running, stopping, ended |
+| Internal lifecycle | starting, running, ended; a close's process cleanup is a background operation, not a state |
 | Reachability | connected or disconnected, with last observation time |
 | Activity | working, not working, unknown |
 | Tool connection | connecting, available, unavailable or not injected |
@@ -260,8 +270,8 @@ disconnect is not proof of deletion.
 | Retained error | reason and source when known |
 
 A live process can lack its Facade tools. A working CLI can accept a message. An idle CLI can contain a draft. An
-unknown activity report does not prove unusable input. Internal cleanup may be stopping, but explicit close removes UI
-immediately. A stale observation is labeled as such rather than treated as proof of exit.
+unknown activity report does not prove unusable input. Process cleanup may still be under way, but explicit close
+removes UI immediately. A stale observation is labeled as such rather than treated as proof of exit.
 
 State observation time comes from the execution environment's current state episode, not the query or view refresh.
 Repeated reports, title-only changes and reload preserve that source time. It is neither a heartbeat nor task duration;
@@ -273,15 +283,20 @@ missing source time stays absent. Lost execution connections mark retained activ
 
 Green and breathing while the agent is busy: starting - until its CLI first shows its activity and its injected Facade
 tools connect, within CLIS-2.3's bound - or working. Red where something is wrong: a failed launch, an abnormal exit, a
-lost connection to its process, an error its CLI reported, Facade tools it cannot use - injected tools that failed or went
-away - or a start not ready within its bound. Red comes before green; a native permission, answer or sign-in question
-waiting for the person shows no dot whatever else holds, as the second line says it (PANEL-1.4). Idle, a reported blocker
-without a recognized kind and unknown activity show no dot either; the hover and accessible label say which (D183). A
-blocker stays a blocker, never idle; idle still requires reliable evidence. Work that stops is shown so a second later, as
-a CLI between two steps does not blink; a blocker or a problem is shown at once.
-A quiet screen or an unrecognized working indicator does not prove idle. Screen evidence is invalidated by a full reset
-or an unrecognized completed layout; incomplete synchronized drawing supplies no new observation. A turn ending removes the dot without a notification or a task-completion claim. Recovery clears only the
-corresponding error. Reduced motion removes breathing, never the accessible state description.
+lost connection to its process, an error its CLI reported, Facade tools it cannot use - injected tools that failed or
+went away - or a start not ready within its bound. Red comes before green. A native permission, answer or sign-in
+question waiting for the person shows no dot even where its Facade tools are unusable or its start was not ready in
+time, as the second line says what it waits for (PANEL-1.4); an error or an ended run stays red. Idle, a reported
+blocker without a recognized kind and unknown activity show no dot either; the hover and accessible label say which. A
+blocker stays a blocker, never idle; idle still requires reliable evidence. Work that stops is shown so a second later,
+as a CLI between two steps does not blink; a blocker or a problem is shown at once. A quiet screen or an unrecognized
+working indicator does not prove idle. Screen evidence is invalidated by a full reset or an unrecognized completed
+layout; incomplete synchronized drawing supplies no new observation. A turn ending removes the dot without a
+notification or a task-completion claim. Recovery clears only the corresponding error. Reduced motion removes breathing,
+never the accessible state description. Activity describes the agent's interactive turn: a command left running after
+that turn, such as a development server, does not by itself keep the agent working. A tested adapter may tell that case
+apart from a CLI's broader process report under CLIS-2.3. Available input, a quiet terminal and an earlier answer alone
+never prove idle.
 
 ### 3.3 Exit classification is independent of who caused it
 
@@ -309,37 +324,44 @@ transition.
 
 **A window owns its agents; creation relationships do not couple process lifetimes.**
 
-Closing a creator leaves its children running in their own windows. Closing a window ends all its runs and removes
-their UI, preserving Pin intent. No public editor signal tells a close from a reload, so a window's runs end five minutes after its extension
-host disconnects from the execution supervisor, unless a reloaded or reopened window of the same workspace claims them
-first (D75). A reload or a temporary remote disconnect - during which the remote extension host stays connected -
-retains/reconnects the original runs without launching duplicates. Explicit agent closure immediately removes card and
-terminal and Unpins; process cleanup happens in the background, using termination when needed. No fixed UI wait or Stopping card
-is required. Actual termination and uncertain remote cleanup remain distinct facts in the operation record. The
-five-minute timer is cleanup policy, not proof that a person closed the window: no other timer ends a process, and true
-close detection remains a platform proof obligation.
+Closing a creator leaves its children running in their own windows. Closing a window ends all its runs and removes their
+UI, preserving Pin intent. No public editor signal tells a close from a reload, so a window's runs end five minutes
+after its extension host disconnects from the execution supervisor, unless a reloaded or reopened window of the same
+workspace claims them first. A reload or a temporary remote disconnect - during which the remote extension host stays
+connected - retains/reconnects the original runs without launching duplicates. Explicit agent closure immediately
+removes card and terminal and Unpins; process cleanup happens in the background, using termination when needed. A close
+whose Unpin cannot be saved keeps the agent and tells its initiator. No fixed UI wait or Stopping card is required.
+Actual termination and uncertain remote cleanup remain distinct facts in the operation record. The five-minute timer is
+cleanup policy, not proof that a person closed the window: no other timer ends a process. Telling a close from a reload
+is a platform limitation; VERIFICATION G2 verifies this policy.
 
-Until a person closes it or it ends normally, every agent a window started stays shown: its card in the window's panel and
-its terminal in the editor, across a reload, an extension host restart, an update and a lost connection alike. Where Facade
-cannot reach its process or tell its state, the card is red and says why (3.2); Facade never leaves it out (D86). A window
-whose own identity record is gone or damaged cannot tell its agents from another window's (ARCHITECTURE-2.2) and is the
-exception.
+Until a person closes it, it ends normally or its location is removed (2.4), every agent a window started stays shown:
+its card in the window's panel and its terminal in the editor, across a reload, an extension host restart, an update and
+a lost connection alike; an agent started before an update keeps working through the execution supervisor that holds it
+(ARCHITECTURE-2.4). Where Facade cannot reach an agent's process, the card is red and says why (3.2); unknown activity
+alone shows no dot. Facade never leaves the agent out. The one exception is a window that cannot know its own identity,
+so cannot tell its agents from another window's: one whose identity record is damaged, where Facade does not start
+(ARCHITECTURE-2.2), and one without its window component, which is what reads that identity - it shows and starts no
+agents, and its running ones go on for the five minutes above, so that installing the component and reloading in time
+shows them again (ARCHITECTURE-4.3). A window that another window of the same workspace took over shows none of its
+agents; that other window shows them.
 
 ### 4.2 Restoration preserves intent, not an old process
 
 **Resume and Pin restore the exact conversation, original location in a new run.**
 
-Pin stores the conversation key - none yet for an agent pinned before its CLI named one (LIFECYCLE-3.4, D182) - original
+Pin stores the conversation key - none yet for an agent pinned before its CLI named one (LIFECYCLE-3.4) - original
 location, name and order. Keep the conversation/location
 association for non-pinned Facade conversations too; short-lived message cleanup must not erase it. No copied account
 credentials. Use current CLI startup configuration and 4.3's YOLO rule for the new run. The CLI restores its native model/effort unless current launch arguments override it; Facade does not maintain a second saved model/effort configuration to restore.
 Existing processes keep their actual plan.
 
 Explicit agent close, normal exit or actual location removal Unpins. Abnormal exit and whole-window close preserve Pin.
-Unpin alone does not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation.
-Restore in the background once after reattachment on opening; retained failures prevent retries on reload; retain failures without a restart loop.
-If the exact conversation already runs in Facade, later windows skip launching it. Human UX stays local.
-Facade does not inspect or block an external application's writer; vendor resume errors are returned as actual errors.
+Unpin alone does not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation. Each activation
+restores in the background, after reattachment, the Pins no run holds, so a reload restarts none that still run or were
+retained as failures; a failure is retained without a restart loop. If the exact conversation already runs in Facade,
+later windows skip launching it. Human UX stays local. Facade does not inspect or block an external application's
+writer; vendor resume errors are returned as actual errors.
 
 ### 4.3 Reach is client-wide and permissions remain explicit
 
@@ -356,8 +378,9 @@ is no API choice of YOLO.
 Window/location/CLI discovery includes valid startup destinations even with no agents. A new child there joins its
 creator's tree; tree membership alone grants no access to unrelated agents there. Each run's own YOLO still decides
 its reach. Tool-specific limits still apply: read_messages is only the caller's inbox even in YOLO. Enable the CLI's
-own sandbox in non-YOLO when supported; its own commands and edits keep its normal approvals, while calls to Facade's
-own tools do not ask for approval in either mode (CLIS-2.2). Facade's tree rules are normal operating policy, not
+own sandbox in non-YOLO when supported; its own commands and edits keep its normal approvals. Calls to Facade's own
+tools are approved in advance in either mode wherever the CLI can approve one server's tools; Muse Code cannot, so with
+YOLO off its own approvals apply to them too (CLIS-2.2). Facade's tree rules are normal operating policy, not
 authentication or a defense against deliberately spoofed IDs. Do not add credentials, scoped delegation or a new
 security service.
 
@@ -395,7 +418,7 @@ under 2.4.
 
 ### 5.3 Durable records have explicit retention and owners
 
-**Keep simple bounded runtime records and thirty-day Facade message history; vendor conversations are not deleted.**
+**Keep simple bounded runtime records and thirty-day Facade message records; vendor conversations are not deleted.**
 
 The window components own routing; execution owners keep process/input facts; workspace storage keeps preferences; CLI
 stores own their conversations. No durable caller-key deduplication ledger or notification handover ledger is needed.
@@ -414,48 +437,4 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |
 
-[Verification](engineering/VERIFICATION.md) owns actual evidence; writing these rules does not certify runtime behavior.
-
-## Change log
-
-- 2026-11-02: 3.2 keeps two dots: green while an agent starts or works, red for a problem - an error, Facade tools it cannot
-  use or a start not ready within its bound - and none otherwise; startup waits for the tools, and work that stops shows so a
-  second later (D183).
-- 2026-11-02: 4.2 lets a Pin wait for its conversation's key, where its agent was pinned before its CLI named one (D182).
-- 2026-11-02: Retain blockers with unknown kinds and invalidate lost screen evidence without guessing idle (D164).
-
-- 2026-11-01: D149 preserves unconfirmed native prompt acceptance as explicit uncertainty, without starting a new delivery stage.
-
-- 2026-11-01: From the owner-requested release review: 1.4 tries a starting run's input as unknown; 1.5 joins results
-  that come together into one paste; 1.9 continues a reloaded window's deliveries within their deadlines (D132).
-- 2026-11-01: Describe competitive-analysis findings without naming individual products; behavior is unchanged.
-- 2026-11-01: 3.2 separates reliable idle from native blockers: grey idle, yellow permission/answer/sign-in, with green work and red error/unknown retained (D127).
-- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
-
-- 2026-10-31: The owner's clarification of 1.8: automatic blocker notices never direct an agent to contact the person.
-- 2026-10-31: The MCP correctness review keeps read delivery immediate while an already pasted owned draft finishes;
-  5.1 follows D110's request IDs, including concurrent retries and completed runs (D119).
-- 2026-10-31: 1.5 gives a long paste its time and a joining result its whole budget; 1.6 never retypes a paste that did not
-  show and presses Enter only over the placeholder it showed as; 1.10 never pastes with another delivery's text (D118).
-- 2026-10-31: 1.7 types the Facade results waiting for one terminal in one paste (D115).
-- 2026-10-31: 1.1 lets a caller give a send its own request ID (D110).
-- 2026-10-31: 1.8 reports a started agent's wait on its CLI's own question to its creator, an agent (D109).
-- 2026-10-31: 1.6 types a message at most once and presses Enter only over its own draft (D104); 1.4 and 1.5 wait up to
-  ten minutes for an input another draft or a native question holds (D106); 1.3 confirms a submission at a later attempt.
-- 2026-10-30: Step 2 of the Facade Code extension: added the Facade Dots message rules 1.1–1.7 and 1.9–1.10, the client
-  network (2.1), references (2.3), tool and input facts (3.1), client-wide reach (4.3), the MCP switch (4.4) and message
-  retention (5.3), with the owner's decisions of that day: one delivery state, in which read_messages delivers (1.3, 1.7,
-  D88); every CLI version attempted, with unrecognized input boxes left untouched (1.4, D89); Facade's tools without
-  approval prompts (4.3, D90); `#human` for the person (2.3, D91); results for success and failure (1.7, D92). 4.1 keeps
-  the five-minute policy (D75) and adds that creators do not end their children.
-- 2026-10-31: 4.1 keeps every agent a window started shown, red where Facade cannot reach it or tell its state (D86).
-- 2026-10-30: 4.4 refers to CLIS-1.1's `.enabled`, now part of the extension.
-
-- 2026-10-30: 3.2's startup lasts until the CLI first shows its activity, within CLIS-2.3's bound (D81).
-
-- 2026-10-30: 4.1 states the owner's five-minute policy (D75) after a window's extension host disconnects, replacing the
-  prohibition on timed cleanup; 4.4 notes that the disable setting joins in a later step.
-
-- 2026-10-29: 5.2 allows WORKTREES-3.2's confirmed deletion of a clean linked worktree (D73).
-- 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots specification: the rules step 1
-  needs, each with its final number. Later steps add the others.
+[Verification](engineering/VERIFICATION.md) owns actual evidence.

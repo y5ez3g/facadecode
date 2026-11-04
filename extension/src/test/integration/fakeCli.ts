@@ -12,7 +12,7 @@
 // its MCP panel opens, by `/mcp`, or its first turn - and runs each `<record>.mcp-script.<agent>` that appears, in turn, writing
 // every answer to `<record>.mcp.<agent>` as a JSON line; `$name` strings take values earlier answers saved under that name, and
 // `until` repeats a step until its answer holds a text. With FACADE_IT_SCREEN=muse it is Muse Code as it runs on Windows: it
-// reports nothing, and ptyd reads its status from its screen (CLIS-2.3, D80). `<record>.quirks.<agent>`, while there, has it take
+// reports nothing, and ptyd reads its status from its screen (CLIS-2.3). `<record>.quirks.<agent>`, while there, has it take
 // Enter as a slow or busy CLI does - missing so many Enters, or taking a submission only so long after its Enter - or draw a
 // screen no reader recognizes (RULES-1.6).
 
@@ -75,7 +75,7 @@ function appendTranscript(text: string): void {
 	lines.push(...text.split('\n').map((line, index) => as === 'muse' ? `${index === 0 ? '❯ ' : '  '}${line}` : line));
 }
 let draft = '';
-/** Where the paste in its draft starts: what was typed before it stays as typed, as a lead does (D108). */
+/** Where the paste in its draft starts: what was typed before it stays as typed, as a lead does (COLLABORATION-2.1). */
 let pastedFrom: number | undefined;
 
 // A native prompt: after `--`, or OpenCode's `--prompt`
@@ -338,7 +338,7 @@ function start(): void {
 	// Bracketed paste on, as Claude Code turns it on: a paste comes whole, its line breaks no Enter
 	process.stdout.write('\x1b[?2004h');
 	draw();
-	// Muse Code as it runs on Windows takes no part in the Program Status Protocol: its screen is read instead (CLIS-2.3, D80)
+	// Muse Code as it runs on Windows takes no part in the Program Status Protocol: its screen is read instead (CLIS-2.3)
 	if (process.env.FACADE_IT_SCREEN !== 'muse') {
 		process.stdout.write(`${ESC}]7501;?${ST}`);
 	}

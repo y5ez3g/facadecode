@@ -6,6 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import type * as vscode from 'vscode';
+import { FacadeError, OWNERSHIP_LOST } from '../core/errors';
 import { KeptWorkspaceState, NotOwnedError } from '../host/workspaceState';
 import { tempDir } from './util';
 
@@ -20,7 +21,7 @@ function editorState(values: { readonly [key: string]: unknown } = {}): vscode.M
 	};
 }
 
-suite('Host: the window\'s workspace state, kept beside its agents too (ARCHITECTURE-2.2, D70)', () => {
+suite('Host: the window\'s workspace state, kept beside its agents too (ARCHITECTURE-2.2)', () => {
 	let temp: ReturnType<typeof tempDir>;
 	let file: string;
 
@@ -40,6 +41,12 @@ suite('Host: the window\'s workspace state, kept beside its agents too (ARCHITEC
 		assert.throws(() => state.keep('facade.pins', [{ id: 'pin-1' }]), NotOwnedError);
 		assert.deepStrictEqual([state.get('facade.panel.order'), state.get('facade.pins'), editor.get('facade.panel.order'), JSON.parse(fs.readFileSync(file, 'utf8'))],
 			[['b', 'a'], undefined, ['b', 'a'], { 'facade.panel.order': ['b', 'a'] }]);
+	});
+
+	test('UX-2.4: another window\'s ownership refuses a write as Facade\'s own reason, said to the person in their words', () => {
+		const refused = new NotOwnedError();
+		assert.ok(refused instanceof FacadeError);
+		assert.deepStrictEqual([refused.code, refused.reason, refused.said, refused.message], ['INVALID', 'ownership_lost', OWNERSHIP_LOST, 'Another window owns this workspace.']);
 	});
 
 	test('changes that come together are one write, read as they are at once; a synchronous keep writes those waiting with it', async () => {

@@ -13,17 +13,18 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 13;
+export const PTYD_PROTOCOL = 14;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
  * through those ptyds, and starts none there (ARCHITECTURE-2.4). None is ever dropped. 8, of 0.0.1, is 9 without `spawn`'s
  * `screenStatus`; 9 lacks 10's exact-conversation listing and duplicate-spawn protection. 10 lacks 11's screen style ranges and stable final-screen time.
  * 11 lacks 12's screen-evidence invalidation, logical-line status reading and complete record replacement.
- * 12 lacks 13's Windows Unicode input and draft handling; its backend may belong to a removed installation (D191, D192).
+ * 12 lacks 13's Windows Unicode input and draft handling; its backend may belong to a removed installation (CLIS-2.1, ARCHITECTURE-2.4).
+ * 13 lacks 14's Codex completed-turn correction (CLIS-2.3).
  * New runs go to none of these.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13];
 
 import type { ScreenStyle } from '../base/screenStyle';
 import type { OwnerClaim } from '../base/ownership';
@@ -50,8 +51,8 @@ export interface SpawnParams {
 	/** What the window keeps of the agent with its run, to show it again after a reload. Plain JSON. */
 	readonly meta: { readonly [key: string]: unknown };
 	/**
-	 * The screen reader that reads the run's status from its screen while its program reports nothing (CLIS-2.3, D80), by its ID
-	 * in `screenStatus.ts`; none for a program that is read by its reports alone. An ID this ptyd knows no reader by reads nothing.
+	 * The adapter's tested status layout, by its ID in `screenStatus.ts`: a fallback before reports, or the version-scoped
+	 * Codex correction of aggregate working (CLIS-2.3). An unknown ID reads nothing.
 	 */
 	readonly screenStatus?: string;
 }
@@ -168,7 +169,7 @@ export interface Requests {
 	 * The protocol each side speaks: a window of another protocol reports the difference and ends nothing (ARCHITECTURE-2.4). A
 	 * run's shim says it is one, and for which run; ptyd refuses a shim of another protocol and closes its connection.
 	 */
-	hello: { params: { readonly protocol: number; readonly role?: 'window' | 'shim'; readonly run?: string }; result: { readonly protocol: number; readonly pid: number } };
+	hello: { params: { readonly protocol: number; readonly role?: 'window' | 'shim'; readonly run?: string }; result: { readonly protocol: number; readonly pid: number; readonly build?: string } };
 	/** Takes the workspace once, or resumes this activation. Older activations cannot claim it again. */
 	claim: { params: OwnerClaim; result: void };
 	/** Starts a run, claimed by this connection. */
@@ -190,9 +191,9 @@ export interface Requests {
 	read: { params: { readonly run: string; readonly lines: number }; result: ScreenRead };
 	/**
 	 * Pastes `text` - bracketed where the program turned that mode on - or presses Enter where asked, in turn with other automated
-	 * input: never both in one request, an Enter going in one of its own once the CLI can have read the text (MCP-5.2, D113); a ptyd
+	 * input: never both in one request, an Enter going in one of its own once the CLI can have read the text (MCP-5.2); a ptyd
 	 * of protocol 9 still took both. `lead`, where given, is typed before the paste in the same write: words of the person's own ahead
-	 * of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1, D108). A ptyd from
+	 * of pasted material, for a CLI whose model takes a paste alone as material rather than a request (CLIS-2.1). A ptyd from
 	 * before it takes no lead and pastes the text alone.
 	 */
 	type: { params: { readonly run: string; readonly text: string; readonly enter: boolean; readonly lead?: string }; result: InputEffect };
@@ -244,7 +245,11 @@ export interface Request<M extends Method = Method> {
  */
 export type Response =
 	| { readonly id: number; readonly result: unknown }
-	| { readonly id: number; readonly error: string; readonly reason?: CallRefusal; readonly effects?: 'none' | 'unknown' };
+	| {
+		readonly id: number; readonly error: string; readonly reason?: CallRefusal; readonly effects?: 'none' | 'unknown';
+		/** Where a start was refused as ptyd's installation was removed: what of it is gone (ARCHITECTURE-2.4). */
+		readonly gone?: string;
+	};
 
 export interface OwnerEvent {
 	readonly event: 'ownerLost';

@@ -170,7 +170,7 @@ suite('The agent panel in Chromium', function () {
 		]);
 	});
 
-	test('J05: green work breathes and a red error is still; idle, a blocker and unknown activity show no dot, each named in its card\'s hover (RULES-3.2, D183)', async () => {
+	test('J05: green work breathes and a red error is still; idle, a blocker and unknown activity show no dot, each named in its card\'s hover (RULES-3.2)', async () => {
 		await evaluate(`document.documentElement.style.cssText = '--vscode-charts-green:#00ff00;--vscode-descriptionForeground:#888888;--vscode-charts-yellow:#ffff00;--vscode-charts-red:#ff0000;--vscode-sideBar-background:#202020';`);
 		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'none', stateText: 'Idle' }), newCard(3, { dot: 'none', stateText: 'Needs permission', line: 'Needs permission · Run tests?' }), newCard(4, { dot: 'none', stateText: 'Activity unavailable', line: 'Activity unavailable · This CLI reports no activity' }), newCard(5, { dot: 'error', stateText: 'Error: Exited with code 2' })]`);
 		await deliver({ type: 'state', state: { revision: 2, loading: false, cards, cardCount: 5, capabilities: { remote: false } } });
@@ -272,7 +272,7 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(said, ['polite', 'Agent 1: Idle. Agent 2: Error: Exited with code 2', 'Agent 1: Idle. Agent 2: Error: Exited with code 2']);
 	});
 
-	test('PANEL-1.3, D128: short names and locations lend their spare width; long folder/worktree labels keep both ends separately', async () => {
+	test('PANEL-1.3: short names and locations lend their spare width; long folder/worktree labels keep both ends separately', async () => {
 		const seen = await evaluate(`(async () => {
 			document.body.style.width = '300px';
 			agents = [
@@ -335,7 +335,7 @@ suite('The agent panel in Chromium', function () {
 			{ name: '', folder: '👩🏽‍💻Café-工作目录-👨‍👩‍👧‍👦', tree: 'feature/42-开发-👩🏽‍💻-Café-👨‍👩‍👧‍👦' },
 			{ name: 'Ada', tree: 'feature/128-a-location-without-a-folder-prefix' },
 			{ name: 'Ada', folder: 'api', tree: 'main' },
-			// A long name cut before its Pin, in Latin and CJK letters: the Pin follows its ellipsis as closely as a whole name (D176)
+			// A long name cut before its Pin, in Latin and CJK letters: the Pin follows its ellipsis as closely as a whole name (PANEL-1.3)
 			{ name: 'facadecode 扩展面板状态与卡片布局', folder: 'facadecode', tree: 'feature/78-mcp-polish' },
 			{ name: 'Refactor the authentication middleware for sessions', tree: 'main' }
 		];
@@ -354,7 +354,7 @@ suite('The agent panel in Chromium', function () {
 				})()`);
 				for (const row of rows) {
 					const context = `${font}, ${width}px: ${JSON.stringify(row)}`;
-					// The name is cut to what it shows, never overflowing a box the browser would ellipsize short of its end (D176)
+					// The name is cut to what it shows, never overflowing a box the browser would ellipsize short of its end (PANEL-1.3)
 					assert.ok(Math.abs(row.pinGap - 4) <= 0.1 && row.nameFits && row.textGap >= 3.9 && row.textGap <= 5.1 && row.locationGap >= 5.9, context);
 					assert.ok(row.beforeDot >= -0.1 && row.beforeDot <= 1.1, context);
 					assert.ok(row.afterDot >= -0.1 && row.afterDot <= 1.1, context);
@@ -431,7 +431,7 @@ suite('The agent panel in Chromium', function () {
 					assert.ok(result.rows.every((row: { gap: number; over: number; folder: string; separator: string; tree: string; hidden: boolean }) => row.gap >= 5.5 && row.over <= 1 && row.folder && row.tree && row.separator === ' · ' && !row.hidden), context);
 					assert.strictEqual(result.overflow, false, context);
 					assert.deepStrictEqual(result.errors, [], context);
-					// Work green and an error red, apart; idle and a blocker without a dot (D183)
+					// Work green and an error red, apart; idle and a blocker without a dot (RULES-3.2)
 					assert.deepStrictEqual([result.colours[1], result.colours[2], new Set([result.colours[0], result.colours[3], 'none']).size], ['none', 'none', 3], context);
 					if (capture && zoom === 0 && (width === 260 || width === 420)) {
 						const shot = await call('Page.captureScreenshot', { format: 'png' });
@@ -472,6 +472,30 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(seen, [['card', 'dot'], true]);
 	});
 
+	test('PANEL-1.3: a pinned card\'s Pin is under the pointer with its own tooltip, the rest of the card still the card or its dot, and a click on the Pin opens the card', async () => {
+		const seen = await evaluate(`(async () => {
+			agents = [newCard(1, { pinned: true }), newCard(2)];
+			redraw({ revision: 2 });
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			const card = document.querySelector('.agent'), dot = card.querySelector('.dot'), pin = card.querySelector('.pin');
+			const box = card.getBoundingClientRect(), under = new Set();
+			for (let y = box.top + 1; y < box.bottom - 1; y += 2) {
+				for (let x = box.left + 5; x < box.right - 5; x += 2) {
+					const at = document.elementFromPoint(x, y);
+					under.add(at === card ? 'card' : at === dot ? 'dot' : at === pin ? 'pin' : at.className || at.tagName);
+				}
+			}
+			const mark = pin.getBoundingClientRect();
+			window.posted = [];
+			return { under: [...under].sort(), own: pin.title !== '' && pin.title !== card.title, x: mark.left + mark.width / 2, y: mark.top + mark.height / 2 };
+		})()`);
+		for (const type of ['mousePressed', 'mouseReleased']) {
+			await call('Input.dispatchMouseEvent', { type, x: seen.x, y: seen.y, button: 'left', clickCount: 1 });
+		}
+		const opened = await evaluate(`window.posted.filter(message => message.type === 'act').map(message => [message.what, message.target])`);
+		assert.deepStrictEqual([seen.under, seen.own, opened], [['card', 'dot', 'pin'], true, [['open', 'run-1']]]);
+	});
+
 	test('PANEL-2.2: outside a card there is no menu at all - the webview\'s default Cut/Copy/Paste included - below the last card too', async () => {
 		// The context VS Code's webview gives a right click: each marked element's from the one clicked up, the nearest winning
 		const contextAt = `(element => { let context = {}; for (let at = element; (at = at && at.closest('[data-vscode-context]')); at = at.parentElement) { context = { ...JSON.parse(at.dataset.vscodeContext), ...context }; } return context; })`;
@@ -487,7 +511,7 @@ suite('The agent panel in Chromium', function () {
 		]);
 	});
 
-	test('UX-2.3, D175: the card a context menu is open on gets no frame', async () => {
+	test('UX-2.3: the card a context menu is open on gets no frame', async () => {
 		const seen = await evaluate(`(() => {
 			document.documentElement.style.setProperty('--vscode-focusBorder', '#0078d4');
 			agents = [newCard(1), newCard(2)]; redraw({ revision: 2 });
@@ -502,7 +526,7 @@ suite('The agent panel in Chromium', function () {
 		assert.strictEqual(seen, 'none');
 	});
 
-	test('PANEL-2.1, D173: a new card goes last; the one the person started, selected, scrolls into view once it has opened, and an agent\'s leaves the list where it is', async () => {
+	test('PANEL-2.1: a new card goes last; the one the person started, selected, scrolls into view once it has opened, and an agent\'s leaves the list where it is', async () => {
 		const seen = await evaluate(`(async () => {
 			const root = document.scrollingElement ?? document.documentElement;
 			agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1)); redraw({ revision: 2 });
@@ -573,7 +597,7 @@ suite('The agent panel in Chromium', function () {
 
 	test('PANEL-1.2, J13: the empty panel says why - no agents, none in the filter\'s location, no folder - each with its own native, keyboard-reachable buttons; nothing while loading', async () => {
 		const empty = (state: object) => evaluate(`(() => { panel.render(stateOf([], ${JSON.stringify(state)})); const empty = document.getElementById('empty'); return [empty.hidden, [...empty.children].map(each => { const button = each.querySelector('button'); return button ? (button.classList.contains('secondary') ? 'secondary:' : 'button:') + button.textContent : each.textContent; })]; })()`);
-		// No agent: New Agent, no ellipsis (D60), with Resume secondary
+		// No agent: New Agent, no ellipsis (PANEL-1.2), with Resume secondary
 		assert.deepStrictEqual(await empty({ empty: 'noAgents' }), [false, ['noAgents', 'button:newAgent', 'secondary:resumeAgent']]);
 		// A filter shows none: how many it hides, Clear Filter first and New Agent secondary
 		assert.deepStrictEqual(await empty({ empty: 'noMatch', cardCount: 3, filter: { kind: 'location', id: 'loc-1', label: 'shop · login-fix' } }), [false, ['No agents found in "shop · login-fix".', '3 other agents are in this workspace.', 'button:clearFilter', 'secondary:newAgent']]);
@@ -1161,7 +1185,7 @@ suite('The agent panel in Chromium', function () {
 			{ glides: true, glided: 50, taken: [true, 400], still: 450, refused: [true] });
 	});
 
-	test('New Agent\'s own icon draws where codicons\' `new-session` does: at 300 px, ink from 38 to 281 px of a 300 px advance, as its outline is placed in VS Code\'s codicon.ttf (PANEL-1.1, D85)', async () => {
+	test('New Agent\'s own icon draws where codicons\' `new-session` does: at 300 px, ink from 38 to 281 px of a 300 px advance, as its outline is placed in VS Code\'s codicon.ttf (PANEL-1.1)', async () => {
 		const root = path.resolve(__dirname, '../../..');
 		const font = fs.readFileSync(path.join(root, 'media', 'new-agent.woff')).toString('base64');
 		const drawn = await evaluate(`(async () => {

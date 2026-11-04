@@ -18,8 +18,9 @@ Security vulnerabilities are not reported in issues; see [`SECURITY.md`](SECURIT
 
 How this repository works is in [`docs/ide/ENGINEERING.md`](docs/ide/ENGINEERING.md):
 setting up a build, the commands that check a change, and the rules below in full. IDE source is in `ide/`; open that
-folder and run its development commands there. The outer `extension/` directory and `docs/extension/` are reserved
-for the standalone extension. Product documentation is shared under `docs/`.
+folder and run its development commands there. The standalone extension is in `extension/`, with its own
+[`AGENTS.md`](extension/AGENTS.md), and its specification is in [`docs/extension/`](docs/extension/README.md). Product
+documentation is shared under `docs/`.
 
 - Branch from `main` as `feature/<number>-<name>`.
 - Merge, never rebase: a feature lands on `main` with `--no-ff`, after review.

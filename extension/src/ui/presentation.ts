@@ -3,8 +3,9 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as vscode from 'vscode';
-import { clauseOf } from '../base/errors';
-import type { FacadeReason, WorktreeCreationEffects } from '../core/ports';
+import { clauseOf, messageOf } from '../base/errors';
+import { FacadeError } from '../core/errors';
+import { PlanError, type FacadeReason, type WorktreeCreationEffects } from '../core/ports';
 
 /** Native agent presentation shared by pickers, terminal tabs and notifications (ARCHITECTURE-1.3). */
 const LOGOS: { readonly [cli: string]: { readonly name: string; readonly light: string; readonly dark: string } } = {
@@ -16,7 +17,7 @@ const LOGOS: { readonly [cli: string]: { readonly name: string; readonly light: 
 	pi: { name: 'Pi', light: 'pi.svg', dark: 'pi.svg' }
 };
 
-/** The name behind a built-in's logo, for searching rows that show only that logo (D161). */
+/** The name behind a built-in's logo, for searching rows that show only that logo (LIFECYCLE-2.3). */
 export function cliDisplayName(cli: string): string {
 	return Object.hasOwn(LOGOS, cli) ? LOGOS[cli].name : cli;
 }
@@ -27,7 +28,7 @@ export function cliIcon(media: vscode.Uri, cli: string): vscode.IconPath {
 	return logo ? { light: vscode.Uri.joinPath(media, 'agents', logo.light), dark: vscode.Uri.joinPath(media, 'agents', logo.dark) } : new vscode.ThemeIcon('terminal');
 }
 
-/** Contributed glyphs survive native file-icon theme rules that can hide terminal URI icons (D159). */
+/** Contributed glyphs survive native file-icon theme rules that can hide terminal URI icons (LIFECYCLE-2.2). */
 export function cliTerminalIcon(cli: string): vscode.ThemeIcon {
 	return Object.hasOwn(LOGOS, cli)
 		? new vscode.ThemeIcon(`facade-cli-${cli}`, new vscode.ThemeColor('foreground'))
@@ -54,7 +55,15 @@ export function withWorktreeEffects(reason: string, effects?: WorktreeCreationEf
 	return retained ? `${sentence} ${retained}` : reason;
 }
 
-/** Facade's own reason in the person's language (UX-2.4): a CLI's configuration or a launch setting; `otherwise` where it has none. */
+/**
+ * Why an operation of the person's failed, as they are told it (UX-2.4): Facade's own reason in their language, any other error -
+ * the system's, Git's or a CLI's - in its own words.
+ */
+export function reasonOf(err: unknown): string {
+	return err instanceof PlanError || err instanceof FacadeError ? reasonText(err.said, err.message) : messageOf(err);
+}
+
+/** Facade's own reason in the person's language (UX-2.4), as `said` names it; `otherwise` where it has none. */
 export function reasonText(said: FacadeReason | undefined, otherwise: string): string {
 	const [a = '', b = '', c = '', d = '', e = ''] = said?.values ?? [];
 	switch (said?.kind) {
@@ -125,6 +134,17 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'custom_placeholder': return vscode.l10n.t("{0}[{1}] uses an unsupported placeholder; {2} in resume is the only placeholder a custom CLI's arguments can contain", a, b, c);
 		// {0} is the setting, such as facade.custom.my-cli.launch.start; {1} the argument's place in it, from 0; {2} the placeholder, ${sessionId}
 		case 'custom_start_session': return vscode.l10n.t("{0}[{1}] uses {2}, which only resume can contain: a new conversation has no session ID yet", a, b, c);
+		case 'component_outdated': return vscode.l10n.t("Facade Code requires a newer Window Component. Update \"Facade Code Window Component\" on this computer, then reload the window.");
+		case 'numbers_unavailable': return vscode.l10n.t("This computer's counter could not give the agent a number. Try again.");
+		case 'ownership_lost': return vscode.l10n.t("This workspace is owned by another window. Reload this window to take ownership.");
+		// {0} is the file of Facade Code's installation that an update or uninstall removed, such as its dist/ptyd.js
+		case 'installation_removed': return vscode.l10n.t("The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.", a);
+		// {0} is the CLI's ID, quoted
+		case 'cli_not_configured': return vscode.l10n.t("No CLI {0} is configured.", a);
+		case 'pin_unsupported': return vscode.l10n.t("Its CLI cannot resume this exact conversation, so it cannot be pinned.");
+		case 'location_gone': return vscode.l10n.t("The working location is no longer available.");
+		// {0} is the working location's path
+		case 'location_not_here': return vscode.l10n.t("The working location {0} is not available in this window.", a);
 		default: return otherwise;
 	}
 }
@@ -148,7 +168,7 @@ export function configureAgentsLabel(): string {
 }
 
 /**
- * History-list age in the window's language (UX-2.4, D162). Unit thresholds, rounding and short phrases follow VS Code's
+ * History-list age in the window's language (UX-2.4). Unit thresholds, rounding and short phrases follow VS Code's
  * `fromNow` with `ago` enabled (Microsoft, MIT; ThirdPartyNotices.txt). No private editor API is imported.
  */
 export function ago(time: number, now: number, language: string): string {

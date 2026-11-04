@@ -12,7 +12,7 @@ const MAY_IMPORT: { readonly [layer: string]: readonly string[] } = {
 	host: ['ui', 'contract', 'core', 'record', 'clis', 'transport', 'schema', 'ptyd', 'base'],
 	ui: ['core', 'webview', 'base'],
 	webview: [],
-	contract: ['core', 'record', 'schema', 'base'],
+	contract: ['core', 'schema', 'base'],
 	core: ['base'],
 	record: ['base'],
 	clis: ['base'],

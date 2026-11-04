@@ -212,7 +212,7 @@ export class PanelModel implements Disposable {
 	private changed(change: RunChange): void {
 		const pin = this.deps.agents.get(change.run)?.pin;
 		if (change.kind !== 'removed' && this.pinByRun.get(change.run) !== pin) {
-			// Pinned, it goes last among the Pins; unpinned, first among the other cards, just below the Pins it left (PANEL-2.1, D181)
+			// Pinned, it goes last among the Pins; unpinned, first among the other cards, just below the Pins it left (PANEL-2.1)
 			this.setOrder(pin ? atEnd(this.order, change.run) : atStart(this.order, change.run));
 		}
 		if (change.kind === 'removed') { this.pinByRun.delete(change.run); } else { this.pinByRun.set(change.run, pin); }
@@ -370,7 +370,7 @@ export class PanelModel implements Disposable {
 		}
 	}
 
-	/** The run IDs of `runs` as the panel lists them: by the stack, any it does not know yet last, oldest first (PANEL-2.1, D173). */
+	/** The run IDs of `runs` as the panel lists them: by the stack, any it does not know yet last, oldest first (PANEL-2.1). */
 	private arrangedIds(runs: readonly RunFacts[]): string[] {
 		const order = arranged(this.order, [...runs].sort((a, b) => a.createdAt - b.createdAt).map(run => run.id));
 		const byId = new Map(runs.map(run => [run.id, run]));

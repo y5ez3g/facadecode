@@ -16,7 +16,7 @@ export interface Capability {
 	readonly reason: string;
 }
 
-/** The server's name in every CLI's configuration, and the skill's (MCP-6.1, D50). */
+/** The server's name in every CLI's configuration, and the skill's (MCP-6.1, ARCHITECTURE-4.1). */
 export const SERVER_NAME = 'facade';
 
 /**
@@ -126,13 +126,13 @@ export function mcpConfigText(server: McpServer): string {
 
 /** The server script the runs' CLIs start, beside ptyd's (MCP-6.1). */
 export const SHIM_FILE = 'shim.js';
-/** How the description of every skill Facade has written begins: with its name, what tells a SKILL.md is Facade's (D179). */
+/** How the description of every skill Facade has written begins: with its name, what tells a SKILL.md is Facade's (CLIS-2.2). */
 export const FACADE_SKILL_SIGNATURE = 'How the Facade Code tools work';
 /** How the description of every plugin manifest Facade has written begins. */
 const FACADE_PLUGIN_SIGNATURE = 'The Facade Code tools';
 /**
  * How the Facade Code IDE's own agent extension describes the `facade` skill it writes into a folder - for Codex, Muse Code and
- * Antigravity alike - which Facade treats as its own too (D186).
+ * Antigravity alike - which Facade treats as its own too (CLIS-2.2).
  */
 const IDE_SKILL_SIGNATURE = 'Coordinate Facade Code agents through MCP tools';
 /** The line a skill Facade writes into a folder ends with, naming the Facade version that wrote it. */
@@ -140,7 +140,7 @@ const SKILL_VERSION_MARK = /<!-- Facade Code (\d+(?:\.\d+)*) writes this file\b/
 
 /**
  * `skill` as Facade writes it into a folder: its last line names `version`, so that a later Facade replaces it and an earlier one
- * leaves it, as the later one's (D179).
+ * leaves it, as the later one's (CLIS-2.2).
  */
 export function markedSkill(skill: string, version: string): string {
 	return `${skill.trimEnd()}\n\n<!-- Facade Code ${version} writes this file and replaces it as it updates. -->\n`;
@@ -170,7 +170,7 @@ export function isFacadeServer(value: unknown): boolean {
 
 /**
  * Whether `text`, the content of `file`, is what a Facade wrote there - of any version, from any Facade directory, or the Facade
- * Code IDE's (D186) - rather than the person's own (CLIS-2.2, D179): its skill by its name and description, the plugin's manifest
+ * Code IDE's (CLIS-2.2) - rather than the person's own (CLIS-2.2): its skill by its name and description, the plugin's manifest
  * by its name and description - the IDE's by its name alone - its MCP configuration and hooks by Facade's server alone, the shim.
  * Content of the same name that is not recognizably Facade's is the person's, and stays.
  */
@@ -194,7 +194,7 @@ export function isFacadeContent(file: string, text: string): boolean {
 	const keys = Object.keys(value);
 	switch (name) {
 		case 'plugin.json':
-			// The IDE's Antigravity plugin is named and nothing more (D186)
+			// The IDE's Antigravity plugin is named and nothing more (CLIS-2.2)
 			return value.name === SERVER_NAME && (keys.join() === 'name'
 				|| typeof value.description === 'string' && value.description.startsWith(FACADE_PLUGIN_SIGNATURE));
 		case 'mcp_config.json':

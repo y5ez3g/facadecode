@@ -99,7 +99,7 @@ suite('Window registry: the open windows of this computer and its alias counters
 		assert.strictEqual(speaksOurs(entry(1, { protocol: WINDOW_NETWORK_PROTOCOL - 1 })), false);
 	});
 
-	// An update from 0.0.1 gave its first new agent #a1 while 0.0.1's #a1 still ran, as 0.0.1 counted in agent-aliases.json (D141)
+	// An update from 0.0.1 gave its first new agent #a1 while 0.0.1's #a1 still ran, as 0.0.1 counted in agent-aliases.json (RULES-2.2)
 	test('alias numbers move past those the environment\'s own counter gave - 0.0.1\'s - of each kind; one it cannot read gives none', () => {
 		fs.writeFileSync(path.join(home.dir, 'agent-aliases.json'), '{"last":2}\n');
 		assert.deepStrictEqual(allocateNumbers(home.dir, 'agent', 16), { first: 3, count: 16 });

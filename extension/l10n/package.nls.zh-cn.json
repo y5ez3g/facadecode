@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "在 VS Code 中并排运行 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi agent。",
+	"description": "在 VS Code 中并排运行 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi Agent。",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "新建 Agent...",
@@ -54,7 +54,7 @@
 	"config.custom.launch.start": "用于新交互式对话的参数，按所写内容原样传递。",
 	"config.custom.launch.resume": "必填: 用于恢复某个确切的已保存对话的参数。`${sessionId}` 会被替换为其会话 ID，且必须出现。",
 	"icon.newAgent": "新建 Agent 图标",
-	"command.history": "恢复 agent...",
-	"command.pinAgent": "固定 agent",
-	"command.unpinAgent": "取消固定 agent"
+	"command.history": "恢复 Agent...",
+	"command.pinAgent": "固定 Agent",
+	"command.unpinAgent": "取消固定 Agent"
 }

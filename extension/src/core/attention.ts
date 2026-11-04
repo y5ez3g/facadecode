@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // An agent another agent started, waiting on its CLI's own question - a permission, a question or a sign-in - is reported to that
-// creator once it has waited twenty seconds, once for each time it starts waiting (RULES-1.8, D109): Orca tells its coordinator of a
+// creator once it has waited twenty seconds, once for each time it starts waiting (RULES-1.8): Orca tells its coordinator of a
 // worker stopped at a prompt, and T3 Code routes a child's question to its parent. The creator is an agent; a person is never told.
 
 import { messageOf } from '../base/errors';
@@ -22,8 +22,8 @@ export interface AttentionDeps {
 	readonly after?: (ms: number, fn: () => void) => { dispose(): void };
 }
 
-/** What a started agent waits on: its CLI's question, by kind and its own words. */
-type Waiting = NonNullable<RunFacts['blocker']>;
+/** What a started agent waits on that its creator is told of: its CLI's permission, question or sign-in, in its own words. */
+type Waiting = { readonly kind: 'permission' | 'question' | 'auth'; readonly text?: string };
 
 /** The notice its creator gets, in the words of a Facade result (RULES-1.7): what the agent waits on, and who can answer it. */
 export function attentionText(run: Pick<RunFacts, 'name' | 'alias'>, waiting: Waiting): string {
@@ -33,12 +33,11 @@ export function attentionText(run: Pick<RunFacts, 'name' | 'alias'>, waiting: Wa
 		case 'permission': return `${who} is waiting for approval from the user.${quote}`;
 		case 'auth': return `${who} needs the user to sign in.${quote}`;
 		case 'question': return `There's a question from ${who}:${quote || ' Open the terminal to read it.'}`;
-		case 'unknown': return `${who} needs the user's attention.${quote || ' Open the terminal to see what it needs.'}`;
 	}
 }
 
 /**
- * Watches the runs of this window that an agent of this window started (RULES-1.8, D109): one whose CLI reports its own question for
+ * Watches the runs of this window that an agent of this window started (RULES-1.8): one whose CLI reports its own question for
  * twenty seconds has its creator told once; the count starts again once it stops waiting. A creator gone, or of another window, is
  * told nothing.
  */
@@ -76,13 +75,17 @@ export class AttentionNotices implements Disposable {
 		}
 	}
 
-	/** What `run` waits on, where an agent of this window started it and its CLI reports its own question. */
+	/**
+	 * What `run` waits on, where an agent of this window started it and its CLI reports its own permission, question or sign-in: a
+	 * blocker of no kind Facade knows is not one its creator is told of.
+	 */
 	private waitsOn(run: RunId): Waiting | undefined {
 		const facts = this.deps.agents.get(run);
-		if (!facts || facts.lifecycle === 'ended' || facts.origin !== 'agent' || facts.creator === undefined || !facts.blocker) {
+		const kind = facts?.blocker?.kind;
+		if (!facts || facts.lifecycle === 'ended' || facts.origin !== 'agent' || facts.creator === undefined || !kind || kind === 'unknown') {
 			return undefined;
 		}
-		return facts.blocker;
+		return { kind, ...facts.blocker?.text !== undefined ? { text: facts.blocker.text } : {} };
 	}
 
 	private tell(run: RunId, kind: Waiting['kind']): void {

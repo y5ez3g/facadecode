@@ -2,8 +2,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// What a CLI that reports nothing of itself shows on its screen, read as its status (CLIS-2.3, D80): Muse Code, which sends no
-// OSC 7501 on Windows. A reader knows the layout its CLI was observed drawing and vouches only for what that layout shows; a
+// Tested native screen evidence (CLIS-2.3): Muse's fallback where it sends no OSC 7501, and Codex 0.166.0's completed-turn
+// correction of its aggregate working report. A reader vouches only for the layout its CLI was observed drawing; a
 // completed screen it does not know revokes prior screen evidence. Logical lines retain the terminal's real soft wraps;
 // hard line breaks are not guessed together. Text inside the input never supplies activity evidence.
 
@@ -16,7 +16,7 @@ export interface ScreenReading {
 }
 
 /** A reader of the rows a run's terminal shows, top to bottom, each without the spaces at its end. */
-export type ScreenReader = (rows: readonly string[], clippedStart?: boolean, boldHeads?: ReadonlySet<number>) => ScreenReading | undefined;
+export type ScreenReader = (rows: readonly string[], clippedStart?: boolean, boldHeads?: ReadonlySet<number>, dimLines?: ReadonlySet<number>, cols?: number) => ScreenReading | undefined;
 
 /** The top of Muse Code's input: a rule, with a label in it where it offers voice input - `── Voice input (Alt+V to start) ───`. */
 const UPPER_RULE = /^(?:─{2} [^─]+ ─+|─+)$/;
@@ -114,8 +114,37 @@ export function museScreen(rows: readonly string[], clippedStart = false, boldHe
 	return undefined;
 }
 
+/**
+ * Codex 0.166.0's positive finished-turn evidence, correcting only its aggregate root `working` (CLIS-2.3).
+ * A background footer alone is also drawn during streamed answers. Require the native dim turn summary immediately
+ * before it, with only spacing between, and the complete composer/footer below. Input text never decides activity.
+ */
+export const codexCompletedBackground: ScreenReader = (rows, clippedStart = false, _boldHeads, dimLines, cols) => {
+	let model = rows.length - 1;
+	while (model >= 0 && rows[model] === '') { model--; }
+	if (/^ {2}(?:← for agents · )?\? for shortcuts(?: {2,}\S.*)?$/u.test(rows[model] ?? '')
+		|| /^ {20,}\S.*$/u.test(rows[model] ?? '')) { model--; }
+	if (model < 2 || !/^ {2}\S.*? · (?:[~/]|[A-Za-z]:\\)/u.test(rows[model]) || rows[model - 1] !== '') { return undefined; }
+	let prompt = model - 2;
+	while (prompt >= 0 && (rows[prompt] === '' || rows[prompt].startsWith('  '))) { prompt--; }
+	if (prompt < 0 || !/^›(?: |$)/u.test(rows[prompt])) { return undefined; }
+	let background = prompt - 1;
+	while (background >= 0 && rows[background] === '') { background--; }
+	const count = /^ {2}([1-9]\d*) background terminals? running/u.exec(rows[background] ?? '')?.[1];
+	if (!count || !dimLines?.has(background)) { return undefined; }
+	const footer = `  ${count} background terminal${count === '1' ? '' : 's'} running · /ps to view · /stop to close`;
+	// Its footer is cropped, not soft-wrapped, at the right edge. Only that exact native prefix is known; a row keeps no trailing
+	// spaces, so a crop that ends on one compares without them
+	if (rows[background] !== footer && (cols === undefined || rows[background] !== footer.slice(0, cols).trimEnd())) { return undefined; }
+	let summary = background - 1;
+	while (summary >= 0 && rows[summary] === '') { summary--; }
+	if (summary < 0 || summary === 0 && clippedStart || !dimLines.has(summary)
+		|| !/^ {2}Worked for (?:\d+[hms] ?)+ • \d{1,2}:\d{2}(?: [AP]M)?$/u.test(rows[summary])) { return undefined; }
+	return { state: 'idle' };
+};
+
 /** The screen readers, by the ID a CLI adapter names (CLIS-2.3). */
-const READERS: { readonly [id: string]: ScreenReader } = { muse: museScreen };
+const READERS: { readonly [id: string]: ScreenReader } = { muse: museScreen, 'codex-0.166': codexCompletedBackground };
 
 /** The screen reader `id` names; none for no ID, or one ptyd does not know - a newer window's - which reads nothing. */
 export function screenReaderOf(id: string | undefined): ScreenReader | undefined {

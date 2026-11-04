@@ -6,7 +6,7 @@
 // one, under one lock across the runs and windows of the execution environment: the exact original bytes are kept, only Facade's own
 // content is merged in, and each run that uses it holds a reference in the record. Content a Facade wrote - of another version, from
 // another Facade directory, or changed since - is recognized as Facade's and brought up to date, unless a later Facade marked it
-// (D179); a `facade` server or skill of the person's own is a conflict, and malformed or unknown content is never overwritten. After
+// (CLIS-2.2); a `facade` server or skill of the person's own is a conflict, and malformed or unknown content is never overwritten. After
 // the last run lets go, content Facade wrote that nobody changed goes - the original put back byte for byte - and a file changed
 // since stays, with a diagnostic. A record that cannot be
 // read is never replaced. No global Git ignore is touched, and no folder is removed that Facade did not make or that holds
@@ -178,7 +178,7 @@ function fileStep(file: string, content: string, held: Held | undefined): Step |
 			return { file, apply: run => held ? { ...held, runs: withRun(held.runs, run) } : undefined };
 		}
 		// Facade's own from an earlier version, another Facade directory, or changed since: brought up to date, and Facade's to take
-		// out once its last run ends (D179)
+		// out once its last run ends (CLIS-2.2)
 		return {
 			file,
 			apply: run => {
@@ -251,7 +251,7 @@ function entryStep(file: string, write: Extract<ProjectWrite, { kind: 'entry' }>
 		}
 		if (isFacadeServer(nodeValue(member.value))) {
 			// A Facade's entry of another installation or Facade directory, or changed since: brought up to date. What goes back
-			// later is the file without it, never the entry it replaced (D179)
+			// later is the file without it, never the entry it replaced (CLIS-2.2)
 			const without = Buffer.from(applyJsonEdits(read.text, [withoutMember(servers!, member)])).toString('base64');
 			return edited([replaceValue(read.text, member.value, write.value, style)], (text, run) => ({
 				kind: 'entry', keys: write.keys, original: held?.original ?? without, written: sha256(text), owned, parent: held?.parent ?? false,

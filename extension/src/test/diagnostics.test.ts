@@ -32,7 +32,7 @@ function diagnostics(more: Partial<Diagnostics> = {}): Diagnostics {
 	};
 }
 
-suite('The diagnostics report: what it holds (ARCHITECTURE-3.3, D116)', () => {
+suite('The diagnostics report: what it holds (ARCHITECTURE-3.3)', () => {
 	test('catalog configuration errors remain visible even if a malformed catalog yields no custom entries', () => {
 		const text = diagnosticsText(diagnostics({ clis: { where: '/repo', each: [], problems: [{ setting: 'facade.custom', problem: 'facade.custom must be an object; received array' }] } }));
 		assert.match(text, /Configuration error \(facade.custom\): facade.custom must be an object; received array/);
@@ -100,7 +100,7 @@ suite('The diagnostics report: what it holds (ARCHITECTURE-3.3, D116)', () => {
 		assert.match(diagnosticsText(diagnostics({ home: '/' })), /started in \/Users\/ada\/shop/);
 	});
 
-	test('D116: on Windows the home folder is written ~ whatever its drive letter\'s case and its separators - VS Code writes c:\\, Node C:\\ - and on macOS whatever its case; elsewhere a path differing in case is another', () => {
+	test('ARCHITECTURE-3.3: on Windows the home folder is written ~ whatever its drive letter\'s case and its separators - VS Code writes c:\\, Node C:\\ - and on macOS whatever its case; elsewhere a path differing in case is another', () => {
 		const windows = diagnosticsText(diagnostics({
 			home: 'C:\\Users\\Ada',
 			clis: { where: 'c:\\Users\\Ada\\shop', each: [] },
@@ -117,7 +117,7 @@ suite('The diagnostics report: what it holds (ARCHITECTURE-3.3, D116)', () => {
 	});
 });
 
-suite('The diagnostics report the integration suite reads (ARCHITECTURE-3.3, D174)', () => {
+suite('The diagnostics report the integration suite reads (ARCHITECTURE-3.3)', () => {
 	test('it gathers each part, a screen or input that fails or does not answer said so', async function () {
 		this.timeout(20_000);
 		const api = {
@@ -165,7 +165,7 @@ suite('The diagnostics report the integration suite reads (ARCHITECTURE-3.3, D17
 			fs.rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test('in a remote window the window component is named by the version it answered with, which that extension host sees no other way (D116)', async () => {
+	test('in a remote window the window component is named by the version it answered with, which that extension host sees no other way (ARCHITECTURE-3.3)', async () => {
 		const remoteApi = {
 			l10n: { t: (text: string) => text },
 			env: { appName: 'Visual Studio Code', remoteName: 'ssh-remote' },

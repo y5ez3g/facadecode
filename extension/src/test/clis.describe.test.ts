@@ -7,7 +7,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { catalogOf } from '../clis/catalog';
 import { tomlString } from '../clis/codex';
-import { describeLaunches } from '../clis/describe';
+import { describeLaunches, PLACEHOLDERS } from '../clis/describe';
 import { DestinationEnvironment, planLaunch } from '../clis/plan';
 import { redacted } from '../clis/redact';
 import { tempDir } from './util';
@@ -30,6 +30,29 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 		destination = { host: { PATH: bin, HOME: temp.dir, CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '1' }, terminal: { API_TOKEN: 'from-terminal', PLAIN: 'p' }, platform: 'darwin' };
 	});
 	teardown(() => temp.remove());
+
+	test('what a start adds is shown in its place - the Facade tools\' and session tracking\'s arguments and variables - what only a start has named by placeholders, and no launch file written (CLIS-4.1, 2.2, 2.4)', () => {
+		const catalog = catalogOf(() => undefined);
+		const home = path.join(temp.dir, 'facade');
+		const runDir = path.join(home, 'runs', PLACEHOLDERS.run, 'tools');
+		const sessionFile = path.join(home, 'runs', `${PLACEHOLDERS.run}.session.json`);
+		const server = { command: '/runtime', args: ['/ext/dist/shim.js'], env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: PLACEHOLDERS.run, FACADE_AGENT: '#aN', FACADE_LAUNCH_CONTEXT: PLACEHOLDERS.context }, instructions: PLACEHOLDERS.instructions };
+		const described = describeLaunches(catalog, destination, cwd, false, { sessionFile, sessionHook: cli => `node hook.cjs ${cli}`, tools: { server, skill: 'SKILL', runDir } });
+		const claude = described.find(each => each.cli === 'claude')!;
+		const codex = described.find(each => each.cli === 'codex')!;
+		const after = (args: readonly string[] | undefined, option: string) => args?.[args.indexOf(option) + 1];
+		assert.deepStrictEqual([after(claude.args, '--mcp-config'), after(claude.args, '--plugin-dir'), after(claude.args, '--allowedTools'), after(claude.args, '--session-id')],
+			[path.join(runDir, 'mcp.json'), path.join(runDir, 'plugin'), 'mcp__facade', PLACEHOLDERS.session]);
+		assert.match(after(claude.args, '--settings') ?? '', /"command":"node hook\.cjs claude"/);
+		assert.deepStrictEqual(codex.args!.slice(0, 2), ['-c', 'mcp_servers.facade.command="/runtime"']);
+		assert.ok(codex.args!.some(arg => arg.startsWith('hooks=')), 'Codex\'s session hooks');
+		assert.deepStrictEqual([claude.environment.sources.at(-1), claude.environment.variables.filter(each => each.source === 'facade')],
+			['facade', [{ source: 'facade', name: 'FACADE_CODE_SESSION_FILE', value: sessionFile }]]);
+		assert.ok(!fs.existsSync(home), 'no launch file is written');
+		// Without what a start adds, the configured launch alone
+		const configured = describeLaunches(catalog, destination, cwd, false).find(each => each.cli === 'claude')!;
+		assert.deepStrictEqual([configured.args!.includes('--mcp-config'), configured.environment.sources.includes('facade')], [false, false]);
+	});
 
 	test('each CLI as a new start would have it now: program and source, working directory, the literal arguments a launch gets, YOLO, sandbox, approvals and trust - one configuration', () => {
 		const settings: { readonly [name: string]: unknown } = {

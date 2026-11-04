@@ -18,7 +18,7 @@ const charsOf = (text: string) => {
 /** Text without its spaces and line breaks, which a CLI's rows add as they wrap and indent it. */
 const squeezed = (text: string) => text.replace(/\s+/gu, '');
 
-/** Pi's count of a paste's characters (D118): its line breaks one each, its tabs four spaces, other control characters dropped. */
+/** Pi's count of a paste's characters (RULES-1.5): its line breaks one each, its tabs four spaces, other control characters dropped. */
 const piCharsOf = (text: string) => [text.replace(/\r\n|\r/gu, '\n').replace(/\t/gu, '    ').replace(/[\x00-\x09\x0b-\x1f]/gu, '').length];
 
 /** A placeholder its CLI draws for a long paste: whether a draft, after `lead` where it begins with it, is it for a paste of `text`. */
@@ -37,7 +37,7 @@ const counted = (pattern: RegExp, counts: (text: string) => readonly number[], s
 	})
 });
 
-/** Codex and Muse can draw the first non-ASCII character literally, then fold the rest of the same paste (D191). */
+/** Codex and Muse can draw the first non-ASCII character literally, then fold the rest of the same paste (CLIS-2.1). */
 const afterFirstCharacter: Placeholder = {
 	matches: (draft, lead, text) => {
 		const first = [...text][0];
@@ -73,7 +73,7 @@ export const PLACEHOLDERS: { readonly [adapter: string]: readonly Placeholder[] 
 const ASTRAL = /[\u{10000}-\u{10FFFF}]/gu;
 
 /**
- * The characters a CLI on an earlier supervisor can lose from a paste, by its input reader (D189). Codex and Muse Code on Windows read a paste as
+ * The characters a CLI on an earlier supervisor can lose from a paste, by its input reader (CLIS-2.1). Codex and Muse Code on Windows read a paste as
  * console key records - each UTF-16 unit pressed and let go, as the ConPTY ptyd starts them on gives them - and each pairs a
  * character's two halves outside the Basic Multilingual Plane with their own releases, so it drops each such character: an emoji,
  * a message's 📨 too.
@@ -107,7 +107,7 @@ function spacedBodiesOf(draft: string, lead: string | undefined): string[] {
 
 /**
  * Whether `body`, a draft squeezed, is `text` drawn whole - or, where its CLI scrolled rows of it out of its input box above and
- * none below, as its paste leaves it, the end of `text` up to its last character (D118).
+ * none below, as its paste leaves it, the end of `text` up to its last character (RULES-1.5).
  */
 function isWritten(body: string, text: string, hidden: Hidden | undefined): boolean {
 	const whole = squeezed(text);
@@ -129,7 +129,7 @@ export function isOwnDraft(draft: string, text: string, adapter: string, lead?: 
 }
 
 /**
- * Whether `draft`, held as `text`'s own, is the draft `seen` that its paste showed as (D118): drawn the same, or the text itself - a
+ * Whether `draft`, held as `text`'s own, is the draft `seen` that its paste showed as (RULES-1.5): drawn the same, or the text itself - a
  * placeholder's count alone could be a person's later paste of its size, its number being what tells them apart.
  */
 export function isSameDraft(draft: string, seen: string, text: string, lead?: string, hidden?: Hidden): boolean {

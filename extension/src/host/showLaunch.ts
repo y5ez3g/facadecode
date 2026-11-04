@@ -6,6 +6,7 @@
 // environment source, working directory, literal argument order, YOLO, sandbox and approvals, how the folder is trusted and
 // configuration errors - computed without running any CLI or writing any file, secrets redacted, in the person's language.
 
+import * as fs from 'fs';
 import * as vscode from 'vscode';
 import type { ApprovalFact, SandboxFact } from '../clis/adapter';
 import type { CatalogEntry } from '../clis/catalog';
@@ -72,12 +73,13 @@ function sourceText(source: EnvironmentSource, launch: LaunchDescription): strin
 		// {0} is the CLI's name
 		case 'adapter': return vscode.l10n.t("the {0} integration", launch.displayName);
 		case 'run': return vscode.l10n.t("all agents");
+		case 'facade': return vscode.l10n.t("Facade's tools and session tracking");
 	}
 }
 
 /**
- * How a start trusts its folder (CLIS-3.3, 3.4, D62): for the launch alone, by an entry merged into the CLI's file, not at all, or -
- * for a custom CLI - as its own configuration has it.
+ * How a start trusts its folder (CLIS-3.3, 3.4): for the launch alone, by an entry merged into the CLI's file - none where that file
+ * is not there - not at all, or - for a custom CLI - as its own configuration has it.
  */
 function trustText(trust: LaunchTrust): string {
 	if (trust.kind === 'unknown') {
@@ -86,6 +88,11 @@ function trustText(trust: LaunchTrust): string {
 	if (trust.kind === 'file') {
 		if (trust.target.withheld) {
 			return vscode.l10n.t("Trust: none provided for home folder, parents, or filesystem root; CLI prompts in its terminal");
+		}
+		// A file the CLI has not made is not made for it, so nothing is merged (CLIS-3.3)
+		if (!fs.existsSync(trust.target.file)) {
+			// {0} is the CLI's file
+			return vscode.l10n.t("Trust: no entry is written, as {0} does not exist; the CLI prompts in its terminal", trust.target.file);
 		}
 		// {0} is the entry, as JSON; {1} the CLI's file
 		return vscode.l10n.t("Trust: {0} merged into {1} before each start; unreadable files are preserved and the CLI prompts in its terminal", JSON.stringify(trustEntryJson(trust.target)), trust.target.file);

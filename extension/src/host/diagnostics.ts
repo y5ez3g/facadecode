@@ -72,7 +72,7 @@ async function agentOf(deps: DiagnosticsDeps, facts: RunFacts): Promise<Diagnose
 	return { facts, input, screen: typeof screen === 'string' ? [screen] : screen.text };
 }
 
-/** Everything the diagnostics report holds, gathered now: the integration suite's `facade.diagnostics` (ARCHITECTURE-3.3, D116, D174). */
+/** Everything the diagnostics report holds, gathered now: the integration suite's `facade.diagnostics` (ARCHITECTURE-3.3). */
 export async function diagnosticsOf(deps: DiagnosticsDeps): Promise<string> {
 	const component: unknown = deps.component ?? vscode.extensions.getExtension(WINDOW_COMPONENT)?.packageJSON?.version;
 	const location = deps.locations.snapshot().locations[0];

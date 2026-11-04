@@ -337,7 +337,7 @@ interface Drawn {
 
 /** The cards on the list by run ID, as drawn last; none before the first draw. */
 let drawn: Map<string, Drawn> | undefined;
-/** The cards drawn after the first draw, by when they came: one the person started scrolls into view as it is selected (D173). */
+/** The cards drawn after the first draw, by when they came: one the person started scrolls into view as it is selected (PANEL-2.1). */
 const arrived = new Map<string, number>();
 /** How long a new card waits to be selected to scroll into view: a person's start selects it within a state or two. */
 const ARRIVED_MS = 2_000;
@@ -406,7 +406,7 @@ function draw(cards: readonly Card[]): void {
 		}
 	}
 	drawn = next;
-	// A new card goes last in its area (PANEL-2.1, D173): the one the person started, selected, scrolls into view; an agent's does not
+	// A new card goes last in its area (PANEL-2.1): the one the person started, selected, scrolls into view; an agent's does not
 	for (const [run, at] of arrived) {
 		if (!next.has(run) || performance.now() - at > ARRIVED_MS) {
 			arrived.delete(run);
@@ -474,7 +474,7 @@ function update(entry: Drawn, card: Card): void {
 		entry.dot.className = `dot ${card.dot}`;
 		entry.dot.title = card.stateText;
 	}
-	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3, D176)
+	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3)
 	const place = JSON.stringify([card.pinned, card.location.label, card.location.folderPrefix, card.location.full]);
 	if (place !== entry.place) {
 		entry.place = place;
@@ -505,7 +505,7 @@ function pin(): HTMLElement {
 	return element;
 }
 
-/** Separate folder/worktree labels keep their original values in the card's state (PANEL-1.3, D128). */
+/** Separate folder/worktree labels keep their original values in the card's state (PANEL-1.3). */
 function placeOf(location: Card['location']): HTMLElement {
 	const element = el('span', location.folderPrefix ? 'place within' : 'place');
 	if (location.folderPrefix) {
@@ -515,7 +515,7 @@ function placeOf(location: Card['location']): HTMLElement {
 	return element;
 }
 
-/** Short labels stay whole; long names end-ellipsize, long location components middle-ellipsize (PANEL-1.3, D128). */
+/** Short labels stay whole; long names end-ellipsize, long location components middle-ellipsize (PANEL-1.3). */
 function fitPlaces(): void {
 	for (const entry of drawn?.values() ?? []) {
 		fitCardTop(entry.top, entry.name, entry.card.name, entry.card.location);
@@ -740,4 +740,8 @@ function highlight(runId: string | undefined): void {
 	}
 }
 
-post({ type: 'ready' });
+// The system's reduced-motion preference, which the extension host cannot read: said with ready and as it changes, for the agents'
+// tab spinners under `workbench.reduceMotion: auto` (LIFECYCLE-2.2, UX-2.2)
+const systemMotion = matchMedia('(prefers-reduced-motion: reduce)');
+systemMotion.addEventListener('change', () => post({ type: 'motion', reduced: systemMotion.matches }));
+post({ type: 'ready', reducedMotion: systemMotion.matches });

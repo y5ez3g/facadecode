@@ -4,7 +4,7 @@
 
 // Records how a built-in CLI draws its input box as text is typed and pasted into it - never submitted, so its model is asked
 // nothing - and checks Facade's input readers against each screen (CLIS-2.1, VERIFICATION G3): the state the reader reads, and
-// whether a pasted message reads as its own draft, with its lead where its CLI takes one (RULES-1.6, D108). Run it once a CLI
+// whether a pasted message reads as its own draft, with its lead where its CLI takes one (RULES-1.6, COLLABORATION-2.1). Run it once a CLI
 // updates: a failed check is a reader or a placeholder to update, and the screens it saved are the new recorded cases.
 //
 //   npm run compile
@@ -143,7 +143,7 @@ function start() {
 	}
 	term.parser.registerEscHandler({ final: 'c' }, () => { win32Input = false; return false; });
 	// On Windows the ConPTY ptyd starts agents on, node-pty's own: Windows' own gives a program other key records for a character not
-	// on the keyboard, and so other drafts (D189)
+	// on the keyboard, and so other drafts (CLIS-2.1)
 	const child = pty.spawn(program, cli.args, { name: 'xterm-256color', cols, rows, cwd, ...process.platform === 'win32' ? { useConptyDll: true } : {}, env: { ...env, ...state, TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'vscode' } });
 	const write = data => child.write(process.platform === 'win32' && win32Input ? win32Text(data) : data);
 	children.add(child);
@@ -263,7 +263,7 @@ for (const each of CASES) {
 		run.write(`${lead ?? ''}${pasteSequence(true, pasted)}`);
 	}
 	// As long as a paste of its size takes, and its CLI to draw it: Codex and Muse Code on Windows read it a key at a time, 3 ms and
-	// 1 ms a UTF-16 unit, as delivery waits for them (D105, D190)
+	// 1 ms a UTF-16 unit, as delivery waits for them (CLIS-2.1)
 	const keyMs = process.platform === 'win32' ? { 'codex-prompt': 3, 'muse-frame': 1 }[cli.adapter] ?? 0 : 0;
 	const keyAtATime = keyMs * (each.paste ?? '').length;
 	await sleep(1_500 + Math.ceil(Buffer.byteLength(each.paste ?? '') / 64) + keyAtATime);

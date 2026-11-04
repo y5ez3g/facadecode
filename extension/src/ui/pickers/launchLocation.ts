@@ -23,7 +23,7 @@ function folderItems(catalog: Catalog, folder: WorkspaceFolderInfo): Item[] {
 }
 
 /**
- * The first step (CLIS-4.1, D84). In a window of several folders, the folders, as Change Working Location lists them - by name, the
+ * The first step (CLIS-4.1). In a window of several folders, the folders, as Change Working Location lists them - by name, the
  * folder that holds each beside it; one with a single location chooses it at once, one with more opens its own step. In a window
  * of one folder, its locations. No separator: every item is a choice of the same kind.
  */
@@ -50,7 +50,7 @@ function step(flow: Flow, locations: Locations, title: string, placeholderOf: (c
 }
 
 /**
- * The location Show Agent Launch shows, the person's choice (CLIS-4.1, D84): native steps by folder, as Change Working Location
+ * The location Show Agent Launch shows, the person's choice (CLIS-4.1): native steps by folder, as Change Working Location
  * has them - a folder's own step titled with it, Back returning to the folders at it. Null where the person ends the flow.
  */
 export async function chooseLaunchLocation(locations: Locations, log: LogPort): Promise<Location | null> {

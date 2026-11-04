@@ -4,12 +4,11 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
-import { FacadeError } from '../../core/errors';
 import { normalizeName, suggestName } from '../../core/names';
-import { PlanError, type Agents, type Catalog, type CliCatalogPort, type CliChoice, type CliChoices, type HumanPort, type LaunchHistoryPort, type Location, type LocationId, type LocationPort, type LogPort, type RunId, type WorktreePort } from '../../core/ports';
+import type { Agents, Catalog, CliCatalogPort, CliChoice, CliChoices, HumanPort, LaunchHistoryPort, Location, LocationId, LocationPort, LogPort, RunId, WorktreePort } from '../../core/ports';
 import { locationLabel } from '../cardView';
 import { COMMANDS } from '../catalog';
-import { cliIcon, configureAgentsLabel, launchFailureText, plainText, reasonText } from '../presentation';
+import { cliIcon, configureAgentsLabel, launchFailureText, plainText, reasonOf, reasonText } from '../presentation';
 import { chooseLocation, Destination, environmentLabel, worktreeSourceLabel } from './location';
 import { BACK, Flow } from './stepping';
 
@@ -118,7 +117,7 @@ export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promis
 			if (chosen !== BACK) {
 				destination = chosen;
 			} else if (!deps.locations.snapshot().locations.some(each => each.id === destination.location.id)) {
-				// Its folder removed or its worktree deleted in the flow (D73): the first folder's first location, as at first use
+				// Its folder removed or its worktree deleted in the flow (LIFECYCLE-1.3): the first folder's first location, as at first use
 				const found = defaultLocation(deps.locations.snapshot(), undefined);
 				if (!found) {
 					return;
@@ -141,10 +140,7 @@ function start(deps: NewAgentDeps, name: string, destination: Destination, cli: 
 			...(destination.worktree ? { worktree: { branch: destination.worktree.branch } } : {})
 		});
 	} catch (err) {
-		const reason = err instanceof FacadeError && err.reason === 'ownership_lost'
-			? vscode.l10n.t("This workspace is owned by another window. Reload this window to take ownership.")
-			: err instanceof PlanError ? reasonText(err.said, err.message) : messageOf(err);
-		deps.notifyError(launchFailureText(name || cli.displayName, reason), {});
+		deps.notifyError(launchFailureText(name || cli.displayName, reasonOf(err)), {});
 		return;
 	}
 	deps.select(run);
@@ -157,7 +153,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	const place = worktree ? vscode.l10n.t("New worktree {0} from {1}", worktree.branch, locationLabel({ ...location, label: worktreeSourceLabel(location) }, catalog)) : locationLabel(location, catalog);
 	// A planned worktree is compact in the title; its full source stays in the location row (LIFECYCLE-1.1).
 	const titlePlace = worktree ? locationLabel({ ...location, label: vscode.l10n.t("{0} (new)", worktree.branch) }, catalog) : place;
-	// The environment only where it is not this machine (LIFECYCLE-1.1, D67): a remote window's, never `Local`
+	// The environment only where it is not this machine (LIFECYCLE-1.1): a remote window's, never `Local`
 	const where = location.environment === 'local' ? place : `${place} · ${environmentLabel(location.environment, deps.remote)}`;
 	const titleWhere = location.environment === 'local' ? titlePlace : `${titlePlace} · ${environmentLabel(location.environment, deps.remote)}`;
 	// The current choices stay in sight while the CLIs are filtered or scrolled
@@ -187,7 +183,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	const itemsOf = (choices: CliChoices | Error, now: Catalog): { readonly items: Item[]; readonly active?: Item } => {
 		const bottom = bottomOf(now);
 		if (choices instanceof Error) {
-			const item: Item = { label: vscode.l10n.t("Configure Agents..."), detail: choices.message, iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' };
+			const item: Item = { label: vscode.l10n.t("Configure Agents..."), detail: reasonOf(choices), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' };
 			return { items: [item, ...bottom], active: item };
 		}
 		const { available, unavailable } = orderedClis(choices.clis, deps.history.last().cli);
@@ -212,7 +208,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		items: [],
 		busy: true,
 		// The CLIs of the location's environment, found as the step shows (CLIS-1.1); the step up keeps its place meanwhile. Git metadata
-		// read later changes the bottom alone, the item in focus kept, so that an Enter right then takes what the person sees (D71)
+		// read later changes the bottom alone, the item in focus kept, so that an Enter right then takes what the person sees (LIFECYCLE-1.1)
 		live: picker => {
 			let up = true;
 			let found: CliChoices | Error | undefined;

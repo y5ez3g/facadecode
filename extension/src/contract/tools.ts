@@ -190,7 +190,7 @@ class ToolService {
 		} catch (err) {
 			outcome = { result: err instanceof ArgumentError ? errorResult(err, { data: err.problems }) : errorResult(err, { readOnly: QUERY_TOOLS.has(call.tool) }) };
 		}
-		// Each call by its tool, caller and outcome, never its arguments: how agents use the tools shows in the log (ARCHITECTURE-3.3, D117)
+		// Each call by its tool, caller and outcome, never its arguments: how agents use the tools shows in the log (ARCHITECTURE-3.3)
 		const { status, error } = outcome.result;
 		const tool = TOOLS.some(each => each.name === call.tool) ? call.tool : 'an unknown tool';
 		const projected = withRecovery(call.tool, compactResult(call.tool, outcome.result, !!(call.arguments as { details?: boolean } | undefined)?.details), call.arguments);
@@ -340,7 +340,7 @@ class ToolService {
 
 	/** The run `reference` names within the caller's reach (RULES-2.3, 4.3). */
 	/**
-	 * Whether `reference` names the person (RULES-2.3, D91): `#human` always; `@human` or `human` unless an agent the caller reaches is
+	 * Whether `reference` names the person (RULES-2.3): `#human` always; `@human` or `human` unless an agent the caller reaches is
 	 * named `human`, when it is ambiguous like any repeated name and resolving it as an agent says so.
 	 */
 	private async isHuman(reference: string, caller: Caller): Promise<boolean> {
@@ -500,7 +500,8 @@ class ToolService {
 		try {
 			directory = await network.directory();
 		} catch (err) {
-			return { windows: [], unavailable: [{ window_id: only ?? '*', reason: 'window_unavailable', message: `The other Facade windows cannot be listed now: ${errorText(err)}` }] };
+			// A window component too old for the client network says so: protocol_incompatible (ARCHITECTURE-4.3)
+			return { windows: [], unavailable: [{ window_id: only ?? '*', reason: err instanceof FacadeError ? err.reason : 'window_unavailable', message: `The other Facade windows cannot be listed now: ${errorText(err)}` }] };
 		}
 		const unavailable: Data[] = directory.unavailable
 			.filter(each => only === undefined || each.window === only)
@@ -524,9 +525,14 @@ class ToolService {
 		if (locationId !== undefined) { this.location(locationId); }
 		const agents = this.agentsFor(caller, selected !== undefined)
 			.filter(agent => (selected === undefined || agent.agent_id === selected) && (locationId === undefined || agent.location_id === locationId));
-		return { agents, window: await windowSnapshot({ window: this.deps.window, catalog: this.deps.locations.snapshot(), clis: this.deps.clis,
-			yolo: this.deps.yolo(), now: () => this.now(), agentCount: agents.length, location: locationId ?? (selected !== undefined ? String(agents[0]?.location_id ?? '') : undefined), targeted: selected !== undefined, details,
-			logFile: this.deps.historyLog }) };
+		// A facade.yolo neither true nor false is one of this window's configuration problems: the snapshot is still given (UX-4.1)
+		let yolo = true;
+		let yoloProblem: string | undefined;
+		try { yolo = this.deps.yolo(); } catch (err) { yoloProblem = errorText(err); }
+		const window = await windowSnapshot({ window: this.deps.window, catalog: this.deps.locations.snapshot(), clis: this.deps.clis,
+			yolo, now: () => this.now(), agentCount: agents.length, location: locationId ?? (selected !== undefined ? String(agents[0]?.location_id ?? '') : undefined), targeted: selected !== undefined, details,
+			logFile: this.deps.historyLog });
+		return { agents, window: yoloProblem === undefined ? window : { ...window, problems: [{ setting: 'facade.yolo', problem: yoloProblem }, ...window.problems as readonly Data[]] } };
 	}
 
 	/** This window's agents that `caller` reaches, as list_agents describes them (MCP-3.1). */
@@ -567,7 +573,7 @@ class ToolService {
 			id: delivery.id, from: sender.id, sender: { party: { run: sender.id, alias: sender.alias, name: sender.name }, window: from, ...sender.windowLabel !== undefined ? { label: sender.windowLabel } : {} },
 			to: target.id, text: delivery.text, ...delivery.replyTo !== undefined ? { replyTo: delivery.replyTo } : {},
 			elapsedMs: delivery.elapsedMs, ...delivery.callId !== undefined ? { callId: delivery.callId } : {},
-			// A request ID is the sender's words, kept as given where it is the shape a call's is (MCP-1.1, D110)
+			// A request ID is the sender's words, kept as given where it is the shape a call's is (MCP-1.1)
 			...typeof delivery.requestId === 'string' && codePoints(delivery.requestId) > 0 && codePoints(delivery.requestId) <= 200 ? { requestId: delivery.requestId } : {}
 		});
 		return defined({ status: sent.status, reason: sent.reason, obstacle: sent.obstacle, record: sent.record });
@@ -624,7 +630,7 @@ class ToolService {
 	}
 
 	private async startAgent(args: ToolArguments['start_agent'], caller: Caller, call: Received): Promise<Outcome> {
-		// A request ID the caller gave a start before: that start's agent, and no other (MCP-1.1, D110)
+		// A request ID the caller gave a start before: that start's agent, and no other (MCP-1.1)
 		const earlier = args.request_id !== undefined ? this.deps.agents.requested(caller.id, args.request_id) : undefined;
 		if (earlier) {
 			return this.startedBefore(earlier, args);
@@ -643,10 +649,12 @@ class ToolService {
 		if (acceptedMeanwhile) {
 			return this.startedBefore(acceptedMeanwhile, args);
 		}
-		const choice = cliChoiceOf(choices, args.cli, location);
+		const choice = cliChoiceOf(choices, args.cli, location, () => this.deps.clis.turnedOff?.(args.cli));
 		if (!choice.available) {
 			throw new FacadeError('UNAVAILABLE', 'unavailable', `${choice.displayName} cannot start at ${location.path}: ${choice.problem ?? 'it is not available.'}`);
 		}
+		// The YOLO it would start with, before anything is numbered: a facade.yolo neither true nor false refuses it (RULES-4.3, UX-4.1)
+		this.deps.yolo();
 		if (args.model !== undefined || args.effort !== undefined) {
 			const { facts } = this.cliFacts(location, choice.id);
 			for (const kind of ['model', 'effort'] as const) {
@@ -704,8 +712,8 @@ class ToolService {
 	}
 
 	/**
-	 * A start whose request ID started `facts` already: its agent as it is now, nothing started again (MCP-1.1, D110) - answered as the
-	 * start went: still starting, failed, or started (D118).
+	 * A start whose request ID started `facts` already: its agent as it is now, nothing started again (MCP-1.1) - answered as the
+	 * start went: still starting, failed, or started (RULES-1.5).
 	 */
 	private startedBefore(facts: RunFacts, args: ToolArguments['start_agent']): Outcome {
 		const present = this.deps.agents.get(facts.id);
@@ -721,7 +729,7 @@ class ToolService {
 			return { result: accepted(data, { ...effects, outcome: 'pending' }), headline: `${before} Its process is still starting. The start's outcome is ${LATER}.` };
 		}
 		if (facts.end?.kind === 'failed') {
-			const message = `${before} It could not start: ${facts.error?.reason ?? 'its launch failed.'}`;
+			const message = `${before} It could not start: ${facts.error?.english ?? facts.error?.reason ?? 'its launch failed.'}`;
 			return { result: failure({ code: 'FAILED', reason: facts.error?.source === 'worktree' ? 'worktree_failed' : 'launch_failed', message }, data, effects), headline: message };
 		}
 		if (!present && !facts.end) {
@@ -809,7 +817,7 @@ class ToolService {
 
 	/**
 	 * The creation prompt, once the process started (COLLABORATION-2.2): natively given, it is recorded with what that path can tell -
-	 * acceptance where its mapping is supported, an unknown outcome while it is used unverified (D49); otherwise it goes now as the
+	 * acceptance where its mapping is supported, an unknown outcome while it is used unverified (COLLABORATION-2.2); otherwise it goes now as the
 	 * caller's first ordinary message, its budget starting with the process, and the send's first response is reported - a pending
 	 * one's outcome comes to the caller from the message service. A failure leaves the agent running.
 	 */
@@ -939,7 +947,18 @@ class ToolService {
 		if (cleanup) {
 			return stopped(target, cleanup.value);
 		}
-		const resultMessageId = this.deps.messages.reserveResult();
+		let resultMessageId: string;
+		try {
+			resultMessageId = this.deps.messages.reserveResult();
+		} catch (err) {
+			// No number for a later result can be taken now (RULES-2.2), and the card is gone already: the stop answers as still ending,
+			// within its wait (MCP-3.2), and no later result comes: its end is not reported
+			this.deps.log?.(`Could not number the later result of the stop of ${target.alias}; none will follow: ${errorText(err)}`);
+			return {
+				result: accepted({ agent_id: target.id, reference: referenceOf(target), call_id: call.callId, closed: true, process_state: 'stopping', cleanup: 'pending' }, { outcome: 'pending', agent_id: target.id }),
+				headline: `Closed ${shown}'s card and terminal; its process is still being ended, and no later result can be numbered, so how its cleanup ends is not reported.`
+			};
+		}
 		void closing.then(late => {
 			const final = stopped(target, late);
 			this.reportTo(caller, { id: resultMessageId, callId: call.callId, tool: 'stop_agent', agent: target, text: receiptTextOf(final.result, final.headline),
@@ -955,11 +974,11 @@ class ToolService {
 	// Messages (MCP-4)
 
 	private async sendMessage(args: ToolArguments['send_message'], caller: Caller, call: Received): Promise<Outcome> {
-		// A request ID the caller gave a send before: that message as it stands, sent no second time (MCP-1.1, D110)
+		// A request ID the caller gave a send before: that message as it stands, sent no second time (MCP-1.1)
 		const earlier = args.request_id !== undefined ? this.deps.messages.findRequest(caller.id, args.request_id) : undefined;
 		if (earlier && earlier.window !== this.deps.window.id && earlier.delivery.status === 'pending' && this.deps.network && caller.window === undefined) {
 			// Another window holds it, its outcome not told here yet - its reply lost, or its result: asked there, where it stands, and
-			// never sent to whoever its reference names now (MCP-1.1, D119)
+			// never sent to whoever its reference names now (MCP-1.1)
 			return this.routeSend(earlier.window, { id: earlier.id, to: earlier.to, text: earlier.text, replyTo: earlier.replyTo, environment: earlier.environment }, args, caller, call, earlier);
 		}
 		if (earlier) {
@@ -1013,7 +1032,7 @@ class ToolService {
 	/**
 	 * Delivers `message` in `window`, where its record is made under its ID, within what is left of the two seconds (RULES-1.2), and keeps
 	 * a copy here: the window's answer, or - where the answer may have been lost after the message arrived - the message with its outcome
-	 * not known, so that a retry with its request ID asks that window again, as `earlier` does (MCP-1.1, D119).
+	 * not known, so that a retry with its request ID asks that window again, as `earlier` does (MCP-1.1).
 	 */
 	private async routeSend(window: string, message: { readonly id: string; readonly to: MessageRecord['to']; readonly text: string; readonly replyTo?: string; readonly environment?: string }, args: ToolArguments['send_message'], caller: Caller, call: Received, earlier?: MessageRecord): Promise<Outcome> {
 		const { id, to, text, replyTo } = message;
@@ -1071,7 +1090,7 @@ class ToolService {
 		return sendOutcome(record, answered.status, { shown, reason: answered.reason, obstacle: answered.obstacle, window, ...earlier ? { requestId: args.request_id } : {} });
 	}
 
-	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1, D110). */
+	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1). */
 	private sentBefore(record: MessageRecord, args: ToolArguments['send_message']): Outcome {
 		const status = record.delivery.status === 'pending' ? 'accepted' : record.delivery.status === 'unknown' ? 'failure' : record.delivery.status;
 		return sendOutcome(record, status, { shown: shownOf(record.to), requestId: args.request_id });
@@ -1255,9 +1274,14 @@ function within<T>(promise: Promise<T>, ms: number): Promise<{ readonly value: T
 	return Promise.race([promise.then(value => ({ value })), late]).finally(() => clearTimeout(timer));
 }
 
-function cliChoiceOf(choices: readonly CliChoice[], cli: string, location: Location): CliChoice {
+function cliChoiceOf(choices: readonly CliChoice[], cli: string, location: Location, turnedOff: () => string | undefined): CliChoice {
 	const choice = choices.find(each => each.id === cli);
 	if (!choice) {
+		// A built-in its setting turns off is listed for no new start, and is refused for that reason (CLIS-1.1, RULES-5.1)
+		const off = turnedOff();
+		if (off) {
+			throw new FacadeError('UNAVAILABLE', 'unavailable', `${off}.`);
+		}
 		throw new FacadeError('NOT_FOUND', 'not_found', `No CLI ${JSON.stringify(cli)} is configured at ${location.path}; the CLIs there are ${choices.map(each => each.id).join(', ') || 'none'}.`);
 	}
 	return choice;
@@ -1271,7 +1295,7 @@ function shownOf(party: MessageRecord['to']): string {
 
 /**
  * What a send came to, as its caller is answered (MCP-4.1): the message's facts and its delivery as it stands - success, accepted with
- * its deadline, or failure with why - and, for a repeated `requestId`, that nothing was sent again (MCP-1.1, D110).
+ * its deadline, or failure with why - and, for a repeated `requestId`, that nothing was sent again (MCP-1.1).
  */
 function sendOutcome(record: MessageRecord, status: SendResult['status'], how: { readonly shown: string; readonly reason?: string; readonly obstacle?: string; readonly window?: string; readonly requestId?: string }): Outcome {
 	const { shown } = how;

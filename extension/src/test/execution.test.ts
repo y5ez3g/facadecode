@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { ptydBuild, ptydRecords, recordedPtyds, recordPtyd } from '../base/ptydRegistry';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -10,9 +11,9 @@ import * as path from 'path';
 import type * as vscode from 'vscode';
 import type { ActivityReport, ExitReport, LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
-import { EarlierPtyds, PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from '../host/execution/ptydClient';
+import { EarlierPtyds, otherPtyds, ownPtydSocket, PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from '../host/execution/ptydClient';
 import { lineReader } from '../base/lines';
-import { EARLIER_PROTOCOLS, type Method, type Requests } from '../ptyd/protocol';
+import { EARLIER_PROTOCOLS, PTYD_PROTOCOL, type Method, type Requests } from '../ptyd/protocol';
 import { PtydServer } from '../ptyd/server';
 import { programEnv } from './ptydPlace';
 import { nextOwnerClaim } from '../record/ownership';
@@ -69,12 +70,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	/** How many reaches of a ptyd of an earlier protocol fail next, as one not taking a connection now would. */
 	let failEarlierClients: number;
 	class FlakyEarlierPtyds extends EarlierPtyds {
-		override async client(protocol: number): Promise<PtydClient> {
+		override async client(socket: string): Promise<PtydClient> {
 			if (failEarlierClients > 0) {
 				failEarlierClients--;
 				throw new PtydNotSent('injected: the ptyd of an earlier protocol took no connection now');
 			}
-			return super.client(protocol);
+			return super.client(socket);
 		}
 	}
 	let spawns: number;
@@ -90,7 +91,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 
 	setup(async () => {
 		home = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-exec-'));
-		server = new PtydServer(ptydSocketPath(home));
+		server = new PtydServer(ownPtydSocket(home, '/nonexistent/ptyd.js'));
+		server.build = ptydBuild('/nonexistent/ptyd.js', '');
 		assert.strictEqual(await server.listen(), true);
 		terminals = [];
 		activeChanged = new TestEmitter();
@@ -217,7 +219,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				dispose: () => real.dispose(), get isClosed() { return real.isClosed; }
 			};
 		};
-		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect, join: PtydClient.join.bind(PtydClient) }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
+		Execution = withModules({ vscode: vscodeApi, './ptydClient': { PtydClient: { connect, join: PtydClient.join.bind(PtydClient) }, PtydGone, PtydLost, PtydNotSent, EarlierPtyds: FlakyEarlierPtyds, otherPtyds, ownPtydSocket, ptydSocketPath, within } })<typeof import('../host/execution/agentExecution')>(require.resolve('../host/execution/agentExecution')).AgentExecution;
 	});
 
 	teardown(() => {
@@ -366,7 +368,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(screenOf(terminals[0]).split('ready').length - 1, 1, 'its output once');
 	});
 
-	test('CLI activity and title reach the core while the tab keeps only the agent name; until its first report its run is still starting (CLIS-2.3, D81, D130)', async () => {
+	test('CLI activity and title reach the core while the tab keeps only the agent name; until its first report its run is still starting (CLIS-2.3, LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
@@ -379,12 +381,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', observedAt: reports[reports.length - 1].observedAt, reporting: true, title: '✳ Claude Code' });
 		// Its probe answered, it was still starting until it reported: never unknown with a reason meanwhile
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity && !report.reason), JSON.stringify(reports));
-		// CLI titles never reach the tab: it says the agent's name alone (D130)
+		// CLI titles never reach the tab: it says the agent's name alone (LIFECYCLE-2.2)
 		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'CLI reports never emit tab names');
 		config['terminal.integrated.tabs.separator'] = ' / ';
 		configChanged.fire({ affectsConfiguration: section => section === 'terminal.integrated.tabs.separator' });
 		assert.deepStrictEqual(terminals[0].names, ['Ada'], 'tab separators no longer affect the name');
-		// The spinner turns where its card's dot is green, as the core says (D185)
+		// The spinner turns where its card's dot is green, as the core says (LIFECYCLE-2.2)
 		port.spin('run-3', true);
 		port.rename('run-3', 'Grace');
 		port.spin('run-3', false);
@@ -392,7 +394,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(terminals[0].names.at(-1), 'Grace');
 	});
 
-	test('D183: a run whose Facade tools were injected is still starting after its CLI reports, until they connect or its bound passes; work that stops is told a second later', async () => {
+	test('RULES-3.2: a run whose Facade tools were injected is still starting after its CLI reports, until they connect or its bound passes; work that stops is told a second later', async () => {
 		// A bound a slow runner's process start and first report fit in well, as its tools never connect here
 		const port = portOf(6_000);
 		const reports: ActivityReport[] = [];
@@ -417,7 +419,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.ok(performance.now() - stopped >= 900, `told ${Math.round(performance.now() - stopped)} ms after it stopped`);
 	});
 
-	test('D184: an Enter the person types over a draft goes in after the text typed before it, and once the CLI took the draft its text is told; an empty Enter, a line break in a paste or a run without an input reader tells nothing', async () => {
+	test('PANEL-1.4: an Enter the person types over a draft goes in after the text typed before it, and once the CLI took the draft its text is told; an empty Enter, a line break in a paste or a run without an input reader tells nothing', async () => {
 		// The reading before an Enter given time a slow runner needs: a reading that comes too late would tell nothing
 		const port = portOf(undefined, 5_000);
 		const submitted: { run: RunId; text: string }[] = [];
@@ -436,8 +438,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		pty.handleInput!('fix the login bug');
 		await until('its draft', async () => (await port.inspectInput('run-said', 'claude-frame')).state === 'draft');
 		pty.handleInput!('\r');
-		pty.handleInput!('next');
+		// Told once its input reads empty (CLIS-2.1): another draft typed before that would say nothing of it
 		await until('the draft told', () => submitted.length > 0);
+		pty.handleInput!('next');
 		await until('what it got, in order', async () => (await got()).includes(JSON.stringify('fix the login bug\rnext')));
 		pty.handleInput!('\x7f\x7f\x7f\x7f\r');
 		pty.handleInput!('\x1b[200~one\rtwo\x1b[201~');
@@ -446,7 +449,36 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(submitted, [{ run: 'run-said', text: 'fix the login bug' }]);
 	});
 
-	test('terminal decorations survive later plain reports, decoration-only updates and reattachment (CLIS-2.3, D160)', async () => {
+	test('LIFECYCLE-2.2, UX-2.2: a busy tab\'s spinner is still with workbench.reduceMotion on and turns with it off; at auto it stays still until the panel\'s page says the system allows motion, then follows what it says', async () => {
+		const port = portOf();
+		port.openPair(facts('run-motion'), { reveal: false });
+		open(terminals[0]);
+		const turning = async () => {
+			const before = terminals[0].names.length;
+			await new Promise(resolve => setTimeout(resolve, 350));
+			return terminals[0].names.length > before;
+		};
+		const setting = (value: string) => {
+			config['reduceMotion'] = value;
+			configChanged.fire({ affectsConfiguration: section => section === 'workbench.reduceMotion' });
+		};
+		config['reduceMotion'] = 'auto';
+		port.spin('run-motion', true);
+		const unreported = await turning();
+		port.systemMotion(false);
+		const allowed = await turning();
+		port.systemMotion(true);
+		const reduced = await turning();
+		setting('off');
+		const off = await turning();
+		port.systemMotion(false);
+		setting('on');
+		const on = await turning();
+		port.spin('run-motion', false);
+		assert.deepStrictEqual({ unreported, allowed, reduced, off, on }, { unreported: false, allowed: true, reduced: false, off: true, on: false });
+	});
+
+	test('terminal decorations survive later plain reports, decoration-only updates and reattachment (CLIS-2.3)', async () => {
 		const first = portOf();
 		const reports: ActivityReport[] = [];
 		first.onDidReport(report => reports.push(report));
@@ -545,7 +577,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	/** A CLI that says it is ready and then nothing, taking no part in the protocol. */
 	const QUIET = `process.stdout.write('ready\\r\\n'); setInterval(() => {}, 1000);`;
 
-	test('a run whose CLI shows no activity is still starting until its bound from its process start, then unknown with why; a reloaded window counts from that start, not its own (CLIS-2.3, D81)', async function () {
+	test('a run whose CLI shows no activity is still starting until its bound from its process start, then unknown with why; a reloaded window counts from that start, not its own (CLIS-2.3)', async function () {
 		this.timeout(30_000);
 		const BOUND = 2_000;
 		const first = portOf(BOUND);
@@ -586,7 +618,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await last.next.terminate('run-40'), 'terminated');
 	});
 
-	test('a CLI that asked whether its terminal takes reports and has not reported since is still starting until its bound, then waited for with why (CLIS-2.3, D81)', async function () {
+	test('a CLI that asked whether its terminal takes reports and has not reported since is still starting until its bound, then waited for with why (CLIS-2.3)', async function () {
 		this.timeout(20_000);
 		// A bound its program asks well within: Node takes a second or two to start in a Windows console
 		const port = portOf(4_000);
@@ -602,7 +634,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(reports.at(-2)?.reporting, true);
 	});
 
-	test('a run whose CLI showed its activity - its screen read, here - is not starting again as its CLI then asks whether its terminal takes reports and has not reported yet (CLIS-2.3, D81)', async () => {
+	test('a run whose CLI showed its activity - its screen read, here - is not starting again as its CLI then asks whether its terminal takes reports and has not reported yet (CLIS-2.3)', async () => {
 		const port = portOf(10_000);
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
@@ -617,7 +649,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await port.terminate('run-43'), 'terminated');
 	});
 
-	test('a run started in a new worktree keeps its CLI-and-folder terminal title (CLIS-2.3, D126)', async function () {
+	test('a run started in a new worktree keeps its CLI-and-folder terminal title (CLIS-2.3)', async function () {
 		this.timeout(15_000);
 		const port = portOf();
 		const reports: ActivityReport[] = [];
@@ -767,7 +799,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(JSON.parse(fs.readFileSync(path.join(home, 'workspaces', 'workspace-1', 'closing.json'), 'utf8')), [], 'its record goes once ptyd confirms it');
 	});
 
-	test('a window that shows no run connects again when its connection goes: its claim, which ptyd would let expire, is kept (RULES-4.1, D75)', async function () {
+	test('a window that shows no run connects again when its connection goes: its claim, which ptyd would let expire, is kept (RULES-4.1)', async function () {
 		this.timeout(20_000);
 		const port = portOf();
 		assert.deepStrictEqual(await port.live(), []);
@@ -841,7 +873,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(renames.map(each => each.name), ['Bob', 'Ada']);
 	});
 
-	test('native renames preserve title-like suffixes in full while changing CLI titles stay in reports, with no tab-name events (LIFECYCLE-2.2, D130)', async () => {
+	test('native renames preserve title-like suffixes in full while changing CLI titles stay in reports, with no tab-name events (LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);
 		const reports: ActivityReport[] = [];
@@ -956,7 +988,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		// ptyd stays away past the first try to connect again, which gives up; it comes back, and a later check claims the run again
 		await new Promise(resolve => setTimeout(resolve, 7_000));
 		assert.deepStrictEqual(exits, []);
-		server = new PtydServer(ptydSocketPath(home));
+		server = new PtydServer(ownPtydSocket(home, '/nonexistent/ptyd.js'));
+		server.build = ptydBuild('/nonexistent/ptyd.js', '');
 		assert.strictEqual(await server.listen(), true);
 		// The new ptyd does not hold it: it is gone, how is not known
 		await until('the run found gone', () => exits.length === 1, 10_000);
@@ -1027,7 +1060,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		closed.fire(Object.assign(terminals[0], { exitStatus: { reason: EXIT_REASON.Extension, code: undefined } }));
 		assert.deepStrictEqual(closes, []);
 		assert.strictEqual(await port.terminate('run-6'), 'terminated');
-		const observer = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(observer);
 		await until('ptyd to forget it', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
 		assert.throws(() => process.kill(pid, 0), /ESRCH/);
@@ -1039,7 +1072,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const starting = port.spawn('run-7', plan(ECHO), meta('run-7'));
 		port.removePair('run-7');
 		await assert.rejects(starting, /closed before its CLI started/);
-		const observer = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(observer);
 		await until('ptyd to end and forget it', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
 	});
@@ -1094,7 +1127,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		failTerminateOnce = true;
 		port.removePair('pending-close');
 		assert.strictEqual(await port.terminate('pending-close'), 'unconfirmed');
-		const observer = await PtydClient.connect(ptydSocketPath(home), '/unused', '/unused');
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/unused', '/unused');
 		extraClients.push(observer);
 		assert.strictEqual((await observer.request('list', { owner: 'workspace-1' }))[0].pid, started.pid);
 		await until('the pending close to be reconciled', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
@@ -1179,7 +1212,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(await port.conversations(), []);
 	});
 
-	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1, D86)', async function () {
+	test('a run in the ptyd of an earlier protocol - its window reloaded into this build - is listed, shown and operated through that ptyd: its screen, what is typed, its close; a new agent starts in this window\'s own (ARCHITECTURE-2.4, RULES-4.1)', async function () {
 		this.timeout(20_000);
 		const protocol = EARLIER_PROTOCOLS[0];
 		const earlier = await earlierWith('run-old');
@@ -1207,7 +1240,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			port.openPair(facts('run-new'), { reveal: false });
 			open(terminals[1]);
 			await port.spawn('run-new', plan(ECHO), meta('run-new'));
-			const own = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+			const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 			const old = (await PtydClient.join(earlier.socket, protocol))!;
 			extraClients.push(own, old);
 			const runsOf = async (client: PtydClient) => (await client.request('list', { owner: 'workspace-1' })).map(run => run.run);
@@ -1220,7 +1253,125 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		}
 	});
 
-	test('the ptyd of an earlier protocol going takes the window\'s runs there with it: each is told ended, how not known, and its terminal says so - never left out (RULES-3.3, 4.1, D86)', async function () {
+	/**
+	 * A ptyd of this same protocol but another build - at the name builds used before they named their ptyds, as 0.0.4's did, or at
+	 * `build`'s own name, recorded as it records itself - holding `run` where one is given (ARCHITECTURE-2.4).
+	 */
+	const otherBuildWith = async (run: RunId | undefined, build?: string): Promise<{ readonly server: PtydServer; readonly socket: string }> => {
+		const socket = ptydSocketPath(home, PTYD_PROTOCOL, build);
+		const server = new PtydServer(socket, () => undefined);
+		server.build = build;
+		assert.strictEqual(await server.listen(), true);
+		if (build) {
+			recordPtyd(ptydRecords(path.join(home, 'ptyd')), { protocol: PTYD_PROTOCOL, build, socket, pid: process.pid });
+		}
+		if (run) {
+			const before = (await PtydClient.join(socket, PTYD_PROTOCOL))!;
+			await before.request('claim', nextOwnerClaim('workspace-1', home));
+			await before.request('spawn', {
+				run, owner: 'workspace-1', file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: { ...meta(run) }
+			});
+			before.dispose();
+		}
+		return { server, socket };
+	};
+
+	for (const [kind, build] of [['named no build, as 0.0.4\'s', undefined], ['another build that recorded itself', 'abcdef0123']] as const) {
+		test(`ARCHITECTURE-2.4: a run in a ptyd of this protocol and ${kind} is shown and operated there; a new agent starts in this window's own ptyd alone`, async function () {
+			this.timeout(20_000);
+			const other = await otherBuildWith('run-kept', build);
+			try {
+				const port = portOf();
+				const live = await port.live();
+				assert.deepStrictEqual(live.map(run => [run.run, run.claimedElsewhere]), [['run-kept', false]]);
+				const attaching = port.attach(live[0], facts('run-kept'));
+				const terminal = await until('its terminal', () => terminals[0]);
+				open(terminal);
+				await attaching;
+				await until('its screen', () => screenOf(terminal).includes('ready'));
+				terminal.options.pty.handleInput!('kept');
+				await until('its answer, through the other build\'s ptyd', () => screenOf(terminal).includes('got kept'));
+				assert.ok((await port.readScreen('run-kept', 20)).lines.some(line => line.includes('got kept')), 'its screen is read there');
+				port.openPair(facts('run-new'), { reveal: false });
+				open(terminals[1]);
+				await port.spawn('run-new', plan(ECHO), meta('run-new'));
+				const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+				const old = (await PtydClient.join(other.socket, PTYD_PROTOCOL))!;
+				extraClients.push(own, old);
+				const runsOf = async (client: PtydClient) => (await client.request('list', { owner: 'workspace-1' })).map(run => run.run);
+				assert.deepStrictEqual([await runsOf(own), await runsOf(old)], [['run-new'], ['run-kept']]);
+				assert.strictEqual(await port.terminate('run-kept'), 'terminated');
+				assert.deepStrictEqual(await runsOf(old), []);
+			} finally {
+				other.server.close();
+			}
+		});
+	}
+
+	test('ARCHITECTURE-2.4: a ptyd of another build that holds none of this window\'s runs is not held, a new agent starting in this window\'s own; a record nothing listens at any more is taken out', async () => {
+		const other = await otherBuildWith(undefined, 'abcdef0123');
+		const records = ptydRecords(path.join(home, 'ptyd'));
+		const staleSocket = ptydSocketPath(home, PTYD_PROTOCOL, '0123abcdef');
+		recordPtyd(records, { protocol: PTYD_PROTOCOL, build: '0123abcdef', socket: staleSocket, pid: 999_999 });
+		try {
+			const port = portOf();
+			assert.deepStrictEqual(await port.live(), []);
+			assert.deepStrictEqual((port as unknown as { session: { earlierHeld: readonly unknown[] } }).session.earlierHeld, [], 'no other ptyd is held');
+			assert.ok(!recordedPtyds(records).some(record => record.socket === staleSocket), 'the stale record is taken out');
+			assert.ok(recordedPtyds(records).some(record => record.socket === other.socket), 'a live one stays');
+			port.openPair(facts('run-new'), { reveal: false });
+			open(terminals[0]);
+			await port.spawn('run-new', plan(ECHO), meta('run-new'));
+			const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+			const old = (await PtydClient.join(other.socket, PTYD_PROTOCOL))!;
+			extraClients.push(own, old);
+			const runsOf = async (client: PtydClient) => (await client.request('list', {})).map(run => run.run);
+			assert.deepStrictEqual([await runsOf(own), await runsOf(old)], [['run-new'], []]);
+		} finally {
+			other.server.close();
+		}
+	});
+
+	test('ARCHITECTURE-2.4, LIFECYCLE-3.2: each listing of every workspace\'s runs asks every other ptyd anew: a conversation an older window starts in its ptyd after it listed none is never offered to start twice', async function () {
+		this.timeout(20_000);
+		const protocol = EARLIER_PROTOCOLS.at(-1)!;
+		const older = new PtydServer(ptydSocketPath(home, protocol), () => undefined, undefined, protocol);
+		assert.strictEqual(await older.listen(), true);
+		const recorded = await otherBuildWith(undefined, 'abcdef0123');
+		const connections = new Map<string, number>();
+		for (const [name, other] of [['older', older], ['recorded', recorded.server]] as const) {
+			connections.set(name, 0);
+			(other as unknown as { readonly server: net.Server }).server.on('connection', () => connections.set(name, connections.get(name)! + 1));
+		}
+		const asked = async <T>(discover: () => Promise<T>): Promise<[T, string[]]> => {
+			const before = new Map(connections);
+			const found = await discover();
+			return [found, [...connections].filter(([name, count]) => count > before.get(name)!).map(([name]) => name).sort()];
+		};
+		try {
+			const port = portOf();
+			// This window's own search of the other ptyds for its runs is over: none of them holds any
+			assert.deepStrictEqual(await port.live(), []);
+			assert.deepStrictEqual(await asked(() => port.conversations()), [[], ['older', 'recorded']]);
+			// A window of the older build, still open, starts a conversation in its own ptyd
+			const window = (await PtydClient.join(ptydSocketPath(home, protocol), protocol))!;
+			extraClients.push(window);
+			await window.request('claim', nextOwnerClaim('workspace-3', home));
+			await window.request('spawn', {
+				run: 'run-later', owner: 'workspace-3', file: process.execPath, args: ['-e', ECHO], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24,
+				meta: { ...meta('run-later'), sessionId: 'started-later', cli: 'claude', environment: 'local' }
+			});
+			assert.deepStrictEqual(await asked(() => port.conversations()), [[{ sessionId: 'started-later', cli: 'claude', environment: 'local' }], ['older', 'recorded']]);
+			const [ids, listed] = await asked(() => port.allRunIds());
+			assert.ok(ids.includes('run-later'));
+			assert.deepStrictEqual(listed, ['older', 'recorded']);
+		} finally {
+			older.close();
+			recorded.server.close();
+		}
+	});
+
+	test('the ptyd of an earlier protocol going takes the window\'s runs there with it: each is told ended, how not known, and its terminal says so - never left out (RULES-3.3, 4.1)', async function () {
 		this.timeout(20_000);
 		const earlier = await earlierWith('run-gone');
 		try {
@@ -1243,7 +1394,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		}
 	});
 
-	test('after its first restore, a run a ptyd lists that the window shows no pair of - its reattach failed, or its ptyd was found late - is told once a while, for the window to restore again (RULES-4.1, D86)', async function () {
+	test('after its first restore, a run a ptyd lists that the window shows no pair of - its reattach failed, or its ptyd was found late - is told once a while, for the window to restore again (RULES-4.1)', async function () {
 		this.timeout(15_000);
 		const first = portOf();
 		first.openPair(facts('run-unshown'), { reveal: false });
@@ -1264,7 +1415,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(found, 1, 'once a while, not at every check');
 	});
 
-	test('a run of an earlier protocol\'s ptyd that could not be reached as the window reattached it is told as lost, and claimed again at a later check once it can be: never left reconnecting (RULES-3.1, 4.1, D86)', async function () {
+	test('a run of an earlier protocol\'s ptyd that could not be reached as the window reattached it is told as lost, and claimed again at a later check once it can be: never left reconnecting (RULES-3.1, 4.1)', async function () {
 		this.timeout(20_000);
 		const earlier = await earlierWith('run-late');
 		try {
@@ -1299,7 +1450,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('its exit', () => exits.length === 1);
 		failForgetOnce = true;
 		port.removePair('run-forget');
-		const own = await PtydClient.connect(ptydSocketPath(home), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		const own = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(own);
 		const listed = async () => (await own.request('list', { owner: 'workspace-1' })).some(run => run.run === 'run-forget');
 		await new Promise(resolve => setTimeout(resolve, 200));

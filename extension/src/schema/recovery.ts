@@ -56,6 +56,11 @@ function recoveryOf(tool: string, result: Result, data: Record<string, unknown>,
 	if (reason === 'unsupported' || reason === 'configuration_invalid') {
 		return { action: 'check_capability', ...check('list_agents') };
 	}
+	// A delivery that ran out of time reached its target, whose input did not take it in time: that is what to look at (MCP-1.2). A
+	// route's own timeout is UNAVAILABLE, and reconnecting is for lost routes alone
+	if (reason === 'timeout' && result.error?.code === 'FAILED') {
+		return { action: 'resolve_blocker', ...check('read_screen') };
+	}
 	if (reason === 'window_unavailable' || reason === 'timeout' || reason === 'invalid_response' || reason === 'route_failed') {
 		return { action: 'reconnect' };
 	}

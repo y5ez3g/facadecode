@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "在 VS Code 中並排執行 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi agent。",
+	"description": "在 VS Code 中並排執行 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi Agent。",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "新增 Agent...",
@@ -54,7 +54,7 @@
 	"config.custom.launch.start": "用於新互動式對話的引數，會完全依照所寫的內容傳遞。",
 	"config.custom.launch.resume": "必要: 用於接續某個確切已儲存對話的引數。`${sessionId}` 會由其工作階段 ID 取代，且必須出現。",
 	"icon.newAgent": "新增 Agent 圖示",
-	"command.history": "恢復 agent...",
-	"command.pinAgent": "釘選 agent",
-	"command.unpinAgent": "取消釘選 agent"
+	"command.history": "恢復 Agent...",
+	"command.pinAgent": "釘選 Agent",
+	"command.unpinAgent": "取消釘選 Agent"
 }

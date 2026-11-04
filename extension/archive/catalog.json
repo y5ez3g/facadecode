@@ -1,0 +1,184 @@
+{
+  "schemaVersion": 1,
+  "name": "@y5ez3g/facade-extension",
+  "repository": "https://github.com/y5ez3g/facadecode.git",
+  "releases": [
+    {
+      "version": "0.0.1",
+      "tag": "extension/0.0.1",
+      "sourceRevision": "4f7bc2744e9f16dded8a7b561f732da27c43d4a1",
+      "evidence": {
+        "verification": "Every published runtime bundle matches the production bundle from the first preview source commit. Original Marketplace VSIX files and their hashes are preserved.",
+        "sourceManifestVersion": "0.0.1",
+        "runtimeBundleCount": 10,
+        "historicalNativeAndModelChecks": "not rerun for this backfill"
+      },
+      "artifacts": [
+        {
+          "target": "darwin-arm64",
+          "file": "facadecode-darwin-arm64-0.0.1.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.1/1793380270956/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "270555732716ff05ad5bfce6a66300df5cfa3af9c45337332aa42bd5742462b8",
+          "marketplaceLastUpdatedAt": "2026-10-30T17:17:02.470Z"
+        },
+        {
+          "target": "linux-x64",
+          "file": "facadecode-linux-x64-0.0.1.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.1/1793380950396/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "2cc4f640a70b67091944b3a98b192fabb46bf7cbb58820b82bd0686277031df7",
+          "marketplaceLastUpdatedAt": "2026-10-30T17:27:49.193Z"
+        },
+        {
+          "target": "win32-x64",
+          "file": "facadecode-win32-x64-0.0.1.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.1/1793382268146/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "2dfd1d9d53c78816eac4b125892a68831d5d5e19f19be324c71a64145a526a74",
+          "marketplaceLastUpdatedAt": "2026-10-30T17:51:16.993Z"
+        },
+        {
+          "target": "universal",
+          "file": "facadecode-window-0.0.1.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode-window/0.0.1/1793380265154/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "ddf933a01bd518d2bf68edd4f0e0bdde44597f9fdf87769d3ae98c52da7f2ff8",
+          "marketplaceLastUpdatedAt": "2026-10-30T17:16:23.550Z"
+        }
+      ]
+    },
+    {
+      "version": "0.0.2",
+      "tag": "extension/0.0.2",
+      "sourceRevision": "8133741b66188ab336f549eb97cd5cf662723707",
+      "evidence": {
+        "verification": "Published runtime bundles and the three platform native backends match the successful three-platform CI run. Published release metadata, README and changelog differ from CI; published originals are retained.",
+        "ciRun": "https://github.com/y5ez3g/facadecode/actions/runs/41337771252",
+        "ciConclusion": "success",
+        "sourceManifestVersion": "0.2.0",
+        "publishedManifestVersion": "0.0.2",
+        "versionOverride": "The historical CI source says 0.2.0; Marketplace was published as 0.0.2 with the same runtime. The backfilled tag records that source and this explicit override.",
+        "historicalNativeAndModelChecks": "not rerun for this backfill"
+      },
+      "artifacts": [
+        {
+          "target": "darwin-arm64",
+          "file": "facadecode-darwin-arm64-0.0.2.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.2/1793561462742/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "c82ae3736c0b84928623d92c897b6b8f49eefd300c606b39a2a93a182a5551d4",
+          "marketplaceLastUpdatedAt": "2026-11-01T19:34:40.033Z"
+        },
+        {
+          "target": "linux-x64",
+          "file": "facadecode-linux-x64-0.0.2.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.2/1793561463973/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "75626fa6b37ff13507a3f68fefcc474e37ff7d1a93831847272444b0924194cc",
+          "marketplaceLastUpdatedAt": "2026-11-01T19:36:43.793Z"
+        },
+        {
+          "target": "win32-x64",
+          "file": "facadecode-win32-x64-0.0.2.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.2/1793561465082/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "bd9b1b4ef2acf1e49e8c863b165e2f70cbc84860f1e5293b4f1da827f5cd044d",
+          "marketplaceLastUpdatedAt": "2026-11-01T19:36:46.073Z"
+        },
+        {
+          "target": "universal",
+          "file": "facadecode-window-0.0.2.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode-window/0.0.2/1793561433025/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "177e237fc0df166b3c0261849cf79cb67052258a4256156bb5921d682347d811",
+          "marketplaceLastUpdatedAt": "2026-11-01T19:34:43.100Z"
+        }
+      ]
+    },
+    {
+      "version": "0.0.3",
+      "tag": "extension/0.0.3",
+      "sourceRevision": "edc9507da01bfbe2a2d6ccbb3b879c498bb86939",
+      "evidence": {
+        "verification": "All four published VSIX SHA-256 values match the original successful three-platform CI artifacts exactly.",
+        "ciRun": "https://github.com/y5ez3g/facadecode/actions/runs/41663309392",
+        "ciConclusion": "success",
+        "sourceManifestVersion": "0.0.3",
+        "historicalNativeAndModelChecks": "not rerun for this backfill"
+      },
+      "artifacts": [
+        {
+          "target": "darwin-arm64",
+          "file": "facadecode-darwin-arm64-0.0.3.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.3/1793723629538/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "284e984b598938803b4bf442c041cce69b82134af8315a061e0d21ad28a2752c",
+          "marketplaceLastUpdatedAt": "2026-11-03T16:41:51.267Z"
+        },
+        {
+          "target": "linux-x64",
+          "file": "facadecode-linux-x64-0.0.3.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.3/1793723623771/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "b0f02c2eef3bf2a070d9b3af9ee4b18722574a4683a824d5dafd8637a9594873",
+          "marketplaceLastUpdatedAt": "2026-11-03T16:41:10.140Z"
+        },
+        {
+          "target": "win32-x64",
+          "file": "facadecode-win32-x64-0.0.3.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.3/1793723625289/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "a984afcfca1dc022c56cb8d95cfef2701a1512761d6ee52718c1ac1e3861ab28",
+          "marketplaceLastUpdatedAt": "2026-11-03T16:41:48.277Z"
+        },
+        {
+          "target": "universal",
+          "file": "facadecode-window-0.0.3.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode-window/0.0.3/1793723608948/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "a3a3d55d75a5a2c15e34968d849633e50a5b67b41a844b665750572c923d5606",
+          "marketplaceLastUpdatedAt": "2026-11-03T16:39:42.487Z"
+        }
+      ]
+    },
+    {
+      "version": "0.0.4",
+      "tag": "extension/0.0.4",
+      "sourceRevision": "extension/0.0.4",
+      "evidence": {
+        "verification": "Original Marketplace files match the verified 0.0.4 release packages. Runtime sources are main PR #51 with release version metadata. Archival tooling is added after the product build.",
+        "runtimeBaseCommit": "59116d7e78750163d5b7dd90a8fb93212e8011d8",
+        "ciRun": "https://github.com/y5ez3g/facadecode/actions/runs/41702953268",
+        "ciConclusion": "success at identical runtime source before release metadata changes",
+        "unitTests": {
+          "passed": 1271,
+          "pending": 6
+        },
+        "packageChecksPassed": 12,
+        "isolatedEditorIntegration": "passed on official VS Code 1.144.1 with fake CLIs, including real 300249 ms cleanup and exact restoration",
+        "packaging": "macOS and universal component built locally; Linux/Windows retain target-tested CI runtime and native bytes with release metadata updated",
+        "sourceManifestVersion": "0.0.4",
+        "realModelAndRemoteChecks": "not rerun in 0.0.4 release preparation"
+      },
+      "artifacts": [
+        {
+          "target": "darwin-arm64",
+          "file": "facadecode-darwin-arm64-0.0.4.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.4/1793738972648/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "e799596d9a16d78476cfd44056fbc8376b09b792e3d7d42e62adac6cb465a565",
+          "marketplaceLastUpdatedAt": "2026-11-03T20:56:22.887Z"
+        },
+        {
+          "target": "linux-x64",
+          "file": "facadecode-linux-x64-0.0.4.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.4/1793738973682/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "9add2dac5744bd5102147bd9e29e1db143f560e4475e2b82cdf6c667e177ee77",
+          "marketplaceLastUpdatedAt": "2026-11-03T20:56:59.517Z"
+        },
+        {
+          "target": "win32-x64",
+          "file": "facadecode-win32-x64-0.0.4.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.0.4/1793738975309/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "deb7d8175489153924a2141e176f87f204c39301ffeebfd4154f8897368349e2",
+          "marketplaceLastUpdatedAt": "2026-11-03T20:56:25.717Z"
+        },
+        {
+          "target": "universal",
+          "file": "facadecode-window-0.0.4.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode-window/0.0.4/1793738961804/Microsoft.VisualStudio.Services.VSIXPackage",
+          "sha256": "92dbe9b983234c99639cd713c59faf782e8616b99ec6c44a2c39f1413329cc0d",
+          "marketplaceLastUpdatedAt": "2026-11-03T20:53:30.993Z"
+        }
+      ]
+    }
+  ]
+}

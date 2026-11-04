@@ -38,7 +38,7 @@ suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3
 	});
 	teardown(() => temp.remove());
 
-	test('a workspace\'s key comes from its URI, the same for every window of it; one the workspace kept wins - a folder window that became a multi-root workspace keeps the folder\'s (D65)', () => {
+	test('a workspace\'s key comes from its URI, the same for every window of it; one the workspace kept wins - a folder window that became a multi-root workspace keeps the folder\'s (ARCHITECTURE-2.2)', () => {
 		const folder = workspaceRecord('file:///work/shop', temp.dir);
 		const again = workspaceRecord('file:///work/shop/', temp.dir);
 		const other = workspaceRecord('file:///work/docs', temp.dir);
@@ -153,7 +153,7 @@ suite('Record: the workspace a window claims its runs under (ARCHITECTURE-2.2, 3
 		}
 	});
 
-	test('D70: a window whose extensions restart finds the key it claimed its runs under, by its editor session, while it still has the folder it had first; another session, another window\'s folders or a broken record find none', () => {
+	test('ARCHITECTURE-2.2: a window whose extensions restart finds the key it claimed its runs under, by its editor session, while it still has the folder it had first; another session, another window\'s folders or a broken record find none', () => {
 		const key = workspaceRecord('file:///work/shop', temp.dir).key;
 		keepWindowKey('session-1', key, ['file:///work/shop'], temp.dir);
 		const broken = path.join(temp.dir, 'windows', 'broken.json');

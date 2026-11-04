@@ -56,8 +56,8 @@ export function installedVersionOf(cli: string, executable: string): { readonly 
 			}
 		}
 		case 'opencode': {
-			// npm's package of its line, the program in its `bin/`: `opencode-ai` for 1.x, which is refused, `@opencode/cli` for 2.x (D78,
-			// D145); on Windows npm's shim is read for the program it runs
+			// npm's package of its line, the program in its `bin/`: `opencode-ai` for 1.x, which is refused, `@opencode/cli` for 2.x (CLIS-2.3,
+			// CLIS-1.1); on Windows npm's shim is read for the program it runs
 			const program = /\.cmd$/i.test(real) ? launchTarget(real, 'win32').executable : real;
 			for (let dir = path.dirname(program), up = 0; up < 2; dir = path.dirname(dir), up++) {
 				const file = path.join(dir, 'package.json');

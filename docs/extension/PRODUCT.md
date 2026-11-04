@@ -1,8 +1,6 @@
 # Product
 
 Facade Code is the product described here. This document sets direction; the lower layers define exact behavior.
-The owner recalibrated this direction on 2026-10-28 after both top-down reviews and authorized this revision.
-Specification status does not establish that the implementation already meets it.
 
 | Group | Decides |
 | --- | --- |
@@ -95,7 +93,7 @@ usability needs.
 **A person understands what a screen shows and how to use it at a glance.**
 
 The common path is short. Relevant information is visible; advanced choices appear where needed. Actions with the
-same name have the same meaning. The owner's Apple-like reference means this clarity, not a new visual theme.
+same name have the same meaning. Apple-like here means this clarity, not a new visual theme.
 Everything a person sees says what happened in plain words; internal mechanisms and their names stay out of it.
 
 ## 5 Scope and quality
@@ -104,9 +102,9 @@ Everything a person sees says what happened in plain words; internal mechanisms 
 
 **Facade provides agent operation, communication and work locations.**
 
-Start, find, inspect, type into, resume, pin/unpin and stop agents; send messages with explicit results; contact the person; choose
-locations and optionally create/use worktrees. Each feature
-states its limits honestly, including unsupported CLI capabilities. None imposes a workflow.
+Start, find, inspect, type into, resume, pin/unpin and stop agents; send messages with explicit results; contact the
+person; choose locations and optionally create, use and delete worktrees. Each feature states its limits honestly,
+including unsupported CLI capabilities. None imposes a workflow.
 
 ### 5.2 Operating boundaries
 
@@ -115,7 +113,7 @@ states its limits honestly, including unsupported CLI capabilities. None imposes
 - Built-in and configured custom CLIs run interactively. Facade does not supply a separate application or hosted agent.
 - The product name is Facade Code; Facade is the short form. User interfaces follow VS Code's language; agent APIs use English.
 - The supported desktop editor must supply the required extension APIs. Browser-only editors and virtual filesystems
-  without an executable workspace environment are outside this release.
+  without an executable workspace environment are not supported.
 - Compatibility is demonstrated per editor, platform and integration; it is not inferred from a similar appearance.
 
 ### 5.3 Agents run in the workspace environment
@@ -153,23 +151,11 @@ These are normal MCP operating rules, not authentication or protection against d
 
 **The complete journeys work coherently, and claims about behavior are backed by acceptance evidence.**
 
-Local and remote interoperability is part of this release: verify a local environment and two remote environments
+Local and remote interoperability is part of the product: verify a local environment and two remote environments
 communicating and stopping agents, and verify that 100 agents in one window remain usable. 100 is a required test
-scale, not a product cap; larger sessions may start without a claim that their usability has been tested. A real VS
-Code user must walk the product before public use.
+scale, not a product cap; larger sessions may start without a claim that their usability has been tested. Release
+acceptance includes a real VS Code user's walkthrough of the product.
 
 Normal use, cancellation, errors, reconnect and reopening have defined outcomes. The user sees what actually happened
 and retains access to failures. A passing build alone does not prove the product works. Unsupported or unverified
 capabilities are named; technical limitations do not quietly redefine the product.
-
-## Change log
-
-- 2026-10-31: Added the owner-authorized Resume and linked Pin/Unpin step, using Facade Dots as the reference.
-
-- 2026-10-31: Configured custom CLIs run interactively beside the built-ins (CLIS-3.4).
-- 2026-10-30: Step 2 of the Facade Code extension: agents start, message and operate one another across this computer's
-  windows (1.1, 2.1, 3.1, 5.1, 5.6), with the Facade Dots wording; 4.2 adds the owner's plain-language rule (D96); 5.7
-  requires local and two remote environments communicating and stopping agents.
-
-- 2026-10-29: Step 1 of the Facade Code extension, carried from the Facade Dots specification: the rules step 1
-  needs, each with its final number. Later steps add the others.

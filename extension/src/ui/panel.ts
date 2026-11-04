@@ -37,6 +37,7 @@ const isText: Check = value => typeof value === 'string';
 const isPage: Check = value => typeof value === 'string' && /^[0-9a-f]{32}$/.test(value);
 const isAction: Check = value => typeof value === 'string' && value.length > 0 && value.length <= 64;
 const isTarget: Check = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
+const isFlag: Check = value => typeof value === 'boolean';
 
 /** What the person can do on the page (PANEL-3.1, 1.2), each with whether it is a card's and so names the card's run. */
 const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
@@ -45,7 +46,7 @@ const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	resume: { target: false },
 	clearFilter: { target: false },
 	openFolder: { target: false },
-	// F2 on a card: the host opens the Input Box and validates the name (D38)
+	// F2 on a card: the host opens the Input Box and validates the name (PANEL-3.1)
 	rename: { target: true }
 };
 
@@ -54,7 +55,9 @@ const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
  * of its fields, with one of another type or with any other field is refused (PANEL-3.2).
  */
 const MESSAGES: { readonly [type: string]: readonly [required: Readonly<Record<string, Check>>, optional?: Readonly<Record<string, Check>>] } = {
-	ready: [{ page: isPage }],
+	// The system's reduced-motion preference comes with it, and alone as it changes (LIFECYCLE-2.2)
+	ready: [{ page: isPage }, { reducedMotion: isFlag }],
+	motion: [{ page: isPage, reduced: isFlag }],
 	error: [{ page: isPage, message: isText }],
 	act: [{ page: isPage, action: isAction, what: value => typeof value === 'string' && Object.hasOwn(ACTS, value) }, { target: isTarget }],
 	// A probe's answer, in the integration suite's build alone: the shipped one has none of its code (UX-3.2)
@@ -106,7 +109,9 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 	private readonly contextSaid = new Map<string, boolean>();
 	private progressing = false;
 
-	constructor(private readonly extensionUri: vscode.Uri, private readonly model: PanelModel, private readonly actions: PanelActions, private readonly log: LogPort) {
+	constructor(private readonly extensionUri: vscode.Uri, private readonly model: PanelModel, private readonly actions: PanelActions, private readonly log: LogPort,
+		/** The system's reduced-motion preference, as the page says it: the tab spinners follow it (LIFECYCLE-2.2). */
+		private readonly motion?: (reduced: boolean) => void) {
 		this.disposables.push(model.onDidChange(state => this.publish(state)), vscode.workspace.onDidChangeConfiguration(change => {
 			if (change.affectsConfiguration('workbench.list') || change.affectsConfiguration('window.zoomLevel')
 				|| change.affectsConfiguration('workbench.experimental.modernUI')) {
@@ -194,12 +199,19 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		}
 		if (message.type === 'ready') {
 			this.page = message.page;
+			if (typeof message.reducedMotion === 'boolean') {
+				this.motion?.(message.reducedMotion);
+			}
 			this.postScrolling();
 			this.post(this.model.state());
 			this.waiting.splice(0).forEach(then => then());
 			return;
 		}
 		if (message.page !== this.page) {
+			return;
+		}
+		if (message.type === 'motion') {
+			this.motion?.(message.reduced as boolean);
 			return;
 		}
 		if (message.type === 'probed') {

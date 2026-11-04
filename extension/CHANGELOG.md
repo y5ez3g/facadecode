@@ -1,6 +1,13 @@
 # Changelog
 
-## Unreleased
+## 0.0.5
+
+- **Fixed: every new agent failed with `Cannot create process` after updating to 0.0.4.** 0.0.4 kept starting agents in the background process of the version it replaced, whose files the update had removed. Each installation now starts agents in its own background process, whatever the update changed, while agents an earlier version started keep running there until they end; that process is then let go. You need not end anything by hand after updating. Where an installation is removed under a process still using it, Facade says so and asks you to reload the window, rather than `Cannot create process`.
+- **Fixed: Codex agents stayed green after their turn.** A Codex 0.166.0 agent that left a command running, such as a development server, kept its working dot after it finished; its dot now follows the turn. Agents started before this version keep the old behavior.
+- **Fixed: messages to Codex refused at its transcript footer.** While Codex 0.166.0 showed its passive "latest" footer, messages to it were refused; they are delivered now.
+- **Fixed: smaller things the specification review found.** A pinned card's pin shows its tooltip again. Facade's own reasons - another window owning the workspace, a working location that is gone - are in your language and never show an internal ID. A pin or unpin that cannot be saved, from the card or the tab, says so. An agent with an empty name is `#aN` everywhere. Chinese writes Agent the same way everywhere. A busy tab's spinner follows the system's reduced-motion setting. Show Agent Launch... shows everything Facade adds to a start, and says when no folder trust is written. Without its Window Component, Facade's commands explain what to install instead of failing; with one too old to connect windows, new agents and messages are refused until it is updated, so that no agent or message number is ever given twice.
+
+## 0.0.4
 
 - **Fixed: agents retained across an update could not use their Facade tools.** Their terminal connections now carry tool calls and replies again, including after reconnection.
 - **Fixed: Muse Code agents ended as they started.** A Muse Code agent in a folder whose `.mcp.json` already had a `facade` server - the Facade Code app leaves one - ended at once with "-c mcpServers.facade: refusing run: the server name is reserved", as Muse Code will not run with a second server of that name. Facade now takes the place of the app's entry there, as it does the app's other files; where the server is your own, or Muse Code would refuse to run for another reason in your configuration, the agent starts without working with other agents and says why.

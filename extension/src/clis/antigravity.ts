@@ -94,7 +94,7 @@ function workingDirectoryOf(cwd: string, env: Environment, platform: NodeJS.Plat
  * Antigravity's CLI in its own UI (CLIS-1.3). YOLO on: edits accepted and permissions bypassed, `--mode accept-edits
  * --dangerously-skip-permissions`. YOLO off: its approvals its own. It has no sandbox of its own. Every launch trusts the folder it
  * starts in as accepting its trust question does: the folder an item of the `trustedWorkspaces` of its settings, which trust exact
- * folders, so a worktree has its own (CLIS-3.3, D62).
+ * folders, so a worktree has its own (CLIS-3.3).
  */
 export const antigravityAdapter: CliAdapter = {
 	id: 'agy',

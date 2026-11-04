@@ -5,9 +5,9 @@
 import * as assert from 'assert';
 import { arranged, atEnd, atStart, moved, withNew } from '../ui/order';
 
-suite('The panel\'s two queues (PANEL-2.1, D173, U05)', () => {
+suite('The panel\'s two queues (PANEL-2.1, U05)', () => {
 
-	test('a new card goes last; one already in the stack keeps its place, whatever its state; Pin moves a card last, Unpin first (D181)', () => {
+	test('a new card goes last; one already in the stack keeps its place, whatever its state; Pin moves a card last, Unpin first (PANEL-2.1)', () => {
 		assert.deepStrictEqual([withNew(['a', 'b'], 'c'), withNew(['a', 'b'], 'a'), atEnd(['a', 'b', 'c'], 'a'), atEnd(['a', 'b'], 'b'), atEnd(['a'], 'n'), atStart(['a', 'b', 'c'], 'c'), atStart(['a'], 'n')],
 			[['a', 'b', 'c'], ['a', 'b'], ['b', 'c', 'a'], ['a', 'b'], ['a', 'n'], ['c', 'a', 'b'], ['n', 'a']]);
 	});

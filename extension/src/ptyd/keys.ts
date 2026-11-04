@@ -22,7 +22,7 @@ export interface KeyModes {
 export const DEFAULT_KEY_MODES: KeyModes = { applicationCursorKeys: false, kittyFlags: 0, win32Input: false };
 
 /**
- * Text for a Windows console in win32 input mode (D191). ConPTY otherwise synthesizes a release after each UTF-16 unit;
+ * Text for a Windows console in win32 input mode (CLIS-2.1). ConPTY otherwise synthesizes a release after each UTF-16 unit;
  * Codex's and Muse's Windows readers pair a high surrogate with that release and lose the character. These are text, not
  * physical keys: send the two key-down records together, without releases (which those readers would insert a second time).
  * Existing control sequences and BMP text pass through unchanged.

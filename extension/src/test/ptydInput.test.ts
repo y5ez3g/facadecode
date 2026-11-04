@@ -7,7 +7,7 @@ import { InputEffect, InputQueue } from '../ptyd/input';
 import { DEFAULT_KEY_MODES, isAgentKey, keySequence, pasteSequence } from '../ptyd/keys';
 import { withModules } from './withModules';
 
-suite('Windows Unicode input through the run (D191)', () => {
+suite('Windows Unicode input through the run (CLIS-2.1)', () => {
 	for (const platform of ['win32', 'linux'] as const) {
 		test(`${platform}: human input, automated paste and printable keys preserve supplementary characters in the requested input mode`, async () => {
 			let output!: (data: string) => void;

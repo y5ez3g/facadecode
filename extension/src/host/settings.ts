@@ -10,7 +10,7 @@
 import * as vscode from 'vscode';
 import type { SettingsReader } from '../clis/catalog';
 import { shown } from '../clis/config';
-import { PlanError } from '../core/ports';
+import { FacadeError } from '../core/errors';
 
 /** The YOLO setting of RULES-4.3. */
 export const YOLO_SETTING = 'facade.yolo';
@@ -31,13 +31,13 @@ export function readYolo(): { readonly value: boolean; readonly problem?: undefi
 }
 
 /**
- * The destination's YOLO for a launch being accepted (RULES-4.3): `facade.yolo`, true by default. Throws a PlanError naming
- * the setting where it holds neither true nor false.
+ * The destination's YOLO for a launch being accepted (RULES-4.3): `facade.yolo`, true by default. Where it holds neither true nor
+ * false, the launch is refused before any effect, `configuration_invalid`, naming the setting (UX-4.1).
  */
 export function yolo(): boolean {
 	const read = readYolo();
 	if (read.problem !== undefined) {
-		throw new PlanError(read.problem, 'configuration_invalid', { kind: 'yolo_type', values: [read.received] });
+		throw new FacadeError('UNAVAILABLE', 'configuration_invalid', read.problem, { kind: 'yolo_type', values: [read.received] });
 	}
 	return read.value;
 }

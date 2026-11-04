@@ -69,7 +69,7 @@ suite('ptyd: a run\'s screen and its numbered output meet once (ARCHITECTURE-2.3
 		});
 	}
 
-	test('a screen drawn anew keeps what its program set that the serializer leaves out: the mouse encoding, a hidden cursor, the kitty keyboard flags and win32 input (D178)', async () => {
+	test('a screen drawn anew keeps what its program set that the serializer leaves out: the mouse encoding, a hidden cursor, the kitty keyboard flags and win32 input (ARCHITECTURE-2.3)', async () => {
 		const { run, output } = runOf();
 		try {
 			output('prompt> \x1b[?1002h\x1b[?1006h\x1b[?25l\x1b[>1u\x1b[>9u\x1b[?9001h');

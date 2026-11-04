@@ -181,7 +181,7 @@ export interface LaunchPlan {
 	 * version. A CLI without one is never typed a message into.
 	 */
 	readonly input: { readonly adapter?: string; readonly capability: CapabilityState };
-	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3, D80). */
+	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3). */
 	readonly screenStatus?: string;
 	readonly sessionId?: string;
 	/** Whether a run can keep identifying its exact conversation, including after native session changes. */
@@ -249,10 +249,10 @@ export interface ActivityReport {
 	readonly reporting: boolean;
 	/**
 	 * Its run is still starting - its CLI has not shown its activity yet, or its Facade tools have not connected - within its bound
-	 * from its process start (CLIS-2.3, D81, D183).
+	 * from its process start (CLIS-2.3).
 	 */
 	readonly awaitingActivity?: true;
-	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly (D183). */
+	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly (RULES-3.2). */
 	readonly notReady?: true;
 }
 
@@ -281,10 +281,10 @@ export type CleanupResult = 'terminated' | 'already_exited' | 'unconfirmed' | 'f
 export interface ExecutionPort {
 	readonly onDidIdentify?: Event<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>;
 	readonly onDidPinTab?: Event<{ readonly run: RunId; readonly pinned: boolean }>;
-	/** The person pressed Enter over text in a run's input, and its CLI took it (PANEL-1.4, D184): that text, as its input drew it. */
+	/** The person pressed Enter over text in a run's input, and its CLI took it (PANEL-1.4): that text, as its input drew it. */
 	readonly onDidSubmit?: Event<{ readonly run: RunId; readonly text: string }>;
 	pinTab?(run: RunId, pinned: boolean): void;
-	/** Turns the spinner on the run's tab while its card's dot is green, and stops it otherwise (LIFECYCLE-2.2, D185). */
+	/** Turns the spinner on the run's tab while its card's dot is green, and stops it otherwise (LIFECYCLE-2.2). */
 	spin?(run: RunId, busy: boolean): void;
 	conversations?(): Promise<readonly ConversationKey[]>;
 	/** Creates the run's editor terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). */
@@ -336,7 +336,7 @@ export interface RunMeta {
 	readonly pin?: string;
 	readonly sessionId?: string;
 	readonly exactResume?: boolean;
-	/** Whether its conversation is known to be saved - Facade resumed it, or its CLI named it - so that it can be pinned (D180). */
+	/** Whether its conversation is known to be saved - Facade resumed it, or its CLI named it - so that it can be pinned (LIFECYCLE-3.4). */
 	readonly resumable?: boolean;
 	readonly alias: string;
 	readonly name: string;
@@ -353,7 +353,7 @@ export interface RunMeta {
 	readonly creator?: RunId;
 	readonly creatorLabel?: string;
 	readonly origin?: 'human' | 'agent';
-	/** The creator's request ID for its start, where it gave one (MCP-1.1, D110). */
+	/** The creator's request ID for its start, where it gave one (MCP-1.1). */
 	readonly requestId?: string;
 	/** The original creation prompt's message ID, retained for start-result lookup without replay. */
 	readonly promptId?: string;
@@ -370,7 +370,7 @@ export interface RunMeta {
 	readonly toolsProblem?: ToolsProblem;
 	readonly toolsFile?: string;
 	readonly promptLine?: string;
-	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4, D184). */
+	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4). */
 	readonly said?: string;
 	/** Its ordinary-message input as its launch planned it, kept across a reload. */
 	readonly inputAdapter?: string;
@@ -389,7 +389,7 @@ export interface ConversationKey {
 
 /**
  * The conversation a Pin restores: without a session where its agent was pinned before its CLI named one. That Pin starts a new
- * conversation of the CLI and takes the one the CLI names (LIFECYCLE-3.4, D182).
+ * conversation of the CLI and takes the one the CLI names (LIFECYCLE-3.4).
  */
 export type PinnedConversation = Omit<ConversationKey, 'sessionId'> & { readonly sessionId?: string };
 
@@ -411,7 +411,7 @@ export interface ConversationEntry {
 	readonly unavailable?: string;
 }
 
-/** A Resume picker session: batches of 100, recent first, with metadata read once and reused (LIFECYCLE-3.2, D35). */
+/** A Resume picker session: batches of 100, recent first, with metadata read once and reused (LIFECYCLE-3.2). */
 export interface ConversationPager extends Disposable {
 	/** The next batch, or `done` once every relevant store is exhausted; never silently stops at a scan limit. */
 	next(): Promise<{ readonly entries: readonly ConversationEntry[]; readonly done: boolean }>;
@@ -487,7 +487,7 @@ export interface WorktreePort {
 	/** Creates through the editor's native Git API, then confirms with Git; partial effects are kept and reported (WORKTREES-2.2). */
 	create(plan: WorktreePlan, stillWanted: () => boolean): Promise<Location>;
 	/**
-	 * Deletes a linked worktree that no workspace folder is in (WORKTREES-3.2, D73): refused with nothing touched where Git lists a
+	 * Deletes a linked worktree that no workspace folder is in (WORKTREES-3.2): refused with nothing touched where Git lists a
 	 * change that is not committed or an untracked file, or another worktree is inside it; otherwise `closeAgents` - the agents
 	 * launched there closed, true once all their processes are known to have ended - then a second check and `git worktree remove`
 	 * without `--force`. Its branch is kept.
@@ -505,7 +505,10 @@ export type Lifecycle = 'starting' | 'running' | 'ended';
 export type Phase = 'creating_worktree' | 'launching_cli' | 'running';
 
 export interface RunError {
+	/** The reason as the person reads it, in their language where Facade words it (UX-2.4). */
 	readonly reason: string;
+	/** The same reason in English, for agents and logs (UX-1.3, MCP-1.2), where it differs from `reason`. */
+	readonly english?: string;
 	readonly worktree?: WorktreeCreationEffects;
 	/** Where the error came from: `launch`, `cli`, `exit`, `activity`, `location`... */
 	readonly source: string;
@@ -517,7 +520,7 @@ export interface RunFacts {
 	readonly resumable?: boolean;
 	/**
 	 * Whether it can be pinned (LIFECYCLE-3.4): its conversation is known to be saved, or it runs a CLI that names the conversation
-	 * it holds, also before it has one (D180, D182).
+	 * it holds, also before it has one (LIFECYCLE-3.4).
 	 */
 	readonly pinnable?: boolean;
 	readonly pin?: string;
@@ -546,15 +549,15 @@ export interface RunFacts {
 	readonly reporting: boolean;
 	/**
 	 * Its process started, and its CLI has not shown its activity yet or its Facade tools have not connected: the run is still
-	 * starting, within CLIS-2.3's bound (D81, D183).
+	 * starting, within CLIS-2.3's bound (CLIS-2.3).
 	 */
 	readonly awaitingActivity?: true;
-	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly, red (D183). */
+	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly, red (RULES-3.2). */
 	readonly notReady?: true;
 	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
 	readonly title?: string;
 	/**
-	 * The last message sent to it (PANEL-1.4, D184): what its CLI took from its input after the person's Enter, or a message Facade
+	 * The last message sent to it (PANEL-1.4): what its CLI took from its input after the person's Enter, or a message Facade
 	 * delivered. Its card's second line says it from then on, never the CLI's title again.
 	 */
 	readonly said?: string;
@@ -568,7 +571,7 @@ export interface RunFacts {
 	/** The creator's reference as its window named it at the start, `@name #aN`: what the card's hover says started it (PANEL-1.5). */
 	readonly creatorLabel?: string;
 	readonly origin: 'human' | 'agent';
-	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1, D110). */
+	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1). */
 	readonly requestId?: string;
 	/** The original creation prompt's message ID; no new prompt is inferred from a repeated request. */
 	readonly promptId?: string;
@@ -610,7 +613,9 @@ export interface RunChange {
 
 /** A failure the core tells the person, as facts the window words in the person's language (UX-2.4). */
 export type HumanFailure = { readonly kind: 'restore'; readonly name: string; readonly reason: string; readonly count: number; readonly worktree?: never }
-	| { readonly kind: 'pin'; readonly name: string; readonly reason: string; readonly worktree?: never }
+	| { readonly kind: 'pin' | 'unpin'; readonly name: string; readonly reason: string; readonly worktree?: never }
+	/** A close whose process could not be ended: its card is gone already (LIFECYCLE-3.1). */
+	| { readonly kind: 'terminate'; readonly name: string; readonly reason?: never; readonly worktree?: never }
 	| { readonly kind: 'start'; readonly name: string; readonly reason: string; readonly worktree?: WorktreeCreationEffects };
 
 export interface HumanPort {
@@ -679,7 +684,7 @@ export interface LaunchRequest {
 	 */
 	readonly origin: 'human' | 'agent';
 	readonly creator?: { readonly run: RunId; readonly root: RunId; readonly label?: string };
-	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1, D110). */
+	/** The caller's request ID, where it gave one: kept with the run, so that the same one again answers it (MCP-1.1). */
 	readonly requestId?: string;
 	readonly promptId?: string;
 	/** Original MCP start call, for matching a continuing start and its receipt after retries/reload. */

@@ -6,7 +6,7 @@
 // editor's settings and the destination folder's terminal environment. Read on every use, so a setting or PATH change applies to
 // the next list and the next start. A start given the Facade tools has their files written before it is returned: where that
 // fails, the CLI starts without them (CLIS-2.2). A start of a CLI that keeps its trust in a file of its own has its folder trusted
-// there first; where it cannot be, the start goes ahead and the CLI asks in its terminal (CLIS-3.3, D62).
+// there first; where it cannot be, the start goes ahead and the CLI asks in its terminal (CLIS-3.3).
 
 import { SESSION_HOOK_SCRIPT, sessionDirOf, sessionFileOf, sessionHookCommand } from '../clis/identity';
 import * as fs from 'fs';
@@ -17,9 +17,9 @@ import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
 import { CatalogEntry, catalogOf, entryOf, SettingsReader } from '../clis/catalog';
 import { acquireProject, injectedRecordOf, markPlanned, reconcileRuns, releaseRun, removeRunFiles, writeRunFiles } from '../clis/injected';
-import { CliPlanError, DestinationEnvironment, discover, discoverEntry, environmentOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough, targetOf } from '../clis/plan';
+import { CliPlanError, DestinationEnvironment, discover, discoverEntry, environmentOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough, targetOf, turnedOffError } from '../clis/plan';
 import { installedVersionOf } from '../clis/version';
-import { markedSkill, runDirOf, ToolsInput } from '../clis/tools';
+import { markedSkill, McpServer, runDirOf, ToolsInput } from '../clis/tools';
 import { writeTrust } from '../clis/trust';
 import type { CliFacts } from '../contract/tools';
 import { CliCatalogPort, CliChoice, CliChoices, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
@@ -27,7 +27,7 @@ import { FACADE_SKILL } from '../schema/skill';
 import { readCollaboration, readSetting } from './settings';
 import type { CliProblem } from '../clis/config';
 import { CUSTOM_SETTING } from '../clis/custom';
-import { describeLaunches, LaunchDescription } from '../clis/describe';
+import { describeLaunches, EffectiveInputs, LaunchDescription, PLACEHOLDERS } from '../clis/describe';
 import { destinationEnvironment } from './terminals';
 
 /** Where the planner reads from: the editor's settings and terminal environment unless a test gives its own. */
@@ -40,8 +40,10 @@ export interface HostClisOptions {
 	readonly fact?: (event: string, fields: Readonly<Record<string, unknown>>) => void;
 	/** This execution environment's Facade directory, where runs' launch files go (ARCHITECTURE-3.1). */
 	readonly home?: string;
-	/** The extension's version, which marks the skill Facade writes into a folder (D179). */
+	/** The extension's version, which marks the skill Facade writes into a folder (CLIS-2.2). */
 	readonly version?: string;
+	/** The MCP server a start of `run` would be given, as Show Agent Launch shows it: what only a start has, placeholders (CLIS-4.1). */
+	readonly server?: (run: string) => McpServer;
 }
 
 /** The plan as the core has it: without the trust and injected files written for it. */
@@ -65,6 +67,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	private readonly scans = new Map<string, string>();
 	private readonly fact: HostClisOptions['fact'];
 	private readonly skill: string;
+	private readonly server: HostClisOptions['server'];
 
 	constructor(options: HostClisOptions = {}) {
 		this.read = options.read ?? readSetting;
@@ -73,6 +76,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		this.home = options.home ?? facadeHome();
 		this.fact = options.fact;
 		this.skill = options.version ? markedSkill(FACADE_SKILL, options.version) : FACADE_SKILL;
+		this.server = options.server;
 	}
 
 	/**
@@ -130,6 +134,12 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		return found.available ? undefined : found.problem ?? 'This CLI is unavailable.';
 	}
 
+	/** Why the built-in `cli` is not offered for new starts, where its `.enabled` setting turns it off (CLIS-1.1); none otherwise. */
+	turnedOff(cli: string): string | undefined {
+		const entry = entryOf(catalogOf(this.read), cli);
+		return entry && !entry.enabled ? turnedOffError(entry.adapter).message : undefined;
+	}
+
 	/**
 	 * The built-ins new starts are offered in CLIS-1.1 order - a turned-off one hidden - then the custom CLIs, for `location`; and the
 	 * errors of `facade.custom` no CLI stands for (CLIS-3.4).
@@ -162,7 +172,15 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	 */
 	describeLaunch(location: Location | undefined, yolo: boolean): { readonly launches: readonly LaunchDescription[]; readonly entries: readonly CatalogEntry[]; readonly problems: readonly CliProblem[] } {
 		const catalog = catalogOf(this.read);
-		return { launches: location ? describeLaunches(catalog, this.destination(location), location.path, yolo) : [], entries: catalog.entries, problems: catalog.problems };
+		// What a start adds, as plan() gives it: its session tracking always, the tools where they are on - named, never written
+		const file = sessionFileOf(this.home, PLACEHOLDERS.run);
+		const script = path.join(sessionDirOf(file), 'hook.cjs');
+		const effective: EffectiveInputs = {
+			sessionFile: file,
+			sessionHook: (cli, platform) => sessionHookCommand(process.execPath, platform, cli, file, script),
+			...this.server && this.collaborationEnabled() ? { tools: this.toolsOf(PLACEHOLDERS.run, this.server(PLACEHOLDERS.run)) } : {}
+		};
+		return { launches: location ? describeLaunches(catalog, this.destination(location), location.path, yolo, effective) : [], entries: catalog.entries, problems: catalog.problems };
 	}
 
 	/**
@@ -263,7 +281,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 
 	/**
 	 * Trusts the folder `planned` starts in where its CLI keeps trust in a file of its own, as the person would by accepting its question
-	 * (CLIS-3.3, D62): what was merged, or why nothing could be, is logged. Nothing stops the start: the CLI then asks in its terminal.
+	 * (CLIS-3.3): what was merged, or why nothing could be, is logged. Nothing stops the start: the CLI then asks in its terminal.
 	 */
 	private trust(planned: PlannedLaunch): void {
 		if (planned.trust.kind !== 'file') {

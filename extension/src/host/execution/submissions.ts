@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// What the person submits in an agent's terminal (PANEL-1.4, D184): an Enter they type over a draft that the run's input reader
+// What the person submits in an agent's terminal (PANEL-1.4): an Enter they type over a draft that the run's input reader
 // reads, and that the CLI then takes - its input emptied, or a menu or question in its place. The text is the draft as the input
 // drew it, never what tracked keystrokes would make of it; a CLI without an input reader submits nothing that Facade can say.
 
@@ -35,16 +35,12 @@ export class TypedEnters {
 	}
 }
 
-/** A draft without the spaces and line breaks its CLI's rows wrap and indent it with. */
-const squeezed = (text: string) => text.replace(/\s+/gu, '');
-
 /**
- * Whether the CLI took `draft` after an Enter over it (D184): its input, read again in {@link SUBMIT_CHECKS_MS}'s turns, is empty or
- * shows a menu or question - or another draft, the person typing anew. The same draft, or one with more after it - a line break the
- * Enter typed - is not taken; an input that cannot be read any more says nothing.
+ * Whether the CLI took the draft an Enter was typed over (CLIS-2.1, PANEL-1.4): its input, read again in {@link SUBMIT_CHECKS_MS}'s
+ * turns, is empty or shows a menu or question. Any other reading - the same draft, more after it, or another draft - says nothing of
+ * it, nor does an input that cannot be read any more.
  */
-export async function taken(draft: string, read: () => Promise<InputReading | undefined>, wait: (ms: number) => Promise<void>, checks: readonly number[] = SUBMIT_CHECKS_MS): Promise<boolean> {
-	const before = squeezed(draft);
+export async function taken(read: () => Promise<InputReading | undefined>, wait: (ms: number) => Promise<void>, checks: readonly number[] = SUBMIT_CHECKS_MS): Promise<boolean> {
 	for (const ms of checks) {
 		await wait(ms);
 		const now = await read();
@@ -52,9 +48,6 @@ export async function taken(draft: string, read: () => Promise<InputReading | un
 			return false;
 		}
 		if (now.state === 'usable' || now.state === 'interaction') {
-			return true;
-		}
-		if (now.state === 'draft' && !squeezed(now.draft ?? '').startsWith(before)) {
 			return true;
 		}
 	}

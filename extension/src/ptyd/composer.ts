@@ -23,7 +23,7 @@ export interface InputReading {
 	 * there (RULES-1.6, CLIS-2.1). It is compared, never logged.
 	 */
 	readonly draft?: string;
-	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (D118). */
+	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (RULES-1.5). */
 	readonly hidden?: Hidden;
 }
 
@@ -235,7 +235,7 @@ function readFrame(screen: InputScreen, layout: FrameLayout): InputReading {
 		return noInput(rows, layout.menu, why);
 	}
 	// Antigravity's colored mode hint is not dim. Its empty-only footer distinguishes the hint from the exact same
-	// words pasted by a person, even when their cursor is back at the beginning (CLIS-2.1, D157).
+	// words pasted by a person, even when their cursor is back at the beginning (CLIS-2.1).
 	const placeholder = layout.placeholder;
 	if (placeholder && lower === prompt + 1 && placeholder.footer.test(textOf(rows[lower + 1]))) {
 		const text = textOf(rows[prompt].slice(2)).trimEnd();
@@ -259,6 +259,12 @@ const CODEX_MODEL = /^ {2}\S.*? · (?:[~/]|[A-Za-z]:\\)/;
  * at its right end too, `⚠ 1 warning · f2 to view`, alone on the row while a draft hides its hints.
  */
 const CODEX_HINTS = /^ {2}(?:\S.*? · )?(?:\? for shortcuts|tab to queue message)(?: {2,}\S.*?)? *$|^ {20,}\S.*$/;
+/**
+ * 0.166.0's passive transcript navigation leaves its composer focused: `enter/esc latest`, optionally `New activity · `
+ * first and ` · ? shortcuts` last. A resting draft changes it to `esc latest`. Active browsing, search and selection have
+ * different controls and do not match. This is input evidence only: a passive view can show an old transcript (CLIS-2.1).
+ */
+const CODEX_PASSIVE_HINTS = /^ {2}(?:New activity · )?(?:enter\/esc latest(?: · \? shortcuts)?|esc latest)(?: {2,}⚠ [1-9]\d* warnings? · f2 to view)? *$/u;
 
 /**
  * Codex's input, as 0.165.0 was observed drawing it, which has no frame: its footer at the bottom of what it draws - the model line, and a row of hints under
@@ -272,7 +278,7 @@ function readCodexPrompt(screen: InputScreen): InputReading {
 	while (model >= 0 && isBlank(rows[model])) {
 		model--;
 	}
-	if (model >= 0 && CODEX_HINTS.test(textOf(rows[model]))) {
+	if (model >= 0 && (CODEX_HINTS.test(textOf(rows[model])) || CODEX_PASSIVE_HINTS.test(textOf(rows[model])))) {
 		model--;
 	}
 	if (model < 2 || !CODEX_MODEL.test(textOf(rows[model])) || !isBlank(rows[model - 1])) {

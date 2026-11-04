@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import type { GuestCaller } from '../contract/network';
 import { createToolServices, ToolServices } from '../contract/tools';
+import { FacadeError } from '../core/errors';
 import type { MessageRecord } from '../core/messagePorts';
 import { TOOL_PROTOCOL } from '../schema/protocol';
 import { accepted, failure, success } from '../schema/result';
@@ -94,6 +95,16 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			assert.strictEqual(result.data.complete, false);
 			assert.deepStrictEqual(result.data.unavailable_windows.map((each: { reason: string }) => each.reason), ['protocol_incompatible', 'timeout']);
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'agents', 9993], ['win-3', 'agents', 9993]]);
+		});
+
+		test('a window component too old for the client network: the other windows are unavailable as protocol_incompatible, the list not complete; a name is not resolved, this window\'s exact ID is (ARCHITECTURE-4.3, RULES-2.3)', async () => {
+			const { stranger, worker } = team(s);
+			network.directoryError = new FacadeError('UNAVAILABLE', 'protocol_incompatible', 'this window\'s Facade Code Window Component is too old to reach other windows');
+			const listed = resultOf(await s.call(stranger, 'list_agents'));
+			assert.deepStrictEqual([listed.status, listed.data.complete, listed.data.unavailable_windows.map((each: { window_id: string; reason: string }) => [each.window_id, each.reason]), listed.data.counts.known_windows],
+				['success', false, [['*', 'protocol_incompatible']], 1]);
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: '@worker', text: 'Hello' })).error?.reason, 'window_unavailable');
+			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: worker.alias, text: 'Hello' })).status, 'success');
 		});
 
 		test('an unreadable directory preserves local facts and explicitly marks unknown windows', async () => {
@@ -329,7 +340,7 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			assert.strictEqual(resultOf(await s.call(stranger, 'send_message', { to: `@worker ${worker.alias}`, text: 'Hello' })).status, 'success');
 		});
 
-		test('its request ID goes with it to the window it is delivered in, and the copy kept here keeps it too (D110, D118)', async () => {
+		test('its request ID goes with it to the window it is delivered in, and the copy kept here keeps it too (RULES-1.1, RULES-1.5)', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
 			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, runId(20), DELIVERED), requestId: route.args.requestId } } });
@@ -397,7 +408,7 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			]);
 		});
 
-		test('a retry whose message another window holds asks that window how it stands - after a lost reply or a lost result - and never sends it anywhere else (MCP-1.1, D119)', async () => {
+		test('a retry whose message another window holds asks that window how it stands - after a lost reply or a lost result - and never sends it anywhere else (MCP-1.1)', async () => {
 			const { stranger } = team(s);
 			const NOW = Date.UTC(2026, 9, 28, 22, 0, 0);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
@@ -526,7 +537,7 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_draft' });
 			const answered = await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-77', from: reaching, to: stranger.id, text: 'Hi there', replyTo: 'm-70', callId: 'c-1', requestId: 'ask-9', elapsedMs: 900 } }) as { status: string; obstacle: string; record: MessageRecord };
 			assert.deepStrictEqual([answered.status, answered.obstacle, answered.record.id], ['accepted', 'input_draft', 'm-77']);
-			// Its request ID kept with it here, where its record is made, for the sender's retry to find (D110, D118)
+			// Its request ID kept with it here, where its record is made, for the sender's retry to find (RULES-1.1, RULES-1.5)
 			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-77', from: runId(30), sender: { party: { run: runId(30), alias: '#a30', name: 'guest 30' }, window: 'win-2', label: 'Backend' }, to: stranger.id, text: 'Hi there', replyTo: 'm-70', elapsedMs: 900, callId: 'c-1', requestId: 'ask-9' }]);
 			// Out of a non-YOLO guest's tree: not found, nothing sent
 			// Refused before anything is recorded, as a refusal its sender can tell from a lost answer (MCP-1.2)

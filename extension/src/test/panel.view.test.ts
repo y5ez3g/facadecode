@@ -16,6 +16,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let contexts: Record<string, unknown>;
 	let progress: number;
 	let logged: string[];
+	/** The system's reduced-motion preference, each time the page says it. */
+	let motions: boolean[];
 	let state: PanelState;
 	/** The editor's settings as the panel reads them, and their changes. */
 	let settings: Record<string, unknown>;
@@ -63,7 +65,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			acts.push([what, target]);
 			return answer();
 		};
-		panel = new View({ path: '/extension' } as never, model as never, actions, { event: message => logged.push(message) });
+		panel = new View({ path: '/extension' } as never, model as never, actions, { event: message => logged.push(message) }, reduced => motions.push(reduced));
 		view = {
 			visible: true,
 			badge: undefined,
@@ -87,7 +89,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	};
 
 	setup(() => {
-		posted = []; acts = []; contexts = {}; progress = 0; logged = [];
+		posted = []; acts = []; contexts = {}; progress = 0; logged = []; motions = [];
 		settings = {};
 		configChanged = new TestEmitter();
 		state = stateOf(1);
@@ -102,6 +104,14 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	teardown(() => {
 		panel.dispose();
 		delete (globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE;
+	});
+
+	test('LIFECYCLE-2.2: the page says the system\'s reduced-motion preference with ready and as it changes; an earlier page\'s is not heard, a malformed one refused', async () => {
+		await say({ type: 'ready', page: page(1), reducedMotion: false });
+		await say({ type: 'motion', page: page(1), reduced: true });
+		await say({ type: 'motion', page: page(2), reduced: false });
+		await say({ type: 'motion', page: page(1), reduced: 'yes' });
+		assert.deepStrictEqual([motions, logged.filter(line => line.startsWith('The panel refused a message from its webview')).length], [[false, true], 1]);
 	});
 
 	test('each state goes to the page that said it is ready, with the model\'s own revision; nothing goes before', async () => {

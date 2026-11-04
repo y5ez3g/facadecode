@@ -467,7 +467,7 @@ suite('ptyd: a run\'s terminal read and written for its owner (MCP-5, CLIS-2.1, 
 	test('type pastes text and Enter in turn; read gives the rendered lines; keys press named keys; a reader that does not recognize the screen says unknown', async () => {
 		const owner = await window('w1', 1);
 		await cat(owner, 't1');
-		// Text and its Enter are never one request: refused before anything goes in (MCP-5.2, D113)
+		// Text and its Enter are never one request: refused before anything goes in (MCP-5.2)
 		await assert.rejects(owner.request('type', { run: 't1', text: 'both at once', enter: true }), /typed in two requests/);
 		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'hello facade', enter: false }), { outcome: 'applied', pasted: true, entered: false });
 		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: '', enter: true }), { outcome: 'applied', pasted: false, entered: true });
@@ -480,7 +480,7 @@ suite('ptyd: a run\'s terminal read and written for its owner (MCP-5, CLIS-2.1, 
 		const reading: InputReading = await owner.request('inspect', { run: 't1', adapter: 'claude-frame' });
 		assert.strictEqual(reading.state, 'unknown');
 		assert.strictEqual((await owner.request('inspect', { run: 't1', adapter: 'no-such-reader' })).state, 'unknown');
-		// A lead is typed ahead of the paste, in the same write; one with a control in it is refused before anything goes in (D108)
+		// A lead is typed ahead of the paste, in the same write; one with a control in it is refused before anything goes in (COLLABORATION-2.1)
 		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: 'the message', enter: false, lead: 'Act on this: ' }), { outcome: 'applied', pasted: true, entered: false });
 		assert.deepStrictEqual(await owner.request('type', { run: 't1', text: '', enter: true }), { outcome: 'applied', pasted: false, entered: true });
 		await screenUntil(owner, 't1', each => each.text.some(line => line.includes('Act on this: the message')));

@@ -7,6 +7,7 @@ import type * as vscode from 'vscode';
 import { replaceFile } from '../base/files';
 import { isJsonObject } from '../base/json';
 import type { OwnedWrite } from '../base/ownership';
+import { FacadeError, OWNERSHIP_LOST } from '../core/errors';
 
 /**
  * How long a change through `update` waits to be written with those after it: a burst of them - the panel's order as a window
@@ -22,15 +23,16 @@ interface Waiting {
 }
 
 /** A successor activation of this workspace owns its state now: this one keeps nothing more of it (ARCHITECTURE-2.2). */
-export class NotOwnedError extends Error {
+export class NotOwnedError extends FacadeError {
 	constructor() {
-		super('Another window owns this workspace.');
+		// Said to the person in their language, as every refusal for another window's ownership is (UX-2.4)
+		super('INVALID', 'ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST);
 	}
 }
 
 /**
  * The window's workspace state - known locations, last launch, panel order, the workspace key - kept beside its runs as well
- * (ARCHITECTURE-2.2, D70). A folder window that becomes a multi-root workspace gets an empty workspace state from the editor, which
+ * (ARCHITECTURE-2.2). A folder window that becomes a multi-root workspace gets an empty workspace state from the editor, which
  * does not carry an extension's over: a window that `carried` its runs over that way takes what it kept in `file` where its
  * workspace state belongs to an older visit to the destination. The state of the continuing window wins.
  */

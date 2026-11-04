@@ -33,7 +33,7 @@ export class WorkspacePins implements PinStore {
 	save(pin: Pin): void {
 		const pins = this.list();
 		const at = pins.findIndex(each => each.id === pin.id);
-		// A new Pin goes last among the Pins (PANEL-2.1, D173)
+		// A new Pin goes last among the Pins (PANEL-2.1)
 		this.write(at === -1 ? [...pins, pin] : pins.map(each => each.id === pin.id ? pin : each));
 	}
 
@@ -58,6 +58,6 @@ function isPin(value: unknown): value is Pin {
 	const identity = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && !value.includes('\0');
 	return !!pin && identity(pin.id) && typeof pin.name === 'string' && identity(pin.cwd) && identity(pin.location)
 		&& !!pin.conversation && identity(pin.conversation.environment) && identity(pin.conversation.cli)
-		// A Pin made before its CLI named a conversation has none yet (D182)
+		// A Pin made before its CLI named a conversation has none yet (LIFECYCLE-3.4)
 		&& (pin.conversation.sessionId === undefined || identity(pin.conversation.sessionId));
 }

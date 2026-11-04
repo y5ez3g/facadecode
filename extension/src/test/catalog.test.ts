@@ -18,7 +18,7 @@ const english = (value: string) => value.replace(/^%(.+)%$/, (_, key) => nls[key
 
 /** The catalog of UX-3.1 (public) and UX-3.2 (context only) of this build: ID, English title, icon. */
 const PUBLIC: readonly [string, string, string?][] = [
-	// Facade's own copy of codicons' `new-session`, which VS Code before 1.111 has not (PANEL-1.1, D85)
+	// Facade's own copy of codicons' `new-session`, which VS Code before 1.111 has not (PANEL-1.1)
 	['facade.newAgent', 'New Agent...', '$(facade-new-agent)'],
 	['facade.history', 'Resume Agent...', '$(history)'],
 	['facade.pinAgent', 'Pin Agent'],
@@ -77,7 +77,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered', group: 'navigation@1' },
 				{ command: 'facade.history', when: 'view == facade.agents', group: 'navigation@2' },
 				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@3' },
-				// The More Actions menu (PANEL-1.1, D58): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
+				// The More Actions menu (PANEL-1.1): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
 				{ command: 'facade.newWorktree', when: 'view == facade.agents && workspaceFolderCount != 0', group: '1_locations@2' },
 				{ command: 'facade.configureAgents', when: 'view == facade.agents', group: '9_configure@1' }
@@ -100,20 +100,20 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		});
 	});
 
-	test('PANEL-1.1, D58, D129: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Configure Agents... - in that order, as the editor sorts groups and their order', () => {
+	test('PANEL-1.1: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Configure Agents... - in that order, as the editor sorts groups and their order', () => {
 		type Entry = { command: string; group: string };
 		const more = (contributes.menus['view/title'] as Entry[]).filter(each => !each.group.startsWith('navigation'));
 		const placed = more.map(each => ({ command: each.command, group: each.group.split('@')[0], order: Number(each.group.split('@')[1]) }))
 			.sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order);
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
 		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.configureAgents']);
-		// These commands are in the Command Palette alone (D83, D129); Configure Agents is in it too.
+		// These commands are in the Command Palette alone (PANEL-1.1); Configure Agents is in it too.
 		const palette = ['facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
 		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.configureAgents'].includes(each.command)));
 	});
 
-	test('settings: Agents, then each built-in CLI in its catalog order with whether it is offered, its path and its launch, then Custom Agents; machine scope (UX-4.1, D43, CLIS-1.1, 1.2, 3.1, 3.4)', () => {
+	test('settings: Agents, then each built-in CLI in its catalog order with whether it is offered, its path and its launch, then Custom Agents; machine scope (UX-4.1, CLIS-1.1, 1.2, 3.1, 3.4)', () => {
 		const sections = contributes.configuration.map((section: { id: string; title: string; order: number; properties: Record<string, unknown> }) => [section.id, english(section.title), section.order, Object.keys(section.properties)]);
 		const cli = (setting: string) => [`${setting}.enabled`, `${setting}.path`, `${setting}.launch`];
 		assert.deepStrictEqual(sections, [

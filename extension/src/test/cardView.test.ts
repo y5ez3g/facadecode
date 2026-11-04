@@ -73,7 +73,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		}
 	});
 
-	test('D183: green while it starts or works; red for an error, Facade tools it cannot use or a start not ready by its bound; none otherwise, its state in the hover', () => {
+	test('RULES-3.2: green while it starts or works; red for an error, Facade tools it cannot use or a start not ready by its bound; none otherwise, its state in the hover', () => {
 		const shown = (facts: RunFacts) => {
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
 			return [card.dot, card.stateText, card.line, card.tooltip.includes(WORDS.status(card.stateText))];
@@ -103,7 +103,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
-	test('D184: the second line says the last message sent to it - the task it was started with being the first - and its CLI title\'s words only before any', () => {
+	test('PANEL-1.4: the second line says the last message sent to it - the task it was started with being the first - and its CLI title\'s words only before any', () => {
 		const line = (facts: Partial<RunFacts>) => statusOf(run({ activity: 'not_working', ...facts }), WORDS).line;
 		assert.deepStrictEqual([
 			line({ title: '⠐ Fixing the login bug' }),
@@ -115,7 +115,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		], ['Fixing the login bug', '/clear', 'Implement the parser', 'and the tests', 'Idle', 'Idle']);
 	});
 
-	test('connecting tools are said in the hover; a start not ready by its bound says them on its red second line (D183), and actual connection removes them', () => {
+	test('connecting tools are said in the hover; a start not ready by its bound says them on its red second line (RULES-3.2), and actual connection removes them', () => {
 		for (const activity of ['working', 'not_working'] as const) {
 			const facts = run({ activity, title: '✳ Checking tests', tools: 'connecting' });
 			const card = cardOf(facts, { place, selected: false, menu, words: WORDS });
@@ -136,7 +136,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.ok(starting.tooltip.includes(WORDS.tools(WORDS.toolsConnecting)));
 	});
 
-	test('the hover retains the complete bounded CLI title, decorations and multi-code-point emoji included; the second line its words (D160, D184)', () => {
+	test('the hover retains the complete bounded CLI title, decorations and multi-code-point emoji included; the second line its words (CLIS-2.3, PANEL-1.4)', () => {
 		const title = `✳ ${'a'.repeat(298)}👨‍👩‍👧‍👦 | workspace`;
 		const card = cardOf(run({ title: cliTitle({ terminal: title }) }), { place, selected: false, menu, words: WORDS });
 		assert.strictEqual(card.line, title.slice(2));
@@ -170,7 +170,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		assert.deepStrictEqual(received, [['spawn refused', effects]]);
 	});
 
-	test('J05: an unresolved error is red with its reason first, whatever else is known; unknown activity has no dot, its reason on the second line where it has nothing else to say (D183)', () => {
+	test('J05: an unresolved error is red with its reason first, whatever else is known; unknown activity has no dot, its reason on the second line where it has nothing else to say (RULES-3.2)', () => {
 		const cases: [Partial<RunFacts>, string, string, string][] = [
 			[{ lifecycle: 'ended', end: { kind: 'failed', at: 3 }, error: { reason: 'claude was not found', source: 'launch', at: 3 }, title: 'T', blocker: { kind: 'question' } }, 'error', 'Error: claude was not found', 'Error: claude was not found'],
 			[{ lifecycle: 'ended', end: { kind: 'abnormal', code: 2, at: 3 }, error: { reason: 'Exited with code 2', source: 'exit', at: 3 } }, 'error', 'Error: Beendet mit Code 2', 'Error: Beendet mit Code 2'],
@@ -186,7 +186,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		}
 	});
 
-	test('a native blocker has no dot and says the CLI\'s own words, else Needs permission, Sign-in required or Waiting for an answer; startup is green (D183)', () => {
+	test('a native blocker has no dot and says the CLI\'s own words, else Needs permission, Sign-in required or Waiting for an answer; startup is green (RULES-3.2)', () => {
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'not_working', blocker: { kind: 'permission', text: 'Allow Bash(npm test)?' } }), WORDS),
 			statusOf(run({ activity: 'not_working', blocker: { kind: 'permission' } }), WORDS).line,
@@ -204,7 +204,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
-	test('a run whose CLI has shown no activity yet is still starting, green, its title or else its stage on the second line; an error still comes first, red (CLIS-2.3, D81, D183, D184)', () => {
+	test('a run whose CLI has shown no activity yet is still starting, green, its title or else its stage on the second line; an error still comes first, red (CLIS-2.3, PANEL-1.4)', () => {
 		const connection = { reason: "Connection to agent process lost; reconnecting", source: 'connection', at: 3 };
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, awaitingActivity: true, title: 'Fix login' }), WORDS),
@@ -219,7 +219,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
-	test('a known native blocker leads the second line in its own words whatever the activity, without a dot (PANEL-1.4, RULES-3.2, D183)', () => {
+	test('a known native blocker leads the second line in its own words whatever the activity, without a dot (PANEL-1.4, RULES-3.2)', () => {
 		assert.deepStrictEqual([
 			statusOf(run({ activity: 'unknown', reporting: false, blocker: { kind: 'auth' } }), WORDS),
 			statusOf(run({ activity: 'unknown', reporting: true, blocker: { kind: 'question' } }), WORDS),
@@ -231,7 +231,7 @@ suite('Cards: dot, second line, hover and label (RULES-3.2, PANEL-1.3-1.5)', () 
 		]);
 	});
 
-	test('reliable work is green and idle has no dot, over the CLI title\'s words, else Working or Idle - never a completion or input-readiness claim (PANEL-1.4, D183)', () => {
+	test('reliable work is green and idle has no dot, over the CLI title\'s words, else Working or Idle - never a completion or input-readiness claim (PANEL-1.4)', () => {
 		const lines = [
 			statusOf(run({ activity: 'working', title: 'Fix login' }), WORDS),
 			statusOf(run({ activity: 'working' }), WORDS),
