@@ -1278,6 +1278,28 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(places.map(each => [each.run, typeof each.place === 'object' ? (each.place as { column: number }).column : each.place]), [['run-n1', 1], ['run-n2', 2]]);
 	});
 
+	test('where VS Code numbers its groups anew with new objects - a group closed or opened rebuilds its whole model - a tab is told by the groups that closed and opened, known or not (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		const places: { run: RunId; place: unknown }[] = [];
+		port.onDidPlaceTab!(each => places.push(each));
+		for (const [index, run, column] of [[0, 'run-r1', 2], [1, 'run-r2', 3]] as const) {
+			port.openPair(facts(run, { name: `Agent ${index}` }), { reveal: false });
+			open(terminals[index]);
+			Object.assign(terminals[index].tab, { group: { viewColumn: column } });
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		const columns = () => places.map(each => [each.run, typeof each.place === 'object' ? (each.place as { column: number }).column : each.place]);
+		// Group 1, a file's, closes: the model rebuilt, every tab a new object
+		places.length = 0;
+		visibleTabs = [{ input: new TabInputTerminal(), isActive: false, isPinned: false, group: { viewColumn: 1 } }, { input: new TabInputTerminal(), isActive: false, isPinned: false, group: { viewColumn: 2 } }];
+		groupsChanged.fire({ opened: [], closed: [{ viewColumn: 1 }], changed: [] } as never);
+		assert.deepStrictEqual(columns(), [['run-r1', 1], ['run-r2', 2]]);
+		// A group opens at 2: the one there and after it move one on
+		places.length = 0;
+		groupsChanged.fire({ opened: [{ viewColumn: 2 }], closed: [], changed: [] } as never);
+		assert.deepStrictEqual(columns(), [['run-r2', 3]]);
+	});
+
 	test('where groups join, moving their tabs in inactive, the group keeps its active agent tab, else the one last active; a tab moved in active stays (LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const place = (index: number, viewColumn: number, isActive: boolean) => Object.assign(terminals[index].tab, { group: { viewColumn }, isActive });

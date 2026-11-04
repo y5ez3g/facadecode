@@ -130,7 +130,7 @@ export class AgentTerminals implements vscode.Disposable {
 			}),
 			vscode.window.tabGroups.onDidChangeTabs(event => this.tabsChanged(event)),
 			vscode.window.onDidOpenTerminal(terminal => this.maybeCopy(terminal)),
-			vscode.window.tabGroups.onDidChangeTabGroups(() => this.groupsChanged()),
+			vscode.window.tabGroups.onDidChangeTabGroups(event => this.groupsChanged(event)),
 			vscode.window.onDidCloseTerminal(terminal => {
 				const pair = this.pairOf(terminal);
 				if (!pair) {
@@ -594,14 +594,24 @@ export class AgentTerminals implements vscode.Disposable {
 		this.options.placed?.(pair.run, column, pair.activeAt);
 	}
 
-	/** VS Code 1.105 can replace every Tab object in a group-model update without a tab-change event. */
-	private groupsChanged(): void {
+	/**
+	 * VS Code 1.105 can replace every Tab object in a group-model update without a tab-change event: VS Code rebuilds its whole model as
+	 * a group is added or removed, its groups and tabs new objects then.
+	 */
+	private groupsChanged(event?: vscode.TabGroupChangeEvent): void {
 		const present = new Set(vscode.window.tabGroups.all.flatMap(group => group.tabs));
+		// Groups number themselves anew as one closes, opens or moves (LIFECYCLE-3.5): a tab still known is in its group's number; one
+		// the editor's new objects leave unknown follows the groups that closed - each in the number it had - and those that opened
+		const closed = (event?.closed ?? []).map(group => group.viewColumn).filter(Number.isFinite).sort((a, b) => b - a);
+		const opened = (event?.opened ?? []).map(group => group.viewColumn).filter(Number.isFinite).sort((a, b) => a - b);
+		const shifted = (column: number) => opened.reduce((at, open) => at >= open ? at + 1 : at, closed.reduce((at, gone) => at > gone ? at - 1 : at, column));
 		for (const pair of this.entries.values()) {
 			if (pair.tab && !present.has(pair.tab)) { pair.tab = undefined; }
-			// Groups number themselves anew as one closes or moves: a known tab whose group's number changed is told there
-			const column = pair.tab?.group?.viewColumn;
-			if (column !== undefined && pair.placedColumn !== undefined && column !== pair.placedColumn) {
+			if (pair.placedColumn === undefined) {
+				continue;
+			}
+			const column = pair.tab?.group?.viewColumn ?? shifted(pair.placedColumn);
+			if (column !== pair.placedColumn) {
 				this.place(pair, column);
 			}
 		}

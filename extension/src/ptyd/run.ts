@@ -829,20 +829,21 @@ export class Run {
 	}
 
 	/**
-	 * What its program set that a terminal drawing its screen anew needs beside the serializer's modes, which leave these out
-	 * (ARCHITECTURE-2.3): the mouse encoding - without which a reload sends the program mouse reports it cannot read, so that
-	 * neither its scrolling nor its selection works - the hidden cursor, the kitty keyboard protocol's flags on the screen it is on and
-	 * win32 input mode. Written after the screen, in the terminal the screen leaves it in.
-	 */
-	/**
 	 * Where its cursor is, said outright: the serializer places it by moves from where its last row leaves it, which after a row filled
-	 * to its last column - a full-width rule under an input box - lands a column short of it (ARCHITECTURE-2.3).
+	 * to its last column - a full-width rule under an input box - lands a column short of it (ARCHITECTURE-2.3). A cursor waiting to
+	 * wrap past the last column is placed on it: the next character then takes that column rather than the next row's first.
 	 */
 	private cursorPlace(): string {
 		const buffer = this.terminal.buffer.active;
 		return `\x1b[${buffer.cursorY + 1};${Math.min(buffer.cursorX, this.terminal.cols - 1) + 1}H`;
 	}
 
+	/**
+	 * What its program set that a terminal drawing its screen anew needs beside the serializer's modes, which leave these out
+	 * (ARCHITECTURE-2.3): the mouse encoding - without which a reload sends the program mouse reports it cannot read, so that
+	 * neither its scrolling nor its selection works - the hidden cursor, the kitty keyboard protocol's flags on the screen it is on and
+	 * win32 input mode. Written after the screen, in the terminal the screen leaves it in.
+	 */
 	private modesBeyondScreen(): string {
 		const kitty = this.kittyStacks[this.terminal.buffer.active.type];
 		return [
