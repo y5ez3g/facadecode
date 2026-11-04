@@ -12,7 +12,7 @@ import { provesAbsent } from '../base/connect';
 import { codeOf, messageOf } from '../base/errors';
 import { lineReader } from '../base/lines';
 import { isAgentKey } from './keys';
-import { CallEvent, CallRefusal, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
+import { CallEvent, CallRefusal, isTerminalColours, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall, TerminalColours } from './protocol';
 import { OwnerClaims, type OwnerClock } from './ownership';
 import { InstallationGone, MOST_RUN_BUFFER, Run, RunListener } from './run';
 import { ensurePtydSocket } from './socket';
@@ -64,6 +64,8 @@ class Connection {
 	shimRun: string | undefined;
 	/** It claimed a workspace: a window, which keeps ptyd, as a connection that only lists runs does not (ARCHITECTURE-2.3). */
 	claimed = false;
+	/** The colours its window's terminals draw with, given to each run it claims (ARCHITECTURE-2.3). */
+	colours: TerminalColours = {};
 	private waiting = 0;
 	private readonly waitingByRun = new Map<Run, number>();
 	private readonly requests = new Map<number, { readonly body: string; readonly result: Promise<unknown>; bytes: number }>();
@@ -397,6 +399,10 @@ export class PtydServer {
 			exit: exit => connection.send({ event: 'exit', run: run.id, ...exit })
 		};
 		run.listen(listener);
+		// A window that has not said its colours yet - it says them as it connects - leaves the run those it had
+		if (Object.keys(connection.colours).length) {
+			run.useColours(connection.colours);
+		}
 		if (previous !== connection && this.shims.get(run.id)?.size) {
 			connection.send({ event: 'tools', run: run.id });
 		}
@@ -458,6 +464,16 @@ export class PtydServer {
 				connection.claimed = true;
 				this.scheduleIdleExit();
 				return undefined;
+			case 'colours': {
+				if (!isTerminalColours(params)) {
+					throw new Error('Terminal colours are rrrr/gggg/bbbb, of the foreground, background and cursor alone.');
+				}
+				connection.colours = params;
+				for (const run of this.claimedBy(connection)) {
+					run.useColours(params);
+				}
+				return undefined;
+			}
 			case 'conversations':
 				return [...this.runs.values()].flatMap(run => {
 					const meta = run.meta;

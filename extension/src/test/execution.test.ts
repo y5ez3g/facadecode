@@ -144,6 +144,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 					get all() { return [{ tabs: visibleTabs ?? terminals.filter(terminal => !terminal.disposed).map(terminal => terminal.tab) }]; },
 					get activeTabGroup() { return { activeTab }; } },
 				onDidChangeActiveTerminal: activeChanged.event,
+				activeColorTheme: { kind: 2 }, onDidChangeActiveColorTheme: () => ({ dispose() { } }),
 				onDidCloseTerminal: closed.event,
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => {
 					const terminal: FakeTerminal = {

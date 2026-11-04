@@ -7,6 +7,7 @@ import { messageOf } from '../../base/errors';
 import { TERMINAL_REGISTRATION_MS, WINDOW_TERMINALS_COMMAND, type TerminalOwner, type TerminalRegistration } from '../../base/windowIdentity';
 import type { PairFacts, RunId } from '../../core/ports';
 import { cliTerminalIcon } from '../../ui/presentation';
+import type { WindowColours } from './terminalColours';
 import { AgentPty } from './agentPty';
 
 /** One run's terminal resource; process state and subscriptions belong to the execution coordinator. */
@@ -42,6 +43,8 @@ interface TerminalOptions {
 	readonly closed: (run: RunId) => void;
 	readonly pinned?: (run: RunId, pinned: boolean) => void;
 	readonly renamed: (run: RunId, name: string) => void;
+	/** The window's terminal colours, which each terminal reports as it opens and the theme changes (ARCHITECTURE-2.3). */
+	readonly colours?: WindowColours;
 }
 
 /** Active-terminal and active-tab changes within this interval identify one change (LIFECYCLE-2.2). */
@@ -63,6 +66,8 @@ export class AgentTerminals implements vscode.Disposable {
 
 	constructor(private readonly options: TerminalOptions) {
 		this.disposables.push(
+			// A new theme's colours, as the terminals open report them again
+			vscode.window.onDidChangeActiveColorTheme(() => { for (const entry of this.entries.values()) { entry.pty.askColours(); } }),
 			vscode.workspace.onDidChangeConfiguration(change => {
 				if (change.affectsConfiguration('workbench.reduceMotion')) { this.moved(); }
 			}),
@@ -148,7 +153,7 @@ export class AgentTerminals implements vscode.Disposable {
 
 	/** Register the pseudoterminal first; the coordinator opens the native tab after registering its run. */
 	create(facts: Pick<PairFacts, 'run' | 'name' | 'cli'>, reveal: boolean): AgentTerminal {
-		const pty = new AgentPty(facts.name, line => this.options.log(line), () => this.still());
+		const pty = new AgentPty(facts.name, line => this.options.log(line), () => this.still(), (osc, rgb) => this.options.colours?.learn(osc, rgb));
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
 		const pair: TerminalEntry = {
 			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(),
