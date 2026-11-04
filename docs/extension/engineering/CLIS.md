@@ -274,17 +274,20 @@ retains Pi's native collision diagnostic: do not suppress warnings, overwrite it
 Before a project write, snapshot exact original bytes/existence, take one lock for the execution environment's runs and
 windows, merge only owned content, and record content hashes/reference counts. Content a Facade wrote is Facade's
 whatever wrote it - another version, another Facade data directory, or one changed since - and is brought up to date: a
-skill by its `facade` name and the description every Facade skill begins with, the plugin's manifest by its name and
-description, its MCP configuration, hooks and a `.mcp.json` entry by Facade's server alone, the shim. What the Facade
-Code IDE's agent extension writes into a folder is Facade's too: its `facade` skill by its own description, its
-Antigravity plugin's manifest by its name alone, its server by its shim. A skill Facade writes into a folder ends with a
-line naming the Facade version that wrote it; one a later version marked stands. An existing `facade` server/skill of
-the person's own is a conflict; fail integration while preserving the CLI where it can launch safely. Never overwrite
-malformed user config or unknown values. On cleanup remove only unchanged Facade-owned content after the last run that
-uses it releases it; a `.mcp.json` entry taken over goes with the file left as it would be without it, and modified files
-remain with a diagnostic. Never hide arbitrary files by modifying global Git ignore. Do not copy vendor credentials into
-project files. Per-run files reside in the execution environment's Facade data directory; no identity token or
-protected-file authentication mechanism is introduced.
+skill by its `facade` name and the description every Facade skill begins with; a file of its Antigravity plugin by its
+members, every one of them one a Facade writes there - the manifest's `facade` name and Facade's description, an MCP
+configuration and hooks of Facade's server alone, the shim; and a `.mcp.json` entry by that server. What the Facade Code
+IDE's agent extension writes into a folder is Facade's too: its `facade` skill by its own description, its Antigravity
+plugin's manifest by its name alone, its server by its shim. So is what a Facade left of a plugin file after taking its
+own part out of it - the IDE takes its `name` out of this extension's manifest - even an empty object: nothing of anyone
+else's is in it, and the person is never asked to move or rename a file only Facade wrote. A skill Facade writes into a
+folder ends with a line naming the Facade version that wrote it; one a later version marked stands. An existing `facade`
+server/skill of the person's own is a conflict; fail integration while preserving the CLI where it can launch safely.
+Never overwrite malformed user config or unknown values. On cleanup remove only unchanged Facade-owned content after the
+last run that uses it releases it; a `.mcp.json` entry taken over goes with the file left as it would be without it, and
+modified files remain with a diagnostic. Never hide arbitrary files by modifying global Git ignore. Do not copy vendor
+credentials into project files. Per-run files reside in the execution environment's Facade data directory; no identity
+token or protected-file authentication mechanism is introduced.
 
 ### 2.3 Status, title and input evidence
 

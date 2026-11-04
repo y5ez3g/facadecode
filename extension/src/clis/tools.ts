@@ -170,9 +170,11 @@ export function isFacadeServer(value: unknown): boolean {
 
 /**
  * Whether `text`, the content of `file`, is what a Facade wrote there - of any version, from any Facade directory, or the Facade
- * Code IDE's (CLIS-2.2) - rather than the person's own (CLIS-2.2): its skill by its name and description, the plugin's manifest
- * by its name and description - the IDE's by its name alone - its MCP configuration and hooks by Facade's server alone, the shim.
- * Content of the same name that is not recognizably Facade's is the person's, and stays.
+ * Code IDE's (CLIS-2.2) - rather than the person's own (CLIS-2.2): its skill by its name and description; a file of its plugin by
+ * its members, each one a Facade writes there - the manifest's `facade` name and Facade's description, the IDE's by its name alone,
+ * an MCP configuration and hooks of Facade's server alone, the shim. What a Facade left of one after taking its own part out - the
+ * IDE takes its `name` out of this extension's manifest - is Facade's too, even empty: nothing of anyone else's is in it. A member
+ * that is not recognizably Facade's makes the file the person's, and it stays.
  */
 export function isFacadeContent(file: string, text: string): boolean {
 	const name = path.basename(file);
@@ -191,17 +193,21 @@ export function isFacadeContent(file: string, text: string): boolean {
 	if (!isJsonObject(value)) {
 		return false;
 	}
-	const keys = Object.keys(value);
+	const object = value;
+	// Every member of `object` is one of `members`, each Facade's by its test
+	const only = (members: Readonly<Record<string, (member: unknown) => boolean>>) =>
+		Object.entries(object).every(([key, member]) => Object.hasOwn(members, key) && members[key](member));
 	switch (name) {
 		case 'plugin.json':
-			// The IDE's Antigravity plugin is named and nothing more (CLIS-2.2)
-			return value.name === SERVER_NAME && (keys.join() === 'name'
-				|| typeof value.description === 'string' && value.description.startsWith(FACADE_PLUGIN_SIGNATURE));
+			// The IDE's Antigravity plugin is named and nothing more; this extension's is named and described (CLIS-2.2)
+			return only({
+				name: member => member === SERVER_NAME,
+				description: member => typeof member === 'string' && member.startsWith(FACADE_PLUGIN_SIGNATURE)
+			});
 		case 'mcp_config.json':
-			return keys.length === 1 && isJsonObject(value.mcpServers) && Object.keys(value.mcpServers).join() === SERVER_NAME
-				&& isFacadeServer(value.mcpServers[SERVER_NAME]);
+			return only({ mcpServers: servers => isJsonObject(servers) && Object.entries(servers).every(([key, server]) => key === SERVER_NAME && isFacadeServer(server)) });
 		case 'hooks.json':
-			return keys.join() === SERVER_NAME && JSON.stringify(value[SERVER_NAME]).includes(SHIM_FILE);
+			return only({ [SERVER_NAME]: hooks => JSON.stringify(hooks).includes(SHIM_FILE) });
 		default:
 			return false;
 	}
