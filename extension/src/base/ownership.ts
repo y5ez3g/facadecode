@@ -9,6 +9,11 @@ export interface OwnerClaim {
 	readonly owner: string;
 	readonly generation: number;
 	readonly token: string;
+	/**
+	 * Whether the claiming window's extension host runs on the computer it shows on - a local window, whose runs end 90 seconds after
+	 * it goes, as opposed to a remote one, whose extension host a lost network leaves running and whose runs have five minutes (RULES-4.1).
+	 */
+	readonly local?: boolean;
 }
 
 export function isOwnerClaim(value: unknown): value is OwnerClaim {

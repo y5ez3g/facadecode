@@ -151,8 +151,6 @@ interface FrameLayout {
 	readonly gap: string;
 	/** Its upper rule: plain, or with a label in it. */
 	readonly upper: RegExp;
-	/** The row right under its lower rule, where only a frame with it is its CLI's. */
-	readonly footer?: RegExp;
 	/** Known non-dim placeholders, accepted only with the empty-input footer cue and a one-line frame. */
 	readonly placeholder?: { readonly texts: readonly string[]; readonly footer: RegExp };
 	/** Its native menus, which it draws with no frame. */
@@ -175,15 +173,13 @@ const CLAUDE_FRAME: FrameLayout = {
 /**
  * Muse Code's input, as 1.4.14 was observed drawing it: a rule - with its label where it offers voice input, `── Voice input (⌥ + v
  * to start) ───`, plain where it does not - then its prompt row, `❯` and a space before the input (`❯` alone while empty), the draft
- * going on in rows indented two spaces - its slash menu among them - then a plain rule, and right under it its own line of the model,
- * its effort and the folder, `  muse-spark-1.3 · max · /work/app`. Its trust question draws no frame but a menu, `⟩ 1  Trust and
- * continue` with `  2  Quit` under it.
+ * going on in rows indented two spaces - its slash menu among them - then a plain rule; what it draws under the frame is not read
+ * (CLIS-2.1). Its trust question draws no frame but a menu, `⟩ 1  Trust and continue` with `  2  Quit` under it.
  */
 const MUSE_FRAME: FrameLayout = {
 	prompt: '❯',
 	gap: ' ',
 	upper: /^(?:─+|─{2} [^─]+ ─+)$/,
-	footer: /^ {2}\S[^·]*? · \S/,
 	menu: { selected: /^⟩ \d+ +\S/, next: /^ {2}\d+ +\S/ }
 };
 
@@ -231,7 +227,7 @@ function readFrame(screen: InputScreen, layout: FrameLayout): InputReading {
 		}
 		lower++;
 	}
-	if (lower >= rows.length || (layout.footer && !layout.footer.test(textOf(rows[lower + 1])))) {
+	if (lower >= rows.length) {
 		return noInput(rows, layout.menu, why);
 	}
 	// Antigravity's colored mode hint is not dim. Its empty-only footer distinguishes the hint from the exact same
@@ -252,51 +248,48 @@ function readFrame(screen: InputScreen, layout: FrameLayout): InputReading {
 
 /** Codex's native menus, drawn in place of its input: its trust question's `› 1. Trust and continue`, `  2. ...` under it. */
 const CODEX_MENU: Menu = { selected: /^› \d+\. \S/, next: /^ {2}\d+\. \S/ };
-/** Its footer's first row: the model and the folder, `  GPT-… max · /work/app`, maybe more after them. */
+/**
+ * The row Codex draws its model and folder on under its input, `  GPT-… max · /work/app`, maybe more after them: the last row it
+ * draws or the one above it, a row of hints or a status under it, which is not read (CLIS-2.1).
+ */
 const CODEX_MODEL = /^ {2}\S.*? · (?:[~/]|[A-Za-z]:\\)/;
-/**
- * A row of hints under it: `  ← for agents · ? for shortcuts`, or `  tab to queue message` while it works - 0.166.0 draws a status
- * at its right end too, `⚠ 1 warning · f2 to view`, alone on the row while a draft hides its hints.
- */
-const CODEX_HINTS = /^ {2}(?:\S.*? · )?(?:\? for shortcuts|tab to queue message)(?: {2,}\S.*?)? *$|^ {20,}\S.*$/;
-/**
- * 0.166.0's passive transcript navigation leaves its composer focused: `enter/esc latest`, optionally `New activity · `
- * first and ` · ? shortcuts` last. A resting draft changes it to `esc latest`. Active browsing, search and selection have
- * different controls and do not match. This is input evidence only: a passive view can show an old transcript (CLIS-2.1).
- */
-const CODEX_PASSIVE_HINTS = /^ {2}(?:New activity · )?(?:enter\/esc latest(?: · \? shortcuts)?|esc latest)(?: {2,}⚠ [1-9]\d* warnings? · f2 to view)? *$/u;
 
 /**
- * Codex's input, as 0.165.0 was observed drawing it, which has no frame: its footer at the bottom of what it draws - the model line, and a row of hints under
- * it where there is one - with a blank row above it, and above that its input: a prompt row `› ` with the input or its dim
- * placeholder, the draft going on in rows indented two spaces. Its own earlier messages begin `› ` too, higher up: the input is the
- * one above the footer, the cursor in it. Its slash menu is drawn above the input.
+ * Codex's input, which has no frame: a prompt row `› ` with the input or its dim placeholder, the draft going on in rows indented
+ * two spaces, blank ones among them. It ends at the blank row above the row of its model and folder, found by that row's shape and
+ * place - nothing under that row is read, whatever its hints, status or passive transcript footer say. Its own earlier messages
+ * begin `› ` too, higher up: the input is the one the cursor is in. Its slash menu is drawn above the input. Its transcript
+ * browsing, search and selection keep the input drawn but put the cursor under it, and its trust question draws a menu in its
+ * place (CLIS-2.1).
  */
 function readCodexPrompt(screen: InputScreen): InputReading {
 	const { rows, cursor } = screen;
-	let model = rows.length - 1;
-	while (model >= 0 && isBlank(rows[model])) {
-		model--;
+	let last = rows.length - 1;
+	while (last >= 0 && isBlank(rows[last])) {
+		last--;
 	}
-	if (model >= 0 && (CODEX_HINTS.test(textOf(rows[model])) || CODEX_PASSIVE_HINTS.test(textOf(rows[model])))) {
-		model--;
-	}
-	if (model < 2 || !CODEX_MODEL.test(textOf(rows[model])) || !isBlank(rows[model - 1])) {
-		return noInput(rows, CODEX_MENU, 'no model line of its footer at the bottom');
+	const model = [last, last - 1].find(y => y >= 2 && CODEX_MODEL.test(textOf(rows[y])));
+	if (model === undefined || !isBlank(rows[model - 1])) {
+		return noInput(rows, CODEX_MENU, 'no blank row above a model line at its bottom');
 	}
 	const end = model - 1;
-	let prompt = end - 1;
+	let prompt = Math.min(cursor.y, end - 1);
 	while (prompt >= 0 && !(charAt(rows[prompt], 0) === '›' && charAt(rows[prompt], 1) === ' ')) {
-		if (!isContinuation(rows[prompt])) {
-			return noInput(rows, CODEX_MENU, 'no prompt row above its footer');
+		if (!isContinuation(rows[prompt]) && !isBlank(rows[prompt])) {
+			return noInput(rows, CODEX_MENU, 'no prompt row above the cursor in its input');
 		}
 		prompt--;
 	}
 	if (prompt < 0) {
-		return noInput(rows, CODEX_MENU, 'no prompt row above its footer');
+		return noInput(rows, CODEX_MENU, 'no prompt row above the cursor in its input');
 	}
 	if (cursor.y < prompt || cursor.y >= end) {
-		return noInput(rows, CODEX_MENU, `the cursor at row ${cursor.y + 1} is not in the input above its footer`);
+		return noInput(rows, CODEX_MENU, `the cursor at row ${cursor.y + 1} is not in the input above its model line`);
+	}
+	for (let y = cursor.y + 1; y < end; y++) {
+		if (!isContinuation(rows[y]) && !isBlank(rows[y])) {
+			return noInput(rows, CODEX_MENU, `row ${y + 1} of what the cursor is in is no row of its input`);
+		}
 	}
 	return contentOf(rows, prompt, end, cursor, 'the input');
 }
@@ -308,8 +301,6 @@ const PI_LOWER = /^─+(?: ↓ \d+ more ─+)?$/;
 /** The rows its scroll marks say are out of its editor, above and below. */
 const PI_ABOVE = /^─{2,} ↑ (\d+) more ─+$/;
 const PI_BELOW = /^─+ ↓ (\d+) more ─+$/;
-/** Its footer's row of figures, which ends in the context it has used: `↑637 ↓15 … 1.3%/131k (auto)`, `?/131k` before it knows. */
-const PI_STATS = /(?:^|\s)(?:\d+\.\d%|\?)\/\d+(?:\.\d)?[kM]?(?: \(auto\))?(?:\s|$)/;
 /**
  * Its questions and pickers, drawn in place of its editor: a selected item `→ Trust` or `→ ✓ qwen3.8-flash`, the next under it, and
  * their hint `… escape/ctrl+c cancel` below them, which its slash menu has none of.
@@ -319,34 +310,23 @@ const PI_MENU: Menu = { selected: /^ ?→ \S/, next: /^ {2,4}\S/, hint: { row: /
 /**
  * Pi's editor, as 1.4.0 was observed drawing it, which has no prompt: two rules across the terminal with the input between them,
  * from its first column - a long paste as `[paste #1 +33 lines]` - at most 30% of the terminal's rows, at least five, and its own
- * cursor in inverse video where the terminal's is; its slash menu under the lower rule; then its footer at the bottom - the folder,
- * then a row of figures ending in the context used, maybe an extension's status under it. Its questions and pickers draw their own
- * rules in place of the editor, taller than it can be.
+ * cursor in inverse video where the terminal's is: the editor is the rules around the cursor. Its slash menu under the lower rule
+ * and its footer under that are not read (CLIS-2.1). Its questions and pickers draw their own rules in place of the editor, taller
+ * than it can be.
  */
 function readPiEditor(screen: InputScreen): InputReading {
 	const { rows, cursor } = screen;
-	let stats = rows.length - 1;
-	while (stats >= 0 && isBlank(rows[stats])) {
-		stats--;
-	}
-	if (stats >= 1 && !PI_STATS.test(textOf(rows[stats])) && PI_STATS.test(textOf(rows[stats - 1]))) {
-		// An extension's status under it
-		stats--;
-	}
-	if (stats < 3 || !PI_STATS.test(textOf(rows[stats])) || isBlank(rows[stats - 1])) {
-		return noInput(rows, PI_MENU, 'no footer of its folder and context at the bottom');
-	}
-	let lower = stats - 2;
-	while (lower >= 0 && !PI_LOWER.test(textOf(rows[lower]))) {
-		lower--;
-	}
-	let upper = lower - 1;
+	let upper = cursor.y - 1;
 	while (upper >= 0 && !PI_UPPER.test(textOf(rows[upper]))) {
 		upper--;
 	}
+	let lower = cursor.y;
+	while (lower < rows.length && !PI_LOWER.test(textOf(rows[lower]))) {
+		lower++;
+	}
 	const height = lower - upper - 1;
-	if (upper < 0 || height < 1 || height > Math.max(5, Math.floor(rows.length * 0.3))) {
-		return noInput(rows, PI_MENU, 'no editor between two rules above its footer');
+	if (upper < 0 || lower >= rows.length || height < 1 || height > Math.max(5, Math.floor(rows.length * 0.3))) {
+		return noInput(rows, PI_MENU, `no editor between two rules around the cursor at row ${cursor.y + 1}`);
 	}
 	const top = upper + 1;
 	const where = `the editor at ${height > 1 ? `rows ${top + 1}-${lower}` : `row ${lower}`}`;

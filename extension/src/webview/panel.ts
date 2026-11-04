@@ -47,9 +47,9 @@ const isAvatar: Check = value => isShaped(value, { file: value => isString(value
 	|| isShaped(value, { initial: value => isString(value) && value !== '', color: value => AVATAR_COLORS.includes(value) });
 const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString, alias: isString,
-	location: value => isShaped(value, { label: isString, full: isString }, { folderPrefix: isString }),
+	location: value => isShaped(value, { full: isString }),
 	dot: value => DOTS.includes(value), stateText: isString, line: isString, tooltip: isStrings, label: isString, menu: isMenu
-}, { avatar: isAvatar, startedAt: isNumber, workingSince: isNumber, pinned: isBoolean });
+}, { avatar: isAvatar, startedAt: isNumber, workingSince: isNumber, pinned: isBoolean, repeated: value => value === true });
 const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
@@ -475,10 +475,10 @@ function update(entry: Drawn, card: Card): void {
 		entry.dot.title = card.stateText;
 	}
 	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3)
-	const place = JSON.stringify([card.pinned, card.location.label, card.location.folderPrefix, card.location.full]);
+	const place = JSON.stringify([card.pinned, card.repeated && card.alias]);
 	if (place !== entry.place) {
 		entry.place = place;
-		entry.top.replaceChildren(entry.name, ...card.pinned ? [pin()] : [], placeOf(card.location));
+		entry.top.replaceChildren(entry.name, ...card.repeated ? [el('span', 'short-id', card.alias)] : [], ...card.pinned ? [pin()] : []);
 	}
 	if (entry.line.textContent !== card.line) {
 		entry.line.textContent = card.line;
@@ -505,20 +505,10 @@ function pin(): HTMLElement {
 	return element;
 }
 
-/** Separate folder/worktree labels keep their original values in the card's state (PANEL-1.3). */
-function placeOf(location: Card['location']): HTMLElement {
-	const element = el('span', location.folderPrefix ? 'place within' : 'place');
-	if (location.folderPrefix) {
-		element.append(el('span', 'folder', location.folderPrefix), el('span', 'bullet', ' · '));
-	}
-	element.append(el('span', 'tree', location.label));
-	return element;
-}
-
-/** Short labels stay whole; long names end-ellipsize, long location components middle-ellipsize (PANEL-1.3). */
+/** A short name stays whole; a long one ellipsizes at its end, its short ID and Pin kept whole (PANEL-1.3). */
 function fitPlaces(): void {
 	for (const entry of drawn?.values() ?? []) {
-		fitCardTop(entry.top, entry.name, entry.card.name, entry.card.location);
+		fitCardTop(entry.top, entry.name, entry.card.name || entry.card.alias);
 	}
 }
 new ResizeObserver(fitPlaces).observe(list);

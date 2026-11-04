@@ -13,7 +13,7 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 14;
+export const PTYD_PROTOCOL = 15;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
@@ -22,9 +22,16 @@ export const PTYD_PROTOCOL = 14;
  * 11 lacks 12's screen-evidence invalidation, logical-line status reading and complete record replacement.
  * 12 lacks 13's Windows Unicode input and draft handling; its backend may belong to a removed installation (CLIS-2.1, ARCHITECTURE-2.4).
  * 13 lacks 14's Codex completed-turn correction (CLIS-2.3).
+ * 14 lacks 15's answers to a program's terminal queries while a window claims its run - its colours among them - its OSC 7501
+ * probe answered before a window has its output, a local window's 90 seconds, and a run its grace could not confirm ended listed as
+ * uncertain (ARCHITECTURE-2.2, 2.3, CLIS-2.3): it ignores whether a claim's window is local, and its window passes its terminal's
+ * answers on.
  * New runs go to none of these.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13, 14];
+
+/** The first protocol whose ptyd answers its runs' terminal queries itself: a window filters its editor terminal's answers (ARCHITECTURE-2.3). */
+export const QUERY_ANSWERS_PROTOCOL = 15;
 
 import type { ScreenStyle } from '../base/screenStyle';
 import type { OwnerClaim } from '../base/ownership';
@@ -34,6 +41,22 @@ import type { InputEffect } from './input';
 export type { OwnerClaim } from '../base/ownership';
 export type { InputReading, InputState } from './composer';
 export type { InputEffect } from './input';
+
+/**
+ * The colours a window's editor terminals draw with, each `rrrr/gggg/bbbb` as an OSC 10, 11 or 12 answer gives it: what ptyd answers,
+ * at once, a program of a run that window claims asking its terminal's colours (ARCHITECTURE-2.3).
+ */
+export interface TerminalColours {
+	readonly foreground?: string;
+	readonly background?: string;
+	readonly cursor?: string;
+}
+
+/** Whether `value` is a TerminalColours: each colour present `rgb` as an OSC answer writes it, and nothing else. */
+export function isTerminalColours(value: unknown): value is TerminalColours {
+	return isJsonObject(value) && Object.entries(value).every(([key, colour]) => ['foreground', 'background', 'cursor'].includes(key)
+		&& typeof colour === 'string' && /^[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}\/[0-9a-fA-F]{1,4}$/.test(colour));
+}
 
 /** What a window gives ptyd to start a run: the agent's process, where it runs, and what the window keeps with it. */
 export interface SpawnParams {
@@ -109,6 +132,11 @@ export interface RunInfo {
 	readonly seq: number;
 	/** Whether another connected window claims it: a window shows only the runs it claims (RULES-4.1). */
 	readonly claimedElsewhere: boolean;
+	/**
+	 * Whether its grace ended it and that end is not confirmed: listed still, holding its conversation, never reattached, until its exit
+	 * is heard (ARCHITECTURE-2.2, LIFECYCLE-3.5).
+	 */
+	readonly uncertain?: boolean;
 	readonly meta: { readonly [key: string]: unknown };
 }
 
@@ -218,6 +246,8 @@ export interface Requests {
 	 * (RULES-4.1, ARCHITECTURE-2.2). Answers how many it ends.
 	 */
 	endWindow: { params: { readonly owner: string; readonly graceMs: number }; result: number };
+	/** The colours this window's terminals draw with: ptyd answers its runs' programs asking them, at once (ARCHITECTURE-2.3). */
+	colours: { params: TerminalColours; result: void };
 	/**
 	 * A shim's tool call, answered with the owning window's answer as it gave it. Waits for a window to claim the run while the call's
 	 * two seconds last (RULES-1.2), and a query for an answer while its route deadline lasts; refused with a {@link CallRefusal} where

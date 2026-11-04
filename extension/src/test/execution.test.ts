@@ -49,6 +49,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let terminals: FakeTerminal[];
 	let activeChanged: TestEmitter<unknown>;
 	let closed: TestEmitter<unknown>;
+	/** Terminals the editor opened that Facade did not: a copy of a tab's among them. */
+	let openedTerminal: TestEmitter<unknown>;
 	let configChanged: TestEmitter<{ affectsConfiguration(section: string): boolean }>;
 	let config: { [key: string]: unknown };
 	/** The editor's tabs as the test has them: the active tab, its changes, and the commands run on the active editor. */
@@ -57,6 +59,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let visibleTabs: unknown[] | undefined;
 	let activeTab: unknown;
 	let activeTerminal: unknown;
+	/** The editor's groups where a test says them. */
+	let visibleGroups: { viewColumn: number }[] | undefined;
 	let commands: string[];
 	class TabInputTerminal { }
 	class TabInputText { constructor(readonly uri: unknown) { } }
@@ -86,6 +90,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let loseAttach: boolean;
 	/** Where the next listing's answer waits, once had, until opened: what the run says meanwhile reaches the window first. */
 	let listGate: { entered(): void; readonly open: Promise<void> } | undefined;
+	/** Where the next spawn's answer waits, once had, until opened; and each request's method in order. */
+	let spawnGate: { entered(): void; readonly open: Promise<void> } | undefined;
+	let requested: string[];
 	const ports: AgentExecution[] = [];
 	const extraClients: PtydClient[] = [];
 
@@ -97,6 +104,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		terminals = [];
 		activeChanged = new TestEmitter();
 		closed = new TestEmitter();
+		openedTerminal = new TestEmitter();
 		configChanged = new TestEmitter();
 		config = { 'terminal.integrated.tabs.separator': ' | ' };
 		tabsChanged = new TestEmitter();
@@ -104,6 +112,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		visibleTabs = undefined;
 		activeTab = undefined;
 		activeTerminal = undefined;
+		visibleGroups = undefined;
 		commands = [];
 		connectGate = undefined;
 		loseSpawnReply = false;
@@ -116,6 +125,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		connections = [];
 		delayAttach = 0;
 		loseAttach = false;
+		spawnGate = undefined;
+		requested = [];
 		listGate = undefined;
 		const vscodeApi = {
 			TabInputTerminal,
@@ -141,10 +152,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			window: {
 				get activeTerminal() { return activeTerminal; },
 				tabGroups: { onDidChangeTabs: tabsChanged.event, onDidChangeTabGroups: groupsChanged.event,
-					get all() { return [{ tabs: visibleTabs ?? terminals.filter(terminal => !terminal.disposed).map(terminal => terminal.tab) }]; },
+					get all() { return visibleGroups ?? [{ tabs: visibleTabs ?? terminals.filter(terminal => !terminal.disposed).map(terminal => terminal.tab) }]; },
 					get activeTabGroup() { return { activeTab }; } },
 				onDidChangeActiveTerminal: activeChanged.event,
+				activeColorTheme: { kind: 2 }, onDidChangeActiveColorTheme: () => ({ dispose() { } }),
 				onDidCloseTerminal: closed.event,
+				onDidOpenTerminal: openedTerminal.event,
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => {
 					const terminal: FakeTerminal = {
 						name: options.name, options, written: [], names: [], pending: [], opened: false, shown: [], disposed: false,
@@ -177,6 +190,16 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			return {
 				request: async <M extends Method>(method: M, params: Requests[M]['params']): Promise<Requests[M]['result']> => {
 					if (method === 'spawn') { spawns++; }
+					requested.push(method);
+					if (method === 'spawn' && spawnGate) {
+						// Its answer held, as ptyd's start line can hold it: the request itself went, in its turn on the connection
+						const gate = spawnGate;
+						spawnGate = undefined;
+						const answered = real.request(method, params);
+						gate.entered();
+						await gate.open;
+						return await answered;
+					}
 					if (method === 'terminate' && failTerminateOnce) {
 						failTerminateOnce = false;
 						throw new PtydNotSent('injected request that did not arrive');
@@ -236,7 +259,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		ports.push(port);
 		return port;
 	};
-	const facts = (run: RunId, more: Partial<PairFacts> = {}): PairFacts => ({ run, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', cwd: os.tmpdir(), ...more });
+	const facts = (run: RunId, more: Partial<PairFacts> = {}): PairFacts => ({ run, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', cwd: os.tmpdir(), tab: { column: 1 }, ...more });
 	const meta = (_run: RunId): RunMeta => ({
 		alias: '#a1', name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: os.tmpdir(),
 		environment: 'local', yolo: true, createdAt: 1
@@ -1002,7 +1025,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const closes: RunId[] = [];
 		const activations: (RunId | undefined)[] = [];
 		port.onDidExit(exit => exits.push(exit));
-		port.onDidClosePair!(run => closes.push(run));
+		port.onDidClosePair!(({ run }) => closes.push(run));
 		port.onDidActivate(run => activations.push(run));
 		port.openPair(facts('run-4'), { reveal: false });
 		open(terminals[0]);
@@ -1030,7 +1053,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	test('a run the person kept after closing its tab opens in a new tab - the same pseudoterminal, its screen drawn again - and so does revealing it (LIFECYCLE-3.1)', async () => {
 		const port = portOf();
 		const closes: RunId[] = [];
-		port.onDidClosePair!(run => closes.push(run));
+		port.onDidClosePair!(({ run }) => closes.push(run));
 		port.openPair(facts('run-7'), { reveal: false });
 		open(terminals[0]);
 		await port.spawn('run-7', plan(ECHO), meta('run-7'));
@@ -1047,10 +1070,355 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(terminals.length, 3);
 	});
 
+	test('a hidden pair - an agent another agent starts - has no tab: its run starts and works at 120 by 30, and its tab opens, on its screen, as the person opens it (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		port.openPair(facts('run-hid'), { reveal: false, hidden: true });
+		const { pid } = await port.spawn('run-hid', plan(`process.stdout.write('size ' + process.stdout.columns + 'x' + process.stdout.rows + '\\n'); ${ECHO}`), meta('run-hid'));
+		assert.ok(pid > 0);
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.strictEqual(terminals.length, 0, 'no tab opened');
+		assert.strictEqual(await port.reveal('run-hid', { preserveFocus: false }), true);
+		assert.strictEqual(terminals.length, 1);
+		open(terminals[0]);
+		await until('its screen', () => screenOf(terminals[0]).includes('size 120x30'));
+	});
+
+	test('a group shows one unpinned agent tab: the one opened or moved in stays and the other is hidden, its agent going on; a pinned agent\'s tab hides none and is hidden by none; an Unpin keeps the active one (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const closes: unknown[] = [];
+		port.onDidClosePair!(close => closes.push(close));
+		const first = { viewColumn: 1 }, second = { viewColumn: 2 };
+		const shown = (index: number, group: { viewColumn: number }) => {
+			const terminal = terminals[index];
+			for (const other of terminals) { Object.assign(other.tab, { isActive: false }); }
+			Object.assign(terminal.tab, { group, isActive: true });
+			open(terminal);
+			tabsChanged.fire({ opened: [terminal.tab], closed: [], changed: [] });
+		};
+		port.openPair(facts('run-a'), { reveal: true });
+		shown(0, first);
+		port.openPair(facts('run-b'), { reveal: true });
+		shown(1, first);
+		assert.deepStrictEqual([terminals[0].disposed, terminals[1].disposed], [true, false], 'B opened in the group: A hidden');
+		port.openPair(facts('run-c'), { reveal: true });
+		port.pinTab('run-c', true);
+		shown(2, first);
+		assert.deepStrictEqual([terminals[1].disposed, terminals[2].disposed], [false, false], 'a pinned agent\'s tab hides none');
+		port.openPair(facts('run-d'), { reveal: true });
+		shown(3, second);
+		// B moved into the second group: its tab closed there while its terminal stays open, and one opened in the other
+		const moved = { input: new TabInputTerminal(), isPinned: false, isActive: true, group: second };
+		tabsChanged.fire({ opened: [], closed: [terminals[1].tab], changed: [] });
+		tabsChanged.fire({ opened: [moved], closed: [], changed: [] });
+		assert.deepStrictEqual([terminals[1].disposed, terminals[3].disposed], [false, true], 'the one moved in stays');
+		// C unpinned beside B: the active one stays
+		Object.assign(moved, { isActive: false });
+		Object.assign(terminals[2].tab, { group: second, isActive: true });
+		port.pinTab('run-c', false);
+		assert.deepStrictEqual([terminals[1].disposed, terminals[2].disposed, closes], [true, false, []]);
+	});
+
+	test('a repeated name shows its short ID on its tab, and a native rename takes that ID off what was typed - the tab\'s own, once - whatever the duplicates are by then (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const renames: unknown[] = [];
+		port.onDidRenameTab(rename => renames.push(rename));
+		port.openPair(facts('run-r'), { reveal: false });
+		const tab = terminals[0];
+		open(tab);
+		const reset = (name: string) => { tab.name = name; tabsChanged.fire({ opened: [], closed: [], changed: [tab.tab] }); };
+		reset(tab.options.name as string);
+		port.tabLabel('run-r', '#a12', true);
+		assert.strictEqual(tab.names.at(-1), 'Ada #a12');
+		reset('Ada #a12');
+		assert.deepStrictEqual(renames, [], 'its own title is no rename');
+		for (const [typed, name] of [['auditor', 'auditor'], ['auditor #a12', 'auditor'], ['#a12', ''], ['auditor #a13', 'auditor #a13']] as const) {
+			renames.length = 0;
+			reset(typed);
+			assert.deepStrictEqual(renames, [{ run: 'run-r', name }], typed);
+			port.rename('run-r', 'Ada');
+			reset(tab.names.at(-1)!);
+		}
+		port.tabLabel('run-r', '#a12', false);
+		assert.strictEqual(tab.names.at(-1), 'Ada');
+	});
+
+	test('a reload brings each tab back as its record says: open in its group, the last one where that is gone; hidden hidden; from a build that kept no record hidden, unless pinned (LIFECYCLE-3.5)', async () => {
+		const first = portOf();
+		for (const run of ['in-2', 'in-gone', 'hid', 'old', 'old-pinned']) {
+			first.openPair(facts(run), { reveal: false, hidden: true });
+			await first.spawn(run, plan(ECHO), meta(run));
+		}
+		const second = portOf();
+		const live = await second.live();
+		visibleGroups = [{ viewColumn: 1 }, { viewColumn: 2 }];
+		const before = terminals.length;
+		const places: Record<string, Partial<PairFacts>> = { 'in-2': { tab: { column: 2 } }, 'in-gone': { tab: { column: 5 } }, hid: { tab: 'hidden' }, old: { tab: undefined }, 'old-pinned': { tab: undefined, pinned: true } };
+		const opened: Record<string, unknown> = {};
+		for (const run of Object.keys(places)) {
+			const at = terminals.length;
+			const attaching = second.attach(live.find(each => each.run === run)!, facts(run, places[run]));
+			await new Promise(resolve => setTimeout(resolve, 50));
+			if (terminals.length > at) { open(terminals[at]); }
+			await attaching;
+			opened[run] = terminals.length > at ? (terminals[at].options.location as { viewColumn: number }).viewColumn : 'none';
+		}
+		visibleGroups = undefined;
+		assert.ok(terminals.length >= before);
+		assert.deepStrictEqual(opened, { 'in-2': 2, 'in-gone': 2, hid: 'none', old: 'none', 'old-pinned': -1 });
+	});
+
+	test('a copy of an agent\'s tab - no shell or pseudoterminal of its own, the name its tab was opened under - is told for that agent alone, and closes as the caller says; several copies at once, a name two open tabs bear or a person\'s own shell are never told (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const told: { run: RunId; done: (started: RunId | undefined) => void }[] = [];
+		port.onDidCopyTab(copy => told.push(copy));
+		port.openPair(facts('run-c1'), { reveal: false });
+		open(terminals[0]);
+		port.openPair(facts('run-c2', { name: 'Bo' }), { reveal: false });
+		open(terminals[1]);
+		const copyOf = (name: string, more: object = {}) => ({ name, creationOptions: { name, ...more }, disposed: false, dispose() { this.disposed = true; } });
+		const wait = () => new Promise(resolve => setTimeout(resolve, 400));
+		// One copy of Ada's tab
+		const one = copyOf('Ada');
+		openedTerminal.fire(one);
+		await wait();
+		assert.deepStrictEqual([told.map(each => each.run), one.disposed], [['run-c1'], false]);
+		told[0].done(undefined);
+		assert.strictEqual(one.disposed, true, 'no agent started: the copy closes at once');
+		// A person's own shell named like an agent, and two copies at once
+		const shell = copyOf('Ada', { shellPath: '/bin/zsh' });
+		openedTerminal.fire(shell);
+		const both = [copyOf('Ada'), copyOf('Bo')];
+		for (const each of both) { openedTerminal.fire(each); }
+		await wait();
+		assert.deepStrictEqual([told.length, shell.disposed, both.map(each => each.disposed)], [1, false, [true, true]]);
+		// A name two open tabs bear
+		port.openPair(facts('run-c3'), { reveal: false });
+		open(terminals[2]);
+		const shared = copyOf('Ada');
+		openedTerminal.fire(shared);
+		await wait();
+		assert.deepStrictEqual([told.length, shared.disposed], [1, true]);
+	});
+
+	test('a copy\'s agent opens in the group of the copy\'s own tab - the one active with its terminal, else the one that opened with it - whatever other terminal tabs Facade cannot tell are open, a person\'s shell among them (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const told: { run: RunId; column?: number }[] = [];
+		port.onDidCopyTab(copy => told.push({ run: copy.run, ...copy.column !== undefined ? { column: copy.column } : {} }));
+		port.openPair(facts('run-g1'), { reveal: false });
+		open(terminals[0]);
+		tabsChanged.fire({ opened: [terminals[0].tab], closed: [], changed: [] });
+		const shellTab = { input: new TabInputTerminal(), isActive: false, isPinned: false, group: { viewColumn: 1 } };
+		const copyOf = (name: string) => ({ name, creationOptions: { name }, dispose() { } });
+		const wait = () => new Promise(resolve => setTimeout(resolve, 400));
+		const tabIn = (viewColumn: number, isActive: boolean) => ({ input: new TabInputTerminal(), isActive, isPinned: false, group: { viewColumn } });
+		// A split: the copy's tab opens in group 2, active with the copy's terminal
+		const first = copyOf('Ada'), firstTab = tabIn(2, true);
+		openedTerminal.fire(first);
+		visibleTabs = [terminals[0].tab, shellTab, firstTab];
+		tabsChanged.fire({ opened: [firstTab], closed: [], changed: [] });
+		activeTab = firstTab; activeTerminal = first; activeChanged.fire(first);
+		await wait();
+		// A copying drag into group 3 whose tab is not made active: the one that opened with it
+		const second = copyOf('Ada'), secondTab = tabIn(3, false);
+		openedTerminal.fire(second);
+		visibleTabs = [terminals[0].tab, shellTab, secondTab];
+		tabsChanged.fire({ opened: [secondTab], closed: [], changed: [] });
+		await wait();
+		// Two opened with it and neither active with it: it cannot be told, and the agent opens in the active group
+		const third = copyOf('Ada'), thirdTab = tabIn(4, false), otherTab = tabIn(5, false);
+		openedTerminal.fire(third);
+		visibleTabs = [terminals[0].tab, shellTab, thirdTab, otherTab];
+		tabsChanged.fire({ opened: [thirdTab, otherTab], closed: [], changed: [] });
+		await wait();
+		assert.deepStrictEqual(told, [{ run: 'run-g1', column: 2 }, { run: 'run-g1', column: 3 }, { run: 'run-g1' }]);
+	});
+
+	test('an agent opened before and opened again behind the person\'s editor waits for this opening of its terminal, not its first: nothing spins, and the editor it covered shows again once it opens (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		port.openPair(facts('run-u1'), { reveal: false });
+		open(terminals[0]);
+		tabsChanged.fire({ opened: [terminals[0].tab], closed: [], changed: [] });
+		port.hideTab!('run-u1');
+		closed.fire(terminals[0]);
+		// The person's file in front, then the agent's tab made anew behind it, opening active over it before its terminal opens
+		const file = { input: { uri: 'file:///work/app/README.md' }, isActive: true, isPinned: false, isPreview: false, group: { viewColumn: 1, tabs: [] as unknown[] } };
+		file.group.tabs.push(file);
+		activeTab = file;
+		port.reopen('run-u1');
+		const again = terminals[1];
+		const tab = { ...again.tab, isActive: true, group: file.group };
+		visibleTabs = [file, tab];
+		tabsChanged.fire({ opened: [tab], closed: [], changed: [] });
+		// While its terminal is not open yet, a timer still runs: nothing waits in a loop of its own
+		const before = Date.now();
+		await new Promise(resolve => setTimeout(resolve, 10));
+		const took = Date.now() - before;
+		assert.ok(took < 500, `a 10 ms timer ran after ${took} ms`);
+		assert.ok(!commands.includes('vscode.open'), 'nothing is shown before its terminal opens');
+		open(again);
+		await new Promise(resolve => setTimeout(resolve, 20));
+		assert.ok(commands.includes('vscode.open'), 'the covered editor is shown again once it opened');
+	});
+
+	test('a known tab whose group\'s number changes - an earlier group closed - is told in its group\'s new number, for a reload to bring it back there (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		const places: { run: RunId; place: unknown }[] = [];
+		port.onDidPlaceTab!(each => places.push(each));
+		const groups = [{ viewColumn: 2 }, { viewColumn: 3 }];
+		for (const [index, run] of [[0, 'run-n1'], [1, 'run-n2']] as const) {
+			port.openPair(facts(run, { name: `Agent ${index}` }), { reveal: false });
+			open(terminals[index]);
+			Object.assign(terminals[index].tab, { group: groups[index] });
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		places.length = 0;
+		// Group 1 - a file's - closes: the others number themselves 1 and 2
+		groups[0].viewColumn = 1; groups[1].viewColumn = 2;
+		groupsChanged.fire(undefined);
+		assert.deepStrictEqual(places.map(each => [each.run, typeof each.place === 'object' ? (each.place as { column: number }).column : each.place]), [['run-n1', 1], ['run-n2', 2]]);
+	});
+
+	test('where VS Code numbers its groups anew with new objects - a group closed or opened rebuilds its whole model - a tab is told by the groups that closed and opened, known or not (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		const places: { run: RunId; place: unknown }[] = [];
+		port.onDidPlaceTab!(each => places.push(each));
+		for (const [index, run, column] of [[0, 'run-r1', 2], [1, 'run-r2', 3]] as const) {
+			port.openPair(facts(run, { name: `Agent ${index}` }), { reveal: false });
+			open(terminals[index]);
+			Object.assign(terminals[index].tab, { group: { viewColumn: column } });
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		const columns = () => places.map(each => [each.run, typeof each.place === 'object' ? (each.place as { column: number }).column : each.place]);
+		// Group 1, a file's, closes: the model rebuilt, every tab a new object
+		places.length = 0;
+		visibleTabs = [{ input: new TabInputTerminal(), isActive: false, isPinned: false, group: { viewColumn: 1 } }, { input: new TabInputTerminal(), isActive: false, isPinned: false, group: { viewColumn: 2 } }];
+		groupsChanged.fire({ opened: [], closed: [{ viewColumn: 1 }], changed: [] } as never);
+		assert.deepStrictEqual(columns(), [['run-r1', 1], ['run-r2', 2]]);
+		// A group opens at 2: the one there and after it move one on
+		places.length = 0;
+		groupsChanged.fire({ opened: [{ viewColumn: 2 }], closed: [], changed: [] } as never);
+		assert.deepStrictEqual(columns(), [['run-r2', 3]]);
+	});
+
+	test('where groups join, moving their tabs in inactive, the group keeps its active agent tab, else the one last active; a tab moved in active stays (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const place = (index: number, viewColumn: number, isActive: boolean) => Object.assign(terminals[index].tab, { group: { viewColumn }, isActive });
+		const join = (index: number, isActive: boolean) => {
+			const moved = { input: new TabInputTerminal(), isActive, isPinned: false, label: terminals[index].tab.label, group: { viewColumn: 1 } };
+			tabsChanged.fire({ opened: [moved], closed: [terminals[index].tab], changed: [] });
+			return moved;
+		};
+		const activate = (index: number) => {
+			activeTab = terminals[index].tab; activeTerminal = terminals[index];
+			tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(terminals[index].tab, { isActive: true })] });
+			activeChanged.fire(terminals[index]);
+		};
+		for (const [index, run, column] of [[0, 'run-j1', 1], [1, 'run-j2', 2], [2, 'run-j3', 3]] as const) {
+			port.openPair(facts(run, { name: `Agent ${index}` }), { reveal: false });
+			open(terminals[index]);
+			place(index, column, false);
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		// Join All Groups from group 1, its agent's tab active there: the agent moved in inactive is hidden
+		activate(2); activate(1); activate(0);
+		join(1, false);
+		assert.deepStrictEqual(terminals.slice(0, 3).map(each => each.disposed), [false, true, false]);
+		// Close Group of group 3 with a file active: none of group 1's agent tabs is active, and the one last active stays
+		Object.assign(terminals[0].tab, { isActive: false });
+		activeTab = { input: { uri: 'file:///work/app/README.md' }, isActive: true, isPinned: false, group: { viewColumn: 1 } };
+		await new Promise(resolve => setTimeout(resolve, 5));
+		activate(2);
+		Object.assign(terminals[2].tab, { isActive: false });
+		join(2, false);
+		assert.deepStrictEqual(terminals.slice(0, 3).map(each => each.disposed), [true, true, false]);
+	});
+
+	test('a mark changed on a tab Facade cannot tell wins once the tab is known where it came after the agent\'s last Pin or Unpin; else Facade\'s Pin stands and the mark follows (LIFECYCLE-3.4, J12)', async () => {
+		const port = portOf();
+		const changes: unknown[] = [];
+		port.onDidPinTab(change => changes.push(change));
+		const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+		for (const [index, run] of [[0, 'run-m1'], [1, 'run-m2']] as const) {
+			port.openPair(facts(run), { reveal: false });
+			open(terminals[index]);
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		// Both moved at once: neither tab can be told now
+		const [first, second] = [0, 1].map(() => ({ input: new TabInputTerminal(), isPinned: false, isActive: false, group: { viewColumn: 2 } }));
+		tabsChanged.fire({ opened: [first, second], closed: [terminals[0].tab, terminals[1].tab], changed: [] });
+		// m1: Unpinned from its card, then pinned natively on its unknown tab - the later, the tab's, wins
+		port.pinTab('run-m1', false);
+		await tick();
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isPinned: true })] });
+		// m2: pinned natively on its unknown tab, then Unpinned from its card - the card's, later, stands
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(second, { isPinned: true })] });
+		await tick();
+		port.pinTab('run-m2', false);
+		const known = (index: number, tab: typeof first) => {
+			activeTab = tab; activeTerminal = terminals[index];
+			activeChanged.fire(terminals[index]);
+			tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(tab, { isActive: true })] });
+		};
+		assert.deepStrictEqual(changes, [], 'nothing told while the tabs are unknown');
+		known(0, first);
+		known(1, second);
+		assert.deepStrictEqual(changes, [{ run: 'run-m1', pinned: true }]);
+		await until('the card\'s Unpin followed on the tab', () => commands.includes('workbench.action.unpinEditor'));
+	});
+
+	test('two native changes of an unknown tab\'s mark ending on the mark it showed are still the latest: newer than the card\'s Pin, they win (LIFECYCLE-3.4)', async () => {
+		const port = portOf();
+		const changes: unknown[] = [];
+		port.onDidPinTab(change => changes.push(change));
+		for (const [index, run] of [[0, 'run-p1'], [1, 'run-p2']] as const) {
+			port.openPair(facts(run), { reveal: false });
+			open(terminals[index]);
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		// Pinned from its card, its mark to follow; then both tabs moved at once, neither told
+		port.pinTab('run-p1', true);
+		await new Promise(resolve => setTimeout(resolve, 5));
+		const [first, second] = [0, 1].map(() => ({ input: new TabInputTerminal(), isPinned: false, isActive: false, group: { viewColumn: 2 } }));
+		tabsChanged.fire({ opened: [first, second], closed: [terminals[0].tab, terminals[1].tab], changed: [] });
+		// The person pins its tab natively, then unpins it: it ends as it was, the latest change the person's
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isPinned: true })] });
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isPinned: false })] });
+		activeTab = first; activeTerminal = terminals[0];
+		activeChanged.fire(terminals[0]);
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isActive: true })] });
+		await new Promise(resolve => setTimeout(resolve, 20));
+		assert.deepStrictEqual([changes, commands.includes('workbench.action.pinEditor')], [[{ run: 'run-p1', pinned: false }], false]);
+	});
+
+	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
+		const port = portOf();
+		const closes: { readonly run: RunId; readonly marked: boolean }[] = [];
+		port.onDidClosePair!(close => closes.push(close));
+		port.openPair(facts('run-h'), { reveal: false });
+		open(terminals[0]);
+		await port.spawn('run-h', plan(ECHO), meta('run-h'));
+		await until('its output', () => screenOf(terminals[0]).includes('ready'));
+		assert.strictEqual(port.hideTab('run-h'), true);
+		assert.strictEqual(terminals[0].disposed, true);
+		closed.fire(Object.assign(terminals[0], { exitStatus: { reason: EXIT_REASON.Extension, code: undefined } }));
+		assert.deepStrictEqual([closes, port.hideTab('run-h')], [[], false], 'hidden: nothing to hide again, nothing closed');
+		assert.strictEqual(await port.reveal('run-h', { preserveFocus: false }), true);
+		assert.strictEqual(terminals.length, 2);
+		open(terminals[1]);
+		await until('its screen drawn again', () => screenOf(terminals[1]).includes('ready'));
+		// Its tab, pinned: the person's close says so
+		const tab = { input: new TabInputTerminal(), isActive: true, isPinned: true, group: { viewColumn: 1, tabs: [] as unknown[] } };
+		activeTerminal = terminals[1];
+		activeChanged.fire(terminals[1]);
+		tabsChanged.fire({ opened: [tab], closed: [], changed: [] });
+		closed.fire(Object.assign(terminals[1], { exitStatus: { reason: EXIT_REASON.User, code: undefined } }));
+		assert.deepStrictEqual(closes, [{ run: 'run-h', marked: true }]);
+	});
+
 	test('removing a pair disposes its terminal at once - no close of the person\'s - ends a live process in the background and lets ptyd forget the run; removing it again does nothing', async () => {
 		const port = portOf();
 		const closes: RunId[] = [];
-		port.onDidClosePair!(run => closes.push(run));
+		port.onDidClosePair!(({ run }) => closes.push(run));
 		port.openPair(facts('run-6'), { reveal: false });
 		open(terminals[0]);
 		const { pid } = await port.spawn('run-6', plan(ECHO), meta('run-6'));
@@ -1075,6 +1443,40 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(observer);
 		await until('ptyd to end and forget it', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
+	});
+
+	test('details that change while a run starts are kept with its process: before its spawn was sent they go after it, after it they go at once on the same connection (ARCHITECTURE-2.3)', async () => {
+		let entered!: () => void, open!: () => void;
+		const reached = new Promise<void>(resolve => entered = resolve);
+		spawnGate = { entered, open: new Promise<void>(resolve => open = resolve) };
+		const port = portOf();
+		port.openPair(facts('run-meta'), { reveal: false });
+		const starting = port.spawn('run-meta', plan(ECHO), meta('run-meta'));
+		port.setMeta('run-meta', { ...meta('run-meta'), name: 'before' });
+		await reached;
+		port.setMeta('run-meta', { ...meta('run-meta'), name: 'renamed' });
+		open();
+		await starting;
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		extraClients.push(observer);
+		const held = await until('ptyd to keep the details', async () => (await observer.request('list', { owner: 'workspace-1' })).find(each => each.run === 'run-meta' && each.meta.name === 'renamed'));
+		// The change before the spawn was sent went with it (its meta the latest then); the one after reached the run it named
+		assert.deepStrictEqual([held.meta.name, requested.filter(method => method === 'spawn' || method === 'setMeta')], ['renamed', ['spawn', 'setMeta']]);
+	});
+
+	test('a change of a run\'s details while its start waits for ptyd\'s connection goes with its spawn, which carries the latest (ARCHITECTURE-2.3)', async () => {
+		const port = portOf();
+		port.openPair(facts('run-early'), { reveal: false });
+		// An earlier change, made before the start was asked for, is older than the details the start carries
+		port.setMeta('run-early', { ...meta('run-early'), name: 'stale' });
+		const starting = port.spawn('run-early', plan(ECHO), meta('run-early'));
+		// While its start waits for the connection: a change of its tab, its second line, its name
+		port.setMeta('run-early', { ...meta('run-early'), name: 'early' });
+		await starting;
+		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
+		extraClients.push(observer);
+		const held = await until('ptyd to hold it', async () => (await observer.request('list', { owner: 'workspace-1' })).find(each => each.run === 'run-early'));
+		assert.deepStrictEqual([held.meta.name, requested.filter(method => method === 'spawn' || method === 'setMeta')], ['early', ['spawn']]);
 	});
 
 	test('close while the initial handshake is pending sends no spawn and creates no file effect', async () => {
@@ -1534,7 +1936,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		const port = portOf();
 		const closes: RunId[] = [];
 		const renames: { readonly run: RunId; readonly name: string }[] = [];
-		port.onDidClosePair(run => closes.push(run));
+		port.onDidClosePair(({ run }) => closes.push(run));
 		port.onDidRenameTab(rename => renames.push(rename));
 		const group = { viewColumn: 1, tabs: [] as unknown[] };
 		const file = { input: new TabInputText({ path: '/work/a.ts' }), isActive: true, isPreview: false, group };

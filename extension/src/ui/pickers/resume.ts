@@ -8,7 +8,7 @@ import { messageOf } from '../../base/errors';
 import { isEqualPath, isInsideFolder, realFolderOf } from '../../base/files';
 import { conversationId } from '../../core/ports';
 import type { Catalog, ConversationDiscoveryPort, ConversationEntry, ConversationKey, ConversationPager, HumanPort, Location, LocationPort, RunId } from '../../core/ports';
-import { locationLabel } from '../cardView';
+import { locationLabel, onePlaceOf } from '../cardView';
 import { ago, cliDisplayName, cliIcon, plainText, reasonOf } from '../presentation';
 import { BACK, Flow } from './stepping';
 import { matchesCliSearch } from './search';
@@ -41,8 +41,9 @@ export interface ResumeDeps {
 const READ_AHEAD = 10;
 
 /**
- * Where a conversation was, as the window names it: its location, a subdirectory of one after it, else its path. Compared as the
- * folders really are, `reals` each location's: a CLI may record the other form - macOS's /var is /private/var.
+ * Where a conversation was, as the window names it: its location, a subdirectory of one after it, else its path; nothing for the
+ * window's one place to work itself, which goes without saying (LIFECYCLE-3.2). Compared as the folders really are, `reals` each
+ * location's: a CLI may record the other form - macOS's /var is /private/var.
  */
 function placeOf(cwd: string, reals: readonly { readonly location: Location; readonly real: string }[], catalog: Catalog): string {
 	const real = realFolderOf(cwd);
@@ -53,6 +54,9 @@ function placeOf(cwd: string, reals: readonly { readonly location: Location; rea
 		return cwd;
 	}
 	const rest = path.relative(inside.real, real).split(path.sep).join('/');
+	if (!rest && onePlaceOf(catalog)?.id === inside.location.id) {
+		return '';
+	}
 	return rest ? `${locationLabel(inside.location, catalog)}/${rest}` : locationLabel(inside.location, catalog);
 }
 
@@ -90,11 +94,14 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	const itemOf = (entry: ConversationEntry): Item => {
 		const item: Item = {
 			label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled conversation")),
-			description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).join(', '), names.get(conversationId(entry.key))].filter(Boolean).map(text => plainText(text!)).join(' · '),
+			description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).filter(Boolean).join(', '), names.get(conversationId(entry.key))].filter(Boolean).map(text => plainText(text!)).join(' · '),
 			iconPath: cliIcon(deps.media, entry.key.cli),
 			entry
 		};
-		return { ...item, alwaysShow: matchesCliSearch(picker.value, entry.key.cli, cliDisplayName(entry.key.cli), item) };
+		// The window's one place to work, left unsaid, still matches a search (LIFECYCLE-3.2)
+		const one = onePlaceOf(catalog);
+		const unsaid = one && (entry.cwdChoices ?? [entry.cwd]).some(cwd => !placeIn(cwd)) ? locationLabel(one, catalog) : undefined;
+		return { ...item, alwaysShow: matchesCliSearch(picker.value, entry.key.cli, cliDisplayName(entry.key.cli), item, unsaid) };
 	};
 	const show = () => {
 		const active = picker.activeItems[0]?.entry;

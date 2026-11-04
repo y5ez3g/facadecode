@@ -9,7 +9,7 @@ import { SUGGESTED_NAMES } from '../core/names';
 import {
 	ActivityReport, CleanupResult, Disposable, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, Location, LocationPort,
 	ConversationEntry, ConversationMeta, ConversationKey, Pin, PinStore,
-	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RetainedRun, RunChange, RunFacts, RunId, RunMeta, WorktreeError, WorktreePlan
+	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RetainedRun, RunChange, RunFacts, RunId, RunMeta, TabPlace, WorktreeError, WorktreePlan
 } from '../core/ports';
 
 class Emitter<T> {
@@ -39,7 +39,7 @@ class FakeExecution implements ExecutionPort {
 	readonly reports = new Emitter<ActivityReport>();
 	readonly exits = new Emitter<ExitReport>();
 	readonly activations = new Emitter<RunId | undefined>();
-	readonly tabCloses = new Emitter<RunId>();
+	readonly tabCloses = new Emitter<{ readonly run: RunId; readonly marked: boolean }>();
 	readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
 	readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
 	readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
@@ -66,11 +66,16 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidExit = this.exits.event;
 	readonly onDidActivate = this.activations.event;
 	readonly onDidClosePair = this.tabCloses.event;
+	readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
+	readonly onDidPlaceTab = this.placements.event;
+	readonly copies = new Emitter<{ readonly run: RunId; readonly done: (started: RunId | undefined) => void }>();
+	readonly onDidCopyTab = this.copies.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
 	readonly onDidDisconnectTools = this.toolDisconnections.event;
-	openPair(facts: PairFacts, options: { reveal: boolean }): void { this.pairs.set(facts.run, facts); this.reveals.set(facts.run, options.reveal); }
+	readonly hidden = new Set<RunId>();
+	openPair(facts: PairFacts, options: { reveal: boolean; hidden?: boolean }): void { this.pairs.set(facts.run, facts); this.reveals.set(facts.run, options.reveal); if (options.hidden) { this.hidden.add(facts.run); } }
 	note(run: RunId, text: string): void { this.notes.push({ run, text }); }
 	async spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ pid: number; startedAt: number }> {
 		await this.spawnGate;
@@ -82,7 +87,8 @@ class FakeExecution implements ExecutionPort {
 		if (this.namesAtSpawn && plan.exactResume && plan.sessionId) { this.identities.fire({ run, sessionId: plan.sessionId }); }
 		return { pid: 4242, startedAt: 1000 };
 	}
-	async attach(live: LiveRun, facts: PairFacts): Promise<void> { this.pairs.set(live.run, facts); }
+	readonly attachedRuns: RunId[] = [];
+	async attach(live: LiveRun, facts: PairFacts): Promise<void> { this.attachedRuns.push(live.run); this.pairs.set(live.run, facts); }
 	async terminate(run: RunId): Promise<CleanupResult> { this.terminated.push(run); return this.cleanup; }
 	removePair(run: RunId): void { this.pairs.delete(run); this.removed.push(run); }
 	async reveal(): Promise<boolean> { return true; }
@@ -100,13 +106,15 @@ const WORKTREE: Location = { ...LOCATION, id: 'loc-wt', path: '/work/app.worktre
 
 function setUp(options: {
 	sessions?: boolean; failSpawnFor?: (plan: LaunchPlan) => boolean; planError?: PlanError; worktreeError?: WorktreeError; worktreeGate?: Promise<void>; removedWhileAway?: readonly string[];
-	confirm?: (agent: { readonly run: RunId; readonly label: string }) => Promise<boolean>; describe?: (err: unknown, english: string) => string;
+	describe?: (err: unknown, english: string) => string;
 	/** What each plan adds to the test's plain one: its tools, input reader, prompt path, version. */
 	plan?: Partial<LaunchPlan>;
 	/** Orchestration on: each start is given its own shim. */
 	tools?: boolean;
 	/** What the window does with a start's typing before its first turn: recorded, and settled as the test says. */
 	warmUp?: (run: RunId, warmUp: NonNullable<LaunchPlan['warmUp']>) => Promise<void>;
+	/** How the service waits before it looks again: the test's own, released as it says. */
+	wait?: (ms: number) => Promise<void>;
 } = {}) {
 	const execution = new FakeExecution();
 	execution.failSpawnFor = options.failSpawnFor;
@@ -181,8 +189,7 @@ function setUp(options: {
 				text: `Could not ${failure.kind} ${failure.name}: ${failure.reason}`,
 				...(opts.show ? { show: opts.show } : {})
 			}); },
-			error: (text, opts) => errors.push({ text, ...(opts.show ? { show: opts.show } : {}) }),
-			...(options.confirm ? { confirmClose: options.confirm } : {})
+			error: (text, opts) => errors.push({ text, ...(opts.show ? { show: opts.show } : {}) })
 		},
 		retained: { list: () => [...retained.values()], put: run => retained.set(run.id, run), remove: run => retained.delete(run) },
 		aliases: { next: () => `#a${++alias}` },
@@ -197,6 +204,7 @@ function setUp(options: {
 		} } : {}),
 		...(options.describe ? { describe: options.describe } : {}),
 		...(options.warmUp ? { warmUp: options.warmUp } : {}),
+		...(options.wait ? { wait: options.wait } : {}),
 		newRunId: () => `run-${(++next).toString(16).padStart(32, '0')}`
 	});
 	const changes: RunChange[] = [];
@@ -205,6 +213,13 @@ function setUp(options: {
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
+/** Settles once `check` holds, looking again after each turn of the event loop. */
+const until = async (check: () => boolean): Promise<void> => {
+	for (let turns = 0; !check(); turns++) {
+		if (turns > 1_000) { throw new Error('Timed out waiting.'); }
+		await settle();
+	}
+};
 
 
 suite('Structured lifecycle facts', () => {
@@ -323,6 +338,19 @@ suite('A start\'s typing before the first turn (COLLABORATION-2.2)', () => {
 		await plain.agents.warmedUp(other);
 	});
 
+	test('a post-start creation prompt holds its run\'s input from its plan until it is settled; a native one never does (RULES-1.10)', async () => {
+		const world = setUp({ plan: { warmUp: WARM_UP, prompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } }, warmUp: async () => undefined });
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' }, promptId: 'm-1', prompt: 'Go.', promptLine: 'Go.' });
+		await world.agents.started(id);
+		assert.strictEqual(world.agents.creationPending(id), true);
+		world.agents.creationSettled(id);
+		assert.strictEqual(world.agents.creationPending(id), false);
+		const native = setUp({ plan: { prompt: { path: 'native', capability: { state: 'supported', reason: 'verified' } } } });
+		const other = native.agents.launch({ name: 'B', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' }, promptId: 'm-2', prompt: 'Go.', promptLine: 'Go.' });
+		await native.agents.started(other);
+		assert.strictEqual(native.agents.creationPending(other), false);
+	});
+
 	test('one the window could not do is logged and settles: the run goes on', async () => {
 		const world = setUp({ plan: { warmUp: WARM_UP }, warmUp: async () => { throw new Error('ptyd went away'); } });
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'agy', origin: 'human' });
@@ -370,6 +398,35 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.agents.requested(creator, 'old'), undefined, 'a request lookup is not failed by the same cleanup');
 	});
 
+	test('a run its grace ended without that end confirmed is a red card that says so, holding its Pin and never reattached; once it is no longer listed it goes and its Pin is restored (LIFECYCLE-3.5)', async () => {
+		const looks: (() => void)[] = [];
+		const world = setUp({ sessions: true, wait: () => new Promise<void>(resolve => looks.push(resolve)) });
+		const uncertain = 'run-' + '9'.repeat(32);
+		const meta = { alias: '#a9', name: 'Stuck', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local' as const, yolo: true, createdAt: 5, sessionId: 's-stuck', exactResume: true, pin: 'pin-stuck' };
+		(world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.save({ id: 'pin-stuck', conversation: { environment: 'local', cli: 'claude', sessionId: 's-stuck' }, location: 'loc-1', cwd: '/work/app', name: 'Stuck' });
+		world.execution.liveRuns = [{ run: uncertain, meta, pid: 99, startedAt: 6, claimedElsewhere: false, uncertain: true }];
+		await world.agents.restore();
+		await world.agents.restorePins();
+		assert.deepStrictEqual([world.agents.get(uncertain)?.pin, world.agents.list().length], ['pin-stuck', 1], 'its Pin is held, not restored beside it');
+		const card = world.agents.get(uncertain);
+		assert.deepStrictEqual([card?.lifecycle, card?.error?.reason, card?.error?.source, world.execution.notes.map(note => note.text)],
+			['running', 'Could not confirm that it stopped', 'cleanup', ['Could not confirm that it stopped']]);
+		assert.ok(!world.execution.attachedRuns.includes(uncertain), 'never reattached');
+		// Still listed: it stays
+		await until(() => looks.length === 1);
+		looks.shift()!();
+		await until(() => looks.length === 1);
+		assert.ok(world.agents.get(uncertain));
+		// No longer listed: its exit was heard, and it goes
+		world.execution.liveRuns = [];
+		looks.shift()!();
+		await until(() => !world.agents.get(uncertain));
+		assert.deepStrictEqual([world.execution.removed.includes(uncertain), world.changes.some(change => change.run === uncertain && change.kind === 'removed' && change.cause === 'exit')], [true, true]);
+		// Its Pin is restored then, its exact conversation in a new run
+		await until(() => world.agents.list().some(run => run.pin === 'pin-stuck'));
+		assert.deepStrictEqual(world.agents.list().map(run => [run.sessionId, run.pin, run.id === uncertain]), [['s-stuck', 'pin-stuck', false]]);
+	});
+
 	test('a damaged retained record is ignored without stopping restoration, said once however often the window restores (ARCHITECTURE-4.2)', async () => {
 		const world = setUp();
 		world.retained.set('bad', { id: 'bad', alias: '#a1', name: 'Incomplete' } as RunFacts);
@@ -399,6 +456,68 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.execution.spawned.length, 1);
 		assert.deepStrictEqual(world.remembered, [{ location: 'loc-1', cli: 'claude' }], 'a human launch remembers its CLI and location once the process starts');
 		assert.strictEqual(world.execution.reveals.get(id), true, 'a human New Agent shows its terminal');
+		assert.strictEqual(world.execution.hidden.has(id), false);
+	});
+
+	test('a name repeating among the window\'s cards shows each one\'s short ID on its tab, an empty name its ID alone; a duplicate going takes it away (LIFECYCLE-2.2)', async () => {
+		const world = setUp();
+		const labels = new Map<RunId, [string, boolean]>();
+		(world.execution as unknown as { tabLabel: (run: RunId, alias: string, shown: boolean) => void }).tabLabel = (run, alias, shown) => labels.set(run, [alias, shown]);
+		const first = world.agents.launch({ name: 'reviewer', location: 'loc-1', cli: 'claude', origin: 'human' });
+		assert.deepStrictEqual(labels.get(first)?.[1], false);
+		const second = world.agents.launch({ name: 'reviewer', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const empty = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		assert.deepStrictEqual([labels.get(first), labels.get(second), labels.get(empty)?.[1]], [['#a1', true], ['#a2', true], true]);
+		world.agents.rename(second, 'auditor');
+		assert.deepStrictEqual([labels.get(first)?.[1], labels.get(second)?.[1]], [false, false]);
+	});
+
+	test('where a run\'s tab is goes with its process for a reload; the one last active comes back last, and a run with no record comes back with none (LIFECYCLE-3.5)', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.execution.placements.fire({ run: id, place: { column: 2, activeAt: 7 } });
+		assert.deepStrictEqual(world.execution.metas.get(id)?.tab, { column: 2, activeAt: 7 });
+		world.execution.placements.fire({ run: id, place: 'hidden' });
+		assert.strictEqual(world.execution.metas.get(id)?.tab, 'hidden');
+		const reload = setUp();
+		const meta = (alias: string, tab?: TabPlace) => ({ alias, name: alias, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local' as const, yolo: true, createdAt: 5, ...tab ? { tab } : {} });
+		const run = (n: number) => `run-${String(n).repeat(32)}`;
+		reload.execution.liveRuns = [
+			{ run: run(1), meta: meta('#a1', { column: 1, activeAt: 30 }), pid: 1, startedAt: 1, claimedElsewhere: false },
+			{ run: run(2), meta: meta('#a2', { column: 1, activeAt: 10 }), pid: 2, startedAt: 2, claimedElsewhere: false },
+			{ run: run(3), meta: meta('#a3'), pid: 3, startedAt: 3, claimedElsewhere: false }
+		];
+		await reload.agents.restore();
+		assert.deepStrictEqual(reload.execution.attachedRuns, [run(3), run(2), run(1)]);
+		assert.deepStrictEqual([reload.execution.pairs.get(run(1))?.tab, reload.execution.pairs.get(run(3))?.tab], [{ column: 1, activeAt: 30 }, undefined]);
+	});
+
+	test('a copied agent tab starts, in its place, a new agent of the same CLI and location with the model and effort the first had, under a new name, shown; a launch refused closes the copy and says why (LIFECYCLE-2.2)', async () => {
+		const world = setUp();
+		const first = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human', model: 'opus', effort: 'max' });
+		await settle();
+		const results: (RunId | undefined)[] = [];
+		world.execution.copies.fire({ run: first, done: started => results.push(started) });
+		await settle();
+		const started = results[0]!;
+		const facts = world.agents.get(started)!;
+		assert.deepStrictEqual([facts.cli, facts.location, facts.model, facts.effort, facts.origin, facts.name !== 'Ada' && !!facts.name, world.execution.reveals.get(started), !!world.agents.get(first)],
+			['claude', 'loc-1', 'opus', 'max', 'human', true, true, true]);
+		// Its location gone: refused, said, the copy closing with no agent
+		world.agents.close(first);
+		(world.agents as unknown as { runs: Map<RunId, unknown> }).runs.set(first, { facts: { ...facts, id: first, alias: '#a9', location: 'loc-gone' } });
+		world.execution.copies.fire({ run: first, done: started => results.push(started) });
+		await settle();
+		assert.deepStrictEqual([results[1], world.failures.map(each => each.kind)], [undefined, ['start']]);
+	});
+
+	test('an agent another agent starts has its card alone: its tab is not opened, and it covers nothing and takes no focus (LIFECYCLE-2.2)', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' } });
+		await settle();
+		assert.deepStrictEqual([world.execution.pairs.has(id), world.execution.hidden.has(id), world.execution.reveals.get(id), world.agents.get(id)?.lifecycle, world.execution.spawned[0]?.meta?.tab], [true, true, false, 'running', 'hidden']);
 	});
 
 	test('names are labels: empty strings, spaces, duplicates and human are accepted with distinct run IDs (LIFECYCLE-2.1)', () => {
@@ -536,9 +655,8 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.ok(world.execution.pairs.has(crashed));
 	});
 
-	test('an exit heard before its start is answered leaves the run ended: its tab then closes without the question for a live agent (RULES-3.1, 3.3, LIFECYCLE-3.1)', async () => {
-		const asked: RunId[] = [];
-		const world = setUp({ confirm: async agent => { asked.push(agent.run); return false; } });
+	test('an exit heard before its start is answered leaves the run ended; closing its tab then hides it, its red card staying (RULES-3.1, 3.3, LIFECYCLE-2.2)', async () => {
+		const world = setUp();
 		let release!: () => void;
 		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
@@ -546,10 +664,10 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		world.execution.exits.fire({ run: id, code: 1, interruptVerified: false });
 		release();
 		await settle();
-		const facts = world.agents.get(id)!;
-		world.execution.tabCloses.fire(id);
+		world.execution.tabCloses.fire({ run: id, marked: false });
 		await settle();
-		assert.deepStrictEqual([facts.lifecycle, facts.end?.kind, facts.pid, asked, world.agents.get(id)], ['ended', 'abnormal', 4242, [], undefined]);
+		const facts = world.agents.get(id)!;
+		assert.deepStrictEqual([facts.lifecycle, facts.end?.kind, facts.pid, world.execution.terminated], ['ended', 'abnormal', 4242, []]);
 	});
 
 	test('a rename while the CLI starts is kept with its process, as a later one is: a reloaded window shows it (LIFECYCLE-2.1, 3.5)', async () => {
@@ -562,6 +680,20 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		release();
 		await settle();
 		assert.strictEqual(world.execution.metas.get(id)?.name, 'Grace');
+	});
+
+	test('its tab opened and what was typed in while its CLI starts are kept with its process too: a reload shows the tab where it is and the line (LIFECYCLE-3.5, PANEL-1.4)', async () => {
+		const world = setUp();
+		let release!: () => void;
+		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
+		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.execution.placements.fire({ run: id, place: { column: 2, activeAt: 7 } });
+		world.agents.said(id, 'check the build');
+		release();
+		await settle();
+		const kept = world.execution.metas.get(id);
+		assert.deepStrictEqual([kept?.tab, kept?.said], [{ column: 2, activeAt: 7 }, 'check the build']);
 	});
 
 	test('a CLI a signal ended is abnormal though its code is 0 - as node-pty reports a process killed on Linux and macOS - and keeps its red pair; the person\'s own close is not (RULES-3.3)', async () => {
@@ -661,80 +793,44 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.ok(world.log.some(line => /Could not unpin "A", whose working location was removed: disk full/.test(line)));
 	});
 
-	test('LIFECYCLE-3.1: a tab closed by the person whose process could not be ended tells them, as Close Agent does; an ended or unconfirmed cleanup says nothing', async () => {
+	test('LIFECYCLE-2.2, 3.1: a tab the person closed is hidden - no question, no close, no cleanup - whatever its agent\'s state; its card stays and opens it again', async () => {
 		const world = continuitySetup();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const live = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		(world.execution as unknown as { cleanup: string }).cleanup = 'failed';
-		world.execution.tabCloses.fire(id);
+		let release!: () => void;
+		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
+		const starting = world.agents.launch({ name: 'S', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		assert.deepStrictEqual([world.agents.get(id), world.failures.map(failure => [failure.kind, failure.name])], [undefined, [['terminate', 'A']]]);
-		const quiet = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
+		for (const run of [live, starting]) { world.execution.tabCloses.fire({ run, marked: false }); }
 		await settle();
-		(world.execution as unknown as { cleanup: string }).cleanup = 'unconfirmed';
-		world.execution.tabCloses.fire(quiet);
+		release();
 		await settle();
-		assert.strictEqual(world.failures.length, 1, 'an unconfirmed cleanup is reported as neither');
+		assert.deepStrictEqual([!!world.agents.get(live), world.agents.get(starting)?.lifecycle, world.execution.terminated, world.failures], [true, 'running', [], []]);
 	});
 
-	test('a tab closed by the person whose close fails - its Unpin could not be saved - keeps the agent, opens its terminal again and tells the person it could not unpin it (LIFECYCLE-3.1, RULES-1.8)', async () => {
+	test('LIFECYCLE-3.4: the person\'s close of a tab showing its pin mark Unpins it and hides it; a pinned agent\'s tab whose mark is still to follow is hidden alone, its Pin kept', async () => {
+		const world = continuitySetup();
+		const marked = world.agents.launch({ name: 'M', location: 'loc-1', cli: 'claude', origin: 'human' });
+		const unmarked = world.agents.launch({ name: 'U', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.agents.pin(marked);
+		world.agents.pin(unmarked);
+		world.execution.tabCloses.fire({ run: marked, marked: true });
+		world.execution.tabCloses.fire({ run: unmarked, marked: false });
+		await settle();
+		assert.deepStrictEqual([world.agents.get(marked)?.pin, world.agents.get(unmarked)?.pin !== undefined, world.execution.terminated], [undefined, true, []]);
+	});
+
+	test('a marked tab\'s close whose Unpin could not be saved opens the tab again, pinned, and tells the person it could not unpin it (LIFECYCLE-3.4, RULES-1.8)', async () => {
 		const world = continuitySetup();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.agents.pin(id);
 		(world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.remove = () => { throw new Error('disk full'); };
-		world.execution.tabCloses.fire(id);
+		world.execution.tabCloses.fire({ run: id, marked: true });
 		await settle();
-		assert.deepStrictEqual([world.agents.get(id)?.pin !== undefined, world.execution.reopened, world.failures.map(failure => [failure.kind, failure.reason])], [true, [id], [['unpin', 'disk full']]]);
-		assert.ok(world.log.some(line => /Could not close #a1 as its tab was closed: disk full/.test(line)));
-	});
-
-	test('a natively closed tab is an explicit close (LIFECYCLE-3.1)', async () => {
-		const world = setUp();
-		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
-		await settle();
-		world.execution.tabCloses.fire(id);
-		await settle();
-		assert.strictEqual(world.agents.get(id), undefined);
-		assert.deepStrictEqual(world.execution.terminated, [id]);
-	});
-
-	test('a live agent whose tab was closed - alone or with other editors - ends only once the person confirms; kept, its terminal opens again (LIFECYCLE-3.1)', async () => {
-		const asked: { readonly run: RunId; readonly label: string }[] = [];
-		let answer = false;
-		const world = setUp({ confirm: async agent => { asked.push(agent); return answer; } });
-		const named = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
-		const unnamed = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
-		await settle();
-		world.execution.tabCloses.fire(named);
-		world.execution.tabCloses.fire(unnamed);
-		await settle();
-		assert.deepStrictEqual({ asked, kept: [!!world.agents.get(named), !!world.agents.get(unnamed)], reopened: world.execution.reopened, terminated: world.execution.terminated },
-			{ asked: [{ run: named, label: 'A' }, { run: unnamed, label: '#a2' }], kept: [true, true], reopened: [named, unnamed], terminated: [] });
-		answer = true;
-		world.execution.tabCloses.fire(named);
-		await settle();
-		assert.deepStrictEqual([world.agents.get(named), world.execution.terminated], [undefined, [named]]);
-	});
-
-	test('a closed tab of a starting or ended agent closes it without asking (LIFECYCLE-3.1)', async () => {
-		const asked: RunId[] = [];
-		let release!: () => void;
-		const world = setUp({ confirm: async agent => { asked.push(agent.run); return false; } });
-		world.execution.spawnGate = new Promise(resolve => { release = resolve; });
-		const starting = world.agents.launch({ name: 'S', location: 'loc-1', cli: 'claude', origin: 'human' });
-		await settle();
-		world.execution.tabCloses.fire(starting);
-		await settle();
-		release();
-		world.execution.spawnGate = Promise.resolve();
-		world.execution.spawnError = new Error('no program');
-		const failed = world.agents.launch({ name: 'F', location: 'loc-1', cli: 'claude', origin: 'human' });
-		await settle();
-		world.execution.tabCloses.fire(failed);
-		await settle();
-		assert.deepStrictEqual({ asked, starting: world.agents.get(starting), failed: world.agents.get(failed), reopened: world.execution.reopened },
-			{ asked: [], starting: undefined, failed: undefined, reopened: [] });
+		assert.deepStrictEqual([world.agents.get(id)?.pin !== undefined, world.execution.reopened, world.execution.pinnedTabs.at(-1), world.failures.map(failure => [failure.kind, failure.reason])],
+			[true, [id], { run: id, pinned: true }, [['unpin', 'disk full']]]);
 	});
 
 	test('a failure says Facade\'s own reason in the person\'s words and an empty name by its #aN, while the log keeps the English (UX-2.4, LIFECYCLE-2.1)', async () => {
@@ -1217,7 +1313,7 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		world.agents.pin(claude);
 		// The workspace's state refuses the write: another window owns it now
 		(world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.remove = () => { throw new FacadeError('INVALID', 'ownership_lost', 'Another window owns this workspace.', OWNERSHIP_LOST); };
-		world.execution.tabCloses.fire(claude);
+		world.execution.tabCloses.fire({ run: claude, marked: true });
 		await settle();
 		const told = world.failures.map(each => [each.kind, each.reason]);
 		world.execution.transfers.fire();

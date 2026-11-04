@@ -224,20 +224,21 @@ suite('CLIs: the folder a run starts in, trusted as the CLI\'s own question woul
 		assert.deepStrictEqual([mergeTrust(target), fs.existsSync(lock), JSON.parse(fs.readFileSync(target.file, 'utf8')).projects[cwd]], [{ kind: 'written' }, false, { hasTrustDialogAccepted: true }]);
 	});
 
-	test('Antigravity: the folder an item of the trustedWorkspaces of its settings in the home folder, the folder its run takes for its working directory - PWD where that names it, else the real path; on Windows the folder as given', () => {
+	test('Antigravity: the folder an item of the trustedWorkspaces of its settings in the home folder, the folder its run takes for its working directory - the folder as the launch gives it, which node-pty puts in its PWD, never its real path; on Windows the folder as given (CLIS-3.3)', () => {
 		const file = path.join(home, '.gemini', 'antigravity-cli', 'settings.json');
-		const folder = canonicalFolder(cwd);
-		assert.deepStrictEqual(targetOf('agy', cwd, env), { file, keys: ['trustedWorkspaces'], entry: { item: folder }, folder });
+		assert.deepStrictEqual(targetOf('agy', cwd, env), { file, keys: ['trustedWorkspaces'], entry: { item: cwd }, folder: cwd });
 		assert.strictEqual(targetOf('agy', cwd, { USERPROFILE: home }, 'win32').file, file);
 		assert.strictEqual(targetOf('agy', 'C:\\work\\repo', { USERPROFILE: 'C:\\Users\\me' }, 'win32').folder, path.resolve('C:\\work\\repo'));
-		// A folder reached through a link: the PWD that names it, as a Go program takes its working directory; else its real path
+		// A folder reached through a link, or named in another letter case on a filesystem that ignores case: as the launch names it,
+		// whatever PWD the window's own environment has
 		const link = path.join(temp.dir, 'link');
 		fs.symlinkSync(cwd, link, 'junction');
-		assert.deepStrictEqual([targetOf('agy', link, { ...env, PWD: link }).folder, targetOf('agy', link, { ...env, PWD: temp.dir }).folder, targetOf('agy', link, env).folder], [link, folder, folder]);
+		const other = path.join(path.dirname(cwd), path.basename(cwd).toUpperCase());
+		assert.deepStrictEqual([targetOf('agy', link, { ...env, PWD: link }).folder, targetOf('agy', link, { ...env, PWD: temp.dir }).folder, targetOf('agy', link, env).folder, targetOf('agy', other, env).folder], [link, link, link, other]);
 		fs.mkdirSync(path.dirname(file), { recursive: true });
 		fs.writeFileSync(file, '{}');
 		assert.deepStrictEqual(mergeTrust(targetOf('agy', cwd, env)), { kind: 'written' });
-		assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { trustedWorkspaces: [folder] });
+		assert.deepStrictEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { trustedWorkspaces: [cwd] });
 	});
 
 	test('a list entry: the folder added at the end of the list at its keys as the file is written - made where there is none, a null taken for nothing - and nothing written where it is there', () => {

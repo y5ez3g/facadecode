@@ -4,8 +4,18 @@
 
 import type { OwnerClaim } from './protocol';
 
-/** The product's grace period starts when the current extension host disconnects from ptyd. */
+/**
+ * The grace period a remote window's runs have, from when its current extension host disconnects from ptyd: long enough for a
+ * reconnect after a lost network, which a reopened window of the workspace may take too (RULES-4.1).
+ */
 export const OWNER_GRACE_MS = 5 * 60_000;
+
+/**
+ * A local window's: a reload or an extension host restart claims its runs again well within it; a closed window's runs end after
+ * it, unless a window opening the workspace within it takes them over, as a reload does - no claim ends another window's runs
+ * (RULES-4.1).
+ */
+export const LOCAL_OWNER_GRACE_MS = 90_000;
 
 export interface OwnerClock {
 	after(ms: number, run: () => void): { dispose(): void };
@@ -38,7 +48,8 @@ export class OwnerClaims<C> {
 	) { }
 
 	claim(claim: OwnerClaim, connection: C): void {
-		if (typeof claim.owner !== 'string' || !claim.owner || !Number.isSafeInteger(claim.generation) || claim.generation < 1 || typeof claim.token !== 'string' || !claim.token) {
+		if (typeof claim.owner !== 'string' || !claim.owner || !Number.isSafeInteger(claim.generation) || claim.generation < 1 || typeof claim.token !== 'string' || !claim.token
+			|| (claim.local !== undefined && typeof claim.local !== 'boolean')) {
 			throw new Error('Invalid workspace ownership claim.');
 		}
 		const previous = this.owners.get(claim.owner);
@@ -46,6 +57,7 @@ export class OwnerClaims<C> {
 			(claim.generation === previous.claim.generation && (claim.token !== previous.claim.token || previous.expired)))) {
 			throw new Error('Workspace ownership was transferred or expired.');
 		}
+		// Within its grace any window of the workspace takes its runs over, a reloaded one or another: no claim ends them (RULES-4.1)
 		previous?.timer?.dispose();
 		this.owners.set(claim.owner, { claim, connection });
 		if (previous?.connection !== undefined && previous.connection !== connection) {
@@ -65,7 +77,7 @@ export class OwnerClaims<C> {
 				continue;
 			}
 			owner.connection = undefined;
-			owner.timer = this.clock.after(OWNER_GRACE_MS, () => {
+			owner.timer = this.clock.after(owner.claim.local === true ? LOCAL_OWNER_GRACE_MS : OWNER_GRACE_MS, () => {
 				if (this.owners.get(key) !== owner || owner.connection !== undefined) {
 					return;
 				}

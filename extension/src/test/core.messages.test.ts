@@ -124,14 +124,19 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	let owned = true;
 	const stored = new Map<string, MessageRecord>();
 	const log: string[] = [];
+	const said: [RunId, string][] = [];
+	const sources: unknown[] = [];
+	/** Runs whose post-start creation prompt is still to go in (RULES-1.10). */
+	const creating = new Set<RunId>();
 	let n = 0;
 	let spent = 0;
+	let listed = 0;
 	const deps: MessageServiceDeps = {
-		agents: { get: run => runs.get(run), onDidChange: changes.event, owned: () => owned },
+		agents: { get: run => runs.get(run), onDidChange: changes.event, owned: () => owned, creationPending: run => creating.has(run) },
 		input,
 		human: { contact: (record, lookup) => { contacts.push(record); saved = lookup; return reachable; } },
 		store: {
-			list: () => [...stored.values()].sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2))),
+			list: () => { listed++; return [...stored.values()].sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2))); },
 			create: record => {
 				if (stored.has(record.id)) {
 					throw new Error(`A message ${record.id} is kept already.`);
@@ -147,11 +152,18 @@ function setUp(options: { readonly createMs?: number } = {}) {
 		window: { id: 'win-1', label: 'Design' },
 		environment: 'local',
 		workspace: 'ws-1',
-		log: { event: text => log.push(text) }
+		log: { event: text => log.push(text) },
+		said: (run, text, source) => { said.push([run, text]); sources.push(source); }
 	};
 	let service = new MessageService(deps);
 	return {
-		service, runs, input, contacts, stored, log,
+		service, runs, input, contacts, stored, log, creating,
+		/** How often every kept message was read: a delivery's attempts are not each to read them all. */
+		listed: () => listed,
+		/** What each recipient's card was told was sent to it, as each delivery went in (PANEL-1.4). */
+		said,
+		/** Who the record says sent each of them (PANEL-1.4). */
+		sources,
 		/** The window reloads: its message service goes, and a new one opens on the same records. */
 		reload: () => {
 			service.dispose();
@@ -212,6 +224,86 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.strictEqual(input.submitted.length, 1, 'reload never pastes again');
 		assert.strictEqual(input.entered[0].text, frozen, 'only the original owned draft may be submitted');
 		assert.deepStrictEqual([...stored.values()].map(record => [record.delivery.status, record.delivery.input]), [['success', undefined], ['success', undefined]]);
+	});
+
+	test('a creation prompt recorded as its start answered, the window reloaded before it went in, goes in from the reloaded window, and its outcome is the start\'s result under the ID the start reserved (MCP-2.3)', async () => {
+		const { service, input, stored, reload, creating } = setUp();
+		input.states.set(B, ['usable']);
+		const prompt = service.allocate({ from: A, text: 'Your task.' });
+		const resultId = service.reserveResult();
+		service.recordPrompt({ id: prompt.id, from: A, to: B, text: 'Your task.', callId: 'start-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } }, resultId },
+			{ status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, attempts: 0, deadline: Date.now() + 600_000 });
+		// Before the reload, a message to B waits for it
+		creating.add(B);
+		const held = await settled(service.send({ from: C, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.strictEqual(held.obstacle, 'input_draft');
+		const reopened = reload();
+		creating.delete(B);
+		reopened.resume();
+		await sleep(6_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.text.split('\n')[1]), ['Your task.', 'Hello']);
+		const result = stored.get(resultId)!;
+		assert.deepStrictEqual([stored.get(prompt.id)!.delivery.status, result.kind, result.about, result.callId], ['success', 'result', prompt.id, 'start-1']);
+	});
+
+	test('a recorded creation prompt given up holds no message back and no reload types it (MCP-2.3, RULES-1.10)', async () => {
+		const { service, input, stored, reload } = setUp();
+		input.states.set(B, ['usable']);
+		const prompt = service.allocate({ from: A, text: 'Your task.' });
+		service.recordPrompt({ id: prompt.id, from: A, to: B, text: 'Your task.', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } },
+			{ status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, attempts: 0, deadline: Date.now() + 600_000 });
+		service.giveUpPrompt(prompt.id, 'unexpected_error');
+		assert.strictEqual((await settled(service.send({ from: C, to: B, text: 'Hello', elapsedMs: 0 }))).status, 'success');
+		reload().resume();
+		await sleep(3_000);
+		assert.deepStrictEqual([stored.get(prompt.id)!.delivery.status, input.submitted.map(each => each.text.split('\n')[1])], ['failure', ['Hello']]);
+	});
+
+	test('a recorded creation prompt its agent read through read_messages before it went in is delivered so: its send types nothing and answers it delivered (MCP-2.3, COLLABORATION-2.2)', async () => {
+		const { service, input, stored } = setUp();
+		input.states.set(B, ['usable']);
+		const prompt = service.allocate({ from: A, text: 'Your task.' });
+		const initialPrompt = { path: 'post_start' as const, capability: { state: 'unavailable' as const, reason: 'none' } };
+		service.recordPrompt({ id: prompt.id, from: A, to: B, text: 'Your task.', callId: 'start-1', initialPrompt, resultId: service.reserveResult() },
+			{ status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, attempts: 0, deadline: Date.now() + 600_000 });
+		// Its agent read its inbox while it readied its tools, before its prompt was sent
+		service.markDelivered(B, [prompt.id]);
+		const sent = await settled(service.send({ id: prompt.id, from: A, to: B, text: 'Your task.', elapsedMs: 0, callId: 'start-1', initialPrompt }));
+		await sleep(5_000);
+		assert.deepStrictEqual([sent.status, sent.record.id, stored.get(prompt.id)!.delivery.via, input.submitted.filter(each => each.run === B).length], ['success', prompt.id, 'read', 0]);
+	});
+
+	test('a message held by a draft is tried again every three seconds without reading every kept message each time (RULES-1.10)', async () => {
+		const { service, input, listed } = setUp();
+		input.states.set(B, [...Array.from({ length: 12 }, () => 'draft' as const), 'usable' as const]);
+		const sending = settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(1_000);
+		const before = listed();
+		await sleep(30_000);
+		const during = listed() - before;
+		await sending;
+		assert.ok(during <= 2, `every kept message was read ${during} times while it was tried again`);
+	});
+
+	test('a recorded creation prompt past its deadline holds no message back (RULES-1.10, MCP-2.3)', async () => {
+		const { service, input } = setUp();
+		input.states.set(B, ['usable']);
+		const prompt = service.allocate({ from: A, text: 'Your task.' });
+		service.recordPrompt({ id: prompt.id, from: A, to: B, text: 'Your task.', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } },
+			{ status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, attempts: 0, deadline: Date.now() - 1_000 });
+		const sent = await settled(service.send({ from: C, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.deepStrictEqual([sent.status, sent.obstacle], ['success', undefined]);
+	});
+
+	test('what a card is told was sent says who sent it, from the record: an agent, with its window where that is another, or Facade for a result (PANEL-1.4, 1.5)', async () => {
+		const { service, input, sources } = setUp();
+		input.states.set(B, ['usable']);
+		input.states.set(A, ['usable']);
+		await settled(service.send({ from: A, to: B, text: '📨 looks like a mark', elapsedMs: 0 }));
+		await settled(service.send({ from: A, sender: { party: { run: C, alias: '#a9', name: 'Far' }, window: 'win-2', label: 'Design' }, to: B, text: 'From afar', elapsedMs: 0 }));
+		service.report({ to: A, text: 'A result.' });
+		await sleep(1_000);
+		assert.deepStrictEqual(sources, [{ kind: 'agent', name: 'Ada', alias: '#a1' }, { kind: 'agent', name: 'Far', alias: '#a9', window: 'Design' }, { kind: 'facade' }]);
 	});
 
 	test('a reserved receipt makes no inbox item, retains its ID and cannot be handed over twice', async () => {
@@ -275,6 +367,24 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.at - start), [9_000]);
 		const original = service.history().find(record => record.id === 'm-1')!;
 		assert.deepStrictEqual([original.delivery.status, original.delivery.attempts, original.delivery.via, original.delivery.deliveredAt! - start], ['success', 4, 'terminal', 9_000]);
+	});
+
+	test('a message sent while its recipient\'s creation prompt is still to go in waits behind it, held from its start: accepted with ten minutes, then the prompt first (RULES-1.10, COLLABORATION-2.2)', async () => {
+		const { service, input, creating } = setUp();
+		creating.add(B);
+		input.states.set(B, ['usable']);
+		const start = Date.now();
+		const result = await settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0, callId: 'call-7' }));
+		assert.deepStrictEqual([result.status, result.obstacle, result.record.delivery.deadline], ['accepted', 'input_draft', start + 600_000]);
+		// The creation prompt itself is not held by its own hold, and goes in first
+		const prompt = await settled(service.send({ from: A, to: B, text: 'Your task.', elapsedMs: 0, initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } }));
+		assert.strictEqual(prompt.status, 'success');
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.text.split('\n')[1]), ['Your task.']);
+		await sleep(6_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).length, 1, 'held while the prompt is pending');
+		creating.delete(B);
+		await sleep(3_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.text.split('\n')[1]), ['Your task.', 'Hello']);
 	});
 
 	test('an accepted send\'s outcome comes back to its sender as a Facade result - in its inbox and its terminal, about the original and its call', async () => {
@@ -800,6 +910,22 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		unreachable();
 		const failed = await service.send({ from: A, to: '@human', text: 'Again', elapsedMs: 0 });
 		assert.deepStrictEqual([failed.status, failed.reason, contacts.length], ['failure', 'window_unavailable', 2]);
+	});
+
+	test('PANEL-1.4: a recipient\'s card is told a message\'s own text, without the 📨 line that introduces it; a Facade result as typed, its 🔔 line being all it says', async () => {
+		const { service, input, said } = setUp();
+		input.states.set(B, ['draft', 'usable']);
+		await settled(service.send({ from: A, to: B, text: 'Review the API.\nThen the tests.', elapsedMs: 0 }));
+		await sleep(15_000);
+		assert.deepStrictEqual(input.submitted.map(each => [each.run, each.text.split('\n')[0]]), [[B, '📨 Message from Ada (#a1) · #m1'], [A, '🔔 Your message #m1 has been passed on to Bob (#a2).']]);
+		assert.deepStrictEqual(said, [[B, 'Review the API.\nThen the tests.'], [A, '🔔 Your message #m1 has been passed on to Bob (#a2).']]);
+	});
+
+	test('PANEL-1.4: a creation prompt that goes in after startup tells its card its first line, as before it went in and by the native path', async () => {
+		const { service, said } = setUp();
+		await settled(service.send({ from: A, to: B, text: '\n  Review the API.\nThen the tests.', elapsedMs: 0, initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } } }));
+		await sleep(15_000);
+		assert.deepStrictEqual(said.filter(([run]) => run === B), [[B, 'Review the API.']]);
 	});
 
 	test('report: a Facade result about another operation goes to its run with the call and agent named, ending quietly if it cannot', async () => {

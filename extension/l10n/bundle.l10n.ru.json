@@ -15,11 +15,6 @@
 	"Connection to agent process lost; reconnecting": "Связь с процессом агента потеряна; повторное подключение",
 	"[Agent process disconnected; exit cause unknown]": "[Процесс агента отключен; причина завершения неизвестна]",
 	"Close Agent": "Закрыть агента",
-	"Close Agents": "Закрыть агентов",
-	"Close {0}?": "Закрыть {0}?",
-	"Close {0} agents?": "Закрыть агентов ({0})?",
-	"Its process will end. Cancel keeps it running and opens its terminal again.": "Его процесс будет завершен. Отмена сохранит его выполнение и снова откроет его терминал.",
-	"Their processes will end. Cancel keeps them running and opens their terminals again.": "Их процессы будут завершены. Отмена сохранит их выполнение и снова откроет их терминалы.",
 	"Show": "Показать",
 	"Could not restore agents for this window. Reload the window to try again.": "Не удалось восстановить агентов для этого окна. Перезагрузите окно, чтобы повторить попытку.",
 	"Window": "Окно",
@@ -79,6 +74,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} не указывает ни на одну фиксацию в {1}.",
 	"The working location is no longer available.": "Рабочее расположение больше недоступно.",
 	"The working location {0} is not available in this window.": "Рабочее расположение {0} недоступно в этом окне.",
+	"Could not confirm that it stopped": "Не удалось подтвердить, что он остановлен",
 	"Git is not available in this environment.": "Git недоступен в этой среде.",
 	"{0} is not in a Git repository.": "{0} не находится в репозитории Git.",
 	"{0} has no commits yet.": "{0} пока не содержит коммитов.",
@@ -317,6 +313,10 @@
 	"Location: {0}": "Расположение: {0}",
 	"Path: {0}": "Путь: {0}",
 	"Started by: {0}": "Кем запущен: {0}",
+	"Source window: {0}": "Окно-источник: {0}",
+	"Last message from agent {0}: {1}": "Последнее сообщение от агента {0}: {1}",
+	"Your last input: {0}": "Ваш последний ввод: {0}",
+	"Facade result: {0}": "Результат Facade: {0}",
 	"New Worktree · Select Folder": "Новое рабочее дерево · Выбор папки",
 	"Started: {0}": "Запущен: {0}",
 	"Reported working: {0}": "Сообщение о работе: {0}",
@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "Новый агент · Выбор папки",
 	"New Agent · Working Location": "Новый агент · Рабочее расположение",
 	"New Agent · New Worktree": "Новый агент · Новое рабочее дерево",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "Установка Facade Code, в которой работают агенты этого окна, удалена обновлением или удалением расширения ({0} отсутствует), поэтому ни один агент не может запуститься. Перезагрузите окно, чтобы запускать агентов в установленной версии."
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "Установка Facade Code, в которой работают агенты этого окна, удалена обновлением или удалением расширения ({0} отсутствует), поэтому ни один агент не может запуститься. Перезагрузите окно, чтобы запускать агентов в установленной версии.",
+	"{0} · {1}": "{0} · {1}"
 }

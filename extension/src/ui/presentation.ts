@@ -145,6 +145,7 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'location_gone': return vscode.l10n.t("The working location is no longer available.");
 		// {0} is the working location's path
 		case 'location_not_here': return vscode.l10n.t("The working location {0} is not available in this window.", a);
+		case 'end_unconfirmed': return vscode.l10n.t("Could not confirm that it stopped");
 		default: return otherwise;
 	}
 }

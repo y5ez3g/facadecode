@@ -487,9 +487,12 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			assert.deepStrictEqual([served.result.data.creator, served.result.data.root], [runId(30), runId(29)]);
 			assert.strictEqual(s.agents.get(served.result.data.agent_id)?.root, runId(29));
 			// Sent after startup as the guest's own message, its result to go back to the window the route came from, not the one it named
+			assert.strictEqual(served.result.data.prompt.status, 'pending');
+			await waitFor(() => s.messages.sent.length === 1 && network.routed.length === 1);
 			assert.deepStrictEqual(s.messages.sent.map(each => [each.from, each.to, each.text, each.sender]), [[runId(30), served.result.data.agent_id, 'Build the API.\nThen test it.', { party: { run: runId(30), alias: '#a30', name: 'planner' }, window: 'win-2', label: 'Backend' }]]);
-			assert.strictEqual(served.result.data.prompt.status, 'success');
-			assert.deepStrictEqual(network.routed, []);
+			// The start's one later result, with its prompt delivered, goes back to the guest's window (MCP-2.3)
+			assert.deepStrictEqual([network.routed[0].window, network.routed[0].op, network.routed[0].args.to], ['win-2', 'result', runId(30)]);
+			assert.strictEqual((network.routed[0].args.result as { data: { prompt: { status: string } } }).data.prompt.status, 'success');
 		});
 
 		test('a routed start still starting is accepted, and its outcome goes back to the guest\'s window as a result - never into this window\'s inbox', async () => {

@@ -327,8 +327,18 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const first = await script(alias, [
 			{ tool: 'list_agents', arguments: {}, save: { window: 'data.windows.0.window_id', location: 'data.windows.0.locations.0.location_id' } },
 			{ tool: 'start_agent', arguments: { name: 'Listener', window_id: '$window', location_id: '$location', cli: CLI, prompt: 'Wait for my messages.' }, save: { child: 'data.agent_id', childAlias: 'data.agent_id' } },
-			// Its box is drawn, its first task taken: an ordinary message can go in now (RULES-1.4)
-			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 },
+			// Its box is drawn, its first task shown - taken, or still going in
+			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Wait for my messages.', wait: 30_000 }
+		]);
+		const started = first.content('start_agent');
+		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
+		const childAlias = started.data.agent_id as string;
+		// A first task that goes in after startup holds the agent's other messages until it went in (RULES-1.10): the start's one later
+		// result, its outcome, says when an ordinary message can go in (RULES-1.4)
+		if (started.data.prompt?.path === 'post_start') {
+			await script(alias, [{ tool: 'read_messages', arguments: { all: true }, until: 'after startup', wait: 30_000 }]);
+		}
+		const sending = await script(alias, [
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello from your creator.\nTwo lines, one message.' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Two lines, one message.' },
 			// A draft left in its box: the next message never goes over it, and waits for it to go (RULES-1.4, 1.5)
@@ -337,25 +347,22 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Second message.' }, save: { second: 'data.message_id' } },
 			{ tool: 'send_message', arguments: { to: '#human', text: 'Please look at this.' } }
 		]);
-		const started = first.content('start_agent');
-		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
-		const childAlias = started.data.agent_id as string;
 
-		const sent = first.content('send_message');
+		const sent = sending.content('send_message');
 		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
 		assert.deepStrictEqual([sent.effects.outcome, sent.effects.text_written, sent.effects.enter_written, sent.data.disposition], ['confirmed', 'full', true, 'submitted_to_cli']);
 		const message = sent.data.message_id as string;
 		assert.ok(received(childAlias).some(each => block(message, alias, window, 'Hello from your creator.\nTwo lines, one message.').test(each)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
-		assert.ok(JSON.stringify(first.content('read_screen', 1)).includes(message), 'its screen shows the message block');
+		assert.ok(JSON.stringify(sending.content('read_screen')).includes(message), 'its screen shows the message block');
 
-		const waiting = first.content('send_message', 1);
+		const waiting = sending.content('send_message', 1);
 		assert.strictEqual(waiting?.status, 'accepted', JSON.stringify(waiting));
 		assert.deepStrictEqual([waiting.data.obstacle, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'pending', 'none']);
 		// Held by the draft: its deadline ten minutes on, not fifteen seconds (RULES-1.4)
 		assert.ok(Date.parse(waiting.data.deadline) - Date.now() > 500_000, waiting.data.deadline);
 		const second = waiting.data.message_id as string;
 
-		const human = first.content('send_message', 2);
+		const human = sending.content('send_message', 2);
 		assert.strictEqual(human?.status, 'success', JSON.stringify(human));
 		assert.deepStrictEqual([human.data.target, human.data.disposition], ['#human', 'notified']);
 

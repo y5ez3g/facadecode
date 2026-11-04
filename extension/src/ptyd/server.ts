@@ -12,7 +12,7 @@ import { provesAbsent } from '../base/connect';
 import { codeOf, messageOf } from '../base/errors';
 import { lineReader } from '../base/lines';
 import { isAgentKey } from './keys';
-import { CallEvent, CallRefusal, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall } from './protocol';
+import { CallEvent, CallRefusal, isTerminalColours, Method, OwnerEvent, PTYD_PROTOCOL, Request, Requests, Response, RunEvent, RunInfo, ShimCall, TerminalColours } from './protocol';
 import { OwnerClaims, type OwnerClock } from './ownership';
 import { InstallationGone, MOST_RUN_BUFFER, Run, RunListener } from './run';
 import { ensurePtydSocket } from './socket';
@@ -64,6 +64,8 @@ class Connection {
 	shimRun: string | undefined;
 	/** It claimed a workspace: a window, which keeps ptyd, as a connection that only lists runs does not (ARCHITECTURE-2.3). */
 	claimed = false;
+	/** The colours its window's terminals draw with, given to each run it claims (ARCHITECTURE-2.3). */
+	colours: TerminalColours = {};
 	private waiting = 0;
 	private readonly waitingByRun = new Map<Run, number>();
 	private readonly requests = new Map<number, { readonly body: string; readonly result: Promise<unknown>; bytes: number }>();
@@ -212,6 +214,11 @@ export class PtydServer {
 	/** Every run ID ptyd started, kept so that none is started twice (RULES-2.2). */
 	private readonly seen = new Set<string>();
 	private readonly claims = new Map<Run, Connection>();
+	/**
+	 * Each owner whose grace ended and whose runs are still ending: a claim of it is answered once they ended, so that its window
+	 * restores its Pins after them, never beside them (LIFECYCLE-3.5).
+	 */
+	private readonly endings = new Map<string, Promise<unknown>>();
 	private readonly connections = new Set<Connection>();
 	private server: net.Server | undefined;
 	/** The socket this ptyd made at its path, on Unix: the one it may remove as it closes, never one another ptyd made there later. */
@@ -253,7 +260,15 @@ export class PtydServer {
 			}
 			previous.send({ event: 'ownerLost', owner });
 			this.log(`Workspace ${owner} transferred to a newer activation.`);
-		}, owner => this.endOwner(owner, 3_000, 'its owner connection was absent for five minutes'), clock);
+		}, owner => {
+			const ending = this.endOwner(owner, 3_000, 'its owner connection was absent past its grace period', true).ended;
+			this.endings.set(owner, ending);
+			void ending.then(() => {
+				if (this.endings.get(owner) === ending) {
+					this.endings.delete(owner);
+				}
+			});
+		}, clock);
 	}
 
 	/**
@@ -397,6 +412,10 @@ export class PtydServer {
 			exit: exit => connection.send({ event: 'exit', run: run.id, ...exit })
 		};
 		run.listen(listener);
+		// A window that has not said its colours yet - it says them as it connects - leaves the run those it had
+		if (Object.keys(connection.colours).length) {
+			run.useColours(connection.colours);
+		}
 		if (previous !== connection && this.shims.get(run.id)?.size) {
 			connection.send({ event: 'tools', run: run.id });
 		}
@@ -453,15 +472,30 @@ export class PtydServer {
 				}
 				return undefined;
 			}
-			case 'claim':
-				this.owners.claim(params as Requests['claim']['params'], connection);
+			case 'claim': {
+				const claim = params as Requests['claim']['params'];
+				this.owners.claim(claim, connection);
 				connection.claimed = true;
 				this.scheduleIdleExit();
+				// Runs its grace is ending: answered once they ended, within the seconds cleanup takes (LIFECYCLE-3.5, 4.2)
+				await this.endings.get(claim.owner);
 				return undefined;
+			}
+			case 'colours': {
+				if (!isTerminalColours(params)) {
+					throw new Error('Terminal colours are rrrr/gggg/bbbb, of the foreground, background and cursor alone.');
+				}
+				connection.colours = params;
+				for (const run of this.claimedBy(connection)) {
+					run.useColours(params);
+				}
+				return undefined;
+			}
 			case 'conversations':
 				return [...this.runs.values()].flatMap(run => {
 					const meta = run.meta;
-					return !run.removed && !run.info(false).exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
+					// One whose end is uncertain holds its conversation still: nothing starts it a second time (LIFECYCLE-3.5)
+					return (!run.removed || run.uncertain) && !run.info(false).exited && typeof meta.sessionId === 'string' && typeof meta.cli === 'string' && typeof meta.environment === 'string'
 						? [{ environment: meta.environment, cli: meta.cli, sessionId: meta.sessionId }] : [];
 				});
 			case 'spawn': {
@@ -470,7 +504,7 @@ export class PtydServer {
 				if (typeof spawn.run !== 'string' || !spawn.run || this.seen.has(spawn.run)) {
 					throw new Error(`Run ${JSON.stringify(spawn.run)} was started before: ptyd never starts a run ID twice.`);
 				}
-				if (typeof spawn.meta.sessionId === 'string' && [...this.runs.values()].some(run => !run.removed && !run.info(false).exited
+				if (typeof spawn.meta.sessionId === 'string' && [...this.runs.values()].some(run => (!run.removed || run.uncertain) && !run.info(false).exited
 					&& run.meta.sessionId === spawn.meta.sessionId && run.meta.cli === spawn.meta.cli && run.meta.environment === spawn.meta.environment)) {
 					throw new Error('This conversation is already running in Facade.');
 				}
@@ -504,7 +538,7 @@ export class PtydServer {
 			case 'list': {
 				const { owner } = params as Requests['list']['params'];
 				const runs = [...this.runs.values()];
-				return (typeof owner === 'string' ? runs.filter(run => run.params.owner === owner && !run.removed) : runs).map(run => this.info(run, connection));
+				return (typeof owner === 'string' ? runs.filter(run => run.params.owner === owner && (!run.removed || run.uncertain)) : runs).map(run => this.info(run, connection));
 			}
 			case 'attach': {
 				const run = runOf((params as Requests['attach']['params']).run);
@@ -608,23 +642,33 @@ export class PtydServer {
 			case 'endWindow': {
 				const { owner, graceMs } = params as Requests['endWindow']['params'];
 				this.owners.assert(owner, connection);
-				return this.endOwner(owner, graceMs, 'its window closed');
+				return this.endOwner(owner, graceMs, 'its window closed').count;
 			}
 			default:
 				throw new Error(`Unknown method ${String(request.method)}.`);
 		}
 	}
 
-	private endOwner(owner: string, graceMs: number, reason: string): number {
-		const ending = [...this.runs.values()].filter(run => run.params.owner === owner);
+	/**
+	 * Ends every run of `owner`, each removed at once: how many, and what resolves once all of them ended. Where its grace ended
+	 * them, `uncertain` keeps one whose end is not confirmed listed, as uncertain, until it ends (ARCHITECTURE-2.2).
+	 */
+	private endOwner(owner: string, graceMs: number, reason: string, uncertain = false): { readonly count: number; readonly ended: Promise<unknown> } {
+		const ending = [...this.runs.values()].filter(run => run.params.owner === owner && !run.removed);
+		const ended: Promise<unknown>[] = [];
 		for (const run of ending) {
 			this.log(`Ending run ${run.id}: ${reason}.`);
 			this.remove(run);
 			if (!run.hasExited) {
-				void run.terminate(Math.max(0, graceMs));
+				ended.push(run.terminate(Math.max(0, graceMs)).then(result => {
+					if (uncertain && (result === 'unconfirmed' || result === 'failed') && !run.hasExited) {
+						run.uncertain = true;
+						this.log(`Run ${run.id} did not end as its grace ended (${result}): listed as uncertain until it ends.`);
+					}
+				}, () => undefined));
 			}
 		}
-		return ending.length;
+		return { count: ending.length, ended: Promise.all(ended) };
 	}
 
 	/**

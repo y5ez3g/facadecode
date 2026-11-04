@@ -11,7 +11,7 @@ import { deliveryText, notificationName, operationText } from './notificationTex
 import { REQUEST_MS } from './requests';
 import { messageTrace } from './messageTrace';
 import type { HumanContactPort, InboxPage, InboxQuery, InputEffects, InputPort, MessageRecord, Messages, ResultReport, SendRequest, SendResult } from './messagePorts';
-import type { Agents, CapabilityState, Clock, Disposable, LogPort, RunChange, RunFacts, RunId } from './ports';
+import type { Agents, CapabilityState, Clock, Disposable, LogPort, RunChange, RunFacts, RunId, SaidSource } from './ports';
 
 /** The message records, kept in the execution environment's Facade directory for thirty days (RULES-5.3, ARCHITECTURE-3.1). */
 export interface MessageStore {
@@ -35,7 +35,7 @@ export interface ResultRoute {
 }
 
 export interface MessageServiceDeps {
-	readonly agents: Pick<Agents, 'get' | 'onDidChange' | 'owned'>;
+	readonly agents: Pick<Agents, 'get' | 'onDidChange' | 'owned' | 'creationPending'>;
 	readonly input: InputPort;
 	readonly human: HumanContactPort;
 	readonly store: MessageStore;
@@ -59,7 +59,7 @@ export interface MessageServiceDeps {
 	/** Waits `ms`, rejecting as soon as `signal` aborts. */
 	readonly wait?: (ms: number, signal: AbortSignal) => Promise<void>;
 	/** A message its recipient's CLI took from its input: what that agent's card says on its second line (PANEL-1.4). */
-	readonly said?: (run: RunId, text: string) => void;
+	readonly said?: (run: RunId, text: string, source: SaidSource) => void;
 }
 
 /** The first response comes within this long of the request reaching Facade (RULES-1.2). */
@@ -144,6 +144,8 @@ interface Stage {
 	heldUntil?: number;
 	/** The Facade results it types in one paste, where it delivers results; `message` is the first of them (RULES-1.7). */
 	readonly batch?: ResultBatch;
+	/** Whether it delivers its run's creation prompt, which the input is held for, not by (RULES-1.10, COLLABORATION-2.2). */
+	creation?: boolean;
 }
 
 const NO_EFFECTS: InputEffects = { outcome: 'none', text_written: 'none', enter_written: false };
@@ -160,6 +162,15 @@ const OBSTACLES: { readonly [state: string]: string | undefined } = { draft: 'in
 /** What holds an input for a person or its CLI, and is waited for (RULES-1.5): unlike an input that cannot be read. */
 const HELD: ReadonlySet<string> = new Set(['input_draft', 'input_interaction']);
 
+/** Whether `record` is a creation prompt recorded to go after startup and not settled yet: one that holds its run's other messages. */
+function pendingCreation(record: MessageRecord): boolean {
+	return record.initialPrompt?.path === 'post_start' && record.delivery.status === 'pending';
+}
+
+function creationOf(record: MessageRecord): { readonly to: string; readonly deadline?: number } {
+	return { to: record.to.run, ...record.delivery.deadline !== undefined ? { deadline: record.delivery.deadline } : {} };
+}
+
 /**
  * Agent messages (RULES-1, COLLABORATION-2-4): every send is recorded at once with its own ID, then given to its one recipient - the
  * person in this window by notification, or a run's CLI as one paste and Enter, never over a draft or into a menu, trying every
@@ -171,6 +182,8 @@ export class MessageService implements Messages, Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	/** Records whose delivery is under way here: the current version of each, ahead of what was read from the store. */
 	private readonly live = new Map<string, MessageRecord>();
+	/** The creation prompts recorded pending that go after startup, once read: see {@link creations}. */
+	private pendingCreations: Map<string, { readonly to: string; readonly deadline?: number }> | undefined;
 	private readonly stages = new Set<Stage>();
 	/** Each terminal's attempts, one after another (RULES-1.10). */
 	private readonly lanes = new Map<RunId, Promise<void>>();
@@ -217,7 +230,14 @@ export class MessageService implements Messages, Disposable {
 		const elapsed = Number.isFinite(request.elapsedMs) ? Math.max(0, request.elapsedMs) : 0;
 		const start = this.mono() - elapsed;
 		const deadline = this.deps.clock.now() - elapsed + STAGE_MS;
-		const record = this.create({
+		// A creation prompt recorded as its start answered, nothing of it typed yet, goes now under that record; one its agent read
+		// meanwhile through read_messages is delivered already, and nothing is typed (MCP-2.3, COLLABORATION-2.2)
+		const kept = request.id !== undefined && request.initialPrompt !== undefined ? this.deps.store.list().find(each => each.id === request.id) : undefined;
+		if (kept && kept.delivery.status !== 'pending') {
+			return { record: kept, status: kept.delivery.status === 'unknown' ? 'failure' : kept.delivery.status, ...kept.delivery.reason ? { reason: kept.delivery.reason } : {} };
+		}
+		const recorded = kept?.delivery.start === undefined ? kept : undefined;
+		const record = recorded ?? this.create({
 			kind: 'message',
 			from: request.sender?.party ?? this.party(request.from),
 			to: request.to === '@human' ? { run: '@human' } : this.party(request.to),
@@ -229,7 +249,8 @@ export class MessageService implements Messages, Disposable {
 			// window was renamed meanwhile, as a folder becoming a multi-root workspace renames it (RULES-1.6, 1.9)
 			label: request.sender?.label ?? this.deps.window.label,
 			...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
-			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {})
+			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {}),
+			...(request.resultId !== undefined ? { resultId: request.resultId } : {})
 		}, PENDING, true, request.id);
 		if (request.to === '@human') {
 			return this.contact(record);
@@ -249,6 +270,7 @@ export class MessageService implements Messages, Disposable {
 		const extra = this.deps.input.pasteTime?.(request.to, text) ?? 0;
 		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra, start: deadline - STAGE_MS } });
 		const stage = this.newStage(request.to, pending.id, start, extra);
+		stage.creation = request.initialPrompt !== undefined;
 		const delivered = Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.read]);
 		const first = await this.within(delivered, RESPONSE_BUDGET_MS - (this.mono() - start));
 		if (first !== 'deadline') {
@@ -259,7 +281,12 @@ export class MessageService implements Messages, Disposable {
 		void delivered.then(outcome => {
 			const final = this.finish(pending.id, outcome);
 			if (final && !this.disposed) {
-				this.reportOutcome(final, request.callId);
+				if (request.settled) {
+					// Its caller reports it, with what it belongs to (MCP-2.3): no result of its own besides
+					request.settled(final);
+				} else {
+					this.reportOutcome(final, request.callId);
+				}
 			}
 		});
 		return {
@@ -282,6 +309,7 @@ export class MessageService implements Messages, Disposable {
 
 	recordPrompt(request: Omit<SendRequest, 'elapsedMs'>, delivery: MessageRecord['delivery']): MessageRecord {
 		return this.create({
+			...(request.resultId !== undefined ? { resultId: request.resultId } : {}),
 			kind: 'message',
 			from: request.sender?.party ?? this.party(request.from),
 			...(request.sender ? { fromWindow: request.sender.window } : {}),
@@ -291,6 +319,13 @@ export class MessageService implements Messages, Disposable {
 			...(request.callId !== undefined ? { callId: request.callId } : {}),
 			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {})
 		}, delivery, true, request.id);
+	}
+
+	giveUpPrompt(id: string, reason: string): void {
+		const record = this.deps.store.list().find(each => each.id === id && each.delivery.status === 'pending');
+		if (record) {
+			this.save(settledAt(record, reason));
+		}
 	}
 
 	reserveResult(): string { return `m-${this.deps.ids.next()}`; }
@@ -480,7 +515,8 @@ export class MessageService implements Messages, Disposable {
 			text: resultText(original, this.cliOf(original.to.run)),
 			...(result !== undefined ? { result } : {}),
 			...(callId !== undefined ? { callId } : {})
-		}, PENDING, false);
+		// A creation prompt's outcome is its start's one later result, under the ID the start reserved for it (MCP-2.3)
+		}, PENDING, false, original.resultId);
 		this.handOver(record, formatResult(record));
 	}
 
@@ -595,7 +631,7 @@ export class MessageService implements Messages, Disposable {
 				stage.attempts++;
 				if (attempt.kind === 'submitted') {
 					if (attempt.effects.outcome === 'confirmed') {
-						this.deps.said?.(stage.target, typeof text === 'string' ? text : text());
+						this.tellSaid(stage, typeof text === 'string' ? text : text());
 						return { status: 'success', effects: attempt.effects, attempts: stage.attempts, via: 'terminal' };
 					}
 					stage.effects = telling(stage.effects, attempt.effects);
@@ -629,6 +665,38 @@ export class MessageService implements Messages, Disposable {
 		}
 	}
 
+	/** Whether `stage`'s run has a creation prompt recorded and still pending, which goes first - after a reload too (RULES-1.10). */
+	private creationRecorded(stage: Stage): boolean {
+		const now = this.deps.clock.now();
+		for (const [id, creation] of this.creations()) {
+			if (id !== stage.message && creation.to === stage.target && (creation.deadline === undefined || creation.deadline > now)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The creation prompts recorded to go after startup and not settled yet, by ID, with their run and deadline: read from the store once,
+	 * then kept as records are made and saved, not read again for each attempt of each message (RULES-1.10, MCP-2.3).
+	 */
+	private creations(): Map<string, { readonly to: string; readonly deadline?: number }> {
+		this.pendingCreations ??= new Map(this.deps.store.list().filter(pendingCreation).map(record => [record.id, creationOf(record)]));
+		return this.pendingCreations;
+	}
+
+	/** `record` as made or saved: a pending creation prompt kept among them, or out of them now. */
+	private track(record: MessageRecord): void {
+		if (!this.pendingCreations) {
+			return;
+		}
+		if (pendingCreation(record)) {
+			this.pendingCreations.set(record.id, creationOf(record));
+		} else {
+			this.pendingCreations.delete(record.id);
+		}
+	}
+
 	/** A stage stopped before its deadline: delivered meanwhile by the recipient's read, or its run ended or was closed. */
 	private ended(stage: Stage): Outcome {
 		return stage.settled ?? { status: 'failure', reason: 'ended', effects: stage.effects, attempts: stage.attempts };
@@ -653,6 +721,10 @@ export class MessageService implements Messages, Disposable {
 		}
 		if (this.deps.input.capability(stage.target).state === 'unavailable') {
 			return { kind: 'unsupported' };
+		}
+		if (!stage.written && !stage.creation && (this.deps.agents.creationPending?.(stage.target) || this.creationRecorded(stage))) {
+			// Its creation prompt, its preparation included, goes first: the input is held for it, as by a draft (RULES-1.10)
+			return { kind: 'blocked', obstacle: 'input_draft' };
 		}
 		let input: Awaited<ReturnType<InputPort['inspect']>>;
 		try {
@@ -819,7 +891,7 @@ export class MessageService implements Messages, Disposable {
 	 * A new record with its own ID (RULES-1.1) - the one `allocate` took for it, where given - written before any input and never over
 	 * another; throws where it cannot be written, unless `required` is false.
 	 */
-	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'operation' | 'fromWindow' | 'requestId' | 'initialPrompt' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
+	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'operation' | 'fromWindow' | 'requestId' | 'initialPrompt' | 'resultId' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
 		const given = id !== undefined ? messageIdOf(id) : undefined;
 		if (id !== undefined && (given === undefined || given !== id)) {
 			throw new Error(`${JSON.stringify(id)} is not a message ID.`);
@@ -844,6 +916,7 @@ export class MessageService implements Messages, Disposable {
 			// A retry with the same request ID finds it, in this window or the sender's (MCP-1.1)
 			...(fields.requestId !== undefined ? { requestId: fields.requestId } : {}),
 			...(fields.initialPrompt !== undefined ? { initialPrompt: fields.initialPrompt } : {}),
+			...(fields.resultId !== undefined ? { resultId: fields.resultId } : {}),
 			...(fields.label !== undefined ? { label: fields.label } : {}),
 			text: fields.text,
 			...(fields.result !== undefined ? { result: fields.result } : {}),
@@ -852,6 +925,7 @@ export class MessageService implements Messages, Disposable {
 		};
 		try {
 			this.deps.store.create(record);
+			this.track(record);
 		} catch (err) {
 			this.deps.log.event(`Could not record message ${record.alias}: ${messageOf(err)}`);
 			if (required) {
@@ -866,6 +940,23 @@ export class MessageService implements Messages, Disposable {
 	}
 
 	/** The record's current version with `changes`, written and told. */
+	/**
+	 * What a delivered stage sent, as the recipient's card says it (PANEL-1.4): a message's own text, without the `📨` line that
+	 * introduces it; a Facade result as typed, its `🔔` line being all it says.
+	 */
+	private tellSaid(stage: Stage, typed: string): void {
+		const record = this.live.get(stage.message) ?? this.deps.store.list().find(each => each.id === stage.message);
+		if (record?.kind === 'message' && !stage.batch) {
+			const { name, alias } = record.from;
+			const window = record.fromWindow !== undefined ? record.label ?? record.fromWindow : undefined;
+			// A creation prompt says its first line, as it does on the card before it went in and by the native path (PANEL-1.4)
+			const text = record.initialPrompt ? record.text.split(/\r?\n/).map(line => line.trim()).find(line => !!line) ?? record.text : record.text;
+			this.deps.said?.(stage.target, text, { kind: 'agent', ...name ? { name } : {}, ...alias ? { alias } : {}, ...window !== undefined ? { window } : {} });
+		} else {
+			this.deps.said?.(stage.target, typed, { kind: 'facade' });
+		}
+	}
+
 	private update(id: string, changes: Partial<MessageRecord>): MessageRecord {
 		const current = this.live.get(id) ?? this.deps.store.list().find(record => record.id === id);
 		if (!current) {
@@ -882,6 +973,7 @@ export class MessageService implements Messages, Disposable {
 		if (!this.disposed) {
 			try {
 				this.deps.store.put(record);
+				this.track(record);
 			} catch (err) {
 				this.deps.log.event(`Could not record message ${record.alias}: ${messageOf(err)}`);
 			}
@@ -979,6 +1071,9 @@ export class MessageService implements Messages, Disposable {
 				this.abandon(record, 'ended');
 			} else if (deadline <= now) {
 				this.abandon(record, 'timeout');
+			} else if (start === undefined && record.initialPrompt !== undefined && !record.delivery.pasted) {
+				// A creation prompt the window reloaded before it went in: it goes now, its own budget starting here (MCP-2.3)
+				this.goOn(this.save({ ...record, delivery: { ...record.delivery, start: now, deadline: Math.min(deadline, now + STAGE_MS) } }), facts.id, now);
 			} else if (start === undefined) {
 				this.expireAt(record);
 			} else {

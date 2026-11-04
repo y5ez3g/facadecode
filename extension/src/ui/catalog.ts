@@ -43,7 +43,9 @@ export const CONTEXT = {
 	agentSelectedEnded: 'facade.agentSelectedEnded',
 	agentSelectedPinned: 'facade.agentSelectedPinned',
 	agentSelectedPinnable: 'facade.agentSelectedPinnable',
-	filtered: 'facade.filtered'
+	filtered: 'facade.filtered',
+	/** The window's one place to work holds every agent: there is no location to filter by (PANEL-2.3). */
+	onePlace: 'facade.onePlace'
 } as const;
 
 /** Where Configure Agents goes: the Settings editor showing this extension's settings alone, in the execution environment (CLIS-1.1). */

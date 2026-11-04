@@ -168,7 +168,7 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reser
 	/** What recording a prompt throws, where it is to fail. */
 	recordError: Error | undefined;
 	readonly prompts: { readonly request: Omit<SendRequest, 'elapsedMs'>; readonly delivery: MessageRecord['delivery'] }[] = [];
-	readonly reports: { readonly to: RunId; readonly callId?: string; readonly agent?: RunId; readonly text: string }[] = [];
+	readonly reports: Parameters<Messages['report']>[0][] = [];
 	/** Each markDelivered: the read IDs a handed-back read_messages delivered (COLLABORATION-3.1). */
 	readonly delivered: { readonly run: RunId; readonly ids: readonly string[] }[] = [];
 	respond: (request: SendRequest) => SendResponse = () => ({ status: 'success' });
@@ -214,7 +214,9 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reser
 				? { status: 'pending' as const, effects: { outcome: 'pending' as const, text_written: 'none' as const, enter_written: false }, deadline: Date.UTC(2026, 9, 28, 23, 0, 15), attempts: 1 }
 				: { status: 'failure' as const, ...response.reason ? { reason: response.reason } : {}, effects: { outcome: 'none' as const, text_written: 'none' as const, enter_written: false }, attempts: 0 });
 		const record = this.recordOf(request, delivery);
-		this.records.push(record);
+		// A creation prompt recorded as its start answered goes under that record
+		const recorded = this.records.findIndex(each => each.id === record.id);
+		if (recorded >= 0) { this.records[recorded] = record; } else { this.records.push(record); }
 		return { record, status: response.status, ...response.reason ? { reason: response.reason } : {}, ...response.obstacle ? { obstacle: response.obstacle } : {} };
 	}
 
@@ -229,6 +231,15 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reser
 	}
 
 	reserveResult(): string { return `m-${++this.n}`; }
+
+	/** Settles the accepted send `index` with `delivery`, as the message service does once its outcome is known. */
+	finishSent(index: number, delivery: MessageRecord['delivery']): void {
+		const request = this.sent[index];
+		const at = this.records.findIndex(record => record.id === (request.id ?? record.id) && record.text === request.text);
+		const record = { ...this.records[at], delivery };
+		this.records[at] = record;
+		request.settled?.(record);
+	}
 
 	report(request: Parameters<Messages['report']>[0]): MessageRecord {
 		this.reports.push(request);

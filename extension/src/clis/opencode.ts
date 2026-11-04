@@ -76,8 +76,13 @@ export function openCodeSession({ file, env, platform }: SessionIntegrationInput
 	const plugins = overlay.plugins ?? config.plugins ?? legacyPlugins;
 	if (!Array.isArray(plugins)) { return { unavailable: true }; }
 	const directory = sessionDirOf(file);
+	// Its session tabs list every session of the working folder, other agents' among them: a run's terminal shows its own alone
+	// (CLIS-2.4). `enabled` is the toggle every 2.x knows; a `mode` the person set takes its place, and is set off as well
+	const ownTabs = isJsonObject(overlay.tabs) ? overlay.tabs : {};
+	const moded = [config.tabs, legacy.tabs, overlay.tabs].some(tabs => isJsonObject(tabs) && tabs.mode !== undefined);
+	const tabs = { ...ownTabs, enabled: false, ...moded ? { mode: 'off' } : {} };
 	return {
-		env: { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugins: [...plugins, directory] }) },
+		env: { OPENCODE_CLI_CONFIG_CONTENT: JSON.stringify({ ...overlay, plugins: [...plugins, directory], tabs }) },
 		files: [
 			{ file: path.join(directory, 'package.json'), content: JSON.stringify({ name: 'facade-session', type: 'module', exports: { './tui': './tui.mjs' } }) },
 			{ file: path.join(directory, 'tui.mjs'), content: OPENCODE_SESSION_PLUGIN }

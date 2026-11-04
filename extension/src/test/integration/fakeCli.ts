@@ -14,7 +14,8 @@
 // `until` repeats a step until its answer holds a text. With FACADE_IT_SCREEN=muse it is Muse Code as it runs on Windows: it
 // reports nothing, and ptyd reads its status from its screen (CLIS-2.3). `<record>.quirks.<agent>`, while there, has it take
 // Enter as a slow or busy CLI does - missing so many Enters, or taking a submission only so long after its Enter - or draw a
-// screen no reader recognizes (RULES-1.6).
+// screen no reader recognizes (RULES-1.6) - or ask its terminal a question, as a CLI does. Everything it is given comes in a JSON line of
+// `<record>.stdin.<agent>` too, as it came.
 
 import { spawn } from 'child_process';
 import * as fs from 'fs';
@@ -135,6 +136,8 @@ interface Quirks {
 	readonly title?: string;
 	/** A separate, undecorated report title, sent after the terminal title to catch source-precedence regressions. */
 	readonly reportedTitle?: string;
+	/** Questions to its terminal - its cursor, the device attributes, its colours - written once, as the quirk is given (ARCHITECTURE-2.3). */
+	readonly ask?: string;
 }
 const QUIRKS = `${record}.quirks.${agent}`;
 function quirks(): Quirks {
@@ -240,6 +243,7 @@ function take(): void {
 let pending = '';
 let pasting = false;
 function received(chunk: string): void {
+	fs.appendFileSync(`${record}.stdin.${agent}`, `${JSON.stringify({ at: Date.now(), data: chunk })}\n`);
 	pending += chunk;
 	for (;;) {
 		if (pasting) {
@@ -325,7 +329,10 @@ function start(): void {
 		const now = fs.existsSync(QUIRKS) ? fs.readFileSync(QUIRKS, 'utf8') : '';
 		if (now !== quirked) {
 			quirked = now;
-			const { title, reportedTitle } = quirks();
+			const { title, reportedTitle, ask } = quirks();
+			if (ask !== undefined) {
+				process.stdout.write(ask);
+			}
 			if (title !== undefined) {
 				process.stdout.write(`${ESC}]0;${title}${ST}`);
 			}

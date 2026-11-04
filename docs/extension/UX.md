@@ -20,7 +20,8 @@ This document owns common surfaces, presentation, accessibility, commands and se
 The webview contains cards/empty state only. Context menus are native, flat and show relevant actions; no nested custom
 popover or global chat composer. Multi-step choices retain one flow with Back and previous selections. Show validation
 beneath the input while typing; asynchronous checks show busy and disable acceptance until complete. Cancel changes no
-selection history or filesystem state. Accepted agent launches close the picker and show card/terminal immediately.
+selection history or filesystem state. A person's accepted launch closes the picker and shows card and terminal
+immediately; an agent's start shows its card (LIFECYCLE-2.2).
 
 Use native view progress for initial loading and human Git operations, and existing card/terminal text for launch/setup.
 No progress, success or copy notifications. Long operation diagnostics are in Show Agents Log. A button/key receives
@@ -165,7 +166,7 @@ are validated against current state, without falling back to the selection.
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
-| `filter` | Filter by Working Location... | Always; panel title | PANEL-2.3 |
+| `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
 | `showAgentLaunch` | Show Agent Launch... | Always; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
@@ -193,8 +194,10 @@ every argument, appear in no palette or menu and are not a public API.
 
 Test commands `state`, `selectRow` (selects a card by run ID), `probe`, `screen`, `testPaste`, `messageInput` and
 `diagnostics` (the diagnostics report, ARCHITECTURE-3.3) are registered only in test mode and excluded from production
-manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected`
-identifies PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded`, `agentSelectedPinned`, `agentSelectedPinnable` and `filtered` reflect current state.
+manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected` identifies
+PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded`, `agentSelectedPinned`,
+`agentSelectedPinnable` and `filtered` reflect current state; `onePlace` says every agent works in the window's one
+place to work (LIFECYCLE-1.3).
 
 ## 4 Settings
 
@@ -228,7 +231,6 @@ components' network has no settings; it shares the same OS-user desktop boundary
 
 | Editor setting | Owner/use |
 | --- | --- |
-| `terminal.integrated.confirmOnKill` | LIFECYCLE-3.1's question for live agents whose tabs close together with other tabs: `editor`/`always` ask, `never`/`panel` do not |
 | `terminal.integrated.env.osx/linux/windows`, configured default-profile env | CLIS-1.2 owns the shared discovery/launch environment; shell startup scripts are not evaluated |
 | `git.path`, `git.branchPrefix` | WORKTREES executable and creation |
 | `git.worktreeIncludeFiles`, `git.worktreeSymlinkFolders` | WORKTREES setup where supported by editor version |

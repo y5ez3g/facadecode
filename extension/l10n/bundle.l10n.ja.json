@@ -15,11 +15,6 @@
 	"Connection to agent process lost; reconnecting": "エージェントのプロセスとの接続が切れました。再接続中",
 	"[Agent process disconnected; exit cause unknown]": "[エージェント プロセスが切断されました (終了原因不明)]",
 	"Close Agent": "エージェントを閉じる",
-	"Close Agents": "エージェントを閉じる",
-	"Close {0}?": "{0} を閉じますか?",
-	"Close {0} agents?": "{0} 個のエージェントを閉じますか?",
-	"Its process will end. Cancel keeps it running and opens its terminal again.": "そのプロセスは終了します。[キャンセル] を選択すると実行が維持され、ターミナルが再度開きます。",
-	"Their processes will end. Cancel keeps them running and opens their terminals again.": "それらのプロセスは終了します。[キャンセル] を選択すると実行が維持され、ターミナルが再度開きます。",
 	"Show": "表示",
 	"Could not restore agents for this window. Reload the window to try again.": "このウィンドウのエージェントを復元できませんでした。ウィンドウを再読み込みして再試行してください。",
 	"Window": "ウィンドウ",
@@ -79,6 +74,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} は {1} のどのコミットも指していません。",
 	"The working location is no longer available.": "この作業場所はもう使用できません。",
 	"The working location {0} is not available in this window.": "作業場所 {0} はこのウィンドウでは使用できません。",
+	"Could not confirm that it stopped": "停止したことを確認できませんでした",
 	"Git is not available in this environment.": "この環境では Git を使用できません。",
 	"{0} is not in a Git repository.": "{0} は Git リポジトリ内にありません。",
 	"{0} has no commits yet.": "{0} にはまだコミットがありません。",
@@ -317,6 +313,10 @@
 	"Location: {0}": "作業場所: {0}",
 	"Path: {0}": "パス: {0}",
 	"Started by: {0}": "起動元: {0}",
+	"Source window: {0}": "送信元ウィンドウ: {0}",
+	"Last message from agent {0}: {1}": "エージェント {0} からの最後のメッセージ: {1}",
+	"Your last input: {0}": "最後の入力: {0}",
+	"Facade result: {0}": "Facade の結果: {0}",
 	"New Worktree · Select Folder": "新しい作業ツリー · フォルダーを選択",
 	"Started: {0}": "開始: {0}",
 	"Reported working: {0}": "作業中の報告: {0}",
@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "新しいエージェント · フォルダーを選択",
 	"New Agent · Working Location": "新しいエージェント · 作業場所",
 	"New Agent · New Worktree": "新しいエージェント · 新しい作業ツリー",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "このウィンドウのエージェントを実行する Facade Code のインストールが、更新またはアンインストールによって削除されました ({0} がありません)。そのため、エージェントを開始できません。インストールされているバージョンでエージェントを開始するには、ウィンドウを再読み込みしてください。"
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "このウィンドウのエージェントを実行する Facade Code のインストールが、更新またはアンインストールによって削除されました ({0} がありません)。そのため、エージェントを開始できません。インストールされているバージョンでエージェントを開始するには、ウィンドウを再読み込みしてください。",
+	"{0} · {1}": "{0} · {1}"
 }

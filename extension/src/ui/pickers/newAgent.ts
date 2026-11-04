@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { normalizeName, suggestName } from '../../core/names';
 import type { Agents, Catalog, CliCatalogPort, CliChoice, CliChoices, HumanPort, LaunchHistoryPort, Location, LocationId, LocationPort, LogPort, RunId, WorktreePort } from '../../core/ports';
-import { locationLabel } from '../cardView';
+import { locationLabel, onePlaceOf } from '../cardView';
 import { COMMANDS } from '../catalog';
 import { cliIcon, configureAgentsLabel, launchFailureText, plainText, reasonOf, reasonText } from '../presentation';
 import { chooseLocation, Destination, environmentLabel, worktreeSourceLabel } from './location';
@@ -156,8 +156,10 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	// The environment only where it is not this machine (LIFECYCLE-1.1): a remote window's, never `Local`
 	const where = location.environment === 'local' ? place : `${place} · ${environmentLabel(location.environment, deps.remote)}`;
 	const titleWhere = location.environment === 'local' ? titlePlace : `${titlePlace} · ${environmentLabel(location.environment, deps.remote)}`;
-	// The current choices stay in sight while the CLIs are filtered or scrolled
-	const summary = vscode.l10n.t("{0} · {1} · {2}", at.title, at.name, titleWhere);
+	// The current choices stay in sight while the CLIs are filtered or scrolled; the window's one place to work goes without saying
+	// (LIFECYCLE-1.1), which Git read later may find to be no such place
+	const summaryOf = (now: Catalog) => !worktree && onePlaceOf(now)?.id === location.id
+		? vscode.l10n.t("{0} · {1}", at.title, at.name) : vscode.l10n.t("{0} · {1} · {2}", at.title, at.name, titleWhere);
 	const configure: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: configureAgentsLabel() };
 	/**
 	 * The step's bottom as the catalog is now (LIFECYCLE-1.3): nothing to change the location to - one folder whose only location is a
@@ -167,16 +169,16 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		const inFolder = now.locations.filter(each => each.folders.some(folder => folder.uri === location.folders[0]?.uri));
 		const changeable = now.folders.length > 1 || inFolder.length > 1 || inFolder.some(each => each.kind === 'checkout') || !!worktree;
 		return [
-			// A labeled line: the editor draws one without a label as all but invisible. The location said as a label is its own line.
-			...!changeable
-				? [{ label: plainText(where), kind: vscode.QuickPickItemKind.Separator }]
-				: [{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator }, {
-					label: vscode.l10n.t("Change Working Location..."),
-					description: plainText(where),
-					iconPath: new vscode.ThemeIcon('folder'),
-					alwaysShow: true,
-					does: 'location' as const
-				}],
+			// A labeled line: the editor draws one without a label as all but invisible, and a label right of the item below it
+			{ label: vscode.l10n.t("Options"), kind: vscode.QuickPickItemKind.Separator },
+			// Nothing to change the location to: the title says it, and no item offers a change that does nothing (LIFECYCLE-1.3)
+			...!changeable ? [] : [{
+				label: vscode.l10n.t("Change Working Location..."),
+				description: plainText(where),
+				iconPath: new vscode.ThemeIcon('folder'),
+				alwaysShow: true,
+				does: 'location' as const
+			}],
 			{ label: vscode.l10n.t("Change Name..."), description: plainText(at.name), iconPath: new vscode.ThemeIcon('edit'), alwaysShow: true, does: 'name' }
 		];
 	};
@@ -201,7 +203,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 		return { items, active: items.find(item => item.does === 'start' || item.does === 'configure') };
 	};
 	const picked = await flow.pick<Item>({
-		title: summary,
+		title: summaryOf(catalog),
 		placeholder: vscode.l10n.t("Select a CLI"),
 		// Nothing until the CLIs are found: the editor keeps the place of the item it had in focus when the items change, so a
 		// Change item shown meanwhile would leave the focus on another CLI than the one preselected, which an Enter then starts
@@ -215,7 +217,9 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 			const show = () => {
 				if (up && found) {
 					const before = picker.activeItems[0];
-					const { items, active } = itemsOf(found, deps.locations.snapshot());
+					const now = deps.locations.snapshot();
+					const { items, active } = itemsOf(found, now);
+					picker.title = summaryOf(now);
 					const kept = before && items.find(item => item.does === before.does && item.cli?.id === before.cli?.id && item.label === before.label);
 					picker.items = items;
 					picker.activeItems = kept ? [kept] : active ? [active] : [];

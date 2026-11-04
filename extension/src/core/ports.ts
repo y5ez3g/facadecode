@@ -226,7 +226,17 @@ export interface PairFacts {
 	readonly displayName: string;
 	readonly command: string;
 	readonly cwd: string;
+	/** Where its tab is to open, or that it stays hidden, as a reload brings it back (LIFECYCLE-3.5). */
+	readonly tab?: TabPlace;
+	/** Its agent holds a Pin: the group's one unpinned agent tab does not count it (LIFECYCLE-2.2). */
+	readonly pinned?: true;
 }
+
+/**
+ * Where a run's tab is, kept with its process so that a reload brings it back (LIFECYCLE-3.5, ARCHITECTURE-3.1): open in the editor
+ * group of `column`, last active at `activeAt`, or hidden. None is a build's that kept no such record.
+ */
+export type TabPlace = { readonly column: number; readonly activeAt?: number } | 'hidden';
 
 export type Activity = 'working' | 'not_working' | 'unknown';
 
@@ -274,9 +284,20 @@ export interface LiveRun {
 	readonly exited?: { readonly code?: number; readonly signal?: string; readonly interruptVerified: boolean };
 	/** Whether another connected window of this workspace currently claims it. */
 	readonly claimedElsewhere: boolean;
+	/**
+	 * Whether its grace ended it and the end is not confirmed: shown red, never reattached, holding its conversation until its exit is
+	 * heard (LIFECYCLE-3.5).
+	 */
+	readonly uncertain?: boolean;
 }
 
 export type CleanupResult = 'terminated' | 'already_exited' | 'unconfirmed' | 'failed';
+
+/**
+ * Who sent what a card's second line says, as its record keeps it: another agent - its name, short ID and, from another window, that
+ * window's label - or Facade, for a result; none is the person's own input (PANEL-1.4, 1.5).
+ */
+export type SaidSource = { readonly kind: 'agent'; readonly name?: string; readonly alias?: string; readonly window?: string } | { readonly kind: 'facade' };
 
 export interface ExecutionPort {
 	readonly onDidIdentify?: Event<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>;
@@ -287,8 +308,11 @@ export interface ExecutionPort {
 	/** Turns the spinner on the run's tab while its card's dot is green, and stops it otherwise (LIFECYCLE-2.2). */
 	spin?(run: RunId, busy: boolean): void;
 	conversations?(): Promise<readonly ConversationKey[]>;
-	/** Creates the run's editor terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). */
-	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void;
+	/**
+	 * Creates the run's terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). Its tab opens
+	 * then - `hidden`, as for an agent another agent starts, it opens only as the person opens the agent (LIFECYCLE-2.2).
+	 */
+	openPair(facts: PairFacts, options: { readonly reveal: boolean; readonly hidden?: boolean }): void;
 	/** Writes a line of startup progress or failure into the run's terminal (UX-1.1: existing surfaces). */
 	note(run: RunId, text: string): void;
 	/** Starts the planned process in the run's existing terminal. Rejects with the actual error when it cannot. */
@@ -320,8 +344,24 @@ export interface ExecutionPort {
 	 * gave it. Whatever becomes of it, the tab then shows the agent's name.
 	 */
 	readonly onDidRenameTab?: Event<{ readonly run: RunId; readonly name: string }>;
-	/** The person closed a run's terminal tab natively: a close they confirm for a live agent (LIFECYCLE-3.1). */
-	readonly onDidClosePair?: Event<RunId>;
+	/**
+	 * The person closed a run's terminal tab natively, as the editor reports a close of theirs: it is hidden, the agent going on, and
+	 * `marked` where the tab showed its pin mark - such a close Unpins (LIFECYCLE-2.2, 3.4).
+	 */
+	readonly onDidClosePair?: Event<{ readonly run: RunId; readonly marked: boolean }>;
+	/** Closes the run's terminal tab, its agent going on: false where it has none open (LIFECYCLE-2.2). */
+	hideTab?(run: RunId): boolean;
+	/** The run's short ID, and whether its tab shows it: its name repeats among this window's cards, or it has none (LIFECYCLE-2.2). */
+	tabLabel?(run: RunId, alias: string, shown: boolean): void;
+	/** Where a run's tab is now, for a reload to bring it back (LIFECYCLE-3.5). */
+	readonly onDidPlaceTab?: Event<{ readonly run: RunId; readonly place: TabPlace }>;
+	/**
+	 * The editor copied a run's tab - a split, a copying drag, Copy into New Window (LIFECYCLE-2.2): `done` is told the agent started in
+	 * its place, or none, and the copy, which has no process, closes then.
+	 */
+	readonly onDidCopyTab?: Event<{ readonly run: RunId; readonly column?: number; readonly done: (started: RunId | undefined) => void }>;
+	/** Opens the next agent's tab in `column`'s group - a copy's (LIFECYCLE-2.2). */
+	openNextIn?(column: number | undefined): void;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */
@@ -372,6 +412,10 @@ export interface RunMeta {
 	readonly promptLine?: string;
 	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4). */
 	readonly said?: string;
+	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
+	readonly saidSource?: SaidSource;
+	/** Where its tab is (LIFECYCLE-3.5). */
+	readonly tab?: TabPlace;
 	/** Its ordinary-message input as its launch planned it, kept across a reload. */
 	readonly inputAdapter?: string;
 	readonly inputCapability?: CapabilityState;
@@ -561,6 +605,10 @@ export interface RunFacts {
 	 * delivered. Its card's second line says it from then on, never the CLI's title again.
 	 */
 	readonly said?: string;
+	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
+	readonly saidSource?: SaidSource;
+	/** Where its tab is (LIFECYCLE-3.5). */
+	readonly tab?: TabPlace;
 	/** The unresolved error that makes the card red (RULES-3.2): launch failure, abnormal exit, reported error. */
 	readonly error?: RunError;
 	/** How the process ended, where it ended and the pair is retained (abnormal exit or failed launch, RULES-3.3). */
@@ -623,11 +671,6 @@ export interface HumanPort {
 	failed(failure: HumanFailure, options: { readonly show?: RunId; readonly configure?: boolean }): void;
 	/** The same, for a human operation's error the UI has already worded. */
 	error(text: string, options: { readonly show?: RunId; readonly configure?: boolean }): void;
-	/**
-	 * The person closed a live agent's terminal tab, alone or with other editors (LIFECYCLE-3.1): whether they confirm ending it. Tabs
-	 * closed together are asked about once; the editor's `terminal.integrated.confirmOnKill` decides whether to ask at all.
-	 */
-	confirmClose?(agent: { readonly run: RunId; readonly label: string }): Promise<boolean>;
 }
 
 /** The person's last successful launch in this workspace (LIFECYCLE-1.2): written only once a human launch's CLI process starts. */
@@ -729,6 +772,10 @@ export interface Agents {
 	 * CLI needs none, or that this window does not hold.
 	 */
 	warmedUp(run: RunId): Promise<void>;
+	/** Whether the run's post-start creation prompt, its preparation included, is still to be delivered or given up (RULES-1.10). */
+	creationPending?(run: RunId): boolean;
+	/** Its post-start creation prompt was delivered or given up: its input is held for it no longer (RULES-1.10). */
+	creationSettled?(run: RunId): void;
 	/** Close Agent, the single close action for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
 	close(run: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */

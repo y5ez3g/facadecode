@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { SessionIdentity } from './sessionIdentity';
-import type { ConversationKey } from '../../core/ports';
+import type { ConversationKey, TabPlace } from '../../core/ports';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -21,11 +21,12 @@ import type { CallEvent, InputEffect, InputReading, Method, OwnerClaim, Requests
 import type { ServedAnswer, ToolCall } from '../../schema/protocol';
 import { failureAnswer, isToolAnswer } from '../../transport/failure';
 import { McpServerLaunch, shimLaunch as launchShim } from '../../transport/launch';
+import { WindowColours } from './terminalColours';
 import { AgentTerminals, type AgentTerminal } from './agentTerminals';
 import { ExecutionSession, RECONCILE_MS } from './executionSession';
 import { PtydClient, PtydGone, PtydLost, PtydNotSent, within } from './ptydClient';
 import { submittedDraft, taken, TypedEnters } from './submissions';
-import { PTYD_PROTOCOL } from '../../ptyd/protocol';
+import { PTYD_PROTOCOL, QUERY_ANSWERS_PROTOCOL } from '../../ptyd/protocol';
 
 /** How long a CLI has to end on the hang-up before ptyd kills its process group (LIFECYCLE-4.2): no UI waits for it. */
 const GRACE_MS = 3_000;
@@ -33,12 +34,18 @@ const GRACE_MS = 3_000;
 /** How long restoring waits for one terminal to open before it restores the next: VS Code can leave a terminal unopened. */
 const OPEN_WAIT_MS = 10_000;
 
+/** The size `info` gives its run, where it gives one: a supervisor of any protocol may leave it out. */
+function sizeOf(info: RunInfo | undefined): { readonly cols?: number; readonly rows?: number } {
+	return typeof info?.cols === 'number' && typeof info.rows === 'number' && info.cols > 0 && info.rows > 0 ? { cols: info.cols, rows: info.rows } : {};
+}
+
 /** The size a run starts at where its terminal has not told its own yet: the CLI redraws as the terminal's arrives. */
 const START_COLUMNS = 120;
 const START_ROWS = 30;
 
 /** How long after its process started a run is still starting while its CLI has shown no activity (CLIS-2.3). */
-const STARTUP_MS = 20_000;
+// A minute: many CLIs starting at once - a burst of agents another starts - each take far longer than one alone (CLIS-2.3)
+const STARTUP_MS = 60_000;
 /** How long work that stopped is still told as work: a CLI between two steps does not blink its dot and tab (RULES-3.2). */
 const HOLD_MS = 1_000;
 /** How long an Enter the person typed waits for the reading of the input it submits, at most: a moment, never a stall (PANEL-1.4). */
@@ -101,6 +108,10 @@ interface Pair {
 	readonly lifetime: AbortController;
 	/** Spawn was sent, but its outcome is not known yet. Closure must reconcile it even before a PID is returned. */
 	starting?: boolean;
+	/** Its details changed before its spawn was sent, kept for ptyd once it holds the run - from the spawn request on. */
+	pendingMeta?: RunMeta;
+	/** Its spawn was sent: ptyd holds the run from that request on, and a change on the same connection after it reaches the run. */
+	spawnSent?: boolean;
 	/** The CLI whose adapter reads its reports and exit. */
 	cli: string;
 	process?: { readonly pid: number; readonly startedAt: number };
@@ -189,7 +200,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly reports = new Emitter<ActivityReport>();
 	private readonly exits = new Emitter<ExitReport>();
 	private readonly activations = new Emitter<RunId | undefined>();
-	private readonly closes = new Emitter<RunId>();
+	private readonly closes = new Emitter<{ readonly run: RunId; readonly marked: boolean }>();
+	private readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
+	private readonly copies = new Emitter<{ readonly run: RunId; readonly column?: number; readonly done: (started: RunId | undefined) => void }>();
 	private readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
 	private readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
 	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
@@ -205,6 +218,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidExit = this.exits.event;
 	readonly onDidActivate = this.activations.event;
 	readonly onDidClosePair = this.closes.event;
+	readonly onDidPlaceTab = this.placements.event;
+	readonly onDidCopyTab = this.copies.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
@@ -217,6 +232,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly terminals: AgentTerminals;
 	private readonly session: ExecutionSession;
 	private readonly identity: SessionIdentity;
+	/** The colours this window's terminals draw with: ptyd answers its runs' programs asking them (ARCHITECTURE-2.3). */
+	private readonly colours = new WindowColours();
+	private readonly colourChanges: vscode.Disposable;
 
 	constructor(private readonly options: AgentExecutionOptions) {
 		this.identity = new SessionIdentity(options.home, (run, sessionId, cwd) => this.identities.fire({ run, sessionId, cwd }), options.log);
@@ -229,15 +247,29 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			transferred: () => this.transferred(),
 			reconnect: () => this.reclaim(),
 			reconcile: () => this.reconcile(),
-			connected: client => client.onCall((event, receivedAt) => void this.answerCall(client, event, receivedAt))
+			connected: client => client.onCall((event, receivedAt) => void this.answerCall(client, event, receivedAt)),
+			colours: () => this.colours.current()
 		});
+		this.colourChanges = this.colours.onDidChange(() => this.session.coloursChanged());
 		try {
 			this.terminals = new AgentTerminals({
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
-				closed: run => this.closes.fire(run),
+				closed: (run, marked) => this.closes.fire({ run, marked }),
+				placed: (run, column, activeAt) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column, ...activeAt !== undefined ? { activeAt } : {} } }),
+				// A copy closes once the agent started in its place has its tab open - the copy's group never empties first - or at once
+				// where none started (LIFECYCLE-2.2)
+				copied: (run, copy, column) => this.copies.fire({ run, column, done: started => {
+					const pair = started === undefined ? undefined : this.pairs.get(started);
+					if (!pair) {
+						copy.dispose();
+						return;
+					}
+					void Promise.race([pair.terminal.pty.nextOpen(), timeout(OPEN_WAIT_MS)]).finally(() => copy.dispose());
+				} }),
 				renamed: (run, name) => this.tabRenames.fire({ run, name }),
-			pinned: (run, pinned) => this.tabPins.fire({ run, pinned })
+			pinned: (run, pinned) => this.tabPins.fire({ run, pinned }),
+				colours: this.colours
 			});
 		} catch (err) {
 			this.session.dispose();
@@ -263,11 +295,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		return held;
 	}
 
-	openPair(facts: PairFacts, options: { readonly reveal: boolean }): void {
+	openPair(facts: PairFacts, options: { readonly reveal: boolean; readonly hidden?: boolean }): void {
 		if (this.pairs.has(facts.run)) {
 			return;
 		}
-		this.create(facts, options.reveal);
+		// A hidden one has its card alone until the person opens it, its run drawing at START_COLUMNS by START_ROWS (LIFECYCLE-2.2)
+		this.create(facts, options.reveal, options.hidden === true || facts.tab === 'hidden');
 	}
 
 	/** The initial restoration batch is complete; a recreated local registry may retire its predecessor's UI resources. */
@@ -419,6 +452,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		if (!pair) {
 			throw new Error('The agent was closed before its CLI started.');
 		}
+		// The details its start is asked with are the latest now: a change kept from before is older
+		pair.pendingMeta = undefined;
 		let client = await this.session.client();
 		if (this.pairs.get(run) !== pair || this.session.closed) {
 			throw new Error('The agent was closed before its CLI started.');
@@ -433,12 +468,18 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		let info: RunInfo;
 		let snapshot: { readonly screen: string; readonly seq: number } | undefined;
 		pair.starting = true;
+		// The details spawn carries are the latest - a change while it waited for the connection among them; one from now on goes once
+		// the run is held
+		const latest = pair.pendingMeta ?? meta;
+		pair.pendingMeta = undefined;
 		try {
-			info = await client.request('spawn', {
+			const spawned = client.request('spawn', {
 				run, owner: this.options.owner, file: plan.executable, args: plan.args, cwd: plan.cwd, env: plan.env,
-				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...meta },
+				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...latest },
 				...plan.screenStatus ? { screenStatus: plan.screenStatus } : {}
 			});
+			pair.spawnSent = true;
+			info = await spawned;
 		} catch (err) {
 			if (!(err instanceof PtydLost)) {
 				pair.starting = false;
@@ -464,6 +505,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.status = info.status;
 		pair.terminalTitle = info.title;
 		pair.terminal.pty.bind(this.binding(client, run), snapshot);
+		this.keepPendingMeta(pair);
 		this.tell(pair);
 		if (info.exited) {
 			this.ended(pair, info.exited);
@@ -565,7 +607,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.exited = info.exited;
 		pair.status = info.status;
 		pair.terminalTitle = info.title;
-		pair.terminal.pty.bind(this.binding(client, live.run), { screen, seq });
+		pair.terminal.pty.bind(this.binding(client, live.run), { screen, seq, ...sizeOf(info) });
+		this.keepPendingMeta(pair);
 		if (info.exited) {
 			pair.terminal.pty.exited(this.endLine(info.exited));
 		}
@@ -588,8 +631,14 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 * and prevent VS Code from ever opening its pseudoterminal: the next run is restored only after this native terminal is ready.
 	 */
 	private async openRestored(pair: Pair, run: RunId): Promise<void> {
-		pair.terminal.open(false);
-		const opened = await Promise.race([pair.terminal.pty.ready, timeout(OPEN_WAIT_MS).then(() => undefined)]);
+		// Its tab back in its group, hidden if it was; from a build that kept no record, hidden unless pinned (LIFECYCLE-3.5)
+		const place = pair.facts.tab;
+		if (place === 'hidden' || (place === undefined && !pair.facts.pinned)) {
+			return;
+		}
+		pair.terminal.open(false, typeof place === 'object' ? place.column : undefined);
+		// This opening's: a run this window had already opened before has its first long ago
+		const opened = await Promise.race([pair.terminal.pty.nextOpen(), timeout(OPEN_WAIT_MS).then(() => undefined)]);
 		if (opened === false || this.pairs.get(run) !== pair) {
 			throw new Error('The agent was closed while reattaching.');
 		}
@@ -665,6 +714,21 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		return pair;
 	}
 
+	/** Opens the next agent's tab in `column`'s group - a copy's, where an agent starts in its place (LIFECYCLE-2.2). */
+	openNextIn(column: number | undefined): void {
+		this.terminals.openNextIn(column);
+	}
+
+	/** `run`'s short ID, and whether its tab shows it: its name repeats among this window's cards, or it has none (LIFECYCLE-2.2). */
+	tabLabel(run: RunId, alias: string, shown: boolean): void {
+		this.pairs.get(run)?.terminal.label(alias, shown);
+	}
+
+	/** Closes `run`'s tab, its agent going on, until the person opens it again (LIFECYCLE-2.2). */
+	hideTab(run: RunId): boolean {
+		return this.pairs.get(run)?.terminal.hide() ?? false;
+	}
+
 	async reveal(run: RunId, options: { readonly preserveFocus: boolean }): Promise<boolean> {
 		return this.pairs.get(run)?.terminal.reveal(options.preserveFocus) ?? false;
 	}
@@ -683,7 +747,22 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 	}
 
+	/** Sends the details that changed while the run was not held yet, now that ptyd holds it. */
+	private keepPendingMeta(pair: Pair): void {
+		const pending = pair.pendingMeta;
+		pair.pendingMeta = undefined;
+		if (pending) {
+			this.setMeta(pair.run, pending);
+		}
+	}
+
+	/** Keeps `meta` with the run's process in ptyd - once ptyd holds it, from its spawn request on: a change before that goes after it. */
 	setMeta(run: RunId, meta: RunMeta): void {
+		const pair = this.pairs.get(run);
+		if (pair && !pair.process && !pair.spawnSent) {
+			pair.pendingMeta = meta;
+			return;
+		}
 		void this.session.client(this.holderOf(run)).then(client => client.request('setMeta', { run, meta: { ...meta } })).catch(err => this.options.log(`Could not keep the new details of ${run} with its process: ${messageOf(err)}`));
 	}
 
@@ -724,6 +803,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				pid: run.pid,
 				startedAt: run.startedAt,
 				...(run.exited ? { exited: this.exitOf(String(run.meta.cli), run.exited) } : {}),
+				...(run.uncertain ? { uncertain: true } : {}),
 				claimedElsewhere: run.claimedElsewhere
 			});
 		}
@@ -754,6 +834,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	dispose(): void {
 		this.identity.dispose();
+		this.colourChanges.dispose();
+		this.colours.dispose();
 		this.identities.clear();
 		this.tabPins.clear();
 		this.session.dispose();
@@ -791,17 +873,19 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		};
 		this.pairs.set(facts.run, pair);
 		if (!deferTerminal) {
-			terminal.open(reveal);
+			terminal.open(reveal, typeof facts.tab === 'object' ? facts.tab.column : undefined);
 		}
 		return pair;
 	}
 
 	/** How a run's terminal shows its process through `client`. */
 	private binding(client: PtydClient, run: RunId) {
+		const protocol = this.pairs.get(run)?.protocol ?? PTYD_PROTOCOL;
 		return {
+			answersQueries: protocol >= QUERY_ANSWERS_PROTOCOL,
 			snapshot: async () => {
-				const { screen, seq } = await client.request('attach', { run });
-				return { screen, seq };
+				const { info, screen, seq } = await client.request('attach', { run });
+				return { screen, seq, ...sizeOf(info) };
 			},
 			input: (data: string) => this.typed(client, run, data),
 			resize: (columns: number, rows: number) => void client.request('resize', { run, cols: columns, rows }).catch(() => undefined)
@@ -1157,7 +1241,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 					continue;
 				}
 				pair.lost = false;
-				pair.terminal.pty.bind(this.binding(holder, pair.run), { screen, seq });
+				pair.terminal.pty.bind(this.binding(holder, pair.run), { screen, seq, ...sizeOf(info) });
 				if (info.exited) {
 					this.ended(pair, info.exited);
 				} else {

@@ -269,7 +269,8 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			[CONTEXT.agentSelectedEnded, selected?.ended === true],
 			[CONTEXT.agentSelectedPinned, selected?.pinned === true],
 			[CONTEXT.agentSelectedPinnable, selected?.pinnable === true],
-			[CONTEXT.filtered, state.filter !== undefined]
+			[CONTEXT.filtered, state.filter !== undefined],
+			[CONTEXT.onePlace, !this.model.placesShown()]
 		];
 		for (const [key, value] of keys) {
 			if (this.contextSaid.get(key) !== value) {

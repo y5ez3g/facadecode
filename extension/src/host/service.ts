@@ -171,7 +171,9 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const locations = createLocationService(workspaceState, log);
 	const execution = new AgentExecution({
 		owner: record.key,
-		claim,
+		// ptyd is told whether the claiming window is local: a local window's runs end 90 seconds after it goes, a remote window's five
+		// minutes after, unless a window of the workspace claims them first (RULES-4.1)
+		claim: { ...claim, local: vscode.env.remoteName === undefined },
 		ptydScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'ptyd.js').fsPath,
 		version: String(context.extension.packageJSON.version),
 		home,
@@ -277,7 +279,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		environment,
 		workspace: record.key,
 		log,
-		said: (run, text) => agents.said(run, text)
+		said: (run, text, source) => agents.said(run, text, source)
 	});
 	// An agent another agent started, waiting on its CLI's own question, is reported to that creator (RULES-1.8)
 	const attention = new AttentionNotices({ agents, messages, log: text => log.event(text) });

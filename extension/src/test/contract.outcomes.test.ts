@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import { metaOf } from '../core/agents';
 import { resultOf, runFacts, setUp, Setup } from './contractFakes';
+import { waitFor } from './util';
 
 const START = { name: 'worker', window_id: 'win-1', location_id: 'loc-1', cli: 'claude', request_id: 'original', prompt: 'One original task.' };
 
@@ -38,9 +39,11 @@ suite('Contract: truthful operation outcomes', () => {
 		s.agents.add(lead);
 		s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_draft' });
 		const first = resultOf(await s.call(lead, 'start_agent', START));
+		await waitFor(() => s.messages.sent.length === 1);
 		const repeated = resultOf(await s.call(lead, 'start_agent', START));
 		assert.strictEqual(repeated.data.prompt.message_id, first.data.prompt.message_id);
-		assert.deepStrictEqual([repeated.data.prompt.status, repeated.data.prompt.deadline], ['pending', first.data.prompt.deadline]);
+		// Pending, its deadline the one its delivery has; the start's later result is still to come (MCP-2.3)
+		assert.deepStrictEqual([first.data.prompt.status, repeated.data.prompt.status, repeated.data.prompt.deadline, repeated.data.result_message_id], ['pending', 'pending', '2026-10-28T23:00:15.000Z', first.data.result_message_id]);
 		s.messages.records.length = 0;
 		const absent = resultOf(await s.call(lead, 'start_agent', START));
 		assert.deepStrictEqual([absent.data.prompt.status, absent.data.prompt.reason], ['unknown', 'prompt_unrecorded']);

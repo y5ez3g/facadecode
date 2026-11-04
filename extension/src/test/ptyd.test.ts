@@ -379,6 +379,106 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		assert.ok(!outputOf(events).includes('before'));
 	});
 
+	test('a window opening the workspace within its grace takes its runs over, whichever window, local or remote - no claim ends them (RULES-4.1)', async () => {
+		const window = async (generation: number, local: boolean) => {
+			const client = await PtydClient.connect(socketPath, '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			clients.push(client);
+			await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, local });
+			return client;
+		};
+		const first = await window(1, true);
+		const { pid } = await spawn(first, 'kept-local', IDLE);
+		first.dispose();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		const reopened = await window(2, true);
+		assert.deepStrictEqual([alive(pid), (await reopened.request('list', { owner: 'w1' })).map(run => [run.run, run.exited])], [true, [['kept-local', undefined]]]);
+		reopened.dispose();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		const remote = await window(3, false);
+		assert.deepStrictEqual((await remote.request('list', { owner: 'w1' })).map(run => run.run), ['kept-local']);
+	});
+
+	test('a claim while its grace is ending its runs is answered once they ended: its window restores its Pins after them, never beside them (LIFECYCLE-3.5)', async function () {
+		this.timeout(20_000);
+		const place = ptydPlace('fd-grace-');
+		// The grace, run by hand, and each end held until the test lets it finish
+		const graces: (() => void)[] = [];
+		let release!: () => void;
+		const held = new Promise<void>(resolve => release = resolve);
+		class HeldEnd extends runModule.Run {
+			override async terminate(graceMs: number) {
+				await held;
+				return super.terminate(graceMs);
+			}
+		}
+		const Graced = withModules({ './run': { ...runModule, Run: HeldEnd } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const graced = new Graced(place.socket, () => undefined, { after: (_ms, run) => { graces.push(run); return { dispose: () => undefined }; } });
+		try {
+			assert.strictEqual(await graced.listen(), true);
+			const window = async (generation: number) => {
+				const client = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, local: true });
+				return client;
+			};
+			const first = await window(1);
+			const { pid } = await spawn(first, 'ending', IDLE);
+			first.dispose();
+			await until('its grace to start', () => graces.length === 1);
+			graces[0]();
+			let answered = false;
+			const claiming = window(2).then(client => { answered = true; return client; });
+			await new Promise(resolve => setTimeout(resolve, 300));
+			assert.strictEqual(answered, false, 'not answered while its run is still ending');
+			release();
+			const claimed = await claiming;
+			assert.deepStrictEqual([alive(pid), await claimed.request('list', { owner: 'w1' }), await claimed.request('conversations', {})], [false, [], []]);
+		} finally {
+			graced.close();
+			fs.rmSync(place.dir, { recursive: true, force: true });
+		}
+	});
+
+	test('a run its grace ended without that end confirmed stays listed, uncertain, holding its conversation and never reattached, until it ends (ARCHITECTURE-2.2, LIFECYCLE-3.5)', async function () {
+		this.timeout(20_000);
+		const place = ptydPlace('fd-uncertain-');
+		const graces: (() => void)[] = [];
+		// An end that is not confirmed: the process goes on, as one Windows could not end
+		class UnconfirmedEnd extends runModule.Run {
+			override async terminate(): Promise<'unconfirmed'> { return 'unconfirmed'; }
+		}
+		const Graced = withModules({ './run': { ...runModule, Run: UnconfirmedEnd } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const graced = new Graced(place.socket, () => undefined, { after: (_ms, run) => { graces.push(run); return { dispose: () => undefined }; } });
+		let pid = 0;
+		try {
+			assert.strictEqual(await graced.listen(), true);
+			const window = async (generation: number) => {
+				const client = await PtydClient.connect(place.socket, '/nonexistent/ptyd.js', path.join(place.dir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `activation-${generation}`, local: true });
+				return client;
+			};
+			const meta = { name: 'stuck', sessionId: 's-stuck', cli: 'claude', environment: 'local' };
+			const first = await window(1);
+			({ pid } = await spawn(first, 'stuck', IDLE, { meta }));
+			first.dispose();
+			await until('its grace to start', () => graces.length === 1);
+			graces[0]();
+			const claimed = await window(2);
+			const [listed] = await claimed.request('list', { owner: 'w1' });
+			assert.deepStrictEqual([listed.run, listed.uncertain, await claimed.request('conversations', {})], ['stuck', true, [{ environment: 'local', cli: 'claude', sessionId: 's-stuck' }]]);
+			await assert.rejects(claimed.request('attach', { run: 'stuck' }), /No run stuck/);
+			await assert.rejects(spawn(claimed, 'again', IDLE, { meta }), /already running in Facade/);
+			// Its exit heard, it is listed no more
+			process.kill(pid);
+			await until('it to be let go', async () => (await claimed.request('list', { owner: 'w1' })).length === 0);
+		} finally {
+			if (pid && alive(pid)) { process.kill(pid); }
+			graced.close();
+			fs.rmSync(place.dir, { recursive: true, force: true });
+		}
+	});
+
 	test('a newer activation takes the same process immediately and fences every stale effect and later reconnect', async () => {
 		const first = await connect();
 		const before = await spawn(first, 'r3', IDLE);
@@ -648,6 +748,184 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			['working', undefined, 'Fixing tests', undefined],
 			['blocked', undefined, undefined, 'permission']
 		]);
+	});
+
+	test('CLIS-2.3: a program\'s question whether ptyd takes reports is answered before any of its output reaches a window: a window\'s terminal answering its next question at once comes second, however far ptyd\'s own parse is behind', async function () {
+		this.timeout(20_000);
+		const client = await connect();
+		const file = path.join(os.tmpdir(), `fd-answers-${process.pid}-${Date.now()}.txt`);
+		// Much drawn first, then the question and the terminal's own identification (DA1) at once, as Claude Code asks them
+		const program = `const fs = require('fs'); process.stdin.setRawMode(true); let got = ''; process.stdin.on('data', d => { got += d.toString('latin1'); fs.writeFileSync(${JSON.stringify(file)}, got); }); process.stdout.write('x'.repeat(2000000) + '\\x1b]7501;?\\x1b\\\\\\x1b[c'); setInterval(() => {}, 1000);`;
+		let answered = false;
+		// Where each question was in the output the window heard: the order the terminal gave them in
+		let heard = '';
+		client.onRunEvent('r-ask', event => {
+			if (event.event === 'output') {
+				heard += event.data.replace(/x+/g, 'x');
+			}
+			// The window answers the program's identification the moment it sees it: the one after its question whether ptyd takes
+			// reports - on Windows the console asks its own as it starts, and takes the answer to that itself
+			const question = heard.indexOf('\x1b]7501;?');
+			if (!answered && event.event === 'output' && question >= 0 && heard.indexOf('\x1b[c', question) >= 0) {
+				answered = true;
+				void client.request('input', { run: 'r-ask', data: '\x1b[?62;22c' });
+			}
+		});
+		try {
+			await client.request('spawn', { run: 'r-ask', owner: 'w1', file: process.execPath, args: ['-e', program], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {} });
+			const read = () => { try { return fs.readFileSync(file, 'latin1'); } catch { return ''; } };
+			const got = await until('both answers', () => {
+				const text = read();
+				return text.includes('\x1b]7501;?:states=') && text.includes('\x1b[?62;22c') && text;
+			}, 15_000).catch(err => { throw new Error(`${(err as Error).message}: ${JSON.stringify({ got: read(), answered, heard: heard.slice(-400) })}`); });
+			assert.ok(got.indexOf('\x1b]7501;?:states=') < got.indexOf('\x1b[?62;22c'), JSON.stringify({ got, heard: heard.slice(-400), question: heard.indexOf('\x1b]7501;?'), identification: heard.indexOf('\x1b[c') }));
+			assert.strictEqual(got.split('\x1b]7501;?:states=').length - 1, 1, 'answered once, not again as its parse reaches the question');
+		} finally {
+			fs.rmSync(file, { force: true });
+		}
+	});
+
+	test('CLIS-2.3: a program asking whether ptyd takes reports and then its terminal\'s identification, as Claude Code asks them, reads ptyd\'s answer to the first before its answer to the second, with little output before them or much', async function () {
+		this.timeout(40_000);
+		const client = await connect();
+		for (const [run, lead] of [['r-order-few', 0], ['r-order-much', 2_000_000]] as const) {
+			const file = path.join(os.tmpdir(), `fd-order-${run}-${process.pid}-${Date.now()}.txt`);
+			const program = `const fs = require('fs'); process.stdin.setRawMode(true); let got = ''; process.stdin.on('data', d => { got += d.toString('latin1'); fs.writeFileSync(${JSON.stringify(file)}, got); }); process.stdout.write('x'.repeat(${lead}) + '\\x1b]7501;?\\x1b\\\\\\x1b[c'); setInterval(() => {}, 1000);`;
+			// What ptyd heard, its questions in the order the terminal gave them
+			let heard = '';
+			const listening = client.onRunEvent(run, event => { if (event.event === 'output') { heard += event.data.replace(/x+/g, 'x'); } });
+			try {
+				await client.request('spawn', { run, owner: 'w1', file: process.execPath, args: ['-e', program], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {} });
+				const got = await until(`both answers to ${run}`, () => {
+					try {
+						const text = fs.readFileSync(file, 'latin1');
+						return text.includes('\x1b]7501;?:states=') && text.includes('\x1b[?1;2c') && text;
+					} catch {
+						return false;
+					}
+				}, 15_000);
+				assert.ok(got.indexOf('\x1b]7501;?:states=') < got.indexOf('\x1b[?1;2c'), JSON.stringify({ run, got, heard: heard.slice(-300), question: heard.indexOf('\x1b]7501;?'), identification: heard.indexOf('\x1b[c') }));
+			} finally {
+				listening.dispose();
+				fs.rmSync(file, { force: true });
+			}
+		}
+	});
+
+	// Codex, made behind other tabs, asked its terminal's colours; its window's terminal answered once its tab was opened, long after
+	// Codex stopped waiting: Codex read an Escape - its turn interrupted - and the answer as typed text (2026-11-03). What ptyd can
+	// answer it answers at once, whoever claims the run; the editor's answers to those never reach the program (ARCHITECTURE-2.3)
+	test('a program\'s question its headless terminal can answer is answered by ptyd at once, whether or not a window claims the run (ARCHITECTURE-2.3)', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const written: string[] = [];
+		const pty = { pid: 4242, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); }, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const asking = new Server(pipe('asking'));
+		assert.strictEqual(await asking.listen(), true);
+		try {
+			const open = async (generation: number) => {
+				const client = await PtydClient.connect(pipe('asking'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `asking-${generation}` });
+				return client;
+			};
+			const window = await open(1);
+			await spawn(window, 'asks', IDLE);
+			// The program asks where its cursor is and what the terminal is; ptyd's answers are what it wrote to the program, read once
+			// the questions are drawn
+			const answered = async (client: PtydClient) => {
+				const before = written.length;
+				emit('\x1b[6n\x1b[c');
+				await client.request('read', { run: 'asks', lines: 1 });
+				return written.slice(before).join('');
+			};
+			const expected = '\x1b[1;1R\x1b[?1;2c';
+			assert.strictEqual(await answered(window), expected, 'claimed by the window that started it');
+			await window.request('attach', { run: 'asks' });
+			assert.strictEqual(await answered(window), expected, 'its terminal drawing the screen');
+			const reloaded = await open(2);
+			await reloaded.request('attach', { run: 'asks' });
+			assert.strictEqual(await answered(reloaded), expected, 'claimed by a reloaded window');
+			reloaded.dispose();
+			const next = await open(3);
+			await until('ptyd answering with no window', async () => await answered(next) === expected);
+		} finally {
+			asking.close();
+		}
+	});
+
+	// Codex waits 200 to 300 ms for its terminal's colours and reads a later answer as typed keys: an editor terminal's answer, through
+	// the window and ptyd, can be later on a busy machine, and for a tab behind others is (2026-11-03)
+	test('a program asking its terminal\'s colours is answered by ptyd at once with those its window said, and not at all before (ARCHITECTURE-2.3)', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const written: string[] = [];
+		const pty = { pid: 4343, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); }, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const asking = new Server(pipe('colours'));
+		assert.strictEqual(await asking.listen(), true);
+		try {
+			const open = async (generation: number) => {
+				const client = await PtydClient.connect(pipe('colours'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `colours-${generation}` });
+				return client;
+			};
+			const window = await open(1);
+			await spawn(window, 'asks', IDLE);
+			const answered = async (client: PtydClient, question: string) => {
+				const before = written.length;
+				emit(question);
+				await client.request('read', { run: 'asks', lines: 1 });
+				return written.slice(before).join('');
+			};
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'no colours said yet: no answer, and the program uses its own');
+			await window.request('colours', { foreground: 'cccc/cccc/cccc', background: '1919/1a1a/1b1b', cursor: 'aeaf/adad/b0b0' });
+			assert.strictEqual(await answered(window, '\x1b]10;?\x1b\\\x1b]11;?\x07\x1b]12;?\x1b\\'),
+				'\x1b]10;rgb:cccc/cccc/cccc\x1b\\\x1b]11;rgb:1919/1a1a/1b1b\x1b\\\x1b]12;rgb:aeaf/adad/b0b0\x1b\\');
+			// A program setting its colours is no question; a window not saying its own yet leaves the run those it had
+			assert.strictEqual(await answered(window, '\x1b]11;rgb:0000/0000/0000\x1b\\'), '');
+			// ptyd's one thread held - as creating a program holds it - past a tenth of a second: a question that arrives within a second
+			// after may have waited, and no answer is better than a late one; then it is answered again
+			const heldUntil = Date.now() + 150;
+			while (Date.now() < heldUntil) { /* held */ }
+			await new Promise(resolve => setTimeout(resolve, 30));
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'just held up: not answered');
+			await new Promise(resolve => setTimeout(resolve, 1_100));
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\', 'answered again a second after');
+			const reloaded = await open(2);
+			await reloaded.request('attach', { run: 'asks' });
+			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\');
+			await reloaded.request('colours', { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff' });
+			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:ffff/ffff/ffff\x1b\\', 'the theme changed');
+			await assert.rejects(reloaded.request('colours', { background: 'white' } as never), /Terminal colours are rrrr\/gggg\/bbbb/);
+		} finally {
+			asking.close();
+		}
+	});
+
+	test('a screen taken puts its cursor where the run\'s is, a last row filled to its last column included (ARCHITECTURE-2.3)', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const pty = { pid: 4344, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write() {}, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const server = new Server(pipe('cursor'));
+		assert.strictEqual(await server.listen(), true);
+		try {
+			const client = await PtydClient.connect(pipe('cursor'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			clients.push(client);
+			await client.request('claim', { owner: 'w1', generation: 1, token: 'cursor-1' });
+			await spawn(client, 'boxed', IDLE);
+			// An input box between full-width rules, its cursor saved after its prompt and put back there once the box is drawn
+			const rule = '─'.repeat(80);
+			emit(`\x1b[H\x1b[2J\x1b[22;1H${rule}\x1b[23;1H❯ \x1b7\x1b[2mTry a task\x1b[22m\x1b[24;1H${rule}\x1b8`);
+			const { screen } = await client.request('attach', { run: 'boxed' });
+			const { Terminal } = await import('@xterm/headless');
+			const drawn = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
+			await new Promise<void>(resolve => drawn.write(screen, resolve));
+			assert.deepStrictEqual([drawn.buffer.active.cursorY + 1, drawn.buffer.active.cursorX + 1], [23, 3]);
+			drawn.dispose();
+		} finally {
+			server.close();
+		}
 	});
 
 	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3)', async function () {

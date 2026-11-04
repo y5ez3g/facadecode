@@ -10,7 +10,7 @@ import { cliIcon, plainText } from '../presentation';
 import { matchesCliSearch } from './search';
 
 export interface GoToAgentDeps {
-	readonly model: Pick<PanelModel, 'ordered' | 'placeOf'>;
+	readonly model: Pick<PanelModel, 'ordered' | 'placeOf' | 'placesShown'>;
 	readonly agents: Pick<Agents, 'onDidChange'>;
 	readonly words: CardWords;
 	readonly media: vscode.Uri;
@@ -48,15 +48,17 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	picker.title = vscode.l10n.t("Go to Agent");
 	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location, or ID");
 	picker.matchOnDescription = true;
-	const itemOf = (facts: RunFacts): Item => {
+	const itemOf = (facts: RunFacts, placesShown: boolean): Item => {
 		const item: Item = {
 			label: plainText(facts.name || facts.alias),
-			description: plainText([facts.name ? facts.alias : undefined, statusOf(facts, deps.words).stateText, deps.model.placeOf(facts).qualified, facts.title].filter(Boolean).join(' · ')),
+			// Where it works, unless every agent works in the window's one place to work (PANEL-1.3)
+			description: plainText([facts.name ? facts.alias : undefined, statusOf(facts, deps.words).stateText, placesShown ? deps.model.placeOf(facts).qualified : undefined, facts.title].filter(Boolean).join(' · ')),
 			iconPath: cliIcon(deps.media, facts.cli),
 			buttons: [copy, close],
 			run: facts.id
 		};
-		return { ...item, alwaysShow: matchesCliSearch(picker.value, facts.cli, facts.displayName, item) };
+		// The window's one place to work, left unsaid, still matches a search (LIFECYCLE-2.3)
+		return { ...item, alwaysShow: matchesCliSearch(picker.value, facts.cli, facts.displayName, item, placesShown ? undefined : deps.model.placeOf(facts).qualified) };
 	};
 	/** The query used for the current items, including their hidden CLI matches. */
 	let shownFor: string | undefined;
@@ -69,7 +71,8 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 		}
 		shownFor = picker.value;
 		const active = picker.activeItems[0]?.run;
-		picker.items = named ? [{ ...itemOf(runs.find(run => run.id === named)!), alwaysShow: true }] : runs.map(itemOf);
+		const placesShown = deps.model.placesShown();
+		picker.items = named ? [{ ...itemOf(runs.find(run => run.id === named)!, placesShown), alwaysShow: true }] : runs.map(run => itemOf(run, placesShown));
 		const again = picker.items.find(item => item.run === active);
 		if (again) {
 			picker.activeItems = [again];

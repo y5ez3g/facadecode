@@ -15,11 +15,6 @@
 	"Connection to agent process lost; reconnecting": "Verbindung zum Agentenprozess verloren; Verbindung wird wiederhergestellt",
 	"[Agent process disconnected; exit cause unknown]": "[Agent-Prozess getrennt; Exit-Ursache unbekannt]",
 	"Close Agent": "Agent schließen",
-	"Close Agents": "Agenten schließen",
-	"Close {0}?": "\"{0}\" schließen?",
-	"Close {0} agents?": "{0} Agenten schließen?",
-	"Its process will end. Cancel keeps it running and opens its terminal again.": "Sein Prozess wird beendet. Bei \"Abbrechen\" wird er weiter ausgeführt und sein Terminal wieder geöffnet.",
-	"Their processes will end. Cancel keeps them running and opens their terminals again.": "Ihre Prozesse werden beendet. Bei \"Abbrechen\" werden sie weiter ausgeführt und ihre Terminals wieder geöffnet.",
 	"Show": "Anzeigen",
 	"Could not restore agents for this window. Reload the window to try again.": "Agenten für dieses Fenster konnten nicht wiederhergestellt werden. Laden Sie das Fenster neu, um es erneut zu versuchen.",
 	"Window": "Fenster",
@@ -79,6 +74,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} bezeichnet keinen Commit in {1}.",
 	"The working location is no longer available.": "Der Arbeitsort ist nicht mehr verfügbar.",
 	"The working location {0} is not available in this window.": "Arbeitsort {0} ist in diesem Fenster nicht verfügbar.",
+	"Could not confirm that it stopped": "Es konnte nicht bestätigt werden, dass er beendet wurde",
 	"Git is not available in this environment.": "Git ist in dieser Umgebung nicht verfügbar.",
 	"{0} is not in a Git repository.": "{0} befindet sich nicht in einem Git-Repository.",
 	"{0} has no commits yet.": "{0} enthält noch keine Commits.",
@@ -317,6 +313,10 @@
 	"Location: {0}": "Arbeitsort: {0}",
 	"Path: {0}": "Pfad: {0}",
 	"Started by: {0}": "Gestartet von: {0}",
+	"Source window: {0}": "Quellfenster: {0}",
+	"Last message from agent {0}: {1}": "Letzte Nachricht von Agent {0}: {1}",
+	"Your last input: {0}": "Ihre letzte Eingabe: {0}",
+	"Facade result: {0}": "Facade-Ergebnis: {0}",
 	"New Worktree · Select Folder": "Neuer Worktree · Ordner auswählen",
 	"Started: {0}": "Gestartet: {0}",
 	"Reported working: {0}": "Arbeit gemeldet: {0}",
@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "Neuer Agent · Ordner auswählen",
 	"New Agent · Working Location": "Neuer Agent · Arbeitsort",
 	"New Agent · New Worktree": "Neuer Agent · Neuer Worktree",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "Die Facade Code-Installation, die die Agenten dieses Fensters ausführt, wurde durch ein Update oder eine Deinstallation entfernt ({0} fehlt), daher kann kein Agent starten. Laden Sie das Fenster neu, um Agenten mit der installierten Version zu starten."
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "Die Facade Code-Installation, die die Agenten dieses Fensters ausführt, wurde durch ein Update oder eine Deinstallation entfernt ({0} fehlt), daher kann kein Agent starten. Laden Sie das Fenster neu, um Agenten mit der installierten Version zu starten.",
+	"{0} · {1}": "{0} · {1}"
 }

@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
-import { OwnerClaims, OWNER_GRACE_MS, type OwnerClock } from '../ptyd/ownership';
+import { LOCAL_OWNER_GRACE_MS, OwnerClaims, OWNER_GRACE_MS, type OwnerClock } from '../ptyd/ownership';
 import { isCurrentOwner, nextOwnerClaim, writeAsOwner } from '../record/ownership';
 import { tempDir } from './util';
 
@@ -19,7 +19,7 @@ function fixture() {
 		timers.push(timer);
 		return { dispose: () => timer.canceled = true };
 	} };
-	const owners = new OwnerClaims<string>((owner, connection) => events.push(`transfer ${owner} ${connection}`), owner => events.push(`expire ${owner}`), clock);
+	const owners = new OwnerClaims<string>((owner, connection) => events.push(`transfer ${owner} ${connection}`), owner => void events.push(`expire ${owner}`), clock);
 	const claim = (generation: number, owner = 'workspace') => ({ owner, generation, token: `activation-${generation}` });
 	return { owners, timers, events, claim };
 }
@@ -75,6 +75,45 @@ suite('Workspace ownership: one activation, fenced reconnect and five-minute cle
 		owners.claim(claim(1), 'remote-extension-host');
 		assert.deepStrictEqual(timers, []);
 		owners.assert('workspace', 'remote-extension-host');
+	});
+
+	test('a local window\'s runs have 90 seconds: any window opening its workspace within them takes them over, as a reload does - no claim ends them - and past them they end (RULES-4.1)', () => {
+		const { owners, timers, events, claim } = fixture();
+		const local = (generation: number) => ({ ...claim(generation), local: true });
+		owners.claim(local(1), 'first');
+		owners.disconnect('first');
+		assert.deepStrictEqual(timers.map(timer => timer.ms), [LOCAL_OWNER_GRACE_MS], 'a local window\'s grace, not five minutes');
+		owners.claim(local(2), 'reopened');
+		owners.assert('workspace', 'reopened');
+		assert.deepStrictEqual([events, timers[0].canceled], [[], true], 'taken over, nothing ended');
+		// Its queued timer cannot end the new window's
+		timers[0].callback();
+		assert.deepStrictEqual(events, []);
+		// Gone again and claimed by none: they end at the grace
+		owners.disconnect('reopened');
+		timers[1].callback();
+		assert.deepStrictEqual([timers[1].ms, events], [LOCAL_OWNER_GRACE_MS, ['expire workspace']]);
+	});
+
+	test('two windows of one workspace: the second takes the first\'s runs over while it is still there, ending none (RULES-4.1)', () => {
+		const both = fixture();
+		both.owners.claim({ ...both.claim(1), local: true }, 'first');
+		both.owners.claim({ ...both.claim(2), local: true }, 'second');
+		assert.deepStrictEqual(both.events, ['transfer workspace first']);
+	});
+
+	test('a remote window keeps its five minutes, and a reopened window takes its runs over; a claim saying nothing of where it runs has them too (RULES-4.1)', () => {
+		const remote = fixture();
+		remote.owners.claim({ ...remote.claim(1), local: false }, 'remote-extension-host');
+		remote.owners.disconnect('remote-extension-host');
+		remote.owners.claim({ ...remote.claim(2), local: false }, 'reopened');
+		assert.deepStrictEqual([remote.timers.map(timer => [timer.ms, timer.canceled]), remote.events], [[[OWNER_GRACE_MS, true]], []]);
+		remote.owners.assert('workspace', 'reopened');
+		const unsaid = fixture();
+		unsaid.owners.claim(unsaid.claim(1), 'earlier');
+		unsaid.owners.disconnect('earlier');
+		assert.deepStrictEqual(unsaid.timers.map(timer => timer.ms), [OWNER_GRACE_MS]);
+		assert.throws(() => unsaid.owners.claim({ ...unsaid.claim(3), local: 7 } as never, 'odd'), /Invalid workspace ownership claim/);
 	});
 
 	test('the same generation with a different token is refused, and disposal disarms queued timers', () => {

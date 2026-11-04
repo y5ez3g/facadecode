@@ -56,65 +56,66 @@ automatically launch an agent. This prerequisite step does not ask the person to
 
 ### 1.3 Card geometry and identity
 
-**A card is two lines beside a CLI avatar and status dot, with identity and location visible first.**
+**A card is two lines beside a CLI avatar and status dot; the first line identifies the agent and shows its Pin at the
+right.**
 
 | Element | Value |
 | --- | --- |
 | Card | Minimum 44 px tall; padding 8 px top/bottom/left, 9 px right; 4 px corners |
-| Avatar | 28 px circle, 8 px before text, 1 px theme border |
-| First line | Name 13 px; location 12 px aligned at end; 6 px gaps |
-| Pin | 14 px icon box 4 px after the name as shown, its ellipsis included; adds no card height |
+| Avatar | 28 px circle, 8 px before text, 1 px inner edge of the theme foreground at 14 % opacity - high contrast: its contrast border - never an opaque border over the icon |
+| First line | Name 13 px at the left; its short ID where its name repeats, 12 px in the quieter color, 4 px after it; the Pin at the right; no location |
+| Pin | Nonshrinking 14 px icon box at the first line's right content edge, inside the card's right padding, at least 4 px from the name and ID; adds no card height |
 | Second line | 12 px, quieter, single line with ellipsis |
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
 
 Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`,
 `avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Custom avatars are an uppercased first grapheme in a
-circle; deterministic theme colors from UX-2.1. Location is alias/branch/folder, prefixed by workspace folder in a
-multi-folder window unless it is named that folder's name already, as a plain folder is. A related worktree can be
+circle; deterministic theme colors from UX-2.1. No card shows its location, at any width, on hover or on focus: the
+first line is the agent's name, a shortened location being no help to read, and the location is the hover's and the
+accessible label's in full (1.5). A location's label there is alias/branch/folder, prefixed by workspace folder in a
+multi-folder window unless it is named that folder's name already, as a plain folder is; a related worktree can be
 outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
-temporarily disconnected location is retained. Reserve the Pin's measured width and spacing when present, then let
-name and location share the first line's remaining width: a short one
-stays whole and the other uses the remaining room. Only when both exceed their shares does the line divide about 60%
-to the name and 40% to location; 40% is not a location cap. A long name ellipsizes at the end, its
-width that of the text it shows as drawn, so that a Pin follows the ellipsis as closely as it follows a whole name.
-Location keeps its `folder · worktree` structure: each long component ellipsizes in the middle, between whole graphemes,
-keeping its beginning and end where they fit. A short component stays whole; when both are long, the worktree receives
-about two thirds of their text space. The separator remains and the folder is never hidden just because it is long.
-These shares are width limits, not reserved empty boxes: after fitting whole graphemes, give unused folder space to
-the worktree, then any remaining space back to the folder. Render each fitted component at its measured width and
-align their compact group at the line's end. Only the separator's normal spaces separate the two visible labels;
-unused allocation must not appear before the separator or after the worktree. Any final spare width is available to
-the name, up to its natural width.
-Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font changes, rename
-and location updates. Avatar/dot do not shrink. Full values remain in hover and accessibility; the panel header is unchanged.
+temporarily disconnected location is retained. Where two or more of this window's cards have exactly the same stored
+name after trimming - compared whole and case-sensitively, among its starting, disconnected and retained-error cards too
+and those the filter hides, other windows' never - each adds its own short ID after the name; an empty name shows its
+short ID alone, in the name's style. A duplicate appearing, going or being renamed updates every card affected, changing
+no stored name, order, selection or focus. Reserve the whole ID where present, and the Pin's width and gap, and give the
+name the rest: a long name ellipsizes at the end between whole graphemes, and a short name and its ID stay together at
+their natural widths, the spare space before the Pin. Unpinned cards reserve no Pin box. The Pin and its hover box stay
+clear of the overlay scrollbar at every width and zoom, and neither the scrollbar's showing nor pointer or keyboard
+focus moves them. Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font
+changes and rename. Avatar/dot do not shrink. The panel header is unchanged.
 
-Pinned cards show the Pin beside the name. Hovering the Pin shows its own tooltip with its restoration meaning: the
-conversation is restored when the workspace opens again. Its color follows the quieter text, including the selected
-foreground at 80% opacity; high-contrast selections use full opacity. The icon's internal space keeps its visible shape
-smaller than the name's letters.
+Pinned cards show the Pin at the first line's right; it is passive, with no click or Tab stop. Hovering the Pin shows
+its own tooltip with its restoration meaning: the conversation is restored when the workspace opens again. Its color
+follows the quieter text, including the selected foreground at 80% opacity; high-contrast selections use full opacity.
+The icon's internal space keeps its visible shape smaller than the name's letters.
 
 ### 1.4 Second line and dot
 
 **The second line says what was last sent to the agent, unless its dot is red or its CLI waits for the person.**
 
 It says the last message sent to the agent: the person's text after a nonempty Enter, slash commands included, as the
-CLI's input reader read the draft that Enter submitted (CLIS-2.1); a message or Facade result that Facade typed into
-its input, as typed, its `📨` or `🔔` line first; or the task it was started with, its creation prompt's first line. A
-CLI without an input reader has no typed text to show. Before any, it says its CLI title's words: the title CLIS-2.3
-keeps, without the spinner frame or state symbol a CLI puts before its words, for every CLI. Once a message was sent, a
-title never replaces it; the hover's `Title:` shows the title as CLIS-2.3 keeps it. The last message is kept across a
-reload. Two cases say something else while they last: a red dot says why (RULES-3.2) - the error, the Facade tools it
-cannot use or the start not ready - and a native blocker says what it waits for.
-A CLI without its Facade tools says so in plain words, for example
-`Cannot work with other agents: move or rename {file}`, or `Cannot work with other agents: its Facade tools stopped`
-once its tools went away, and stays usable. Fallbacks, before any message or title: the startup stage, `Working`,
-`Idle`, `Activity unavailable`. Idle alone proves neither an empty composer nor usable input; there is no separate
-first-message readiness claim. Never `Done, waiting for you` from a turn end. Normal work/idle shows the message or
-title directly, without a repeated `Working`/`Idle` prefix. Native blockers lead with `Needs permission`,
-`Sign-in required` or `Waiting for an answer`, followed by the CLI's original words when present. A reported blocker
-with no recognized kind says `Needs attention`, preserving its original words. Errors lead with `Error: {reason}`; why
-activity is unavailable is the hover's. No popup solely for a native blocker.
+CLI's input reader read the draft that Enter submitted (CLIS-2.1); a message another agent sent that Facade typed into
+its input - the task an agent-started run was started with among them, its creation prompt's first line, whichever path
+it went in by - as `📨` and its own text, without the line that introduces it, a message the agent took through
+read_messages changing nothing; a Facade result as typed, its `🔔` line first. The `📨` comes from who sent the item as
+its record keeps it, never from a name, the destination or an emoji the text begins with; the person's input has none.
+It says where that item came from, not what the agent works on now or whether it read it. A CLI without an input reader
+has no typed text to show. Before any, it says its CLI title's words: the title CLIS-2.3 keeps, without the spinner
+frame or state symbol a CLI puts before its words, for every CLI. Once a message was sent, a title never replaces it;
+the hover's `Title:` shows the title as CLIS-2.3 keeps it. The last message is kept across a reload. Two cases say
+something else while they last: a red dot says why (RULES-3.2) - the error, an end Facade could not confirm among them
+(LIFECYCLE-3.5), the Facade tools it cannot use or the start not ready - and a native blocker says what it waits for. A
+CLI without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file}`,
+or `Cannot work with other agents: its Facade tools stopped` once its tools went away, and stays usable. Fallbacks,
+before any message or title: the startup stage, `Working`, `Idle`, `Activity unavailable`. Idle alone proves neither an
+empty composer nor usable input; there is no separate first-message readiness claim. Never `Done, waiting for you` from
+a turn end. Normal work/idle shows the message or title directly, without a repeated `Working`/`Idle` prefix. Native
+blockers lead with `Needs permission`, `Sign-in required` or `Waiting for an answer`, followed by the CLI's original
+words when present. A reported blocker with no recognized kind says `Needs attention`, preserving its original words.
+Errors lead with `Error: {reason}`; why activity is unavailable is the hover's. No popup solely for a native blocker.
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
 dot or notification rules. Tools injected but not yet connected say `Not connected to other agents yet` in the hover;
@@ -130,24 +131,28 @@ The accessible label preserves it. No unread dot, completed check, bold-name sta
 
 **Every fact cut from a card remains readable without relying on color.**
 
-Card tooltip lines use a localized `Label: value` format throughout: `Agent:` for name, short run ID and CLI;
-`Title:` for a full title or `Prompt:` for its creation prompt's first line; `Status:` and a distinct `Reason:` when
-present. Use `Tools:` for unavailable or connecting collaboration tools, retaining 1.4's conditions; an ended card leaves
-out the tools that went away with its process. Where a red card's reason is its tools, `Status:` and `Tools:` say the
-same words. Empty names create no empty identity separator. Keep title-over-prompt
-priority and suppress a reason identical to the description. For a working agent, `Reported working:` shows how long
-ago its CLI reported that work, for example `Reported working: 25 min. ago`. This is the CLI's last word; a long silence
-leaves the person to judge it rather than turning it into idle or done. This uses the source observation for the current
-working episode, preserved through title changes and reload, not the host's report-receipt or API-query time. Missing
-source time omits the line. Relative times use the source clock; an observation ahead of that clock shows its absolute
-time instead; `Started:` for started relative time and, for an agent started by an agent, `Started by:` for its creator;
-`Location:` for qualified location including non-local environment context; `Path:` for its complete path, the home
-folder written `~` except on Windows; `Window:` for the window. Preserve case and every path component, allowing
-native wrapping. Do not repeat natural-language prefixes after labels. Missing facts omit their lines. Hovering the dot
-shows its state alone, and hovering the Pin its own tooltip (1.3). Accessible label: name, short run ID, `Pinned` for a
-pinned card, state, location, CLI, and the second line where it differs from the state. Use a listbox named `Agents`,
-options with `aria-selected`, decorative icons hidden, one roving Tab stop. Update labels in place. State-change
-announcements are polite, coalesced, and do not repeatedly announce spinner/progress ticks.
+Card tooltip lines use a localized `Label: value` format throughout: `Agent:` for name, short run ID and CLI; `Title:`
+for a full title or `Prompt:` for its creation prompt's first line; `Status:` and a distinct `Reason:` when present. Use
+`Tools:` for unavailable or connecting collaboration tools, retaining 1.4's conditions; an ended card leaves out the
+tools that went away with its process. Where a red card's reason is its tools, `Status:` and `Tools:` say the same
+words. Empty names create no empty identity separator. Keep title-over-prompt priority and suppress a reason identical
+to the description. For a working agent, `Reported working:` shows how long ago its CLI reported that work, for example
+`Reported working: 25 min. ago`. This is the CLI's last word; a long silence leaves the person to judge it rather than
+turning it into idle or done. This uses the source observation for the current working episode, preserved through title
+changes and reload, not the host's report-receipt or API-query time. Missing source time omits the line. Relative times
+use the source clock; an observation ahead of that clock shows its absolute time instead; `Started:` for started
+relative time and, for an agent started by an agent, `Started by:` for its creator; `Location:` for qualified location
+including non-local environment context, the window's one place to work included; `Path:` for its complete path, the
+home folder written `~` except on Windows; `Window:` for the window. Where the second line shows another agent's
+message, `From:` names its sender, name and `#aN` - `#aN` alone for an empty name - and `Source window:` the sender's
+window where that is another; both go with that message, kept with it across a reload and its sender's exit, and are
+gone with it, as they are for any other second line. Preserve case and every path component, allowing native wrapping.
+Do not repeat natural-language prefixes after labels. Missing facts omit their lines. Hovering the dot shows its state
+alone, and hovering the Pin its own tooltip (1.3). Accessible label: name, short run ID, `Pinned` for a pinned card,
+state, location, CLI, and the second line where it differs from the state, its source said in words - a message from an
+agent, the person's input or a Facade result - rather than by its mark. Use a listbox named `Agents`, options with
+`aria-selected`, decorative icons hidden, one roving Tab stop. Update labels in place. State-change announcements are
+polite, coalesced, and do not repeatedly announce spinner/progress ticks.
 
 ## 2 List and actions
 
@@ -157,14 +162,14 @@ announcements are polite, coalesced, and do not repeatedly announce spinner/prog
 
 A new card, whether a person or an agent started it, goes last in the ordinary area. Pin moves a card last among the
 Pins, also where it takes its conversation's existing Pin (LIFECYCLE-3.4). A card that leaves the Pins - by Unpin, or
-because another card took its Pin - goes first in the ordinary area, just below the Pins it left. A
-new card the person started, which is selected, scrolls into view; one an agent started does not move the list.
-Move Up/Down works within both the Pin and ordinary areas; hidden cards retain their relative positions. Persist Pin
-order by Pin ID so restoration keeps it. Explicit close removes a card immediately; no stopping card remains.
-There are no batch actions or automatic creation-tree grouping.
-Click selects immediately and reveals its terminal. Selection follows the last active owned agent terminal, survives
-focus on a file/unrelated terminal, and disappears when that record is removed. A failed launch remains selected;
-background starts do not change selection. Keyboard focus and selection are independent.
+because another card took its Pin - goes first in the ordinary area, just below the Pins it left. A new card the person
+started, which is selected, scrolls into view; one an agent started does not move the list. Move Up/Down works within
+both the Pin and ordinary areas; hidden cards retain their relative positions. Persist Pin order by Pin ID so
+restoration keeps it. Explicit close removes a card immediately; no stopping card remains. There are no batch actions or
+automatic creation-tree grouping. Click selects immediately and opens or reveals its terminal (LIFECYCLE-2.2). Selection
+follows the last active owned agent terminal, survives focus on a file/unrelated terminal and its tab being hidden, and
+disappears when that record is removed. A failed launch remains selected; background starts do not change selection.
+Keyboard focus and selection are independent.
 
 ### 2.2 Card menu
 
@@ -180,23 +185,23 @@ selected row by fallback. Palette targeting follows UX-3.1.
 
 **A filter affects this window's card visibility only, not access or launch defaults.**
 
-Filter by Working Location opens native Quick Pick steps by folder. In each step one separator follows the first
-item, then come the folders or locations that have cards (including starting and retained failures) or hold the
-current filter, each with its count. In a window of several folders the first step lists All Locations, then the
-folders. Every folder row keeps its name as label and shows `{agent count} · {parent path}` as description, with
-the count first and the parent path using the existing home-relative representation. Do not shorten this path
-artificially; native clipping may still occur. Location rows retain their existing names, icons and counts.
-A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
+Filter by Working Location opens native Quick Pick steps by folder. Where every agent works in the window's one place to
+work (LIFECYCLE-1.3) there is nothing to filter by and it is not offered; an active filter keeps its way to be cleared.
+In each step one separator follows the first item, then come the folders or locations that have cards (including
+starting and retained failures) or hold the current filter, each with its count. In a window of several folders the
+first step lists All Locations, then the folders. Every folder row keeps its name as label and shows `{agent count} ·
+{parent path}` as description, with the count first and the parent path using the existing home-relative representation.
+Do not shorten this path artificially; native clipping may still occur. Location rows retain their existing names, icons
+and counts. A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
 (WORKTREES-1.2) - where two or more of its locations are listed, or where the filtered location is one of several it
-has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its
-first item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog does not
-list now stays choosable, last in the first step. The current filter, or in the first step its folder, is initially
-highlighted. Back returns to the first step; Escape leaves the filter unchanged. The view description names the
-filter; the icon fills.
-Persist environment-qualified location/folder association in workspace state. Clear on the filtered empty state's Clear
-Filter, the first step's first item or confirmed location removal, never on a failed Git read. A launch does not change
-the filter; every new agent enters the normal list data and is displayed only when it matches. Ordinary folders use
-“location,” not an implication that Git/worktrees are required.
+has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its first
+item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog does not list now
+stays choosable, last in the first step. The current filter, or in the first step its folder, is initially highlighted.
+Back returns to the first step; Escape leaves the filter unchanged. The view description names the filter; the icon
+fills. Persist environment-qualified location/folder association in workspace state. Clear on the filtered empty state's
+Clear Filter, the first step's first item or confirmed location removal, never on a failed Git read. A launch does not
+change the filter; every new agent enters the normal list data and is displayed only when it matches. Ordinary folders
+use “location,” not an implication that Git/worktrees are required.
 
 ## 3 Technical design
 

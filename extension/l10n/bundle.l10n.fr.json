@@ -15,11 +15,6 @@
 	"Connection to agent process lost; reconnecting": "Connexion au processus de l'agent perdue ; reconnexion en cours",
 	"[Agent process disconnected; exit cause unknown]": "[Processus de l'agent déconnecté ; cause de sortie inconnue]",
 	"Close Agent": "Fermer l'agent",
-	"Close Agents": "Fermer les agents",
-	"Close {0}?": "Fermer {0} ?",
-	"Close {0} agents?": "Fermer {0} agents ?",
-	"Its process will end. Cancel keeps it running and opens its terminal again.": "Son processus va se terminer. Annuler le maintient en cours d'exécution et rouvre son terminal.",
-	"Their processes will end. Cancel keeps them running and opens their terminals again.": "Leurs processus vont se terminer. Annuler les maintient en cours d'exécution et rouvre leurs terminaux.",
 	"Show": "Afficher",
 	"Could not restore agents for this window. Reload the window to try again.": "Impossible de restaurer les agents pour cette fenêtre. Rechargez la fenêtre pour réessayer.",
 	"Window": "Fenêtre",
@@ -79,6 +74,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} ne désigne aucun commit dans {1}.",
 	"The working location is no longer available.": "L’emplacement de travail n’est plus disponible.",
 	"The working location {0} is not available in this window.": "L’emplacement de travail {0} n’est pas disponible dans cette fenêtre.",
+	"Could not confirm that it stopped": "Impossible de confirmer qu’il s’est arrêté",
 	"Git is not available in this environment.": "Git n’est pas disponible dans cet environnement.",
 	"{0} is not in a Git repository.": "{0} n'est pas dans un dépôt Git.",
 	"{0} has no commits yet.": "{0} n'a pas encore de commit.",
@@ -317,6 +313,10 @@
 	"Location: {0}": "Emplacement : {0}",
 	"Path: {0}": "Chemin : {0}",
 	"Started by: {0}": "Démarré par : {0}",
+	"Source window: {0}": "Fenêtre source : {0}",
+	"Last message from agent {0}: {1}": "Dernier message de l’agent {0} : {1}",
+	"Your last input: {0}": "Votre dernière saisie : {0}",
+	"Facade result: {0}": "Résultat de Facade : {0}",
 	"New Worktree · Select Folder": "Nouvelle arborescence de travail · Sélectionner un dossier",
 	"Started: {0}": "Démarré : {0}",
 	"Reported working: {0}": "Travail en cours signalé : {0}",
@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "Nouvel agent · Sélectionner un dossier",
 	"New Agent · Working Location": "Nouvel agent · Emplacement de travail",
 	"New Agent · New Worktree": "Nouvel agent · Nouvelle arborescence de travail",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "L'installation de Facade Code qui exécute les agents de cette fenêtre a été supprimée par une mise à jour ou une désinstallation ({0} n'existe plus) : aucun agent ne peut donc démarrer. Rechargez la fenêtre pour démarrer des agents avec la version installée."
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "L'installation de Facade Code qui exécute les agents de cette fenêtre a été supprimée par une mise à jour ou une désinstallation ({0} n'existe plus) : aucun agent ne peut donc démarrer. Rechargez la fenêtre pour démarrer des agents avec la version installée.",
+	"{0} · {1}": "{0} · {1}"
 }

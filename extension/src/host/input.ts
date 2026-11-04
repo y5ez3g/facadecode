@@ -31,6 +31,12 @@ const LINE_SETTLE_MS: { readonly [adapter: string]: number } = { 'agy-frame': 45
  * Windows took 7,533 in 4.9 s, and gets 1 ms each (CLIS-2.1). A character is a UTF-16 code unit there, one key event each.
  */
 const CHAR_SETTLE_MS: { readonly [adapter: string]: { readonly [platform: string]: number } } = { 'codex-prompt': { win32: 3 }, 'muse-frame': { win32: 1 } };
+/**
+ * How long after its paste shows a CLI is to be left before Enter, where it takes an Enter that soon for a line break in the paste:
+ * Muse Code did for one 15 ms after, and submitted with one 100 ms after (2026-11-03, CLIS-2.1). Its first Enter lost, a message waited
+ * three seconds for a second, past the send's two, and its sender was told by a Facade result instead of at once.
+ */
+const PASTE_ENTER_SETTLE_MS: { readonly [adapter: string]: number } = { 'muse-frame': 250 };
 /** How long type_text's Enter waits after its text at least, so that its CLI reads them apart (MCP-5.2). */
 const DIRECT_ENTER_MS = 100;
 
@@ -312,7 +318,7 @@ export class OrdinaryInput implements InputPort {
 	 * on to empty: a confirmed submission, else what went in.
 	 */
 	private async enterNow(run: RunId, adapter: string, text: string, signal: AbortSignal | undefined): Promise<InputEffects> {
-		const settle = this.linesMs(adapter, text);
+		const settle = this.linesMs(adapter, text) + (PASTE_ENTER_SETTLE_MS[adapter] ?? 0);
 		if (settle > 0) {
 			try {
 				await this.wait(settle, signal);
@@ -345,7 +351,8 @@ export class OrdinaryInput implements InputPort {
 	/**
 	 * type_text's text, then its Enter where asked (MCP-5.2): no draft protection, but its Enter in a write of its own once its CLI can
 	 * have read the text - a tenth of a second at least, and the time a paste of its size takes (CLIS-2.1, MCP-4.1) - as a CLI that reads a
-	 * paste's end and an Enter together may drop the Enter, as Claude Code does.
+	 * paste's end and an Enter together may drop the Enter, as Claude Code does; Muse Code's 250 ms more, as an Enter sooner is a line
+	 * break to it.
 	 */
 	async typeDirect(run: RunId, text: string, enter: boolean): Promise<InputEffect> {
 		if (!enter || !text) {
@@ -356,7 +363,7 @@ export class OrdinaryInput implements InputPort {
 			return typed;
 		}
 		const adapter = this.adapterOf(run);
-		await this.wait(DIRECT_ENTER_MS + this.pasteMs(text) + this.linesMs(adapter, text) + this.charactersMs(adapter, text), undefined);
+		await this.wait(DIRECT_ENTER_MS + (PASTE_ENTER_SETTLE_MS[adapter ?? ''] ?? 0) + this.pasteMs(text) + this.linesMs(adapter, text) + this.charactersMs(adapter, text), undefined);
 		let entered: InputEffect;
 		try {
 			entered = await this.deps.typeText(run, '', true);

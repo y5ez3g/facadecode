@@ -24,11 +24,12 @@ explanation; there is no separate tutorial, team wizard or product-mode choice.
 
 **The person sees the location and suggested name, chooses a CLI, and continues in its editor terminal.**
 
-The last successfully used CLI is first and preselected; choosing it still starts only after the person's action.
-Change Working Location and Change Name remain at the bottom of the same picker. A name has an editable
-recommendation and may be empty, contain spaces or duplicate another name. CLI login and permissions remain in the terminal.
-The current name and actual location remain visible while searching for a CLI, as specified in LIFECYCLE-1.1.
-No account or CLI setup is silently performed by Facade.
+The last successfully used CLI is first and preselected; choosing it still starts only after the person's action. Change
+Working Location and Change Name remain at the bottom of the same picker - Change Name alone where there is no location
+to change (1.5). A name has an editable recommendation and may be empty, contain spaces or duplicate another name. CLI
+login and permissions remain in the terminal. The current name and actual location remain visible while searching for a
+CLI - the window's one place to work going without saying - as specified in LIFECYCLE-1.1. No account or CLI setup is
+silently performed by Facade.
 
 ### 1.3 Default working location
 
@@ -51,25 +52,27 @@ not block either step. A removed location is reselected; no silent CLI substitut
 **Change Working Location is an item in the same menu that shows the current location and CLI choices.**
 
 Choose a folder, then its location/worktree, then return to CLI selection. A single-folder window has no folder step; a
-plain folder outside a Git repository has no location step, and in a single-folder window it is shown as a label rather
-than an action that does nothing (LIFECYCLE-1.3). Back preserves selections; Escape makes no launch or worktree.
-Creating a worktree is an advanced choice in this flow, with the same contract as [Worktrees](features/WORKTREES.md).
+plain folder outside a Git repository has no location step, and in a single-folder window there is no location to
+change, the window's one place to work going without saying (LIFECYCLE-1.3). Back preserves selections; Escape makes no
+launch or worktree. Creating a worktree is an advanced choice in this flow, with the same contract as
+[Worktrees](features/WORKTREES.md).
 
 ### 1.6 Seeing the agent start
 
 **Choosing the CLI closes the menu and immediately creates the agent's card and terminal together.**
 
 The card and terminal identify one launch throughout setup and startup. A human launch shows its terminal and selects
-its card, scrolled into view; an agent-created launch appears in the background without moving the list. Progress is
-shown in the existing surfaces.
+its card, scrolled into view; an agent-created launch adds its card alone, its terminal hidden until the person opens
+it, without moving the list or taking focus (LIFECYCLE-2.2). Progress is shown in the existing surfaces.
 
 ### 1.7 Startup outcomes and collaboration availability
 
 **A failed accepted launch retains its card and terminal; a usable CLI remains available if its Facade tools fail.**
 
-The second line explains the actual error. Operation errors go to the initiator: human UI errors to that window's person,
-agent operation errors to that agent, with no extra human popup. Closing the retained pair removes it immediately.
-Native Git post-create preparation does not gate CLI startup once the worktree exists and Git recognizes it.
+The second line explains the actual error. Operation errors go to the initiator: human UI errors to that window's
+person, agent operation errors to that agent, with no extra human popup. Close Agent removes the retained pair
+immediately; closing its tab only hides it. Native Git post-create preparation does not gate CLI startup once the
+worktree exists and Git recognizes it.
 
 ## 2 Following an agent's work
 
@@ -96,27 +99,31 @@ RULES-1.8. No startup, idle, turn-end, permission or login news is announced. Ea
 
 **A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until closed.**
 
-Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. Explicit close
-removes card and terminal immediately and cleans up the owned process in the background. It does not delete a worktree
-or close the agents it started. There is no visible Stopping wait.
+Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. Close Agent
+removes card and terminal immediately and cleans up the owned process in the background; closing an agent's tab only
+hides it (LIFECYCLE-2.2). It does not delete a worktree or close the agents it started. There is no visible Stopping
+wait.
 
 ### 2.4 Reloading, closing and reconnecting
 
 **Reload reconnects existing runs; closing a window ends that window's agents.**
 
-Temporary remote loss retains observations and reconciles the original processes. A closed window's agents end five
-minutes after it goes unless the workspace is opened again first, which shows them again (RULES-4.1). Other windows
-continue their work. Pending messages to ended runs fail to their agent senders where reachable and are never replayed
-on reopening. If only the sender closes, delivery already executing elsewhere may finish; work left at the closing side
-may end. No extra handover machinery guarantees that edge case. System results that cannot return simply end.
+Temporary remote loss retains observations and reconciles the original processes. A closed window's agents end after
+RULES-4.1's grace - 90 seconds for a local window, five minutes for a remote one, and five minutes for agents a released
+build's execution supervisor still holds - unless the workspace is opened again first, which shows them again, as a
+reload does within that time (RULES-4.1), and Pins restore once their agents ended. Other windows continue their work.
+Pending messages to ended runs fail to their agent senders where reachable and are never replayed on reopening. If only
+the sender closes, delivery already executing elsewhere may finish; work left at the closing side may end. No extra
+handover machinery guarantees that edge case. System results that cannot return simply end.
 
 ### 2.5 Resume and Pin
 
 **Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
 
-Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are
-the same intent. Unpin keeps the current agent running. Explicit close and normal exit Unpin; abnormal exit and
-whole-window close preserve the intent. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
+Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are the
+same intent. Unpin keeps the current agent running. Close Agent, a person's close of the agent's tab showing its pin
+mark and normal exit Unpin; abnormal exit and whole-window close preserve the intent, and a Pin restored opens its tab
+in the background. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
 
 ## 3 Working with other agents
 
@@ -134,10 +141,11 @@ manager, judge, team hierarchy or “all work done” state is imposed.
 A child joins its creator's creation tree and uses RULES-4.3's launch-time YOLO rule. The API cannot choose YOLO. It may
 request a new worktree as part of startup. A new child can be placed in another valid window on this computer, local or
 remote, even when that window has no agents; a window without a folder has no working location. An optional prompt
-follows COLLABORATION-2.2's native/post-start path. Process startup and prompt submission have separate results; a
-pending prompt later reports its final outcome under MCP-2.3. Facade has no task concept and reports no child's work;
-its one automatic notice to a creator is RULES-1.8's, of a child waiting on a permission, question or sign-in. Explicit
-model/effort in this call takes precedence under CLIS-1.4.
+follows COLLABORATION-2.2's native/post-start path. Process startup and prompt submission have separate results: the
+start answers once the process runs, never waiting on the prompt, and a pending prompt later reports its final outcome
+under MCP-2.3. Facade has no task concept and reports no child's work; its one automatic notice to a creator is
+RULES-1.8's, of a child waiting on a permission, question or sign-in. Explicit model/effort in this call takes
+precedence under CLIS-1.4.
 
 ### 3.3 Discovering launch choices
 
@@ -199,11 +207,11 @@ notification in that agent's window.
 
 **Stopping or cancellation does not undo completed input or user files.**
 
-Canceling an unaccepted picker changes nothing. Closing an accepted launch immediately removes UI and prevents later
-CLI startup; a worktree already created stays. Facade does not manage Git initialization, initial commits, or native
-post-create preparation jobs; it deletes only a clean linked worktree the person confirms. External removal of a window
-folder/worktree closes its affected agents.
-An unconfirmed remote cleanup is not silently described as proven process exit.
+Canceling an unaccepted picker changes nothing. Close Agent on an accepted launch immediately removes UI and prevents
+later CLI startup; a worktree already created stays. Hiding its tab does neither. Facade does not manage Git
+initialization, initial commits, or native post-create preparation jobs; it deletes only a clean linked worktree the
+person confirms. External removal of a window folder/worktree closes its affected agents. An unconfirmed remote cleanup
+is not silently described as proven process exit.
 
 ### 4.3 Optional features never block the core journey
 
@@ -220,7 +228,7 @@ Creation trees do not group the list or imply a team workflow.
 | --- | --- |
 | 1.1–1.7 | Walk first use, last location, location change, no Git, no CLI, cancel, immediate surfaces and both startup failures |
 | 2.1–2.3 | Observe actual activity, errors, native CLI prompts, normal exit, unknown abnormal exit and explicit closure |
-| 2.4 | Reload, disconnect, close and immediate reopen under the five-minute policy, pending messages to ended runs |
+| 2.4 | Reload, disconnect, close and immediate reopen under RULES-4.1's grace policy for the supervisor that holds each run, pending messages to ended runs |
 | 2.5 | Resume an exact conversation; Pin from the card and the native tab, restored on reopening; Unpin keeps the agent running |
 | 3.1–3.6 | Two-way cross-window and local/remote operations; explicit launch choices; all initial/final message outcomes |
 | 4.1–4.3 | Walk both complete journeys including review, redirected work, cleanup, multi-folder and plain-folder use |

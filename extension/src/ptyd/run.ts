@@ -10,10 +10,10 @@ import type { IPty } from 'node-pty';
 import { InputReading, inputScreenOf, readInput } from './composer';
 import { InputEffect, InputQueue } from './input';
 import { KeyModes, keySequence, pasteSequence, win32Text } from './keys';
-import type { RunExit, RunInfo, RunStatus, ScreenFrame, ScreenRead, SpawnParams, Termination } from './protocol';
+import type { RunExit, RunInfo, RunStatus, ScreenFrame, ScreenRead, SpawnParams, TerminalColours, Termination } from './protocol';
 import { MOST_SCREEN_LINES, readScreen, readStatusLines } from './screen';
 import { ScreenReader, screenReaderOf } from './screenStatus';
-import { parseStatus, ProgramStatus, STATUS_REPLY } from './status';
+import { parseStatus, ProgramStatus, STATUS_REPLY, StatusQueries } from './status';
 
 /** The backend packaged beside ptyd, loaded lazily so tests can substitute the process adapter (ARCHITECTURE-1.2). */
 let pty: typeof import('node-pty') | undefined;
@@ -104,6 +104,40 @@ export const MOST_RUN_BUFFER = 8 * 1024 * 1024;
 /** The OSCs of the Program Status Protocol, and of a shell's prompt marks (OSC 133), whose `A` ends what a program reported. */
 const PROGRAM_STATUS_OSC = 7501;
 const PROMPT_MARK_OSC = 133;
+
+/** A colour question - OSC 10, 11 or 12, foreground, background, cursor - as a program writes it, BEL or ST ending it. */
+// eslint-disable-next-line no-control-regex
+const COLOUR_QUESTION = /\x1b\](1[0-2]);\?(?:\x07|\x1b\\)/g;
+/** The length of the longest colour question: a shorter start of one at the end of an arrival waits for the next. */
+const COLOUR_QUESTION_MOST = 8;
+/**
+ * A program waits for its terminal's colours a moment only - Codex 200 to 300 ms - and reads a later answer as typed keys
+ * (ARCHITECTURE-2.3). ptyd's one thread is held while it creates a program - on Windows up to two seconds, as several agents start
+ * together - and what a program wrote meanwhile arrives once it is free, its question already too old to answer. So a hold that
+ * long is noted as it ends - by the creation itself, and by a timer that finds itself late for any other - and a colour question
+ * arriving within {@link HELD_RECENT_MS} of one is not answered: no answer is better than a late one.
+ */
+const HELD_UP_MS = 100;
+const HELD_RECENT_MS = 1_000;
+let heldUntil = 0;
+let tickDue = Date.now() + 20;
+setInterval(() => {
+	const now = Date.now();
+	if (now - tickDue > HELD_UP_MS) {
+		heldUntil = now;
+	}
+	tickDue = now + 20;
+}, 20).unref?.();
+/** ptyd's thread was held from `since` until now: what arrives next may have waited. */
+function noteHeld(since: number): void {
+	if (Date.now() - since > HELD_UP_MS) {
+		heldUntil = Date.now();
+	}
+}
+/** Whether ptyd's thread was held up just now, so that output arriving may have waited for it. */
+function ptydHeldUp(): boolean {
+	return Date.now() - heldUntil < HELD_RECENT_MS;
+}
 
 /**
  * The pause after a lone Escape that another key of the call follows: in the legacy encoding Escape is the ESC that also starts
@@ -211,12 +245,20 @@ export class Run {
 	private readonly terminal: import('@xterm/headless').Terminal;
 	private readonly serializer: import('@xterm/addon-serialize').SerializeAddon;
 	private listener: RunListener | undefined;
+	/** The colours of the editor terminals of the window that claims it, or claimed it last: what a colour question is answered. */
+	private colours: TerminalColours = {};
+	/** The start of a colour question its last arrival ended with, which the next completes. */
+	private colourTail = '';
 	private readonly exitListeners = new Set<(exit: RunExit) => void>();
 	/** Whoever cannot take more of what the run writes yet: while anyone is, its pty is not read, and the CLI waits. */
 	private readonly holders = new Set<object>();
 	/** Whether it is being ended: what it writes is read on, held back or not, as its exit is known only once that is drained. */
 	private ending = false;
 	private readonly programStatus: ProgramStatus;
+	/** Its questions whether ptyd takes reports, found in its output as it comes (CLIS-2.3). */
+	private readonly statusQueries = new StatusQueries();
+	/** Of those, the ones answered that its headless terminal has not parsed yet: it answers none of them again. */
+	private answeredQueries = 0;
 	private readonly queue = new InputQueue();
 	/** The adapter's tested native status layout, as a fallback or a version-scoped correction (CLIS-2.3). */
 	private readonly screenReader: ScreenReader | undefined;
@@ -263,6 +305,11 @@ export class Run {
 	/** Set once a window removed it: no window lists it again, and it is dropped as it ends. */
 	removed = false;
 	/**
+	 * Set where its grace ended it and that end was not confirmed: it is listed again, uncertain, holding its conversation, until it
+	 * ends (ARCHITECTURE-2.2, LIFECYCLE-3.5).
+	 */
+	uncertain = false;
+	/**
 	 * When its program was created - the process start a run's startup counts from (CLIS-2.3) - or, until its turn, now: a window that sees
 	 * it before then gives its startup no less time than it has (ARCHITECTURE-2.3).
 	 */
@@ -293,11 +340,15 @@ export class Run {
 		});
 		this.followStatus();
 		this.followModes();
+		this.answerColours();
 		this.programStatus.onDidChange(status => this.listener?.status(status));
-		// With no window showing it, ptyd answers what the program asks its terminal - where its cursor is - so that a CLI waiting
-		// for the answer goes on; a window that shows it answers itself
+		// ptyd answers what the program asks its terminal that its headless terminal can - where its cursor is, the device attributes,
+		// a mode - at once, whether or not a window shows the run, so that a CLI waiting for the answer goes on: an editor terminal
+		// answers a question as it draws it, which for one made behind other tabs is long after the program asked. The window keeps
+		// the editor's answers to these from the program, and passes on what only the editor knows only where it answers at once
+		// (ARCHITECTURE-2.3)
 		terminal.onData(reply => {
-			if (!this.listener && this.writable) {
+			if (this.writable) {
 				this.send(reply);
 			}
 		});
@@ -322,7 +373,10 @@ export class Run {
 		if (this.pty) {
 			return;
 		}
+		const creating = Date.now();
 		const pty = this.pty = spawnPty({ ...this.params, cols: this.terminal.cols, rows: this.terminal.rows });
+		// Creating it held ptyd's one thread: what the other runs wrote meanwhile arrives late (ARCHITECTURE-2.3)
+		noteHeld(creating);
 		this.startTime = Date.now();
 		// Held back already - its window over its buffer - it is not read either until let go
 		if (this.holders.size) {
@@ -330,7 +384,18 @@ export class Run {
 		}
 		pty.onData(data => {
 			this.lastOutput = Date.now();
+			// Its question whether ptyd takes reports answered as the bytes arrive, ahead of its other questions, which are answered as
+			// they are drawn: a parse far behind - many programs starting at once - never delays it, and Claude Code, which takes the
+			// answer to its last question for the end of the answers, never decides there is none (CLIS-2.3)
+			for (let asked = this.statusQueries.feed(data); asked > 0; asked--) {
+				this.answeredQueries++;
+				if (this.writable) {
+					this.send(STATUS_REPLY);
+				}
+			}
 			const seq = ++this.seq;
+			// Its colour questions answered as the bytes arrive, before they wait their turn to be drawn (ARCHITECTURE-2.3)
+			this.answerColourQuestions(data);
 			this.draw(data);
 			this.listener?.output(seq, data);
 		});
@@ -429,8 +494,14 @@ export class Run {
 			...(status ? { status } : {}),
 			seq: this.seq,
 			claimedElsewhere,
+			...(this.uncertain ? { uncertain: true } : {}),
 			meta: this.meta
 		};
+	}
+
+	/** The colours its claimant's terminals draw with, from now on (ARCHITECTURE-2.3). */
+	useColours(colours: TerminalColours): void {
+		this.colours = colours;
 	}
 
 	/** Tells `listener` what the run does from now on: its claimant. */
@@ -451,7 +522,11 @@ export class Run {
 		const seq = this.seq;
 		return new Promise((resolve, reject) => this.afterDrawn(() => {
 			try {
-				resolve({ screen: this.serializer.serialize({ scrollback: scrollbackRows(this.terminal.cols) }) + this.modesBeyondScreen(), seq });
+				// Serializing a long scrollback holds ptyd's one thread as creating a program does (ARCHITECTURE-2.3)
+				const serializing = Date.now();
+				const screen = this.serializer.serialize({ scrollback: scrollbackRows(this.terminal.cols) }) + this.cursorPlace() + this.modesBeyondScreen();
+				noteHeld(serializing);
+				resolve({ screen, seq });
 			} catch (err) {
 				reject(err);
 			}
@@ -754,6 +829,16 @@ export class Run {
 	}
 
 	/**
+	 * Where its cursor is, said outright: the serializer places it by moves from where its last row leaves it, which after a row filled
+	 * to its last column - a full-width rule under an input box - lands a column short of it (ARCHITECTURE-2.3). A cursor waiting to
+	 * wrap past the last column is placed on it: the next character then takes that column rather than the next row's first.
+	 */
+	private cursorPlace(): string {
+		const buffer = this.terminal.buffer.active;
+		return `\x1b[${buffer.cursorY + 1};${Math.min(buffer.cursorX, this.terminal.cols - 1) + 1}H`;
+	}
+
+	/**
 	 * What its program set that a terminal drawing its screen anew needs beside the serializer's modes, which leave these out
 	 * (ARCHITECTURE-2.3): the mouse encoding - without which a reload sends the program mouse reports it cannot read, so that
 	 * neither its scrolling nor its selection works - the hidden cursor, the kitty keyboard protocol's flags on the screen it is on and
@@ -874,12 +959,59 @@ export class Run {
 	 * window shows the run or none - ptyd implements the protocol, a window's terminal does not - and each report is taken. A new
 	 * shell prompt (OSC 133 A) and a full reset (RIS) end what it reported (CLIS-2.3).
 	 */
+	/**
+	 * Answers what the program asks of its terminal's colours - OSC 10, 11, 12: foreground, background, cursor - with its window's, as
+	 * it parses the question: at once, as a program waits a moment only - Codex 200 to 300 ms - and reads a later answer as typed keys,
+	 * an Escape among them. An editor terminal answers a question only as it draws it, which can be later, so its answers reach no
+	 * program; a colour no window gave is not answered, and the program uses its own (ARCHITECTURE-2.3). A program setting a colour
+	 * is the terminal's own to follow.
+	 */
+	private answerColours(): void {
+		// Answered as the bytes arrive (answerColourQuestions): drawing them, the headless terminal leaves the question alone
+		const parser = this.terminal.parser;
+		for (const osc of [10, 11, 12]) {
+			parser.registerOscHandler(osc, data => data === '?');
+		}
+	}
+
+	/**
+	 * Answers each colour question in `data`, its program's output as it arrived - one split between two arrivals as the second
+	 * completes it - at once, with its window's colours: one ptyd draws every run's output on one thread, and while many agents
+	 * start together that drawing falls seconds behind, past the moment a program waits. Where ptyd itself was held up just before,
+	 * the question may have waited already, and it is not answered at all: no answer is better than a late one (ARCHITECTURE-2.3).
+	 */
+	private answerColourQuestions(data: string): void {
+		const text = this.colourTail + data;
+		this.colourTail = '';
+		if (!text.includes('\x1b]')) {
+			return;
+		}
+		COLOUR_QUESTION.lastIndex = 0;
+		let end = 0;
+		for (let match = COLOUR_QUESTION.exec(text); match; match = COLOUR_QUESTION.exec(text)) {
+			end = COLOUR_QUESTION.lastIndex;
+			const osc = Number(match[1]) as 10 | 11 | 12;
+			const rgb = this.colours[osc === 10 ? 'foreground' : osc === 11 ? 'background' : 'cursor'];
+			if (rgb && this.writable && !ptydHeldUp()) {
+				this.send(`\x1b]${osc};rgb:${rgb}\x1b\\`);
+			}
+		}
+		// The start of a question the next arrival completes
+		const open = text.lastIndexOf('\x1b]');
+		if (open >= end && text.length - open < COLOUR_QUESTION_MOST) {
+			this.colourTail = text.slice(open);
+		}
+	}
+
 	private followStatus(): void {
 		const parser = this.terminal.parser;
 		parser.registerOscHandler(PROGRAM_STATUS_OSC, data => {
 			const message = parseStatus(data);
 			if (message === 'query') {
-				if (this.writable) {
+				// Answered as it came, unless the scan of its output missed it
+				if (this.answeredQueries > 0) {
+					this.answeredQueries--;
+				} else if (this.writable) {
 					this.send(STATUS_REPLY);
 				}
 				this.programStatus.asked();

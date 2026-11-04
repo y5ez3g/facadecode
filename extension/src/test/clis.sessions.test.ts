@@ -67,6 +67,24 @@ suite('Native session integration preserves configuration and exact identity (CL
 		assert.deepStrictEqual(JSON.parse(overlay.env!.OPENCODE_CLI_CONFIG_CONTENT).theme, { name: 'run' });
 	});
 
+	test('OpenCode runs have its session tabs off - the toggle every 2.x knows, and a mode the person set - the rest of their tab settings kept (CLIS-2.4)', () => {
+		const dir = path.join(temp.dir, 'config', 'opencode'); fs.mkdirSync(dir, { recursive: true });
+		const file = path.join(dir, 'cli.json');
+		const tabsOf = (env: NodeJS.ProcessEnv = input.env) => JSON.parse(openCodeSession({ ...input, env }).env!.OPENCODE_CLI_CONFIG_CONTENT).tabs;
+		// Nothing set: only the toggle, which no version takes for a setting it does not know
+		fs.writeFileSync(file, '{"plugins":[]}');
+		assert.deepStrictEqual(tabsOf(), { enabled: false });
+		// A mode set in the file or in the person's own overlay would win over the toggle: it is set off too
+		fs.writeFileSync(file, '{"plugins":[],"tabs":{"mode":"on","layout":"vertical"}}');
+		assert.deepStrictEqual(tabsOf(), { enabled: false, mode: 'off' });
+		fs.writeFileSync(file, '{"plugins":[]}');
+		assert.deepStrictEqual(tabsOf({ ...input.env, OPENCODE_CLI_CONFIG_CONTENT: '{"tabs":{"mode":"auto","scope":"global"}}' }), { mode: 'off', scope: 'global', enabled: false });
+		// Where cli.json is not there yet, the tui.json OpenCode migrates from counts
+		fs.rmSync(file);
+		fs.writeFileSync(path.join(dir, 'tui.json'), '{"tabs":{"mode":"on"}}');
+		assert.deepStrictEqual(tabsOf(), { enabled: false, mode: 'off' });
+	});
+
 	test('Muse supplies each run\'s private initialization on native SessionStart, including resume, without a user message or subagent leak', () => {
 		const id = '86da4482-2bae-4a45-b193-a5664c19826a';
 		for (const [run, instructions] of [['one', 'You are Facade Code agent #a1.'], ['two', 'You are Facade Code agent #a2.']]) {

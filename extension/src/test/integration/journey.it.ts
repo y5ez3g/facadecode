@@ -216,6 +216,57 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
+	test('LIFECYCLE-2.2: a split of an agent\'s tab starts, in the new group, a new agent of its CLI and location; the first stays in its group, and no empty tab is left', async function () {
+		if (CLI !== 'claude') { this.skip(); }
+		this.timeout(90_000);
+		const seen = () => JSON.stringify({
+			groups: vscode.window.tabGroups.all.map(group => ({ column: group.viewColumn, active: group.isActive, tabs: group.tabs.map(tab => [tab.input instanceof vscode.TabInputTerminal ? 'terminal' : 'other', unspun(tab.label), tab.isActive]) })),
+			// What the editor says of each terminal's start: a copy has neither a shell nor a pseudoterminal of its own (LIFECYCLE-2.2)
+			terminals: vscode.window.terminals.map(each => [each.name, Object.fromEntries(Object.entries(each.creationOptions).map(([key, value]) => [key, key === 'env' ? (value ? 'set' : value) : key === 'pty' ? 'pty' : value]))])
+		});
+		const cards: string[] = [];
+		try {
+			const first = await newCard();
+			cards.push(first.runId);
+			await until('its tab active', async () => vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTerminal ? true : undefined);
+			const before = seen();
+			// What terminals the editor opens for the split: VS Code 1.105 opens none - its split of a terminal tab is an empty group
+			const opened: vscode.Terminal[] = [];
+			const listening = vscode.window.onDidOpenTerminal(terminal => opened.push(terminal));
+			await vscode.commands.executeCommand('workbench.action.splitEditorRight');
+			const copied = await until('a copy, or none', async () => opened.length ? true : (await state()).cards.length > 1 ? true : undefined, 5_000).catch(() => false);
+			listening.dispose();
+			if (!copied) {
+				// No copy reported, so none to start an agent in place of: the first agent stays as it was, alone (LIFECYCLE-2.2). Only an
+				// editor before 1.144 may make none - 1.105 opens an empty group - so that a later one making none is a regression seen
+				const [major, minor] = vscode.version.split('.').map(Number);
+				assert.ok(major === 1 && minor < 144, `VS Code ${vscode.version} copies a terminal tab it splits, and no copy was seen: ${seen()}`);
+				console.log(`  split: VS Code ${vscode.version} makes no copy of a terminal tab it splits: ${seen()}`);
+				assert.deepStrictEqual([(await state()).cards.map(card => card.runId), vscode.window.terminals.length], [[first.runId], 1]);
+				return;
+			}
+			const second = await until('an agent started in the copy\'s place', async () => (await state()).cards.find(card => card.runId !== first.runId), 30_000)
+				.catch(err => { throw new Error(`${(err as Error).message}: before ${before}, after ${seen()}`); });
+			cards.push(second.runId);
+			let last = '';
+			try {
+				await until('two groups with one agent tab each, the copy gone', async () => {
+					last = seen();
+					const groups = vscode.window.tabGroups.all.map(group => group.tabs.filter(tab => tab.input instanceof vscode.TabInputTerminal).map(tab => unspun(tab.label)));
+					return groups.length === 2 && groups[0].length === 1 && groups[1].length === 1 && groups[0][0] === first.name && groups[1][0] === second.name ? true : undefined;
+				}, 20_000);
+			} catch (err) {
+				throw new Error(`${(err as Error).message}: before ${before}, after ${last}`);
+			}
+			assert.notStrictEqual(second.name, first.name);
+		} finally {
+			for (const run of cards) {
+				await vscode.commands.executeCommand('facade.closeAgent', { run_id: run }).then(undefined, () => undefined);
+			}
+			await vscode.commands.executeCommand('workbench.action.closeAllGroups');
+		}
+	});
+
 	test('PANEL-3.3: native Modern UI settings reach the webview initially and on live changes, with a traditional fallback on older editors', async function () {
 		if (CLI !== 'claude') { this.skip(); }
 		const setting = 'workbench.experimental.modernUI';

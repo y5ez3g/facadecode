@@ -6,6 +6,7 @@ import * as assert from 'assert';
 import { deliveryReceipt } from '../contract/facts';
 import { failureAnswer } from '../transport/failure';
 import { resultOf, runFacts, setUp, Setup } from './contractFakes';
+import { waitFor } from './util';
 
 suite('Contract: recovery preserves effects and existing operations', () => {
 	let s: Setup;
@@ -28,9 +29,13 @@ suite('Contract: recovery preserves effects and existing operations', () => {
 		s.agents.add(lead);
 		s.messages.respond = () => ({ status: 'failure', reason: 'input_draft' });
 		const result = resultOf(await s.call(lead, 'start_agent', { name: 'worker', window_id: 'win-1', location_id: 'loc-1', cli: 'claude', prompt: 'one task' }));
-		assert.deepStrictEqual([result.status, result.data.process_state, result.data.prompt.status], ['success', 'running', 'failure']);
+		assert.deepStrictEqual([result.status, result.data.process_state, result.data.prompt.status], ['success', 'running', 'pending']);
 		assert.strictEqual(result.recovery, undefined);
-		assert.deepStrictEqual(result.data.prompt.recovery, { action: 'resolve_blocker', check: { tool: 'read_screen', arguments: { agent: result.data.agent_id } } });
+		// The prompt's failure is the start's later result, with its own recovery (MCP-2.3)
+		await waitFor(() => s.messages.reports.length === 1);
+		const later = s.messages.reports[0].result as { status: string; recovery?: unknown; data: { process_state: string; prompt: { status: string; recovery: unknown } } };
+		assert.deepStrictEqual([later.status, later.data.process_state, later.data.prompt.status, later.recovery], ['success', 'running', 'failure', undefined]);
+		assert.deepStrictEqual(later.data.prompt.recovery, { action: 'resolve_blocker', check: { tool: 'read_screen', arguments: { agent: result.data.agent_id } } });
 		assert.deepStrictEqual([s.agents.launched.length, s.messages.sent.length, s.agents.closed.length], [1, 1, 0]);
 	});
 

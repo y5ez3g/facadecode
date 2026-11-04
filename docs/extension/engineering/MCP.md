@@ -36,20 +36,20 @@ once within the caller's normal reach.
 start_agent and send_message take an optional `request_id` of the caller's own, 1–200 code points: the same one again
 from that caller to the same tool within an hour of the first call answers what the first call started or sent, as it
 stands, with `request_id` and `repeated: true`, and does nothing again. It is kept on the run or message record - a
-message to another window's agent carries it there, where its record is made - and a repeated start answers as its
-start went: accepted while its process still starts, the start's failure where it could not start, success otherwise.
+message to another window's agent carries it there, where its record is made - and a repeated start answers as its start
+went: accepted while its process still starts, the start's failure where it could not start, success otherwise - its
+prompt as it stands, pending included, with the first call's `call_id`, `result_message_id` and prompt `message_id`.
 Concurrent calls share that operation. The recipient deduplicates a routed send before input, so a lost route reply
 cannot make a retry send again. A send whose route answer was lost, so that the message may have arrived, keeps the
 sender's copy with its outcome unknown; a retry with the same `request_id` asks the window that holds the message and
 never resolves `to` again, which could now name another agent. Request-bearing run metadata remains available for the
 original one-hour request period even after its card closes or its process exits; it does not restore a closed card or
-process. An interrupted start whose outcome was not recorded reports unknown effects instead of starting again.
-Removing a card does not prove process termination: a repeated request reports that process state as unknown where no
-exit was recorded.
-No other tool takes one, and none takes a selectable YOLO/permission profile or input_policy. A new
-invocation without one is a new request; a repeated start may create another agent. Facade may number internal work.
-The normal shim supplies its run ID from launch context; it is an address, not a credential. A call travels within
-5.2's transport bound.
+process. An interrupted start whose outcome was not recorded reports unknown effects instead of starting again. Removing
+a card does not prove process termination: a repeated request reports that process state as unknown where no exit was
+recorded. No other tool takes one, and none takes a selectable YOLO/permission profile or input_policy. A new invocation
+without one is a new request; a repeated start may create another agent. Facade may number internal work. The normal
+shim supplies its run ID from launch context; it is an address, not a credential. A call travels within 5.2's transport
+bound.
 
 ### 1.2 Result envelope and effects
 
@@ -159,22 +159,23 @@ monotonic clock; process clocks are never subtracted across environments. Query 
 delivery-confirming reads side-effect-free. An actual continuing operation may return accepted with its run/effects;
 later completion returns to its initiating agent through a Facade system result. The accepted response and later result
 identify the same originating tool call and target run, using existing call correlation facts so concurrent calls,
-including calls to the same target, are distinguishable. Accepted start/stop results expose `call_id` and
-`result_message_id`, reserved from the message namespace before acceptance; a stop whose window cannot take that number
-answers without it and sends no later result (3.2). The later receipt has that same ID. The full `call_id` stays in
-structured data and records; a same-request start lookup keeps both original IDs, including after reload. Reservation
-creates no inbox item and promises no durable delivery. The original prompt/message ID identifies prompt delivery
-separately. Message records retain originating-call correlation while delivery resumes after reload. Local and routed
-receipts retain the target's known name and short reference even after its card closes; rendering does not depend on
-looking up that removed target again. This adds no public operation object or query API. Result handoff follows
-RULES-1.7, including no duplicate receipt for an immediate final result and no human fallback when handoff fails. Use
-list_agents for current run state; there is no separate operation inspection API. A pending operation continues without
-another send/start. Final system results request no reply. Unknown outcomes with no active operation promise no later
-verification. Receipt delivery remains finite and may end when its initiator is unreachable. An earlier returned message
-deadline can extend under RULES-1.5; its passing or an empty inbox alone proves no final outcome. send_message always
-uses the initial-response and delivery-stage budgets owned by RULES-1.2 and RULES-1.5. A slow operation never keeps a
-closed card/terminal visible or extends a message budget. A continuing call sends no MCP progress notification and
-produces no progress popup.
+including calls to the same target, are distinguishable. Accepted start/stop results, and a start answered while its
+prompt is pending (2.3), expose `call_id` and `result_message_id`, reserved from the message namespace before
+acceptance; a stop whose window cannot take that number answers without it and sends no later result (3.2). The later
+receipt has that same ID. The full `call_id` stays in structured data and records; a same-request start lookup keeps
+both original IDs, including after reload. Reservation creates no inbox item and promises no durable delivery. The
+original prompt/message ID identifies prompt delivery separately. Message records retain originating-call correlation
+while delivery resumes after reload. Local and routed receipts retain the target's known name and short reference even
+after its card closes; rendering does not depend on looking up that removed target again. This adds no public operation
+object or query API. Result handoff follows RULES-1.7, including no duplicate receipt for an immediate final result and
+no human fallback when handoff fails. Use list_agents for current run state; there is no separate operation inspection
+API. A pending operation continues without another send/start. Final system results request no reply. Unknown outcomes
+with no active operation promise no later verification. Receipt delivery remains finite and may end when its initiator
+is unreachable. An earlier returned message deadline can extend under RULES-1.5; its passing or an empty inbox alone
+proves no final outcome. send_message always uses the initial-response and delivery-stage budgets owned by RULES-1.2 and
+RULES-1.5. A slow operation never keeps a closed card/terminal visible or extends a message budget beyond RULES-1.5's
+own, under which a pending post-start creation prompt holds its run's input (RULES-1.10). A continuing call sends no MCP
+progress notification and produces no progress popup.
 
 ## 2 Discover and start
 
@@ -232,36 +233,32 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-The call waits up to `facade.collaboration.waitSeconds` (1.3): `success` once the process runs, `failure` where the
-launch failed, `accepted` while it still starts, its outcome reported later under 1.3. Return `agent_id`, `name`,
-`window_id`, `window` (its label), `environment`, `location_id`, `cwd`, `cli`, `creator`, `root`, `yolo`,
-`process_state` (`starting`, `running` or `failed`; `unknown` with `closed: true`; a repeated start's run as it is now),
-`tools_state` (`connecting`, `available`, `unavailable` or `not_injected`, with `tools_reason` where unavailable) and
-`requested_model` and `requested_effort` where given; an accepted start adds `call_id` and `result_message_id`, and a
-created worktree is `effects.worktree_created`.
-`prompt` gives the prompt's `message_id`, its `path` (`native` or `post_start`) with its `capability` (`supported`,
-`unverified` or `unavailable`, and why), its `status` (`success`, `pending`, `failure` or `unknown`) and its actual
-input `effects` under RULES-1.3 and 1.2, with `reason`, `message`, `obstacle`, `deadline` and `delivered_via` where
-they apply.
-An unverified native prompt has unknown acceptance, with no invented pending delivery or promised later receipt.
-Its message record retains that uncertainty and can be delivered by an explicit inbox read without another paste.
-The run retains its original prompt message ID. A repeated start returns that record's current outcome, or explicit
-unknown (`prompt_unrecorded`) where the record is absent; it never replays the prompt or uses replacement prompt text
-from the retry.
-Startup closed midway fails as `ended`, retains any known created-worktree path in its final effects and reports
-`closed:true` with `process_state:unknown`. Closure alone does not establish that no process was started or that it
-exited.
-For a delivered post-start prompt, `delivered_via` (`terminal` or `read`) keeps terminal submission and an inbox read
-distinct. COLLABORATION-2.2 owns native/post-start prompt selection and budget start.
-If the process has started but prompt delivery is still pending, return that separation and later report the final
-prompt outcome to the caller with the same message ID and target run under 1.3. A successful process-start result
-does not cancel this report or renew the prompt's delivery budget.
-A prompt failure does not destroy a successfully started agent.
-Acceptance creates the pair immediately in the destination; pre-acceptance validation failure creates none. Later
+The call waits up to `facade.collaboration.waitSeconds` (1.3): `success` once the process runs - never waiting on a
+post-start prompt, which goes on after the answer - `failure` where the launch failed, `accepted` while it still starts,
+its outcome reported later under 1.3. Return `agent_id`, `name`, `window_id`, `window` (its label), `environment`,
+`location_id`, `cwd`, `cli`, `creator`, `root`, `yolo`, `process_state` (`starting`, `running` or `failed`; `unknown`
+with `closed: true`; a repeated start's run as it is now), `tools_state` (`connecting`, `available`, `unavailable` or
+`not_injected`, with `tools_reason` where unavailable) and `requested_model` and `requested_effort` where given; an
+accepted start, and one answered while its prompt is pending, add `call_id` and `result_message_id`, and a created
+worktree is `effects.worktree_created`. Such a call has one later result, under that `result_message_id`, once the
+process's start and its prompt's delivery have both settled - a prompt whose delivery stays unknown settling as unknown
+- never one for each. `prompt` gives the prompt's `message_id`, its `path` (`native` or `post_start`) with its
+`capability` (`supported`, `unverified` or `unavailable`, and why), its `status` (`success`, `pending`, `failure` or
+`unknown`) and its actual input `effects` under RULES-1.3 and 1.2, with `reason`, `message`, `obstacle`, `deadline` and
+`delivered_via` where they apply. An unverified native prompt has unknown acceptance, with no invented pending delivery
+or promised later receipt. Its message record retains that uncertainty and can be delivered by an explicit inbox read
+without another paste. The run retains its original prompt message ID. A repeated start returns that record's current
+outcome, or explicit unknown (`prompt_unrecorded`) where the record is absent; it never replays the prompt or uses
+replacement prompt text from the retry. Startup closed midway fails as `ended`, retains any known created-worktree path
+in its final effects and reports `closed:true` with `process_state:unknown`. Closure alone does not establish that no
+process was started or that it exited. For a delivered post-start prompt, `delivered_via` (`terminal` or `read`) keeps
+terminal submission and an inbox read distinct. COLLABORATION-2.2 owns native/post-start prompt selection and budget
+start. Answering that the process runs neither renews the prompt's delivery budget nor cancels the one later result
+above. A prompt failure does not destroy a successfully started agent. Acceptance creates the pair immediately in the
+destination, its terminal's tab hidden (LIFECYCLE-2.2); pre-acceptance validation failure creates none. Later
 cwd-dependent validation or startup failure under CLIS-4.2 retains its error pair and fails as `launch_failed`, or as
 `worktree_failed` where the worktree could not be created, with partial effects. Tool unavailability does not kill a
-usable CLI.
-There is no task object, task_operation_id, completion expectation or automatic creator progress report.
+usable CLI. There is no task object, task_operation_id, completion expectation or automatic creator progress report.
 
 ## 3 Inspect and stop
 
@@ -346,15 +343,16 @@ text that begins with `[Earlier output truncated]` - how Antigravity marks a lon
 characters - lost its beginning on its way: send_message, start_agent's prompt and type_text refuse it with
 invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole.
 
-Within RULES-1.2's response budget, return `message_id` and `target`, with `disposition` on success - `submitted_to_cli`,
-`read_messages` or `notified` (the person) - and, while accepted, `deadline` and an `obstacle` where one holds; add
-`reply_to` where given, `window_id` for another window's agent, and `request_id` with `repeated: true` for a repeated
-request. Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an accepted send returns
-is its stage's, which RULES-1.5 extends once another draft or a native question holds the recipient's input. Message ID
-allocation/reuse follows RULES-1.1; a message's text is typed at most once (RULES-1.6). Expiry is failure.
-An optional `request_id` makes a retry safe under 1.1. No cancel_message is provided. B's actual reply is another send.
-Human contact means notification handoff in the sender's window; no migration to another window on closure.
-All A-to-B delivery/reply/system-result errors remain with agents or end if nobody can receive them.
+Within RULES-1.2's response budget, return `message_id` and `target`, with `disposition` on success -
+`submitted_to_cli`, `read_messages` or `notified` (the person) - and, while accepted, `deadline` and an `obstacle` where
+one holds; add `reply_to` where given, `window_id` for another window's agent, and `request_id` with `repeated: true`
+for a repeated request. Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an
+accepted send returns is its stage's, which RULES-1.5 extends once another draft, delivery or pending creation prompt or
+a native question holds the recipient's input - from the start where the prompt is pending as the send arrives. Message
+ID allocation/reuse follows RULES-1.1; a message's text is typed at most once (RULES-1.6). Expiry is failure. An
+optional `request_id` makes a retry safe under 1.1. No cancel_message is provided. B's actual reply is another send.
+Human contact means notification handoff in the sender's window; no migration to another window on closure. All A-to-B
+delivery/reply/system-result errors remain with agents or end if nobody can receive them.
 
 ```json
 {"status":"success","effects":{"outcome":"confirmed","text_written":"full","enter_written":true},

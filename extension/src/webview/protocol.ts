@@ -26,11 +26,10 @@ export interface Card {
 	readonly alias: string;
 	/** A built-in CLI's maker avatar in `media/agents`, or a custom CLI's initial on a theme colour; none for a name that shows nothing. */
 	readonly avatar?: { readonly file: string } | { readonly initial: string; readonly color: AvatarColor };
-	/**
-	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it,
-	 * then gives its path and window as localized Label: value lines (PANEL-1.5).
-	 */
-	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly full: string };
+	/** Its short ID shows beside its name: another card of this window has that name too (PANEL-1.3). */
+	readonly repeated?: true;
+	/** The hover's and accessible label's alone: no card shows its location (PANEL-1.3). */
+	readonly location: { readonly full: string };
 	/** Green for work, red for an error, none for anything else (RULES-3.2). */
 	readonly dot: 'working' | 'error' | 'none';
 	/** The state in words, dot or none: startup, work, idle, the native blocker's kind, an error or unavailable activity. */

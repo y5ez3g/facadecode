@@ -15,11 +15,6 @@
 	"Connection to agent process lost; reconnecting": "Agent 處理序連線已中斷；正在重新連線",
 	"[Agent process disconnected; exit cause unknown]": "[Agent 處理程序中斷連線（結束原因未知）]",
 	"Close Agent": "關閉 Agent",
-	"Close Agents": "關閉 Agent",
-	"Close {0}?": "關閉 {0}？",
-	"Close {0} agents?": "關閉 {0} 個 Agent？",
-	"Its process will end. Cancel keeps it running and opens its terminal again.": "其處理程序將結束。按一下 [取消] 將保持其執行並重新開啟其終端機。",
-	"Their processes will end. Cancel keeps them running and opens their terminals again.": "它們的處理程序將結束。按一下 [取消] 將保持它們執行並重新開啟它們的終端機。",
 	"Show": "顯示",
 	"Could not restore agents for this window. Reload the window to try again.": "無法還原此視窗的 Agent。請重新載入視窗以重試。",
 	"Window": "視窗",
@@ -79,6 +74,7 @@
 	"{0} is not a commit in the repository at {1}.": "{0} 在 {1} 中未指向任何提交。",
 	"The working location is no longer available.": "此工作位置已無法使用。",
 	"The working location {0} is not available in this window.": "工作位置 {0} 在此視窗中無法使用。",
+	"Could not confirm that it stopped": "無法確認它已停止",
 	"Git is not available in this environment.": "此環境中無法使用 Git。",
 	"{0} is not in a Git repository.": "{0} 不在 Git 存放庫中。",
 	"{0} has no commits yet.": "{0} 存放庫尚無任何認可。",
@@ -317,6 +313,10 @@
 	"Location: {0}": "工作位置: {0}",
 	"Path: {0}": "路徑: {0}",
 	"Started by: {0}": "啟動者: {0}",
+	"Source window: {0}": "來源視窗: {0}",
+	"Last message from agent {0}: {1}": "來自 Agent {0} 的最後一則訊息: {1}",
+	"Your last input: {0}": "你最後的輸入: {0}",
+	"Facade result: {0}": "Facade 結果: {0}",
 	"New Worktree · Select Folder": "新增工作樹 · 選取資料夾",
 	"Started: {0}": "啟動時間: {0}",
 	"Reported working: {0}": "工作中狀態回報: {0}",
@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "新增 Agent · 選取資料夾",
 	"New Agent · Working Location": "新增 Agent · 工作位置",
 	"New Agent · New Worktree": "新增 Agent · 新增工作樹",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "執行此視窗 Agent 的 Facade Code 安裝已被更新或解除安裝刪除（{0} 已不存在），因此無法啟動 Agent。請重新載入視窗，以使用已安裝的版本啟動 Agent。"
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "執行此視窗 Agent 的 Facade Code 安裝已被更新或解除安裝刪除（{0} 已不存在），因此無法啟動 Agent。請重新載入視窗，以使用已安裝的版本啟動 Agent。",
+	"{0} · {1}": "{0} · {1}"
 }

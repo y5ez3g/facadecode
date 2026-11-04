@@ -56,47 +56,4 @@ suite('Host: the person in this window (RULES-1.8, UX-1.2)', () => {
 		human.failed({ kind: 'unpin', name: 'Ada', reason: 'disk full' }, {});
 		assert.deepStrictEqual(shown, ['Could not pin Ada: disk full', 'Could not unpin Ada: disk full']);
 	});
-
-	test('LIFECYCLE-3.1: a live agent\'s tab closed by itself closes it without a question; with other tabs, the agents are asked about once', async () => {
-		const asked: { message: string; detail: string }[] = [];
-		let answer: string | undefined = 'Close Agent';
-		let confirmOnKill: string | undefined;
-		const listeners: ((event: { closed: readonly unknown[] }) => void)[] = [];
-		const api = {
-			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, i: string) => String(args[Number(i)])) },
-			workspace: { getConfiguration: () => ({ get: () => confirmOnKill }) },
-			window: {
-				showWarningMessage: async (message: string, options: { detail: string }, action: string) => { asked.push({ message, detail: options.detail }); return answer === 'Close Agent' ? action : answer; },
-				tabGroups: { onDidChangeTabs: (listener: (event: { closed: readonly unknown[] }) => void) => { listeners.push(listener); return { dispose: () => undefined }; } }
-			}
-		};
-		const { WindowHuman } = withModules({ vscode: api })<typeof import('../host/human')>(require.resolve('../host/human'));
-		const human = new WindowHuman(async () => undefined);
-		const closeTabs = (count: number) => listeners.forEach(listener => listener({ closed: Array.from({ length: count }, () => ({})) }));
-		const ada = { run: 'run-1', label: 'Ada' };
-		const bo = { run: 'run-2', label: 'Bo' };
-
-		// Its close button, Close or Close Editor: its tab alone closes
-		closeTabs(1);
-		const alone = await human.confirmClose(ada);
-		// Close Others from a file: the file's tab and the agent's close together
-		closeTabs(2);
-		const withFile = await human.confirmClose(ada);
-		answer = undefined;
-		closeTabs(1);
-		const later = human.confirmClose(ada);
-		closeTabs(1);
-		const cancelled = await later;
-		// Close All of two agents: one question for both
-		answer = 'Close Agents';
-		closeTabs(2);
-		const both = await Promise.all([human.confirmClose(ada), human.confirmClose(bo)]);
-		confirmOnKill = 'never';
-		closeTabs(3);
-		const never = await human.confirmClose(ada);
-		human.dispose();
-		assert.deepStrictEqual([alone, withFile, cancelled, both, never], [true, true, false, [true, true], true]);
-		assert.deepStrictEqual(asked.map(each => each.message), ['Close Ada?', 'Close Ada?', 'Close 2 agents?']);
-		assert.ok(asked[2].detail.startsWith('Ada, Bo\n\n'), asked[2].detail);
-	});
 });
