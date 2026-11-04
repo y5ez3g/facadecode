@@ -266,18 +266,27 @@ mechanism.
 
 **The execution owner keeps process/screen facts and serializes input independently of the visible card.**
 
-Keep process/run identity, screen snapshot/output sequence and actual input effects across extension-host reload.
-Attach without duplicating output; retain a dated final screen after exit where available. A snapshot or a read waits
-until everything written to the headless terminal is drawn, on the last write's own callback, as the terminal may drop
-an empty write's. A screen snapshot carries the terminal modes its program set, so that a terminal drawing it anew
-behaves as before: besides the serializer's own, the mouse encoding, a hidden cursor, the kitty keyboard flags of the
-screen it is on and win32 input mode, each followed through the program's resets. While no window shows a run, ptyd
-answers its program's terminal queries, such as the cursor position, so that a CLI waiting for an answer goes on during
-a reload; a window that shows the run answers them itself. Propagate RULES-1.5's remaining message budget to the input
-owner; internal hops cannot restart it. Do not compare independent host wall clocks as if synchronized. Check whether
-input can still start before writing; ptyd takes a text and its Enter in separate requests, never both in one
-(MCP-5.2). Uncertain effects stay uncertain; ordinary-message retries follow RULES-1.6's single paste and owned-draft
-Enter. No exactly-once write protocol or operation-query service is required.
+Keep process/run identity, screen snapshot/output sequence and actual input effects across extension-host reload. Attach
+without duplicating output; retain a dated final screen after exit where available. A snapshot or a read waits until
+everything written to the headless terminal is drawn, on the last write's own callback, as the terminal may drop an
+empty write's. A screen snapshot carries the terminal modes its program set, so that a terminal drawing it anew behaves
+as before: besides the serializer's own, the mouse encoding, a hidden cursor, the kitty keyboard flags of the screen it
+is on and win32 input mode, each followed through the program's resets. A terminal query a program asks is answered at
+most once, as it is asked, and never later: a program waits a moment only - Codex 200 to 300 ms - and reads a later
+answer as typed keys, an Escape that interrupts a turn, then text in its input. An editor terminal answers a query only
+as it draws it, which for a tab behind others is when the tab is opened, and its answer comes back through the window and
+ptyd, which on a busy machine can pass that moment. So ptyd answers, as it parses the query, whether or not a window
+claims the run: its headless terminal what it can - the cursor position, the device attributes, the terminal's status, a
+mode, a setting - and a colour query (OSC 10, 11, 12) with the colours the window that claims the run, or claimed it
+last, told it - its theme kind's until one of its editor terminals reports its own, answering the window's question as
+it opens or a program's - and not at all where none was told, the program then using its own. The editor's answers to
+these reach no program; what only the editor knows - its kitty keyboard flags, its name, its size in pixels - reaches the
+program where the editor answers within 150 ms of the query being written to it. A terminal draws a run's output only
+while open: output that comes before it opens is not kept for it, and it opens on the run's screen taken anew, which
+holds no query. Propagate RULES-1.5's remaining message budget to the input owner; internal hops cannot restart it. Do not compare independent host wall clocks as if synchronized. Check whether input can still start before writing;
+ptyd takes a text and its Enter in separate requests, never both in one (MCP-5.2). Uncertain effects stay uncertain;
+ordinary-message retries follow RULES-1.6's single paste and owned-draft Enter. No exactly-once write protocol or
+operation-query service is required.
 
 A run's shim connects to its execution environment's supervisor and names the run it speaks for; a shim of another
 protocol is refused and its connection closed. The supervisor forwards each call to the connection that currently owns

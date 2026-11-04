@@ -647,6 +647,89 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		]);
 	});
 
+	// Codex, made behind other tabs, asked its terminal's colours; its window's terminal answered once its tab was opened, long after
+	// Codex stopped waiting: Codex read an Escape - its turn interrupted - and the answer as typed text (2026-11-03). What ptyd can
+	// answer it answers at once, whoever claims the run; the editor's answers to those never reach the program (ARCHITECTURE-2.3)
+	test('a program\'s question its headless terminal can answer is answered by ptyd at once, whether or not a window claims the run (ARCHITECTURE-2.3)', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const written: string[] = [];
+		const pty = { pid: 4242, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); }, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const asking = new Server(pipe('asking'));
+		assert.strictEqual(await asking.listen(), true);
+		try {
+			const open = async (generation: number) => {
+				const client = await PtydClient.connect(pipe('asking'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `asking-${generation}` });
+				return client;
+			};
+			const window = await open(1);
+			await spawn(window, 'asks', IDLE);
+			// The program asks where its cursor is and what the terminal is; ptyd's answers are what it wrote to the program, read once
+			// the questions are drawn
+			const answered = async (client: PtydClient) => {
+				const before = written.length;
+				emit('\x1b[6n\x1b[c');
+				await client.request('read', { run: 'asks', lines: 1 });
+				return written.slice(before).join('');
+			};
+			const expected = '\x1b[1;1R\x1b[?1;2c';
+			assert.strictEqual(await answered(window), expected, 'claimed by the window that started it');
+			await window.request('attach', { run: 'asks' });
+			assert.strictEqual(await answered(window), expected, 'its terminal drawing the screen');
+			const reloaded = await open(2);
+			await reloaded.request('attach', { run: 'asks' });
+			assert.strictEqual(await answered(reloaded), expected, 'claimed by a reloaded window');
+			reloaded.dispose();
+			const next = await open(3);
+			await until('ptyd answering with no window', async () => await answered(next) === expected);
+		} finally {
+			asking.close();
+		}
+	});
+
+	// Codex waits 200 to 300 ms for its terminal's colours and reads a later answer as typed keys: an editor terminal's answer, through
+	// the window and ptyd, can be later on a busy machine, and for a tab behind others is (2026-11-03)
+	test('a program asking its terminal\'s colours is answered by ptyd at once with those its window said, and not at all before (ARCHITECTURE-2.3)', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const written: string[] = [];
+		const pty = { pid: 4343, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); }, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const asking = new Server(pipe('colours'));
+		assert.strictEqual(await asking.listen(), true);
+		try {
+			const open = async (generation: number) => {
+				const client = await PtydClient.connect(pipe('colours'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+				clients.push(client);
+				await client.request('claim', { owner: 'w1', generation, token: `colours-${generation}` });
+				return client;
+			};
+			const window = await open(1);
+			await spawn(window, 'asks', IDLE);
+			const answered = async (client: PtydClient, question: string) => {
+				const before = written.length;
+				emit(question);
+				await client.request('read', { run: 'asks', lines: 1 });
+				return written.slice(before).join('');
+			};
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'no colours said yet: no answer, and the program uses its own');
+			await window.request('colours', { foreground: 'cccc/cccc/cccc', background: '1919/1a1a/1b1b', cursor: 'aeaf/adad/b0b0' });
+			assert.strictEqual(await answered(window, '\x1b]10;?\x1b\\\x1b]11;?\x07\x1b]12;?\x1b\\'),
+				'\x1b]10;rgb:cccc/cccc/cccc\x1b\\\x1b]11;rgb:1919/1a1a/1b1b\x1b\\\x1b]12;rgb:aeaf/adad/b0b0\x1b\\');
+			// A program setting its colours is no question; a window not saying its own yet leaves the run those it had
+			assert.strictEqual(await answered(window, '\x1b]11;rgb:0000/0000/0000\x1b\\'), '');
+			const reloaded = await open(2);
+			await reloaded.request('attach', { run: 'asks' });
+			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\');
+			await reloaded.request('colours', { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff' });
+			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:ffff/ffff/ffff\x1b\\', 'the theme changed');
+			await assert.rejects(reloaded.request('colours', { background: 'white' } as never), /Terminal colours are rrrr\/gggg\/bbbb/);
+		} finally {
+			asking.close();
+		}
+	});
+
 	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3)', async function () {
 		this.timeout(10_000);
 		const client = await connect();

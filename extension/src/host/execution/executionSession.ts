@@ -5,7 +5,7 @@
 import * as path from 'path';
 import { messageOf } from '../../base/errors';
 import type { OwnerClaim } from '../../base/ownership';
-import { PTYD_PROTOCOL } from '../../ptyd/protocol';
+import { PTYD_PROTOCOL, type TerminalColours } from '../../ptyd/protocol';
 import { nextOwnerClaim } from '../../record/ownership';
 import { EarlierPtyds, PtydClient, PtydNotSent, ptydSocketPath } from './ptydClient';
 
@@ -27,6 +27,8 @@ interface SessionOptions {
 	readonly reconcile: () => Promise<void>;
 	/** Each connection once it holds this activation's claim: the window hears its runs' tool calls on it (MCP-6.1). */
 	readonly connected?: (client: PtydClient) => void;
+	/** The colours this window's terminals draw with, told its own ptyd as it connects and when they change (ARCHITECTURE-2.3). */
+	readonly colours?: () => TerminalColours;
 }
 
 /** Owns one activation's claim, connection and recovery schedule; it never owns terminal or per-run state. */
@@ -94,6 +96,7 @@ export class ExecutionSession {
 						throw new Error('This workspace activation no longer owns its agents.');
 					}
 					this.options.connected?.(client);
+					this.tellColours(client);
 					return client;
 				} catch (err) {
 					client.dispose();
@@ -177,6 +180,18 @@ export class ExecutionSession {
 		this.lost = false;
 		if (hasRuns && !await restore(client) && !this.closed) {
 			this.lost = true;
+		}
+	}
+
+	/** Tells this window's own ptyd the colours its terminals draw with now, where it is connected (ARCHITECTURE-2.3). */
+	coloursChanged(): void {
+		void this.connection?.then(client => this.tellColours(client), () => undefined);
+	}
+
+	private tellColours(client: PtydClient): void {
+		const colours = this.options.colours?.();
+		if (colours) {
+			void client.request('colours', colours).catch(err => this.options.log(`Could not tell ptyd the terminal colours: ${messageOf(err)}`));
 		}
 	}
 

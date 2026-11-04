@@ -55,6 +55,7 @@ suite('Transport: the window answers its runs\' tool calls and tells their tools
 				activeTerminal: undefined,
 				tabGroups: { onDidChangeTabs: never.event, onDidChangeTabGroups: never.event, all: [], activeTabGroup: { activeTab: undefined } },
 				onDidChangeActiveTerminal: never.event,
+				activeColorTheme: { kind: 2 }, onDidChangeActiveColorTheme: never.event,
 				onDidCloseTerminal: never.event,
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => ({
 					name: options.name, options, show() { }, dispose() { },

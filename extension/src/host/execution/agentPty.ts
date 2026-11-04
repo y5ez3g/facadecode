@@ -5,10 +5,14 @@
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { MouseReports } from '../../base/mouseReports';
+import { TerminalReplies } from '../../base/terminalReplies';
 import { SPINNER_FRAMES as FRAMES, spunName } from '../../base/tabSpinner';
 
 /** The most output an unopened terminal keeps for its first draw; beyond it, the run's screen is taken anew as it opens. */
 const MOST_UNOPENED = 8 * 1024 * 1024;
+
+/** The window's own questions for an editor terminal's colours: foreground, background and cursor (OSC 10, 11, 12). */
+const COLOUR_QUESTIONS = '\x1b]10;?\x1b\\\x1b]11;?\x1b\\\x1b]12;?\x1b\\';
 
 /** The most names said for a tab that are still told from a person's as the tab shows them: far more than are ever on their way. */
 const MOST_SAID = 32;
@@ -75,6 +79,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	/** Whether a screen of the run was drawn: drawing another starts from a reset terminal. */
 	private drawn = false;
 	private ended = false;
+	/** The line saying how its process ended, once it did: drawn after the run's screen. */
+	private exitLine: string | undefined;
 	/** The name the terminal was created with, which the editor gives its tab once more after each open (LIFECYCLE-2.2). */
 	private created: string;
 	/** Whether the editor's naming of the tab by {@link created} is to come: from each open until it is seen or the agent renamed. */
@@ -85,15 +91,32 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private seen: string;
 	/** The mouse reports the person's clicks type, a release the editor could not measure given its press's position (LIFECYCLE-2.2). */
 	private readonly mouse = new MouseReports();
+	/** The program's questions written to the editor's terminal, by which its answers reach the program or not (ARCHITECTURE-2.3). */
+	private readonly replies: TerminalReplies;
 	/** Whether its tab spins while the agent works, the frame it shows and what turns it (LIFECYCLE-2.2). */
 	private spinning = false;
 	private frame = 0;
 	private spinner: ReturnType<typeof setInterval> | undefined;
 
-	/** `still` says whether the editor is to reduce motion: the tab then shows one frame while the agent works (LIFECYCLE-2.2). */
-	constructor(private name: string, private readonly log: (message: string) => void, private readonly still: () => boolean = () => false) {
+	/**
+	 * `still` says whether the editor is to reduce motion: the tab then shows one frame while the agent works (LIFECYCLE-2.2). `learn`
+	 * hears each colour the editor's terminal reports, the window's to tell ptyd (ARCHITECTURE-2.3).
+	 */
+	constructor(private name: string, private readonly log: (message: string) => void, private readonly still: () => boolean = () => false,
+		learn?: (osc: '10' | '11' | '12', rgb: string) => void) {
 		this.created = name;
 		this.seen = name;
+		this.replies = new TerminalReplies(learn);
+	}
+
+	/**
+	 * Asks the editor's terminal for its colours, where it is open: its answers teach the window the colours ptyd answers a program
+	 * asking them, and reach no program (ARCHITECTURE-2.3).
+	 */
+	askColours(): void {
+		if (this.opened) {
+			this.writeEmitter.fire(COLOUR_QUESTIONS);
+		}
 	}
 
 	/** Its dimensions, once VS Code gave them. */
@@ -113,15 +136,19 @@ export class AgentPty implements vscode.Pseudoterminal {
 
 	/**
 	 * Shows the run's process from now on (ARCHITECTURE-2.3). `taken` is its screen where the caller has it already - a reattach,
-	 * which claimed the run - else the screen is taken as the terminal opens, or now where it is open.
+	 * which claimed the run - drawn where the terminal is open; else the screen is taken as the terminal opens, or now where it is
+	 * open. A terminal not open keeps none of the run's output for later, so it takes the screen anew as it opens.
 	 */
 	bind(binding: RunBinding, taken?: { readonly screen: string; readonly seq: number }): void {
 		this.binding = binding;
 		this.applied = undefined;
-		if (taken) {
+		if (taken && this.opened) {
 			this.draw(taken.screen, taken.seq);
-		} else if (this.opened) {
-			this.take();
+		} else {
+			this.early = undefined;
+			if (this.opened) {
+				this.take();
+			}
 		}
 		if (this.opened && this.size) {
 			binding.resize(this.size.columns, this.size.rows);
@@ -141,21 +168,38 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.early = undefined;
 	}
 
-	/** Output numbered `seq`: drawn once, after the screen it follows. */
+	/**
+	 * Output numbered `seq`: drawn once, after the screen it follows, by a terminal open as it comes. A terminal not open does not
+	 * keep it for later: replayed, the questions in it - its terminal's colours, its cursor - would be answered long after the program
+	 * stopped waiting, and it would read the answer as typed keys, an Escape among them. It takes the run's screen anew as it opens,
+	 * which holds no question (ARCHITECTURE-2.3).
+	 */
 	output(seq: number, data: string): void {
 		if (this.early) {
 			this.early.push({ seq, data });
 		} else if (this.applied !== undefined && seq > this.applied) {
-			this.applied = seq;
-			this.write(data);
+			if (this.opened) {
+				this.applied = seq;
+				this.write(data);
+			} else {
+				this.applied = undefined;
+				this.stale = true;
+			}
 		}
 	}
 
-	/** The run's process ended: a dim line says how, once. */
+	/**
+	 * The run's process ended: a dim line says how, after its last screen - now where that is drawn, else after the screen the
+	 * terminal draws as it opens - and again after each screen drawn anew.
+	 */
 	exited(text: string): void {
 		if (!this.ended) {
 			this.ended = true;
-			this.write(`\r\n${noteLine(text)}`);
+			this.exitLine = `\r\n${noteLine(text)}`;
+			// With no screen of the run to come - none bound, as for a run whose supervisor went - it is written as Facade's other lines
+			if (!this.binding || (this.opened && this.applied !== undefined)) {
+				this.write(this.exitLine);
+			}
 		}
 	}
 
@@ -272,7 +316,11 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.unopened = [];
 		this.unopenedLength = 0;
 		for (const data of waiting) {
+			this.replies.wrote(data, Date.now());
 			this.writeEmitter.fire(data);
+		}
+		if (!reopened) {
+			this.askColours();
 		}
 		this.say();
 		if (this.binding && (reopened || this.applied === undefined && !this.early || this.stale)) {
@@ -285,12 +333,24 @@ export class AgentPty implements vscode.Pseudoterminal {
 	}
 
 	close(): void {
-		// Closing the tab is the window's to report as the person's close (LIFECYCLE-3.1); nothing ends here
+		// Closing the tab is the window's to report as the person's close (LIFECYCLE-3.1); nothing ends here. Its terminal is gone, though:
+		// nothing more is written to it, and a terminal opened anew draws the run's screen anew (ARCHITECTURE-2.3)
+		if (!this.opened) {
+			return;
+		}
+		this.opened = false;
+		this.early = undefined;
+		this.applied = undefined;
+		this.stale = true;
 	}
 
+	/**
+	 * What the person typed, and what the editor's terminal answered for the program's questions, straight to its process - but for
+	 * the answers ptyd gives itself and those that come too late for the program to wait for them (ARCHITECTURE-2.3).
+	 */
 	handleInput(data: string): void {
 		if (this.binding && !this.ended) {
-			const typed = this.mouse.repair(data);
+			const typed = this.mouse.repair(this.replies.typed(data, Date.now()));
 			if (typed) {
 				this.binding.input(typed);
 			}
@@ -339,16 +399,27 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.stale = false;
 		this.early = [];
 		binding.snapshot().then(({ screen, seq }) => {
-			if (this.binding === binding) {
+			if (this.binding !== binding) {
+				return;
+			}
+			if (this.opened) {
 				this.draw(screen, seq);
+			} else {
+				// Closed meanwhile: a screen kept for a terminal not open would be drawn twice; the one that opens takes its own
+				this.early = undefined;
+				this.stale = true;
 			}
 		}, err => {
 			this.early = undefined;
 			this.log(`Could not show the run's screen: ${messageOf(err)}`);
+			// No screen to follow: the line saying how it ended goes as Facade's other lines do
+			if (this.exitLine && this.binding === binding) {
+				this.write(this.exitLine);
+			}
 		});
 	}
 
-	/** Draws the run's screen as it stood at output `seq`, then what came after it. */
+	/** Draws the run's screen as it stood at output `seq`, then what came after it, then how its process ended where it did. */
 	private draw(screen: string, seq: number): void {
 		const later = (this.early ?? []).filter(each => each.seq > seq);
 		this.early = undefined;
@@ -362,10 +433,14 @@ export class AgentPty implements vscode.Pseudoterminal {
 		for (const each of later) {
 			this.output(each.seq, each.data);
 		}
+		if (this.exitLine) {
+			this.write(this.exitLine);
+		}
 	}
 
 	private write(data: string): void {
 		if (this.opened) {
+			this.replies.wrote(data, Date.now());
 			this.writeEmitter.fire(data);
 			return;
 		}

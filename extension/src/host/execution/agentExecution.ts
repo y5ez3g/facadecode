@@ -21,6 +21,7 @@ import type { CallEvent, InputEffect, InputReading, Method, OwnerClaim, Requests
 import type { ServedAnswer, ToolCall } from '../../schema/protocol';
 import { failureAnswer, isToolAnswer } from '../../transport/failure';
 import { McpServerLaunch, shimLaunch as launchShim } from '../../transport/launch';
+import { WindowColours } from './terminalColours';
 import { AgentTerminals, type AgentTerminal } from './agentTerminals';
 import { ExecutionSession, RECONCILE_MS } from './executionSession';
 import { PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from './ptydClient';
@@ -213,6 +214,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly terminals: AgentTerminals;
 	private readonly session: ExecutionSession;
 	private readonly identity: SessionIdentity;
+	/** The colours this window's terminals draw with: ptyd answers its runs' programs asking them (ARCHITECTURE-2.3). */
+	private readonly colours = new WindowColours();
+	private readonly colourChanges: vscode.Disposable;
 
 	constructor(private readonly options: AgentExecutionOptions) {
 		this.identity = new SessionIdentity(options.home, (run, sessionId, cwd) => this.identities.fire({ run, sessionId, cwd }), options.log);
@@ -225,15 +229,18 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			transferred: () => this.transferred(),
 			reconnect: () => this.reclaim(),
 			reconcile: () => this.reconcile(),
-			connected: client => client.onCall((event, receivedAt) => void this.answerCall(client, event, receivedAt))
+			connected: client => client.onCall((event, receivedAt) => void this.answerCall(client, event, receivedAt)),
+			colours: () => this.colours.current()
 		});
+		this.colourChanges = this.colours.onDidChange(() => this.session.coloursChanged());
 		try {
 			this.terminals = new AgentTerminals({
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
 				closed: run => this.closes.fire(run),
 				renamed: (run, name) => this.tabRenames.fire({ run, name }),
-			pinned: (run, pinned) => this.tabPins.fire({ run, pinned })
+			pinned: (run, pinned) => this.tabPins.fire({ run, pinned }),
+				colours: this.colours
 			});
 		} catch (err) {
 			this.session.dispose();
@@ -745,6 +752,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	dispose(): void {
 		this.identity.dispose();
+		this.colourChanges.dispose();
+		this.colours.dispose();
 		this.identities.clear();
 		this.tabPins.clear();
 		this.session.dispose();
