@@ -701,15 +701,18 @@ export class AgentTerminals implements vscode.Disposable {
 		if (placedBefore !== tab.group?.viewColumn) {
 			this.place(pair, tab.group?.viewColumn);
 		}
-		if (pair.observedPin !== tab.isPinned) {
+		// A mark the person changed while the tab was unknown wins where that change came after Facade's last Pin or Unpin of the agent,
+		// however many changes there were - two that ended on the mark it showed before included; else Facade's Pin stands, its mark to
+		// follow (LIFECYCLE-3.4)
+		const stray = this.strayMarks.get(tab)?.changedAt;
+		this.strayMarks.delete(tab);
+		if (stray !== undefined && pair.wantedPin !== undefined && stray > (pair.pinnedAt ?? -Infinity)) {
+			pair.wantedPin = undefined;
+			pair.observedPin = tab.isPinned;
+			if (!pair.applyingPin && tab.isPinned !== !!pair.pinned) { this.options.pinned?.(pair.run, tab.isPinned); }
+		} else if (pair.observedPin !== tab.isPinned) {
 			const changed = pair.observedPin !== undefined || tab.isPinned;
 			pair.observedPin = tab.isPinned;
-			// A mark the person changed while the tab was unknown wins where that change came after Facade's last Pin or Unpin of the
-			// agent; else Facade's Pin stands, its mark to follow (LIFECYCLE-3.4)
-			const stray = this.strayMarks.get(tab)?.changedAt;
-			if (stray !== undefined && pair.wantedPin !== undefined && stray > (pair.pinnedAt ?? -Infinity)) {
-				pair.wantedPin = undefined;
-			}
 			if (changed && pair.wantedPin === undefined && !pair.applyingPin) { this.options.pinned?.(pair.run, tab.isPinned); }
 		}
 		this.applyPin(pair);

@@ -1344,6 +1344,30 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('the card\'s Unpin followed on the tab', () => commands.includes('workbench.action.unpinEditor'));
 	});
 
+	test('two native changes of an unknown tab\'s mark ending on the mark it showed are still the latest: newer than the card\'s Pin, they win (LIFECYCLE-3.4)', async () => {
+		const port = portOf();
+		const changes: unknown[] = [];
+		port.onDidPinTab(change => changes.push(change));
+		for (const [index, run] of [[0, 'run-p1'], [1, 'run-p2']] as const) {
+			port.openPair(facts(run), { reveal: false });
+			open(terminals[index]);
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		// Pinned from its card, its mark to follow; then both tabs moved at once, neither told
+		port.pinTab('run-p1', true);
+		await new Promise(resolve => setTimeout(resolve, 5));
+		const [first, second] = [0, 1].map(() => ({ input: new TabInputTerminal(), isPinned: false, isActive: false, group: { viewColumn: 2 } }));
+		tabsChanged.fire({ opened: [first, second], closed: [terminals[0].tab, terminals[1].tab], changed: [] });
+		// The person pins its tab natively, then unpins it: it ends as it was, the latest change the person's
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isPinned: true })] });
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isPinned: false })] });
+		activeTab = first; activeTerminal = terminals[0];
+		activeChanged.fire(terminals[0]);
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isActive: true })] });
+		await new Promise(resolve => setTimeout(resolve, 20));
+		assert.deepStrictEqual([changes, commands.includes('workbench.action.pinEditor')], [[{ run: 'run-p1', pinned: false }], false]);
+	});
+
 	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
 		const port = portOf();
 		const closes: { readonly run: RunId; readonly marked: boolean }[] = [];
