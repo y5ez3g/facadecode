@@ -68,6 +68,8 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidClosePair = this.tabCloses.event;
 	readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
 	readonly onDidPlaceTab = this.placements.event;
+	readonly copies = new Emitter<{ readonly run: RunId; readonly done: (started: RunId | undefined) => void }>();
+	readonly onDidCopyTab = this.copies.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
@@ -490,6 +492,25 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		await reload.agents.restore();
 		assert.deepStrictEqual(reload.execution.attachedRuns, [run(3), run(2), run(1)]);
 		assert.deepStrictEqual([reload.execution.pairs.get(run(1))?.tab, reload.execution.pairs.get(run(3))?.tab], [{ column: 1, activeAt: 30 }, undefined]);
+	});
+
+	test('a copied agent tab starts, in its place, a new agent of the same CLI and location with the model and effort the first had, under a new name, shown; a launch refused closes the copy and says why (LIFECYCLE-2.2)', async () => {
+		const world = setUp();
+		const first = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human', model: 'opus', effort: 'max' });
+		await settle();
+		const results: (RunId | undefined)[] = [];
+		world.execution.copies.fire({ run: first, done: started => results.push(started) });
+		await settle();
+		const started = results[0]!;
+		const facts = world.agents.get(started)!;
+		assert.deepStrictEqual([facts.cli, facts.location, facts.model, facts.effort, facts.origin, facts.name !== 'Ada' && !!facts.name, world.execution.reveals.get(started), !!world.agents.get(first)],
+			['claude', 'loc-1', 'opus', 'max', 'human', true, true, true]);
+		// Its location gone: refused, said, the copy closing with no agent
+		world.agents.close(first);
+		(world.agents as unknown as { runs: Map<RunId, unknown> }).runs.set(first, { facts: { ...facts, id: first, alias: '#a9', location: 'loc-gone' } });
+		world.execution.copies.fire({ run: first, done: started => results.push(started) });
+		await settle();
+		assert.deepStrictEqual([results[1], world.failures.map(each => each.kind)], [undefined, ['start']]);
 	});
 
 	test('an agent another agent starts has its card alone: its tab is not opened, and it covers nothing and takes no focus (LIFECYCLE-2.2)', async () => {

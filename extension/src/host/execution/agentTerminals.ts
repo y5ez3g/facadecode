@@ -61,6 +61,11 @@ interface TerminalOptions {
 	readonly colours?: WindowColours;
 	/** Where `run`'s tab is now: open in the group of `column`, or hidden - what a reload brings back (LIFECYCLE-2.2, 3.5). */
 	readonly placed?: (run: RunId, column: number | undefined, activeAt: number | undefined) => void;
+	/**
+	 * The editor copied `run`'s tab - a split, a copying drag, Copy into New Window - into a terminal with no process: `copy`, which
+	 * closes as the caller says (LIFECYCLE-2.2).
+	 */
+	readonly copied?: (run: RunId, copy: vscode.Terminal) => void;
 }
 
 /** Active-terminal and active-tab changes within this interval identify one change (LIFECYCLE-2.2). */
@@ -69,6 +74,9 @@ const TOGETHER_MS = 250;
 const OPENING_MS = 2_000;
 /** A tab of an agent closed while its terminal stays open is that tab moved where one tab opens within this (LIFECYCLE-2.2). */
 const MOVE_MS = 1_000;
+
+/** Copies the editor makes within this of one another are copied together - a whole group's - and none of them is attributed. */
+const COPIES_MS = 300;
 
 /** Why a tab is where it is now: what decides, where its group has another unpinned agent tab, which one stays (LIFECYCLE-2.2). */
 type Placement = 'opened' | 'moved' | 'active' | 'unpinned';
@@ -79,6 +87,9 @@ export class AgentTerminals implements vscode.Disposable {
 	private opening: { readonly pair: TerminalEntry; readonly at: number }[] = [];
 	/** Agents' tabs closed with their terminals still open: moved, where one tab opens to take each (LIFECYCLE-2.2). */
 	private movedOut: { readonly pair: TerminalEntry; readonly at: number }[] = [];
+	/** Copies of agents' tabs the editor made lately, attributed together once no other follows (LIFECYCLE-2.2). */
+	private copies: vscode.Terminal[] = [];
+	private copiesTimer: ReturnType<typeof setTimeout> | undefined;
 	private terminalActivatedAt = -Infinity;
 	private tabActivatedAt = -Infinity;
 	private readonly disposables: vscode.Disposable[] = [];
@@ -105,6 +116,7 @@ export class AgentTerminals implements vscode.Disposable {
 				}
 			}),
 			vscode.window.tabGroups.onDidChangeTabs(event => this.tabsChanged(event)),
+			vscode.window.onDidOpenTerminal(terminal => this.maybeCopy(terminal)),
 			vscode.window.tabGroups.onDidChangeTabGroups(() => this.groupsChanged()),
 			vscode.window.onDidCloseTerminal(terminal => {
 				const pair = this.pairOf(terminal);
@@ -286,6 +298,44 @@ export class AgentTerminals implements vscode.Disposable {
 		}).finally(() => { pair.opening = false; });
 	}
 
+	/**
+	 * A terminal the editor opened that Facade did not: a copy of an agent's tab where it has neither a shell nor a pseudoterminal of
+	 * its own and the name an agent's tab was opened under - a person's own shell never is (LIFECYCLE-2.2).
+	 */
+	private maybeCopy(terminal: vscode.Terminal): void {
+		if (this.pairOf(terminal)) {
+			return;
+		}
+		const options = terminal.creationOptions as vscode.TerminalOptions & { readonly pty?: unknown };
+		if ('pty' in options || options.shellPath !== undefined || options.shellArgs !== undefined || options.cwd !== undefined || options.env !== undefined
+			|| typeof options.name !== 'string' || ![...this.entries.values()].some(pair => pair.pty.createdName() === options.name)) {
+			return;
+		}
+		this.copies.push(terminal);
+		clearTimeout(this.copiesTimer);
+		this.copiesTimer = setTimeout(() => this.attributeCopies(), COPIES_MS);
+	}
+
+	/**
+	 * The copies made together: one, of the agent whose open tab alone was opened under its name, is told; several at once - a whole
+	 * group's - or one whose name two open agent tabs bear close, starting nothing (LIFECYCLE-2.2).
+	 */
+	private attributeCopies(): void {
+		const copies = this.copies;
+		this.copies = [];
+		this.copiesTimer = undefined;
+		const name = copies.length === 1 ? (copies[0].creationOptions as vscode.TerminalOptions).name : undefined;
+		const sources = name === undefined ? [] : [...this.entries.values()].filter(pair => pair.terminal && pair.pty.createdName() === name);
+		if (sources.length === 1 && this.options.copied) {
+			this.options.copied(sources[0].run, copies[0]);
+			return;
+		}
+		this.options.log(`Closed ${copies.length === 1 ? 'a copy of an agent tab whose agent could not be told' : `${copies.length} copies of agent tabs made together`}; no agent started.`);
+		for (const copy of copies) {
+			copy.dispose();
+		}
+	}
+
 	/** Remove identity before disposing native resources, so their callbacks cannot become a human close. */
 	private remove(pair: TerminalEntry): void {
 		if (this.entries.get(pair.run) !== pair) {
@@ -300,6 +350,7 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	dispose(): void {
+		clearTimeout(this.copiesTimer);
 		for (const disposable of this.disposables) {
 			disposable.dispose();
 		}

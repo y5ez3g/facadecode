@@ -293,6 +293,11 @@ export class AgentPty implements vscode.Pseudoterminal {
 		return this.spinning ? `${FRAMES[this.frame]} ${this.tabName()}` : this.tabName();
 	}
 
+	/** The name its current native terminal was created under: what a copy of its tab is named (LIFECYCLE-2.2). */
+	createdName(): string {
+		return this.created;
+	}
+
 	/** The native terminal's initial name, set before VS Code opens the pseudoterminal. */
 	creationName(): string {
 		this.created = this.tabName();

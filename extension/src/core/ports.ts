@@ -355,6 +355,11 @@ export interface ExecutionPort {
 	tabLabel?(run: RunId, alias: string, shown: boolean): void;
 	/** Where a run's tab is now, for a reload to bring it back (LIFECYCLE-3.5). */
 	readonly onDidPlaceTab?: Event<{ readonly run: RunId; readonly place: TabPlace }>;
+	/**
+	 * The editor copied a run's tab - a split, a copying drag, Copy into New Window (LIFECYCLE-2.2): `done` is told the agent started in
+	 * its place, or none, and the copy, which has no process, closes then.
+	 */
+	readonly onDidCopyTab?: Event<{ readonly run: RunId; readonly done: (started: RunId | undefined) => void }>;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */

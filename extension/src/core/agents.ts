@@ -180,6 +180,9 @@ export class AgentService implements Agents, Disposable {
 		if (execution.onDidClosePair) {
 			this.subscriptions.push(execution.onDidClosePair(({ run, marked }) => this.tabClosed(run, marked)));
 		}
+		if (execution.onDidCopyTab) {
+			this.subscriptions.push(execution.onDidCopyTab(({ run, done }) => this.tabCopied(run, done)));
+		}
 		if (execution.onDidPlaceTab) {
 			this.subscriptions.push(execution.onDidPlaceTab(({ run, place }) => this.tabPlaced(run, place)));
 		}
@@ -895,6 +898,33 @@ export class AgentService implements Agents, Disposable {
 			this.deps.execution.reopen?.(id);
 			this.deps.human.failed({ kind: 'unpin', name: labelOf(run.facts), reason: this.wording(err) }, { show: id });
 		}
+	}
+
+	/**
+	 * The person copied an agent's tab - a split in any direction, a copying drag, Copy into New Window (LIFECYCLE-2.2): the agent stays
+	 * where it is, and in the copy's place a new agent starts of the same CLI and location, with the model and effort the first was
+	 * started with where it had any, under a new name, in a new conversation with no prompt - its tab focused there, its start,
+	 * failure and location history as New Agent's. A launch refused before acceptance says why as New Agent's would.
+	 */
+	private tabCopied(id: RunId, done: (started: RunId | undefined) => void): void {
+		const run = this.runs.get(id);
+		if (!run || this.ownershipLost) {
+			done(undefined);
+			return;
+		}
+		const { facts } = run;
+		const name = suggestName([...this.runs.values()].map(each => each.facts.name));
+		let started: RunId;
+		try {
+			started = this.launch({ name, location: facts.location, cli: facts.cli, origin: 'human', ...facts.model !== undefined ? { model: facts.model } : {}, ...facts.effort !== undefined ? { effort: facts.effort } : {} });
+		} catch (err) {
+			done(undefined);
+			this.deps.log.event(`Could not start an agent in place of ${facts.alias}'s copied tab: ${messageOf(err)}`);
+			this.deps.human.failed({ kind: 'start', name, reason: this.wording(err) }, {});
+			return;
+		}
+		this.deps.log.event(`Started ${this.runs.get(started)?.facts.alias ?? started} in place of ${facts.alias}'s copied tab`);
+		done(started);
 	}
 
 	/** Where the run's tab is now, kept with its process or its retained record for a reload to bring back (LIFECYCLE-3.5). */

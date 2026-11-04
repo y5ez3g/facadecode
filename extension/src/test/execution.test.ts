@@ -49,6 +49,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let terminals: FakeTerminal[];
 	let activeChanged: TestEmitter<unknown>;
 	let closed: TestEmitter<unknown>;
+	/** Terminals the editor opened that Facade did not: a copy of a tab's among them. */
+	let openedTerminal: TestEmitter<unknown>;
 	let configChanged: TestEmitter<{ affectsConfiguration(section: string): boolean }>;
 	let config: { [key: string]: unknown };
 	/** The editor's tabs as the test has them: the active tab, its changes, and the commands run on the active editor. */
@@ -102,6 +104,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		terminals = [];
 		activeChanged = new TestEmitter();
 		closed = new TestEmitter();
+		openedTerminal = new TestEmitter();
 		configChanged = new TestEmitter();
 		config = { 'terminal.integrated.tabs.separator': ' | ' };
 		tabsChanged = new TestEmitter();
@@ -154,6 +157,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				onDidChangeActiveTerminal: activeChanged.event,
 				activeColorTheme: { kind: 2 }, onDidChangeActiveColorTheme: () => ({ dispose() { } }),
 				onDidCloseTerminal: closed.event,
+				onDidOpenTerminal: openedTerminal.event,
 				createTerminal: (options: vscode.ExtensionTerminalOptions) => {
 					const terminal: FakeTerminal = {
 						name: options.name, options, written: [], names: [], pending: [], opened: false, shown: [], disposed: false,
@@ -1161,6 +1165,39 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		visibleGroups = undefined;
 		assert.ok(terminals.length >= before);
 		assert.deepStrictEqual(opened, { 'in-2': 2, 'in-gone': 2, hid: 'none', old: 'none', 'old-pinned': -1 });
+	});
+
+	test('a copy of an agent\'s tab - no shell or pseudoterminal of its own, the name its tab was opened under - is told for that agent alone, and closes as the caller says; several copies at once, a name two open tabs bear or a person\'s own shell are never told (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const told: { run: RunId; done: (started: RunId | undefined) => void }[] = [];
+		port.onDidCopyTab(copy => told.push(copy));
+		port.openPair(facts('run-c1'), { reveal: false });
+		open(terminals[0]);
+		port.openPair(facts('run-c2', { name: 'Bo' }), { reveal: false });
+		open(terminals[1]);
+		const copyOf = (name: string, more: object = {}) => ({ name, creationOptions: { name, ...more }, disposed: false, dispose() { this.disposed = true; } });
+		const wait = () => new Promise(resolve => setTimeout(resolve, 400));
+		// One copy of Ada's tab
+		const one = copyOf('Ada');
+		openedTerminal.fire(one);
+		await wait();
+		assert.deepStrictEqual([told.map(each => each.run), one.disposed], [['run-c1'], false]);
+		told[0].done(undefined);
+		assert.strictEqual(one.disposed, true, 'no agent started: the copy closes at once');
+		// A person's own shell named like an agent, and two copies at once
+		const shell = copyOf('Ada', { shellPath: '/bin/zsh' });
+		openedTerminal.fire(shell);
+		const both = [copyOf('Ada'), copyOf('Bo')];
+		for (const each of both) { openedTerminal.fire(each); }
+		await wait();
+		assert.deepStrictEqual([told.length, shell.disposed, both.map(each => each.disposed)], [1, false, [true, true]]);
+		// A name two open tabs bear
+		port.openPair(facts('run-c3'), { reveal: false });
+		open(terminals[2]);
+		const shared = copyOf('Ada');
+		openedTerminal.fire(shared);
+		await wait();
+		assert.deepStrictEqual([told.length, shared.disposed], [1, true]);
 	});
 
 	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
