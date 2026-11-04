@@ -22,6 +22,8 @@ const OUT = process.env.FACADE_IT_CONVERSION!;
 const RECORD = process.env.FACADE_IT_RECORD!;
 const REOPEN = process.env.FACADE_IT_REOPEN === '1';
 const NATIVE = process.env.FACADE_IT_NATIVE;
+/** Agents started beside the journey's own before it reloads, so that each reload's claim is timed in a busy window (VERIFICATION G2). */
+const LOAD = Number(process.env.FACADE_IT_LOAD ?? 0);
 
 /** A native process is observed from this isolated window's launch log, never from the owner's process list. */
 function pidOf(alias: string): number | undefined {
@@ -108,9 +110,13 @@ async function pinState(runId: string, pinned: boolean): Promise<void> {
 export async function activate(): Promise<void> {
 	try {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
-		await until('the panel state', async () => (await state())?.loading === false ? true : undefined);
+		// The window's runs are claimed and shown once its state stops loading: how long after the reload was asked for (RULES-4.1)
+		await until('the panel state', async () => (await state())?.loading === false ? true : undefined, 90_000);
+		const claimedAt = Date.now();
 		const steps = fs.existsSync(OUT) ? fs.readFileSync(OUT, 'utf8').trim().split('\n').filter(Boolean)
-			.map(line => JSON.parse(line) as { phase: string; runId?: string }) : [];
+			.map(line => JSON.parse(line) as { phase: string; runId?: string; at?: number }) : [];
+		const reloadedAt = steps[steps.length - 1]?.at;
+		const claim = reloadedAt !== undefined ? { claimMs: claimedAt - reloadedAt, agents: (await state()).cardCount } : {};
 		if (!steps.length) {
 			void vscode.commands.executeCommand('facade.newAgent');
 			const card = await until('a new card', async () => {
@@ -143,7 +149,18 @@ export async function activate(): Promise<void> {
 			}, NATIVE ? 60_000 : 20_000);
 			// Pin is offered before the CLI names its conversation (LIFECYCLE-3.4): its record takes the session once the window hears it
 			await until('the Pin to take the session', async () => pinHolds(session) || undefined, NATIVE ? 60_000 : 20_000);
-			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session });
+			// A busy window: more agents beside it, each running, for the reload to claim (VERIFICATION G2, J14)
+			for (let started = 1; started <= LOAD; started++) {
+				void vscode.commands.executeCommand('facade.newAgent');
+				await until(`agent ${started} of the load`, async () => {
+					if ((await state()).cardCount > started) {
+						return true;
+					}
+					await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+					return undefined;
+				});
+			}
+			write({ phase: 'folder', runId: card.runId, name: card.name, pid, session, at: Date.now() });
 			// Reload tears down this host, which may cancel its command promise after the window accepted the request.
 			void vscode.commands.executeCommand(REOPEN ? 'workbench.action.closeWindow' : 'workbench.action.reloadWindow').then(undefined, () => undefined);
 			return;
@@ -165,15 +182,15 @@ export async function activate(): Promise<void> {
 		if (!vscode.workspace.workspaceFile) {
 			if (!steps.some(step => step.phase === 'unpin')) {
 				await pinState(runId, true);
-				write({ phase: 'reload-pinned', runId });
+				write({ phase: 'reload-pinned', runId, ...claim });
 				await vscode.commands.executeCommand('facade.unpinAgent', { run_id: runId });
 				await pinState(runId, false);
-				write({ phase: 'unpin', runId });
+				write({ phase: 'unpin', runId, at: Date.now() });
 				void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
 				return;
 			}
 			await pinState(runId, false);
-			write({ phase: 'reload-unpinned', runId });
+			write({ phase: 'reload-unpinned', runId, ...claim });
 			await vscode.commands.executeCommand('workbench.action.pinEditor');
 			await pinState(runId, true);
 			// As a folder dropped on the window adds it

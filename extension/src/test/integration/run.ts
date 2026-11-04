@@ -91,6 +91,8 @@ async function main(): Promise<void> {
 	// The update journey's packages: a released build's, FACADE_IT_RELEASED, and the ones it updates to, FACADE_IT_CURRENT - else this build's
 	const released = process.env.FACADE_IT_RELEASED;
 	const current = process.env.FACADE_IT_CURRENT;
+	// One built-in's journeys and conversion alone, FACADE_IT_BUILT_IN, for a quick look at a change
+	const builtIn = process.env.FACADE_IT_BUILT_IN;
 	const passed = Object.fromEntries((process.env.FACADE_IT_REAL_PASS ?? '').split(',').filter(name => name && process.env[name] !== undefined).map(name => [name, process.env[name]!]));
 	// A prepared temporary home may be used directly, or copied from an isolated state template.
 	const prepared = only === 'real' || nativeLifecycle ? process.env.FACADE_IT_REAL_AGENTS_HOME : undefined;
@@ -217,6 +219,8 @@ async function main(): Promise<void> {
 			child.on('error', append);
 		};
 		const editorEnv = { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out,
+			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
+			...!reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
@@ -285,6 +289,13 @@ async function main(): Promise<void> {
 				throw new Error('Pin/Unpin did not survive reload, or the folder agent was not the same pinned run, live process and one terminal in the workspace it became.');
 			}
 			console.log('    ✔ Pin and Unpin survive reload; the same pinned run, live process and one terminal survive conversion');
+			// Each reload's claim, timed from the reload's request to the reloaded window's runs shown: well within a local window's 90
+			// seconds, which a reload must not reach (RULES-4.1, VERIFICATION G2)
+			const claims = said.filter(line => line.phase === 'reload-pinned' || line.phase === 'reload-unpinned').map(line => ({ ms: Number(line.claimMs), agents: Number(line.agents) }));
+			console.log(`    reload claims: ${claims.map(each => `${each.ms} ms with ${each.agents} agents`).join(', ')}`);
+			if (claims.length !== 2 || claims.some(each => !Number.isFinite(each.ms) || each.ms > 45_000)) {
+				throw new Error(`A reload's claim took too long or was not timed: ${JSON.stringify(claims)}`);
+			}
 		} catch (error) {
 			console.error(`Editor output for ${suffix} (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput}`);
 			throw error;
@@ -488,8 +499,7 @@ async function main(): Promise<void> {
 		if (!only || only === 'journeys') {
 			// The journeys once for each built-in: those before it in the catalog not installed, so that it is the one preselected
 			for (const [at, cli] of BUILT_INS.entries()) {
-				// `FACADE_IT_BUILT_IN` runs one built-in's journeys alone, for a quick look at a change
-				if (process.env.FACADE_IT_BUILT_IN && process.env.FACADE_IT_BUILT_IN !== cli.id) {
+				if (builtIn && builtIn !== cli.id) {
 					continue;
 				}
 				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
@@ -499,7 +509,7 @@ async function main(): Promise<void> {
 				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, { ...missing, ...screen });
 			}
 			// A custom CLI with every built-in turned off, so that it is the one New Agent offers: started exactly as configured (CLIS-1.1, 3.4)
-			if (process.env.FACADE_IT_BUILT_IN) {
+			if (builtIn) {
 				return;
 			}
 			const off = Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.enabled`, false]));
@@ -510,7 +520,9 @@ async function main(): Promise<void> {
 			await crossWindow();
 		}
 		if (!only || only === 'conversion') {
-			for (const cli of BUILT_INS) { await conversion(cli); }
+			for (const cli of BUILT_INS) {
+				if (!builtIn || builtIn === cli.id) { await conversion(cli); }
+			}
 		}
 		if (!only || only === 'reopen') {
 			for (const cli of BUILT_INS) { await conversion(cli, true); }
