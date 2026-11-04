@@ -197,7 +197,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly activations = new Emitter<RunId | undefined>();
 	private readonly closes = new Emitter<{ readonly run: RunId; readonly marked: boolean }>();
 	private readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
-	private readonly copies = new Emitter<{ readonly run: RunId; readonly done: (started: RunId | undefined) => void }>();
+	private readonly copies = new Emitter<{ readonly run: RunId; readonly column?: number; readonly done: (started: RunId | undefined) => void }>();
 	private readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
 	private readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
 	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
@@ -254,7 +254,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				placed: (run, column, activeAt) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column, ...activeAt !== undefined ? { activeAt } : {} } }),
 				// A copy closes once the agent started in its place has its tab open - the copy's group never empties first - or at once
 				// where none started (LIFECYCLE-2.2)
-				copied: (run, copy) => this.copies.fire({ run, done: started => {
+				copied: (run, copy, column) => this.copies.fire({ run, column, done: started => {
 					const pair = started === undefined ? undefined : this.pairs.get(started);
 					if (!pair) {
 						copy.dispose();
@@ -702,6 +702,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		// Its conversation is not watched for a run this window does not show: one that failed to reattach, or went to another window
 		this.identity.untrack(run);
 		return pair;
+	}
+
+	/** Opens the next agent's tab in `column`'s group - a copy's, where an agent starts in its place (LIFECYCLE-2.2). */
+	openNextIn(column: number | undefined): void {
+		this.terminals.openNextIn(column);
 	}
 
 	/** `run`'s short ID, and whether its tab shows it: its name repeats among this window's cards, or it has none (LIFECYCLE-2.2). */

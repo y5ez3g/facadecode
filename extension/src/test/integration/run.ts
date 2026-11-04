@@ -350,6 +350,10 @@ async function main(): Promise<void> {
 		if (!only || only === 'journeys') {
 			// The journeys once for each built-in: those before it in the catalog not installed, so that it is the one preselected
 			for (const [at, cli] of BUILT_INS.entries()) {
+				// `FACADE_IT_BUILT_IN` runs one built-in's journeys alone, for a quick look at a change
+				if (process.env.FACADE_IT_BUILT_IN && process.env.FACADE_IT_BUILT_IN !== cli.id) {
+					continue;
+				}
 				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
 				// Each agent's fake draws its input as this built-in does (CLIS-2.1); Muse Code's as it runs on Windows, reporting nothing:
 				// its dot follows its screen (CLIS-2.3)
@@ -357,6 +361,9 @@ async function main(): Promise<void> {
 				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, { ...missing, ...screen });
 			}
 			// A custom CLI with every built-in turned off, so that it is the one New Agent offers: started exactly as configured (CLIS-1.1, 3.4)
+			if (process.env.FACADE_IT_BUILT_IN) {
+				return;
+			}
 			const off = Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.enabled`, false]));
 			const custom = { [CUSTOM_CLI]: { path: fake, launch: { start: ['--from-custom', 'two words'], resume: ['resume', '${sessionId}'] } } };
 			await run('custom', repo, { FACADE_IT_CLI: CUSTOM_CLI, FACADE_IT_AGENTS_HOME: agentsHome }, { ...off, 'facade.custom': custom });

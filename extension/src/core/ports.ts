@@ -359,7 +359,9 @@ export interface ExecutionPort {
 	 * The editor copied a run's tab - a split, a copying drag, Copy into New Window (LIFECYCLE-2.2): `done` is told the agent started in
 	 * its place, or none, and the copy, which has no process, closes then.
 	 */
-	readonly onDidCopyTab?: Event<{ readonly run: RunId; readonly done: (started: RunId | undefined) => void }>;
+	readonly onDidCopyTab?: Event<{ readonly run: RunId; readonly column?: number; readonly done: (started: RunId | undefined) => void }>;
+	/** Opens the next agent's tab in `column`'s group - a copy's (LIFECYCLE-2.2). */
+	openNextIn?(column: number | undefined): void;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */

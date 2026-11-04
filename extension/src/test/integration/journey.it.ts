@@ -216,6 +216,41 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
+	test('LIFECYCLE-2.2: a split of an agent\'s tab starts, in the new group, a new agent of its CLI and location; the first stays in its group, and no empty tab is left', async function () {
+		if (CLI !== 'claude') { this.skip(); }
+		this.timeout(90_000);
+		const seen = () => JSON.stringify({
+			groups: vscode.window.tabGroups.all.map(group => ({ column: group.viewColumn, active: group.isActive, tabs: group.tabs.map(tab => [tab.input instanceof vscode.TabInputTerminal ? 'terminal' : 'other', unspun(tab.label), tab.isActive]) })),
+			terminals: vscode.window.terminals.map(each => [each.name, Object.keys(each.creationOptions)])
+		});
+		const cards: string[] = [];
+		try {
+			const first = await newCard();
+			cards.push(first.runId);
+			await until('its tab active', async () => vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputTerminal ? true : undefined);
+			const before = seen();
+			await vscode.commands.executeCommand('workbench.action.splitEditorRight');
+			const second = await until('an agent started in the copy\'s place', async () => (await state()).cards.find(card => card.runId !== first.runId), 30_000);
+			cards.push(second.runId);
+			let last = '';
+			try {
+				await until('two groups with one agent tab each, the copy gone', async () => {
+					last = seen();
+					const groups = vscode.window.tabGroups.all.map(group => group.tabs.filter(tab => tab.input instanceof vscode.TabInputTerminal).map(tab => unspun(tab.label)));
+					return groups.length === 2 && groups[0].length === 1 && groups[1].length === 1 && groups[0][0] === first.name && groups[1][0] === second.name ? true : undefined;
+				}, 20_000);
+			} catch (err) {
+				throw new Error(`${(err as Error).message}: before ${before}, after ${last}`);
+			}
+			assert.notStrictEqual(second.name, first.name);
+		} finally {
+			for (const run of cards) {
+				await vscode.commands.executeCommand('facade.closeAgent', { run_id: run }).then(undefined, () => undefined);
+			}
+			await vscode.commands.executeCommand('workbench.action.closeAllGroups');
+		}
+	});
+
 	test('PANEL-3.3: native Modern UI settings reach the webview initially and on live changes, with a traditional fallback on older editors', async function () {
 		if (CLI !== 'claude') { this.skip(); }
 		const setting = 'workbench.experimental.modernUI';

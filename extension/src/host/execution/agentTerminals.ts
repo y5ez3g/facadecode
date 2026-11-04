@@ -65,7 +65,7 @@ interface TerminalOptions {
 	 * The editor copied `run`'s tab - a split, a copying drag, Copy into New Window - into a terminal with no process: `copy`, which
 	 * closes as the caller says (LIFECYCLE-2.2).
 	 */
-	readonly copied?: (run: RunId, copy: vscode.Terminal) => void;
+	readonly copied?: (run: RunId, copy: vscode.Terminal, column: number | undefined) => void;
 }
 
 /** Active-terminal and active-tab changes within this interval identify one change (LIFECYCLE-2.2). */
@@ -90,6 +90,8 @@ export class AgentTerminals implements vscode.Disposable {
 	/** Copies of agents' tabs the editor made lately, attributed together once no other follows (LIFECYCLE-2.2). */
 	private copies: vscode.Terminal[] = [];
 	private copiesTimer: ReturnType<typeof setTimeout> | undefined;
+	/** The group the next agent's tab opens in: a copy's, where an agent starts in its place (LIFECYCLE-2.2). */
+	private nextColumn: number | undefined;
 	private terminalActivatedAt = -Infinity;
 	private tabActivatedAt = -Infinity;
 	private readonly disposables: vscode.Disposable[] = [];
@@ -244,13 +246,17 @@ export class AgentTerminals implements vscode.Disposable {
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
 		const pair: TerminalEntry = {
 			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(), ...facts.pinned ? { pinned: true } : {},
+			...this.nextColumn !== undefined ? { openIn: this.nextColumn } : {},
 			...reveal ? {} : { background: { since: Date.now(), ...covered ? { covered } : {} } }
 		};
 		this.entries.set(facts.run, pair);
+		this.nextColumn = undefined;
 		return {
 			pty,
 			open: (reveal, column) => {
-				pair.openIn = column;
+				if (column !== undefined) {
+					pair.openIn = column;
+				}
 				this.openPair(pair, reveal);
 			},
 			reveal: preserveFocus => {
@@ -327,13 +333,20 @@ export class AgentTerminals implements vscode.Disposable {
 		const name = copies.length === 1 ? (copies[0].creationOptions as vscode.TerminalOptions).name : undefined;
 		const sources = name === undefined ? [] : [...this.entries.values()].filter(pair => pair.terminal && pair.pty.createdName() === name);
 		if (sources.length === 1 && this.options.copied) {
-			this.options.copied(sources[0].run, copies[0]);
+			// The copy's group: the one terminal tab no agent's is - the editor may not have made that group active yet
+			const strays = vscode.window.tabGroups.all.flatMap(group => group.tabs).filter(tab => tab.input instanceof vscode.TabInputTerminal && !this.pairOfTab(tab));
+			this.options.copied(sources[0].run, copies[0], strays.length === 1 ? strays[0].group?.viewColumn : undefined);
 			return;
 		}
 		this.options.log(`Closed ${copies.length === 1 ? 'a copy of an agent tab whose agent could not be told' : `${copies.length} copies of agent tabs made together`}; no agent started.`);
 		for (const copy of copies) {
 			copy.dispose();
 		}
+	}
+
+	/** Opens the next agent's tab in `column`'s group: in a copy's place (LIFECYCLE-2.2). */
+	openNextIn(column: number | undefined): void {
+		this.nextColumn = column;
 	}
 
 	/** Remove identity before disposing native resources, so their callbacks cannot become a human close. */

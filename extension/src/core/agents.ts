@@ -181,7 +181,7 @@ export class AgentService implements Agents, Disposable {
 			this.subscriptions.push(execution.onDidClosePair(({ run, marked }) => this.tabClosed(run, marked)));
 		}
 		if (execution.onDidCopyTab) {
-			this.subscriptions.push(execution.onDidCopyTab(({ run, done }) => this.tabCopied(run, done)));
+			this.subscriptions.push(execution.onDidCopyTab(({ run, column, done }) => this.tabCopied(run, done, column)));
 		}
 		if (execution.onDidPlaceTab) {
 			this.subscriptions.push(execution.onDidPlaceTab(({ run, place }) => this.tabPlaced(run, place)));
@@ -906,7 +906,7 @@ export class AgentService implements Agents, Disposable {
 	 * started with where it had any, under a new name, in a new conversation with no prompt - its tab focused there, its start,
 	 * failure and location history as New Agent's. A launch refused before acceptance says why as New Agent's would.
 	 */
-	private tabCopied(id: RunId, done: (started: RunId | undefined) => void): void {
+	private tabCopied(id: RunId, done: (started: RunId | undefined) => void, column?: number): void {
 		const run = this.runs.get(id);
 		if (!run || this.ownershipLost) {
 			done(undefined);
@@ -916,8 +916,11 @@ export class AgentService implements Agents, Disposable {
 		const name = suggestName([...this.runs.values()].map(each => each.facts.name));
 		let started: RunId;
 		try {
+			// In the copy's group, which the editor may not have made active yet
+			this.deps.execution.openNextIn?.(column);
 			started = this.launch({ name, location: facts.location, cli: facts.cli, origin: 'human', ...facts.model !== undefined ? { model: facts.model } : {}, ...facts.effort !== undefined ? { effort: facts.effort } : {} });
 		} catch (err) {
+			this.deps.execution.openNextIn?.(undefined);
 			done(undefined);
 			this.deps.log.event(`Could not start an agent in place of ${facts.alias}'s copied tab: ${messageOf(err)}`);
 			this.deps.human.failed({ kind: 'start', name, reason: this.wording(err) }, {});
