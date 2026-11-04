@@ -14,7 +14,7 @@ import { dotOf } from './status';
 import {
 	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, LocationId,
 	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
-	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError, SaidSource,
+	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError, SaidSource, TabPlace,
 	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
 } from './ports';
 
@@ -180,6 +180,9 @@ export class AgentService implements Agents, Disposable {
 		if (execution.onDidClosePair) {
 			this.subscriptions.push(execution.onDidClosePair(({ run, marked }) => this.tabClosed(run, marked)));
 		}
+		if (execution.onDidPlaceTab) {
+			this.subscriptions.push(execution.onDidPlaceTab(({ run, place }) => this.tabPlaced(run, place)));
+		}
 		if (execution.onDidRenameTab) {
 			this.subscriptions.push(execution.onDidRenameTab(({ run, name }) => this.tabRenamed(run, name)));
 		}
@@ -315,7 +318,8 @@ export class AgentService implements Agents, Disposable {
 				const pin = facts.pin && this.pins().find(pin => pin.id === facts.pin);
 				const { pin: _previousPin, ...rest } = facts;
 				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, exactResume: facts.resumable, settled: Promise.resolve() });
-				this.deps.execution.openPair(pairOf(facts), { reveal: false });
+				// Its tab as it was; from a build that kept no record, hidden unless pinned (LIFECYCLE-3.5)
+				this.deps.execution.openPair(pairOf(facts), { reveal: false, ...facts.tab === undefined && !pin ? { hidden: true } : {} });
 				if (facts.error) {
 					this.deps.execution.note(facts.id, facts.error.reason);
 				}
@@ -323,7 +327,9 @@ export class AgentService implements Agents, Disposable {
 			}
 		}
 		let elsewhere = 0;
-		for (const each of live) {
+		// The one last active comes back last: a group where several come back keeps it (LIFECYCLE-2.2, 3.5)
+		const activeAt = (run: LiveRun) => { const place = run.meta.tab; return typeof place === 'object' ? place.activeAt ?? 0 : 0; };
+		for (const each of [...live].sort((a, b) => activeAt(a) - activeAt(b))) {
 			if (this.ownershipLost) {
 				return 0;
 			}
@@ -394,7 +400,7 @@ export class AgentService implements Agents, Disposable {
 			error: { reason, ...reason !== english ? { english } : {}, source: 'cleanup', at: this.deps.clock.now() }
 		};
 		this.runs.set(each.run, { facts, exactResume: each.meta.exactResume, settled: Promise.resolve(), uncertain: true });
-		this.deps.execution.openPair(pairOf(facts), { reveal: false });
+		this.deps.execution.openPair(pairOf(facts), { reveal: false, hidden: true });
 		this.deps.execution.note(each.run, reason);
 		this.emit({ run: each.run, kind: 'added' });
 	}
@@ -607,7 +613,9 @@ export class AgentService implements Agents, Disposable {
 			...(request.model !== undefined ? { model: request.model.trim() } : {}),
 			...(request.effort !== undefined ? { effort: request.effort.trim() } : {}),
 			tools: 'not_injected',
-			...(promptLine ? { promptLine } : {})
+			...(promptLine ? { promptLine } : {}),
+			// One another agent starts has its card alone (LIFECYCLE-2.2)
+			...(byAgent ? { tab: 'hidden' as const } : {})
 		};
 		if (options.pin) {
 			for (const other of this.runs.values()) { if (other.facts.pin === options.pin) { this.losePin(other); } }
@@ -886,6 +894,20 @@ export class AgentService implements Agents, Disposable {
 			this.deps.execution.pinTab?.(id, true);
 			this.deps.execution.reopen?.(id);
 			this.deps.human.failed({ kind: 'unpin', name: labelOf(run.facts), reason: this.wording(err) }, { show: id });
+		}
+	}
+
+	/** Where the run's tab is now, kept with its process or its retained record for a reload to bring back (LIFECYCLE-3.5). */
+	private tabPlaced(id: RunId, place: TabPlace): void {
+		const run = this.runs.get(id);
+		if (!run || JSON.stringify(run.facts.tab) === JSON.stringify(place)) {
+			return;
+		}
+		run.facts = { ...run.facts, tab: place };
+		if (run.facts.lifecycle === 'ended') {
+			if (run.facts.end) { this.retain(run); }
+		} else if (run.facts.pid !== undefined) {
+			this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 		}
 	}
 
@@ -1382,6 +1404,11 @@ function retainedFacts(kept: RunFacts): RunFacts {
 	};
 }
 
+function isTabPlace(value: unknown): value is TabPlace {
+	const place = value as Exclude<TabPlace, 'hidden'> | 'hidden' | undefined;
+	return place === 'hidden' || (typeof place === 'object' && place !== null && Number.isSafeInteger(place.column) && (place.activeAt === undefined || typeof place.activeAt === 'number'));
+}
+
 function isSaidSource(value: unknown): value is SaidSource {
 	const source = value as SaidSource | undefined;
 	return source?.kind === 'facade' || (source?.kind === 'agent'
@@ -1425,6 +1452,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
 		...(typeof meta.said === 'string' && meta.said ? { said: meta.said } : {}),
 		...(isSaidSource(meta.saidSource) ? { saidSource: meta.saidSource } : {}),
+		...(isTabPlace(meta.tab) ? { tab: meta.tab } : {}),
 		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),
 		...(isCapability(meta.inputCapability) ? { inputCapability: meta.inputCapability } : {})
 	};
@@ -1464,6 +1492,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
 		...(facts.said !== undefined ? { said: facts.said } : {}),
 		...(facts.saidSource !== undefined ? { saidSource: facts.saidSource } : {}),
+		...(facts.tab !== undefined ? { tab: facts.tab } : {}),
 		...(facts.inputAdapter !== undefined ? { inputAdapter: facts.inputAdapter } : {}),
 		...(facts.inputCapability !== undefined ? { inputCapability: facts.inputCapability } : {})
 	};
@@ -1480,5 +1509,6 @@ function firstLine(prompt: string | undefined): string | undefined {
 }
 
 export function pairOf(facts: RunFacts): PairFacts {
-	return { run: facts.id, name: facts.name, cli: facts.cli, displayName: facts.displayName, command: facts.command, cwd: facts.cwd };
+	return { run: facts.id, name: facts.name, cli: facts.cli, displayName: facts.displayName, command: facts.command, cwd: facts.cwd,
+		...facts.tab !== undefined ? { tab: facts.tab } : {}, ...facts.pin ? { pinned: true as const } : {} };
 }

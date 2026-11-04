@@ -226,7 +226,17 @@ export interface PairFacts {
 	readonly displayName: string;
 	readonly command: string;
 	readonly cwd: string;
+	/** Where its tab is to open, or that it stays hidden, as a reload brings it back (LIFECYCLE-3.5). */
+	readonly tab?: TabPlace;
+	/** Its agent holds a Pin: the group's one unpinned agent tab does not count it (LIFECYCLE-2.2). */
+	readonly pinned?: true;
 }
+
+/**
+ * Where a run's tab is, kept with its process so that a reload brings it back (LIFECYCLE-3.5, ARCHITECTURE-3.1): open in the editor
+ * group of `column`, last active at `activeAt`, or hidden. None is a build's that kept no such record.
+ */
+export type TabPlace = { readonly column: number; readonly activeAt?: number } | 'hidden';
 
 export type Activity = 'working' | 'not_working' | 'unknown';
 
@@ -343,6 +353,8 @@ export interface ExecutionPort {
 	hideTab?(run: RunId): boolean;
 	/** The run's short ID, and whether its tab shows it: its name repeats among this window's cards, or it has none (LIFECYCLE-2.2). */
 	tabLabel?(run: RunId, alias: string, shown: boolean): void;
+	/** Where a run's tab is now, for a reload to bring it back (LIFECYCLE-3.5). */
+	readonly onDidPlaceTab?: Event<{ readonly run: RunId; readonly place: TabPlace }>;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */
@@ -395,6 +407,8 @@ export interface RunMeta {
 	readonly said?: string;
 	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
 	readonly saidSource?: SaidSource;
+	/** Where its tab is (LIFECYCLE-3.5). */
+	readonly tab?: TabPlace;
 	/** Its ordinary-message input as its launch planned it, kept across a reload. */
 	readonly inputAdapter?: string;
 	readonly inputCapability?: CapabilityState;
@@ -586,6 +600,8 @@ export interface RunFacts {
 	readonly said?: string;
 	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
 	readonly saidSource?: SaidSource;
+	/** Where its tab is (LIFECYCLE-3.5). */
+	readonly tab?: TabPlace;
 	/** The unresolved error that makes the card red (RULES-3.2): launch failure, abnormal exit, reported error. */
 	readonly error?: RunError;
 	/** How the process ended, where it ended and the pair is retained (abnormal exit or failed launch, RULES-3.3). */

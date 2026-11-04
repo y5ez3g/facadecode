@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { SessionIdentity } from './sessionIdentity';
-import type { ConversationKey } from '../../core/ports';
+import type { ConversationKey, TabPlace } from '../../core/ports';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -196,6 +196,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly exits = new Emitter<ExitReport>();
 	private readonly activations = new Emitter<RunId | undefined>();
 	private readonly closes = new Emitter<{ readonly run: RunId; readonly marked: boolean }>();
+	private readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
 	private readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
 	private readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
 	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
@@ -211,6 +212,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidExit = this.exits.event;
 	readonly onDidActivate = this.activations.event;
 	readonly onDidClosePair = this.closes.event;
+	readonly onDidPlaceTab = this.placements.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
@@ -247,6 +249,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
 				closed: (run, marked) => this.closes.fire({ run, marked }),
+				placed: (run, column, activeAt) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column, ...activeAt !== undefined ? { activeAt } : {} } }),
 				renamed: (run, name) => this.tabRenames.fire({ run, name }),
 			pinned: (run, pinned) => this.tabPins.fire({ run, pinned }),
 				colours: this.colours
@@ -280,7 +283,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			return;
 		}
 		// A hidden one has its card alone until the person opens it, its run drawing at START_COLUMNS by START_ROWS (LIFECYCLE-2.2)
-		this.create(facts, options.reveal, options.hidden === true);
+		this.create(facts, options.reveal, options.hidden === true || facts.tab === 'hidden');
 	}
 
 	/** The initial restoration batch is complete; a recreated local registry may retire its predecessor's UI resources. */
@@ -607,7 +610,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 * and prevent VS Code from ever opening its pseudoterminal: the next run is restored only after this native terminal is ready.
 	 */
 	private async openRestored(pair: Pair, run: RunId): Promise<void> {
-		pair.terminal.open(false);
+		// Its tab back in its group, hidden if it was; from a build that kept no record, hidden unless pinned (LIFECYCLE-3.5)
+		const place = pair.facts.tab;
+		if (place === 'hidden' || (place === undefined && !pair.facts.pinned)) {
+			return;
+		}
+		pair.terminal.open(false, typeof place === 'object' ? place.column : undefined);
 		const opened = await Promise.race([pair.terminal.pty.ready, timeout(OPEN_WAIT_MS).then(() => undefined)]);
 		if (opened === false || this.pairs.get(run) !== pair) {
 			throw new Error('The agent was closed while reattaching.');
@@ -838,7 +846,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		};
 		this.pairs.set(facts.run, pair);
 		if (!deferTerminal) {
-			terminal.open(reveal);
+			terminal.open(reveal, typeof facts.tab === 'object' ? facts.tab.column : undefined);
 		}
 		return pair;
 	}

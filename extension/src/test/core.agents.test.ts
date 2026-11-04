@@ -9,7 +9,7 @@ import { SUGGESTED_NAMES } from '../core/names';
 import {
 	ActivityReport, CleanupResult, Disposable, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, Location, LocationPort,
 	ConversationEntry, ConversationMeta, ConversationKey, Pin, PinStore,
-	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RetainedRun, RunChange, RunFacts, RunId, RunMeta, WorktreeError, WorktreePlan
+	HumanFailure, LocationRemoval, PairFacts, PlanError, PlanRequest, RetainedRun, RunChange, RunFacts, RunId, RunMeta, TabPlace, WorktreeError, WorktreePlan
 } from '../core/ports';
 
 class Emitter<T> {
@@ -66,6 +66,8 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidExit = this.exits.event;
 	readonly onDidActivate = this.activations.event;
 	readonly onDidClosePair = this.tabCloses.event;
+	readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
+	readonly onDidPlaceTab = this.placements.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
@@ -469,11 +471,32 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual([labels.get(first)?.[1], labels.get(second)?.[1]], [false, false]);
 	});
 
+	test('where a run\'s tab is goes with its process for a reload; the one last active comes back last, and a run with no record comes back with none (LIFECYCLE-3.5)', async () => {
+		const world = setUp();
+		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
+		await settle();
+		world.execution.placements.fire({ run: id, place: { column: 2, activeAt: 7 } });
+		assert.deepStrictEqual(world.execution.metas.get(id)?.tab, { column: 2, activeAt: 7 });
+		world.execution.placements.fire({ run: id, place: 'hidden' });
+		assert.strictEqual(world.execution.metas.get(id)?.tab, 'hidden');
+		const reload = setUp();
+		const meta = (alias: string, tab?: TabPlace) => ({ alias, name: alias, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local' as const, yolo: true, createdAt: 5, ...tab ? { tab } : {} });
+		const run = (n: number) => `run-${String(n).repeat(32)}`;
+		reload.execution.liveRuns = [
+			{ run: run(1), meta: meta('#a1', { column: 1, activeAt: 30 }), pid: 1, startedAt: 1, claimedElsewhere: false },
+			{ run: run(2), meta: meta('#a2', { column: 1, activeAt: 10 }), pid: 2, startedAt: 2, claimedElsewhere: false },
+			{ run: run(3), meta: meta('#a3'), pid: 3, startedAt: 3, claimedElsewhere: false }
+		];
+		await reload.agents.restore();
+		assert.deepStrictEqual(reload.execution.attachedRuns, [run(3), run(2), run(1)]);
+		assert.deepStrictEqual([reload.execution.pairs.get(run(1))?.tab, reload.execution.pairs.get(run(3))?.tab], [{ column: 1, activeAt: 30 }, undefined]);
+	});
+
 	test('an agent another agent starts has its card alone: its tab is not opened, and it covers nothing and takes no focus (LIFECYCLE-2.2)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'Child', location: 'loc-1', cli: 'claude', origin: 'agent', creator: { run: 'run-lead' as RunId, root: 'run-lead' as RunId, label: 'lead' } });
 		await settle();
-		assert.deepStrictEqual([world.execution.pairs.has(id), world.execution.hidden.has(id), world.execution.reveals.get(id), world.agents.get(id)?.lifecycle], [true, true, false, 'running']);
+		assert.deepStrictEqual([world.execution.pairs.has(id), world.execution.hidden.has(id), world.execution.reveals.get(id), world.agents.get(id)?.lifecycle, world.execution.spawned[0]?.meta?.tab], [true, true, false, 'running', 'hidden']);
 	});
 
 	test('names are labels: empty strings, spaces, duplicates and human are accepted with distinct run IDs (LIFECYCLE-2.1)', () => {

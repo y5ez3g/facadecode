@@ -57,6 +57,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let visibleTabs: unknown[] | undefined;
 	let activeTab: unknown;
 	let activeTerminal: unknown;
+	/** The editor's groups where a test says them. */
+	let visibleGroups: { viewColumn: number }[] | undefined;
 	let commands: string[];
 	class TabInputTerminal { }
 	class TabInputText { constructor(readonly uri: unknown) { } }
@@ -107,6 +109,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		visibleTabs = undefined;
 		activeTab = undefined;
 		activeTerminal = undefined;
+		visibleGroups = undefined;
 		commands = [];
 		connectGate = undefined;
 		loseSpawnReply = false;
@@ -146,7 +149,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			window: {
 				get activeTerminal() { return activeTerminal; },
 				tabGroups: { onDidChangeTabs: tabsChanged.event, onDidChangeTabGroups: groupsChanged.event,
-					get all() { return [{ tabs: visibleTabs ?? terminals.filter(terminal => !terminal.disposed).map(terminal => terminal.tab) }]; },
+					get all() { return visibleGroups ?? [{ tabs: visibleTabs ?? terminals.filter(terminal => !terminal.disposed).map(terminal => terminal.tab) }]; },
 					get activeTabGroup() { return { activeTab }; } },
 				onDidChangeActiveTerminal: activeChanged.event,
 				activeColorTheme: { kind: 2 }, onDidChangeActiveColorTheme: () => ({ dispose() { } }),
@@ -252,7 +255,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		ports.push(port);
 		return port;
 	};
-	const facts = (run: RunId, more: Partial<PairFacts> = {}): PairFacts => ({ run, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', cwd: os.tmpdir(), ...more });
+	const facts = (run: RunId, more: Partial<PairFacts> = {}): PairFacts => ({ run, name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', cwd: os.tmpdir(), tab: { column: 1 }, ...more });
 	const meta = (_run: RunId): RunMeta => ({
 		alias: '#a1', name: 'Ada', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: os.tmpdir(),
 		environment: 'local', yolo: true, createdAt: 1
@@ -1133,6 +1136,31 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		}
 		port.tabLabel('run-r', '#a12', false);
 		assert.strictEqual(tab.names.at(-1), 'Ada');
+	});
+
+	test('a reload brings each tab back as its record says: open in its group, the last one where that is gone; hidden hidden; from a build that kept no record hidden, unless pinned (LIFECYCLE-3.5)', async () => {
+		const first = portOf();
+		for (const run of ['in-2', 'in-gone', 'hid', 'old', 'old-pinned']) {
+			first.openPair(facts(run), { reveal: false, hidden: true });
+			await first.spawn(run, plan(ECHO), meta(run));
+		}
+		const second = portOf();
+		const live = await second.live();
+		visibleGroups = [{ viewColumn: 1 }, { viewColumn: 2 }];
+		const before = terminals.length;
+		const places: Record<string, Partial<PairFacts>> = { 'in-2': { tab: { column: 2 } }, 'in-gone': { tab: { column: 5 } }, hid: { tab: 'hidden' }, old: { tab: undefined }, 'old-pinned': { tab: undefined, pinned: true } };
+		const opened: Record<string, unknown> = {};
+		for (const run of Object.keys(places)) {
+			const at = terminals.length;
+			const attaching = second.attach(live.find(each => each.run === run)!, facts(run, places[run]));
+			await new Promise(resolve => setTimeout(resolve, 50));
+			if (terminals.length > at) { open(terminals[at]); }
+			await attaching;
+			opened[run] = terminals.length > at ? (terminals[at].options.location as { viewColumn: number }).viewColumn : 'none';
+		}
+		visibleGroups = undefined;
+		assert.ok(terminals.length >= before);
+		assert.deepStrictEqual(opened, { 'in-2': 2, 'in-gone': 2, hid: 'none', old: 'none', 'old-pinned': -1 });
 	});
 
 	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {

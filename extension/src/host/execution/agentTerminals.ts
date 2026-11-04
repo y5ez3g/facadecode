@@ -13,7 +13,8 @@ import { AgentPty } from './agentPty';
 /** One run's terminal resource; process state and subscriptions belong to the execution coordinator. */
 export interface AgentTerminal {
 	readonly pty: AgentPty;
-	open(reveal: boolean): void;
+	/** Opens its tab: in the active group, or in `column`'s where that is given - the last group where it is gone (LIFECYCLE-3.5). */
+	open(reveal: boolean, column?: number): void;
 	reveal(preserveFocus: boolean): boolean;
 	/** Closes its tab, the run and its pseudoterminal going on: opened again, it draws the run's screen (LIFECYCLE-2.2). */
 	hide(): boolean;
@@ -41,8 +42,10 @@ interface TerminalEntry {
 	hiding?: boolean;
 	/** Facade's Pin of its agent, which a group's one unpinned agent tab counts - its mark following (LIFECYCLE-2.2, 3.4). */
 	pinned?: boolean;
-	/** When its tab was last active, by this host's clock: where none of a group's is active, the one last active stays. */
+	/** When its tab was last active, by this host's clock: what a reload into one group goes by (LIFECYCLE-2.2, 3.5). */
 	activeAt?: number;
+	/** The group its tab is to open in; none, the active one. */
+	openIn?: number;
 }
 
 interface TerminalOptions {
@@ -57,7 +60,7 @@ interface TerminalOptions {
 	/** The window's terminal colours, which each terminal reports as it opens and the theme changes (ARCHITECTURE-2.3). */
 	readonly colours?: WindowColours;
 	/** Where `run`'s tab is now: open in the group of `column`, or hidden - what a reload brings back (LIFECYCLE-2.2, 3.5). */
-	readonly placed?: (run: RunId, column: number | undefined) => void;
+	readonly placed?: (run: RunId, column: number | undefined, activeAt: number | undefined) => void;
 }
 
 /** Active-terminal and active-tab changes within this interval identify one change (LIFECYCLE-2.2). */
@@ -115,7 +118,10 @@ export class AgentTerminals implements vscode.Disposable {
 				pair.observedPin = undefined;
 				pair.tab = undefined;
 				this.opening = this.opening.filter(each => each.pair !== pair);
-				this.options.placed?.(pair.run, undefined);
+				// The window going keeps what a reload brings back
+				if (terminal.exitStatus?.reason !== vscode.TerminalExitReason.Shutdown) {
+					this.options.placed?.(pair.run, undefined, undefined);
+				}
 				if (pair.hiding) {
 					pair.hiding = false;
 					return;
@@ -221,22 +227,27 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/** Register the pseudoterminal first; the coordinator opens the native tab after registering its run. */
-	create(facts: Pick<PairFacts, 'run' | 'name' | 'cli'>, reveal: boolean): AgentTerminal {
+	create(facts: Pick<PairFacts, 'run' | 'name' | 'cli' | 'pinned'>, reveal: boolean): AgentTerminal {
 		const pty = new AgentPty(facts.name, line => this.options.log(line), () => this.still(), (osc, rgb) => this.options.colours?.learn(osc, rgb));
 		const covered = reveal ? undefined : vscode.window.tabGroups.activeTabGroup.activeTab;
 		const pair: TerminalEntry = {
-			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(),
+			run: facts.run, name: facts.name, cli: facts.cli, pty, terminal: undefined, lifetime: new AbortController(), ...facts.pinned ? { pinned: true } : {},
 			...reveal ? {} : { background: { since: Date.now(), ...covered ? { covered } : {} } }
 		};
 		this.entries.set(facts.run, pair);
 		return {
 			pty,
-			open: reveal => this.openPair(pair, reveal),
+			open: (reveal, column) => {
+				pair.openIn = column;
+				this.openPair(pair, reveal);
+			},
 			reveal: preserveFocus => {
 				if (this.entries.get(pair.run) !== pair) {
 					return false;
 				}
 				if (!pair.terminal) {
+					// In the group the person is in, wherever it last was
+					pair.openIn = undefined;
 					this.revealRequested = { pair, preserveFocus };
 					// A kept run whose tab was closed has none until it is opened again
 					if (!pair.opening) {
@@ -316,10 +327,19 @@ export class AgentTerminals implements vscode.Disposable {
 			pty,
 			iconPath: cliTerminalIcon(cli),
 			// The editor area alone (LIFECYCLE-2.2); never restored by the editor itself after a reload, which reattaches instead
-			location: { viewColumn: vscode.ViewColumn.Active, preserveFocus: !reveal },
+			location: { viewColumn: this.columnFor(pair), preserveFocus: !reveal },
 			isTransient: true
 		});
 		this.opening.push({ pair, at: Date.now() });
+	}
+
+	/** The group `pair`'s tab opens in: the one it was in, the last one where that is gone, else the active one (LIFECYCLE-3.5). */
+	private columnFor(pair: TerminalEntry): vscode.ViewColumn {
+		if (pair.openIn === undefined) {
+			return vscode.ViewColumn.Active;
+		}
+		const columns = vscode.window.tabGroups.all.map(group => group.viewColumn).filter(Number.isFinite);
+		return columns.length ? Math.min(pair.openIn, Math.max(...columns)) : vscode.ViewColumn.Active;
 	}
 
 	private createQueuedTerminal(pair: TerminalEntry): void {
@@ -502,8 +522,12 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 		const holder = this.pairOfTab(tab);
 		if ((!holder || holder === pair) && (!pair.tab || pair.tab === tab)) {
+			const before = pair.activeAt;
 			pair.activeAt = Date.now();
 			this.match(pair, tab, 'active');
+			if (before !== pair.activeAt && pair.tab === tab) {
+				this.options.placed?.(pair.run, tab.group?.viewColumn, pair.activeAt);
+			}
 		}
 	}
 
@@ -545,7 +569,7 @@ export class AgentTerminals implements vscode.Disposable {
 		const placedBefore = pair.tab?.group?.viewColumn;
 		pair.tab = tab;
 		if (placedBefore !== tab.group?.viewColumn) {
-			this.options.placed?.(pair.run, tab.group?.viewColumn);
+			this.options.placed?.(pair.run, tab.group?.viewColumn, pair.activeAt);
 		}
 		if (pair.observedPin !== tab.isPinned) {
 			const changed = pair.observedPin !== undefined || tab.isPinned;
