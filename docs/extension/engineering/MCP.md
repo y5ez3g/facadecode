@@ -173,8 +173,9 @@ API. A pending operation continues without another send/start. Final system resu
 with no active operation promise no later verification. Receipt delivery remains finite and may end when its initiator
 is unreachable. An earlier returned message deadline can extend under RULES-1.5; its passing or an empty inbox alone
 proves no final outcome. send_message always uses the initial-response and delivery-stage budgets owned by RULES-1.2 and
-RULES-1.5. A slow operation never keeps a closed card/terminal visible or extends a message budget. A continuing call
-sends no MCP progress notification and produces no progress popup.
+RULES-1.5. A slow operation never keeps a closed card/terminal visible or extends a message budget beyond RULES-1.5's
+own, under which a pending post-start creation prompt holds its run's input (RULES-1.10). A continuing call sends no MCP
+progress notification and produces no progress popup.
 
 ## 2 Discover and start
 
@@ -342,15 +343,16 @@ text that begins with `[Earlier output truncated]` - how Antigravity marks a lon
 characters - lost its beginning on its way: send_message, start_agent's prompt and type_text refuse it with
 invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole.
 
-Within RULES-1.2's response budget, return `message_id` and `target`, with `disposition` on success - `submitted_to_cli`,
-`read_messages` or `notified` (the person) - and, while accepted, `deadline` and an `obstacle` where one holds; add
-`reply_to` where given, `window_id` for another window's agent, and `request_id` with `repeated: true` for a repeated
-request. Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an accepted send returns
-is its stage's, which RULES-1.5 extends once another draft or a native question holds the recipient's input. Message ID
-allocation/reuse follows RULES-1.1; a message's text is typed at most once (RULES-1.6). Expiry is failure.
-An optional `request_id` makes a retry safe under 1.1. No cancel_message is provided. B's actual reply is another send.
-Human contact means notification handoff in the sender's window; no migration to another window on closure.
-All A-to-B delivery/reply/system-result errors remain with agents or end if nobody can receive them.
+Within RULES-1.2's response budget, return `message_id` and `target`, with `disposition` on success -
+`submitted_to_cli`, `read_messages` or `notified` (the person) - and, while accepted, `deadline` and an `obstacle` where
+one holds; add `reply_to` where given, `window_id` for another window's agent, and `request_id` with `repeated: true`
+for a repeated request. Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an
+accepted send returns is its stage's, which RULES-1.5 extends once another draft, delivery or pending creation prompt or
+a native question holds the recipient's input - from the start where the prompt is pending as the send arrives. Message
+ID allocation/reuse follows RULES-1.1; a message's text is typed at most once (RULES-1.6). Expiry is failure. An
+optional `request_id` makes a retry safe under 1.1. No cancel_message is provided. B's actual reply is another send.
+Human contact means notification handoff in the sender's window; no migration to another window on closure. All A-to-B
+delivery/reply/system-result errors remain with agents or end if nobody can receive them.
 
 ```json
 {"status":"success","effects":{"outcome":"confirmed","text_written":"full","enter_written":true},

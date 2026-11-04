@@ -180,9 +180,10 @@ terminal shows in one tab at a time. Where the editor copies an agent's tab - a 
 Copy into New Window - the agent stays where it is, and in the copy's place Facade starts a new agent of the same CLI
 and location, with the model and effort the first was started with where it had any and its CLI's defaults otherwise,
 under a new name, in a new conversation with no prompt, its tab focused and its start and failure as New Agent's (1.5);
-the copy, which has no process, closes once the new tab is open, and a copy whose agent Facade cannot tell closes,
-starting nothing. A reload brings the open tabs back (3.5). At most one unpinned agent terminal per group draws, besides
-the pinned ones, while ptyd keeps every agent's process and screen (ARCHITECTURE-2.3).
+the copy, which has no process, closes once the new tab is open, or as the launch is refused before acceptance (1.5),
+the person told why as New Agent's would; a copy whose agent Facade cannot tell closes, starting nothing; the first
+agent stays as it was throughout. A reload brings the open tabs back (3.5). At most one unpinned agent terminal per
+group draws, besides the pinned ones, while ptyd keeps every agent's process and screen (ARCHITECTURE-2.3).
 
 The tab shows only the agent name beside the CLI's theme-appropriate logo; custom CLIs use a terminal icon. While its
 card's dot is green (RULES-3.2), a spinner frame turns between the logo and the name every 100 ms, for every CLI: the

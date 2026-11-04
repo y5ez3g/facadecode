@@ -160,15 +160,17 @@ Direct text/keys only require the terminal input backend, not an input reader.
 
 Each built-in CLI has an input reader that finds its input box around the cursor - its prompt row, frame or box, the
 cursor being the terminal's or the CLI's own drawn one - and reads what the box holds: nothing, its placeholder drawn
-dim or known by its words, or a draft. A reader goes by layout, not version number, and reads nothing outside the box:
-footers, hints, status rows and warnings may change, as a CLI updates or within a session, without changing what it
-reads, apart from the two places below where the box alone cannot tell - Antigravity's colored placeholder and Codex's
-transcript. A CLI's questions, menus and logins take its box's place, so a screen without the box around the cursor is
-unknown: nothing is typed, and the message fails at its deadline with `input_unknown`, naming the CLI and the version
-Facade found. Every installed version is attempted. The version never gates message input; only 1.1's unsupported line
-is refused, at its start. A CLI without an input reader fails ordinary messages at once with `unsupported`. Readers are
-tested against recorded screens of real CLI versions; a changed box becomes a new recorded case, and a reader never
-guesses an empty input where it does not find its box.
+dim or known by its words, or a draft. A reader goes by layout, not version number, and tells a usable input from a
+draft by nothing outside the box: footers, hints, status rows and warnings may change, as a CLI updates or within a
+session, without changing what it reads, apart from the two places below where the box alone cannot tell - Antigravity's
+colored placeholder and Codex's transcript. A CLI's questions, menus and logins take its box's place: a screen without
+the box around the cursor is a native interaction where the reader recognizes one of its CLI's questions or menus, which
+a message waits for (RULES-1.4, 1.5), and unknown otherwise. Nothing is typed into either, and an unknown screen fails
+the message at its deadline with `input_unknown`, naming the CLI and the version Facade found. Every installed version
+is attempted. The version never gates message input; only 1.1's unsupported line is refused, at its start. A CLI without
+an input reader fails ordinary messages at once with `unsupported`. Readers are tested against recorded screens of real
+CLI versions; a changed box becomes a new recorded case, and a reader never guesses an empty input where it does not
+find its box.
 
 `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed and pasted text, messages, a
 Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines, a

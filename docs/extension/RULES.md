@@ -88,7 +88,7 @@ protection.
 | Initial response | At most 2 seconds from Facade ingress |
 | Attempts per stage | At stage start, then every 3 seconds |
 | Deadline per stage | 15 seconds from that stage's start |
-| Input held by another draft or a native menu or question | Once held, the stage's deadline is 10 minutes from its start, whatever the input shows after |
+| Input held by another draft, another delivery or a pending creation prompt (1.10), or a native menu or question | Once held, the stage's deadline is 10 minutes from its start, whatever the input shows after |
 | Permanent obstacle | Finish immediately; do not wait out unused slots |
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
@@ -192,9 +192,9 @@ No notification or message is scheduled for replay on the next opening.
 **Serialize automated input per terminal so two operations cannot splice their contents together.**
 
 An ordinary message is one full paste plus Enter, not one Enter per line. Direct text/keys use the same serialization.
-While another delivery's text may still be in that input - written, neither confirmed nor ended - no message is pasted
-into it: that input is held for it, as by a draft. Waiting in that sequence does not renew deadlines; a message waiting
-behind its recipient's creation prompt starts its stage once that prompt settles (COLLABORATION-2.2). Stop is
+While another delivery's text may still be in that input - written, neither confirmed nor ended - or its run's
+post-start creation prompt, its preparation included, is neither delivered nor given up (COLLABORATION-2.2), no message
+is pasted into it: that input is held for it, as by a draft. Waiting in that sequence does not renew deadlines. Stop is
 independent of pending input and prevents further queued input for the closed run. Use a simple bounded implementation;
 no agent workflow or general-purpose scheduler is added.
 
