@@ -9,6 +9,7 @@ import * as os from 'os';
 import * as path from 'path';
 import * as zlib from 'zlib';
 import { build } from 'esbuild';
+import type { Card } from '../webview/protocol';
 
 /** Real Chromium input and layout, in a throwaway headless profile. No installed browser profile or editor is attached. */
 suite('The agent panel in Chromium', function () {
@@ -315,6 +316,21 @@ suite('The agent panel in Chromium', function () {
 		assert.ok(pinned.id === undefined && Math.abs(pinned.pinEnd) <= 1, JSON.stringify(pinned));
 		assert.ok(plain.id === undefined && plain.end > 40, 'an unpinned card reserves no Pin box');
 		assert.strictEqual(seen.wide[0].name, seen.long.replace(/\s+/g, ' '), 'widened, the original name comes back');
+	});
+
+	test('PANEL-3.2: a state the extension sends is drawn whichever of a card\'s fields it has - two cards of one name with their short IDs among them; none is refused', async () => {
+		// Every field a card can have: a field the host's cards gain that the page's check does not know fails here, as `repeated` did
+		const every: { readonly [K in keyof Required<Card>]: Card[K] } = {
+			pinned: true, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
+			location: { full: 'Location: project · /project' }, dot: 'working', stateText: 'Working', line: '📨 Check the build', tooltip: ['Ada · #a1 · Claude Code', 'Working'],
+			label: 'Ada, #a1, Working', startedAt: Date.now(), workingSince: Date.now(), menu: { pin: false, unpin: true, moveUp: false, moveDown: true }
+		};
+		const twin: Card = { ...every, pinned: undefined, selected: false, runId: 'run-2', alias: '#a2', avatar: { initial: 'A', color: 'blue' }, menu: { pin: true, moveUp: true, moveDown: false } };
+		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3' };
+		await deliver({ type: 'state', state: { revision: 7, loading: false, cards: [every, twin, other], cardCount: 3, capabilities: { remote: false }, clockAt: Date.now() } });
+		await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+		assert.deepStrictEqual(await evaluate(`[window.errors, [...document.querySelectorAll('.agent')].map(card => [card.querySelector('.name').textContent, card.querySelector('.short-id')?.textContent ?? null])]`),
+			[[], [['Ada', '#a1'], ['Ada', '#a2'], ['Cy', null]]]);
 	});
 
 	test('PANEL-1.3: Pin and Unpin refit the same card, and a repeated name\'s ID comes and goes without losing its name', async () => {

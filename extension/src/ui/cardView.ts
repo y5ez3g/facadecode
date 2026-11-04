@@ -80,7 +80,6 @@ export function folderPrefixOf(location: Pick<Location, 'label' | 'folders'>, ca
 	return catalog.folders.length > 1 && folder && folder.name !== location.label ? folder.name : undefined;
 }
 
-/** A location as the person reads it alone (PANEL-1.3): its label, after its workspace folder's name in a multi-folder window. */
 /**
  * The window's one place to work, where it has one (LIFECYCLE-1.3): one folder whose only location is a plain folder - one Git found
  * no repository in, or is missing for - which goes without saying wherever a location would be said. A folder Git is still reading,

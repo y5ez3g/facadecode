@@ -49,7 +49,7 @@ const isCard: Check = value => isShaped(value, {
 	runId: isString, selected: isBoolean, name: isString, alias: isString,
 	location: value => isShaped(value, { full: isString }),
 	dot: value => DOTS.includes(value), stateText: isString, line: isString, tooltip: isStrings, label: isString, menu: isMenu
-}, { avatar: isAvatar, startedAt: isNumber, workingSince: isNumber, pinned: isBoolean });
+}, { avatar: isAvatar, startedAt: isNumber, workingSince: isNumber, pinned: isBoolean, repeated: value => value === true });
 const isState: Check = value => isShaped(value, {
 	revision: isNumber, loading: isBoolean, cards: value => Array.isArray(value) && value.every(isCard), cardCount: isNumber,
 	capabilities: value => isShaped(value, { remote: isBoolean })
