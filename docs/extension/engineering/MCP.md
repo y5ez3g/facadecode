@@ -159,22 +159,22 @@ monotonic clock; process clocks are never subtracted across environments. Query 
 delivery-confirming reads side-effect-free. An actual continuing operation may return accepted with its run/effects;
 later completion returns to its initiating agent through a Facade system result. The accepted response and later result
 identify the same originating tool call and target run, using existing call correlation facts so concurrent calls,
-including calls to the same target, are distinguishable. Accepted start/stop results expose `call_id` and
-`result_message_id`, reserved from the message namespace before acceptance; a stop whose window cannot take that number
-answers without it and sends no later result (3.2). The later receipt has that same ID. The full `call_id` stays in
-structured data and records; a same-request start lookup keeps both original IDs, including after reload. Reservation
-creates no inbox item and promises no durable delivery. The original prompt/message ID identifies prompt delivery
-separately. Message records retain originating-call correlation while delivery resumes after reload. Local and routed
-receipts retain the target's known name and short reference even after its card closes; rendering does not depend on
-looking up that removed target again. This adds no public operation object or query API. Result handoff follows
-RULES-1.7, including no duplicate receipt for an immediate final result and no human fallback when handoff fails. Use
-list_agents for current run state; there is no separate operation inspection API. A pending operation continues without
-another send/start. Final system results request no reply. Unknown outcomes with no active operation promise no later
-verification. Receipt delivery remains finite and may end when its initiator is unreachable. An earlier returned message
-deadline can extend under RULES-1.5; its passing or an empty inbox alone proves no final outcome. send_message always
-uses the initial-response and delivery-stage budgets owned by RULES-1.2 and RULES-1.5. A slow operation never keeps a
-closed card/terminal visible or extends a message budget. A continuing call sends no MCP progress notification and
-produces no progress popup.
+including calls to the same target, are distinguishable. Accepted start/stop results, and a start answered while its
+prompt is pending (2.3), expose `call_id` and `result_message_id`, reserved from the message namespace before
+acceptance; a stop whose window cannot take that number answers without it and sends no later result (3.2). The later
+receipt has that same ID. The full `call_id` stays in structured data and records; a same-request start lookup keeps
+both original IDs, including after reload. Reservation creates no inbox item and promises no durable delivery. The
+original prompt/message ID identifies prompt delivery separately. Message records retain originating-call correlation
+while delivery resumes after reload. Local and routed receipts retain the target's known name and short reference even
+after its card closes; rendering does not depend on looking up that removed target again. This adds no public operation
+object or query API. Result handoff follows RULES-1.7, including no duplicate receipt for an immediate final result and
+no human fallback when handoff fails. Use list_agents for current run state; there is no separate operation inspection
+API. A pending operation continues without another send/start. Final system results request no reply. Unknown outcomes
+with no active operation promise no later verification. Receipt delivery remains finite and may end when its initiator
+is unreachable. An earlier returned message deadline can extend under RULES-1.5; its passing or an empty inbox alone
+proves no final outcome. send_message always uses the initial-response and delivery-stage budgets owned by RULES-1.2 and
+RULES-1.5. A slow operation never keeps a closed card/terminal visible or extends a message budget. A continuing call
+sends no MCP progress notification and produces no progress popup.
 
 ## 2 Discover and start
 

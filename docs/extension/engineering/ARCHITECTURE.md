@@ -293,12 +293,14 @@ pseudoterminal lives from its acceptance to its removal; its editor tab is creat
 as it is hidden (LIFECYCLE-2.2), the pseudoterminal and the run's process untouched, and each opening draws the run's
 screen taken anew. A run whose tab is hidden has ptyd's answers alone, what only the editor knows going unanswered. A
 run of an earlier supervisor, which leaves its queries to the window, has them answered while its tab is hidden by a
-headless terminal the window keeps for it from the output it hears, as its editor terminal would - what only an editor
-knows aside - so that hiding it changes its view alone; the window lets that terminal go as the tab opens. Propagate
-RULES-1.5's remaining message budget to the input owner; internal hops cannot restart it. Do not compare independent
-host wall clocks as if synchronized. Check whether input can still start before writing; ptyd takes a text and its Enter
-in separate requests, never both in one (MCP-5.2). Uncertain effects stay uncertain; ordinary-message retries follow
-RULES-1.6's single paste and owned-draft Enter. No exactly-once write protocol or operation-query service is required.
+headless terminal the window keeps for it, starting from the run's screen as its tab is hidden and following the output
+it hears, as its editor terminal would - what only an editor knows aside - so that hiding it changes its view alone; the
+tab and that terminal hand the answering over between two pieces of output, each query answered once, and the window
+lets that terminal go as the tab opens. Propagate RULES-1.5's remaining message budget to the input owner; internal hops
+cannot restart it. Do not compare independent host wall clocks as if synchronized. Check whether input can still start
+before writing; ptyd takes a text and its Enter in separate requests, never both in one (MCP-5.2). Uncertain effects
+stay uncertain; ordinary-message retries follow RULES-1.6's single paste and owned-draft Enter. No exactly-once write
+protocol or operation-query service is required.
 
 A run's shim connects to its execution environment's supervisor and names the run it speaks for; a shim of another
 protocol is refused and its connection closed. The supervisor forwards each call to the connection that currently owns
@@ -567,12 +569,13 @@ editor reports the component installed later. If it does not appear, the window 
 which the component reads, so it cannot tell which agents are its own and shows and starts none (RULES-4.1): the panel
 and one notification explain in plain words that the Facade Code Window Component must be installed and enabled on this
 computer, with an action that shows it in the Extensions view, Facade's commands repeat that explanation, and a reload
-is offered once the component is installed. The window's running agents go on for RULES-4.1's grace, so that
-installing the component and reloading in time shows them again. A window component without the client network, too old
-to carry requests, leaves its window's agents shown and usable: they reach this window's agents alone, list_agents and
-name resolution report the other windows unavailable (`complete: false`, MCP-3.1), and a new start or send is refused,
-saying to update the Facade Code Window Component on this computer and reload the window (1.1). Unpublished installation
-tests install that component locally as well as the platform-specific execution VSIX in its execution host.
+is offered once the component is installed. The window's running agents go on for RULES-4.1's grace: a remote window's
+leaves time to install the component and reload, which shows them again, and a local window's does not. A window
+component without the client network, too old to carry requests, leaves its window's agents shown and usable: they reach
+this window's agents alone, list_agents and name resolution report the other windows unavailable (`complete: false`,
+MCP-3.1), and a new start or send is refused, saying to update the Facade Code Window Component on this computer and
+reload the window (1.1). Unpublished installation tests install that component locally as well as the platform-specific
+execution VSIX in its execution host.
 
 The execution stage includes its owned backend, node-pty 1.2.0-beta.15 pinned exactly - node-pty 1.1.0's Windows exit
 watchers change a shared console list without a lock, which corrupts ptyd when several consoles end together - with its

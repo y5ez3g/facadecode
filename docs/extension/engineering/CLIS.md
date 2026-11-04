@@ -158,33 +158,39 @@ Ordinary input evidence distinguishes a usable input box, a draft, a native inte
 tracked keystrokes alone cannot prove the draft empty after paste/history navigation. Never send Enter as a probe.
 Direct text/keys only require the terminal input backend, not an input reader.
 
-Each built-in CLI has an input reader that recognizes its input box by layout - prompt row, frame, box or footer, a
-placeholder drawn dim or known by its words, and the cursor position or the CLI's own drawn cursor - not by version
-number. Every installed version is attempted. A screen the reader does not recognize is unknown: nothing is typed, and
-the message fails at its deadline with `input_unknown`, naming the CLI and the version Facade found. The version never
-gates message input; only 1.1's unsupported line is refused, at its start. A CLI without an input reader fails ordinary
-messages at once with `unsupported`. Readers are tested against recorded screens of real CLI versions; a changed layout
-becomes a new recorded case, and a reader never guesses an empty input from a layout it does not recognize.
+Each built-in CLI has an input reader that finds its input box around the cursor - its prompt row, frame or box, the
+cursor being the terminal's or the CLI's own drawn one - and reads what the box holds: nothing, its placeholder drawn
+dim or known by its words, or a draft. A reader goes by layout, not version number, and reads nothing outside the box:
+footers, hints, status rows and warnings may change, as a CLI updates or within a session, without changing what it
+reads, apart from the two places below where the box alone cannot tell - Antigravity's colored placeholder and Codex's
+transcript. A CLI's questions, menus and logins take its box's place, so a screen without the box around the cursor is
+unknown: nothing is typed, and the message fails at its deadline with `input_unknown`, naming the CLI and the version
+Facade found. Every installed version is attempted. The version never gates message input; only 1.1's unsupported line
+is refused, at its start. A CLI without an input reader fails ordinary messages at once with `unsupported`. Readers are
+tested against recorded screens of real CLI versions; a changed box becomes a new recorded case, and a reader never
+guesses an empty input where it does not find its box.
+
 `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed and pasted text, messages, a
 Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines, a
 hundred-line message and Claude Code's lead - without submitting anything, at 40 rows or the `--rows` given, and checks
-each reader and its own-draft recognition against what it drew; it is run once a CLI updates, and the screens it saves,
-each paste's text kept with its screen, become recorded cases. In a terminal 24 rows high, as an editor's panel may be,
-Antigravity and Pi scroll a draft taller than their input box, Antigravity marking it with `↑ 1 more lines` first in the
-box and Pi in its upper rule, `─── ↑ 2 more ───`: their readers say how many rows are out of sight above and below,
-apart from the draft, and a draft whose end in sight is the message's end, nothing being out of sight below, is the
-message's own. Pi draws a paste of ten lines or fewer and more than 1,000 characters as `[paste #1 1284 chars]`,
-counting a line break as one and a tab as four; its reader reads that count apart from the paste's number, so that a
-person's `[paste #2 11284 chars]` is not a message's 1,284, and finds Pi's own drawn cursor by its column, after wide
-characters too. Codex 0.166.0 draws a status at the right end of its hints row, `⚠ 1 warning · f2 to view`, alone there
-while a draft hides the hints, when `-c` overrides run it outside its background server: Facade starts it with
-`--no-daemon`, and its reader takes that row either way. Codex 0.166.0's passive transcript footer can replace its
-shortcuts row with `enter/esc latest` or `New activity · enter/esc latest`, optionally followed by `· ? shortcuts` and a
-right-aligned warning, and a resting draft changes that hint to `esc latest`: these are usable input layouts only with
-the model/folder row, the blank separator, the complete composer and the cursor in it, and the same draft and
-synchronized-drawing checks apply. Active transcript browsing, search and selection are not these passive footers and
-stay unavailable to ordinary delivery. A usable input in a passive transcript view says nothing about current activity,
-as its transcript can show old content (2.3).
+each reader and its own-draft recognition against what it drew; it is run against each built-in's newest version before
+a release and whenever a CLI updates, and the screens it saves, each paste's text kept with its screen, become recorded
+cases. In a terminal 24 rows high, as an editor's panel may be, Antigravity and Pi scroll a draft taller than their
+input box, Antigravity marking it with `↑ 1 more lines` first in the box and Pi in its upper rule, `─── ↑ 2 more ───`:
+their readers say how many rows are out of sight above and below, apart from the draft, and a draft whose end in sight
+is the message's end, nothing being out of sight below, is the message's own. Pi draws a paste of ten lines or fewer and
+more than 1,000 characters as `[paste #1 1284 chars]`, counting a line break as one and a tab as four; its reader reads
+that count apart from the paste's number, so that a person's `[paste #2 11284 chars]` is not a message's 1,284, and
+finds Pi's own drawn cursor by its column, after wide characters too. Codex has no frame: its box is its prompt row `› `
+with the input or its dim placeholder, the draft going on in rows indented two spaces, and its own earlier messages
+begin `› ` too, higher up: the box is the one the cursor is in. The rows Codex 0.166.0 draws under it change with its
+state and are not read - among them a status at the right end, `⚠ 1 warning · f2 to view`, when `-c` overrides run it
+outside its background server, as Facade starts it with `--no-daemon`, and in a passive transcript view
+`enter/esc latest` or, under a resting draft, `esc latest`, led by `New activity · `, by `Earlier messages available.  `
+while older history is not loaded, or by both. Its transcript browsing, search and selection keep the box drawn while
+they take its keys: they are not usable input and stay unavailable to ordinary delivery, its reader telling each from
+the box, as a recorded screen of each shows. A usable input in a passive transcript view says nothing about current
+activity, as its transcript can show old content (2.3).
 
 Antigravity's accept-edits and plan modes draw a colored, non-dim initial placeholder. Recognize its exact mode
 sentence (or the CLI's width-truncated prefix ending in `...`) only inside its one-line frame with the empty-input
@@ -212,13 +218,12 @@ Code, which read console input one key at a time: 21.1 s for 9,249 characters, a
 that draft - for Antigravity, which takes seconds to expand a long paste, 45 ms a line after the draft shows; for Muse
 Code 250 ms after, as it takes an Enter that soon after its paste for a line break in it (it did 15 ms after, and
 submitted 100 ms after) - and delivery is confirmed once the input box is empty again, within 3 seconds and the paste's
-time. The same times - Muse Code's 250 ms apart, which comes before an ordinary message's Enter alone - extend the
-stage's deadlines (RULES-1.5) and type_text's wait before its Enter (MCP-5.2). State actual full/partial/unknown
-effects. A later attempt never types the text again; it presses Enter only over the message's own draft (RULES-1.6). Do
-not require a reconciliation API. An unknown version still starts its terminal, and its activity can still be verified
-per run under 2.3. A CLI that never shows its activity is red, with its reason, once the run's startup bound passed
-(2.3). Every CLI advertised as fully supported must actually demonstrate the required capabilities on its stated
-platform.
+time. The same times extend the stage's deadlines (RULES-1.5) and type_text's wait before its Enter (MCP-5.2), Muse
+Code's 250 ms included, so that its Enter after a typed text submits too. State actual full/partial/unknown effects. A
+later attempt never types the text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require
+a reconciliation API. An unknown version still starts its terminal, and its activity can still be verified per run under
+2.3. A CLI that never shows its activity is red, with its reason, once the run's startup bound passed (2.3). Every CLI
+advertised as fully supported must actually demonstrate the required capabilities on its stated platform.
 
 The reader also reads what the person submits. An Enter the person types into an agent's terminal waits for the reader's
 reading of the input - at most 150 ms, after 30 ms for typing sent with that Enter to be drawn - before it reaches the
@@ -596,7 +601,7 @@ installed CLI is the runtime evidence.
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.4 | Each built-in's destination discovery, unknown-version launch, OpenCode below version 2 refused with how to update, a turned-off CLI refused as turned off, matching profile/PATH/env/quoting, Windows launcher recognition and cmd.exe refusals, native permission mapping, explicit per-call model/effort and native defaults |
-| 2.1–2.3 | Adapter evidence, layout-based input readers on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, titles kept as set for each built-in, Muse Code's screen reader on its fixtures and its reports' precedence |
+| 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, titles kept as set for each built-in, Muse Code's screen reader on its fixtures and its reports' precedence |
 | 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks |
 | 3.1–3.4 | `.enabled` affects new starts only, custom CLIs require Resume without capability declarations or other placeholders, minimal argument/env schema, owned and session options refused, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
 | 4.1–4.2 | Show Agent Launch describes and redacts the configured launch and says where no trust entry is written; staged cwd validation |

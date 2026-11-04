@@ -110,20 +110,20 @@ wait.
 
 Temporary remote loss retains observations and reconciles the original processes. A closed window's agents end after
 RULES-4.1's grace - 90 seconds for a local window, five minutes for a remote one, and five minutes for agents a released
-build's execution supervisor still holds - unless the workspace is opened again first, which shows them again; a reload
-never ends them, and Pins restore once their agents ended. Other windows continue their work. Pending messages to ended
-runs fail to their agent senders where reachable and are never replayed on reopening. If only the sender closes,
-delivery already executing elsewhere may finish; work left at the closing side may end. No extra handover machinery
-guarantees that edge case. System results that cannot return simply end.
+build's execution supervisor still holds - unless the workspace is opened again first, which shows them again, as a
+reload does within that time (RULES-4.1), and Pins restore once their agents ended. Other windows continue their work.
+Pending messages to ended runs fail to their agent senders where reachable and are never replayed on reopening. If only
+the sender closes, delivery already executing elsewhere may finish; work left at the closing side may end. No extra
+handover machinery guarantees that edge case. System results that cannot return simply end.
 
 ### 2.5 Resume and Pin
 
 **Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
 
 Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are the
-same intent. Unpin keeps the current agent running. Close Agent, a person's close of the agent's pinned tab and normal
-exit Unpin; abnormal exit and whole-window close preserve the intent, and a Pin restored opens its tab in the
-background. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
+same intent. Unpin keeps the current agent running. Close Agent, a person's close of the agent's tab showing its pin
+mark and normal exit Unpin; abnormal exit and whole-window close preserve the intent, and a Pin restored opens its tab
+in the background. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
 
 ## 3 Working with other agents
 
