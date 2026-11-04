@@ -163,14 +163,14 @@ cursor being the terminal's or the CLI's own drawn one - and reads what the box 
 dim or known by its words, or a draft. A reader goes by layout, not version number, and tells a usable input from a
 draft by nothing outside the box: footers, hints, status rows and warnings may change, as a CLI updates or within a
 session, without changing what it reads, apart from the two places below where the box alone cannot tell - Antigravity's
-colored placeholder and Codex's transcript. A CLI's questions, menus and logins take its box's place: a screen without
-the box around the cursor is a native interaction where the reader recognizes one of its CLI's questions or menus, which
-a message waits for (RULES-1.4, 1.5), and unknown otherwise. Nothing is typed into either, and an unknown screen fails
-the message at its deadline with `input_unknown`, naming the CLI and the version Facade found. Every installed version
-is attempted. The version never gates message input; only 1.1's unsupported line is refused, at its start. A CLI without
-an input reader fails ordinary messages at once with `unsupported`. Readers are tested against recorded screens of real
-CLI versions; a changed box becomes a new recorded case, and a reader never guesses an empty input where it does not
-find its box.
+colored placeholder and the lower edge of Codex's box. A CLI's questions, menus and logins take its box's place: a
+screen without the box around the cursor is a native interaction where the reader recognizes one of its CLI's questions
+or menus, which a message waits for (RULES-1.4, 1.5), and unknown otherwise. Nothing is typed into either, and an
+unknown screen fails the message at its deadline with `input_unknown`, naming the CLI and the version Facade found.
+Every installed version is attempted. The version never gates message input; only 1.1's unsupported line is refused, at
+its start. A CLI without an input reader fails ordinary messages at once with `unsupported`. Readers are tested against
+recorded screens of real CLI versions; a changed box becomes a new recorded case, and a reader never guesses an empty
+input where it does not find its box.
 
 `scripts/capture-inputs.mjs` records a built-in's input box for each case - empty, typed and pasted text, messages, a
 Facade result alone and several in one paste, Chinese and emoji, a seven-line message, a message of a few long lines, a
@@ -184,15 +184,17 @@ is the message's end, nothing being out of sight below, is the message's own. Pi
 more than 1,000 characters as `[paste #1 1284 chars]`, counting a line break as one and a tab as four; its reader reads
 that count apart from the paste's number, so that a person's `[paste #2 11284 chars]` is not a message's 1,284, and
 finds Pi's own drawn cursor by its column, after wide characters too. Codex has no frame: its box is its prompt row `› `
-with the input or its dim placeholder, the draft going on in rows indented two spaces, and its own earlier messages
-begin `› ` too, higher up: the box is the one the cursor is in. The rows Codex 0.166.0 draws under it change with its
-state and are not read - among them a status at the right end, `⚠ 1 warning · f2 to view`, when `-c` overrides run it
-outside its background server, as Facade starts it with `--no-daemon`, and in a passive transcript view
+with the input or its dim placeholder, the draft going on in rows indented two spaces, blank ones among them, and its
+own earlier messages begin `› ` too, higher up: the box is the one the cursor is in. It ends at the blank row above the
+row Codex draws its model and folder on - two spaces, the model, ` · ` and the folder's path - which its reader finds by
+that shape and its place, the last row Codex draws or the one above it. The row under it, where Codex draws one, changes
+with its state and is not read - among them a status at the right end, `⚠ 1 warning · f2 to view`, when `-c` overrides
+run it outside its background server, as Facade starts it with `--no-daemon`, and in a passive transcript view
 `enter/esc latest` or, under a resting draft, `esc latest`, led by `New activity · `, by `Earlier messages available.  `
 while older history is not loaded, or by both. Its transcript browsing, search and selection keep the box drawn while
-they take its keys: they are not usable input and stay unavailable to ordinary delivery, its reader telling each from
-the box, as a recorded screen of each shows. A usable input in a passive transcript view says nothing about current
-activity, as its transcript can show old content (2.3).
+they take its keys, and put the cursor outside the box or hide it: they are not usable input and stay unavailable to
+ordinary delivery, as a recorded screen of each shows. A usable input in a passive transcript view says nothing about
+current activity, as its transcript can show old content (2.3).
 
 Antigravity's accept-edits and plan modes draw a colored, non-dim initial placeholder. Recognize its exact mode
 sentence (or the CLI's width-truncated prefix ending in `...`) only inside its one-line frame with the empty-input
