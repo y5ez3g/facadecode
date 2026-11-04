@@ -16,31 +16,31 @@ document owns launch, naming, terminal, finding, closing, Resume and Pin interac
 
 **New Agent shows the working location, editable suggested name and CLI choices in one native picker.**
 
-With a folder open, use `New Agent · {name} · {location}` as the title; placeholder: `Select a CLI`. In a multi-folder
-window, prefix a checkout's location with its workspace folder; do not repeat a plain folder's name. A proposed worktree
-appears as `{branch} (new)` in the title, with the folder prefix in a multi-folder window. Append the environment only
-when it is remote, named as VS Code's remote indicator names it: `SSH: {host}`, `WSL: {distro}` or `Dev Container`;
-another remote is named by its remote authority's kind. Only the local window component sees the remote authority, so it
-reports it with the window identity; location identities do not change. This summary remains visible while CLI choices
-are filtered or scrolled, including when 1.2 has fallen back to another location. Put the last successfully used CLI
-first and preselect it; never execute it without selection. The CLI step lists nothing until the CLIs are found, so an
-Enter while they load starts nothing: the editor keeps the focused position as items change. Other installed/enabled
-CLIs follow CLIS-1.1 order, then configured custom CLIs. CLIs that cannot start here - a configuration error, a
-configured program that is not found, a version Facade does not start - follow under a separator labeled `Unavailable`,
-each with its reason as detail and a `Configure Agents` button; choosing one opens Configure Agents too. Errors of
-`facade.custom` that belong to no CLI are listed there under their setting. A built-in that is not installed, or is
-turned off, is not listed. The bottom items, under a separator labeled `Options`, are `Change Working Location...` and
-`Change Name...`; where nothing can be chosen (1.3) `Change Name...` is alone there. The location item's description
-shows the full current working location, including `New worktree {branch} from {source}` for a proposed worktree, and
-its environment when that is not this machine. The name item's description shows the full current name. These items edit
-the values; they are not the only place the current choices appear. A person can accept the suggested name or leave it
-empty; an empty name keeps its title segment (`New Agent ·  · main`). Change Name uses the title `New Agent · Change
-Name` and the placeholder `Agent name`, and prefills the current name with no prompt of its own; the editor supplies the
-Enter/Escape instructions. With no usable CLI, `Configure Agents...` has the detail `Install a supported CLI in this
-environment, or configure its path.`; where the CLIs cannot be listed at all, it carries that failure as its detail.
-With no folder, use PANEL-1.2's Open Folder prerequisite picker and its wording instead of the CLI step. Missing
-optional Git does not block creation or trigger a Git initialization suggestion. Cancel closes without effects or
-changing successful-launch history.
+With a folder open, use `New Agent · {name} · {location}` as the title, or `New Agent · {name}` in the window's one
+place to work (1.3); placeholder: `Select a CLI`. In a multi-folder window, prefix a checkout's location with its
+workspace folder; do not repeat a plain folder's name. A proposed worktree appears as `{branch} (new)` in the title,
+with the folder prefix in a multi-folder window. Append the environment only when it is remote, named as VS Code's
+remote indicator names it: `SSH: {host}`, `WSL: {distro}` or `Dev Container`; another remote is named by its remote
+authority's kind. Only the local window component sees the remote authority, so it reports it with the window identity;
+location identities do not change. This summary remains visible while CLI choices are filtered or scrolled, including
+when 1.2 has fallen back to another location. Put the last successfully used CLI first and preselect it; never execute
+it without selection. The CLI step lists nothing until the CLIs are found, so an Enter while they load starts nothing:
+the editor keeps the focused position as items change. Other installed/enabled CLIs follow CLIS-1.1 order, then
+configured custom CLIs. CLIs that cannot start here - a configuration error, a configured program that is not found, a
+version Facade does not start - follow under a separator labeled `Unavailable`, each with its reason as detail and a
+`Configure Agents` button; choosing one opens Configure Agents too. Errors of `facade.custom` that belong to no CLI are
+listed there under their setting. A built-in that is not installed, or is turned off, is not listed. The bottom items,
+under a separator labeled `Options`, are `Change Working Location...` and `Change Name...`; where nothing can be chosen
+(1.3) `Change Name...` is alone there. The location item's description shows the full current working location,
+including `New worktree {branch} from {source}` for a proposed worktree, and its environment when that is not this
+machine. The name item's description shows the full current name. These items edit the values; they are not the only
+place the current choices appear. A person can accept the suggested name or leave it empty; an empty name keeps its
+title segment (`New Agent ·  · main`). Change Name uses the title `New Agent · Change Name` and the placeholder `Agent
+name`, and prefills the current name with no prompt of its own; the editor supplies the Enter/Escape instructions. With
+no usable CLI, `Configure Agents...` has the detail `Install a supported CLI in this environment, or configure its
+path.`; where the CLIs cannot be listed at all, it carries that failure as its detail. With no folder, use PANEL-1.2's
+Open Folder prerequisite picker and its wording instead of the CLI step. Missing optional Git does not block creation or
+trigger a Git initialization suggestion. Cancel closes without effects or changing successful-launch history.
 
 ### 1.2 Human location history
 
@@ -65,9 +65,13 @@ Worktree...` naming its source as `from {branch}` (WORKTREES-2.1); where a prere
 native creation - that row shows why as its detail and cannot be chosen (WORKTREES-2.3). The step shows at once and adds
 the row when its check completes. A folder in no repository, or where Git is missing, is a plain folder and has no New
 Worktree row; when nothing can be chosen - one folder whose only location is a plain folder - the picker offers no
-location change, as an action that does nothing would be, and its title alone shows the location. Retain
-Back/selections; Escape cancels the launch. A proposed new branch/location is only created when the person accepts a
-CLI. There is no Git initialization or initial-commit path.
+location change, as an action that does nothing would be. Once Git found no repository there, or is missing, that folder
+is the window's one place to work, which goes without saying: the title does not name it, nor does a Resume Agent line
+(3.2), and where every agent works there neither do cards (PANEL-1.3) or Go to Agent rows (2.3), and the panel offers no
+filter (PANEL-2.3); hovers keep it. A second folder, a repository found there, a worktree or a location Resume
+remembered ends it, and an agent working elsewhere ends it for the panel and Go to Agent: each names its location again.
+Retain Back/selections; Escape cancels the launch. A proposed new branch/location is only created when the person
+accepts a CLI. There is no Git initialization or initial-commit path.
 
 The creation substeps use `New Agent · Select Folder`, `New Agent · Working Location`, and
 `New Agent · New Worktree` as titles. A plain folder is still a working location. The main CLI picker retains
@@ -177,14 +181,15 @@ that.
 
 Match name, CLI, title, state, working location and run ID. Accept the existing short ID and a copied agent reference as
 search input; an ID in a copied reference matches that run even if its descriptive name is stale. Use one native picker
-line: CLI icon, prominent name, then quieter short ID, current state, working location and CLI title, in that order.
-An empty name uses the short ID as the prominent identifier, with state/location/title after it. The icon identifies
-the CLI; its name stays searchable without being repeated in the row. Keep name and title even when equal; omit only
-missing fields. Native width clipping never changes the stored or searchable text. Include starting/running and
-retained-error cards in panel order, whatever the panel's filter shows; rows follow changes while the picker is open.
-Choosing a row closes the picker and reveals that terminal. Each row's buttons copy its reference (2.1) and close that
-exact run, both keeping the picker open. No cross-window picker, focus transfer or proxy card is provided. The person
-switches editor windows to manage another window; agents can use MCP across windows.
+line: CLI icon, prominent name, then quieter short ID, current state, working location - none where every agent works in
+the window's one place to work (1.3) - and CLI title, in that order. An empty name uses the short ID as the prominent
+identifier, with state/location/title after it. The icon identifies the CLI; its name stays searchable without being
+repeated in the row. Keep name and title even when equal; omit only missing fields. Native width clipping never changes
+the stored or searchable text. Include starting/running and retained-error cards in panel order, whatever the panel's
+filter shows; rows follow changes while the picker is open. Choosing a row closes the picker and reveals that terminal.
+Each row's buttons copy its reference (2.1) and close that exact run, both keeping the picker open. No cross-window
+picker, focus transfer or proxy card is provided. The person switches editor windows to manage another window; agents
+can use MCP across windows.
 
 ## 3 End and continuity
 
@@ -221,37 +226,35 @@ empty name by its `#aN`. A tab close whose Unpin cannot be saved keeps the agent
 
 **Resume searches vendor histories for this window's folders, subfolders and all associated worktrees.**
 
-Open from panel, empty state or Command Palette; the picker shows at once, busy while the window's locations and
-running conversations are read. With no folder open, its one item `Open Folder...`, detail
-`Open a folder to resume its conversations.`, runs the editor's Open Folder as PANEL-1.2's does. Read only list
-metadata, recent activity first, paginated in batches of 100: the next batch is read when the person comes within 10
-rows of the end, and on to the last while a search is typed. A batch that has taken 1,000 conversation records ends
-early and the next goes on, so no scan limit makes older matching history unreachable. Reuse already read metadata
-during the picker session rather than rescanning every log on each page or keystroke. Reading the histories keeps the
-window's agents responsive: the stores are read together, each folder's real path is resolved once per reading rather
-than per conversation, and no long synchronous read holds the extension host that draws their terminals. Prefer vendor
-discovery; do not build a new conversation store. There is no 30-day age cutoff. Deduplicate by environment/CLI/session
-ID. Each conversation uses the same single-line native presentation as Go to Agent: its CLI icon and prominent
-conversation title, then quieter activity time, original location and saved Facade name, in that order. A conversation
-without a title is `Untitled conversation`. Omit a missing or empty name without generating one while browsing. Keep
-the saved name even when it equals the title. The icon names the CLI, so no CLI name is repeated as text; search covers
-title, saved name, CLI and location, including beyond the first page. Use the vendor's saved display title and
-conversation activity time, including native renames; file maintenance does not make an old conversation recently
-active. Ordering remains correct across page boundaries. Omit a history segment whose vendor continuation points to an
-existing resumable conversation. With nothing to list, the placeholder says
-`No saved conversations in this window's folders`; where the histories or the window's state cannot be read, a
-notification says `Could not read the saved conversations: {0}`.
-A conversation that cannot be resumed now - its working directory gone, or its CLI turned off or not installed
-in this environment - is not listed, nor is one an agent already holds, in this window or another (CLIS-2.4). Do not list
-unrelated projects, or provide delete, hide or show-hidden controls. The panel's display filter does not change this
-history scope.
-When a vendor records a set of workspace folders without identifying the original cwd, use Facade's recorded cwd if
-known. Otherwise, choosing that conversation opens a native working-location picker for its folders in this window, each
-with its full path. Do not infer the original cwd from directory order. Cancellation starts nothing.
-If that exact conversation already runs in Facade, do not start it again; reveal it only when it belongs to this window,
-otherwise say `{0} is already running in another window.` Do not build cross-window navigation. External activity is
-not a gate: call vendor resume and return its result. No external-writer scan, lease or concurrency guarantee is
-required.
+Open from panel, empty state or Command Palette; the picker shows at once, busy while the window's locations and running
+conversations are read. With no folder open, its one item `Open Folder...`, detail `Open a folder to resume its
+conversations.`, runs the editor's Open Folder as PANEL-1.2's does. Read only list metadata, recent activity first,
+paginated in batches of 100: the next batch is read when the person comes within 10 rows of the end, and on to the last
+while a search is typed. A batch that has taken 1,000 conversation records ends early and the next goes on, so no scan
+limit makes older matching history unreachable. Reuse already read metadata during the picker session rather than
+rescanning every log on each page or keystroke. Reading the histories keeps the window's agents responsive: the stores
+are read together, each folder's real path is resolved once per reading rather than per conversation, and no long
+synchronous read holds the extension host that draws their terminals. Prefer vendor discovery; do not build a new
+conversation store. There is no 30-day age cutoff. Deduplicate by environment/CLI/session ID. Each conversation uses the
+same single-line native presentation as Go to Agent: its CLI icon and prominent conversation title, then quieter
+activity time, original location - none for the window's one place to work itself (1.3), a subfolder of it still named -
+and saved Facade name, in that order. A conversation without a title is `Untitled conversation`. Omit a missing or empty
+name without generating one while browsing. Keep the saved name even when it equals the title. The icon names the CLI,
+so no CLI name is repeated as text; search covers title, saved name, CLI and location, including beyond the first page.
+Use the vendor's saved display title and conversation activity time, including native renames; file maintenance does not
+make an old conversation recently active. Ordering remains correct across page boundaries. Omit a history segment whose
+vendor continuation points to an existing resumable conversation. With nothing to list, the placeholder says `No saved
+conversations in this window's folders`; where the histories or the window's state cannot be read, a notification says
+`Could not read the saved conversations: {0}`. A conversation that cannot be resumed now - its working directory gone,
+or its CLI turned off or not installed in this environment - is not listed, nor is one an agent already holds, in this
+window or another (CLIS-2.4). Do not list unrelated projects, or provide delete, hide or show-hidden controls. The
+panel's display filter does not change this history scope. When a vendor records a set of workspace folders without
+identifying the original cwd, use Facade's recorded cwd if known. Otherwise, choosing that conversation opens a native
+working-location picker for its folders in this window, each with its full path. Do not infer the original cwd from
+directory order. Cancellation starts nothing. If that exact conversation already runs in Facade, do not start it again;
+reveal it only when it belongs to this window, otherwise say `{0} is already running in another window.` Do not build
+cross-window navigation. External activity is not a gate: call vendor resume and return its result. No external-writer
+scan, lease or concurrency guarantee is required.
 
 ### 3.3 Resume execution
 

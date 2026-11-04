@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "새 에이전트 · 폴더 선택",
 	"New Agent · Working Location": "새 에이전트 · 작업 위치",
 	"New Agent · New Worktree": "새 에이전트 · 새 작업 트리",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "이 창의 에이전트를 실행하는 Facade Code 설치가 업데이트 또는 제거로 삭제되었습니다({0}이(가) 없음). 따라서 에이전트를 시작할 수 없습니다. 설치된 버전으로 에이전트를 시작하려면 창을 다시 로드하세요."
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "이 창의 에이전트를 실행하는 Facade Code 설치가 업데이트 또는 제거로 삭제되었습니다({0}이(가) 없음). 따라서 에이전트를 시작할 수 없습니다. 설치된 버전으로 에이전트를 시작하려면 창을 다시 로드하세요.",
+	"{0} · {1}": "{0} · {1}"
 }

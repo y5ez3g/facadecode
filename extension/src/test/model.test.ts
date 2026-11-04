@@ -369,6 +369,38 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		]);
 	});
 
+	test('PANEL-1.3, LIFECYCLE-1.3: in the window\'s one place to work cards say no location - their hover does - until a second place holds an agent or Git finds a repository there; while Git reads it, it is said', async () => {
+		const ORCA: WorkspaceFolderInfo = { index: 0, name: 'orca', uri: 'file:///orca', path: '/orca' };
+		const plain: Location = { ...location('loc-orca', 'orca', ORCA), kind: 'folder', git: 'none', opened: true };
+		const one: Catalog = { locations: [plain], folders: [ORCA], pending: false };
+		locations.catalog = one;
+		const model = make();
+		agents.add(run(1, { location: plain.id, cwd: plain.path }));
+		agents.add(run(2, { location: plain.id, cwd: plain.path }));
+		await tick();
+		const seen = () => [model.state().cards.map(card => card.location), model.placesShown()];
+		const alone = seen();
+		// Git still reading: it may be a repository, whose branch is said
+		locations.catalog = { ...one, locations: [{ ...plain, git: 'pending' }], pending: true };
+		locations.changed.fire();
+		await tick();
+		const reading = seen();
+		// A repository after all
+		locations.catalog = { ...one, locations: [{ ...plain, kind: 'checkout', git: 'ok', label: 'main' }] };
+		locations.changed.fire();
+		await tick();
+		const repository = seen()[1];
+		// Back to one plain folder, and an agent working somewhere it no longer lists
+		locations.catalog = one;
+		locations.changed.fire();
+		agents.add(run(3, { location: 'loc-elsewhere', cwd: '/elsewhere' }));
+		await tick();
+		const elsewhere = seen()[1];
+		const hidden = { label: 'orca', hidden: true, full: 'Location: orca\nPath: /orca' };
+		const said = { label: 'orca', full: 'Location: orca\nPath: /orca' };
+		assert.deepStrictEqual([alone, reading, repository, elsewhere], [[[hidden, hidden], false], [[said, said], true], true, true]);
+	});
+
 	test('PANEL-1.5: the hover names the window; a rename is shown at once; the state carries only the remote capability', async () => {
 		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(storage), words: WORDS, remote: false, window: 'shop', ready: Promise.resolve(), timers: clock });
 		models.push(model);

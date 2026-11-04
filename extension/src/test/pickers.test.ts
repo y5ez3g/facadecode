@@ -541,7 +541,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([offered, planned, chosen], ['from login-fix', ['loc-login feat/api'], 'New worktree feat/api from login-fix']);
 		});
 
-		test('LIFECYCLE-1.3: a lone plain folder offers no location change - the title says it, under Options only Change Name - never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
+		test('LIFECYCLE-1.1, 1.3: a lone plain folder - the window\'s one place to work - goes unsaid in the title and offers no location change, under Options only Change Name, never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
 			catalog = { locations: [GUIDE], folders: [DOCS], pending: false };
 			last = { location: GUIDE.id, cli: 'claude' };
 			let done = start();
@@ -563,7 +563,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.hide();
 			await done;
 			assert.deepStrictEqual([plain, step, stayed], [
-				['New Agent · Ada · guide', ['Claude Code', 'Options', 'Change Name...']],
+				['New Agent · Ada', ['Claude Code', 'Options', 'Change Name...']],
 				['Select a branch or worktree', ['main', '', 'New Worktree...'], '/main has no commits yet.'],
 				'Select a branch or worktree'
 			]);
@@ -1116,6 +1116,16 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual(lines, [['2 mins ago \u00b7 main', undefined], ['4 mins ago \u00b7 main', undefined]]);
 		});
 
+		test('LIFECYCLE-3.2: in the window\'s one place to work a conversation there says its time alone; one in a subfolder still says where', async () => {
+			const plain = place('loc-shop', 'shop', SHOP, { kind: 'folder', git: 'none', opened: true, path: '/shop', uri: SHOP.uri });
+			const done = open([[entry(1, { cwd: '/shop' }), entry(2, { cwd: '/shop/api' })]], 'run-new', [plain]);
+			await settle();
+			const lines = ui.current!.items.map(item => item.description);
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual(lines, ['1 min ago', '2 mins ago \u00b7 shop/api']);
+		});
+
 		test('LIFECYCLE-2.3: title leads, saved names follow time/location even when equal; absent names stay absent and CLI search reaches later pages', async () => {
 			savedNames.set('s0', 'Same title');
 			savedNames.set('s1', '');
@@ -1573,6 +1583,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 
 		test('U06, LIFECYCLE-2.3: single-line names, IDs, state, location and titles; empty/equal names, hidden CLI search, copied references and item actions', async () => {
 			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			let placesShown = true;
 			let runs = [run(1, { title: 'Fix login' }), run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }), run(3, { lifecycle: 'starting', phase: 'launching_cli' }), run(4, { name: '', title: 'Unnamed work' }), run(5, { name: 'Same', title: 'Same', cli: 'muse', displayName: 'Muse Code' })];
 			const changed = new TestEmitter<RunChange>();
 			const did: string[] = [];
@@ -1585,7 +1596,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
 			};
 			const done = goToAgent({
-				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }) },
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => placesShown },
 				agents: { onDidChange: changed.event as never },
 				words,
 				media: { path: '/extension/media' } as never,
@@ -1611,9 +1622,14 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			picker.press(1, close);
 			await settle();
 			const afterClose = picker.items.map(item => item.description);
+			// Every agent in the window's one place to work: none says it (PANEL-1.3)
+			placesShown = false;
+			changed.fire({ run: run(9).id, kind: 'removed', cause: 'close' });
+			await settle();
+			const onePlace = picker.items.map(item => item.description);
 			picker.accept();
 			await done;
-			assert.deepStrictEqual([picker.title, listed, searched, byId, byReference, all, afterClose, did], [
+			assert.deepStrictEqual([picker.title, listed, searched, byId, byReference, all, afterClose, onePlace, did], [
 				'Go to Agent',
 				[['Ada', '#a1 · Working · main · Fix login', undefined], ['Ada', '#a2 · Error: Not found · main', undefined], ['Ada', '#a3 · Starting · main', undefined], ['#a4', 'Working · main · Unnamed work', undefined], ['Same', '#a5 · Working · main · Same', undefined]],
 				[true, false],
@@ -1621,6 +1637,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				['#a1 · Working · main · Fix login'],
 				5,
 				['#a1 · Working · main · Fix login', '#a3 · Starting · main', 'Working · main · Unnamed work', '#a5 · Working · main · Same'],
+				['#a1 · Working · Fix login', '#a3 · Starting', 'Working · Unnamed work', '#a5 · Working · Same'],
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
 		});
@@ -1644,7 +1661,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
 			};
 			const done = goToAgent({
-				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }) },
+				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => true },
 				agents: { onDidChange: changed.event },
 				words,
 				media: { path: '/extension/media' } as never,
@@ -1685,7 +1702,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
 			};
 			const done = goToAgent({
-				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }) },
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => true },
 				agents: { onDidChange: new TestEmitter<void>().event as never },
 				words,
 				media: { path: '/extension/media' } as never,

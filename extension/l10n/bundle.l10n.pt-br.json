@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "Novo Agente · Selecionar Pasta",
 	"New Agent · Working Location": "Novo Agente · Local de trabalho",
 	"New Agent · New Worktree": "Novo Agente · Nova Árvore de Trabalho",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "A instalação do Facade Code que executa os agentes desta janela foi removida por uma atualização ou desinstalação ({0} não existe mais), então nenhum agente pode ser iniciado. Recarregue a janela para iniciar agentes com a versão instalada."
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "A instalação do Facade Code que executa os agentes desta janela foi removida por uma atualização ou desinstalação ({0} não existe mais), então nenhum agente pode ser iniciado. Recarregue a janela para iniciar agentes com a versão instalada.",
+	"{0} · {1}": "{0} · {1}"
 }

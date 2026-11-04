@@ -475,10 +475,10 @@ function update(entry: Drawn, card: Card): void {
 		entry.dot.title = card.stateText;
 	}
 	// The name's text is the fitting's, which shows as much of it as fits (PANEL-1.3)
-	const place = JSON.stringify([card.pinned, card.location.label, card.location.folderPrefix, card.location.full]);
+	const place = JSON.stringify([card.pinned, card.location.label, card.location.folderPrefix, card.location.hidden, card.location.full]);
 	if (place !== entry.place) {
 		entry.place = place;
-		entry.top.replaceChildren(entry.name, ...card.pinned ? [pin()] : [], placeOf(card.location));
+		entry.top.replaceChildren(entry.name, ...card.pinned ? [pin()] : [], ...card.location.hidden ? [] : [placeOf(card.location)]);
 	}
 	if (entry.line.textContent !== card.line) {
 		entry.line.textContent = card.line;

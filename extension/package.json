@@ -159,7 +159,7 @@
 			"view/title": [
 				{
 					"command": "facade.filter",
-					"when": "view == facade.agents && !facade.filtered",
+					"when": "view == facade.agents && !facade.filtered && !facade.onePlace",
 					"group": "navigation@1"
 				},
 				{
@@ -261,6 +261,10 @@
 				{
 					"command": "facade.unpinAgent",
 					"when": "facade.agentSelectedPinned"
+				},
+				{
+					"command": "facade.filter",
+					"when": "!facade.onePlace || facade.filtered"
 				}
 			]
 		},

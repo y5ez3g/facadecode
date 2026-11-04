@@ -23,6 +23,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	let settings: Record<string, unknown>;
 	let configChanged: TestEmitter<{ affectsConfiguration(section: string): boolean }>;
 	let front: SelectedAgent | undefined;
+	let placesShown = true;
 	let changed: TestEmitter<PanelState>;
 	let said: TestEmitter<unknown>;
 	let visibility: TestEmitter<void>;
@@ -60,7 +61,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		};
 		(globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE = testMode;
 		const { PanelView: View } = withModules({ vscode: api })<typeof import('../ui/panel')>(require.resolve('../ui/panel'));
-		const model = { onDidChange: changed.event, state: () => state, selectedAgent: () => front };
+		const model = { onDidChange: changed.event, state: () => state, selectedAgent: () => front, placesShown: () => placesShown };
 		const actions: PanelActions = async (what, target) => {
 			acts.push([what, target]);
 			return answer();
@@ -94,6 +95,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		configChanged = new TestEmitter();
 		state = stateOf(1);
 		front = undefined;
+		placesShown = true;
 		changed = new TestEmitter();
 		said = new TestEmitter();
 		visibility = new TestEmitter();
@@ -229,17 +231,20 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	test('PANEL-1.1, 2.3, UX-3.2: the badge counts every card - none at zero - the description names the filter, and the context keys come from the same state', async () => {
 		const badges = [view.badge];
 		front = { run: 'run-1', ended: true };
+		placesShown = true;
 		await update(stateOf(2, { cardCount: 1, filter: { kind: 'location', id: 'loc-1', label: 'shop · main' }, capabilities: { remote: true } }));
 		badges.push(view.badge);
 		const selected = [view.description, { ...contexts }];
 		front = undefined;
+		// Every agent in the window's one place to work: nothing to filter by
+		placesShown = false;
 		await update(stateOf(3, { cardCount: 0 }));
 		badges.push(view.badge);
 		assert.deepStrictEqual([badges, selected, view.description, contexts], [
 			[{ value: 2, tooltip: '2 agents' }, { value: 1, tooltip: '1 agent' }, undefined],
-			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': true }],
+			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': true, 'facade.onePlace': false }],
 			undefined,
-			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': false }
+			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': false, 'facade.onePlace': true }
 		]);
 	});
 

@@ -73,7 +73,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
-				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered', group: 'navigation@1' },
+				// Not offered where every agent works in the window's one place to work, unless a filter is on (PANEL-2.3)
+				{ command: 'facade.filter', when: 'view == facade.agents && !facade.filtered && !facade.onePlace', group: 'navigation@1' },
 				{ command: 'facade.filterOn', when: 'view == facade.agents && facade.filtered', group: 'navigation@1' },
 				{ command: 'facade.history', when: 'view == facade.agents', group: 'navigation@2' },
 				{ command: 'facade.newAgent', when: 'view == facade.agents', group: 'navigation@3' },
@@ -95,7 +96,8 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
 				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedPinnable && !facade.agentSelectedPinned' },
-				{ command: 'facade.unpinAgent', when: 'facade.agentSelectedPinned' }
+				{ command: 'facade.unpinAgent', when: 'facade.agentSelectedPinned' },
+				{ command: 'facade.filter', when: '!facade.onePlace || facade.filtered' }
 			]
 		});
 	});

@@ -5,7 +5,7 @@
 import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
 import type { CardMenu, PanelFilter, PanelState } from '../webview/protocol';
-import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel } from './cardView';
+import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel, onePlaceOf } from './cardView';
 import { arranged, atEnd, atStart, moved, PanelPrefs, withNew } from './order';
 
 /** Reported text and activity reach the page at most this often; lifecycle changes and errors go at once (PANEL-3.1, UX-5.2). */
@@ -197,6 +197,15 @@ export class PanelModel implements Disposable {
 		return true;
 	}
 
+	/**
+	 * Whether the cards, and Go to Agent, say where each agent works (PANEL-1.3): not where every one works in the window's one place to
+	 * work (LIFECYCLE-1.3), which goes without saying.
+	 */
+	placesShown(catalog: Catalog = this.deps.locations.snapshot()): boolean {
+		const one = onePlaceOf(catalog);
+		return !one || this.deps.agents.list().some(run => run.location !== one.id);
+	}
+
 	/** Where a run works, as its card says it (PANEL-1.3): its location's label, after its folder's name in a multi-folder window. */
 	placeOf(facts: RunFacts, catalog: Catalog = this.deps.locations.snapshot()): CardPlace {
 		const location = this.known.get(facts.location) ?? catalog.locations.find(each => each.id === facts.location);
@@ -333,6 +342,7 @@ export class PanelModel implements Disposable {
 		const filter = this.filter && this.labeled(this.filter, catalog);
 		const shown = ids.filter(id => this.matches(byId.get(id), filter));
 		const shownSet = new Set(shown);
+		const placeShown = this.placesShown(catalog);
 		const visible = (id: string) => shownSet.has(id);
 		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
@@ -343,7 +353,7 @@ export class PanelModel implements Disposable {
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
 				moveDown: moved(ids, id, 1, withinArea) !== undefined
 			};
-			return cardOf(facts, { place: this.placeOf(facts, catalog), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.window ? { window: this.deps.window } : {} });
+			return cardOf(facts, { place: this.placeOf(facts, catalog), placeShown, selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.window ? { window: this.deps.window } : {} });
 		});
 		const exited = [...this.exited];
 		this.exited.clear();

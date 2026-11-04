@@ -241,6 +241,7 @@
 	"New Agent · New Worktree": "New Agent · New Worktree",
 	"New worktree {0} from {1}": "New worktree {0} from {1}",
 	"{0} (new)": "{0} (new)",
+	"{0} · {1}": "{0} · {1}",
 	"{0} · {1} · {2}": "{0} · {1} · {2}",
 	"Options": "Options",
 	"Change Working Location...": "Change Working Location...",

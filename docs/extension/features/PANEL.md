@@ -72,22 +72,22 @@ Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `a
 `avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Custom avatars are an uppercased first grapheme in a
 circle; deterministic theme colors from UX-2.1. Location is alias/branch/folder, prefixed by workspace folder in a
 multi-folder window unless it is named that folder's name already, as a plain folder is. A related worktree can be
-outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
-temporarily disconnected location is retained. Reserve the Pin's measured width and spacing when present, then let
-name and location share the first line's remaining width: a short one
-stays whole and the other uses the remaining room. Only when both exceed their shares does the line divide about 60%
-to the name and 40% to location; 40% is not a location cap. A long name ellipsizes at the end, its
-width that of the text it shows as drawn, so that a Pin follows the ellipsis as closely as it follows a whole name.
-Location keeps its `folder · worktree` structure: each long component ellipsizes in the middle, between whole graphemes,
-keeping its beginning and end where they fit. A short component stays whole; when both are long, the worktree receives
-about two thirds of their text space. The separator remains and the folder is never hidden just because it is long.
-These shares are width limits, not reserved empty boxes: after fitting whole graphemes, give unused folder space to
-the worktree, then any remaining space back to the folder. Render each fitted component at its measured width and
-align their compact group at the line's end. Only the separator's normal spaces separate the two visible labels;
-unused allocation must not appear before the separator or after the worktree. Any final spare width is available to
-the name, up to its natural width.
-Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font changes, rename
-and location updates. Avatar/dot do not shrink. Full values remain in hover and accessibility; the panel header is unchanged.
+outside a folder and still show its actual location. Where every agent works in the window's one place to work
+(LIFECYCLE-1.3) no card shows a location, the name taking the first line, and the hover keeps it. Confirmed location
+removal closes its affected agents; a temporarily disconnected location is retained. Reserve the Pin's measured width
+and spacing when present, then let name and location share the first line's remaining width: a short one stays whole and
+the other uses the remaining room. Only when both exceed their shares does the line divide about 60% to the name and 40%
+to location; 40% is not a location cap. A long name ellipsizes at the end, its width that of the text it shows as drawn,
+so that a Pin follows the ellipsis as closely as it follows a whole name. Location keeps its `folder · worktree`
+structure: each long component ellipsizes in the middle, between whole graphemes, keeping its beginning and end where
+they fit. A short component stays whole; when both are long, the worktree receives about two thirds of their text space.
+The separator remains and the folder is never hidden just because it is long. These shares are width limits, not
+reserved empty boxes: after fitting whole graphemes, give unused folder space to the worktree, then any remaining space
+back to the folder. Render each fitted component at its measured width and align their compact group at the line's end.
+Only the separator's normal spaces separate the two visible labels; unused allocation must not appear before the
+separator or after the worktree. Any final spare width is available to the name, up to its natural width. Measure in the
+displayed font and available pixels, not a fixed character count; refit on resize, font changes, rename and location
+updates. Avatar/dot do not shrink. Full values remain in hover and accessibility; the panel header is unchanged.
 
 Pinned cards show the Pin beside the name. Hovering the Pin shows its own tooltip with its restoration meaning: the
 conversation is restored when the workspace opens again. Its color follows the quieter text, including the selected
@@ -180,23 +180,23 @@ selected row by fallback. Palette targeting follows UX-3.1.
 
 **A filter affects this window's card visibility only, not access or launch defaults.**
 
-Filter by Working Location opens native Quick Pick steps by folder. In each step one separator follows the first
-item, then come the folders or locations that have cards (including starting and retained failures) or hold the
-current filter, each with its count. In a window of several folders the first step lists All Locations, then the
-folders. Every folder row keeps its name as label and shows `{agent count} · {parent path}` as description, with
-the count first and the parent path using the existing home-relative representation. Do not shorten this path
-artificially; native clipping may still occur. Location rows retain their existing names, icons and counts.
-A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
+Filter by Working Location opens native Quick Pick steps by folder. Where every agent works in the window's one place to
+work (LIFECYCLE-1.3) there is nothing to filter by and it is not offered; an active filter keeps its way to be cleared.
+In each step one separator follows the first item, then come the folders or locations that have cards (including
+starting and retained failures) or hold the current filter, each with its count. In a window of several folders the
+first step lists All Locations, then the folders. Every folder row keeps its name as label and shows `{agent count} ·
+{parent path}` as description, with the count first and the parent path using the existing home-relative representation.
+Do not shorten this path artificially; native clipping may still occur. Location rows retain their existing names, icons
+and counts. A folder opens its own step - All Worktrees (the whole folder), then its locations, the main checkout first
 (WORKTREES-1.2) - where two or more of its locations are listed, or where the filtered location is one of several it
-has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its
-first item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog does not
-list now stays choosable, last in the first step. The current filter, or in the first step its folder, is initially
-highlighted. Back returns to the first step; Escape leaves the filter unchanged. The view description names the
-filter; the icon fills.
-Persist environment-qualified location/folder association in workspace state. Clear on the filtered empty state's Clear
-Filter, the first step's first item or confirmed location removal, never on a failed Git read. A launch does not change
-the filter; every new agent enters the normal list data and is displayed only when it matches. Ordinary folders use
-“location,” not an implication that Git/worktrees are required.
+has; choosing any other folder filters by it directly. A window of one folder shows that folder's step alone, its first
+item showing every card: All Worktrees, or All Locations outside Git. A filtered location the catalog does not list now
+stays choosable, last in the first step. The current filter, or in the first step its folder, is initially highlighted.
+Back returns to the first step; Escape leaves the filter unchanged. The view description names the filter; the icon
+fills. Persist environment-qualified location/folder association in workspace state. Clear on the filtered empty state's
+Clear Filter, the first step's first item or confirmed location removal, never on a failed Git read. A launch does not
+change the filter; every new agent enters the normal list data and is displayed only when it matches. Ordinary folders
+use “location,” not an implication that Git/worktrees are required.
 
 ## 3 Technical design
 

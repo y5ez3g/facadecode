@@ -30,7 +30,8 @@ export interface Card {
 	 * `label` is the alias/branch/folder name; `folderPrefix` names its workspace folder in a multi-folder window; `full` qualifies it,
 	 * then gives its path and window as localized Label: value lines (PANEL-1.5).
 	 */
-	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly full: string };
+	/** `hidden` where every agent works in the window's one place to work: the card's line does not say it, its hover does (PANEL-1.3). */
+	readonly location: { readonly label: string; readonly folderPrefix?: string; readonly hidden?: true; readonly full: string };
 	/** Green for work, red for an error, none for anything else (RULES-3.2). */
 	readonly dot: 'working' | 'error' | 'none';
 	/** The state in words, dot or none: startup, work, idle, the native blocker's kind, an error or unavailable activity. */

@@ -139,24 +139,29 @@ export function fitCardTop(top: HTMLElement, name: HTMLElement, fullName: string
 		}
 		return;
 	}
-	const place = top.querySelector<HTMLElement>('.place')!;
-	const tree = place.querySelector<HTMLElement>('.tree')!;
-	const folder = place.querySelector<HTMLElement>('.folder');
-	const bullet = place.querySelector<HTMLElement>('.bullet');
 	const measureName = measureIn(name);
-	const measurePlace = measureIn(tree);
 	const gap = parseFloat(getComputedStyle(top).columnGap) || 0;
 	const pin = top.querySelector<HTMLElement>('.pin');
 	const pinStyle = pin ? getComputedStyle(pin) : undefined;
 	// The Pin keeps its actual icon width, margins and extra flex gap before the two text labels share the rest.
 	const pinWidth = pin && pinStyle ? pin.getBoundingClientRect().width
 		+ (parseFloat(pinStyle.marginLeft) || 0) + (parseFloat(pinStyle.marginRight) || 0) + gap : 0;
+	const shownName = fullName.replace(/\s+/g, ' ');
+	const nameWidth = measureName(shownName);
+	const place = top.querySelector<HTMLElement>('.place');
+	if (!place) {
+		// No location said - the window's one place to work - the name has the line beside its Pin (PANEL-1.3)
+		show(name, fit(shownName, Math.max(0, Math.min(nameWidth, Math.floor(top.clientWidth - pinWidth))), measureName, end));
+		return;
+	}
+	const tree = place.querySelector<HTMLElement>('.tree')!;
+	const folder = place.querySelector<HTMLElement>('.folder');
+	const bullet = place.querySelector<HTMLElement>('.bullet');
+	const measurePlace = measureIn(tree);
 	const available = Math.max(0, Math.floor(top.clientWidth - gap - pinWidth));
 	const folderWidth = measurePlace(location.folderPrefix ?? '');
 	const separatorWidth = bullet ? measurePlace(bullet.textContent ?? '') : 0;
 	const treeWidth = measurePlace(location.label);
-	const shownName = fullName.replace(/\s+/g, ' ');
-	const nameWidth = measureName(shownName);
 	const [, placeLimit] = widths(available, nameWidth, folderWidth + separatorWidth + treeWidth, 0.6);
 	let placeWidth: number;
 	if (folder && bullet) {

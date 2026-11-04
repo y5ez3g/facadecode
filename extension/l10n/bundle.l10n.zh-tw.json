@@ -324,5 +324,6 @@
 	"New Agent · Select Folder": "新增 Agent · 選取資料夾",
 	"New Agent · Working Location": "新增 Agent · 工作位置",
 	"New Agent · New Worktree": "新增 Agent · 新增工作樹",
-	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "執行此視窗 Agent 的 Facade Code 安裝已被更新或解除安裝刪除（{0} 已不存在），因此無法啟動 Agent。請重新載入視窗，以使用已安裝的版本啟動 Agent。"
+	"The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.": "執行此視窗 Agent 的 Facade Code 安裝已被更新或解除安裝刪除（{0} 已不存在），因此無法啟動 Agent。請重新載入視窗，以使用已安裝的版本啟動 Agent。",
+	"{0} · {1}": "{0} · {1}"
 }

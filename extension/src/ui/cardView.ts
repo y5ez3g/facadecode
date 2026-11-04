@@ -73,6 +73,17 @@ export function folderPrefixOf(location: Pick<Location, 'label' | 'folders'>, ca
 }
 
 /** A location as the person reads it alone (PANEL-1.3): its label, after its workspace folder's name in a multi-folder window. */
+/**
+ * The window's one place to work, where it has one (LIFECYCLE-1.3): one folder whose only location is a plain folder - one Git found
+ * no repository in, or is missing for - which goes without saying wherever a location would be said. A folder Git is still reading,
+ * or failed to read, may be a repository, whose branch is said.
+ */
+export function onePlaceOf(catalog: Catalog): Location | undefined {
+	const [only, ...others] = catalog.locations;
+	return !catalog.pending && catalog.folders.length === 1 && only && !others.length && only.kind === 'folder'
+		&& only.git !== 'pending' && only.git !== 'failed' ? only : undefined;
+}
+
 export function locationLabel(location: Pick<Location, 'label' | 'folders'>, catalog: Pick<Catalog, 'folders'>): string {
 	const prefix = folderPrefixOf(location, catalog);
 	return prefix ? `${prefix} · ${location.label}` : location.label;
@@ -189,7 +200,7 @@ function upper(text: string, locale: string): string {
  * the state and its reason (the page adds the start time, and the qualified location with the window); and an accessible label of
  * name, short run ID, state, location, CLI and second line.
  */
-export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly window?: string }): Card {
+export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly placeShown?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly window?: string }): Card {
 	const { place, words } = input;
 	const status = statusOf(facts, words);
 	const described = facts.title || facts.promptLine;
@@ -215,7 +226,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		name: facts.name,
 		alias: facts.alias,
 		...(avatar ? { avatar } : {}),
-		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), full: [words.location(place.context), words.path(place.path), ...input.window ? [words.window(input.window)] : []].join('\n') },
+		location: { label: place.label, ...(place.folderPrefix ? { folderPrefix: place.folderPrefix } : {}), ...input.placeShown === false ? { hidden: true as const } : {}, full: [words.location(place.context), words.path(place.path), ...input.window ? [words.window(input.window)] : []].join('\n') },
 		dot: status.dot,
 		stateText: status.stateText,
 		line: status.line,

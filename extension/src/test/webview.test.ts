@@ -383,6 +383,32 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(seen[2], seen[0], 'Unpin returns all of the icon space to the original labels');
 	});
 
+	test('PANEL-1.3: a card that says no location - the window\'s one place to work - gives its name the whole line, beside its Pin; said again, the location comes back', async () => {
+		const seen = await evaluate(`(() => {
+			document.body.style.width = '260px';
+			const long = 'An agent name long enough to need the whole first line of its card';
+			agents = [newCard(1, { name: long, location: { label: 'orca', hidden: true, full: 'Location: orca' } })];
+			redraw();
+			const card = document.querySelector('.agent');
+			const read = () => {
+				const top = card.querySelector('.top'), name = card.querySelector('.name'), pin = card.querySelector('.pin');
+				return { place: !!card.querySelector('.place'), name: name.textContent, slack: top.getBoundingClientRect().right - (pin ?? name).getBoundingClientRect().right, title: card.title.includes('Location: orca') };
+			};
+			const hidden = read();
+			agents[0] = { ...agents[0], pinned: true }; redraw({ revision: 2 });
+			const pinned = read();
+			agents[0] = { ...agents[0], pinned: false, location: { label: 'orca', full: 'Location: orca' } }; redraw({ revision: 3 });
+			return [hidden, pinned, read()];
+		})()`);
+		const [hidden, pinned, said] = seen as { place: boolean; name: string; slack: number; title: boolean }[];
+		assert.deepStrictEqual([hidden.place, pinned.place, said.place], [false, false, true]);
+		assert.ok(hidden.title && pinned.title && said.title, 'the hover keeps the location');
+		for (const row of [hidden, pinned]) {
+			assert.ok(row.name.endsWith('…') && row.slack >= -0.5 && row.slack < 12, JSON.stringify(row));
+		}
+		assert.ok(said.name.length < hidden.name.length, JSON.stringify(seen));
+	});
+
 	test('U13: location structure and first-line bounds survive narrow widths, theme changes and zoom scales', async function () {
 		this.timeout(60_000);
 		// Bundled VS Code theme values and their registered defaults. Scaling the CSS viewport and output together emulates editor zoom.
