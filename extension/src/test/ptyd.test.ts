@@ -763,22 +763,21 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			if (event.event === 'output') {
 				heard += event.data.replace(/x+/g, 'x');
 			}
-			// The window answers the identification the moment it sees it
-			if (!answered && event.event === 'output' && event.data.includes('\x1b[c')) {
+			// The window answers the program's identification the moment it sees it: the one after its question whether ptyd takes
+			// reports - on Windows the console asks its own as it starts, and takes the answer to that itself
+			const question = heard.indexOf('\x1b]7501;?');
+			if (!answered && event.event === 'output' && question >= 0 && heard.indexOf('\x1b[c', question) >= 0) {
 				answered = true;
 				void client.request('input', { run: 'r-ask', data: '\x1b[?62;22c' });
 			}
 		});
 		try {
 			await client.request('spawn', { run: 'r-ask', owner: 'w1', file: process.execPath, args: ['-e', program], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {} });
+			const read = () => { try { return fs.readFileSync(file, 'latin1'); } catch { return ''; } };
 			const got = await until('both answers', () => {
-				try {
-					const text = fs.readFileSync(file, 'latin1');
-					return text.includes('\x1b]7501;?:states=') && text.includes('\x1b[?62;22c') && text;
-				} catch {
-					return false;
-				}
-			}, 15_000);
+				const text = read();
+				return text.includes('\x1b]7501;?:states=') && text.includes('\x1b[?62;22c') && text;
+			}, 15_000).catch(err => { throw new Error(`${(err as Error).message}: ${JSON.stringify({ got: read(), answered, heard: heard.slice(-400) })}`); });
 			assert.ok(got.indexOf('\x1b]7501;?:states=') < got.indexOf('\x1b[?62;22c'), JSON.stringify({ got, heard: heard.slice(-400), question: heard.indexOf('\x1b]7501;?'), identification: heard.indexOf('\x1b[c') }));
 			assert.strictEqual(got.split('\x1b]7501;?:states=').length - 1, 1, 'answered once, not again as its parse reaches the question');
 		} finally {
