@@ -168,14 +168,16 @@ is Close Agent's (3.1). The person's close of a tab showing its pin mark Unpins 
 the agent's screen, its draft and its Facade tools, and a starting agent hidden goes on starting. A hidden agent keeps
 the size its tab last had, and one whose tab never opened has 120 columns and 30 rows. Where an editor operation leaves
 two unpinned agent tabs in one group, the group keeps one and hides the others: after an Unpin, its active one, else the
-one just unpinned; after a tab is moved in - dragged, by a Move Editor command or from another window - the one moved;
-where groups join, a Close Group that moves its tabs into another included, or a reload restores tabs of groups gone
-into one (3.5), its active one, else the one last active. A pinned agent's tab moved in hides none, and an Unpin whose
-save is undone hides nothing. Facade knows which agent a tab shows from the editor's own reports - the tab that opens
+one just unpinned; after a tab is moved in - dragged, by a Move Editor command or from another window, which leave it
+active there - the one moved; where groups join - a Close Group that moves its tabs into another included, which moves
+them in inactive - or a reload restores tabs of groups gone into one (3.5), its active one, else the one last active. A
+pinned agent's tab moved in hides none, and an Unpin whose save is undone hides nothing. Facade knows which agent a tab
+shows from the editor's own reports - the tab that opens
 with a terminal Facade opened, the tab that becomes active with its terminal, and, where one tab closes while its
 terminal stays open and one opens, those two as one tab moved - never from Tab objects, which the editor may replace
 without a report. A tab those leave unknown, as several moved at once can, counts for no agent until it next becomes
-active with its terminal: it hides nothing and Unpins nothing, and its agent keeps its last known group for a reload. A
+active with its terminal: it hides nothing, a change of its mark acts once it is known (3.4), the person's close of it
+Unpins as 3.4 says, and its agent keeps its last known group for a reload. A
 terminal shows in one tab at a time. Where the editor copies an agent's tab - a split in any direction, a copying drag,
 Copy into New Window - the agent stays where it is. The editor reports a copy as a new terminal with neither a shell nor
 a pseudoterminal of its own, under the name the copied tab was opened with - a terminal with either is never a copy: the

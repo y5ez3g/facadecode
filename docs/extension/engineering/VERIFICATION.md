@@ -112,8 +112,10 @@ unrelated suites for small changes. Missing environments are recorded as not run
 Status: J15 is proven between a local window and SSH windows on Linux and Windows hosts. J14 is proven on Windows with
 fake CLIs - panel, search and order usable, a further start, and every start of a burst - and open on macOS and Linux.
 J13 and J16 are open: no walkthrough is recorded. The two dots, the last-message second line, the tab spinner, the two
-queues, tab-close questions and Pin before a conversation is named are proven only by unit tests and the pull-request
-checks.
+queues, hidden tabs, one unpinned agent tab per group, tabs back in their groups after a reload and Pin before a
+conversation is named are proven only by unit tests and the pull-request checks; of a tab's copies, the split is proven
+by a journey. J17 is open, but for its released-build part - a released build's hidden agent's question answered once by
+the window's headless terminal - proven on macOS from 0.0.5 by `FACADE_IT_ONLY=update`.
 
 ## 3 Scenarios
 

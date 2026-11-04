@@ -276,16 +276,19 @@ everything written to the headless terminal is drawn, on the last write's own ca
 empty write's. A screen snapshot carries the terminal modes its program set, so that a terminal drawing it anew behaves
 as before: besides the serializer's own, the mouse encoding, a hidden cursor, the kitty keyboard flags of the screen it
 is on and win32 input mode, each followed through the program's resets. A terminal query a program asks is answered at
-most once, as it is asked, and never later: a program waits a moment only - Codex 200 to 300 ms - and reads a later
-answer as typed keys, an Escape that interrupts a turn, then text in its input. An editor terminal answers a query only
+most once. A colour query is answered as it arrives and never later - not at all where ptyd's thread was held up just
+before: a program waits a moment only for its colours - Codex 200 to 300 ms - and reads a later answer as typed keys, an
+Escape that interrupts a turn, then text in its input. Other queries that ptyd's headless terminal handles are answered
+as it parses them; the colour-query delay check does not suppress those answers. An editor terminal answers a query only
 as it draws it, which for a tab behind others is when the tab is opened, and its answer comes back through the window
-and ptyd, which on a busy machine can pass that moment. So ptyd answers, as it parses the query, whether or not a window
-claims the run: its headless terminal what it can - the cursor position, the device attributes, the terminal's status, a
+and ptyd, which on a busy machine can pass that moment. So ptyd answers whether or not a window claims the run: its
+headless terminal what it can - the cursor position, the device attributes, the terminal's status, a
 mode, a setting - and a colour query (OSC 10, 11, 12) with the colours the window that claims the run, or claimed it
 last, told it - its theme kind's until one of its editor terminals reports its own, answering the window's question as
 it opens or a program's - and not at all where none was told, the program then using its own. The editor's answers to
 these reach no program of a supervisor that answers them (protocol 15 on); for a run of an earlier supervisor (2.4),
-which leaves its queries to a window that shows the run, the window passes its terminal's answers on as it did; what
+which leaves its queries to a window that shows the run, the window passes its terminal's answers on as it did, but for
+those to the window's own colour questions, which reach no program; what
 only the editor knows - its kitty keyboard flags, its name, its size in pixels - reaches the program where the editor
 answers within 150 ms of the query being written to it. A terminal draws a run's output only while open: output that
 comes before it opens is not kept for it, and it opens on the run's screen taken anew, which holds no query. A run's
