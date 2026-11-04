@@ -357,7 +357,10 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			await waitFor(() => s.messages.sent.length === 1);
 			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
 			const { settled, ...sent } = s.messages.sent[0];
-			assert.deepStrictEqual([sent, typeof settled], [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' } } }, 'function']);
+			assert.deepStrictEqual([sent, typeof settled], [{ id: 'm-1', from: lead.id, to: runId(100), text: 'Review the changes.', elapsedMs: 0, callId: 'call-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'The launch has no native prompt argument, so the prompt goes as the first message after startup.' } }, resultId: 'm-2' }, 'function']);
+			// Recorded as the start answered, pending with nothing typed: a reloaded window sends it, and the start's result (MCP-2.3)
+			assert.deepStrictEqual([s.messages.prompts.map(each => [each.request.id, each.request.resultId, each.delivery.status, each.delivery.effects])],
+				[[['m-1', 'm-2', 'pending', { outcome: 'pending', text_written: 'none', enter_written: false }]]]);
 			assert.strictEqual(s.messages.reports.length, 0, 'no result of the prompt\'s own');
 			s.messages.finishSent(0, { status: 'success', effects: { outcome: 'confirmed', text_written: 'full', enter_written: true }, attempts: 2, via: 'terminal' });
 			await waitFor(() => s.messages.reports.length === 1);

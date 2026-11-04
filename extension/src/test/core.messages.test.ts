@@ -220,6 +220,26 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		assert.deepStrictEqual([...stored.values()].map(record => [record.delivery.status, record.delivery.input]), [['success', undefined], ['success', undefined]]);
 	});
 
+	test('a creation prompt recorded as its start answered, the window reloaded before it went in, goes in from the reloaded window, and its outcome is the start\'s result under the ID the start reserved (MCP-2.3)', async () => {
+		const { service, input, stored, reload, creating } = setUp();
+		input.states.set(B, ['usable']);
+		const prompt = service.allocate({ from: A, text: 'Your task.' });
+		const resultId = service.reserveResult();
+		service.recordPrompt({ id: prompt.id, from: A, to: B, text: 'Your task.', callId: 'start-1', initialPrompt: { path: 'post_start', capability: { state: 'unavailable', reason: 'none' } }, resultId },
+			{ status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, attempts: 0, deadline: Date.now() + 600_000 });
+		// Before the reload, a message to B waits for it
+		creating.add(B);
+		const held = await settled(service.send({ from: C, to: B, text: 'Hello', elapsedMs: 0 }));
+		assert.strictEqual(held.obstacle, 'input_draft');
+		const reopened = reload();
+		creating.delete(B);
+		reopened.resume();
+		await sleep(6_000);
+		assert.deepStrictEqual(input.submitted.filter(each => each.run === B).map(each => each.text.split('\n')[1]), ['Your task.', 'Hello']);
+		const result = stored.get(resultId)!;
+		assert.deepStrictEqual([stored.get(prompt.id)!.delivery.status, result.kind, result.about, result.callId], ['success', 'result', prompt.id, 'start-1']);
+	});
+
 	test('a reserved receipt makes no inbox item, retains its ID and cannot be handed over twice', async () => {
 		const { service, input, stored, reload } = setUp();
 		const id = service.reserveResult();

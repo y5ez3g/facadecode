@@ -103,8 +103,10 @@ interface Pair {
 	readonly lifetime: AbortController;
 	/** Spawn was sent, but its outcome is not known yet. Closure must reconcile it even before a PID is returned. */
 	starting?: boolean;
-	/** Its details changed while it started, kept for ptyd once it holds the run, which it does not before its spawn answers. */
+	/** Its details changed before its spawn was sent, kept for ptyd once it holds the run - from the spawn request on. */
 	pendingMeta?: RunMeta;
+	/** Its spawn was sent: ptyd holds the run from that request on, and a change on the same connection after it reaches the run. */
+	spawnSent?: boolean;
 	/** The CLI whose adapter reads its reports and exit. */
 	cli: string;
 	process?: { readonly pid: number; readonly startedAt: number };
@@ -446,11 +448,13 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		// The details spawn carries are the latest: a change from now on waits for the run to be held
 		pair.pendingMeta = undefined;
 		try {
-			info = await client.request('spawn', {
+			const spawned = client.request('spawn', {
 				run, owner: this.options.owner, file: plan.executable, args: plan.args, cwd: plan.cwd, env: plan.env,
 				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...meta },
 				...plan.screenStatus ? { screenStatus: plan.screenStatus } : {}
 			});
+			pair.spawnSent = true;
+			info = await spawned;
 		} catch (err) {
 			if (!(err instanceof PtydLost)) {
 				pair.starting = false;
@@ -711,10 +715,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 	}
 
-	/** Keeps `meta` with the run's process in ptyd - once ptyd holds it: a change while its spawn is under way goes after it. */
+	/** Keeps `meta` with the run's process in ptyd - once ptyd holds it, from its spawn request on: a change before that goes after it. */
 	setMeta(run: RunId, meta: RunMeta): void {
 		const pair = this.pairs.get(run);
-		if (pair && !pair.process) {
+		if (pair && !pair.process && !pair.spawnSent) {
 			pair.pendingMeta = meta;
 			return;
 		}

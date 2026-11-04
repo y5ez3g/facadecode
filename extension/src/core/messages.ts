@@ -219,7 +219,10 @@ export class MessageService implements Messages, Disposable {
 		const elapsed = Number.isFinite(request.elapsedMs) ? Math.max(0, request.elapsedMs) : 0;
 		const start = this.mono() - elapsed;
 		const deadline = this.deps.clock.now() - elapsed + STAGE_MS;
-		const record = this.create({
+		// A creation prompt recorded as its start answered, nothing of it typed yet, goes now under that record (MCP-2.3)
+		const recorded = request.id !== undefined && request.initialPrompt !== undefined
+			? this.deps.store.list().find(each => each.id === request.id && each.delivery.status === 'pending' && each.delivery.start === undefined) : undefined;
+		const record = recorded ?? this.create({
 			kind: 'message',
 			from: request.sender?.party ?? this.party(request.from),
 			to: request.to === '@human' ? { run: '@human' } : this.party(request.to),
@@ -231,7 +234,8 @@ export class MessageService implements Messages, Disposable {
 			// window was renamed meanwhile, as a folder becoming a multi-root workspace renames it (RULES-1.6, 1.9)
 			label: request.sender?.label ?? this.deps.window.label,
 			...(request.requestId !== undefined ? { requestId: request.requestId } : {}),
-			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {})
+			...(request.initialPrompt !== undefined ? { initialPrompt: request.initialPrompt } : {}),
+			...(request.resultId !== undefined ? { resultId: request.resultId } : {})
 		}, PENDING, true, request.id);
 		if (request.to === '@human') {
 			return this.contact(record);
@@ -290,6 +294,7 @@ export class MessageService implements Messages, Disposable {
 
 	recordPrompt(request: Omit<SendRequest, 'elapsedMs'>, delivery: MessageRecord['delivery']): MessageRecord {
 		return this.create({
+			...(request.resultId !== undefined ? { resultId: request.resultId } : {}),
 			kind: 'message',
 			from: request.sender?.party ?? this.party(request.from),
 			...(request.sender ? { fromWindow: request.sender.window } : {}),
@@ -488,7 +493,8 @@ export class MessageService implements Messages, Disposable {
 			text: resultText(original, this.cliOf(original.to.run)),
 			...(result !== undefined ? { result } : {}),
 			...(callId !== undefined ? { callId } : {})
-		}, PENDING, false);
+		// A creation prompt's outcome is its start's one later result, under the ID the start reserved for it (MCP-2.3)
+		}, PENDING, false, original.resultId);
 		this.handOver(record, formatResult(record));
 	}
 
@@ -637,6 +643,12 @@ export class MessageService implements Messages, Disposable {
 		}
 	}
 
+	/** Whether `stage`'s run has a creation prompt recorded and still pending, which goes first - after a reload too (RULES-1.10). */
+	private creationRecorded(stage: Stage): boolean {
+		return this.deps.store.list().some(record => record.id !== stage.message && record.to.run === stage.target && record.initialPrompt?.path === 'post_start'
+			&& record.delivery.status === 'pending');
+	}
+
 	/** A stage stopped before its deadline: delivered meanwhile by the recipient's read, or its run ended or was closed. */
 	private ended(stage: Stage): Outcome {
 		return stage.settled ?? { status: 'failure', reason: 'ended', effects: stage.effects, attempts: stage.attempts };
@@ -662,7 +674,7 @@ export class MessageService implements Messages, Disposable {
 		if (this.deps.input.capability(stage.target).state === 'unavailable') {
 			return { kind: 'unsupported' };
 		}
-		if (!stage.written && !stage.creation && this.deps.agents.creationPending?.(stage.target)) {
+		if (!stage.written && !stage.creation && (this.deps.agents.creationPending?.(stage.target) || this.creationRecorded(stage))) {
 			// Its creation prompt, its preparation included, goes first: the input is held for it, as by a draft (RULES-1.10)
 			return { kind: 'blocked', obstacle: 'input_draft' };
 		}
@@ -831,7 +843,7 @@ export class MessageService implements Messages, Disposable {
 	 * A new record with its own ID (RULES-1.1) - the one `allocate` took for it, where given - written before any input and never over
 	 * another; throws where it cannot be written, unless `required` is false.
 	 */
-	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'operation' | 'fromWindow' | 'requestId' | 'initialPrompt' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
+	private create(fields: Pick<MessageRecord, 'kind' | 'from' | 'to' | 'text' | 'result' | 'replyTo' | 'about' | 'callId' | 'agent' | 'operation' | 'fromWindow' | 'requestId' | 'initialPrompt' | 'resultId' | 'label'>, delivery: MessageRecord['delivery'], required = true, id?: string): MessageRecord {
 		const given = id !== undefined ? messageIdOf(id) : undefined;
 		if (id !== undefined && (given === undefined || given !== id)) {
 			throw new Error(`${JSON.stringify(id)} is not a message ID.`);
@@ -856,6 +868,7 @@ export class MessageService implements Messages, Disposable {
 			// A retry with the same request ID finds it, in this window or the sender's (MCP-1.1)
 			...(fields.requestId !== undefined ? { requestId: fields.requestId } : {}),
 			...(fields.initialPrompt !== undefined ? { initialPrompt: fields.initialPrompt } : {}),
+			...(fields.resultId !== undefined ? { resultId: fields.resultId } : {}),
 			...(fields.label !== undefined ? { label: fields.label } : {}),
 			text: fields.text,
 			...(fields.result !== undefined ? { result: fields.result } : {}),
@@ -1000,6 +1013,9 @@ export class MessageService implements Messages, Disposable {
 				this.abandon(record, 'ended');
 			} else if (deadline <= now) {
 				this.abandon(record, 'timeout');
+			} else if (start === undefined && record.initialPrompt !== undefined && !record.delivery.pasted) {
+				// A creation prompt the window reloaded before it went in: it goes now, its own budget starting here (MCP-2.3)
+				this.goOn(this.save({ ...record, delivery: { ...record.delivery, start: now, deadline: Math.min(deadline, now + STAGE_MS) } }), facts.id, now);
 			} else if (start === undefined) {
 				this.expireAt(record);
 			} else {

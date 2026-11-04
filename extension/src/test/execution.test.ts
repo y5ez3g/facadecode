@@ -86,7 +86,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let loseAttach: boolean;
 	/** Where the next listing's answer waits, once had, until opened: what the run says meanwhile reaches the window first. */
 	let listGate: { entered(): void; readonly open: Promise<void> } | undefined;
-	/** Where the next spawn waits, once had, until opened; and each request's method in order. */
+	/** Where the next spawn's answer waits, once had, until opened; and each request's method in order. */
 	let spawnGate: { entered(): void; readonly open: Promise<void> } | undefined;
 	let requested: string[];
 	const ports: AgentExecution[] = [];
@@ -185,10 +185,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 					if (method === 'spawn') { spawns++; }
 					requested.push(method);
 					if (method === 'spawn' && spawnGate) {
+						// Its answer held, as ptyd's start line can hold it: the request itself went, in its turn on the connection
 						const gate = spawnGate;
 						spawnGate = undefined;
+						const answered = real.request(method, params);
 						gate.entered();
 						await gate.open;
+						return await answered;
 					}
 					if (method === 'terminate' && failTerminateOnce) {
 						failTerminateOnce = false;
@@ -1115,21 +1118,22 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('ptyd to end and forget it', async () => (await observer.request('list', { owner: 'workspace-1' })).length === 0);
 	});
 
-	test('details that change while a run starts are kept with its process once ptyd holds it, never sent before its spawn answers (ARCHITECTURE-2.3)', async () => {
+	test('details that change while a run starts are kept with its process: before its spawn was sent they go after it, after it they go at once on the same connection (ARCHITECTURE-2.3)', async () => {
 		let entered!: () => void, open!: () => void;
 		const reached = new Promise<void>(resolve => entered = resolve);
 		spawnGate = { entered, open: new Promise<void>(resolve => open = resolve) };
 		const port = portOf();
 		port.openPair(facts('run-meta'), { reveal: false });
 		const starting = port.spawn('run-meta', plan(ECHO), meta('run-meta'));
+		port.setMeta('run-meta', { ...meta('run-meta'), name: 'before' });
 		await reached;
-		port.setMeta('run-meta', { ...meta('run-meta'), name: 'first' });
 		port.setMeta('run-meta', { ...meta('run-meta'), name: 'renamed' });
 		open();
 		await starting;
 		const observer = await PtydClient.connect(ownPtydSocket(home, '/nonexistent/ptyd.js'), '/nonexistent/ptyd.js', path.join(home, 'unused.log'));
 		extraClients.push(observer);
 		const held = await until('ptyd to keep the details', async () => (await observer.request('list', { owner: 'workspace-1' })).find(each => each.run === 'run-meta' && each.meta.name === 'renamed'));
+		// The change before the spawn was sent went with it (its meta the latest then); the one after reached the run it named
 		assert.deepStrictEqual([held.meta.name, requested.filter(method => method === 'spawn' || method === 'setMeta')], ['renamed', ['spawn', 'setMeta']]);
 	});
 

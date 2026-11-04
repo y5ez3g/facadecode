@@ -397,9 +397,12 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const looks: (() => void)[] = [];
 		const world = setUp({ sessions: true, wait: () => new Promise<void>(resolve => looks.push(resolve)) });
 		const uncertain = 'run-' + '9'.repeat(32);
-		const meta = { alias: '#a9', name: 'Stuck', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local' as const, yolo: true, createdAt: 5, sessionId: 's-stuck', exactResume: true };
+		const meta = { alias: '#a9', name: 'Stuck', cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app', environment: 'local' as const, yolo: true, createdAt: 5, sessionId: 's-stuck', exactResume: true, pin: 'pin-stuck' };
+		(world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.save({ id: 'pin-stuck', conversation: { environment: 'local', cli: 'claude', sessionId: 's-stuck' }, location: 'loc-1', cwd: '/work/app', name: 'Stuck' });
 		world.execution.liveRuns = [{ run: uncertain, meta, pid: 99, startedAt: 6, claimedElsewhere: false, uncertain: true }];
 		await world.agents.restore();
+		await world.agents.restorePins();
+		assert.deepStrictEqual([world.agents.get(uncertain)?.pin, world.agents.list().length], ['pin-stuck', 1], 'its Pin is held, not restored beside it');
 		const card = world.agents.get(uncertain);
 		assert.deepStrictEqual([card?.lifecycle, card?.error?.reason, card?.error?.source, world.execution.notes.map(note => note.text)],
 			['running', 'Could not confirm that it stopped', 'cleanup', ['Could not confirm that it stopped']]);
@@ -414,6 +417,9 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		looks.shift()!();
 		await until(() => !world.agents.get(uncertain));
 		assert.deepStrictEqual([world.execution.removed.includes(uncertain), world.changes.some(change => change.run === uncertain && change.kind === 'removed' && change.cause === 'exit')], [true, true]);
+		// Its Pin is restored then, its exact conversation in a new run
+		await until(() => world.agents.list().some(run => run.pin === 'pin-stuck'));
+		assert.deepStrictEqual(world.agents.list().map(run => [run.sessionId, run.pin, run.id === uncertain]), [['s-stuck', 'pin-stuck', false]]);
 	});
 
 	test('a damaged retained record is ignored without stopping restoration, said once however often the window restores (ARCHITECTURE-4.2)', async () => {

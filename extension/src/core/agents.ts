@@ -419,7 +419,7 @@ export class AgentService implements Agents, Disposable {
 					} catch {
 						continue;
 					}
-					let ended = false;
+					const freed = new Set<string>();
 					for (const [id, run] of [...this.runs]) {
 						if (run.uncertain && !listed.has(id) && !this.disposed) {
 							this.runs.delete(id);
@@ -427,11 +427,12 @@ export class AgentService implements Agents, Disposable {
 							this.deps.execution.removePair(id);
 							this.emit({ run: id, kind: 'removed', cause: 'exit' });
 							this.deps.log.event(`${run.facts.alias}, whose end was not confirmed, has ended`);
-							ended = true;
+							if (run.facts.pin) { freed.add(run.facts.pin); }
 						}
 					}
-					if (ended && !this.disposed) {
-						await this.restorePins();
+					// Its Pin is restored now, as an ended run's - the opening's own restoration is done already
+					if (freed.size && !this.disposed) {
+						await this.restoreHeldBy(freed);
 					}
 				}
 			} finally {
@@ -995,6 +996,14 @@ export class AgentService implements Agents, Disposable {
 	async restorePins(): Promise<void> {
 		if (this.pinsRestored || this.ownershipLost || this.disposed) { return; }
 		this.pinsRestored = true;
+		await this.restoreHeldBy();
+	}
+
+	/**
+	 * Restores the Pins no run holds: every one at an opening, or `only` those a run held until now - one whose grace end was not
+	 * confirmed, its exit heard since (LIFECYCLE-3.5) - telling of these alone.
+	 */
+	private async restoreHeldBy(only?: ReadonlySet<string>): Promise<void> {
 		// The conversations running in every ptyd of this environment first: one that does not answer - an earlier protocol's, whose runs
 		// a first restore may not have shown - is asked again, never guessed, as a Pin started meanwhile runs one twice (LIFECYCLE-3.5)
 		let failure: string | undefined;
@@ -1015,7 +1024,7 @@ export class AgentService implements Agents, Disposable {
 		// A Pin a card already holds - running, or retained red after an abnormal exit or a failed restore - is not started again
 		// on a reload: restoration happens once per opening, without a restart loop (RULES-4.2)
 		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
-		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holdingPin(pin));
+		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holdingPin(pin) && (!only || only.has(pin.id)));
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
 		const failed: { readonly id?: RunId; readonly name: string; readonly reason: string }[] = [];
 		// A Pin refused before any card - a facade.yolo neither true nor false, no number to give (UX-4.1, RULES-2.2) - fails as

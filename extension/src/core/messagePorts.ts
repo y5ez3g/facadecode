@@ -49,6 +49,11 @@ export interface MessageRecord {
 	readonly requestId?: string;
 	/** Evidence of the original startup path, independent of how this message may later be read. */
 	readonly initialPrompt?: { readonly path: 'native' | 'post_start'; readonly capability: CapabilityState };
+	/**
+	 * For a creation prompt that goes after its start: the ID its start reserved for its one later result, which reports this prompt's
+	 * outcome - a window reloaded before then gives that result under it (MCP-2.3).
+	 */
+	readonly resultId?: string;
 	/** The window its header names, where its sender is another window's: what a delivery that goes on after a reload types again. */
 	readonly label?: string;
 	readonly delivery: {
@@ -96,6 +101,8 @@ export interface SendRequest {
 	/** The caller's request ID, kept with the record (MCP-1.1). */
 	readonly requestId?: string;
 	readonly initialPrompt?: MessageRecord['initialPrompt'];
+	/** A creation prompt's start's reserved result ID (MCP-2.3). */
+	readonly resultId?: string;
 	/**
 	 * Where an accepted send's final record goes, in place of the Facade result the sender would get: a creation prompt's, which its
 	 * start reports as one later result with the start (MCP-2.3).

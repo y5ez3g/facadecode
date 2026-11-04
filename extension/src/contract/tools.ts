@@ -121,6 +121,8 @@ const ROUTE_TRANSIT_MS = 500;
 
 /** How a later outcome reaches the caller: what accepted texts say of it (MCP-1.3, RULES-1.7). */
 const LATER = 'recorded later as a Facade result in your inbox, and typed into your terminal where your CLI\'s message input allows';
+/** How long a recorded creation prompt waits for its preparation before a reloaded window ends it: as long as an input is held (RULES-1.5). */
+const PROMPT_HOLD_MS = 10 * 60_000;
 
 /** What a tool came to: its result, the sentence that heads its text, and what to do once its answer was handed back. */
 interface Outcome {
@@ -760,7 +762,9 @@ class ToolService {
 				return ran(this.nativePrompt(start, args.prompt, outcome));
 			}
 			// The prompt goes after the process runs - its preparation first - and the start answers now, not waiting on it: one later
-			// result reports it, under this call's result_message_id (MCP-2.3, COLLABORATION-2.2)
+			// result reports it, under this call's result_message_id (MCP-2.3, COLLABORATION-2.2). Recorded now, nothing of it typed: a
+			// window reloaded before it goes in sends it, and that result, itself
+			this.recordPendingPrompt(start, args.prompt, outcome);
 			const delivery = this.postStartPrompt(start, args.prompt, outcome).finally(() => this.deps.agents.creationSettled?.(run));
 			if (start.answerBy === Infinity) {
 				// This is already that later result, for a start accepted while it was still starting: it waits for the prompt too
@@ -879,6 +883,19 @@ class ToolService {
 		};
 	}
 
+	/** Records a post-start creation prompt, pending with nothing typed, as its start answers (MCP-2.3): a reload never loses it. */
+	private recordPendingPrompt(start: Start, text: string, outcome: StartOutcome): void {
+		const { run, caller, call, promptId } = start;
+		try {
+			this.deps.messages.recordPrompt({ ...promptId !== undefined ? { id: promptId } : {}, from: caller.id, ...this.senderOf(caller), to: run, text, callId: call.callId,
+				initialPrompt: this.promptPath(outcome), resultId: start.resultMessageId },
+			{ status: 'pending', effects: { outcome: 'pending', text_written: 'none', enter_written: false }, attempts: 0, deadline: this.now() + PROMPT_HOLD_MS });
+		} catch (err) {
+			// Its send records it in a moment, as it did before; only a reload meanwhile would lose it
+			this.deps.log?.(`Could not record the prompt of ${run} as its start answered: ${errorText(err)}`);
+		}
+	}
+
 	/** A post-start creation prompt as its start answers, before it went in: pending, nothing typed yet (MCP-2.3). */
 	private pendingPrompt(start: Start, outcome: StartOutcome): { readonly data: Data; readonly headline: string } {
 		const alias = start.promptId !== undefined ? `#m${start.promptId.slice(2)}` : undefined;
@@ -903,7 +920,7 @@ class ToolService {
 			await this.deps.agents.warmedUp(run);
 			let settled!: (final: MessageRecord) => void;
 			const later = new Promise<MessageRecord>(resolve => settled = resolve);
-			const sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId, initialPrompt: base, settled });
+			const sent = await this.deps.messages.send({ ...id, from: caller.id, ...this.senderOf(caller), to: run, text, elapsedMs: 0, callId: call.callId, initialPrompt: base, resultId: start.resultMessageId, settled });
 			record = sent.status === 'accepted' ? await later : sent.record;
 		} catch (err) {
 			const failed = errorResult(err, { effects: { outcome: 'unknown' } });

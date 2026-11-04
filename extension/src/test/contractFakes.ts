@@ -214,7 +214,9 @@ export class FakeMessages implements Pick<Messages, 'send' | 'allocate' | 'reser
 				? { status: 'pending' as const, effects: { outcome: 'pending' as const, text_written: 'none' as const, enter_written: false }, deadline: Date.UTC(2026, 9, 28, 23, 0, 15), attempts: 1 }
 				: { status: 'failure' as const, ...response.reason ? { reason: response.reason } : {}, effects: { outcome: 'none' as const, text_written: 'none' as const, enter_written: false }, attempts: 0 });
 		const record = this.recordOf(request, delivery);
-		this.records.push(record);
+		// A creation prompt recorded as its start answered goes under that record
+		const recorded = this.records.findIndex(each => each.id === record.id);
+		if (recorded >= 0) { this.records[recorded] = record; } else { this.records.push(record); }
 		return { record, status: response.status, ...response.reason ? { reason: response.reason } : {}, ...response.obstacle ? { obstacle: response.obstacle } : {} };
 	}
 
