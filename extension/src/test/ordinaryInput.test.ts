@@ -148,7 +148,7 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		assert.strictEqual(await failing.inspect(RUN), 'unknown');
 	});
 
-	test('type_text: its text, then its Enter in a write of its own a moment later - a tenth of a second, more for a long paste, on Windows and for Antigravity\'s lines (MCP-5.2)', async () => {
+	test('type_text: its text, then its Enter in a write of its own a moment later - a tenth of a second, more for a long paste, on Windows, for Antigravity\'s lines and for Muse Code (MCP-5.2, CLIS-2.1)', async () => {
 		const { input, terminal, waits } = setUp();
 		assert.deepStrictEqual(await input.typeDirect(RUN, 'yes', true), { outcome: 'applied', pasted: true, entered: true });
 		assert.deepStrictEqual(terminal.calls, ['type "yes"', 'type "" and Enter']);
@@ -165,6 +165,10 @@ suite('Ordinary message input: a whole paste, Enter once it shows, confirmed onc
 		const agy = setUp({ inputAdapter: 'agy-frame' });
 		await agy.input.typeDirect(RUN, 'a\nb\nc', true);
 		assert.deepStrictEqual(agy.waits, [100 + 3 * 45]);
+		// Muse Code takes an Enter soon after a paste for a line break in it (CLIS-2.1)
+		const muse = setUp({ inputAdapter: 'muse-frame' });
+		await muse.input.typeDirect(RUN, 'yes', true);
+		assert.deepStrictEqual(muse.waits, [100 + 250]);
 	});
 
 	test('type_text: text the run ended before is not followed by Enter; an Enter it ended before, or ptyd never sent, is not claimed (MCP-5.2)', async () => {

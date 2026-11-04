@@ -351,7 +351,8 @@ export class OrdinaryInput implements InputPort {
 	/**
 	 * type_text's text, then its Enter where asked (MCP-5.2): no draft protection, but its Enter in a write of its own once its CLI can
 	 * have read the text - a tenth of a second at least, and the time a paste of its size takes (CLIS-2.1, MCP-4.1) - as a CLI that reads a
-	 * paste's end and an Enter together may drop the Enter, as Claude Code does.
+	 * paste's end and an Enter together may drop the Enter, as Claude Code does; Muse Code's 250 ms more, as an Enter sooner is a line
+	 * break to it.
 	 */
 	async typeDirect(run: RunId, text: string, enter: boolean): Promise<InputEffect> {
 		if (!enter || !text) {
@@ -362,7 +363,7 @@ export class OrdinaryInput implements InputPort {
 			return typed;
 		}
 		const adapter = this.adapterOf(run);
-		await this.wait(DIRECT_ENTER_MS + this.pasteMs(text) + this.linesMs(adapter, text) + this.charactersMs(adapter, text), undefined);
+		await this.wait(DIRECT_ENTER_MS + (PASTE_ENTER_SETTLE_MS[adapter ?? ''] ?? 0) + this.pasteMs(text) + this.linesMs(adapter, text) + this.charactersMs(adapter, text), undefined);
 		let entered: InputEffect;
 		try {
 			entered = await this.deps.typeText(run, '', true);
