@@ -1260,6 +1260,39 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.ok(commands.includes('vscode.open'), 'the covered editor is shown again once it opened');
 	});
 
+	test('where groups join, moving their tabs in inactive, the group keeps its active agent tab, else the one last active; a tab moved in active stays (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const place = (index: number, viewColumn: number, isActive: boolean) => Object.assign(terminals[index].tab, { group: { viewColumn }, isActive });
+		const join = (index: number, isActive: boolean) => {
+			const moved = { input: new TabInputTerminal(), isActive, isPinned: false, label: terminals[index].tab.label, group: { viewColumn: 1 } };
+			tabsChanged.fire({ opened: [moved], closed: [terminals[index].tab], changed: [] });
+			return moved;
+		};
+		const activate = (index: number) => {
+			activeTab = terminals[index].tab; activeTerminal = terminals[index];
+			tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(terminals[index].tab, { isActive: true })] });
+			activeChanged.fire(terminals[index]);
+		};
+		for (const [index, run, column] of [[0, 'run-j1', 1], [1, 'run-j2', 2], [2, 'run-j3', 3]] as const) {
+			port.openPair(facts(run, { name: `Agent ${index}` }), { reveal: false });
+			open(terminals[index]);
+			place(index, column, false);
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		// Join All Groups from group 1, its agent's tab active there: the agent moved in inactive is hidden
+		activate(2); activate(1); activate(0);
+		join(1, false);
+		assert.deepStrictEqual(terminals.slice(0, 3).map(each => each.disposed), [false, true, false]);
+		// Close Group of group 3 with a file active: none of group 1's agent tabs is active, and the one last active stays
+		Object.assign(terminals[0].tab, { isActive: false });
+		activeTab = { input: { uri: 'file:///work/app/README.md' }, isActive: true, isPinned: false, group: { viewColumn: 1 } };
+		await new Promise(resolve => setTimeout(resolve, 5));
+		activate(2);
+		Object.assign(terminals[2].tab, { isActive: false });
+		join(2, false);
+		assert.deepStrictEqual(terminals.slice(0, 3).map(each => each.disposed), [true, true, false]);
+	});
+
 	test('a mark changed on a tab Facade cannot tell wins once the tab is known where it came after the agent\'s last Pin or Unpin; else Facade\'s Pin stands and the mark follows (LIFECYCLE-3.4, J12)', async () => {
 		const port = portOf();
 		const changes: unknown[] = [];

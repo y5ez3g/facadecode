@@ -175,8 +175,10 @@ export class AgentTerminals implements vscode.Disposable {
 
 	/**
 	 * `keep`'s group shows at most one unpinned agent tab (LIFECYCLE-2.2): the others there are hidden, their agents going on. The one
-	 * opened or moved in stays; after an Unpin the group's active one, else the one just unpinned. A tab Facade cannot tell counts for
-	 * no agent and hides none; pinned agents' tabs never hide one another.
+	 * opened stays, and one moved in as the editor moves a tab the person moves - dragged, by a Move Editor command, from another
+	 * window - active there; one moved in inactive, as groups joining move theirs, leaves the group's active one, else the one last
+	 * active; after an Unpin the group's active one, else the one just unpinned. A tab Facade cannot tell counts for no agent and hides
+	 * none; pinned agents' tabs never hide one another.
 	 */
 	private oneUnpinned(keep: TerminalEntry, why: Placement): void {
 		const column = keep.tab?.group?.viewColumn;
@@ -187,7 +189,9 @@ export class AgentTerminals implements vscode.Disposable {
 		if (together.length < 2) {
 			return;
 		}
-		const stays = why === 'unpinned' ? together.find(each => each.tab?.isActive) ?? keep : keep;
+		const active = together.find(each => each.tab?.isActive);
+		const lastActive = together.reduce((last, each) => (each.activeAt ?? -Infinity) > (last.activeAt ?? -Infinity) ? each : last);
+		const stays = why === 'unpinned' ? active ?? keep : why === 'moved' && !keep.tab?.isActive ? active ?? lastActive : keep;
 		for (const other of together) {
 			if (other !== stays) {
 				this.hidePair(other);
