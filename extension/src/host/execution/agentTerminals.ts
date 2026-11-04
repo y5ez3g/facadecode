@@ -37,6 +37,10 @@ interface TerminalEntry {
 	background?: { readonly since: number; readonly covered?: vscode.Tab };
 	/** Its tab is closing as Facade hid it: no close of the person's (LIFECYCLE-2.2). */
 	hiding?: boolean;
+	/** Facade's Pin of its agent, which a group's one unpinned agent tab counts - its mark following (LIFECYCLE-2.2, 3.4). */
+	pinned?: boolean;
+	/** When its tab was last active, by this host's clock: where none of a group's is active, the one last active stays. */
+	activeAt?: number;
 }
 
 interface TerminalOptions {
@@ -50,17 +54,26 @@ interface TerminalOptions {
 	readonly renamed: (run: RunId, name: string) => void;
 	/** The window's terminal colours, which each terminal reports as it opens and the theme changes (ARCHITECTURE-2.3). */
 	readonly colours?: WindowColours;
+	/** Where `run`'s tab is now: open in the group of `column`, or hidden - what a reload brings back (LIFECYCLE-2.2, 3.5). */
+	readonly placed?: (run: RunId, column: number | undefined) => void;
 }
 
 /** Active-terminal and active-tab changes within this interval identify one change (LIFECYCLE-2.2). */
 const TOGETHER_MS = 250;
 /** A terminal created by Facade may be correlated with an opening tab for this long. */
 const OPENING_MS = 2_000;
+/** A tab of an agent closed while its terminal stays open is that tab moved where one tab opens within this (LIFECYCLE-2.2). */
+const MOVE_MS = 1_000;
+
+/** Why a tab is where it is now: what decides, where its group has another unpinned agent tab, which one stays (LIFECYCLE-2.2). */
+type Placement = 'opened' | 'moved' | 'active' | 'unpinned';
 
 /** Owns native terminal resources, tab identity, names and focus; it never starts or ends a CLI process. */
 export class AgentTerminals implements vscode.Disposable {
 	private readonly entries = new Map<RunId, TerminalEntry>();
 	private opening: { readonly pair: TerminalEntry; readonly at: number }[] = [];
+	/** Agents' tabs closed with their terminals still open: moved, where one tab opens to take each (LIFECYCLE-2.2). */
+	private movedOut: { readonly pair: TerminalEntry; readonly at: number }[] = [];
 	private terminalActivatedAt = -Infinity;
 	private tabActivatedAt = -Infinity;
 	private readonly disposables: vscode.Disposable[] = [];
@@ -94,11 +107,13 @@ export class AgentTerminals implements vscode.Disposable {
 					return;
 				}
 				const marked = pair.observedPin === true;
+				this.movedOut = this.movedOut.filter(each => each.pair !== pair);
 				pair.terminal = undefined;
 				pair.wantedPin ??= pair.observedPin;
 				pair.observedPin = undefined;
 				pair.tab = undefined;
 				this.opening = this.opening.filter(each => each.pair !== pair);
+				this.options.placed?.(pair.run, undefined);
 				if (pair.hiding) {
 					pair.hiding = false;
 					return;
@@ -112,10 +127,52 @@ export class AgentTerminals implements vscode.Disposable {
 		);
 	}
 
-	/** Queue a native pin change until this exact tab is active; never reveal it merely to pin it. */
+	/**
+	 * Facade's Pin of `run` changed: its tab's mark follows once that exact tab is active - never revealed merely to pin it - and an
+	 * Unpin leaves its group one unpinned agent tab (LIFECYCLE-2.2, 3.4).
+	 */
 	pin(run: RunId, pinned: boolean): void {
 		const pair = this.entries.get(run);
-		if (pair) { pair.wantedPin = pinned; this.applyPin(pair); }
+		if (pair) {
+			pair.pinned = pinned;
+			pair.wantedPin = pinned;
+			this.applyPin(pair);
+			if (!pinned) { this.oneUnpinned(pair, 'unpinned'); }
+		}
+	}
+
+	/**
+	 * `keep`'s group shows at most one unpinned agent tab (LIFECYCLE-2.2): the others there are hidden, their agents going on. The one
+	 * opened or moved in stays; after an Unpin the group's active one, else the one just unpinned. A tab Facade cannot tell counts for
+	 * no agent and hides none; pinned agents' tabs never hide one another.
+	 */
+	private oneUnpinned(keep: TerminalEntry, why: Placement): void {
+		const column = keep.tab?.group?.viewColumn;
+		if (column === undefined || keep.pinned || !keep.terminal) {
+			return;
+		}
+		const together = [keep, ...[...this.entries.values()].filter(other => other !== keep && !other.pinned && other.terminal && !other.hiding && other.tab?.group?.viewColumn === column)];
+		if (together.length < 2) {
+			return;
+		}
+		const stays = why === 'unpinned' ? together.find(each => each.tab?.isActive) ?? keep : keep;
+		for (const other of together) {
+			if (other !== stays) {
+				this.hidePair(other);
+			}
+		}
+	}
+
+	/** Closes `pair`'s tab as Facade hides it: no close of the person's, its agent going on (LIFECYCLE-2.2). */
+	private hidePair(pair: TerminalEntry): boolean {
+		const terminal = pair.terminal;
+		if (this.entries.get(pair.run) !== pair || !terminal) {
+			return false;
+		}
+		if (this.revealRequested?.pair === pair) { this.revealRequested = undefined; }
+		pair.hiding = true;
+		terminal.dispose();
+		return true;
 	}
 
 	private applyPin(pair: TerminalEntry): void {
@@ -190,16 +247,7 @@ export class AgentTerminals implements vscode.Disposable {
 				pair.terminal.show(preserveFocus);
 				return true;
 			},
-			hide: () => {
-				const terminal = pair.terminal;
-				if (this.entries.get(pair.run) !== pair || !terminal) {
-					return false;
-				}
-				if (this.revealRequested?.pair === pair) { this.revealRequested = undefined; }
-				pair.hiding = true;
-				terminal.dispose();
-				return true;
-			},
+			hide: () => this.hidePair(pair),
 			rename: name => {
 				pair.name = name;
 				pty.rename(name);
@@ -354,11 +402,29 @@ export class AgentTerminals implements vscode.Disposable {
 	private tabsChanged(event: vscode.TabChangeEvent): void {
 		const now = Date.now();
 		this.opening = this.opening.filter(each => now - each.at <= OPENING_MS && this.entries.get(each.pair.run) === each.pair);
+		// An agent's tab closed while its terminal stays open has moved, where one tab opens to take it (LIFECYCLE-2.2)
+		for (const tab of event.closed) {
+			const pair = this.pairOfTab(tab);
+			if (pair) {
+				pair.tab = undefined;
+				if (pair.terminal && !pair.hiding) {
+					this.movedOut.push({ pair, at: now });
+				}
+			}
+		}
+		this.movedOut = this.movedOut.filter(each => now - each.at <= MOVE_MS && this.entries.get(each.pair.run) === each.pair && !!each.pair.terminal && !each.pair.tab);
 		const opened = event.opened.filter(tab => tab.input instanceof vscode.TabInputTerminal && !this.pairOfTab(tab));
 		if (opened.length === 1 && this.opening.length === 1) {
 			const { pair } = this.opening.shift()!;
-			this.match(pair, opened[0]);
+			this.match(pair, opened[0], 'opened');
 			this.uncover(pair, opened[0]);
+		} else if (opened.length === 1 && this.movedOut.length === 1 && !this.opening.length) {
+			// One moved: the tab that opens is its (LIFECYCLE-2.2)
+			const { pair } = this.movedOut.shift()!;
+			this.match(pair, opened[0], 'moved');
+		} else if (opened.length && this.movedOut.length) {
+			// Several moved at once cannot be told apart: each is known again as it becomes active with its terminal, acting on none till then
+			this.movedOut = [];
 		} else if (opened.length) {
 			// Several made behind the person's work at once cannot be told apart, but what they covered still can: shown again
 			const active = opened.find(tab => tab.isActive);
@@ -367,12 +433,6 @@ export class AgentTerminals implements vscode.Disposable {
 				this.uncover(this.opening[0].pair, active);
 			}
 			this.opening = [];
-		}
-		for (const tab of event.closed) {
-			const pair = this.pairOfTab(tab);
-			if (pair) {
-				pair.tab = undefined;
-			}
 		}
 		if (event.changed.some(tab => tab.isActive) || event.opened.some(tab => tab.isActive)) {
 			this.tabActivatedAt = now;
@@ -439,7 +499,8 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 		const holder = this.pairOfTab(tab);
 		if ((!holder || holder === pair) && (!pair.tab || pair.tab === tab)) {
-			this.match(pair, tab);
+			pair.activeAt = Date.now();
+			this.match(pair, tab, 'active');
 		}
 	}
 
@@ -477,14 +538,19 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 	}
 
-	private match(pair: TerminalEntry, tab: vscode.Tab): void {
+	private match(pair: TerminalEntry, tab: vscode.Tab, why: Placement): void {
+		const placedBefore = pair.tab?.group?.viewColumn;
 		pair.tab = tab;
+		if (placedBefore !== tab.group?.viewColumn) {
+			this.options.placed?.(pair.run, tab.group?.viewColumn);
+		}
 		if (pair.observedPin !== tab.isPinned) {
 			const changed = pair.observedPin !== undefined || tab.isPinned;
 			pair.observedPin = tab.isPinned;
 			if (changed && pair.wantedPin === undefined && !pair.applyingPin) { this.options.pinned?.(pair.run, tab.isPinned); }
 		}
 		this.applyPin(pair);
+		this.oneUnpinned(pair, why);
 	}
 
 	private pairOfTab(tab: vscode.Tab): TerminalEntry | undefined {

@@ -1076,6 +1076,41 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('its screen', () => screenOf(terminals[0]).includes('size 120x30'));
 	});
 
+	test('a group shows one unpinned agent tab: the one opened or moved in stays and the other is hidden, its agent going on; a pinned agent\'s tab hides none and is hidden by none; an Unpin keeps the active one (LIFECYCLE-2.2)', async () => {
+		const port = portOf();
+		const closes: unknown[] = [];
+		port.onDidClosePair!(close => closes.push(close));
+		const first = { viewColumn: 1 }, second = { viewColumn: 2 };
+		const shown = (index: number, group: { viewColumn: number }) => {
+			const terminal = terminals[index];
+			for (const other of terminals) { Object.assign(other.tab, { isActive: false }); }
+			Object.assign(terminal.tab, { group, isActive: true });
+			open(terminal);
+			tabsChanged.fire({ opened: [terminal.tab], closed: [], changed: [] });
+		};
+		port.openPair(facts('run-a'), { reveal: true });
+		shown(0, first);
+		port.openPair(facts('run-b'), { reveal: true });
+		shown(1, first);
+		assert.deepStrictEqual([terminals[0].disposed, terminals[1].disposed], [true, false], 'B opened in the group: A hidden');
+		port.openPair(facts('run-c'), { reveal: true });
+		port.pinTab('run-c', true);
+		shown(2, first);
+		assert.deepStrictEqual([terminals[1].disposed, terminals[2].disposed], [false, false], 'a pinned agent\'s tab hides none');
+		port.openPair(facts('run-d'), { reveal: true });
+		shown(3, second);
+		// B moved into the second group: its tab closed there while its terminal stays open, and one opened in the other
+		const moved = { input: new TabInputTerminal(), isPinned: false, isActive: true, group: second };
+		tabsChanged.fire({ opened: [], closed: [terminals[1].tab], changed: [] });
+		tabsChanged.fire({ opened: [moved], closed: [], changed: [] });
+		assert.deepStrictEqual([terminals[1].disposed, terminals[3].disposed], [false, true], 'the one moved in stays');
+		// C unpinned beside B: the active one stays
+		Object.assign(moved, { isActive: false });
+		Object.assign(terminals[2].tab, { group: second, isActive: true });
+		port.pinTab('run-c', false);
+		assert.deepStrictEqual([terminals[1].disposed, terminals[2].disposed, closes], [true, false, []]);
+	});
+
 	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
 		const port = portOf();
 		const closes: { readonly run: RunId; readonly marked: boolean }[] = [];
