@@ -488,18 +488,19 @@ not run (2.4).
 
 Use native configuration files, commands or explicit literal launch options for vendor preferences. Facade does not
 provide a generic engine to edit arbitrary settings files or mirror their schemas. Facade trusts the folder an agent
-starts in, as the person would by accepting the CLI's own trust question: where the CLI takes trust for one launch,
-in that launch (Codex `-c projects` with `trust_level = "trusted"` for the folder; Muse Code `--trust-workspace`; Pi
+starts in, as the person would by accepting the CLI's own trust question: where the CLI takes trust for one launch, in
+that launch (Codex `-c projects` with `trust_level = "trusted"` for the folder; Muse Code `--trust-workspace`; Pi
 `--approve`); where it keeps trust in its own file, by merging only that entry as the CLI itself writes it, under the
 CLI's lock and preserving the rest of the file (Claude Code `hasTrustDialogAccepted` in its global configuration for the
-folder it keys the project on - on macOS and Linux the real path of the repository's main checkout; on Windows the folder
-with `.git` at or above the folder it starts in, a linked worktree's own, spelled as the run is given it with forward
-slashes; outside any repository the folder itself; Antigravity `trustedWorkspaces` with the folder, spelled as
-Antigravity names its working directory, in `~/.gemini/antigravity-cli/settings.json`). A merged entry stays after the
-run, as the person's own answer would. OpenCode asks no trust question and is given none. A file that cannot be read, or
-that does not exist, is left as it is and the CLI asks in its terminal. Claude Code's trust covers every folder below a
-trusted one, so it is never written for the home folder, a folder above it or a filesystem root; that CLI asks in its
-terminal there too. Native login and permission interactions remain in the terminal.
+folder it keys the project on - on macOS and Linux the real path of the repository's main checkout; on Windows the
+folder with `.git` at or above the folder it starts in, a linked worktree's own, spelled as the run is given it with
+forward slashes; outside any repository the folder itself; Antigravity `trustedWorkspaces` with the folder, spelled as
+Antigravity names its working directory - the folder as the launch gives it, which its terminal names in `PWD`, never
+its real path where a link or another case of its letters names it - in `~/.gemini/antigravity-cli/settings.json`). A
+merged entry stays after the run, as the person's own answer would. OpenCode asks no trust question and is given none. A
+file that cannot be read, or that does not exist, is left as it is and the CLI asks in its terminal. Claude Code's trust
+covers every folder below a trusted one, so it is never written for the home folder, a folder above it or a filesystem
+root; that CLI asks in its terminal there too. Native login and permission interactions remain in the terminal.
 
 Keep administrator settings and user deny policies effective according to verified native precedence. If effective
 native settings are unknown, report that fact instead of claiming trust or sandbox evidence. Test isolation remains
@@ -607,7 +608,7 @@ installed CLI is the runtime evidence.
 | 1.1–1.4 | Each built-in's destination discovery, unknown-version launch, OpenCode below version 2 refused with how to update, a turned-off CLI refused as turned off, matching profile/PATH/env/quoting, Windows launcher recognition and cmd.exe refusals, native permission mapping, explicit per-call model/effort and native defaults |
 | 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, titles kept as set for each built-in, Muse Code's screen reader on its fixtures and its reports' precedence |
 | 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks |
-| 3.1–3.4 | `.enabled` affects new starts only, custom CLIs require Resume without capability declarations or other placeholders, minimal argument/env schema, owned and session options refused, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration |
+| 3.1–3.4 | `.enabled` affects new starts only, custom CLIs require Resume without capability declarations or other placeholders, minimal argument/env schema, owned and session options refused, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration, Antigravity asking nothing in a folder given through a link or in another case of its letters |
 | 4.1–4.2 | Show Agent Launch describes and redacts the configured launch and says where no trust entry is written; staged cwd validation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes; no claim inferred from a dated observation |
 
