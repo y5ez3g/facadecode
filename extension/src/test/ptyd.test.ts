@@ -853,6 +853,14 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 				'\x1b]10;rgb:cccc/cccc/cccc\x1b\\\x1b]11;rgb:1919/1a1a/1b1b\x1b\\\x1b]12;rgb:aeaf/adad/b0b0\x1b\\');
 			// A program setting its colours is no question; a window not saying its own yet leaves the run those it had
 			assert.strictEqual(await answered(window, '\x1b]11;rgb:0000/0000/0000\x1b\\'), '');
+			// ptyd's one thread held - as creating a program holds it - past a tenth of a second: a question that arrives within a second
+			// after may have waited, and no answer is better than a late one; then it is answered again
+			const heldUntil = Date.now() + 150;
+			while (Date.now() < heldUntil) { /* held */ }
+			await new Promise(resolve => setTimeout(resolve, 30));
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'just held up: not answered');
+			await new Promise(resolve => setTimeout(resolve, 1_100));
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\', 'answered again a second after');
 			const reloaded = await open(2);
 			await reloaded.request('attach', { run: 'asks' });
 			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\');
