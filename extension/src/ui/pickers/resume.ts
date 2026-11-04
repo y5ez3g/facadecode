@@ -98,7 +98,10 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 			iconPath: cliIcon(deps.media, entry.key.cli),
 			entry
 		};
-		return { ...item, alwaysShow: matchesCliSearch(picker.value, entry.key.cli, cliDisplayName(entry.key.cli), item) };
+		// The window's one place to work, left unsaid, still matches a search (LIFECYCLE-3.2)
+		const one = onePlaceOf(catalog);
+		const unsaid = one && (entry.cwdChoices ?? [entry.cwd]).some(cwd => !placeIn(cwd)) ? locationLabel(one, catalog) : undefined;
+		return { ...item, alwaysShow: matchesCliSearch(picker.value, entry.key.cli, cliDisplayName(entry.key.cli), item, unsaid) };
 	};
 	const show = () => {
 		const active = picker.activeItems[0]?.entry;

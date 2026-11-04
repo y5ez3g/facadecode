@@ -1121,9 +1121,13 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const done = open([[entry(1, { cwd: '/shop' }), entry(2, { cwd: '/shop/api' })]], 'run-new', [plain]);
 			await settle();
 			const lines = ui.current!.items.map(item => item.description);
+			// Left unsaid, the one place still matches a search
+			ui.current!.type('shop');
+			await settle();
+			const found = ui.current!.items.filter(item => item.alwaysShow).map(item => item.label);
 			ui.current!.hide();
 			await done;
-			assert.deepStrictEqual(lines, ['1 min ago', '2 mins ago \u00b7 shop/api']);
+			assert.deepStrictEqual([lines, found], [['1 min ago', '2 mins ago \u00b7 shop/api'], ['Conversation 1']]);
 		});
 
 		test('LIFECYCLE-2.3: title leads, saved names follow time/location even when equal; absent names stay absent and CLI search reaches later pages', async () => {
@@ -1627,9 +1631,13 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			changed.fire({ run: run(9).id, kind: 'removed', cause: 'close' });
 			await settle();
 			const onePlace = picker.items.map(item => item.description);
+			// Left unsaid, the one place still matches a search (LIFECYCLE-2.3)
+			picker.type('main');
+			const byOnePlace = picker.items.filter(item => item.alwaysShow).length;
+			picker.type('Ada');
 			picker.accept();
 			await done;
-			assert.deepStrictEqual([picker.title, listed, searched, byId, byReference, all, afterClose, onePlace, did], [
+			assert.deepStrictEqual([picker.title, listed, searched, byId, byReference, all, afterClose, onePlace, byOnePlace, did], [
 				'Go to Agent',
 				[['Ada', '#a1 · Working · main · Fix login', undefined], ['Ada', '#a2 · Error: Not found · main', undefined], ['Ada', '#a3 · Starting · main', undefined], ['#a4', 'Working · main · Unnamed work', undefined], ['Same', '#a5 · Working · main · Same', undefined]],
 				[true, false],
@@ -1638,6 +1646,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				5,
 				['#a1 · Working · main · Fix login', '#a3 · Starting · main', 'Working · main · Unnamed work', '#a5 · Working · main · Same'],
 				['#a1 · Working · Fix login', '#a3 · Starting', 'Working · Unnamed work', '#a5 · Working · Same'],
+				4,
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
 		});

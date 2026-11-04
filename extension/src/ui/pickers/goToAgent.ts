@@ -57,7 +57,8 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 			buttons: [copy, close],
 			run: facts.id
 		};
-		return { ...item, alwaysShow: matchesCliSearch(picker.value, facts.cli, facts.displayName, item) };
+		// The window's one place to work, left unsaid, still matches a search (LIFECYCLE-2.3)
+		return { ...item, alwaysShow: matchesCliSearch(picker.value, facts.cli, facts.displayName, item, placesShown ? undefined : deps.model.placeOf(facts).qualified) };
 	};
 	/** The query used for the current items, including their hidden CLI matches. */
 	let shownFor: string | undefined;
