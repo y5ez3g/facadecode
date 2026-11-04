@@ -219,9 +219,13 @@ export class MessageService implements Messages, Disposable {
 		const elapsed = Number.isFinite(request.elapsedMs) ? Math.max(0, request.elapsedMs) : 0;
 		const start = this.mono() - elapsed;
 		const deadline = this.deps.clock.now() - elapsed + STAGE_MS;
-		// A creation prompt recorded as its start answered, nothing of it typed yet, goes now under that record (MCP-2.3)
-		const recorded = request.id !== undefined && request.initialPrompt !== undefined
-			? this.deps.store.list().find(each => each.id === request.id && each.delivery.status === 'pending' && each.delivery.start === undefined) : undefined;
+		// A creation prompt recorded as its start answered, nothing of it typed yet, goes now under that record; one its agent read
+		// meanwhile through read_messages is delivered already, and nothing is typed (MCP-2.3, COLLABORATION-2.2)
+		const kept = request.id !== undefined && request.initialPrompt !== undefined ? this.deps.store.list().find(each => each.id === request.id) : undefined;
+		if (kept && kept.delivery.status !== 'pending') {
+			return { record: kept, status: kept.delivery.status === 'unknown' ? 'failure' : kept.delivery.status, ...kept.delivery.reason ? { reason: kept.delivery.reason } : {} };
+		}
+		const recorded = kept?.delivery.start === undefined ? kept : undefined;
 		const record = recorded ?? this.create({
 			kind: 'message',
 			from: request.sender?.party ?? this.party(request.from),
