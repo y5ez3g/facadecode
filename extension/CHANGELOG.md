@@ -1,13 +1,21 @@
 # Changelog
 
-## Unreleased
+## 0.0.6
+
+Agents end with their local window, terminal questions answered on time, and fixes from daily use.
 
 - **Closing a local window ends its agents.** Agents of a window on this computer end 90 seconds after you close it, and at once when you open its folder or workspace again in a new window, where your pinned agents start again with their conversations. Reloading the window keeps them, as before. A Remote-SSH, WSL or container window still keeps its agents for five minutes, so that a lost connection or a reopened window shows them again. Agents started before this version keep the earlier five minutes.
 - **Fixed: `]10;rgb:…` typed into an agent, and its turn interrupted.** A Codex agent asks its terminal for its colours as it starts and waits a fifth of a second for the answer. Its terminal's answer could come much later - when you opened its tab, or once several agents starting together had let it through - and Codex read it as Escape and typed text, after which messages could not reach it. Facade now answers such questions itself, at once and with your theme's colours, whether or not the agent's tab is open; where it could not answer in time it does not answer at all, and the CLI uses its own colours.
 - **Fixed: messages to Muse Code agents often came back as 🔔 results.** Facade pressed Enter a moment too soon after pasting a message, and Muse Code took that Enter as a new line in the message; the message went in only with a second Enter three seconds later, too late to confirm at once, so its sender got a 🔔 result instead. Facade now leaves Muse Code a quarter of a second before Enter.
 - **Fixed: "Cannot work with other agents: move or rename .agents/plugins/facade/plugin.json".** Antigravity agents could not work with other agents where the Facade Code app had taken its own part out of the plugin file Facade wrote. Facade now recognizes any file of its plugin folder that holds only what a Facade writes, whatever was taken out of it; a file with anything of yours in it is still left alone.
 - **Smoother avatars and status dots.** An agent's avatar no longer shows a pale ring round a coloured or dark icon, and the dot on a selected agent no longer a light rim, on a display scaled to 125% or 150%.
+
+## 0.0.5
+
 - **Fixed: smaller things the specification review found.** A pinned card's pin shows its tooltip again. Facade's own reasons - another window owning the workspace, a working location that is gone - are in your language and never show an internal ID. A pin or unpin that cannot be saved, from the card or the tab, says so. An agent with an empty name is `#aN` everywhere. Chinese writes Agent the same way everywhere. A busy tab's spinner follows the system's reduced-motion setting. Show Agent Launch... shows everything Facade adds to a start, and says when no folder trust is written. Without its Window Component, Facade's commands explain what to install instead of failing; with one too old to connect windows, new agents and messages are refused until it is updated, so that no agent or message number is ever given twice.
+
+## 0.0.4
+
 - **Fixed: agents retained across an update could not use their Facade tools.** Their terminal connections now carry tool calls and replies again, including after reconnection.
 - **Fixed: Muse Code agents ended as they started.** A Muse Code agent in a folder whose `.mcp.json` already had a `facade` server - the Facade Code app leaves one - ended at once with "-c mcpServers.facade: refusing run: the server name is reserved", as Muse Code will not run with a second server of that name. Facade now takes the place of the app's entry there, as it does the app's other files; where the server is your own, or Muse Code would refuse to run for another reason in your configuration, the agent starts without working with other agents and says why.
 - **Fixed: missing emoji and messages that were never delivered on Windows.** Newly started Codex and Muse Code agents keep emoji in typed and pasted text, including 📨 and 🔔 in messages. Long messages remain recognizable when the CLI shows the first character separately from its paste placeholder. Facade also waits for Muse Code to finish reading a long message. Existing agents keep their original terminal backend; start or resume an agent to use the corrected input handling.
