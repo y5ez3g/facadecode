@@ -13,7 +13,7 @@ import { KeyModes, keySequence, pasteSequence, win32Text } from './keys';
 import type { RunExit, RunInfo, RunStatus, ScreenFrame, ScreenRead, SpawnParams, Termination } from './protocol';
 import { MOST_SCREEN_LINES, readScreen, readStatusLines } from './screen';
 import { ScreenReader, screenReaderOf } from './screenStatus';
-import { parseStatus, ProgramStatus, STATUS_REPLY } from './status';
+import { parseStatus, ProgramStatus, STATUS_REPLY, StatusQueries } from './status';
 
 /** The backend packaged beside ptyd, loaded lazily so tests can substitute the process adapter (ARCHITECTURE-1.2). */
 let pty: typeof import('node-pty') | undefined;
@@ -217,6 +217,10 @@ export class Run {
 	/** Whether it is being ended: what it writes is read on, held back or not, as its exit is known only once that is drained. */
 	private ending = false;
 	private readonly programStatus: ProgramStatus;
+	/** Its questions whether ptyd takes reports, found in its output as it comes (CLIS-2.3). */
+	private readonly statusQueries = new StatusQueries();
+	/** Of those, the ones answered that its headless terminal has not parsed yet: it answers none of them again. */
+	private answeredQueries = 0;
 	private readonly queue = new InputQueue();
 	/** The adapter's tested native status layout, as a fallback or a version-scoped correction (CLIS-2.3). */
 	private readonly screenReader: ScreenReader | undefined;
@@ -330,6 +334,14 @@ export class Run {
 		}
 		pty.onData(data => {
 			this.lastOutput = Date.now();
+			// Its question whether ptyd takes reports is answered before any of it reaches a window, whose terminal answers its other
+			// questions: one of those answered first - its headless parse behind - would tell the program there is none (CLIS-2.3)
+			for (let asked = this.statusQueries.feed(data); asked > 0; asked--) {
+				this.answeredQueries++;
+				if (this.writable) {
+					this.send(STATUS_REPLY);
+				}
+			}
 			const seq = ++this.seq;
 			this.draw(data);
 			this.listener?.output(seq, data);
@@ -879,7 +891,10 @@ export class Run {
 		parser.registerOscHandler(PROGRAM_STATUS_OSC, data => {
 			const message = parseStatus(data);
 			if (message === 'query') {
-				if (this.writable) {
+				// Answered as it came, unless the scan of its output missed it
+				if (this.answeredQueries > 0) {
+					this.answeredQueries--;
+				} else if (this.writable) {
 					this.send(STATUS_REPLY);
 				}
 				this.programStatus.asked();

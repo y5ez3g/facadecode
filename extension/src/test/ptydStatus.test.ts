@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { parseStatus, ProgramStatus, STATUS_REPLY } from '../ptyd/status';
+import { parseStatus, ProgramStatus, STATUS_REPLY, StatusQueries } from '../ptyd/status';
 import { RunStatus } from '../ptyd/protocol';
 import { sleep, useFakeClock } from './clock';
 
@@ -29,6 +29,23 @@ suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 				assert.strictEqual(status.status, previous, body);
 			}
 		}
+	});
+
+	test('questions whether the terminal takes reports are found in output as it comes, by either end, cut anywhere between chunks; a report or another sequence is none', () => {
+		const whole = (text: string) => new StatusQueries().feed(text);
+		assert.deepStrictEqual([
+			whole('\x1b]7501;?\x1b\\'), whole('\x1b]7501;?\x07'), whole('a\x1b]7501; ? \x07b\x1b]7501;?\x1b\\'),
+			whole('\x1b]7501;state=idle\x1b\\'), whole('\x1b]75011;?\x07'), whole('\x1b]0;?\x07'), whole('\x1b]7501;??\x07')
+		], [1, 1, 2, 0, 0, 0, 0]);
+		const query = 'before\x1b]7501;?\x1b\\after';
+		for (let cut = 0; cut <= query.length; cut++) {
+			const queries = new StatusQueries();
+			assert.strictEqual(queries.feed(query.slice(0, cut)) + queries.feed(query.slice(cut)), 1, `cut at ${cut}`);
+		}
+		// One cut into three, and what cannot begin one carried no further
+		const queries = new StatusQueries();
+		assert.deepStrictEqual([queries.feed('\x1b]75'), queries.feed('01;'), queries.feed('?\x07')], [0, 0, 1]);
+		assert.deepStrictEqual([queries.feed('\x1b]7502'), queries.feed(';?\x07')], [0, 0]);
 	});
 
 	test('status review: each report replaces its title, including missing and explicit empty values', () => {

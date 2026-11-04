@@ -38,7 +38,8 @@ const START_COLUMNS = 120;
 const START_ROWS = 30;
 
 /** How long after its process started a run is still starting while its CLI has shown no activity (CLIS-2.3). */
-const STARTUP_MS = 20_000;
+// A minute: many CLIs starting at once - a burst of agents another starts - each take far longer than one alone (CLIS-2.3)
+const STARTUP_MS = 60_000;
 /** How long work that stopped is still told as work: a CLI between two steps does not blink its dot and tab (RULES-3.2). */
 const HOLD_MS = 1_000;
 /** How long an Enter the person typed waits for the reading of the input it submits, at most: a moment, never a stall (PANEL-1.4). */

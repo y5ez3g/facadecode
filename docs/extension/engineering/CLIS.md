@@ -298,20 +298,23 @@ protected-file authentication mechanism is introduced.
 
 Support the OSC 7501 adapter where verified: `working` → working; `idle|done|blocked` → not_working; `error` → known
 error; `clear`, a full reset, a new shell prompt (OSC 133 A) after a working or blocked report, or a pending probe →
-unknown. A `blocked` report remains blocked even without a known kind. Reports follow the
-[Program Status Protocol](https://www.superlogical.com/rex/docs/build/program-status): each replaces the whole root
-record, so omitted or empty titles clear that report's title. Malformed or unknown-state reports are discarded without
-changing the last valid record; capability replies advertise only the states implemented here. Activity reporting is
-verified for a run when that run's CLI sends the OSC 7501 capability probe, which ptyd answers, or valid reports,
-independent of CLI version; CLI-specific quirks remain version-scoped evidence. OpenCode reports from its 2.x line; its
-1.x line, which sends no reports, is not started (1.1). Ignore worker reports carrying a distinct worker ID. Respond to
-capability probes only for protocols implemented by the PTY adapter. A run is still starting, with its startup stage,
+unknown. A `blocked` report remains blocked even without a known kind. Reports follow the [Program Status
+Protocol](https://www.superlogical.com/rex/docs/build/program-status): each replaces the whole root record, so omitted
+or empty titles clear that report's title. Malformed or unknown-state reports are discarded without changing the last
+valid record; capability replies advertise only the states implemented here. Activity reporting is verified for a run
+when that run's CLI sends the OSC 7501 capability probe, which ptyd answers, or valid reports, independent of CLI
+version; CLI-specific quirks remain version-scoped evidence. OpenCode reports from its 2.x line; its 1.x line, which
+sends no reports, is not started (1.1). Ignore worker reports carrying a distinct worker ID. Respond to capability
+probes only for protocols implemented by the PTY adapter. The supervisor answers a probe of OSC 7501 as the CLI's output
+reaches it, before any of that output goes on to a window, whose terminal answers the CLI's other queries: an answer of
+the window's first would tell the CLI that its reports go nowhere. A run is still starting, with its startup stage,
 until its CLI first shows its activity - a valid report or, where its screen is read, a state its reader knows - and its
-injected Facade tools connect, for at most 20 s from its process start, a reloaded window counting from that start too.
-Past that bound, a run whose CLI never showed its activity - no report at all, or a probe answered and no report since -
-or whose tools never connected did not start properly: red, with its reason (RULES-3.2). A report the CLI clears later
-is unknown activity, never idle. It never implies an empty input. No “screen quiet for two seconds means done”
-fallback. A supported terminal animation may establish working, but its absence supplies no idle proof.
+injected Facade tools connect, for at most 60 s from its process start - many CLIs starting at once, as when an agent
+starts a group of them, each take far longer than one alone - a reloaded window counting from that start too. Past that
+bound, a run whose CLI never showed its activity - no report at all, or a probe answered and no report since - or whose
+tools never connected did not start properly: red, with its reason (RULES-3.2). A report the CLI clears later is unknown
+activity, never idle. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A
+supported terminal animation may establish working, but its absence supplies no idle proof.
 
 Muse Code's observed Windows versions send no reports, so its adapter names a screen reader that ptyd applies to a run
 whose CLI has neither asked nor reported. It reads logical lines, joining terminal soft wraps without guessing where

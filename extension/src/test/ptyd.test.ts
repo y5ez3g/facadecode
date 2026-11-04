@@ -650,6 +650,37 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		]);
 	});
 
+	test('CLIS-2.3: a program\'s question whether ptyd takes reports is answered before any of its output reaches a window: a window\'s terminal answering its next question at once comes second, however far ptyd\'s own parse is behind', async function () {
+		this.timeout(20_000);
+		const client = await connect();
+		const file = path.join(os.tmpdir(), `fd-answers-${process.pid}-${Date.now()}.txt`);
+		// Much drawn first, then the question and the terminal's own identification (DA1) at once, as Claude Code asks them
+		const program = `const fs = require('fs'); process.stdin.setRawMode(true); let got = ''; process.stdin.on('data', d => { got += d.toString('latin1'); fs.writeFileSync(${JSON.stringify(file)}, got); }); process.stdout.write('x'.repeat(2000000) + '\\x1b]7501;?\\x1b\\\\\\x1b[c'); setInterval(() => {}, 1000);`;
+		let answered = false;
+		client.onRunEvent('r-ask', event => {
+			// The window answers the identification the moment it sees it
+			if (!answered && event.event === 'output' && event.data.includes('\x1b[c')) {
+				answered = true;
+				void client.request('input', { run: 'r-ask', data: '\x1b[?62;22c' });
+			}
+		});
+		try {
+			await client.request('spawn', { run: 'r-ask', owner: 'w1', file: process.execPath, args: ['-e', program], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {} });
+			const got = await until('both answers', () => {
+				try {
+					const text = fs.readFileSync(file, 'latin1');
+					return text.includes('\x1b]7501;?:states=') && text.includes('\x1b[?62;22c') && text;
+				} catch {
+					return false;
+				}
+			}, 15_000);
+			assert.ok(got.indexOf('\x1b]7501;?:states=') < got.indexOf('\x1b[?62;22c'), JSON.stringify(got));
+			assert.strictEqual(got.split('\x1b]7501;?:states=').length - 1, 1, 'answered once, not again as its parse reaches the question');
+		} finally {
+			fs.rmSync(file, { force: true });
+		}
+	});
+
 	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3)', async function () {
 		this.timeout(10_000);
 		const client = await connect();

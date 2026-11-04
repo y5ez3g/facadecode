@@ -55,6 +55,33 @@ export interface StatusReport {
 	readonly progress?: number;
 }
 
+/** A question whether the terminal takes reports, `OSC 7501 ; ?` ended by BEL or ST, `?` alone between, as {@link parseStatus} reads it. */
+const STATUS_QUERY = /\x1b\]7501;[ \t]*\?[ \t]*(?:\x07|\x1b\\)/g;
+/** The longest beginning of one a chunk of output can end in, to be completed by the next. */
+const QUERY_START = /\x1b(?:\](?:7(?:5(?:0(?:1(?:;[ \t]*(?:\?[ \t]*(?:\x1b)?)?)?)?)?)?)?)?$/;
+
+/**
+ * Finds a program's questions whether the terminal takes reports in its output as it comes, before anything else reads it, a
+ * question cut between two chunks too (CLIS-2.3): ptyd answers each at once, ahead of whatever a window's terminal answers.
+ */
+export class StatusQueries {
+	private carried = '';
+
+	/** How many questions `data`, after what came before it, completes. */
+	feed(data: string): number {
+		const text = this.carried + data;
+		let count = 0;
+		let end = 0;
+		for (const match of text.matchAll(STATUS_QUERY)) {
+			count++;
+			end = match.index + match[0].length;
+		}
+		const rest = text.slice(end);
+		this.carried = QUERY_START.exec(rest)?.[0] ?? '';
+		return count;
+	}
+}
+
 /**
  * What a program said between `OSC 7501 ;` and its end: `query`, where it asks whether the terminal takes reports; its report;
  * or undefined for what the protocol has ignored - no state, or one it does not know, an id that is none, a limit passed, text

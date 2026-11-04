@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Fixed: Claude Code agents stuck red with "Waiting for first CLI activity report".** When many agents started at once, a Claude Code agent could decide its terminal takes no activity reports and never send any, its card staying red though it worked. Facade now answers that question before anything else can. An agent that is slow to start because many start together is no longer called not ready before a minute has passed.
 - **A message's own words on the card.** The second line of an agent another agent messaged says what that message said, as it does for the task an agent was started with, instead of its `📨 Message from …` line.
 - **A single folder isn't named everywhere.** In a window with one plain folder - no Git repository, worktree or other location - cards, Go to Agent, Resume Agent and the New Agent title no longer repeat its name, and Filter by Working Location is not offered; hovers still show where each agent works. New Agent's last option line no longer shows the folder's name beside Change Name.
 - **OpenCode agents show their own session alone.** OpenCode's session tab strip, which listed every session of the folder - other agents' among them - is turned off for the agents Facade starts. Your OpenCode configuration is unchanged.
