@@ -6,6 +6,7 @@
 - **A message's own words on the card.** The second line of an agent another agent messaged says what that message said, as it does for the task an agent was started with, instead of its `📨 Message from …` line.
 - **A single folder isn't named everywhere.** In a window with one plain folder - no Git repository, worktree or other location - cards, Go to Agent, Resume Agent and the New Agent title no longer repeat its name, and Filter by Working Location is not offered; hovers still show where each agent works. New Agent's last option line no longer shows the folder's name beside Change Name.
 - **OpenCode agents show their own session alone.** OpenCode's session tab strip, which listed every session of the folder - other agents' among them - is turned off for the agents Facade starts. Your OpenCode configuration is unchanged.
+- **Smoother avatars and status dots.** An agent's avatar no longer shows a pale ring round a coloured or dark icon, and the dot on a selected agent no longer a light rim, on a display scaled to 125% or 150%.
 
 ## 0.0.5
 

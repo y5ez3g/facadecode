@@ -61,7 +61,7 @@ automatically launch an agent. This prerequisite step does not ask the person to
 | Element | Value |
 | --- | --- |
 | Card | Minimum 44 px tall; padding 8 px top/bottom/left, 9 px right; 4 px corners |
-| Avatar | 28 px circle, 8 px before text, 1 px theme border |
+| Avatar | 28 px circle, 8 px before text, 1 px inner edge of the theme foreground at 14 % opacity - high contrast: its contrast border - never an opaque border over the icon |
 | First line | Name 13 px; location 12 px aligned at end; 6 px gaps |
 | Pin | 14 px icon box 4 px after the name as shown, its ellipsis included; adds no card height |
 | Second line | 12 px, quieter, single line with ellipsis |
