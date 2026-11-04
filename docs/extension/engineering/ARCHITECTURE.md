@@ -172,31 +172,39 @@ RULES-4.1 owns the contract: closure ends that window's runs, reload reconnects 
 itself terminate them. ptyd applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
 seconds where the claim says its window is local, five minutes otherwise; a successor activation's claim cancels it, and
 a remote network outage that leaves the remote extension host connected starts no timer. Each claim names its window's
-address, derived from the window's handover identity and so the same across its reloads, and whether the window is
-local. A claim of a local window whose address differs from that of a local owner gone ends that owner's runs at once -
-its window was closed - and is answered once they ended, so that the new window's Pin restoration never runs beside
-them; a claim that names no address, or a remote window's, takes the runs over as before. A stable workspace key is not
-enough to identify a particular live window; two windows can share it. Route-staleness timers can detect loss, not prove
-closure. A window ID is the routing address the window component derives from the window's handover identity when it
-registers the window: the same across the window's reloads while that identity's record lasts, and another where the
-record is gone and replaced (below) - a local window whose record was so replaced is taken at its reload for another
-window, and its agents end (RULES-4.1). The runtime reattaches the original runs, with the same run IDs, to the
-reloaded window. RULES-2.2's Window row is the conceptual identity, not this address. Record enough current
-window/run association to reconnect the actual process. No durable message handover is required solely for a closing
-sender; RULES-1.9 permits natural termination of work still owned by that side. The workspace key that runs are claimed
-under is derived from the workspace's URI once and then kept in the editor's workspace storage for reloads.
-Folder-to-multi-root conversion and Save Workspace As can replace extension workspace state; remote conversion also
-reloads the window and changes `env.sessionId`. Session ID alone cannot carry this state.
+address, derived from the window's handover identity and so the same across its reloads, whether the window is local,
+and when that window was first opened, as its identity's record keeps it. A claim of a local window at another address,
+first opened after a local owner's connection closed, ends that owner's runs at once - an editor shows a workspace in
+one window at a time, so a window opened since shows the owner's closed - and is answered once their processes' exit is
+confirmed, so that the new window's Pin restoration never runs beside them. A run whose cleanup failed or is unconfirmed
+stays listed as uncertain, holding its conversation (LIFECYCLE-3.5), rather than dropped. A claim that names no address
+or no first opening, a remote window's, or one of a window opened before the owner went - two windows of one workspace
+reloading together - takes the runs over as before, and the grace ends them where no window does. A window of another
+editor application sharing the Facade directory is a separate window as well: one first opened there while a window
+reloads takes that window for closed. A stable workspace key is not enough to identify a particular live window; two
+windows can share it. Route-staleness timers can detect loss, not prove closure. A window ID is the routing address the
+window component derives from the window's handover identity when it registers the window: the same across the window's
+reloads while that identity's record or its copy lasts, and another where both are gone and replaced (below) - a local
+window whose identity was so replaced is taken at its reload for a window opened since, and its agents end (RULES-4.1).
+The runtime reattaches the original runs, with the same run IDs, to the reloaded window. RULES-2.2's Window row is the
+conceptual identity, not this address. Record enough current window/run association to reconnect the actual process. No
+durable message handover is required solely for a closing sender; RULES-1.9 permits natural termination of work still
+owned by that side. The workspace key that runs are claimed under is derived from the workspace's URI once and then kept
+in the editor's workspace storage for reloads. Folder-to-multi-root conversion and Save Workspace As can replace
+extension workspace state; remote conversion also reloads the window and changes `env.sessionId`. Session ID alone
+cannot carry this state.
 
 The local window component keeps a random handover identity in its own directory supplied by public
 `ExtensionContext.logUri`. It neither parses the URI nor reads editor storage internals. On the verified desktop editor,
 that directory remains the same for this native window across these transitions and differs for a separate window,
 including one opening a copied workspace. This lifecycle is a platform evidence requirement, not a guarantee inferred
-from the API's name. Deletion or replacement of that directory cannot justify a folder-based search for another
-window's identity. A record gone is replaced by a new identity unnoticed. A damaged one is not replaced: Facade does not
-start in that window and says to close it and open its folder or workspace again, or restart the editor - not to
-reload, which reads the same record. One that cannot be read now but is not damaged - a file the system holds - is
-answered as unreadable, and the workspace component says to reload rather than to install the component.
+from the API's name. Deletion or replacement of that directory cannot justify a folder-based search for another window's
+identity. The component also keeps a copy of the record in its own global state, under that directory's path as an
+opaque key, which differs for each native window: a record gone is restored from it, and only where both are gone is it
+replaced by a new identity, unnoticed. A damaged one is not replaced: Facade does not start in that window and says to
+close it and open its folder or workspace again, or restart the editor - not to reload, which reads the same record. One
+that cannot be read now but is not damaged - a file the system holds - is answered as unreadable, and the workspace
+component says to reload rather than to install the component.
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
 component rejects a request from a different session. Its answer also names the component's own version, which a remote
@@ -280,19 +288,25 @@ as before: besides the serializer's own, the mouse encoding, a hidden cursor, th
 is on and win32 input mode, each followed through the program's resets. A terminal query a program asks is answered at
 most once, as it is asked, and never later: a program waits a moment only - Codex 200 to 300 ms - and reads a later
 answer as typed keys, an Escape that interrupts a turn, then text in its input. An editor terminal answers a query only
-as it draws it, which for a tab behind others is when the tab is opened, and its answer comes back through the window and
-ptyd, which on a busy machine can pass that moment. So ptyd answers, as it parses the query, whether or not a window
+as it draws it, which for a tab behind others is when the tab is opened, and its answer comes back through the window
+and ptyd, which on a busy machine can pass that moment. So ptyd answers, as it parses the query, whether or not a window
 claims the run: its headless terminal what it can - the cursor position, the device attributes, the terminal's status, a
 mode, a setting - and a colour query (OSC 10, 11, 12) with the colours the window that claims the run, or claimed it
 last, told it - its theme kind's until one of its editor terminals reports its own, answering the window's question as
 it opens or a program's - and not at all where none was told, the program then using its own. The editor's answers to
-these reach no program; what only the editor knows - its kitty keyboard flags, its name, its size in pixels - reaches the
-program where the editor answers within 150 ms of the query being written to it. A terminal draws a run's output only
-while open: output that comes before it opens is not kept for it, and it opens on the run's screen taken anew, which
-holds no query. Propagate RULES-1.5's remaining message budget to the input owner; internal hops cannot restart it. Do not compare independent host wall clocks as if synchronized. Check whether input can still start before writing;
-ptyd takes a text and its Enter in separate requests, never both in one (MCP-5.2). Uncertain effects stay uncertain;
-ordinary-message retries follow RULES-1.6's single paste and owned-draft Enter. No exactly-once write protocol or
-operation-query service is required.
+these reach no program of a supervisor that answers them (protocol 15 on); for a run of an earlier supervisor (2.4),
+which leaves its queries to a window that shows the run, the window passes its terminal's answers on as it did; what
+only the editor knows - its kitty keyboard flags, its name, its size in pixels - reaches the program where the editor
+answers within 150 ms of the query being written to it. A terminal draws a run's output only while open: output that
+comes before it opens is not kept for it, and it opens on the run's screen taken anew, which holds no query. A run's
+pseudoterminal lives from its acceptance to its removal; its editor tab is created as the person opens it and released
+as it is hidden (LIFECYCLE-2.2), the pseudoterminal and the run's process untouched, and each opening draws the run's
+screen taken anew. A run whose tab is hidden has ptyd's answers alone, what only the editor knows going unanswered; a
+run of an earlier supervisor whose tab is hidden has none of its queries answered until its tab opens. Propagate
+RULES-1.5's remaining message budget to the input owner; internal hops cannot restart it. Do not compare independent
+host wall clocks as if synchronized. Check whether input can still start before writing; ptyd takes a text and its Enter
+in separate requests, never both in one (MCP-5.2). Uncertain effects stay uncertain; ordinary-message retries follow
+RULES-1.6's single paste and owned-draft Enter. No exactly-once write protocol or operation-query service is required.
 
 A run's shim connects to its execution environment's supervisor and names the run it speaks for; a shim of another
 protocol is refused and its connection closed. The supervisor forwards each call to the connection that currently owns
@@ -353,33 +367,35 @@ current screen/UI usable during output flood using ordinary backpressure and sna
 direct-input limit. Real disk/memory/storage exhaustion fails the requesting operation; there is no product cap of 100
 agents or a lifetime operation-count quota that disables an otherwise usable session.
 
-Existing processes are not killed because the extension or its protocol is updated. Compatible reconnect preserves their
-actual identity; incompatible tools report unavailable. A window starts runs only in its own build's ptyd. That ptyd's
-socket is named by its protocol, the Facade directory and its build - the installation's version, the path of its ptyd
-script and that file's modification time - so that the windows of one installation share one ptyd while an update, a
-second installation of the same version or a script rebuilt in place has a ptyd of its own, and no run starts in a ptyd
-whose installation an update removed. A ptyd records its protocol, build, socket and process ID in `ptyd/sockets/` while
-it listens and removes the record as it exits; a window that finds nothing listening at a recorded socket removes that
-record. A build speaks every protocol a released build used, dropping none. Every other ptyd - each earlier protocol's,
-each recorded one of another build of this protocol or an earlier one, and one at the name a protocol's ptyd had before
-ptyds were named by build, which is never this build's - a window joins where it holds runs of its workspace, never
-starting one, claims them there, and shows and operates them through it as its own: cards, terminals, input, resizing,
-closing, ends and their agents' Facade tool calls, which it answers on that ptyd's own connection, at the first join and
-at every reconnect; a tool protocol it does not speak is refused as `protocol_incompatible`, with no effect (MCP-6.2). A
-request a later protocol added goes to no older ptyd: 0.0.1's, protocol 8, takes no screen read, typing, keys or input
-reading, and they fail before anything is sent. A run whose other ptyd is gone ended with it, how is not known. A run
-whose kept details name no creation tree is a root of its own, its Facade tools not injected. Agents and messages
-started after an update are numbered past the older build's numbers (1.1). Once none of the window's runs is left in
-such a ptyd, or it holds none as the window finds it, the window lets it go and no longer joins it for its runs, so that
-it can exit once idle. A window's listing of every workspace's runs - as it activates, releasing the project files of
-agents gone everywhere (CLIS-2.2), and as Resume Agent lists what it may start - asks every other ptyd anew, so that no
-conversation an agent holds is started twice (LIFECYCLE-3.2). A ptyd of a build from before ptyds were named by build
-exits after five minutes with no live run and no connection, a wait every connection to it - a listing's too - starts
-again. New starts use current settings/protocol, in the window's own ptyd. A change of ptyd's behavior or of its
-packaged native backend still advances its protocol even where requests keep their shape, so that a window knows how
-each ptyd it joins behaves. A ptyd whose installation is gone - its script, or on Windows node-pty's console worker -
-starts no program and says that its installation was removed - Facade's own reason (UX-2.4) - never that a process could
-not be created.
+Existing processes are not killed because the extension or its protocol is updated. A ptyd of protocol 14 or earlier
+keeps its own lifetime policy for the runs it holds - five minutes after their window's connection closes, and a
+takeover by any window that opens their workspace - whichever window held them (RULES-4.1). Compatible reconnect
+preserves their actual identity; incompatible tools report unavailable. A window starts runs only in its own build's
+ptyd. That ptyd's socket is named by its protocol, the Facade directory and its build - the installation's version, the
+path of its ptyd script and that file's modification time - so that the windows of one installation share one ptyd while
+an update, a second installation of the same version or a script rebuilt in place has a ptyd of its own, and no run
+starts in a ptyd whose installation an update removed. A ptyd records its protocol, build, socket and process ID in
+`ptyd/sockets/` while it listens and removes the record as it exits; a window that finds nothing listening at a recorded
+socket removes that record. A build speaks every protocol a released build used, dropping none. Every other ptyd - each
+earlier protocol's, each recorded one of another build of this protocol or an earlier one, and one at the name a
+protocol's ptyd had before ptyds were named by build, which is never this build's - a window joins where it holds runs
+of its workspace, never starting one, claims them there, and shows and operates them through it as its own: cards,
+terminals, input, resizing, closing, ends and their agents' Facade tool calls, which it answers on that ptyd's own
+connection, at the first join and at every reconnect; a tool protocol it does not speak is refused as
+`protocol_incompatible`, with no effect (MCP-6.2). A request a later protocol added goes to no older ptyd: 0.0.1's,
+protocol 8, takes no screen read, typing, keys or input reading, and they fail before anything is sent. A run whose
+other ptyd is gone ended with it, how is not known. A run whose kept details name no creation tree is a root of its own,
+its Facade tools not injected. Agents and messages started after an update are numbered past the older build's numbers
+(1.1). Once none of the window's runs is left in such a ptyd, or it holds none as the window finds it, the window lets
+it go and no longer joins it for its runs, so that it can exit once idle. A window's listing of every workspace's runs -
+as it activates, releasing the project files of agents gone everywhere (CLIS-2.2), and as Resume Agent lists what it may
+start - asks every other ptyd anew, so that no conversation an agent holds is started twice (LIFECYCLE-3.2). A ptyd of a
+build from before ptyds were named by build exits after five minutes with no live run and no connection, a wait every
+connection to it - a listing's too - starts again. New starts use current settings/protocol, in the window's own ptyd. A
+change of ptyd's behavior or of its packaged native backend still advances its protocol even where requests keep their
+shape, so that a window knows how each ptyd it joins behaves. A ptyd whose installation is gone - its script, or on
+Windows node-pty's console worker - starts no program and says that its installation was removed - Facade's own reason
+(UX-2.4) - never that a process could not be created.
 
 ## 3 Data and safety
 
@@ -390,8 +406,9 @@ not be created.
 | Store | Contents |
 | --- | --- |
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
-| Execution supervisor's memory | Processes, screens, output sequences and input effects, for as long as ptyd runs (2.3) |
-| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
+| Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group (LIFECYCLE-3.5) - for as long as ptyd runs (2.3) |
+| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
+| Window component's global storage on the client | A copy of each native window's handover identity, under its log directory's path (2.2) |
 | Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs, its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
 | Vendor CLI store | Its own conversations, credentials and settings |

@@ -43,9 +43,10 @@ These are ways of using the product, not modes selected in the interface. A sess
 
 ### 2.2 The person can reach every agent
 
-**Every agent has an interactive terminal that the person can inspect, use and close, whoever started it.**
+**Every agent has an interactive terminal that the person can open, inspect, use and close, whoever started it.**
 
-Agents started by agents are ordinary visible agents in their destination window. A creator is not an access gate.
+Agents started by agents are ordinary agents in their destination window: their cards show at once, and their terminals
+open as the person opens them. A creator is not an access gate.
 
 ## 3 Responsibility
 
@@ -53,9 +54,10 @@ Agents started by agents are ordinary visible agents in their destination window
 
 **Facade provides basic MCP APIs; users define organization and workflow through prompts or skills.**
 
-Its three surfaces are a window-local agent panel, one interactive editor terminal per agent, and MCP for agent
-startup/query/stop, messages, screen reading and direct terminal input. MCP provides corresponding runtime effects;
-it does not reproduce every human UI command. Human rename and close do not imply additional MCP tools.
+Its three surfaces are a window-local agent panel, one interactive terminal per agent, opened in an editor tab as the
+person views it, and MCP for agent startup/query/stop, messages, screen reading and direct terminal input. MCP provides
+corresponding runtime effects; it does not reproduce every human UI command. Human rename and close do not imply
+additional MCP tools.
 
 Facade does not assign roles, task plans, review schedules, reporting duties, acceptance procedures or escalation
 policies. Its API instructions explain capabilities, effects and failures. They do not instruct an agent how to run

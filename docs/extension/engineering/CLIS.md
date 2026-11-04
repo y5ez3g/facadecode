@@ -212,8 +212,8 @@ Code, which read console input one key at a time: 21.1 s for 9,249 characters, a
 that draft - for Antigravity, which takes seconds to expand a long paste, 45 ms a line after the draft shows; for Muse
 Code 250 ms after, as it takes an Enter that soon after its paste for a line break in it (it did 15 ms after, and
 submitted 100 ms after) - and delivery is confirmed once the input box is empty again, within 3 seconds and the paste's
-time. The same times extend
-the stage's deadlines (RULES-1.5) and type_text's wait before its Enter (MCP-5.2). State actual full/partial/unknown
+time. The same times - Muse Code's 250 ms apart, which comes before an ordinary message's Enter alone - extend the
+stage's deadlines (RULES-1.5) and type_text's wait before its Enter (MCP-5.2). State actual full/partial/unknown
 effects. A later attempt never types the text again; it presses Enter only over the message's own draft (RULES-1.6). Do
 not require a reconciliation API. An unknown version still starts its terminal, and its activity can still be verified
 per run under 2.3. A CLI that never shows its activity is red, with its reason, once the run's startup bound passed
@@ -311,15 +311,17 @@ when that run's CLI sends the OSC 7501 capability probe, which ptyd answers, or 
 version; CLI-specific quirks remain version-scoped evidence. OpenCode reports from its 2.x line; its 1.x line, which
 sends no reports, is not started (1.1). Ignore worker reports carrying a distinct worker ID. Respond to capability
 probes only for protocols implemented by the PTY adapter. The supervisor answers a probe of OSC 7501 as the CLI's output
-reaches it, before any of that output goes on to a window, whose terminal answers the CLI's other queries: an answer of
-the window's first would tell the CLI that its reports go nowhere. A run is still starting, with its startup stage,
-until its CLI first shows its activity - a valid report or, where its screen is read, a state its reader knows - and its
-injected Facade tools connect, for at most 60 s from its process start - many CLIs starting at once, as when an agent
-starts a group of them, each take far longer than one alone - a reloaded window counting from that start too. Past that
-bound, a run whose CLI never showed its activity - no report at all, or a probe answered and no report since - or whose
-tools never connected did not start properly: red, with its reason (RULES-3.2). A report the CLI clears later is unknown
-activity, never idle. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A
-supported terminal animation may establish working, but its absence supplies no idle proof.
+reaches it, before any of that output goes on to a window and before the queries it answers as it parses them
+(ARCHITECTURE-2.3): an answer to a later query coming first would tell the CLI that its reports go nowhere. A run whose
+tab is hidden (LIFECYCLE-2.2) has no editor to answer what only an editor knows; each built-in is verified to start and
+work so, from a start with its tab never opened. A run is still starting, with its startup stage, until its CLI first
+shows its activity - a valid report or, where its screen is read, a state its reader knows - and its injected Facade
+tools connect, for at most 60 s from its process start - many CLIs starting at once, as when an agent starts a group of
+them, each take far longer than one alone - a reloaded window counting from that start too. Past that bound, a run whose
+CLI never showed its activity - no report at all, or a probe answered and no report since - or whose tools never
+connected did not start properly: red, with its reason (RULES-3.2). A report the CLI clears later is unknown activity,
+never idle. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A supported terminal
+animation may establish working, but its absence supplies no idle proof.
 
 Muse Code's observed Windows versions send no reports, so its adapter names a screen reader that ptyd applies to a run
 whose CLI has neither asked nor reported. It reads logical lines, joining terminal soft wraps without guessing where

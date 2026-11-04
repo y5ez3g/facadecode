@@ -157,14 +157,14 @@ announcements are polite, coalesced, and do not repeatedly announce spinner/prog
 
 A new card, whether a person or an agent started it, goes last in the ordinary area. Pin moves a card last among the
 Pins, also where it takes its conversation's existing Pin (LIFECYCLE-3.4). A card that leaves the Pins - by Unpin, or
-because another card took its Pin - goes first in the ordinary area, just below the Pins it left. A
-new card the person started, which is selected, scrolls into view; one an agent started does not move the list.
-Move Up/Down works within both the Pin and ordinary areas; hidden cards retain their relative positions. Persist Pin
-order by Pin ID so restoration keeps it. Explicit close removes a card immediately; no stopping card remains.
-There are no batch actions or automatic creation-tree grouping.
-Click selects immediately and reveals its terminal. Selection follows the last active owned agent terminal, survives
-focus on a file/unrelated terminal, and disappears when that record is removed. A failed launch remains selected;
-background starts do not change selection. Keyboard focus and selection are independent.
+because another card took its Pin - goes first in the ordinary area, just below the Pins it left. A new card the person
+started, which is selected, scrolls into view; one an agent started does not move the list. Move Up/Down works within
+both the Pin and ordinary areas; hidden cards retain their relative positions. Persist Pin order by Pin ID so
+restoration keeps it. Explicit close removes a card immediately; no stopping card remains. There are no batch actions or
+automatic creation-tree grouping. Click selects immediately and opens or reveals its terminal (LIFECYCLE-2.2). Selection
+follows the last active owned agent terminal, survives focus on a file/unrelated terminal and its tab being hidden, and
+disappears when that record is removed. A failed launch remains selected; background starts do not change selection.
+Keyboard focus and selection are independent.
 
 ### 2.2 Card menu
 

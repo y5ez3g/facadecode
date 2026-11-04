@@ -328,27 +328,33 @@ Closing a creator leaves its children running in their own windows. Closing a wi
 UI, preserving Pin intent. No public editor signal tells a close from a reload, so a window's runs end a grace period
 after its extension host disconnects from the execution supervisor, unless that window, reloaded, claims them first: 90
 seconds for a local window, whose reload or extension host restart claims them well within it, and five minutes for a
-remote one, whose network may come back. A local window gone shows itself closed as soon as another window opens its
-workspace - a reload keeps a window's identity (ARCHITECTURE-2.2), another window has its own - and its runs end then,
-not taken over, and that window restores its Pins once they ended. A remote window's runs a reopened window of the same
-workspace takes over within the five minutes. A reload or a temporary remote disconnect - during which the remote
-extension host stays connected - retains/reconnects the original runs without launching duplicates. Explicit agent
-closure immediately removes card and terminal and Unpins; process cleanup happens in the background, using termination
-when needed. A close whose Unpin cannot be saved keeps the agent and tells its initiator. No fixed UI wait or Stopping
-card is required. Actual termination and uncertain remote cleanup remain distinct facts in the operation record. The
-grace timer is cleanup policy, not proof that a person closed the window: no other timer ends a process. Telling a
-close from a reload is otherwise a platform limitation; VERIFICATION G2 verifies this policy.
+remote one, whose network may come back. A local window gone shows itself closed when a window opened since it went
+opens its workspace - a reload keeps a window's identity and when it was first opened (ARCHITECTURE-2.2), and an editor
+shows a workspace in one window at a time - and its runs end then, not taken over; the new window restores their Pins
+only once their processes' exit is confirmed, and a run whose end is not confirmed stays known, its conversation never
+started a second time (LIFECYCLE-3.5). A window that was open before the first one went - two windows of one workspace
+reloading together - or whose first opening is not known takes the runs over as a reload does, and the grace ends them
+where no window does: a reload never ends a window's runs. A remote window's runs a reopened window of the same
+workspace takes over within the five minutes. Runs held by a supervisor of an earlier protocol (ARCHITECTURE-2.4) keep
+its own policy - five minutes, and a takeover by a window that opens the workspace - whichever window held them. A
+reload or a temporary remote disconnect - during which the remote extension host stays connected - retains/reconnects
+the original runs without launching duplicates. Explicit agent closure immediately removes card and terminal and Unpins;
+process cleanup happens in the background, using termination when needed. A close whose Unpin cannot be saved keeps the
+agent and tells its initiator. No fixed UI wait or Stopping card is required. Actual termination and uncertain remote
+cleanup remain distinct facts in the operation record. The grace timer is cleanup policy, not proof that a person closed
+the window: no other timer ends a process. Telling a close from a reload is otherwise a platform limitation;
+VERIFICATION G2 verifies this policy.
 
 Until a person closes it, it ends normally or its location is removed (2.4), every agent a window started stays shown:
-its card in the window's panel and its terminal in the editor, across a reload, an extension host restart, an update and
-a lost connection alike; an agent started before an update keeps working through the execution supervisor that holds it
-(ARCHITECTURE-2.4). Where Facade cannot reach an agent's process, the card is red and says why (3.2); unknown activity
-alone shows no dot. Facade never leaves the agent out. The one exception is a window that cannot know its own identity,
-so cannot tell its agents from another window's: one whose identity record is damaged, where Facade does not start
-(ARCHITECTURE-2.2), and one without its window component, which is what reads that identity - it shows and starts no
-agents, and its running ones go on for the grace period above, so that installing the component and reloading in time
-shows them again (ARCHITECTURE-4.3). A window that another window of the same workspace took over shows none of its
-agents; that other window shows them.
+its card in the window's panel and its terminal, in an editor tab or hidden until the person opens it (LIFECYCLE-2.2),
+across a reload, an extension host restart, an update and a lost connection alike; an agent started before an update
+keeps working through the execution supervisor that holds it (ARCHITECTURE-2.4). Where Facade cannot reach an agent's
+process, the card is red and says why (3.2); unknown activity alone shows no dot. Facade never leaves the agent out. The
+one exception is a window that cannot know its own identity, so cannot tell its agents from another window's: one whose
+identity record is damaged, where Facade does not start (ARCHITECTURE-2.2), and one without its window component, which
+is what reads that identity - it shows and starts no agents, and its running ones go on for the grace period above, so
+that installing the component and reloading in time shows them again (ARCHITECTURE-4.3). A window that another window of
+the same workspace took over shows none of its agents; that other window shows them.
 
 ### 4.2 Restoration preserves intent, not an old process
 
@@ -360,12 +366,13 @@ association for non-pinned Facade conversations too; short-lived message cleanup
 credentials. Use current CLI startup configuration and 4.3's YOLO rule for the new run. The CLI restores its native model/effort unless current launch arguments override it; Facade does not maintain a second saved model/effort configuration to restore.
 Existing processes keep their actual plan.
 
-Explicit agent close, normal exit or actual location removal Unpins. Abnormal exit and whole-window close preserve Pin.
-Unpin alone does not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation. Each activation
-restores in the background, after reattachment, the Pins no run holds, so a reload restarts none that still run or were
-retained as failures; a failure is retained without a restart loop. If the exact conversation already runs in Facade,
-later windows skip launching it. Human UX stays local. Facade does not inspect or block an external application's
-writer; vendor resume errors are returned as actual errors.
+Explicit agent close, a person's explicit close of the agent's pinned editor tab (LIFECYCLE-3.4), normal exit or actual
+location removal Unpins. Abnormal exit, whole-window close and a tab hidden any other way preserve Pin. Unpin alone does
+not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation. Each activation restores in the
+background, after reattachment, the Pins no run holds, so a reload restarts none that still run or were retained as
+failures; a failure is retained without a restart loop. If the exact conversation already runs in Facade, later windows
+skip launching it. Human UX stays local. Facade does not inspect or block an external application's writer; vendor
+resume errors are returned as actual errors.
 
 ### 4.3 Reach is client-wide and permissions remain explicit
 
@@ -404,21 +411,22 @@ locations remain usable without Git.
 
 **Reject invalid arguments before mutation and report what actually happened after an accepted request.**
 
-Accepted launches create their pair immediately. Later failure does not erase already created files or claim nothing
-happened. Validate what is available before effects; CLIS-4.2 defines checks that require a newly created directory.
-MCP-1.1's optional request_id makes a repeated start or send reuse its first operation, including concurrent calls,
-lost cross-window replies and a run that has since ended. Without it, repeating a start may create another agent.
-Facade may keep internal IDs for its own operations without turning them into a public feature.
+Accepted launches create their pair immediately: the card, and the terminal, whose editor tab an agent's start leaves
+hidden (LIFECYCLE-2.2). Later failure does not erase already created files or claim nothing happened. Validate what is
+available before effects; CLIS-4.2 defines checks that require a newly created directory. MCP-1.1's optional request_id
+makes a repeated start or send reuse its first operation, including concurrent calls, lost cross-window replies and a
+run that has since ended. Without it, repeating a start may create another agent. Facade may keep internal IDs for its
+own operations without turning them into a public feature.
 
 ### 5.2 Cancellation preserves completed effects
 
 **Cancellation ends unstarted work and does not undo files or submitted input.**
 
-Canceling a picker has no effects. Closing an accepted launch prevents later spawn and ends its own pending input;
-created worktrees/branches remain. Native post-create environment preparation is not a Facade-managed job. There is no
-message-recall tool, worktree-delete API or stop-with-delete option; a person deletes a clean linked worktree only by
-WORKTREES-3.2's confirmed picker action, otherwise with their usual Git tools. Facade observes actual location loss
-under 2.4.
+Canceling a picker has no effects. Closing an accepted launch - Close Agent or stop_agent; hiding its tab is no close
+(LIFECYCLE-2.2) - prevents later spawn and ends its own pending input; created worktrees/branches remain. Native
+post-create environment preparation is not a Facade-managed job. There is no message-recall tool, worktree-delete API or
+stop-with-delete option; a person deletes a clean linked worktree only by WORKTREES-3.2's confirmed picker action,
+otherwise with their usual Git tools. Facade observes actual location loss under 2.4.
 
 ### 5.3 Durable records have explicit retention and owners
 

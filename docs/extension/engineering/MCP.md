@@ -36,20 +36,20 @@ once within the caller's normal reach.
 start_agent and send_message take an optional `request_id` of the caller's own, 1–200 code points: the same one again
 from that caller to the same tool within an hour of the first call answers what the first call started or sent, as it
 stands, with `request_id` and `repeated: true`, and does nothing again. It is kept on the run or message record - a
-message to another window's agent carries it there, where its record is made - and a repeated start answers as its
-start went: accepted while its process still starts, the start's failure where it could not start, success otherwise.
+message to another window's agent carries it there, where its record is made - and a repeated start answers as its start
+went: accepted while its process still starts, the start's failure where it could not start, success otherwise - its
+prompt as it stands, pending included, with the first call's `call_id`, `result_message_id` and prompt `message_id`.
 Concurrent calls share that operation. The recipient deduplicates a routed send before input, so a lost route reply
 cannot make a retry send again. A send whose route answer was lost, so that the message may have arrived, keeps the
 sender's copy with its outcome unknown; a retry with the same `request_id` asks the window that holds the message and
 never resolves `to` again, which could now name another agent. Request-bearing run metadata remains available for the
 original one-hour request period even after its card closes or its process exits; it does not restore a closed card or
-process. An interrupted start whose outcome was not recorded reports unknown effects instead of starting again.
-Removing a card does not prove process termination: a repeated request reports that process state as unknown where no
-exit was recorded.
-No other tool takes one, and none takes a selectable YOLO/permission profile or input_policy. A new
-invocation without one is a new request; a repeated start may create another agent. Facade may number internal work.
-The normal shim supplies its run ID from launch context; it is an address, not a credential. A call travels within
-5.2's transport bound.
+process. An interrupted start whose outcome was not recorded reports unknown effects instead of starting again. Removing
+a card does not prove process termination: a repeated request reports that process state as unknown where no exit was
+recorded. No other tool takes one, and none takes a selectable YOLO/permission profile or input_policy. A new invocation
+without one is a new request; a repeated start may create another agent. Facade may number internal work. The normal
+shim supplies its run ID from launch context; it is an address, not a credential. A call travels within 5.2's transport
+bound.
 
 ### 1.2 Result envelope and effects
 
@@ -232,36 +232,34 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-The call waits up to `facade.collaboration.waitSeconds` (1.3): `success` once the process runs, `failure` where the
-launch failed, `accepted` while it still starts, its outcome reported later under 1.3. Return `agent_id`, `name`,
-`window_id`, `window` (its label), `environment`, `location_id`, `cwd`, `cli`, `creator`, `root`, `yolo`,
-`process_state` (`starting`, `running` or `failed`; `unknown` with `closed: true`; a repeated start's run as it is now),
-`tools_state` (`connecting`, `available`, `unavailable` or `not_injected`, with `tools_reason` where unavailable) and
-`requested_model` and `requested_effort` where given; an accepted start adds `call_id` and `result_message_id`, and a
-created worktree is `effects.worktree_created`.
-`prompt` gives the prompt's `message_id`, its `path` (`native` or `post_start`) with its `capability` (`supported`,
-`unverified` or `unavailable`, and why), its `status` (`success`, `pending`, `failure` or `unknown`) and its actual
-input `effects` under RULES-1.3 and 1.2, with `reason`, `message`, `obstacle`, `deadline` and `delivered_via` where
-they apply.
-An unverified native prompt has unknown acceptance, with no invented pending delivery or promised later receipt.
-Its message record retains that uncertainty and can be delivered by an explicit inbox read without another paste.
-The run retains its original prompt message ID. A repeated start returns that record's current outcome, or explicit
-unknown (`prompt_unrecorded`) where the record is absent; it never replays the prompt or uses replacement prompt text
-from the retry.
-Startup closed midway fails as `ended`, retains any known created-worktree path in its final effects and reports
-`closed:true` with `process_state:unknown`. Closure alone does not establish that no process was started or that it
-exited.
-For a delivered post-start prompt, `delivered_via` (`terminal` or `read`) keeps terminal submission and an inbox read
-distinct. COLLABORATION-2.2 owns native/post-start prompt selection and budget start.
-If the process has started but prompt delivery is still pending, return that separation and later report the final
-prompt outcome to the caller with the same message ID and target run under 1.3. A successful process-start result
-does not cancel this report or renew the prompt's delivery budget.
-A prompt failure does not destroy a successfully started agent.
-Acceptance creates the pair immediately in the destination; pre-acceptance validation failure creates none. Later
-cwd-dependent validation or startup failure under CLIS-4.2 retains its error pair and fails as `launch_failed`, or as
-`worktree_failed` where the worktree could not be created, with partial effects. Tool unavailability does not kill a
-usable CLI.
-There is no task object, task_operation_id, completion expectation or automatic creator progress report.
+The call waits up to `facade.collaboration.waitSeconds` (1.3): `success` once the process runs - never waiting on a
+post-start prompt, which goes on after the answer - `failure` where the launch failed, `accepted` while it still starts,
+its outcome reported later under 1.3. Return `agent_id`, `name`, `window_id`, `window` (its label), `environment`,
+`location_id`, `cwd`, `cli`, `creator`, `root`, `yolo`, `process_state` (`starting`, `running` or `failed`; `unknown`
+with `closed: true`; a repeated start's run as it is now), `tools_state` (`connecting`, `available`, `unavailable` or
+`not_injected`, with `tools_reason` where unavailable) and `requested_model` and `requested_effort` where given; an
+accepted start, and one answered while its prompt is pending, add `call_id` and `result_message_id`, and a created
+worktree is `effects.worktree_created`. Such a call has one later result, under that `result_message_id`, once the
+process's start and its prompt's delivery have both settled - a prompt whose delivery stays unknown settling as unknown
+- never one for each. `prompt` gives the prompt's `message_id`, its `path` (`native` or `post_start`) with its
+`capability` (`supported`, `unverified` or `unavailable`, and why), its `status` (`success`, `pending`, `failure` or
+`unknown`) and its actual input `effects` under RULES-1.3 and 1.2, with `reason`, `message`, `obstacle`, `deadline` and
+`delivered_via` where they apply. An unverified native prompt has unknown acceptance, with no invented pending delivery
+or promised later receipt. Its message record retains that uncertainty and can be delivered by an explicit inbox read
+without another paste. The run retains its original prompt message ID. A repeated start returns that record's current
+outcome, or explicit unknown (`prompt_unrecorded`) where the record is absent; it never replays the prompt or uses
+replacement prompt text from the retry. Startup closed midway fails as `ended`, retains any known created-worktree path
+in its final effects and reports `closed:true` with `process_state:unknown`. Closure alone does not establish that no
+process was started or that it exited. For a delivered post-start prompt, `delivered_via` (`terminal` or `read`) keeps
+terminal submission and an inbox read distinct. COLLABORATION-2.2 owns native/post-start prompt selection and budget
+start. If the process has started but prompt delivery is still pending, return that separation and later report the
+final prompt outcome to the caller with the same message ID and target run under 1.3. A successful process-start result
+does not cancel this report or renew the prompt's delivery budget. A prompt failure does not destroy a successfully
+started agent. Acceptance creates the pair immediately in the destination, its terminal's tab hidden (LIFECYCLE-2.2);
+pre-acceptance validation failure creates none. Later cwd-dependent validation or startup failure under CLIS-4.2 retains
+its error pair and fails as `launch_failed`, or as `worktree_failed` where the worktree could not be created, with
+partial effects. Tool unavailability does not kill a usable CLI. There is no task object, task_operation_id, completion
+expectation or automatic creator progress report.
 
 ## 3 Inspect and stop
 

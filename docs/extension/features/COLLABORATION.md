@@ -81,33 +81,31 @@ result, and RULES-1.8's notice of a waiting child, end their first line with ` �
 start or stop the one MCP-1.3 reserved. Full call IDs stay in structured records. Partial input, uncertain submission,
 process/tools/prompt distinctions and created worktrees remain explicit; ordinary success needs no boilerplate. Receipt
 delivery is separate from the operation it reports. RULES-1.8's notice uses the same voice - who waits, on what, and who
-can answer - without changing its recipient, frequency or authority.
-An unavailable window before execution says the message could not be sent and confirms untouched input only when known.
-After forwarding without an answer, it says delivery could not be confirmed; it never recommends a blind resend.
-These wordings add no notification or recipient. They are Facade facts, not replies authored by the recipient, and
-request no response. An unreachable result ends; do not notify a person, send another error to B, or resend the
-original content.
-Use the native interactive prompt argument that CLIS-3.2 maps for the CLI, even while it is unverified, and report its
-capability state with the prompt outcome. Without a mapping, start the CLI and automatically send the same prompt after
-process startup through ordinary message delivery. Either path gives the CLI the prompt with its 📨 header (2.1), under
-the message ID its record keeps. The caller does not need to compensate for CLI differences. Start that delivery budget
-when the CLI process starts, not after waiting indefinitely for ready.
-Where a CLI's first turn could not use the Facade tools - Antigravity, which starts a folder's plugin servers only with
-its first turn or its MCP panel - its start types what readies them before any other input. Once its input first reads
-empty, within thirty seconds, it types `/mcp`, then Enter once that alone shows in the input, within two seconds; then
-Escape as soon as the panel shows the server ready, or after ten seconds while the panel is still open. It is given up,
-typing nothing, where the input first reads anything else or nothing within those thirty seconds, or the CLI is
-working, and Enter is not pressed where `/mcp` does not show alone: the person's own first turn then starts the tools
-for the turns after it. Its creation prompt goes after that, as its first message, its budget starting then, or once
-the start's own wait (MCP-1.3) ends, if that comes first.
-A blocked input box consumes the normal attempts. Both paths use RULES-1.3's meaning of delivery; native acceptance
-does not require a terminal Enter effect.
-Report process startup and prompt input separately. Failed prompt submission leaves the started agent available.
-An unverified native prompt remains unconfirmed in its record; it is neither confirmed delivery nor a continuing
-background delivery. Reading its complete record through read_messages then delivers it without another paste.
-MCP-2.3 owns the final report when prompt input remains pending after process startup.
-A native prompt, confirmed or not, is never sent again through the post-start path, and no prompt is typed twice
-(RULES-1.6). There is no task, task result, child completion report or replay of a creation prompt.
+can answer - without changing its recipient, frequency or authority. An unavailable window before execution says the
+message could not be sent and confirms untouched input only when known. After forwarding without an answer, it says
+delivery could not be confirmed; it never recommends a blind resend. These wordings add no notification or recipient.
+They are Facade facts, not replies authored by the recipient, and request no response. An unreachable result ends; do
+not notify a person, send another error to B, or resend the original content. Use the native interactive prompt argument
+that CLIS-3.2 maps for the CLI, even while it is unverified, and report its capability state with the prompt outcome.
+Without a mapping, start the CLI and automatically send the same prompt after process startup through ordinary message
+delivery. Either path gives the CLI the prompt with its 📨 header (2.1), under the message ID its record keeps. The
+caller does not need to compensate for CLI differences. Start that delivery budget when the CLI process starts, not
+after waiting indefinitely for ready. Where a CLI's first turn could not use the Facade tools - Antigravity, which
+starts a folder's plugin servers only with its first turn or its MCP panel - its start types what readies them before
+any other input. Once its input first reads empty, within thirty seconds, it types `/mcp`, then Enter once that alone
+shows in the input, within two seconds; then Escape as soon as the panel shows the server ready, or after ten seconds
+while the panel is still open. It is given up, typing nothing, where the input first reads anything else or nothing
+within those thirty seconds, or the CLI is working, and Enter is not pressed where `/mcp` does not show alone: the
+person's own first turn then starts the tools for the turns after it. Its creation prompt goes after that, as its first
+message, its budget starting as that preparation is done or given up - never sooner because the start answered, which it
+does once the process runs (MCP-2.3). A blocked input box consumes the normal attempts. Both paths use RULES-1.3's
+meaning of delivery; native acceptance does not require a terminal Enter effect. Report process startup and prompt input
+separately. Failed prompt submission leaves the started agent available. An unverified native prompt remains unconfirmed
+in its record; it is neither confirmed delivery nor a continuing background delivery. Reading its complete record
+through read_messages then delivers it without another paste. MCP-2.3 owns the final report when prompt input remains
+pending after process startup. A native prompt, confirmed or not, is never sent again through the post-start path, and
+no prompt is typed twice (RULES-1.6). There is no task, task result, child completion report or replay of a creation
+prompt.
 
 ### 2.3 Contacting the person
 
