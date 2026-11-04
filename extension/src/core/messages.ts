@@ -162,6 +162,15 @@ const OBSTACLES: { readonly [state: string]: string | undefined } = { draft: 'in
 /** What holds an input for a person or its CLI, and is waited for (RULES-1.5): unlike an input that cannot be read. */
 const HELD: ReadonlySet<string> = new Set(['input_draft', 'input_interaction']);
 
+/** Whether `record` is a creation prompt recorded to go after startup and not settled yet: one that holds its run's other messages. */
+function pendingCreation(record: MessageRecord): boolean {
+	return record.initialPrompt?.path === 'post_start' && record.delivery.status === 'pending';
+}
+
+function creationOf(record: MessageRecord): { readonly to: string; readonly deadline?: number } {
+	return { to: record.to.run, ...record.delivery.deadline !== undefined ? { deadline: record.delivery.deadline } : {} };
+}
+
 /**
  * Agent messages (RULES-1, COLLABORATION-2-4): every send is recorded at once with its own ID, then given to its one recipient - the
  * person in this window by notification, or a run's CLI as one paste and Enter, never over a draft or into a menu, trying every
@@ -173,6 +182,8 @@ export class MessageService implements Messages, Disposable {
 	private readonly subscriptions: Disposable[] = [];
 	/** Records whose delivery is under way here: the current version of each, ahead of what was read from the store. */
 	private readonly live = new Map<string, MessageRecord>();
+	/** The creation prompts recorded pending that go after startup, once read: see {@link creations}. */
+	private pendingCreations: Map<string, { readonly to: string; readonly deadline?: number }> | undefined;
 	private readonly stages = new Set<Stage>();
 	/** Each terminal's attempts, one after another (RULES-1.10). */
 	private readonly lanes = new Map<RunId, Promise<void>>();
@@ -657,8 +668,33 @@ export class MessageService implements Messages, Disposable {
 	/** Whether `stage`'s run has a creation prompt recorded and still pending, which goes first - after a reload too (RULES-1.10). */
 	private creationRecorded(stage: Stage): boolean {
 		const now = this.deps.clock.now();
-		return this.deps.store.list().some(record => record.id !== stage.message && record.to.run === stage.target && record.initialPrompt?.path === 'post_start'
-			&& record.delivery.status === 'pending' && (record.delivery.deadline === undefined || record.delivery.deadline > now));
+		for (const [id, creation] of this.creations()) {
+			if (id !== stage.message && creation.to === stage.target && (creation.deadline === undefined || creation.deadline > now)) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * The creation prompts recorded to go after startup and not settled yet, by ID, with their run and deadline: read from the store once,
+	 * then kept as records are made and saved, not read again for each attempt of each message (RULES-1.10, MCP-2.3).
+	 */
+	private creations(): Map<string, { readonly to: string; readonly deadline?: number }> {
+		this.pendingCreations ??= new Map(this.deps.store.list().filter(pendingCreation).map(record => [record.id, creationOf(record)]));
+		return this.pendingCreations;
+	}
+
+	/** `record` as made or saved: a pending creation prompt kept among them, or out of them now. */
+	private track(record: MessageRecord): void {
+		if (!this.pendingCreations) {
+			return;
+		}
+		if (pendingCreation(record)) {
+			this.pendingCreations.set(record.id, creationOf(record));
+		} else {
+			this.pendingCreations.delete(record.id);
+		}
 	}
 
 	/** A stage stopped before its deadline: delivered meanwhile by the recipient's read, or its run ended or was closed. */
@@ -889,6 +925,7 @@ export class MessageService implements Messages, Disposable {
 		};
 		try {
 			this.deps.store.create(record);
+			this.track(record);
 		} catch (err) {
 			this.deps.log.event(`Could not record message ${record.alias}: ${messageOf(err)}`);
 			if (required) {
@@ -936,6 +973,7 @@ export class MessageService implements Messages, Disposable {
 		if (!this.disposed) {
 			try {
 				this.deps.store.put(record);
+				this.track(record);
 			} catch (err) {
 				this.deps.log.event(`Could not record message ${record.alias}: ${messageOf(err)}`);
 			}

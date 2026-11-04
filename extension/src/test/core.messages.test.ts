@@ -130,12 +130,13 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	const creating = new Set<RunId>();
 	let n = 0;
 	let spent = 0;
+	let listed = 0;
 	const deps: MessageServiceDeps = {
 		agents: { get: run => runs.get(run), onDidChange: changes.event, owned: () => owned, creationPending: run => creating.has(run) },
 		input,
 		human: { contact: (record, lookup) => { contacts.push(record); saved = lookup; return reachable; } },
 		store: {
-			list: () => [...stored.values()].sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2))),
+			list: () => { listed++; return [...stored.values()].sort((a, b) => Number(a.id.slice(2)) - Number(b.id.slice(2))); },
 			create: record => {
 				if (stored.has(record.id)) {
 					throw new Error(`A message ${record.id} is kept already.`);
@@ -157,6 +158,8 @@ function setUp(options: { readonly createMs?: number } = {}) {
 	let service = new MessageService(deps);
 	return {
 		service, runs, input, contacts, stored, log, creating,
+		/** How often every kept message was read: a delivery's attempts are not each to read them all. */
+		listed: () => listed,
 		/** What each recipient's card was told was sent to it, as each delivery went in (PANEL-1.4). */
 		said,
 		/** Who the record says sent each of them (PANEL-1.4). */
@@ -268,6 +271,18 @@ suite('Agent messages: the delivery engine (RULES-1, COLLABORATION-2)', () => {
 		const sent = await settled(service.send({ id: prompt.id, from: A, to: B, text: 'Your task.', elapsedMs: 0, callId: 'start-1', initialPrompt }));
 		await sleep(5_000);
 		assert.deepStrictEqual([sent.status, sent.record.id, stored.get(prompt.id)!.delivery.via, input.submitted.filter(each => each.run === B).length], ['success', prompt.id, 'read', 0]);
+	});
+
+	test('a message held by a draft is tried again every three seconds without reading every kept message each time (RULES-1.10)', async () => {
+		const { service, input, listed } = setUp();
+		input.states.set(B, [...Array.from({ length: 12 }, () => 'draft' as const), 'usable' as const]);
+		const sending = settled(service.send({ from: A, to: B, text: 'Hello', elapsedMs: 0 }));
+		await sleep(1_000);
+		const before = listed();
+		await sleep(30_000);
+		const during = listed() - before;
+		await sending;
+		assert.ok(during <= 2, `every kept message was read ${during} times while it was tried again`);
 	});
 
 	test('a recorded creation prompt past its deadline holds no message back (RULES-1.10, MCP-2.3)', async () => {
