@@ -46,6 +46,8 @@ interface TerminalEntry {
 	activeAt?: number;
 	/** The group its tab is to open in; none, the active one. */
 	openIn?: number;
+	/** When Facade's Pin of its agent last changed, by this host's clock: a mark changed on its unknown tab after it wins (LIFECYCLE-3.4). */
+	pinnedAt?: number;
 }
 
 interface TerminalOptions {
@@ -92,6 +94,8 @@ export class AgentTerminals implements vscode.Disposable {
 	private copiesTimer: ReturnType<typeof setTimeout> | undefined;
 	/** The group the next agent's tab opens in: a copy's, where an agent starts in its place (LIFECYCLE-2.2). */
 	private nextColumn: number | undefined;
+	/** Terminal tabs Facade cannot tell: the mark each showed last, and when it changed - a person's pin or unpin there (LIFECYCLE-3.4). */
+	private readonly strayMarks = new WeakMap<vscode.Tab, { readonly pinned: boolean; readonly changedAt?: number }>();
 	private terminalActivatedAt = -Infinity;
 	private tabActivatedAt = -Infinity;
 	private readonly disposables: vscode.Disposable[] = [];
@@ -157,6 +161,7 @@ export class AgentTerminals implements vscode.Disposable {
 		const pair = this.entries.get(run);
 		if (pair) {
 			pair.pinned = pinned;
+			pair.pinnedAt = Date.now();
 			pair.wantedPin = pinned;
 			this.applyPin(pair);
 			if (!pinned) { this.oneUnpinned(pair, 'unpinned'); }
@@ -521,6 +526,13 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 			this.opening = [];
 		}
+		// A mark changed on a tab Facade cannot tell is the person's: kept with that tab until it is known (LIFECYCLE-3.4)
+		for (const tab of [...event.opened, ...event.changed]) {
+			if (tab.input instanceof vscode.TabInputTerminal && !this.pairOfTab(tab)) {
+				const before = this.strayMarks.get(tab);
+				this.strayMarks.set(tab, before === undefined || before.pinned === tab.isPinned ? { pinned: tab.isPinned, ...before?.changedAt !== undefined ? { changedAt: before.changedAt } : {} } : { pinned: tab.isPinned, changedAt: now });
+			}
+		}
 		if (event.changed.some(tab => tab.isActive) || event.opened.some(tab => tab.isActive)) {
 			this.tabActivatedAt = now;
 			this.correlate();
@@ -638,6 +650,12 @@ export class AgentTerminals implements vscode.Disposable {
 		if (pair.observedPin !== tab.isPinned) {
 			const changed = pair.observedPin !== undefined || tab.isPinned;
 			pair.observedPin = tab.isPinned;
+			// A mark the person changed while the tab was unknown wins where that change came after Facade's last Pin or Unpin of the
+			// agent; else Facade's Pin stands, its mark to follow (LIFECYCLE-3.4)
+			const stray = this.strayMarks.get(tab)?.changedAt;
+			if (stray !== undefined && pair.wantedPin !== undefined && stray > (pair.pinnedAt ?? -Infinity)) {
+				pair.wantedPin = undefined;
+			}
 			if (changed && pair.wantedPin === undefined && !pair.applyingPin) { this.options.pinned?.(pair.run, tab.isPinned); }
 		}
 		this.applyPin(pair);

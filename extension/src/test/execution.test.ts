@@ -1200,6 +1200,39 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([told.length, shared.disposed], [1, true]);
 	});
 
+	test('a mark changed on a tab Facade cannot tell wins once the tab is known where it came after the agent\'s last Pin or Unpin; else Facade\'s Pin stands and the mark follows (LIFECYCLE-3.4, J12)', async () => {
+		const port = portOf();
+		const changes: unknown[] = [];
+		port.onDidPinTab(change => changes.push(change));
+		const tick = () => new Promise(resolve => setTimeout(resolve, 5));
+		for (const [index, run] of [[0, 'run-m1'], [1, 'run-m2']] as const) {
+			port.openPair(facts(run), { reveal: false });
+			open(terminals[index]);
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		// Both moved at once: neither tab can be told now
+		const [first, second] = [0, 1].map(() => ({ input: new TabInputTerminal(), isPinned: false, isActive: false, group: { viewColumn: 2 } }));
+		tabsChanged.fire({ opened: [first, second], closed: [terminals[0].tab, terminals[1].tab], changed: [] });
+		// m1: Unpinned from its card, then pinned natively on its unknown tab - the later, the tab's, wins
+		port.pinTab('run-m1', false);
+		await tick();
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(first, { isPinned: true })] });
+		// m2: pinned natively on its unknown tab, then Unpinned from its card - the card's, later, stands
+		tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(second, { isPinned: true })] });
+		await tick();
+		port.pinTab('run-m2', false);
+		const known = (index: number, tab: typeof first) => {
+			activeTab = tab; activeTerminal = terminals[index];
+			activeChanged.fire(terminals[index]);
+			tabsChanged.fire({ opened: [], closed: [], changed: [Object.assign(tab, { isActive: true })] });
+		};
+		assert.deepStrictEqual(changes, [], 'nothing told while the tabs are unknown');
+		known(0, first);
+		known(1, second);
+		assert.deepStrictEqual(changes, [{ run: 'run-m1', pinned: true }]);
+		await until('the card\'s Unpin followed on the tab', () => commands.includes('workbench.action.unpinEditor'));
+	});
+
 	test('hiding a tab closes it with no close of the person\'s, the run going on; the person\'s close says whether the tab showed its pin mark (LIFECYCLE-2.2, 3.4)', async () => {
 		const port = portOf();
 		const closes: { readonly run: RunId; readonly marked: boolean }[] = [];
