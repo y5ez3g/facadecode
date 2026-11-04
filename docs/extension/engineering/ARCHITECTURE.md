@@ -171,40 +171,30 @@ and end them only by RULES-4.1's grace policy.**
 RULES-4.1 owns the contract: closure ends that window's runs, reload reconnects them and temporary remote loss does not
 itself terminate them. ptyd applies RULES-4.1's grace from the moment the owning extension host's connection closes - 90
 seconds where the claim says its window is local, five minutes otherwise; a successor activation's claim cancels it, and
-a remote network outage that leaves the remote extension host connected starts no timer. Each claim names its window's
-address, derived from the window's handover identity and so the same across its reloads, whether the window is local,
-and when that window was first opened, as its identity's record keeps it. A claim of a local window at another address,
-first opened after a local owner's connection closed, ends that owner's runs at once - an editor shows a workspace in
-one window at a time, so a window opened since shows the owner's closed - and is answered once their processes' exit is
-confirmed, so that the new window's Pin restoration never runs beside them. A run whose cleanup failed or is unconfirmed
-stays listed as uncertain, holding its conversation (LIFECYCLE-3.5), rather than dropped. A claim that names no address
-or no first opening, a remote window's, or one of a window opened before the owner went - two windows of one workspace
-reloading together - takes the runs over as before, and the grace ends them where no window does. A window of another
-editor application sharing the Facade directory is a separate window as well: one first opened there while a window
-reloads takes that window for closed. A stable workspace key is not enough to identify a particular live window; two
-windows can share it. Route-staleness timers can detect loss, not prove closure. A window ID is the routing address the
-window component derives from the window's handover identity when it registers the window: the same across the window's
-reloads while that identity's record or its copy lasts, and another where both are gone and replaced (below) - a local
-window whose identity was so replaced is taken at its reload for a window opened since, and its agents end (RULES-4.1).
-The runtime reattaches the original runs, with the same run IDs, to the reloaded window. RULES-2.2's Window row is the
-conceptual identity, not this address. Record enough current window/run association to reconnect the actual process. No
-durable message handover is required solely for a closing sender; RULES-1.9 permits natural termination of work still
-owned by that side. The workspace key that runs are claimed under is derived from the workspace's URI once and then kept
-in the editor's workspace storage for reloads. Folder-to-multi-root conversion and Save Workspace As can replace
-extension workspace state; remote conversion also reloads the window and changes `env.sessionId`. Session ID alone
-cannot carry this state.
+a remote network outage that leaves the remote extension host connected starts no timer. Each claim says whether its
+window is local; one that does not is taken for a remote window's. A claim of the workspace within the grace takes its
+runs over, whichever window makes it: no claim ends another window's runs. A run the grace ended whose cleanup failed or
+is unconfirmed stays listed as uncertain, holding its conversation (LIFECYCLE-3.5), rather than dropped. A stable
+workspace key is not enough to identify a particular live window; two windows can share it. Route-staleness timers can
+detect loss, not prove closure. A window ID is the routing address the window component derives from the window's
+handover identity when it registers the window: the same across the window's reloads while that identity's record lasts,
+and another where it is gone and replaced (below). The runtime reattaches the original runs, with the same run IDs, to
+the reloaded window. RULES-2.2's Window row is the conceptual identity, not this address. Record enough current
+window/run association to reconnect the actual process. No durable message handover is required solely for a closing
+sender; RULES-1.9 permits natural termination of work still owned by that side. The workspace key that runs are claimed
+under is derived from the workspace's URI once and then kept in the editor's workspace storage for reloads.
+Folder-to-multi-root conversion and Save Workspace As can replace extension workspace state; remote conversion also
+reloads the window and changes `env.sessionId`. Session ID alone cannot carry this state.
 
 The local window component keeps a random handover identity in its own directory supplied by public
 `ExtensionContext.logUri`. It neither parses the URI nor reads editor storage internals. On the verified desktop editor,
 that directory remains the same for this native window across these transitions and differs for a separate window,
 including one opening a copied workspace. This lifecycle is a platform evidence requirement, not a guarantee inferred
 from the API's name. Deletion or replacement of that directory cannot justify a folder-based search for another window's
-identity. The component also keeps a copy of the record in its own global state, under that directory's path as an
-opaque key, which differs for each native window: a record gone is restored from it, and only where both are gone is it
-replaced by a new identity, unnoticed. A damaged one is not replaced: Facade does not start in that window and says to
-close it and open its folder or workspace again, or restart the editor - not to reload, which reads the same record. One
-that cannot be read now but is not damaged - a file the system holds - is answered as unreadable, and the workspace
-component says to reload rather than to install the component.
+identity. A record gone is replaced by a new identity unnoticed. A damaged one is not replaced: Facade does not start in
+that window and says to close it and open its folder or workspace again, or restart the editor - not to reload, which
+reads the same record. One that cannot be read now but is not damaged - a file the system holds - is answered as
+unreadable, and the workspace component says to reload rather than to install the component.
 
 The workspace component requests the identity through a public command, including its current `env.sessionId`; the UI
 component rejects a request from a different session. Its answer also names the component's own version, which a remote
@@ -272,8 +262,8 @@ workspace conversion outside test mode, which refuses to enter a workspace.
 Gate G2 needs isolated traces for reload, extension-host restart, remote loss, close-one, close-last and immediate
 reopen. Deactivation, terminal closure, `sessionId`, a missing-heartbeat timer, a hidden terminal's death or the
 Shutdown exit reason does not alone prove a close, so Facade reports no closure from them and RULES-4.1's grace is the
-cleanup, but for a local window another window's claim shows closed. A mechanism proven on the editor can take the place
-of a derived design; it cannot silently redefine RULES-4.1's behavior. This rule is a proof obligation, not a claim that
+cleanup, as no claim of another window proves one either. A mechanism proven on the editor can take the place of a
+derived design; it cannot silently redefine RULES-4.1's behavior. This rule is a proof obligation, not a claim that
 every supported editor supplies a complete mechanism.
 
 ### 2.3 Execution ownership and input deadlines
@@ -301,8 +291,10 @@ answers within 150 ms of the query being written to it. A terminal draws a run's
 comes before it opens is not kept for it, and it opens on the run's screen taken anew, which holds no query. A run's
 pseudoterminal lives from its acceptance to its removal; its editor tab is created as the person opens it and released
 as it is hidden (LIFECYCLE-2.2), the pseudoterminal and the run's process untouched, and each opening draws the run's
-screen taken anew. A run whose tab is hidden has ptyd's answers alone, what only the editor knows going unanswered; a
-run of an earlier supervisor whose tab is hidden has none of its queries answered until its tab opens. Propagate
+screen taken anew. A run whose tab is hidden has ptyd's answers alone, what only the editor knows going unanswered. A
+run of an earlier supervisor, which leaves its queries to the window, has them answered while its tab is hidden by a
+headless terminal the window keeps for it from the output it hears, as its editor terminal would - what only an editor
+knows aside - so that hiding it changes its view alone; the window lets that terminal go as the tab opens. Propagate
 RULES-1.5's remaining message budget to the input owner; internal hops cannot restart it. Do not compare independent
 host wall clocks as if synchronized. Check whether input can still start before writing; ptyd takes a text and its Enter
 in separate requests, never both in one (MCP-5.2). Uncertain effects stay uncertain; ordinary-message retries follow
@@ -408,7 +400,6 @@ Windows node-pty's console worker - starts no program and says that its installa
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
 | Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group (LIFECYCLE-3.5) - for as long as ptyd runs (2.3) |
 | Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
-| Window component's global storage on the client | A copy of each native window's handover identity, under its log directory's path (2.2) |
 | Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs, its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
 | Vendor CLI store | Its own conversations, credentials and settings |
@@ -660,7 +651,7 @@ what was tested and what remains. Task assignments, pauses and discussion author
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.3 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package |
-| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; pressure/upgrades from each released build (0.0.1 to 0.0.4) with agents running |
+| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; pressure/upgrades from every released build with agents running |
 | 3.1–3.3 | Storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |
 | 5.1–5.4 | Evidence and command logs, isolated profile/config paths, dirty-tree preservation, no unrequested Git publication |

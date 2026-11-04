@@ -252,14 +252,12 @@ replacement prompt text from the retry. Startup closed midway fails as `ended`, 
 in its final effects and reports `closed:true` with `process_state:unknown`. Closure alone does not establish that no
 process was started or that it exited. For a delivered post-start prompt, `delivered_via` (`terminal` or `read`) keeps
 terminal submission and an inbox read distinct. COLLABORATION-2.2 owns native/post-start prompt selection and budget
-start. If the process has started but prompt delivery is still pending, return that separation and later report the
-final prompt outcome to the caller with the same message ID and target run under 1.3. A successful process-start result
-does not cancel this report or renew the prompt's delivery budget. A prompt failure does not destroy a successfully
-started agent. Acceptance creates the pair immediately in the destination, its terminal's tab hidden (LIFECYCLE-2.2);
-pre-acceptance validation failure creates none. Later cwd-dependent validation or startup failure under CLIS-4.2 retains
-its error pair and fails as `launch_failed`, or as `worktree_failed` where the worktree could not be created, with
-partial effects. Tool unavailability does not kill a usable CLI. There is no task object, task_operation_id, completion
-expectation or automatic creator progress report.
+start. Answering that the process runs neither renews the prompt's delivery budget nor cancels the one later result
+above. A prompt failure does not destroy a successfully started agent. Acceptance creates the pair immediately in the
+destination, its terminal's tab hidden (LIFECYCLE-2.2); pre-acceptance validation failure creates none. Later
+cwd-dependent validation or startup failure under CLIS-4.2 retains its error pair and fails as `launch_failed`, or as
+`worktree_failed` where the worktree could not be created, with partial effects. Tool unavailability does not kill a
+usable CLI. There is no task object, task_operation_id, completion expectation or automatic creator progress report.
 
 ## 3 Inspect and stop
 

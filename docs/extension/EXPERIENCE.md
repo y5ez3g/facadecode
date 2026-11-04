@@ -24,11 +24,12 @@ explanation; there is no separate tutorial, team wizard or product-mode choice.
 
 **The person sees the location and suggested name, chooses a CLI, and continues in its editor terminal.**
 
-The last successfully used CLI is first and preselected; choosing it still starts only after the person's action.
-Change Working Location and Change Name remain at the bottom of the same picker. A name has an editable
-recommendation and may be empty, contain spaces or duplicate another name. CLI login and permissions remain in the terminal.
-The current name and actual location remain visible while searching for a CLI, as specified in LIFECYCLE-1.1.
-No account or CLI setup is silently performed by Facade.
+The last successfully used CLI is first and preselected; choosing it still starts only after the person's action. Change
+Working Location and Change Name remain at the bottom of the same picker - Change Name alone where there is no location
+to change (1.5). A name has an editable recommendation and may be empty, contain spaces or duplicate another name. CLI
+login and permissions remain in the terminal. The current name and actual location remain visible while searching for a
+CLI - the window's one place to work going without saying - as specified in LIFECYCLE-1.1. No account or CLI setup is
+silently performed by Facade.
 
 ### 1.3 Default working location
 
@@ -107,13 +108,13 @@ wait.
 
 **Reload reconnects existing runs; closing a window ends that window's agents.**
 
-Temporary remote loss retains observations and reconciles the original processes. A closed local window's agents end as
-a new window opens its workspace, or 90 seconds after it went, and a reopened window restores their Pins; a remote
-window's end five minutes after it goes unless the workspace is opened again first, which shows them again (RULES-4.1).
-A reload never ends them. Other windows continue their work. Pending messages to ended runs fail to their agent senders
-where reachable and are never replayed on reopening. If only the sender closes, delivery already executing elsewhere may
-finish; work left at the closing side may end. No extra handover machinery guarantees that edge case. System results
-that cannot return simply end.
+Temporary remote loss retains observations and reconciles the original processes. A closed window's agents end after
+RULES-4.1's grace - 90 seconds for a local window, five minutes for a remote one, and five minutes for agents a released
+build's execution supervisor still holds - unless the workspace is opened again first, which shows them again; a reload
+never ends them, and Pins restore once their agents ended. Other windows continue their work. Pending messages to ended
+runs fail to their agent senders where reachable and are never replayed on reopening. If only the sender closes,
+delivery already executing elsewhere may finish; work left at the closing side may end. No extra handover machinery
+guarantees that edge case. System results that cannot return simply end.
 
 ### 2.5 Resume and Pin
 
@@ -227,7 +228,7 @@ Creation trees do not group the list or imply a team workflow.
 | --- | --- |
 | 1.1–1.7 | Walk first use, last location, location change, no Git, no CLI, cancel, immediate surfaces and both startup failures |
 | 2.1–2.3 | Observe actual activity, errors, native CLI prompts, normal exit, unknown abnormal exit and explicit closure |
-| 2.4 | Reload, disconnect, close and immediate reopen under the grace policy - a local window's agents ended, its Pins restored; a remote window's kept - pending messages to ended runs |
+| 2.4 | Reload, disconnect, close and immediate reopen under RULES-4.1's grace policy for the supervisor that holds each run, pending messages to ended runs |
 | 2.5 | Resume an exact conversation; Pin from the card and the native tab, restored on reopening; Unpin keeps the agent running |
 | 3.1–3.6 | Two-way cross-window and local/remote operations; explicit launch choices; all initial/final message outcomes |
 | 4.1–4.3 | Walk both complete journeys including review, redirected work, cleanup, multi-folder and plain-folder use |

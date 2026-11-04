@@ -166,7 +166,7 @@ are validated against current state, without falling back to the selection.
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
 | `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
-| `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work | PANEL-2.3 |
+| `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
 | `showAgentLaunch` | Show Agent Launch... | Always; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |

@@ -165,12 +165,13 @@ agent's tab in a group hides that group's other unpinned agent tab, its agent ru
 close button, Close Editor, Close All, Close Others, closing its group - hides it, without a question: the agent runs on
 and its card opens it again; ending an agent is Close Agent's (3.1). A person's explicit close of a pinned agent tab
 Unpins it as well (3.4). Hiding keeps the agent's screen, its draft and its Facade tools, and a starting agent hidden
-goes on starting. Where an editor operation leaves two unpinned agent tabs in one group - an Unpin, a tab dragged in,
-groups joined - the group keeps its active one, else the one last active, and hides the other; a pinned tab dragged in
-hides none, and an Unpin whose save is undone hides nothing. A terminal shows in one tab at a time: a split, in any
-direction, of an agent's tab moves it to the new group rather than leaving an empty copy. A reload restores each tab as
-it was (3.5). At most one unpinned agent terminal per group draws, besides the pinned ones, while ptyd keeps every
-agent's process and screen (ARCHITECTURE-2.3).
+goes on starting. Where an editor operation leaves two unpinned agent tabs in one group, the group keeps one and hides
+the others: after an Unpin, its active one, else the one just unpinned; after a tab is dragged in, the one dragged;
+where groups join, or a reload restores tabs of groups gone into one (3.5), its active one, else the one last active. A
+pinned tab dragged in hides none, and an Unpin whose save is undone hides nothing. A terminal shows in one tab at a
+time: a split, in any direction, of an agent's tab moves it to the new group rather than leaving an empty copy. A reload
+restores each tab as it was (3.5). At most one unpinned agent terminal per group draws, besides the pinned ones, while
+ptyd keeps every agent's process and screen (ARCHITECTURE-2.3).
 
 The tab shows only the agent name beside the CLI's theme-appropriate logo; custom CLIs use a terminal icon. While its
 card's dot is green (RULES-3.2), a spinner frame turns between the logo and the name every 100 ms, for every CLI: the
@@ -333,12 +334,11 @@ keeps whether its tab is open, and in which group, with its process (ARCHITECTUR
 waiting its turn keep them with their records.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
-silence or a remote disconnect; RULES-4.1's grace after the extension host disconnects is the only time-based cleanup,
-beside the end it gives a local window that a window opened since shows closed. Reconcile actual process state; never
-restart an unknown original run as a replacement: a run whose end after such a close is not confirmed stays listed as
-uncertain, holding its conversation, and its Pin is not restored beside it. Proven folder/worktree removal closes
-affected agents, whereas a temporary Git/read/remote failure does not; a removal found as the extensions restart closes
-and unpins as one heard while running does.
+silence or a remote disconnect; RULES-4.1's grace after the extension host disconnects is the only time-based cleanup.
+Reconcile actual process state; never restart an unknown original run as a replacement: a run whose end at the grace is
+not confirmed stays listed as uncertain, holding its conversation, and its Pin is not restored beside it. Proven
+folder/worktree removal closes affected agents, whereas a temporary Git/read/remote failure does not; a removal found as
+the extensions restart closes and unpins as one heard while running does.
 
 ## 4 Technical design
 
@@ -363,7 +363,7 @@ Windows the console is ended once. No UI waits for it.
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
+| 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
 | 2.1–2.3 | Empty/duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, one unpinned agent tab per group, hidden tabs and agent-started agents without one, splits that move, tabs restored per group, ID/copied-reference search, distinguishable picker details |
 | 3.1–3.5 | One human Close action shared with `stop_agent`, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and an explicitly closed pinned tab Unpinning, bounded restoration with pinned tabs, no restoration beside an uncertain end, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |

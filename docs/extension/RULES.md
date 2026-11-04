@@ -326,24 +326,20 @@ transition.
 
 Closing a creator leaves its children running in their own windows. Closing a window ends all its runs and removes their
 UI, preserving Pin intent. No public editor signal tells a close from a reload, so a window's runs end a grace period
-after its extension host disconnects from the execution supervisor, unless that window, reloaded, claims them first: 90
-seconds for a local window, whose reload or extension host restart claims them well within it, and five minutes for a
-remote one, whose network may come back. A local window gone shows itself closed when a window opened since it went
-opens its workspace - a reload keeps a window's identity and when it was first opened (ARCHITECTURE-2.2), and an editor
-shows a workspace in one window at a time - and its runs end then, not taken over; the new window restores their Pins
-only once their processes' exit is confirmed, and a run whose end is not confirmed stays known, its conversation never
-started a second time (LIFECYCLE-3.5). A window that was open before the first one went - two windows of one workspace
-reloading together - or whose first opening is not known takes the runs over as a reload does, and the grace ends them
-where no window does: a reload never ends a window's runs. A remote window's runs a reopened window of the same
-workspace takes over within the five minutes. Runs held by a supervisor of an earlier protocol (ARCHITECTURE-2.4) keep
-its own policy - five minutes, and a takeover by a window that opens the workspace - whichever window held them. A
-reload or a temporary remote disconnect - during which the remote extension host stays connected - retains/reconnects
-the original runs without launching duplicates. Explicit agent closure immediately removes card and terminal and Unpins;
-process cleanup happens in the background, using termination when needed. A close whose Unpin cannot be saved keeps the
-agent and tells its initiator. No fixed UI wait or Stopping card is required. Actual termination and uncertain remote
-cleanup remain distinct facts in the operation record. The grace timer is cleanup policy, not proof that a person closed
-the window: no other timer ends a process. Telling a close from a reload is otherwise a platform limitation;
-VERIFICATION G2 verifies this policy.
+after its extension host disconnects from the execution supervisor, unless a reloaded or reopened window of the same
+workspace claims them first: 90 seconds for a local window, whose reload or extension host restart claims them well
+within it, and five minutes for a remote one, whose network may come back. A window that opens the workspace within the
+grace - a local window closed and opened again within its 90 seconds included - takes the runs over as a reload does, so
+a reload never ends them. Runs that reach the grace end as a closed window's do, and their Pins restore as the workspace
+next opens, once their end is confirmed: a run whose end is not confirmed stays known, its conversation never started a
+second time (LIFECYCLE-3.5). Runs held by a supervisor of an earlier protocol (ARCHITECTURE-2.4) keep its own policy -
+five minutes for every window - whichever window held them. A reload or a temporary remote disconnect - during which the
+remote extension host stays connected - retains/reconnects the original runs without launching duplicates. Explicit
+agent closure immediately removes card and terminal and Unpins; process cleanup happens in the background, using
+termination when needed. A close whose Unpin cannot be saved keeps the agent and tells its initiator. No fixed UI wait
+or Stopping card is required. Actual termination and uncertain remote cleanup remain distinct facts in the operation
+record. The grace timer is cleanup policy, not proof that a person closed the window: no other timer ends a process.
+Telling a close from a reload is a platform limitation; VERIFICATION G2 verifies this policy.
 
 Until a person closes it, it ends normally or its location is removed (2.4), every agent a window started stays shown:
 its card in the window's panel and its terminal, in an editor tab or hidden until the person opens it (LIFECYCLE-2.2),
