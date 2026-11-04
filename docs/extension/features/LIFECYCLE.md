@@ -60,18 +60,18 @@ without an unavailable-location note.
 **Change Working Location selects folder, then location, and returns to the same CLI picker.**
 
 Use workspace-folder order and skip a single-choice step. Inside a folder, use WORKTREES-1.2's catalog. An ordinary
-folder is a normal choice. In a folder inside a Git repository, the location step offers New Worktree, its row `New
-Worktree...` naming its source as `from {branch}` (WORKTREES-2.1); where a prerequisite is missing - no commit yet, no
-native creation - that row shows why as its detail and cannot be chosen (WORKTREES-2.3). The step shows at once and adds
-the row when its check completes. A folder in no repository, or where Git is missing, is a plain folder and has no New
-Worktree row; when nothing can be chosen - one folder whose only location is a plain folder - the picker offers no
+folder is a normal choice. In a folder inside a Git repository, the location step offers New Worktree, its row
+`New Worktree...` naming its source as `from {branch}` (WORKTREES-2.1); where a prerequisite is missing - no commit yet,
+no native creation - that row shows why as its detail and cannot be chosen (WORKTREES-2.3). The step shows at once and
+adds the row when its check completes. A folder in no repository, or where Git is missing, is a plain folder and has no
+New Worktree row; when nothing can be chosen - one folder whose only location is a plain folder - the picker offers no
 location change, as an action that does nothing would be. Once Git found no repository there, or is missing, that folder
 is the window's one place to work, which goes without saying: the title does not name it, nor does a Resume Agent line
-(3.2), and where every agent works there neither do cards (PANEL-1.3) or Go to Agent rows (2.3), and the panel offers no
-filter (PANEL-2.3); hovers keep it. A second folder, a repository found there, a worktree or a location Resume
-remembered ends it, and an agent working elsewhere ends it for the panel and Go to Agent: each names its location again.
-Retain Back/selections; Escape cancels the launch. A proposed new branch/location is only created when the person
-accepts a CLI. There is no Git initialization or initial-commit path.
+(3.2), and where every agent works there neither do Go to Agent rows (2.3), and the panel offers no filter (PANEL-2.3);
+hovers keep it, and cards show no location anywhere (PANEL-1.3). A second folder, a repository found there, a worktree
+or a location Resume remembered ends it, and an agent working elsewhere ends it for the panel and Go to Agent: each
+names its location again. Retain Back/selections; Escape cancels the launch. A proposed new branch/location is only
+created when the person accepts a CLI. There is no Git initialization or initial-commit path.
 
 The creation substeps use `New Agent · Select Folder`, `New Agent · Working Location`, and
 `New Agent · New Worktree` as titles. A plain folder is still a working location. The main CLI picker retains
