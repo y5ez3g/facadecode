@@ -872,6 +872,31 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	test('a screen taken puts its cursor where the run\'s is, a last row filled to its last column included (ARCHITECTURE-2.3)', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const pty = { pid: 4344, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write() {}, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const server = new Server(pipe('cursor'));
+		assert.strictEqual(await server.listen(), true);
+		try {
+			const client = await PtydClient.connect(pipe('cursor'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			clients.push(client);
+			await client.request('claim', { owner: 'w1', generation: 1, token: 'cursor-1' });
+			await spawn(client, 'boxed', IDLE);
+			// An input box between full-width rules, its cursor saved after its prompt and put back there once the box is drawn
+			const rule = '─'.repeat(80);
+			emit(`\x1b[H\x1b[2J\x1b[22;1H${rule}\x1b[23;1H❯ \x1b7\x1b[2mTry a task\x1b[22m\x1b[24;1H${rule}\x1b8`);
+			const { screen } = await client.request('attach', { run: 'boxed' });
+			const { Terminal } = await import('@xterm/headless');
+			const drawn = new Terminal({ cols: 80, rows: 24, allowProposedApi: true });
+			await new Promise<void>(resolve => drawn.write(screen, resolve));
+			assert.deepStrictEqual([drawn.buffer.active.cursorY + 1, drawn.buffer.active.cursorX + 1], [23, 3]);
+			drawn.dispose();
+		} finally {
+			server.close();
+		}
+	});
+
 	test('a run whose adapter names a screen reader is read from its screen while its program reports nothing, as Muse Code on Windows; a program that asks is read by its own word alone (CLIS-2.3)', async function () {
 		this.timeout(10_000);
 		const client = await connect();

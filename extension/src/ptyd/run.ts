@@ -524,7 +524,7 @@ export class Run {
 			try {
 				// Serializing a long scrollback holds ptyd's one thread as creating a program does (ARCHITECTURE-2.3)
 				const serializing = Date.now();
-				const screen = this.serializer.serialize({ scrollback: scrollbackRows(this.terminal.cols) }) + this.modesBeyondScreen();
+				const screen = this.serializer.serialize({ scrollback: scrollbackRows(this.terminal.cols) }) + this.cursorPlace() + this.modesBeyondScreen();
 				noteHeld(serializing);
 				resolve({ screen, seq });
 			} catch (err) {
@@ -834,6 +834,15 @@ export class Run {
 	 * neither its scrolling nor its selection works - the hidden cursor, the kitty keyboard protocol's flags on the screen it is on and
 	 * win32 input mode. Written after the screen, in the terminal the screen leaves it in.
 	 */
+	/**
+	 * Where its cursor is, said outright: the serializer places it by moves from where its last row leaves it, which after a row filled
+	 * to its last column - a full-width rule under an input box - lands a column short of it (ARCHITECTURE-2.3).
+	 */
+	private cursorPlace(): string {
+		const buffer = this.terminal.buffer.active;
+		return `\x1b[${buffer.cursorY + 1};${Math.min(buffer.cursorX, this.terminal.cols - 1) + 1}H`;
+	}
+
 	private modesBeyondScreen(): string {
 		const kitty = this.kittyStacks[this.terminal.buffer.active.type];
 		return [
