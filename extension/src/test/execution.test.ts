@@ -1260,6 +1260,24 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.ok(commands.includes('vscode.open'), 'the covered editor is shown again once it opened');
 	});
 
+	test('a known tab whose group\'s number changes - an earlier group closed - is told in its group\'s new number, for a reload to bring it back there (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		const places: { run: RunId; place: unknown }[] = [];
+		port.onDidPlaceTab!(each => places.push(each));
+		const groups = [{ viewColumn: 2 }, { viewColumn: 3 }];
+		for (const [index, run] of [[0, 'run-n1'], [1, 'run-n2']] as const) {
+			port.openPair(facts(run, { name: `Agent ${index}` }), { reveal: false });
+			open(terminals[index]);
+			Object.assign(terminals[index].tab, { group: groups[index] });
+			tabsChanged.fire({ opened: [terminals[index].tab], closed: [], changed: [] });
+		}
+		places.length = 0;
+		// Group 1 - a file's - closes: the others number themselves 1 and 2
+		groups[0].viewColumn = 1; groups[1].viewColumn = 2;
+		groupsChanged.fire(undefined);
+		assert.deepStrictEqual(places.map(each => [each.run, typeof each.place === 'object' ? (each.place as { column: number }).column : each.place]), [['run-n1', 1], ['run-n2', 2]]);
+	});
+
 	test('where groups join, moving their tabs in inactive, the group keeps its active agent tab, else the one last active; a tab moved in active stays (LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const place = (index: number, viewColumn: number, isActive: boolean) => Object.assign(terminals[index].tab, { group: { viewColumn }, isActive });

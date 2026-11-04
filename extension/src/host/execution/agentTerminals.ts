@@ -48,6 +48,8 @@ interface TerminalEntry {
 	openIn?: number;
 	/** When Facade's Pin of its agent last changed, by this host's clock: a mark changed on its unknown tab after it wins (LIFECYCLE-3.4). */
 	pinnedAt?: number;
+	/** The group its tab was last told to be in (LIFECYCLE-3.5). */
+	placedColumn?: number;
 }
 
 interface TerminalOptions {
@@ -143,7 +145,7 @@ export class AgentTerminals implements vscode.Disposable {
 				this.opening = this.opening.filter(each => each.pair !== pair);
 				// The window going keeps what a reload brings back
 				if (terminal.exitStatus?.reason !== vscode.TerminalExitReason.Shutdown) {
-					this.options.placed?.(pair.run, undefined, undefined);
+					this.place(pair, undefined);
 				}
 				if (pair.hiding) {
 					pair.hiding = false;
@@ -586,11 +588,22 @@ export class AgentTerminals implements vscode.Disposable {
 		this.observeNames();
 	}
 
+	/** Where `pair`'s tab is, told for a reload to bring it back there (LIFECYCLE-3.5). */
+	private place(pair: TerminalEntry, column: number | undefined): void {
+		pair.placedColumn = column;
+		this.options.placed?.(pair.run, column, pair.activeAt);
+	}
+
 	/** VS Code 1.105 can replace every Tab object in a group-model update without a tab-change event. */
 	private groupsChanged(): void {
 		const present = new Set(vscode.window.tabGroups.all.flatMap(group => group.tabs));
 		for (const pair of this.entries.values()) {
 			if (pair.tab && !present.has(pair.tab)) { pair.tab = undefined; }
+			// Groups number themselves anew as one closes or moves: a known tab whose group's number changed is told there
+			const column = pair.tab?.group?.viewColumn;
+			if (column !== undefined && pair.placedColumn !== undefined && column !== pair.placedColumn) {
+				this.place(pair, column);
+			}
 		}
 		this.tabActivatedAt = Date.now();
 		this.correlate();
@@ -642,7 +655,7 @@ export class AgentTerminals implements vscode.Disposable {
 			pair.activeAt = Date.now();
 			this.match(pair, tab, 'active');
 			if (before !== pair.activeAt && pair.tab === tab) {
-				this.options.placed?.(pair.run, tab.group?.viewColumn, pair.activeAt);
+				this.place(pair, tab.group?.viewColumn);
 			}
 		}
 	}
@@ -686,7 +699,7 @@ export class AgentTerminals implements vscode.Disposable {
 		const placedBefore = pair.tab?.group?.viewColumn;
 		pair.tab = tab;
 		if (placedBefore !== tab.group?.viewColumn) {
-			this.options.placed?.(pair.run, tab.group?.viewColumn, pair.activeAt);
+			this.place(pair, tab.group?.viewColumn);
 		}
 		if (pair.observedPin !== tab.isPinned) {
 			const changed = pair.observedPin !== undefined || tab.isPinned;
