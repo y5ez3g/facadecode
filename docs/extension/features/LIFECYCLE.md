@@ -307,17 +307,18 @@ too. Explicit agent close/normal exit removes Pin; whole-window close preserves 
 
 **Reload and temporary disconnection reuse existing runs; reopening restores saved Pins whose runs ended.**
 
-RULES-4.1 keeps runs for five minutes after disconnect. Reattach those runs before restoring Pins, never duplicating a
+RULES-4.1 keeps runs for its grace after disconnect. Reattach those runs before restoring Pins, never duplicating a
 conversation still held by Facade: Pins are restored only once the conversations every ptyd of the window holds are
 known, and one that does not answer yet delays them. A run that exits between the listing and its reattachment shows
 that exit. A failure to clean up a kept record never stops the window's agents from showing. A retained failed
 restoration is not retried on reload.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
-silence or a remote disconnect; RULES-4.1's five minutes after the extension host disconnects is the only time-based
-cleanup. Reconcile actual process state; never restart an unknown original run as a replacement. Proven folder/worktree
-removal closes affected agents, whereas a temporary Git/read/remote failure does not; a removal found as the extensions
-restart closes and unpins as one heard while running does.
+silence or a remote disconnect; RULES-4.1's grace after the extension host disconnects is the only time-based cleanup,
+beside the end it gives a local window that another window shows closed. Reconcile actual process state; never restart
+an unknown original run as a replacement. Proven folder/worktree removal closes affected agents, whereas a temporary
+Git/read/remote failure does not; a removal found as the extensions restart closes and unpins as one heard while running
+does.
 
 ## 4 Technical design
 

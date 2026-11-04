@@ -9,6 +9,13 @@ export interface OwnerClaim {
 	readonly owner: string;
 	readonly generation: number;
 	readonly token: string;
+	/**
+	 * What ptyd is told of the claiming window (RULES-4.1): its address, the same across its reloads and another window's for another
+	 * window (ARCHITECTURE-2.2), and whether its extension host runs on the computer it shows on - a local window, as opposed to a
+	 * remote one, whose extension host a lost network leaves running. Absent from a window that cannot know its identity.
+	 */
+	readonly window?: string;
+	readonly local?: boolean;
 }
 
 export function isOwnerClaim(value: unknown): value is OwnerClaim {

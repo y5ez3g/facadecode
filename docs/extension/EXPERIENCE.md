@@ -220,7 +220,7 @@ Creation trees do not group the list or imply a team workflow.
 | --- | --- |
 | 1.1–1.7 | Walk first use, last location, location change, no Git, no CLI, cancel, immediate surfaces and both startup failures |
 | 2.1–2.3 | Observe actual activity, errors, native CLI prompts, normal exit, unknown abnormal exit and explicit closure |
-| 2.4 | Reload, disconnect, close and immediate reopen under the five-minute policy, pending messages to ended runs |
+| 2.4 | Reload, disconnect, close and immediate reopen under the grace policy - a local window's agents ended, its Pins restored; a remote window's kept - pending messages to ended runs |
 | 2.5 | Resume an exact conversation; Pin from the card and the native tab, restored on reopening; Unpin keeps the agent running |
 | 3.1–3.6 | Two-way cross-window and local/remote operations; explicit launch choices; all initial/final message outcomes |
 | 4.1–4.3 | Walk both complete journeys including review, redirected work, cleanup, multi-folder and plain-folder use |

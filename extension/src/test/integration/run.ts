@@ -236,9 +236,11 @@ async function main(): Promise<void> {
 				if (expiry) {
 					const closedAt = Date.now();
 					if (nativeLifecycle) { endMatching(path.join(facade, 'extension', 'ptyd')); }
-					const expiresBy = closedAt + 330_000;
+					// A local window's grace, 90 seconds from its extension host's disconnect, a few seconds before `closedAt` (RULES-4.1):
+					// ended about then, well after the close
+					const expiresBy = closedAt + 150_000;
 					while (alive(Number(before.pid)) && Date.now() < expiresBy) { await new Promise(resolve => setTimeout(resolve, 500)); }
-					if (alive(Number(before.pid)) || (!nativeLifecycle && Date.now() - closedAt < 280_000)) { throw new Error('The closed window did not end its process as expected.'); }
+					if (alive(Number(before.pid)) || (!nativeLifecycle && Date.now() - closedAt < 60_000)) { throw new Error('The closed window did not end its process as expected.'); }
 					console.log(`  ✔ ${cli.id}: the closed window's process ended after ${Date.now() - closedAt} ms, ${nativeLifecycle ? 'forced exit of the isolated supervisor (not a grace-timer test)' : 'using the production grace period'}`);
 				}
 				// That application takes a second start's window, and while it still lists the closing window it reloads that one - it keeps
@@ -255,11 +257,13 @@ async function main(): Promise<void> {
 				const reopenBy = Date.now() + (nativeLifecycle ? 150_000 : 45_000);
 				while (Date.now() < reopenBy && !lines().some(line => line.phase === 'reopened' || line.phase === 'error')) { await new Promise(resolve => setTimeout(resolve, 250)); }
 				const after = lines().find(line => line.phase === 'reopened');
-				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid : after.runId !== before.runId || after.pid !== before.pid)
+				// A local window closed: reopened at once, the new window ends its process before it restores its Pin - never takes it over -
+				// and after its grace the process ended already; either way the exact session goes on in a new process (RULES-4.1)
+				if (!after || after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid))
 					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))) {
-					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
+					throw new Error(`Closing and reopening did not end the closed window's process and restore the pinned conversation: ${JSON.stringify(lines())}`);
 				}
-				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after process exit restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
+				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace' : 'immediate reopen'} end the closed window's process and restore the exact pinned session in a new process, with one terminal: ${JSON.stringify(lines())}`);
 				return;
 			}
 			const said = lines();
@@ -367,7 +371,7 @@ async function main(): Promise<void> {
 			for (const cli of BUILT_INS) { await conversion(cli, true); }
 		}
 		if (!only || only === 'expiry') {
-			// The shared supervisor's real five-minute policy, not a shortened fixture timer.
+			// The shared supervisor's real local grace, not a shortened fixture timer.
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// Never unasked: it signs in and uses an account's usage

@@ -216,7 +216,7 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | --- | --- |
 | Client network | This user's connected editor windows on one client computer |
 | Execution environment | Where files, CLIs and processes exist |
-| Window | One current editor window; reload reconnects it, though its routing ID may change (ARCHITECTURE-2.2); true reopening is a new window |
+| Window | One current editor window; reload reconnects it under the same routing ID while its handover record lasts (ARCHITECTURE-2.2); true reopening is a new window |
 | Workspace | Saved editor workspace/folder context for preferences and Pin intent |
 | Conversation key | Execution environment, CLI and exact vendor session ID |
 | Pin | Saved intent to restore an exact conversation |
@@ -321,15 +321,19 @@ transition.
 **A window owns its agents; creation relationships do not couple process lifetimes.**
 
 Closing a creator leaves its children running in their own windows. Closing a window ends all its runs and removes their
-UI, preserving Pin intent. No public editor signal tells a close from a reload, so a window's runs end five minutes
-after its extension host disconnects from the execution supervisor, unless a reloaded or reopened window of the same
-workspace claims them first. A reload or a temporary remote disconnect - during which the remote extension host stays
-connected - retains/reconnects the original runs without launching duplicates. Explicit agent closure immediately
-removes card and terminal and Unpins; process cleanup happens in the background, using termination when needed. A close
-whose Unpin cannot be saved keeps the agent and tells its initiator. No fixed UI wait or Stopping card is required.
-Actual termination and uncertain remote cleanup remain distinct facts in the operation record. The five-minute timer is
-cleanup policy, not proof that a person closed the window: no other timer ends a process. Telling a close from a reload
-is a platform limitation; VERIFICATION G2 verifies this policy.
+UI, preserving Pin intent. No public editor signal tells a close from a reload, so a window's runs end a grace period
+after its extension host disconnects from the execution supervisor, unless that window, reloaded, claims them first: 90
+seconds for a local window, whose reload or extension host restart claims them well within it, and five minutes for a
+remote one, whose network may come back. A local window gone shows itself closed as soon as another window opens its
+workspace - a reload keeps a window's identity (ARCHITECTURE-2.2), another window has its own - and its runs end then,
+not taken over, and that window restores its Pins once they ended. A remote window's runs a reopened window of the same
+workspace takes over within the five minutes. A reload or a temporary remote disconnect - during which the remote
+extension host stays connected - retains/reconnects the original runs without launching duplicates. Explicit agent
+closure immediately removes card and terminal and Unpins; process cleanup happens in the background, using termination
+when needed. A close whose Unpin cannot be saved keeps the agent and tells its initiator. No fixed UI wait or Stopping
+card is required. Actual termination and uncertain remote cleanup remain distinct facts in the operation record. The
+grace timer is cleanup policy, not proof that a person closed the window: no other timer ends a process. Telling a
+close from a reload is otherwise a platform limitation; VERIFICATION G2 verifies this policy.
 
 Until a person closes it, it ends normally or its location is removed (2.4), every agent a window started stays shown:
 its card in the window's panel and its terminal in the editor, across a reload, an extension host restart, an update and
@@ -338,7 +342,7 @@ a lost connection alike; an agent started before an update keeps working through
 alone shows no dot. Facade never leaves the agent out. The one exception is a window that cannot know its own identity,
 so cannot tell its agents from another window's: one whose identity record is damaged, where Facade does not start
 (ARCHITECTURE-2.2), and one without its window component, which is what reads that identity - it shows and starts no
-agents, and its running ones go on for the five minutes above, so that installing the component and reloading in time
+agents, and its running ones go on for the grace period above, so that installing the component and reloading in time
 shows them again (ARCHITECTURE-4.3). A window that another window of the same workspace took over shows none of its
 agents; that other window shows them.
 

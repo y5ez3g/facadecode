@@ -212,6 +212,8 @@ export class PtydServer {
 	/** Every run ID ptyd started, kept so that none is started twice (RULES-2.2). */
 	private readonly seen = new Set<string>();
 	private readonly claims = new Map<Run, Connection>();
+	/** The runs a claim ended, as another window showed their local window closed: that claim is answered once they did. */
+	private readonly closedWindows = new Map<string, Promise<unknown>>();
 	private readonly connections = new Set<Connection>();
 	private server: net.Server | undefined;
 	/** The socket this ptyd made at its path, on Unix: the one it may remove as it closes, never one another ptyd made there later. */
@@ -243,7 +245,15 @@ export class PtydServer {
 			}
 			previous.send({ event: 'ownerLost', owner });
 			this.log(`Workspace ${owner} transferred to a newer activation.`);
-		}, owner => this.endOwner(owner, 3_000, 'its owner connection was absent for five minutes'), clock);
+		}, (owner, why) => {
+			const ended = this.endOwner(owner, 3_000, why === 'closed'
+				? 'its local window closed - another window opened its workspace'
+				: 'its owner connection was absent past its grace period');
+			if (why === 'closed') {
+				// The claim that ended them is answered once they did: the new window restores its Pins after, never beside them
+				this.closedWindows.set(owner, ended.ended);
+			}
+		}, clock);
 	}
 
 	/**
@@ -448,9 +458,16 @@ export class PtydServer {
 				}
 				return undefined;
 			}
-			case 'claim':
-				this.owners.claim(params as Requests['claim']['params'], connection);
+			case 'claim': {
+				const claim = params as Requests['claim']['params'];
+				this.owners.claim(claim, connection);
+				const closing = this.closedWindows.get(claim.owner);
+				if (closing) {
+					this.closedWindows.delete(claim.owner);
+					await closing;
+				}
 				return undefined;
+			}
 			case 'colours': {
 				if (!isTerminalColours(params)) {
 					throw new Error('Terminal colours are rrrr/gggg/bbbb, of the foreground, background and cursor alone.');
@@ -611,23 +628,25 @@ export class PtydServer {
 			case 'endWindow': {
 				const { owner, graceMs } = params as Requests['endWindow']['params'];
 				this.owners.assert(owner, connection);
-				return this.endOwner(owner, graceMs, 'its window closed');
+				return this.endOwner(owner, graceMs, 'its window closed').count;
 			}
 			default:
 				throw new Error(`Unknown method ${String(request.method)}.`);
 		}
 	}
 
-	private endOwner(owner: string, graceMs: number, reason: string): number {
+	/** Ends every run of `owner`, each removed at once: how many, and what resolves once all of them ended. */
+	private endOwner(owner: string, graceMs: number, reason: string): { readonly count: number; readonly ended: Promise<unknown> } {
 		const ending = [...this.runs.values()].filter(run => run.params.owner === owner);
+		const ended: Promise<unknown>[] = [];
 		for (const run of ending) {
 			this.log(`Ending run ${run.id}: ${reason}.`);
 			this.remove(run);
 			if (!run.hasExited) {
-				void run.terminate(Math.max(0, graceMs));
+				ended.push(run.terminate(Math.max(0, graceMs)).catch(() => undefined));
 			}
 		}
-		return ending.length;
+		return { count: ending.length, ended: Promise.all(ended) };
 	}
 
 	/**
