@@ -47,6 +47,18 @@ suite('An editor terminal\'s answers reach the program only as the answer it wai
 		const typed = 'hi\r\x1b[A\x1b[13;2u\x1b[200~text\x1b[201~\x1b[I\x1b[<0;10;5M\x1b[<0;10;5m\x1bOR';
 		assert.strictEqual(replies.typed(typed, 200_000), typed);
 	});
+
+	test('a question of the editor\'s own it never answered stands for no later answer; a terminal gone takes its questions with it, so a modified F3 is a key again', () => {
+		const replies = new TerminalReplies();
+		// XTWINOPS: VS Code answers 14t, its size in pixels, and not 11t; an 11t long unanswered does not take the 14t answer's place
+		replies.wrote('\x1b[11t', 1_000);
+		replies.wrote('\x1b[14t', 10_000);
+		assert.strictEqual(replies.typed('\x1b[4;720;1280t', 10_050), '\x1b[4;720;1280t');
+		// A cursor question the terminal never answered - it went first - leaves the person's Ctrl+F3 their key
+		replies.wrote('\x1b[6n', 20_000);
+		replies.reset();
+		assert.strictEqual(replies.typed('\x1b[1;5R', 30_000), '\x1b[1;5R');
+	});
 });
 
 suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITECTURE-2.3)', () => {

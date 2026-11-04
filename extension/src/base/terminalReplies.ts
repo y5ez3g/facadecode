@@ -57,6 +57,12 @@ export class TerminalReplies {
 	/** `learn` hears each colour the editor reports - OSC 10, 11 or 12 and its `rgb` - which is the window's to tell ptyd. */
 	constructor(private readonly learn: (osc: '10' | '11' | '12', rgb: string) => void = () => undefined) { }
 
+	/** The terminal went: what was asked of it is answered by none other, and a later cursor position is a key again. */
+	reset(): void {
+		this.asked.clear();
+		this.cursors = 0;
+	}
+
 	/** `data` was written to the terminal at `at`: the questions in it are what its answers may answer. */
 	wrote(data: string, at: number): void {
 		if (!data.includes('\x1b')) {
@@ -88,12 +94,15 @@ export class TerminalReplies {
 			}
 			const kind = editorKind(answer);
 			if (kind !== undefined) {
-				const asked = this.asked.get(kind) ?? [];
+				// A question of its kind the editor never answered - XTWINOPS has some it does not - is no question this one answers
+				const asked = (this.asked.get(kind) ?? []).filter(when => at - when <= FRESH_REPLY_MS);
 				const when = asked.shift();
-				if (!asked.length) {
+				if (asked.length) {
+					this.asked.set(kind, asked);
+				} else {
 					this.asked.delete(kind);
 				}
-				return when !== undefined && at - when <= FRESH_REPLY_MS ? answer : '';
+				return when !== undefined ? answer : '';
 			}
 			if (answer.endsWith('R') && !decxcpr) {
 				// A cursor position answers a cursor question ptyd answered already; with none waiting it is a modified F3 key

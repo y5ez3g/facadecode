@@ -400,6 +400,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.early = undefined;
 		this.applied = undefined;
 		this.stale = true;
+		// The questions written to the terminal that went are answered by none that opens later (ARCHITECTURE-2.3)
+		this.replies.reset();
 		// Its tab gone, what the run asks its terminal is the window's to answer where its supervisor leaves that to it (ARCHITECTURE-2.3)
 		if (this.standIn) {
 			this.standIn.resume();
