@@ -786,6 +786,33 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	test('CLIS-2.3: a program asking whether ptyd takes reports and then its terminal\'s identification, as Claude Code asks them, reads ptyd\'s answer to the first before its answer to the second, with little output before them or much', async function () {
+		this.timeout(40_000);
+		const client = await connect();
+		for (const [run, lead] of [['r-order-few', 0], ['r-order-much', 2_000_000]] as const) {
+			const file = path.join(os.tmpdir(), `fd-order-${run}-${process.pid}-${Date.now()}.txt`);
+			const program = `const fs = require('fs'); process.stdin.setRawMode(true); let got = ''; process.stdin.on('data', d => { got += d.toString('latin1'); fs.writeFileSync(${JSON.stringify(file)}, got); }); process.stdout.write('x'.repeat(${lead}) + '\\x1b]7501;?\\x1b\\\\\\x1b[c'); setInterval(() => {}, 1000);`;
+			// What ptyd heard, its questions in the order the terminal gave them
+			let heard = '';
+			const listening = client.onRunEvent(run, event => { if (event.event === 'output') { heard += event.data.replace(/x+/g, 'x'); } });
+			try {
+				await client.request('spawn', { run, owner: 'w1', file: process.execPath, args: ['-e', program], cwd: os.tmpdir(), env: programEnv(), cols: 80, rows: 24, meta: {} });
+				const got = await until(`both answers to ${run}`, () => {
+					try {
+						const text = fs.readFileSync(file, 'latin1');
+						return text.includes('\x1b]7501;?:states=') && text.includes('\x1b[?1;2c') && text;
+					} catch {
+						return false;
+					}
+				}, 15_000);
+				assert.ok(got.indexOf('\x1b]7501;?:states=') < got.indexOf('\x1b[?1;2c'), JSON.stringify({ run, got, heard: heard.slice(-300), question: heard.indexOf('\x1b]7501;?'), identification: heard.indexOf('\x1b[c') }));
+			} finally {
+				listening.dispose();
+				fs.rmSync(file, { force: true });
+			}
+		}
+	});
+
 	// Codex, made behind other tabs, asked its terminal's colours; its window's terminal answered once its tab was opened, long after
 	// Codex stopped waiting: Codex read an Escape - its turn interrupted - and the answer as typed text (2026-11-03). What ptyd can
 	// answer it answers at once, whoever claims the run; the editor's answers to those never reach the program (ARCHITECTURE-2.3)
