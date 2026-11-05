@@ -123,6 +123,37 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([nothingSelected, pinned], [[], [RUN, RUN]]);
 	});
 
+	test('LIFECYCLE-3.4: a Pin the person asks for - from its card, the Command Palette or a key - shows its tab as a click on the card does, its mark going on there', async () => {
+		activate.fire(RUN);
+		await settle();
+		await run('facade.pinAgent');
+		assert.deepStrictEqual([pinned, did], [[RUN], [`reveal ${RUN}`]]);
+		await run('facade.pinAgent', { webview: 'facade.agents', webviewSection: 'agent', run_id: RUN, preventDefaultContextMenuItems: true });
+		assert.deepStrictEqual([pinned, did], [[RUN, RUN], [`reveal ${RUN}`, `reveal ${RUN}`]]);
+	});
+
+	test('LIFECYCLE-3.4: a Pin of an agent with no tab open opens its tab; an Unpin of one keeps it hidden; a Pin that cannot be saved opens nothing', () => {
+		const shown: string[] = [];
+		const hidden: RunFacts = { ...FACTS, tab: 'hidden' };
+		const state = { pinned: false };
+		const agents = { get: () => hidden, pin: () => { state.pinned = true; }, unpin: () => { state.pinned = false; } };
+		const vscode = { l10n: { t: (text: string) => text } };
+		const { AgentActions } = withModules({ vscode })<typeof import('../ui/commands/agent')>(require.resolve('../ui/commands/agent'));
+		const actions = new AgentActions({ agents: agents as never, model: { select: () => undefined } as never,
+			execution: { reveal: async (run: string) => { shown.push(run); return true; } } as never, notifyError: () => undefined });
+		// Its tab opens, as its Pin keeps it in the editor
+		actions.pin(RUN, true);
+		assert.deepStrictEqual([state.pinned, shown], [true, [RUN]]);
+		// Unpinned: nothing opens for it
+		actions.pin(RUN, false);
+		assert.deepStrictEqual([state.pinned, shown], [false, [RUN]]);
+		// A Pin that cannot be saved opens nothing
+		const refusing = new AgentActions({ agents: { get: () => hidden, pin: () => { throw new Error('disk full'); } } as never, model: { select: () => undefined } as never,
+			execution: { reveal: async (run: string) => { shown.push(run); return true; } } as never, notifyError: () => undefined });
+		refusing.pin(RUN, true);
+		assert.deepStrictEqual(shown, [RUN]);
+	});
+
 	test('a card\'s menu names its run: a run gone does nothing; another shape fails without a guess', async () => {
 		await run('facade.pinAgent', { run_id: `run-${'9'.padStart(32, '0')}` });
 		await run('facade.pinAgent', { webview: 'facade.agents', webviewSection: 'agent', run_id: RUN, preventDefaultContextMenuItems: true });
