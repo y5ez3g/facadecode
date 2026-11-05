@@ -458,6 +458,12 @@ export class AgentTerminals implements vscode.Disposable {
 			? capture.fronts.get(capture.active) : undefined;
 		const beforeColumn = capture ? (this.personMoves === capture.moves ? capture.active : undefined) : groups.activeTabGroup.viewColumn;
 		const before = capture ? reloadFront : this.frontOf(groups.activeTabGroup);
+		// A mark that borrows the focus gives back what it took: at a reload the person brought something to the front in since, their place
+		// as it is now - the group they did so in last and what they brought there - though one in place gives nothing back (3.4, 3.5)
+		const moved = !!capture && this.personMoves !== capture.moves;
+		const theirs = moved && this.personLast !== undefined ? this.personFronts.get(this.personLast) : undefined;
+		const borrowedColumn = moved ? this.personLast : beforeColumn;
+		const borrowedFront = moved ? (theirs ? { tab: theirs } : undefined) : before;
 		// A reload's tab just opened: in front of its group, which the editor makes the active one a moment after
 		if (opened) {
 			await this.settle(() => this.inFront(pair), 500);
@@ -503,7 +509,7 @@ export class AgentTerminals implements vscode.Disposable {
 			try {
 				// The person brought another tab to the front meanwhile, the mark on or not: theirs stands, nothing given back over it
 				if (this.personMoves === moves) {
-					await this.giveBack(pair, ownFront, before, beforeColumn);
+					await this.giveBack(pair, ownFront, borrowedFront, borrowedColumn);
 				}
 			} finally {
 				shown();

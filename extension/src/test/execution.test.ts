@@ -815,6 +815,33 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(commands.filter(each => FOCUS.includes(each) || /^workbench\.action\.focus(Next|Previous)Group$/.test(each)), []);
 	});
 
+	test('a reload\'s pinned tab marked by borrowing the focus, the person having brought something to the front meanwhile, gives them back their group and front with the focus (LIFECYCLE-3.4, 3.5)', async function () {
+		this.timeout(20_000);
+		const first = portOf();
+		first.openPair(facts('run-p'), { reveal: false, hidden: true });
+		await first.spawn('run-p', plan(ECHO), meta('run-p'));
+		const second = portOf();
+		const live = await second.live();
+		groupsOf(2);
+		fileIn(1, '/work/app/a.ts');
+		const mine = fileIn(2, '/work/app/b.ts');
+		const at = terminals.length;
+		const attaching = second.attach(live.find(each => each.run === 'run-p')!, facts('run-p', { tab: { column: 1 }, pinned: true }));
+		await until('its tab opening', () => terminals.length > at);
+		const p = terminals[at];
+		// Past the moment its opening still counts as Facade's, the person goes to their file in group 2
+		await new Promise(resolve => setTimeout(resolve, 700));
+		activate(2);
+		// Its tab opens in group 1, which does not become the active one: its mark borrows the focus
+		open(p);
+		opensIn(p, 1);
+		await attaching;
+		await until('its tab marked', () => p.tab.isPinned);
+		await until('their group the active one again', () => activeGroup().viewColumn === 2 && mine.isActive);
+		assert.ok(commands.lastIndexOf('workbench.action.focusSecondEditorGroup') > commands.lastIndexOf('workbench.action.focusFirstEditorGroup'), JSON.stringify(commands));
+		await second.finishRestore();
+	});
+
 	test('a reload\'s recorded front whose group is gone - a floating window\'s, opened again only after Facade\'s tabs - opens in the last group, the person\'s file there not shown again over it (LIFECYCLE-3.5)', async () => {
 		const port = portOf();
 		groupsOf(2);
