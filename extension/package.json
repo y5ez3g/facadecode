@@ -338,15 +338,6 @@
 						"scope": "machine",
 						"order": 2,
 						"markdownDescription": "%config.collaboration.enabled%"
-					},
-					"facade.collaboration.waitSeconds": {
-						"type": "integer",
-						"default": 120,
-						"minimum": 1,
-						"maximum": 3600,
-						"scope": "machine",
-						"order": 3,
-						"markdownDescription": "%config.collaboration.waitSeconds%"
 					}
 				}
 			},

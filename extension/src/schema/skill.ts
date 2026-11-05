@@ -62,8 +62,8 @@ YOLO off reaches your creation tree; on reaches all agents. Address by ID, \`#aN
 \`send_message({to: "#a7", text: "Please check the input handling."})\` sends a complete message.
 \`reply_to\` may name an inbox message. \`to: "#human"\` notifies the person.
 \`📨 Message from Ada (#a7) · #m42\` precedes the full body; From/Reply to identify a window or earlier message.
-\`🔔 Your message #m42 has been passed on to Ada (#a7).\` is a receipt, not a reply or completed work.
-Receipts request no reply; agents answer with \`send_message\`.
+\`send_message\` answers within 30 s: success is delivery, failure says why; no receipt follows.
+\`🔔\` receipts report a start, a stop or a waiting child - not a reply or completed work; they request no reply.
 
 Messages/results arrive after your turn ends. Do not poll inboxes/screens or reread a full delivered message.
 \`read_messages\` snapshots your own inbox: undelivered by default, \`ids\` to reread, \`all: true\` for retained records.
@@ -71,7 +71,7 @@ Handoff delivers records and may stop terminal injection. Continue \`next_cursor
 \`all\`/\`limit\`. Other inboxes and sent messages are not readable. A receipt's \`about\` names the original;
 read the receipt's own ID. Accepted start/stop receipts match \`result_message_id\`, kept on same-request lookup.
 Delivery is finite; an unreachable caller can lose a result. An empty inbox or elapsed deadline proves no outcome;
-held input may extend delivery. Unknown native prompt acceptance promises no later verification.
+unknown native prompt acceptance promises no later verification.
 
 ${REPEATED_MESSAGE_TEXT}
 

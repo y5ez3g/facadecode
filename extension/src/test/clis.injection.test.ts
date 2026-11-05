@@ -918,7 +918,7 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 	};
 	const load = withModules({ vscode });
 	const { HostClis } = load<typeof HostClisModule>(require.resolve('../host/clis'));
-	const { readWaitSeconds, waitSeconds, yolo } = load<typeof SettingsModule>(require.resolve('../host/settings'));
+	const { WAIT_SECONDS, yolo } = load<typeof SettingsModule>(require.resolve('../host/settings'));
 
 	setup(() => {
 		temp = tempDir('fc-host-');
@@ -957,7 +957,7 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 	});
 	const request = (cli: string, run: string, extra: Partial<PlanRequest> = {}): PlanRequest => ({ run, alias: '#a1', name: 'n', cli, location, yolo: true, tools: SERVER, ...extra });
 
-	test('orchestration is on by default, off where the setting is false, and off for a value that is no boolean, said; the timeout is 1-3600 seconds, 120 otherwise, said', () => {
+	test('orchestration is on by default, off where the setting is false, and off for a value that is no boolean, said; a start or stop waits two minutes, no setting changing it (MCP-1.3)', () => {
 		assert.strictEqual(clis().collaborationEnabled(), true);
 		settings['facade.collaboration.enabled'] = false;
 		assert.strictEqual(clis().collaborationEnabled(), false);
@@ -965,11 +965,7 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		const said: string[] = [];
 		assert.strictEqual(clis(said).collaborationEnabled(), false);
 		assert.deepStrictEqual(said, ['facade.collaboration.enabled must be true or false; received "yes". Agents start without the Facade tools until it is fixed']);
-		const logged: string[] = [];
-		assert.deepStrictEqual([undefined, 30, 3600, 0, 3601, 2.5, '60'].map(value => waitSeconds(() => value, line => logged.push(line))), [120, 30, 3600, 120, 120, 120, 120]);
-		assert.strictEqual(logged.length, 4);
-		assert.strictEqual(logged[3], 'facade.collaboration.waitSeconds must be a whole number of seconds from 1 to 3600; received "60". 120 seconds are used until it is fixed');
-		assert.deepStrictEqual([readWaitSeconds(() => undefined), readWaitSeconds(() => 0).value], [{ value: 120 }, 120]);
+		assert.strictEqual(WAIT_SECONDS, 120);
 	});
 
 	test('a start with tools has its run and project files written; release removes them; the plan the core gets names no files to write', async () => {

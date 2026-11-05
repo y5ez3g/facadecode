@@ -119,16 +119,6 @@ function received(alias: string): string[] {
 	return fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as string) : [];
 }
 
-/** Correlate a receipt inside a possibly batched terminal paste before checking its machine outcome. */
-function receiptFacts(blocks: string, about: string): any {
-	assert.ok(blocks.includes('🔔 ') && blocks.includes(about), `No receipt about ${about}: ${blocks}`);
-	const directory = path.join(process.env.FACADE_HOME!, 'extension', 'messages');
-	const records = fs.readdirSync(directory).filter(file => file.endsWith('.json')).map(file => JSON.parse(fs.readFileSync(path.join(directory, file), 'utf8')));
-	const receipt = records.find(record => record.kind === 'result' && record.about === about.replace('#m', 'm-'));
-	assert.ok(receipt?.result, `No machine receipt for ${about}`);
-	return receipt.result;
-}
-
 async function closePublicAgent(alias: string): Promise<void> {
 	const card = (await state()).cards.find(each => each.alias === alias);
 	assert.ok(card, `No card for ${alias}`);
@@ -320,7 +310,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 	});
 
-	test('messages: one paste and Enter into the input box; a draft there is waited for, never typed over; an input it cannot read fails back to its sender; reading delivers it once', async function () {
+	test('messages: one paste and Enter into the input box; a draft there is waited for, never typed over, and the send fails within its thirty seconds, nothing coming after; an input it cannot read fails the same; reading delivers it once', async function () {
 		this.timeout(180_000);
 		const { card, alias } = await personAgent();
 		const window = vscode.workspace.name!;
@@ -341,7 +331,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const sending = await script(alias, [
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Hello from your creator.\nTwo lines, one message.' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Two lines, one message.' },
-			// A draft left in its box: the next message never goes over it, and waits for it to go (RULES-1.4, 1.5)
+			// A draft left in its box: the next message never goes over it, waiting for it within its thirty seconds (RULES-1.4, 1.5)
 			{ tool: 'type_text', arguments: { agent: '$child', text: 'half-written' } },
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'half-written' },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Second message.' }, save: { second: 'data.message_id' } },
@@ -355,38 +345,33 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		assert.ok(received(childAlias).some(each => block(message, alias, window, 'Hello from your creator.\nTwo lines, one message.').test(each)), `its box took the whole message: ${JSON.stringify(received(childAlias))}`);
 		assert.ok(JSON.stringify(sending.content('read_screen')).includes(message), 'its screen shows the message block');
 
+		// Held by the draft through its thirty seconds: it fails with nothing typed, its outcome in its answer (RULES-1.2, 1.4, 1.5)
 		const waiting = sending.content('send_message', 1);
-		assert.strictEqual(waiting?.status, 'accepted', JSON.stringify(waiting));
-		assert.deepStrictEqual([waiting.data.obstacle, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'pending', 'none']);
-		// Held by the draft: its deadline ten minutes on, not fifteen seconds (RULES-1.4)
-		assert.ok(Date.parse(waiting.data.deadline) - Date.now() > 500_000, waiting.data.deadline);
+		assert.strictEqual(waiting?.status, 'failure', JSON.stringify(waiting));
+		assert.deepStrictEqual([waiting.error.reason, waiting.effects.outcome, waiting.effects.text_written], ['input_draft', 'none', 'none']);
 		const second = waiting.data.message_id as string;
 
 		const human = sending.content('send_message', 2);
 		assert.strictEqual(human?.status, 'success', JSON.stringify(human));
 		assert.deepStrictEqual([human.data.target, human.data.disposition], ['#human', 'notified']);
 
-		// Past fifteen seconds it still waits: nothing typed over the draft, and no failure for its sender
-		await new Promise(resolve => setTimeout(resolve, 18_000));
 		assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'nothing went over the draft');
-		assert.ok(!received(alias).some(each => each.includes(`message ${second}`)), 'its sender heard of no outcome yet');
-		// The draft goes: the message goes in at the next slot, alone, and its sender hears it was submitted
+		// The draft goes: the failed message is never typed later, and nothing about it reaches its sender (RULES-1.2, 1.7)
 		await script(alias, [{ tool: 'press_keys', arguments: { agent: '$child', keys: ['Ctrl+U'] } }]);
-		await until('the waiting message in its box', () => received(childAlias).find(each => each.includes('Second message.')), 20_000);
+		await new Promise(resolve => setTimeout(resolve, 8_000));
+		assert.ok(!received(childAlias).some(each => each.includes('Second message.')), 'a failed message is never typed later');
 		assert.ok(received(childAlias).every(each => !each.includes('half-written')), 'the person\'s draft was never submitted');
-		const delivered = await until('the delivery result in the sender\'s box', () => received(alias).find(each => each.includes(`message ${second}`)), 20_000);
-		assert.strictEqual(receiptFacts(delivered, second).data.disposition, 'submitted_to_cli');
+		assert.ok(!received(alias).some(each => each.includes(`message ${second}`)), 'no receipt follows a send');
 
-		// An input its reader cannot recognize: after its fifteen seconds the sender hears it failed (RULES-1.5, 1.7)
+		// An input its reader cannot recognize: the send fails within its thirty seconds, and no receipt follows (RULES-1.5, 1.7)
 		fs.writeFileSync(`${RECORD}.quirks.${childAlias}`, JSON.stringify({ garble: true }));
 		const third = (await script(alias, [
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Still loading the workspace', wait: 10_000 },
 			{ tool: 'send_message', arguments: { to: '$child', text: 'Third message.' } }
 		])).content('send_message');
-		assert.deepStrictEqual([third?.status, third?.data.obstacle], ['accepted', 'input_unknown'], JSON.stringify(third));
-		const result = await until('the failure result in the sender\'s box', () => received(alias).find(each => each.includes(`message ${third.data.message_id}`)), 40_000);
-		assert.match(result, /^🔔 .*#m\d+/);
-		assert.deepStrictEqual([receiptFacts(result, third.data.message_id).status, receiptFacts(result, third.data.message_id).error.reason], ['failure', 'input_unknown']);
+		assert.deepStrictEqual([third?.status, third?.error?.reason], ['failure', 'input_unknown'], JSON.stringify(third));
+		await new Promise(resolve => setTimeout(resolve, 3_000));
+		assert.ok(!received(alias).some(each => each.includes(`message ${third.data.message_id}`)), 'no receipt follows a send');
 		fs.rmSync(`${RECORD}.quirks.${childAlias}`);
 
 		// A native first prompt is also unconfirmed until this explicit handoff; it is never pasted again (MCP-2.3).
@@ -428,15 +413,10 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		for (const [quirk, text] of [[{ slowMs: 4_500 }, 'Taken slowly.'], [{ swallow: 1 }, 'Enter missed once.']] as const) {
 			fs.writeFileSync(quirks, JSON.stringify(quirk));
 			const sent = (await script(alias, [{ tool: 'send_message', arguments: { to: '$child', text } }])).content('send_message');
-			assert.ok(sent?.status === 'accepted' || sent?.status === 'success', JSON.stringify(sent));
-			await until(`${text} in its box`, () => once(text) ? true : undefined, 30_000);
-			// The next slots see its own draft, or its empty box: never typed again
-			await new Promise(resolve => setTimeout(resolve, 10_000));
+			// Its next slots see its own draft and press Enter again, within its thirty seconds: delivered, its text never typed again
+			assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
+			await new Promise(resolve => setTimeout(resolve, 5_000));
 			assert.strictEqual(once(text), 1, JSON.stringify(received(childAlias)));
-			if (sent.status === 'accepted') {
-				const result = await until(`the result about ${text}`, () => received(alias).find(each => each.includes(`message ${sent.data.message_id}`)), 20_000);
-				assert.strictEqual(receiptFacts(result, sent.data.message_id).data.disposition, 'submitted_to_cli');
-			}
 			fs.rmSync(quirks, { force: true });
 		}
 		await closePublicAgent(started.data.agent_id);
@@ -472,17 +452,11 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const started = ran.content('start_agent');
 		assert.strictEqual(started?.status, 'success', JSON.stringify(started));
 		assert.strictEqual(started.data.window_id, peer.window_id, 'it started in the other window');
-		// Submitted within its response budget, or accepted and reported submitted later, as a slower computer can take it (RULES-1.2,
-		// MCP-1.3): either way submitted before the agent is stopped
+		// Submitted within its thirty seconds, the other window's time included, its outcome in its answer (RULES-1.2)
 		const sent = ran.content('send_message');
-		assert.ok(sent?.status === 'success' || sent?.status === 'accepted', JSON.stringify(sent));
+		assert.strictEqual(sent?.status, 'success', JSON.stringify(sent));
 		assert.strictEqual(sent.data.window_id, peer.window_id);
-		if (sent.status === 'success') {
-			assert.deepStrictEqual([sent.effects.text_written, sent.effects.enter_written], ['full', true]);
-		} else {
-			const result = await until(`the result about ${sent.data.message_id}`, () => received(alias).find(each => each.includes(`message ${sent.data.message_id}`)), 30_000);
-			assert.strictEqual(receiptFacts(result, sent.data.message_id).data.disposition, 'submitted_to_cli');
-		}
+		assert.deepStrictEqual([sent.effects.text_written, sent.effects.enter_written], ['full', true]);
 		const after = await script(alias, [
 			{ tool: 'read_screen', arguments: { agent: '$child' }, until: 'Hello across windows.' },
 			{ tool: 'list_agents', arguments: { details: true } },

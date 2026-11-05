@@ -25,6 +25,8 @@ export interface InputReading {
 	readonly draft?: string;
 	/** The rows of a draft its CLI scrolled out of its input box, above and below what it shows, by the marks it draws for them (RULES-1.5). */
 	readonly hidden?: Hidden;
+	/** Read mid-redraw, within a synchronized update: worth reading again in a moment, as a whole frame follows (CLIS-2.1). */
+	readonly drawing?: true;
 }
 
 export interface Hidden {
@@ -43,6 +45,8 @@ export interface InputCell {
 	readonly x: number;
 	readonly dim: boolean;
 	readonly inverse: boolean;
+	/** Drawn in a color of its own rather than the terminal's text color; a recorded screen that kept no colors has none. */
+	readonly colored?: boolean;
 }
 
 /** The rows the terminal shows, top to bottom, cell by cell - the second half of a wide character left out - and its cursor. */
@@ -79,6 +83,13 @@ const shows = (cell: InputCell) => cell.chars.trim() !== '';
 const isBlank = (row: Row) => !row.some(shows);
 /** Text of the person's or Facade's: shown and not dim, inverse or not. Dim is a CLI's placeholder or hint. */
 const isText = (cell: InputCell) => shows(cell) && !cell.dim;
+/**
+ * Drawn in a color of its own and not dim: a placeholder only where a CLI's captures show its typed text in another color, which no
+ * built-in's do yet, else neither a placeholder nor a draft (CLIS-2.1).
+ */
+const isColored = (cell: InputCell) => shows(cell) && !cell.dim && !!cell.colored;
+/** Text where an empty input's placeholder shows, the cursor at the input's start, all of it dim or colored and some colored (CLIS-2.1). */
+const coloredHint = (row: readonly InputCell[]) => row.some(isColored) && row.filter(shows).every(cell => cell.dim || isColored(cell));
 /** A row of a field indented under its first: two spaces first, or nothing on it. */
 const isContinuation = (row: Row) => charAt(row, 0) === ' ' && charAt(row, 1) === ' ';
 /** A rule across the terminal: `─` alone, from its first column to its last. */
@@ -123,6 +134,12 @@ function noInput(rows: readonly Row[], menus: Menu | readonly Menu[], why: strin
 function contentOf(rows: readonly Row[], prompt: number, end: number, cursor: InputScreen['cursor'], what: string): InputReading {
 	const input = [rows[prompt].slice(2), ...rows.slice(prompt + 1, end)];
 	const where = `${what} at ${input.length > 1 ? `rows ${prompt + 1}-${end}` : `row ${end}`}`;
+	// Text in a color of its own on the prompt row the cursor sits before, nothing typed ahead of it - as Muse Code draws some of its
+	// hints - is no placeholder that a capture of its CLI tells from a draft drawn so: unknown, neither typed over nor taken for a
+	// draft (CLIS-2.1)
+	if (cursor.y === prompt && cursor.x === 2 && input.slice(1).every(isBlank) && coloredHint(input[0])) {
+		return { state: 'unknown', evidence: `${where} shows text in a color of its own where its input starts, which no capture tells from a draft` };
+	}
 	if (input.some(row => row.some(isText))) {
 		// The rows under the prompt row are indented two columns; marks of rows scrolled out of the box are no part of the draft
 		const drawn = [input[0], ...input.slice(1).map(row => row.slice(2))];
@@ -334,6 +351,10 @@ function readPiEditor(screen: InputScreen): InputReading {
 		return { state: 'unknown', evidence: `${where} does not have its own cursor where the cursor is, at row ${cursor.y + 1}` };
 	}
 	const input = rows.slice(top, lower);
+	// Text in a color of its own where the editor's input starts, nothing typed ahead of it: unknown, as in the other CLIs' inputs (CLIS-2.1)
+	if (height === 1 && cursor.y === top && cursor.x <= 3 && input[0].every(cell => cell.x >= cursor.x || !shows(cell)) && coloredHint(input[0])) {
+		return { state: 'unknown', evidence: `${where} shows text in a color of its own where its input starts, which no capture tells from a draft` };
+	}
 	if (input.some(row => row.some(isText))) {
 		const above = PI_ABOVE.exec(textOf(rows[upper]))?.[1];
 		const below = PI_BELOW.exec(textOf(rows[lower]))?.[1];
@@ -428,7 +449,7 @@ export function readInput(screen: InputScreen, adapter: string): InputReading {
 		return { state: 'unknown', evidence: `no input adapter ${JSON.stringify(adapter)}` };
 	}
 	if (screen.drawing) {
-		return { state: 'unknown', evidence: 'its program is in the middle of a synchronized update' };
+		return { state: 'unknown', evidence: 'its program is in the middle of a synchronized update', drawing: true };
 	}
 	if (screen.cursor.y < 0 || screen.cursor.y >= screen.rows.length) {
 		return { state: 'unknown', evidence: 'its cursor is not on the screen' };

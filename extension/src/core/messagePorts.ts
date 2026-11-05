@@ -151,6 +151,11 @@ export interface InboxPage {
 export interface Messages {
 	/** The first message sent by this caller with this request ID within the last hour, including routed sends. */
 	findRequest(from: RunId, requestId: string): MessageRecord | undefined;
+	/**
+	 * `record` as its delivery ends, for a repeated request of it (RULES-1.2): its outcome once its stage here ends, within what remains of
+	 * its thirty seconds, else as it stands.
+	 */
+	settledOf?(record: MessageRecord): Promise<MessageRecord>;
 	/** Sends one message, answering within the response budget (RULES-1.2); an accepted one reports its outcome later. */
 	send(request: SendRequest): Promise<SendResult>;
 	/**
@@ -209,6 +214,8 @@ export interface InputPort {
 	enter(run: RunId, text: string, signal?: AbortSignal, lead?: string, seen?: string): Promise<InputEffects>;
 	/** How much longer than usual a paste of `text` into `run`'s CLI takes to show and be taken: its size, and lines for some (CLIS-2.1). */
 	pasteTime?(run: RunId, text: string): number;
+	/** How long a paste of `text` into `run`'s CLI takes at most from its start to its Enter's confirmation: begun only where it fits (RULES-1.5). */
+	submitTime?(run: RunId, text: string): number;
 }
 
 /** What one submission did: what went in, and whether the input showed the message as its own draft, as which (RULES-1.6). */

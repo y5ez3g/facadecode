@@ -29,7 +29,6 @@
 	"windowDisplayName": "Facade Code Window Component",
 	"windowDescription": "Window identity and session continuity coordinator for Facade Code.",
 	"config.collaboration.enabled": "Let agents start and stop each other, send messages to each other and to you, and read and type in each other's terminals. Applies to new agents only.",
-	"config.collaboration.waitSeconds": "Number of seconds an agent waits for another agent to start or stop. Past that time, the agent receives the result later in a message.",
 	"command.filter": "Filter by Working Location...",
 	"command.showAgentLaunch": "Show Agent Launch...",
 	"command.showAgentsLog": "Show Agents Log",

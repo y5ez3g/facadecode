@@ -160,7 +160,7 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			const answer = await s.call(worker, 'start_agent', { name: 'child', window_id: 'win-2', location_id: 'loc-9', cli: 'codex', prompt: 'Build it.' });
 			assert.deepStrictEqual(resultOf(answer).data, started.data);
 			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args.tool, each.args.arguments.location_id, each.args.arguments.prompt, each.deadlineMs]),
-				[['win-2', 'call', 'start_agent', 'loc-9', 'Build it.', 130_000]]);
+				[['win-2', 'call', 'start_agent', 'loc-9', 'Build it.', 119_993]]);
 			// The child joins the caller's tree there: its root goes with the caller
 			assert.deepStrictEqual([network.routed[0].args.caller.id, network.routed[0].args.caller.root], [worker.id, runId(1)]);
 			assert.deepStrictEqual([s.agents.launched, s.messages.allocated], [[], []]);
@@ -222,7 +222,7 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 				const answer = await s.call(stranger, 'stop_agent', { agent: reference });
 				assert.deepStrictEqual([resultOf(answer).status, resultOf(answer).data.agent_id, resultOf(answer).data.process_state], ['success', '#a20', 'terminated'], reference);
 			}
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args.tool, each.args.arguments, each.deadlineMs]), Array(5).fill(['win-2', 'call', 'stop_agent', { agent: runId(20) }, 130_000]));
+			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.args.tool, each.args.arguments, each.deadlineMs]), Array(5).fill(['win-2', 'call', 'stop_agent', { agent: runId(20) }, 119_993]));
 			assert.deepStrictEqual(network.routed[0].args.caller, { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' });
 			// Nothing of this window's was closed
 			assert.deepStrictEqual(s.agents.closed, []);
@@ -349,18 +349,18 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			assert.deepStrictEqual(s.messages.kept.map(record => [record.id, record.requestId]), [['m-1', 'ask-7']]);
 		});
 
-		test('its ID is taken here, it is delivered there within the two seconds, a copy is kept here and success is the CLI\'s acceptance', async () => {
+		test('its ID is taken here, it is delivered there within the thirty seconds, a copy is kept here and success is the CLI\'s acceptance', async () => {
 			const { stranger } = team(s);
 			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
 			network.respond = route => ({ ok: true, result: { status: 'success', record: recordOf(route.args.id, stranger.id, runId(20), DELIVERED) } });
 			const answer = await s.call(stranger, 'send_message', { to: '@builder', text: 'Please check the build.' });
 			const result = resultOf(answer);
 			assert.deepStrictEqual(s.messages.allocated, ['m-1']);
-			// Its answer comes within the two seconds: that window is given them less the 7 ms spent here and half a second for the way back (RULES-1.2)
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'deliver', 1_993]]);
+			// Its answer comes within the thirty seconds: the route waits what remains of them after the 7 ms spent here, and that window keeps half a second for the way back (RULES-1.2)
+			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs]), [['win-2', 'deliver', 29_993]]);
 			assert.deepStrictEqual(network.routed[0].args, {
 				id: 'm-1', from: { id: stranger.id, alias: '#a4', name: 'stranger', root: stranger.id, yolo: true, window: 'win-1', windowLabel: 'Design' },
-				to: runId(20), text: 'Please check the build.', callId: 'call-1', elapsedMs: 507
+				to: runId(20), text: 'Please check the build.', callId: 'call-1', elapsedMs: 7
 			});
 			assert.deepStrictEqual([result.status, result.data, result.effects], ['success', {
 				message_id: '#m1', target: '#a20', window_id: 'win-2', disposition: 'submitted_to_cli'
@@ -432,6 +432,35 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			network.respond = () => ({ ok: false, reason: 'window_unavailable', message: 'No open Facade window win-2 is on this computer: the request had no effect.', effects: 'none' });
 			const gone = resultOf(await s.call(stranger, 'send_message', { ...args, request_id: 'ask-3' }));
 			assert.deepStrictEqual([gone.status, gone.error?.reason, gone.data.message_id, gone.data.repeated, gone.effects.outcome], ['failure', 'window_unavailable', '#m2', true, 'unknown']);
+		});
+
+		test('a repeat whose copy here failed asks the window that holds the message, where a later read_messages delivered it; the first answer stays what it said (MCP-1.2, COLLABORATION-4.1, M11)', async () => {
+			const { stranger } = team(s);
+			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
+			const failed: MessageRecord['delivery'] = { status: 'failure', reason: 'input_draft', effects: { outcome: 'none', text_written: 'none', enter_written: false }, attempts: 10 };
+			const NOW = Date.UTC(2026, 9, 28, 22, 0, 0);
+			network.respond = route => ({ ok: true, result: { status: 'failure', reason: 'input_draft', record: { ...recordOf(route.args.id, stranger.id, runId(20), failed), at: NOW, requestId: route.args.requestId } } });
+			const args = { to: '@builder', text: 'Please check the build.', request_id: 'ask-9' };
+			const first = resultOf(await s.call(stranger, 'send_message', args));
+			assert.deepStrictEqual([first.status, first.error?.reason], ['failure', 'input_draft']);
+			// Its agent there read it later through read_messages: that window's record says so, and nothing told this one
+			const read: MessageRecord['delivery'] = { status: 'success', effects: { outcome: 'none', text_written: 'none', enter_written: false }, attempts: 10, via: 'read', deliveredAt: Date.now() };
+			network.respond = route => ({ ok: true, result: { status: 'success', record: { ...recordOf(route.args.id, stranger.id, runId(20), read), at: NOW, requestId: route.args.requestId } } });
+			const again = resultOf(await s.call(stranger, 'send_message', args));
+			assert.deepStrictEqual([again.status, again.data.disposition, again.data.repeated, network.routed.length, s.messages.allocated], ['success', 'read_messages', true, 2, ['m-1']]);
+		});
+
+		test('a text the other window\'s recipient could never take is refused there before its record is made: invalid_argument, no message ID, no effect (MCP-4.1)', async () => {
+			const { stranger } = team(s);
+			network.window(2, 'Backend', [remoteAgent(20, { name: 'builder' })]);
+			const message = 'The message is too long for builder (#a20)\'s CLI, Codex 0.166.0, to take within thirty seconds at its paste rate here; send it in shorter parts.';
+			network.respond = () => ({ ok: true, result: { status: 'failure', error: { code: 'INVALID', reason: 'invalid_argument', message } } });
+			const answer = await s.call(stranger, 'send_message', { to: '@builder', text: 'x'.repeat(4000) });
+			const refused = resultOf(answer);
+			assert.deepStrictEqual([refused.status, refused.error?.code, refused.error?.message, refused.data.message_id, refused.data.alias, refused.effects.outcome],
+				['failure', 'INVALID', message, undefined, undefined, 'none']);
+			assert.ok(!JSON.stringify(answer).includes('#m1'), 'no message ID is told');
+			assert.strictEqual(s.messages.kept.length, 0);
 		});
 
 		test('a delivery the other window refuses before recording it - its agent gone - is not found, with no effect on this attempt; an earlier lost reply stays unknown (MCP-1.2)', async () => {
@@ -512,7 +541,7 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			await waitFor(() => network.routed.length > 0);
 			assert.strictEqual(network.routed[0].args.id, served.result.data.result_message_id);
 			assert.deepStrictEqual(network.routed[0].args.operation, { tool: 'start_agent', window: 'win-1' });
-			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs, each.args.to, each.args.callId, each.args.agent]), [['win-2', 'result', 15_000, runId(30), 'c-10', { run: child, alias: s.agents.get(child)!.alias, name: 'child' }]]);
+			assert.deepStrictEqual(network.routed.map(each => [each.window, each.op, each.deadlineMs, each.args.to, each.args.callId, each.args.agent]), [['win-2', 'result', 30_000, runId(30), 'c-10', { run: child, alias: s.agents.get(child)!.alias, name: 'child' }]]);
 			assert.match(network.routed[0].args.text, /^Started @child #a\d+ \(run-[0-9a-f]+\) with claude/);
 			assert.deepStrictEqual(s.messages.reports, []);
 		});
@@ -538,7 +567,7 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 			const { lead, stranger } = team(s);
 			const reaching = guestOf(30, { yolo: true });
 			s.messages.respond = () => ({ status: 'accepted', obstacle: 'input_draft' });
-			const answered = await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-77', from: reaching, to: stranger.id, text: 'Hi there', replyTo: 'm-70', callId: 'c-1', requestId: 'ask-9', elapsedMs: 900 } }) as { status: string; obstacle: string; record: MessageRecord };
+			const answered = await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 29_100, args: { id: 'm-77', from: reaching, to: stranger.id, text: 'Hi there', replyTo: 'm-70', callId: 'c-1', requestId: 'ask-9', elapsedMs: 900 } }) as { status: string; obstacle: string; record: MessageRecord };
 			assert.deepStrictEqual([answered.status, answered.obstacle, answered.record.id], ['accepted', 'input_draft', 'm-77']);
 			// Its request ID kept with it here, where its record is made, for the sender's retry to find (RULES-1.1, RULES-1.5)
 			assert.deepStrictEqual(s.messages.sent, [{ id: 'm-77', from: runId(30), sender: { party: { run: runId(30), alias: '#a30', name: 'guest 30' }, window: 'win-2', label: 'Backend' }, to: stranger.id, text: 'Hi there', replyTo: 'm-70', elapsedMs: 900, callId: 'c-1', requestId: 'ask-9' }]);
@@ -554,6 +583,15 @@ suite('Contract: the eight tools across the windows of this computer (COLLABORAT
 				await assert.rejects(services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 3_000, args: { id: 'm-81', from: reaching, to: stranger.id, text: 'Hi', elapsedMs } }), /incomplete/, String(elapsedMs));
 			}
 			assert.strictEqual(s.messages.sent.length, 1);
+		});
+
+		test('a delivery whose route spent more than its sender counted ends half a second before that route gives up: every layer charges the one budget (MCP-1.3, 4.1)', async () => {
+			const { stranger } = team(s);
+			const reaching = guestOf(30, { yolo: true });
+			s.messages.respond = () => ({ status: 'success' });
+			await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 20_000, args: { id: 'm-90', from: reaching, to: stranger.id, text: 'Hi', elapsedMs: 900 } });
+			await services.serve({ from: 'win-2', op: 'deliver', deadlineMs: 29_500, args: { id: 'm-91', from: reaching, to: stranger.id, text: 'Hi', elapsedMs: 900 } });
+			assert.deepStrictEqual(s.messages.sent.map(each => [each.id, each.elapsedMs]), [['m-90', 10_000], ['m-91', 900]]);
 		});
 
 		test('a result from another window goes into the agent\'s inbox here and brings its sent copy up to date; one for nobody here is refused', async () => {

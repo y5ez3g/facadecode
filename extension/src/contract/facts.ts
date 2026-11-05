@@ -195,7 +195,9 @@ const SEND_FAILURES: { readonly [reason: string]: readonly [ErrorCode, string] }
 	// Another window refused it before recording it: its agent gone, or out of the sender's reach (MCP-1.2)
 	not_found: ['NOT_FOUND', 'The recipient was not found.'],
 	// No input reader for the recipient's CLI: a permanent obstacle, failed at once (MCP-1.2)
-	unsupported: ['UNAVAILABLE', 'Facade cannot type messages into the recipient\'s CLI; type_text still reaches its terminal.']
+	unsupported: ['UNAVAILABLE', 'Facade cannot type messages into the recipient\'s CLI; type_text still reaches its terminal.'],
+	// A post-start prompt no whole stage could take at its CLI's rates: given up, nothing typed, its record readable (RULES-1.5, MCP-2.3)
+	too_long: ['FAILED', 'The prompt is too long for the new agent\'s CLI to take within thirty seconds; nothing was typed. The new agent can read it with read_messages: ask it to rather than send it again.']
 };
 
 export function sendFailureOf(reason: string | undefined): { readonly code: ErrorCode; readonly reason: string; readonly message: string } {

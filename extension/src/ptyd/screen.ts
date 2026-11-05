@@ -46,6 +46,8 @@ export interface DrawnCell {
 	readonly x: number;
 	readonly dim: boolean;
 	readonly inverse: boolean;
+	/** Whether it is drawn in a color of its own rather than the terminal's text color: a CLI's hint, where it is its input's. */
+	readonly colored: boolean;
 }
 
 /**
@@ -60,7 +62,7 @@ export function drawnCells(line: IBufferLine | undefined, cell: IBufferCell | un
 		if (!read || read.getWidth() === 0) {
 			continue;
 		}
-		cells.push({ chars: read.getChars(), x, dim: read.isDim() !== 0, inverse: read.isInverse() !== 0 });
+		cells.push({ chars: read.getChars(), x, dim: read.isDim() !== 0, inverse: read.isInverse() !== 0, colored: !read.isFgDefault() });
 	}
 	return cells;
 }
