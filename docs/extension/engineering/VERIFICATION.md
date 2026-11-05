@@ -120,13 +120,37 @@ agent in a copy's place; a copy becoming an ordinary terminal, and J14 with a hu
 window of two groups - ending with every pinned tab marked, no Pin changed, each tab in its group and the person's file
 in front - a card's and a Command Palette's Pin or Unpin of a tab behind in either group, shown in front of its group and
 marked there, a Command Palette Pin of a hidden agent opening its tab, a Pin or Unpin from its tab, and a close of a marked
-tab, passed by `FACADE_IT_ONLY=pins` on macOS with 12 agents on the build of feature/91-tab-swap of 2026-11-04 under
-review, its run with 20 agents still to come. Where keys go while a mark holds a tab
-in front, each kind of covered front coming back, groups past the eighth and in a floating window, and the person's
-navigation while a mark goes on are probed in an isolated editor by `FACADE_IT_ONLY=probe`, with keyboard events sent
-through the editor's DevTools Protocol - not the system's keyboard or an input method - and are not proven yet. The owner
-accepts the reported brief loss of keys during reload marking, as the person's own Pins and Unpins now show their tab and
-borrow no focus; final-build verification and the remaining focus and front cases remain open. J17 is open, but for its released-build part - a released build's hidden agent's question answered once by
+tab, passed by `FACADE_IT_ONLY=pins` on macOS with 12 agents at cd7d0d61 of feature/91-tab-swap (agentTerminals.ts
+SHA-1 4104ac0d), its run with 20 agents still to come. `FACADE_IT_ONLY=probe` measured that runtime on macOS arm64 with
+VS Code 1.145.0 - the probe's driver as committed at 9dfa8d41 for F2, F6, F8 and F9, as at cd7d0d61 for the others - in
+isolated editors with fake CLIs, keyboard events sent through the editor's DevTools Protocol, not the system's keyboard
+or an input method:
+- F1, F2 and F6: the person's Pin from a card or the Command Palette, of a tab in front, behind in its group or another,
+  or behind a webview or Settings, showed that tab with the focus and marked it there; keys went from where the person
+  was to that agent's CLI, none back. One trial lost one key during the focus transition; no key was misdirected.
+- F4: a shortcut of theirs during a Pin kept their navigation; a mark it came before went on at the tab's next showing.
+- F3: reloads across three groups, with typing throughout, brought every group's front back, losing 2 and 4 of some 155
+  keys, none reaching a CLI or another file.
+- F7: six agents in one group came to the front in the order LIFECYCLE-3.5 gives, each once, a pinned front opening last
+  and marked.
+- F8: the person going to group 3 and then group 2 while seven of group 1's tabs opened after that ended with group 2
+  active, their file in front with the focus, and the next keys reaching it.
+- F5: a floating window's agent came back in the main window; a Pin's mark in a floating window is told, not proven, as
+  the probe gives that window's page no system focus.
+
+Open results:
+- F9 restored the chosen file and active group, with no input reaching a CLI. All three keys sent after settling reached
+  nothing; final keyboard-focus/input recovery remains unverified.
+- F8-agent: BLOCKED by the probe's exclusion of navigation within 500 ms of an opening; in this run, the person's move at
+  222 ms was treated as Facade's, so the agent-front variant has not passed. This remains a known deviation from
+  LIFECYCLE-3.5's newer-navigation rule.
+- A borrowed mark's misnumbered focus step - past the eighth group, or a floating window's - being treated as human
+  navigation, with context not returned, remains an unresolved deviation from LIFECYCLE-3.4.
+
+The owner accepts the reported brief key loss during reload focus transitions. That acceptance does not establish the F9
+post-restoration input outcome or the navigation residuals above as accepted product behavior.
+
+J17 is open, but for its released-build part - a released build's hidden agent's question answered once by
 the window's headless terminal - proven on macOS from 0.0.5 by `FACADE_IT_ONLY=update`. There the cursor position that
 terminal answers can be a column short where the released ptyd's screen ends in a row filled to its last column, as that
 ptyd's screen places the cursor by the serializer's moves alone (E05). A start of each real built-in with its tab never
