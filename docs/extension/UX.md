@@ -209,19 +209,18 @@ place to work (LIFECYCLE-1.3).
 | --- | --- | --- | --- |
 | `facade.yolo` | boolean; true | machine in execution environment | RULES-4.3 |
 | `facade.collaboration.enabled` | boolean; true | machine in execution environment | RULES-4.4 |
-| `facade.collaboration.waitSeconds` | integer seconds 1–3600; 120 | machine in execution environment | MCP-1.3 |
 | `facade.<cli>.enabled` | boolean; true | machine in execution environment | CLIS-1.1 |
 | `facade.<cli>.path` | string; empty | machine in execution environment | CLIS-1.2 |
 | `facade.<cli>.launch` | object; `{}` | machine in execution environment | CLIS-3 |
 | `facade.custom` | object; `{}` | machine in execution environment | CLIS-3.4 |
 
 `<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. Settings sections in order: `Agents`
-(`facade.yolo`, `facade.collaboration.enabled`, `facade.collaboration.waitSeconds`), then one section per built-in CLI
+(`facade.yolo`, `facade.collaboration.enabled`), then one section per built-in CLI
 in CLIS-1.1 order, then `Custom Agents` (`facade.custom`). Descriptions say what changes for the person, for example
 that agents can start, message and control other agents, and that a change applies to agents started afterwards. Read on
 use and apply live where RULES-4.4 allows. A value of the wrong type in `facade.yolo` refuses the launch with the
 reason, because the run's permissions depend on it; one in `facade.collaboration.enabled` starts agents without the
-Facade tools, and one in `facade.collaboration.waitSeconds` uses 120, each with the reason in the agents log. Do not add
+Facade tools, with the reason in the agents log. How long a start or stop is waited for is no setting (MCP-1.3). Do not add
 an “agent default CLI/model/worktree” setting. Local and remote values are clearly scoped in the editor. The window
 components' network has no settings; it shares the same OS-user desktop boundary.
 

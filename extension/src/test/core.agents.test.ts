@@ -68,8 +68,6 @@ class FakeExecution implements ExecutionPort {
 	readonly onDidClosePair = this.tabCloses.event;
 	readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
 	readonly onDidPlaceTab = this.placements.event;
-	readonly copies = new Emitter<{ readonly run: RunId; readonly done: (started: RunId | undefined) => void }>();
-	readonly onDidCopyTab = this.copies.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
@@ -88,6 +86,9 @@ class FakeExecution implements ExecutionPort {
 		return { pid: 4242, startedAt: 1000 };
 	}
 	readonly attachedRuns: RunId[] = [];
+	/** The groups a reload's coming runs were the fronts of, as each restore told them. */
+	readonly fronts: (readonly number[])[] = [];
+	frontsRecorded(columns: readonly number[]): void { this.fronts.push([...columns]); }
 	async attach(live: LiveRun, facts: PairFacts): Promise<void> { this.attachedRuns.push(live.run); this.pairs.set(live.run, facts); }
 	async terminate(run: RunId): Promise<CleanupResult> { this.terminated.push(run); return this.cleanup; }
 	removePair(run: RunId): void { this.pairs.delete(run); this.removed.push(run); }
@@ -494,23 +495,26 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual([reload.execution.pairs.get(run(1))?.tab, reload.execution.pairs.get(run(3))?.tab], [{ column: 1, activeAt: 30 }, undefined]);
 	});
 
-	test('a copied agent tab starts, in its place, a new agent of the same CLI and location with the model and effort the first had, under a new name, shown; a launch refused closes the copy and says why (LIFECYCLE-2.2)', async () => {
-		const world = setUp();
-		const first = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human', model: 'opus', effort: 'max' });
-		await settle();
-		const results: (RunId | undefined)[] = [];
-		world.execution.copies.fire({ run: first, done: started => results.push(started) });
-		await settle();
-		const started = results[0]!;
-		const facts = world.agents.get(started)!;
-		assert.deepStrictEqual([facts.cli, facts.location, facts.model, facts.effort, facts.origin, facts.name !== 'Ada' && !!facts.name, world.execution.reveals.get(started), !!world.agents.get(first)],
-			['claude', 'loc-1', 'opus', 'max', 'human', true, true, true]);
-		// Its location gone: refused, said, the copy closing with no agent
-		world.agents.close(first);
-		(world.agents as unknown as { runs: Map<RunId, unknown> }).runs.set(first, { facts: { ...facts, id: first, alias: '#a9', location: 'loc-gone' } });
-		world.execution.copies.fire({ run: first, done: started => results.push(started) });
-		await settle();
-		assert.deepStrictEqual([results[1], world.failures.map(each => each.kind)], [undefined, ['start']]);
+	test('a reload opens each agent\'s tab once: the pinned ones first, then the others in the order they were last active, and each group\'s recorded front last of all, a pinned one too, telling the groups those fronts are in (LIFECYCLE-3.5)', async () => {
+		const reload = setUp();
+		const pinStore = (reload.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore;
+		for (const session of ['s-quark', 's-laser', 's-cargo']) {
+			pinStore.save({ id: `pin-${session}`, conversation: { environment: 'local', cli: 'claude', sessionId: session }, location: 'loc-1', cwd: '/work/app', name: session });
+		}
+		const meta = (alias: string, tab: TabPlace, sessionId?: string) => ({ alias, name: alias, cli: 'claude', displayName: 'Claude Code', command: 'claude', location: 'loc-1', cwd: '/work/app',
+			environment: 'local' as const, yolo: true, createdAt: 1, tab, ...sessionId ? { sessionId, exactResume: true } : {} });
+		const run = (n: number) => `run-${String(n).repeat(32)}`;
+		reload.execution.liveRuns = [
+			{ run: run(1), meta: meta('#a1', { column: 1, activeAt: 50, front: true }), pid: 1, startedAt: 1, claimedElsewhere: false },
+			{ run: run(2), meta: meta('#a2', { column: 1, activeAt: 40 }, 's-quark'), pid: 2, startedAt: 2, claimedElsewhere: false },
+			{ run: run(3), meta: meta('#a3', { column: 1, activeAt: 10 }), pid: 3, startedAt: 3, claimedElsewhere: false },
+			{ run: run(4), meta: meta('#a4', { column: 1, activeAt: 20 }, 's-laser'), pid: 4, startedAt: 4, claimedElsewhere: false },
+			{ run: run(5), meta: meta('#a5', { column: 1, activeAt: 30 }), pid: 5, startedAt: 5, claimedElsewhere: false },
+			{ run: run(6), meta: meta('#a6', { column: 2, activeAt: 5, front: true }, 's-cargo'), pid: 6, startedAt: 6, claimedElsewhere: false }
+		];
+		await reload.agents.restore();
+		// Quark and Laser pinned first, Shuttle and Clutch next, the groups' fronts last - Cargo, pinned, and Knob
+		assert.deepStrictEqual([reload.execution.attachedRuns, reload.execution.fronts], [[run(4), run(2), run(3), run(5), run(6), run(1)], [[1, 2]]]);
 	});
 
 	test('an agent another agent starts has its card alone: its tab is not opened, and it covers nothing and takes no focus (LIFECYCLE-2.2)', async () => {

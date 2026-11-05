@@ -41,6 +41,8 @@ const B = 'run-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 /** An agent of another window: this window does not hold it. */
 const GUEST = 'run-99999999999999999999999999999999';
 const SENDER = { party: { run: GUEST, alias: '#a9', name: 'Gus' }, window: 'win-2', label: 'Backend' };
+/** A creation prompt typed after its CLI started: its outcome is its start's one later result (MCP-2.3). */
+const PROMPT = { path: 'post_start', capability: { state: 'supported', reason: 'its reader knows its layout' } } as const;
 
 /** A store as a test keeps it: by ID, listed oldest first. */
 function store(): { readonly records: Map<string, MessageRecord>; list(): readonly MessageRecord[]; create(record: MessageRecord): void; put(record: MessageRecord): void } {
@@ -109,24 +111,34 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 		assert.deepStrictEqual(input.submitted, [{ run: B, text: '📨 Message from Gus (#a9) · #m50 · From Backend\nShip it.' }]);
 	});
 
-	test('its accepted outcome goes back to the sender\'s window as a result about it - never into this window', async () => {
+	test('a routed send answers with its outcome within its thirty seconds, and no Facade result follows it, to its sender\'s window or into this one (RULES-1.2, 1.7)', async () => {
 		const { service, input, reported, messages } = setUp();
 		input.states.set(B, ['draft', 'usable']);
 		const result = await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0, callId: 'c-1' }));
+		assert.strictEqual(result.status, 'success');
+		await sleep(40_000);
+		assert.deepStrictEqual(reported, []);
+		// Nothing is typed into this window for it, and no result record is kept here
+		assert.deepStrictEqual([input.submitted.map(each => each.run), [...messages.records.keys()]], [[B], ['m-50']]);
+	});
+
+	test('a creation prompt\'s outcome goes back to the sender\'s window as a result about it - never into this window (RULES-1.7, MCP-2.3)', async () => {
+		const { service, input, reported, messages } = setUp();
+		input.states.set(B, ['draft', 'usable']);
+		const result = await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Build it.', elapsedMs: 0, callId: 'c-1', initialPrompt: PROMPT }));
 		assert.strictEqual(result.status, 'accepted');
 		await sleep(15_000);
 		assert.strictEqual(reported.length, 1);
 		const [{ window, result: report }] = reported;
 		assert.deepStrictEqual([window, report.to, report.callId, report.about.id, report.about.delivery.status], ['win-2', GUEST, 'c-1', 'm-50', 'success']);
 		assert.strictEqual(report.text, `Your message #m50 has been passed on to Bob (#a2).`);
-		// Nothing is typed into this window for it, and no result record is kept here: that window keeps it
 		assert.deepStrictEqual([input.submitted.map(each => each.run), [...messages.records.keys()]], [[B], ['m-50']]);
 	});
 
 	test('a result its sender\'s window cannot take ends there, with a line in the log and nobody else told', async () => {
 		const { service, input, log, messages } = setUp({ results: { report: async () => false } });
 		input.states.set(B, ['draft', 'usable']);
-		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }));
+		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Build it.', elapsedMs: 0, initialPrompt: PROMPT }));
 		await sleep(15_000);
 		assert.ok(log.some(line => line === 'The Facade result about #m50 could not reach its sender\'s window, and ends there'), log.join('\n'));
 		assert.deepStrictEqual([...messages.records.keys()], ['m-50']);
@@ -136,29 +148,38 @@ suite('Agent messages between windows (RULES-1.7, COLLABORATION-1.1, 2.1, 3.2)',
 	test('with no route to other windows, such a result ends quietly too, never handed to this window\'s agents', async () => {
 		const { service, input, log, messages } = setUp({ results: false });
 		input.states.set(B, ['draft', 'usable']);
-		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }));
+		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Build it.', elapsedMs: 0, initialPrompt: PROMPT }));
 		await sleep(15_000);
 		assert.ok(log.some(line => line.startsWith('The Facade result about #m50 could not reach its sender\'s window')), log.join('\n'));
 		assert.deepStrictEqual([[...messages.records.keys()], input.submitted.map(each => each.run)], [['m-50'], [B]]);
 	});
 
-	test('an input box Facade never recognized fails at the deadline, the result naming the CLI and the version it found (CLIS-2.1)', async () => {
+	test('an input box Facade never recognized fails a send at its deadline with input_unknown, nothing typed, and no result follows it (CLIS-2.1, RULES-1.2)', async () => {
 		const { service, input, reported } = setUp();
 		input.states.set(B, ['unknown']);
-		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }));
-		await sleep(15_000);
+		const result = await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Ship it.', elapsedMs: 0 }), 31_000);
+		assert.deepStrictEqual([result.status, result.record.delivery.reason], ['failure', 'input_unknown']);
+		await sleep(40_000);
+		assert.deepStrictEqual([reported, input.submitted], [[], []]);
+	});
+
+	test('a creation prompt\'s result about an input box Facade never recognized names the CLI and the version it found (CLIS-2.1)', async () => {
+		const { service, input, reported } = setUp();
+		input.states.set(B, ['unknown']);
+		await settled(service.send({ id: 'm-50', from: GUEST, sender: SENDER, to: B, text: 'Build it.', elapsedMs: 0, initialPrompt: PROMPT }));
+		await sleep(31_000);
 		assert.strictEqual(reported[0].result.about.delivery.reason, 'input_unknown');
 		assert.strictEqual(reported[0].result.text, `Delivery of your message #m50 to Bob (#a2) failed. Facade could not recognize Codex 0.166.0's terminal input. Nothing was entered in the terminal.`);
 		assert.deepStrictEqual(input.submitted, []);
 	});
 
-	test('a local sender\'s result about an unrecognized input box names the CLI too, and without a known version its name alone', async () => {
+	test('a local creator\'s result about an unrecognized input box names the CLI too, and without a known version its name alone', async () => {
 		const { service, input, runs, messages } = setUp();
 		runs.set(B, { ...runs.get(B)!, version: undefined } as RunFacts);
 		input.states.set(B, ['unknown']);
 		input.states.set(A, ['usable']);
-		await settled(service.send({ from: A, to: B, text: 'Ship it.', elapsedMs: 0 }));
-		await sleep(15_000);
+		await settled(service.send({ from: A, to: B, text: 'Build it.', elapsedMs: 0, initialPrompt: PROMPT }));
+		await sleep(31_000);
 		const result = [...messages.records.values()].find(record => record.kind === 'result')!;
 		assert.match(result.text, /Facade could not recognize Codex's terminal input/);
 	});

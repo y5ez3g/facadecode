@@ -202,7 +202,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private readonly activations = new Emitter<RunId | undefined>();
 	private readonly closes = new Emitter<{ readonly run: RunId; readonly marked: boolean }>();
 	private readonly placements = new Emitter<{ readonly run: RunId; readonly place: TabPlace }>();
-	private readonly copies = new Emitter<{ readonly run: RunId; readonly column?: number; readonly done: (started: RunId | undefined) => void }>();
 	private readonly tabRenames = new Emitter<{ readonly run: RunId; readonly name: string }>();
 	private readonly identities = new Emitter<{ readonly run: RunId; readonly sessionId: string | null; readonly cwd?: string }>();
 	private readonly tabPins = new Emitter<{ readonly run: RunId; readonly pinned: boolean }>();
@@ -219,7 +218,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	readonly onDidActivate = this.activations.event;
 	readonly onDidClosePair = this.closes.event;
 	readonly onDidPlaceTab = this.placements.event;
-	readonly onDidCopyTab = this.copies.event;
 	readonly onDidRenameTab = this.tabRenames.event;
 	readonly onDidLoseOwnership = this.transfers.event;
 	readonly onDidConnectTools = this.toolConnections.event;
@@ -256,17 +254,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
 				closed: (run, marked) => this.closes.fire({ run, marked }),
-				placed: (run, column, activeAt) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column, ...activeAt !== undefined ? { activeAt } : {} } }),
-				// A copy closes once the agent started in its place has its tab open - the copy's group never empties first - or at once
-				// where none started (LIFECYCLE-2.2)
-				copied: (run, copy, column) => this.copies.fire({ run, column, done: started => {
-					const pair = started === undefined ? undefined : this.pairs.get(started);
-					if (!pair) {
-						copy.dispose();
-						return;
-					}
-					void Promise.race([pair.terminal.pty.nextOpen(), timeout(OPEN_WAIT_MS)]).finally(() => copy.dispose());
-				} }),
+				placed: (run, column, activeAt, front) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column, ...activeAt !== undefined ? { activeAt } : {}, ...front ? { front: true } : {} } }),
 				renamed: (run, name) => this.tabRenames.fire({ run, name }),
 			pinned: (run, pinned) => this.tabPins.fire({ run, pinned }),
 				colours: this.colours
@@ -278,6 +266,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	pinTab(run: RunId, pinned: boolean): void { this.terminals.pin(run, pinned); }
+
+	frontsRecorded(columns: readonly number[]): void { this.terminals.frontsRecorded(columns); }
 	/** The system's reduced-motion preference, as the panel's page says it: the tab spinners follow it at `auto` (LIFECYCLE-2.2). */
 	systemMotion(reduced: boolean): void { this.terminals.systemMotion(reduced); }
 	/**
@@ -631,12 +621,13 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	 * and prevent VS Code from ever opening its pseudoterminal: the next run is restored only after this native terminal is ready.
 	 */
 	private async openRestored(pair: Pair, run: RunId): Promise<void> {
-		// Its tab back in its group, hidden if it was; from a build that kept no record, hidden unless pinned (LIFECYCLE-3.5)
+		// Its tab back in its group, hidden if it was - but a pinned one's, whose Pin keeps its tab in the editor: back in the active group
+		// where it had none open, as from a build that kept no record (LIFECYCLE-3.4, 3.5)
 		const place = pair.facts.tab;
-		if (place === 'hidden' || (place === undefined && !pair.facts.pinned)) {
+		if ((place === 'hidden' || place === undefined) && !pair.facts.pinned) {
 			return;
 		}
-		pair.terminal.open(false, typeof place === 'object' ? place.column : undefined);
+		pair.terminal.open(false, typeof place === 'object' ? place.column : undefined, typeof place === 'object' ? place.activeAt : undefined, typeof place === 'object' && place.front === true);
 		// This opening's: a run this window had already opened before has its first long ago
 		const opened = await Promise.race([pair.terminal.pty.nextOpen(), timeout(OPEN_WAIT_MS).then(() => undefined)]);
 		if (opened === false || this.pairs.get(run) !== pair) {
@@ -645,6 +636,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		if (opened === undefined) {
 			// Its card and process are kept; its terminal draws the run's screen once VS Code opens it
 			this.options.log(`The terminal of ${run} did not open within ${OPEN_WAIT_MS / 1000} seconds; the agents after it are restored meanwhile.`);
+			return;
+		}
+		// A pinned one's mark goes on now, its tab in front as it opened: the next run's tab opens after (LIFECYCLE-3.4)
+		if (pair.facts.pinned) {
+			await pair.terminal.markOpened();
 		}
 	}
 
@@ -712,11 +708,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		// Its conversation is not watched for a run this window does not show: one that failed to reattach, or went to another window
 		this.identity.untrack(run);
 		return pair;
-	}
-
-	/** Opens the next agent's tab in `column`'s group - a copy's, where an agent starts in its place (LIFECYCLE-2.2). */
-	openNextIn(column: number | undefined): void {
-		this.terminals.openNextIn(column);
 	}
 
 	/** `run`'s short ID, and whether its tab shows it: its name repeats among this window's cards, or it has none (LIFECYCLE-2.2). */
@@ -873,7 +864,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		};
 		this.pairs.set(facts.run, pair);
 		if (!deferTerminal) {
-			terminal.open(reveal, typeof facts.tab === 'object' ? facts.tab.column : undefined);
+			terminal.open(reveal, typeof facts.tab === 'object' ? facts.tab.column : undefined, typeof facts.tab === 'object' ? facts.tab.activeAt : undefined,
+				typeof facts.tab === 'object' && facts.tab.front === true);
 		}
 		return pair;
 	}

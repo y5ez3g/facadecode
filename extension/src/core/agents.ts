@@ -180,9 +180,6 @@ export class AgentService implements Agents, Disposable {
 		if (execution.onDidClosePair) {
 			this.subscriptions.push(execution.onDidClosePair(({ run, marked }) => this.tabClosed(run, marked)));
 		}
-		if (execution.onDidCopyTab) {
-			this.subscriptions.push(execution.onDidCopyTab(({ run, column, done }) => this.tabCopied(run, done, column)));
-		}
 		if (execution.onDidPlaceTab) {
 			this.subscriptions.push(execution.onDidPlaceTab(({ run, place }) => this.tabPlaced(run, place)));
 		}
@@ -330,9 +327,14 @@ export class AgentService implements Agents, Disposable {
 			}
 		}
 		let elsewhere = 0;
-		// The one last active comes back last: a group where several come back keeps it (LIFECYCLE-2.2, 3.5)
+		// The pinned ones come back first, one after another, each tab's mark put on as it opens; then the others in the order they were
+		// last active; and each group's front last of all, in front then with nothing switched back (LIFECYCLE-3.5)
 		const activeAt = (run: LiveRun) => { const place = run.meta.tab; return typeof place === 'object' ? place.activeAt ?? 0 : 0; };
-		for (const each of [...live].sort((a, b) => activeAt(a) - activeAt(b))) {
+		const recordedFront = (run: LiveRun) => typeof run.meta.tab === 'object' && run.meta.tab.front === true;
+		const turn = (run: LiveRun) => recordedFront(run) ? 2 : this.restoredPin(run.meta) ? 0 : 1;
+		const coming = live.filter(each => !this.runs.has(each.run) && !this.released.has(each.run) && !each.claimedElsewhere && !each.uncertain);
+		this.deps.execution.frontsRecorded?.(coming.filter(recordedFront).map(each => (each.meta.tab as Exclude<TabPlace, 'hidden'>).column));
+		for (const each of [...live].sort((a, b) => turn(a) - turn(b) || activeAt(a) - activeAt(b))) {
 			if (this.ownershipLost) {
 				return 0;
 			}
@@ -902,36 +904,6 @@ export class AgentService implements Agents, Disposable {
 		}
 	}
 
-	/**
-	 * The person copied an agent's tab - a split in any direction, a copying drag, Copy into New Window (LIFECYCLE-2.2): the agent stays
-	 * where it is, and in the copy's place a new agent starts of the same CLI and location, with the model and effort the first was
-	 * started with where it had any, under a new name, in a new conversation with no prompt - its tab focused there, its start,
-	 * failure and location history as New Agent's. A launch refused before acceptance says why as New Agent's would.
-	 */
-	private tabCopied(id: RunId, done: (started: RunId | undefined) => void, column?: number): void {
-		const run = this.runs.get(id);
-		if (!run || this.ownershipLost) {
-			done(undefined);
-			return;
-		}
-		const { facts } = run;
-		const name = suggestName([...this.runs.values()].map(each => each.facts.name));
-		let started: RunId;
-		try {
-			// In the copy's group, which the editor may not have made active yet
-			this.deps.execution.openNextIn?.(column);
-			started = this.launch({ name, location: facts.location, cli: facts.cli, origin: 'human', ...facts.model !== undefined ? { model: facts.model } : {}, ...facts.effort !== undefined ? { effort: facts.effort } : {} });
-		} catch (err) {
-			this.deps.execution.openNextIn?.(undefined);
-			done(undefined);
-			this.deps.log.event(`Could not start an agent in place of ${facts.alias}'s copied tab: ${messageOf(err)}`);
-			this.deps.human.failed({ kind: 'start', name, reason: this.wording(err) }, {});
-			return;
-		}
-		this.deps.log.event(`Started ${this.runs.get(started)?.facts.alias ?? started} in place of ${facts.alias}'s copied tab`);
-		done(started);
-	}
-
 	/** Where the run's tab is now, kept with its process or its retained record for a reload to bring back (LIFECYCLE-3.5). */
 	private tabPlaced(id: RunId, place: TabPlace): void {
 		const run = this.runs.get(id);
@@ -1441,7 +1413,8 @@ function retainedFacts(kept: RunFacts): RunFacts {
 
 function isTabPlace(value: unknown): value is TabPlace {
 	const place = value as Exclude<TabPlace, 'hidden'> | 'hidden' | undefined;
-	return place === 'hidden' || (typeof place === 'object' && place !== null && Number.isSafeInteger(place.column) && (place.activeAt === undefined || typeof place.activeAt === 'number'));
+	return place === 'hidden' || (typeof place === 'object' && place !== null && Number.isSafeInteger(place.column) && (place.activeAt === undefined || typeof place.activeAt === 'number')
+		&& (place.front === undefined || place.front === true));
 }
 
 function isSaidSource(value: unknown): value is SaidSource {

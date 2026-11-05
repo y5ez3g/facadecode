@@ -55,7 +55,7 @@ interface Fixture {
 	readonly expect: InputState;
 	readonly cols: number;
 	readonly cursor: { readonly x: number; readonly y: number };
-	readonly rows: readonly { readonly cells: string | readonly string[]; readonly dim?: readonly [number, number][]; readonly inverse?: readonly [number, number][] }[];
+	readonly rows: readonly { readonly cells: string | readonly string[]; readonly dim?: readonly [number, number][]; readonly inverse?: readonly [number, number][]; readonly colored?: readonly [number, number][] }[];
 	/** What was pasted, where the capture kept it, and the lead typed before it. */
 	readonly paste?: string;
 	readonly lead?: string;
@@ -93,7 +93,7 @@ function screenOf(fixture: Fixture): InputScreen {
 			let column = 0;
 			for (let index = 0; index < chars.length || column < fixture.cols; index++) {
 				const char = chars[index] ?? ' ';
-				cells.push({ chars: char, x: column, dim: within(row.dim, index), inverse: within(row.inverse, index) });
+				cells.push({ chars: char, x: column, dim: within(row.dim, index), inverse: within(row.inverse, index), colored: within(row.colored, index) });
 				column += columnsOf(char);
 			}
 			return cells;
@@ -204,6 +204,17 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 			const reading = readInput(each.screen, each.adapter);
 			assert.ok(reading.draft !== undefined && !isOwnDraft(reading.draft, pasted['message-pasted'], each.adapter), label(each));
 		}
+	});
+
+	test('text in a color of its own where the input starts, as Muse Code draws some hints, reads as unknown - no capture tells it from a draft so drawn - while text in the terminal\'s color is a draft, wherever the cursor is (CLIS-2.1)', () => {
+		const empty = JSON.parse(fs.readFileSync(path.join(FIXTURES, 'muse-1.4.14', 'colors-empty.json'), 'utf8')) as Fixture;
+		const prompt = empty.cursor.y;
+		const hint = 'Start a message with ! to run a shell command yourself';
+		const shown = (text: string, colored: boolean, cursorX: number) => readInput(screenOf({
+			...empty, cursor: { x: cursorX, y: prompt },
+			rows: empty.rows.map((row, y) => y === prompt ? { cells: `❯ ${text}`, ...colored ? { colored: [[2, 2 + text.length]] as [number, number][] } : {} } : row)
+		}), 'muse-frame').state;
+		assert.deepStrictEqual([shown(hint, true, 2), shown(hint, false, 2), shown(hint, true, 2 + hint.length), shown('fix the login bug', false, 2)], ['unknown', 'draft', 'draft', 'draft']);
 	});
 
 	test('a reading says what it rests on, without the text on the screen', () => {

@@ -121,7 +121,10 @@ handover machinery guarantees that edge case. System results that cannot return 
 **Resume continues an exact saved conversation; Pin brings it back when this workspace opens again.**
 
 Resume lists relevant vendor histories with the original CLI and location. Pin and the native terminal tab's Pin are the
-same intent. Unpin keeps the current agent running. Close Agent, a person's close of the agent's tab showing its pin
+same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
+Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
+card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a
+hidden one hidden. Close Agent, a person's close of the agent's tab showing its pin
 mark and normal exit Unpin; abnormal exit and whole-window close preserve the intent, and a Pin restored opens its tab
 in the background. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
 
@@ -161,17 +164,16 @@ YOLO/creation-tree scope.
 
 **Sending succeeds when the other agent has the complete message under RULES-1.3, without waiting for its answer.**
 
-The first call returns success, failure, or accepted for bounded delivery. An accepted send later returns a system
-result to its sender, whether the message was delivered or not. The recipient's reply is a separate message.
+The call returns within thirty seconds: success, or failure with the reason. Nothing about the send comes after it. The recipient's reply is a separate message.
 [RULES-1](RULES.md#1-agent-messages) owns the complete flow; [MCP](engineering/MCP.md) owns the schema.
 
 ### 3.5 When an ordinary message reaches the CLI
 
 **Ordinary messages attempt usable draft-free input even while the target works; direct input deliberately has no draft guard.**
 
-A message goes in as one full paste plus Enter. Another draft, a native menu or a question is waited for, up to ten
-minutes, and never submitted with the message; an input box Facade cannot read fails at fifteen seconds without anything
-typed, whatever the CLI's version (RULES-1.4, 1.5). No typing-idle timer or extra protection for human typing that
+A message goes in as one full paste plus Enter. Another draft, a native menu or a question is waited for within the
+send's thirty seconds and never submitted with the message; then, as for an input box Facade cannot read, the send fails
+without anything typed, whatever the CLI's version (RULES-1.4, 1.5). No typing-idle timer or extra protection for human typing that
 starts after the check. A message's text goes into the input at most once; a later attempt only presses Enter over its
 own draft (RULES-1.6). If a person submits that pasted text themselves, the injected skill tells the model how to
 recognize the repeated message ID. Report actual partial or unknown effects if delivery fails. A message the recipient

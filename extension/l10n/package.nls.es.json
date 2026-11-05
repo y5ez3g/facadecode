@@ -29,7 +29,6 @@
 	"windowDisplayName": "Componente de ventana de Facade Code",
 	"windowDescription": "Coordinador de continuidad de sesión e identidad de ventana para Facade Code.",
 	"config.collaboration.enabled": "Permitir que los agentes se inicien y se detengan entre sí, se envíen mensajes entre ellos y a usted, y lean y escriban en los terminales de los demás. Solo se aplica a agentes nuevos.",
-	"config.collaboration.waitSeconds": "Número de segundos que un agente espera a que otro agente se inicie o se detenga. Pasado ese tiempo, el agente recibe el resultado más tarde en un mensaje.",
 	"command.filter": "Filtrar por ubicación de trabajo...",
 	"command.showAgentLaunch": "Mostrar configuración de inicio de agentes...",
 	"command.showAgentsLog": "Mostrar registro de agentes",

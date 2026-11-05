@@ -34,8 +34,8 @@ display-name-plus-ID form, plus the person's `#human`. Names can repeat; ambigui
 once within the caller's normal reach.
 
 start_agent and send_message take an optional `request_id` of the caller's own, 1–200 code points: the same one again
-from that caller to the same tool within an hour of the first call answers what the first call started or sent, as it
-stands, with `request_id` and `repeated: true`, and does nothing again. It is kept on the run or message record - a
+from that caller to the same tool within an hour of the first call answers what the first call started - as it stands
+- or sent - as RULES-1.2 says - with `request_id` and `repeated: true`, and does nothing again. It is kept on the run or message record - a
 message to another window's agent carries it there, where its record is made - and a repeated start answers as its start
 went: accepted while its process still starts, the start's failure where it could not start, success otherwise - its
 prompt as it stands, pending included, with the first call's `call_id`, `result_message_id` and prompt `message_id`.
@@ -110,7 +110,7 @@ Agent and message IDs identify public objects; no public operation-query identit
 | NOT_FOUND | `not_found` |
 | REFUSED | `out_of_tree` |
 | UNAVAILABLE | `ended`, `not_started`, `unavailable`, `unsupported` (a CLI without an input reader), `configuration_invalid`, `protocol_incompatible`, `window_unavailable`, `timeout` (a route that did not answer in time), `capacity_exceeded` |
-| FAILED | `input_draft`, `input_interaction`, `input_unknown`, `timeout` (a delivery that ran out of time), `submission_unconfirmed`, `partial_input`, `ended` (a start closed before it finished), `launch_failed`, `worktree_failed`, `termination_unconfirmed`, `cleanup_failed`, `route_failed`, `invalid_response`, `unexpected_error` |
+| FAILED | `input_draft`, `input_interaction`, `input_unknown`, `timeout` (a delivery that ran out of time), `submission_unconfirmed`, `partial_input`, `too_long` (a post-start prompt no whole stage fits, 2.3), `ended` (a start closed before it finished), `launch_failed`, `worktree_failed`, `termination_unconfirmed`, `cleanup_failed`, `route_failed`, `invalid_response`, `unexpected_error` |
 
 An ordinary message to a CLI that has no input reader fails immediately with `unsupported`, a permanent obstacle under
 RULES-1.5. A reader that does not recognize the input box leaves it untouched; the send ends at its deadline with
@@ -136,8 +136,9 @@ ambiguous name's `resolve_target` may carry a read-only `check` naming the exist
 arguments: list_agents with the target for a start, a stop, pending work or a capability, list_agents with no arguments
 for an ambiguous name, and otherwise read_screen with the target. A closed or unnamed target has no invented check.
 Only original-request reuse includes `request_id`, and it never restarts that hour. Partial/unknown effects never
-authorize automatic input replay, replacement starts, worktree deletion or escalation. A final failed request remains
-failed when retrieved with the same ID; a deliberate new effect requires a new request after addressing its cause.
+authorize automatic input replay, replacement starts, worktree deletion or escalation. Repeating never retries input; a
+send returns its record's current delivery state, including a subsequent inbox handoff (RULES-1.2), while the first call's
+answer stays what it said when given; a deliberate new effect requires a new request after addressing its cause.
 Normal success and accepted work have no recovery object. Prompt-level failure/uncertainty keeps its recovery alongside
 that prompt. These are API mechanics, not instructions to organize or escalate work. Agent-operation errors never
 create an automatic human notification.
@@ -147,17 +148,18 @@ create an automatic human notification.
 **Return current results promptly and keep ordinary-message deadlines independent from startup/cleanup waiting.**
 
 Queries - list_agents, read_messages and read_screen - use a ten-second route deadline from the shim's ingress and
-report unavailable windows rather than invent an empty result. `facade.collaboration.waitSeconds` is 1–3600 seconds,
-default 120, for waiting on a start or a stop. Completion can return sooner. A start or stop routed to another window is
-given that wait and ten seconds more, type_text and press_keys routed to another window thirty seconds, and a Facade
-result routed back to its caller's window one fifteen-second stage. A CLI that times its MCP calls is given 3660 seconds
-for one of Facade's - the longest wait and a minute for the call's own route and answer - so that it never gives up on a
-call Facade is still answering within its wait. Every forwarding layer charges connection and queue time to the same
+report unavailable windows rather than invent an empty result. A start or a stop is waited for two minutes from the
+shim's ingress, forwarding included - most end in seconds, and a start in a burst of many takes longer, which a caller is
+better answered than told later - and no setting changes it. Completion can return sooner. A start or stop routed to
+another window gives that window what remains of the two minutes less half a second, kept for the answer's way back;
+type_text and press_keys routed to another window have thirty seconds, and a Facade result routed back to its caller's
+window one thirty-second stage. A CLI that times its MCP calls is given 3660 seconds for one of Facade's - far
+more than any wait and the call's own route and answer - so that it never gives up on a call Facade is still answering. Every forwarding layer charges connection and queue time to the same
 remaining route budget. A budget exhausted before forwarding writes no request; a forwarded request whose reply is lost
 remains uncertain. Transport timeouts end waiting, not the destination's operation. Locally measured elapsed time uses a
 monotonic clock; process clocks are never subtracted across environments. Query deadlines do not make
 delivery-confirming reads side-effect-free. An actual continuing operation may return accepted with its run/effects;
-later completion returns to its initiating agent through a Facade system result. The accepted response and later result
+later completion of a start or stop returns to its initiating agent through a Facade system result. The accepted response and later result
 identify the same originating tool call and target run, using existing call correlation facts so concurrent calls,
 including calls to the same target, are distinguishable. Accepted start/stop results, and a start answered while its
 prompt is pending (2.3), expose `call_id` and `result_message_id`, reserved from the message namespace before
@@ -171,10 +173,8 @@ object or query API. Result handoff follows RULES-1.7, including no duplicate re
 no human fallback when handoff fails. Use list_agents for current run state; there is no separate operation inspection
 API. A pending operation continues without another send/start. Final system results request no reply. Unknown outcomes
 with no active operation promise no later verification. Receipt delivery remains finite and may end when its initiator
-is unreachable. An earlier returned message deadline can extend under RULES-1.5; its passing or an empty inbox alone
-proves no final outcome. send_message always uses the initial-response and delivery-stage budgets owned by RULES-1.2 and
-RULES-1.5. A slow operation never keeps a closed card/terminal visible or extends a message budget beyond RULES-1.5's
-own, under which a pending post-start creation prompt holds its run's input (RULES-1.10). A continuing call sends no MCP
+is unreachable. send_message answers with its outcome within RULES-1.2's thirty seconds and never answers accepted. A slow operation never keeps a closed card/terminal visible or extends a message budget beyond
+RULES-1.5's own, within which a pending post-start creation prompt holds its run's input (RULES-1.10). A continuing call sends no MCP
 progress notification and produces no progress popup.
 
 ## 2 Discover and start
@@ -233,7 +233,7 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-The call waits up to `facade.collaboration.waitSeconds` (1.3): `success` once the process runs - never waiting on a
+The call waits up to two minutes (1.3): `success` once the process runs - never waiting on a
 post-start prompt, which goes on after the answer - `failure` where the launch failed, `accepted` while it still starts,
 its outcome reported later under 1.3. Return `agent_id`, `name`, `window_id`, `window` (its label), `environment`,
 `location_id`, `cwd`, `cli`, `creator`, `root`, `yolo`, `process_state` (`starting`, `running` or `failed`; `unknown`
@@ -245,7 +245,9 @@ process's start and its prompt's delivery have both settled - a prompt whose del
 - never one for each. `prompt` gives the prompt's `message_id`, its `path` (`native` or `post_start`) with its
 `capability` (`supported`, `unverified` or `unavailable`, and why), its `status` (`success`, `pending`, `failure` or
 `unknown`) and its actual input `effects` under RULES-1.3 and 1.2, with `reason`, `message`, `obstacle`, `deadline` and
-`delivered_via` where they apply. An unverified native prompt has unknown acceptance, with no invented pending delivery
+`delivered_via` where they apply. A post-start prompt too long for any stage at its CLI's rates (RULES-1.5) is given up
+with nothing typed, its `reason` `too_long`; its record stays readable through read_messages, so that its creator can
+ask the new agent to read it rather than send it again. An unverified native prompt has unknown acceptance, with no invented pending delivery
 or promised later receipt. Its message record retains that uncertainty and can be delivered by an explicit inbox read
 without another paste. The run retains its original prompt message ID. A repeated start returns that record's current
 outcome, or explicit unknown (`prompt_unrecorded`) where the record is absent; it never replays the prompt or uses
@@ -313,7 +315,7 @@ stale.
 Arguments: `agent:string` required. No delete_worktree, discard_changes, recipient array or request ID. Resolve an
 allowed run, remove card/terminal, prevent new input, then terminate its process as needed. Do not stop children.
 Missing IDs fail without guessing. A stop while the agent's process is being started answers how that start's cleanup
-ended, never that none started. The call waits up to `facade.collaboration.waitSeconds` (1.3) and returns `agent_id`,
+ended, never that none started. The call waits up to two minutes (1.3) and returns `agent_id`,
 `closed: true`, `process_state` and `cleanup`: `terminated` or `already_exited` (success, `process_state: ended`);
 `already_ended` (success, with `already_ended: true`); `not_started` (success: closed before its process was asked for,
 so it never starts); `pending` (accepted, `process_state: stopping`, with `call_id` and `result_message_id`, its outcome
@@ -341,14 +343,18 @@ outside the message paste, so they are refused as `invalid_argument` instead of 
 Raw terminal control is a separate tool. Never replace the body with a pointer and call that full-content delivery. A
 text that begins with `[Earlier output truncated]` - how Antigravity marks a long argument it cut to its last 8,000
 characters - lost its beginning on its way: send_message, start_agent's prompt and type_text refuse it with
-invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole.
+invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole. The 8,000 code
+points are the most any send takes, not a length every recipient can: a send whose text no whole delivery stage could
+take at its recipient's paste rate (RULES-1.5, CLIS-2.1) is refused the same way, before its record is made - no message
+ID, and nothing for read_messages - its message naming the recipient and its CLI, and asking for shorter parts.
 
-Within RULES-1.2's response budget, return `message_id` and `target`, with `disposition` on success -
-`submitted_to_cli`, `read_messages` or `notified` (the person) - and, while accepted, `deadline` and an `obstacle` where
-one holds; add `reply_to` where given, `window_id` for another window's agent, and `request_id` with `repeated: true`
-for a repeated request. Ordinary delivery follows RULES-1.4–1.6's input checks and attempt budget; the deadline an
-accepted send returns is its stage's, which RULES-1.5 extends once another draft, delivery or pending creation prompt or
-a native question holds the recipient's input - from the start where the prompt is pending as the send arrives. Message
+Within RULES-1.2's thirty seconds, return `message_id` and `target`, with `disposition` on success - `submitted_to_cli`,
+`read_messages` or `notified` (the person) - or the failure with its reason and effects; a repeated request answers
+its original's outcome as RULES-1.2 says. Add `reply_to` where given, `window_id` for another window's agent, and
+`request_id` with `repeated: true` for a repeated request. Ordinary delivery follows RULES-1.4–1.6's input checks and
+attempt budget, with two boundaries no draft, delivery, pending creation prompt or native question moves: the answer is
+due thirty seconds after Facade ingress, and the delivery stage ends half a second before, 29.5 seconds after ingress -
+the half second kept once, for the answer's way back, however many windows the call crosses. Message
 ID allocation/reuse follows RULES-1.1; a message's text is typed at most once (RULES-1.6). Expiry is failure. An
 optional `request_id` makes a retry safe under 1.1. No cancel_message is provided. B's actual reply is another send.
 Human contact means notification handoff in the sender's window; no migration to another window on closure. All A-to-B
@@ -360,8 +366,8 @@ delivery/reply/system-result errors remain with agents or end if nobody can rece
 ```
 
 ```json
-{"status":"accepted","effects":{"outcome":"pending","text_written":"none","enter_written":false},
- "data":{"message_id":"#m42","target":"#a2","deadline":"2026-10-28T23:00:15Z","obstacle":"input_draft"}}
+{"status":"failure","error":{"code":"FAILED","reason":"input_draft","message":"The recipient's input held a draft, which is never typed over."},
+ "effects":{"outcome":"none","text_written":"none","enter_written":false},"data":{"message_id":"#m42","target":"#a2"}}
 ```
 
 ### 4.2 read_messages
@@ -466,8 +472,8 @@ protection provided. Basic schema/routing validation remains.
 The shim keeps one connection to its execution environment's runtime (ARCHITECTURE-2.3) and says hello on it as the
 run's shim, which tells the window holding the run that its tools are there (RULES-3.1). That connection may take thirty
 seconds to be answered, as a runtime busy starting many CLIs answers late, and it serves the calls after it; a lost one
-is made again for the next call. A call waits at most two seconds for it, the first response's allowance (RULES-1.2),
-and otherwise fails as `window_unavailable` with no effect.
+is made again for the next call. A call waits at most two seconds for it, and otherwise fails as `window_unavailable`
+with no effect.
 
 Calls to Facade's own tools are approved in advance, with YOLO on or off, for each CLI that can approve one server's
 tools (CLIS-2.2); Muse Code cannot, so with YOLO off its own approvals apply to them (RULES-4.3). The CLI's own commands

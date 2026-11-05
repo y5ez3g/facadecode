@@ -159,15 +159,26 @@ tracked keystrokes alone cannot prove the draft empty after paste/history naviga
 Direct text/keys only require the terminal input backend, not an input reader.
 
 Each built-in CLI has an input reader that finds its input box around the cursor - its prompt row, frame or box, the
-cursor being the terminal's or the CLI's own drawn one - and reads what the box holds: nothing, its placeholder drawn
-dim or known by its words, or a draft. A reader goes by layout, not version number, and tells a usable input from a
+cursor being the terminal's or the CLI's own drawn one - and reads what the box holds: nothing, its placeholder, or a
+draft. A placeholder is known by how a CLI draws it apart from typed text, with the cursor where the input starts and
+nothing typed before it: dim, as every built-in's but OpenCode's and Antigravity's mode hints draw it; or, for a CLI whose
+recorded captures show its empty input's placeholder and the person's typed and pasted text - with the cursor moved back
+to the start - in different colors, the placeholder's, as those captures establish them. Text where the placeholder
+would be - the cursor at the input start, nothing typed before it - in a color no capture establishes reads as unknown,
+never as an empty input or a draft, except where its words are recognized, as OpenCode's and Antigravity's mode hints'
+are: a person's draft is never taken for an empty input, and a draft a CLI draws in a color of its own is never
+submitted with a message. OpenCode, which draws typed text and its placeholder
+in the same color, has its placeholder known by its words. A reader goes by layout, not version number, and tells a usable input from a
 draft by nothing outside the box: footers, hints, status rows and warnings may change, as a CLI updates or within a
 session, without changing what it reads, apart from the two places below where the box alone cannot tell - Antigravity's
 colored placeholder and the lower edge of Codex's box. A CLI's questions, menus and logins take its box's place: a
 screen without the box around the cursor is a native interaction where the reader recognizes one of its CLI's questions
 or menus, which a message waits for (RULES-1.4, 1.5), and unknown otherwise. Nothing is typed into either, and an
 unknown screen fails the message at its deadline with `input_unknown`, naming the CLI and the version Facade found.
-Every installed version is attempted. The version never gates message input; only 1.1's unsupported line is refused, at
+A screen its program is still drawing - within a synchronized update - is read again within the same attempt, every
+tenth of a second for at most a second, until a complete frame shows: an unfinished frame is never taken for an empty
+input, a frame still unfinished after that second reads as unknown for that attempt, and reading again never pastes
+again or moves a deadline. Every installed version is attempted. The version never gates message input; only 1.1's unsupported line is refused, at
 its start. A CLI without an input reader fails ordinary messages at once with `unsupported`. Readers are tested against
 recorded screens of real CLI versions; a changed box becomes a new recorded case, and a reader never guesses an empty
 input where it does not find its box.
@@ -199,8 +210,8 @@ current activity, as its transcript can show old content (2.3).
 Antigravity's accept-edits and plan modes draw a colored, non-dim initial placeholder. Recognize its exact mode
 sentence (or the CLI's width-truncated prefix ending in `...`) only inside its one-line frame with the empty-input
 `? for shortcuts` footer and the cursor at the input start. The same words typed or pasted by a person hide that
-footer hint and remain a draft, even with the cursor moved back to the start. Color or matching words alone never
-prove the input empty.
+footer hint and remain a draft, even with the cursor moved back to the start. Neither its color nor matching words alone
+prove the input empty; its captures may later establish its hint's color under the rule above, which then reads it too.
 
 Each reader also reports a draft as it is drawn, so that a delivery knows its own (RULES-1.6): its rows' text, or the
 placeholder its CLI draws for a long paste - Claude Code's `[Pasted text #1 +N lines]` counting the lines after the
@@ -222,8 +233,9 @@ Code, which read console input one key at a time: 21.1 s for 9,249 characters, a
 that draft - for Antigravity, which takes seconds to expand a long paste, 45 ms a line after the draft shows; for Muse
 Code 250 ms after, as it takes an Enter that soon after its paste for a line break in it (it did 15 ms after, and
 submitted 100 ms after) - and delivery is confirmed once the input box is empty again, within 3 seconds and the paste's
-time. The same times extend the stage's deadlines (RULES-1.5) and type_text's wait before its Enter (MCP-5.2), Muse
-Code's 250 ms included, so that its Enter after a typed text submits too. State actual full/partial/unknown effects. A
+time. These times decide whether an attempt's paste fits within what remains of its delivery's budget; they never extend
+it (RULES-1.5). type_text keeps them as its wait before its Enter (MCP-5.2), Muse Code's 250 ms included, so that its
+Enter after a typed text submits too. State actual full/partial/unknown effects. A
 later attempt never types the text again; it presses Enter only over the message's own draft (RULES-1.6). Do not require
 a reconciliation API. An unknown version still starts its terminal, and its activity can still be verified per run under
 2.3. A CLI that never shows its activity is red, with its reason, once the run's startup bound passed (2.3). Every CLI

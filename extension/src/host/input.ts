@@ -14,6 +14,8 @@ import type { InputEffect, InputReading, InputState, ScreenRead } from '../ptyd/
 
 /** How often the input is read again while a submission waits for it to change. */
 const POLL_MS = 100;
+/** How long an attempt reads a screen its program is still drawing again, a frame each POLL_MS, for a whole one (CLIS-2.1). */
+const DRAWING_MS = 1_000;
 /**
  * How long a pasted message has to show in the input as its own draft, beyond the time a paste of its size takes; Enter is not
  * pressed for one that does not.
@@ -124,7 +126,7 @@ export class OrdinaryInput implements InputPort {
 		if (adapter === undefined) {
 			return 'unknown';
 		}
-		const reading = await this.read(run, adapter);
+		const reading = await this.readWhole(run, adapter);
 		if (own !== undefined && holds(reading, own, adapter, this.platform, lead, seen)) {
 			return 'own';
 		}
@@ -145,7 +147,7 @@ export class OrdinaryInput implements InputPort {
 				return NOTHING;
 			}
 			// Read again in this turn: only the message's own draft, alone, gets Enter (RULES-1.6), and none once stopped meanwhile
-			const reading = await this.read(run, adapter);
+			const reading = await this.readWhole(run, adapter);
 			if (signal?.aborted || !holds(reading, text, adapter, this.platform, lead, seen)) {
 				return NOTHING;
 			}
@@ -160,6 +162,11 @@ export class OrdinaryInput implements InputPort {
 	pasteTime(run: RunId, text: string): number {
 		const adapter = this.adapterOf(run);
 		return 2 * this.pasteMs(text) + this.linesMs(adapter, text) + this.charactersMs(adapter, text);
+	}
+
+	/** How long a submission of `text` takes at most: its paste to show, its Enter's settling and the input to empty after (RULES-1.5). */
+	submitTime(run: RunId, text: string): number {
+		return DRAFT_MS + TAKEN_MS + (PASTE_ENTER_SETTLE_MS[this.adapterOf(run) ?? ''] ?? 0) + this.pasteTime(run, text);
 	}
 
 	/**
@@ -278,7 +285,8 @@ export class OrdinaryInput implements InputPort {
 		}
 		// Read again in this turn: direct input that came after the delivery looked is never pasted over (RULES-1.4), and nothing goes
 		// in once stopped meanwhile
-		if ((await this.read(run, adapter)).state !== 'usable' || signal?.aborted || canPaste?.() === false) {
+		// read whole: a frame its CLI is still drawing is read again within the attempt, never taken for what it shows half drawn (CLIS-2.1)
+		if ((await this.readWhole(run, adapter)).state !== 'usable' || signal?.aborted || canPaste?.() === false) {
 			return { effects: NOTHING, shown: false };
 		}
 		// Typed ahead of the paste only where its CLI takes a paste alone as material (COLLABORATION-2.1)
@@ -424,6 +432,19 @@ export class OrdinaryInput implements InputPort {
 	/** The input adapter of a run whose message input is supported; none for any other. */
 	private adapterOf(run: RunId): string | undefined {
 		return this.capability(run).state === 'supported' ? this.deps.get(run)?.inputAdapter : undefined;
+	}
+
+	/**
+	 * The input as a whole frame shows it: a screen its program is still drawing - within a synchronized update - is read again every
+	 * POLL_MS for at most DRAWING_MS, never taken for an empty input (CLIS-2.1).
+	 */
+	private async readWhole(run: RunId, adapter: string): Promise<InputReading> {
+		let reading = await this.read(run, adapter);
+		for (let waited = 0; reading.drawing && waited < DRAWING_MS; waited += POLL_MS) {
+			await new Promise(resolve => setTimeout(resolve, POLL_MS));
+			reading = await this.read(run, adapter);
+		}
+		return reading;
 	}
 
 	private async read(run: RunId, adapter: string): Promise<InputReading> {

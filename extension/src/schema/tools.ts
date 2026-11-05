@@ -101,7 +101,7 @@ export const TOOLS: readonly ToolDefinition[] = [
 		name: 'send_message',
 		title: 'Send a message',
 		annotations: { readOnlyHint: false },
-		description: 'Send one complete message to one agent, or to `#human` to notify the person in your window. Success is delivery, not a reply or task completion. Accepted delivery continues with a deadline and later Facade result; a new send is another message.',
+		description: 'Send one complete message to one agent, or to `#human` to notify the person in your window. It answers within 30 seconds: success is delivery, not a reply or task completion; failure says why; no later result follows. A send cut off before its answer may still arrive: repeat its request_id to learn its outcome. A new send is another message.',
 		inputSchema: {
 			type: 'object',
 			properties: {

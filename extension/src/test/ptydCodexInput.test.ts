@@ -139,7 +139,8 @@ suite('Codex passive transcript footers keep ordinary input separate from active
 			const frame = screen.rows.map(row => row.map(cell => `${cell.dim ? '\x1b[2m' : '\x1b[22m'}${cell.chars}`).join('')).join('\r\n');
 			await settled(new Promise<void>(resolve => terminal.write(`\x1b[?2026h\x1b[H${frame}\x1b[${each.cursor.y + 1};${each.cursor.x + 1}H`, resolve)));
 			const test = delivery(inputScreenOf(terminal));
-			assert.deepStrictEqual((await test.input.submit('fixture', firstMessage)).effects, NOTHING);
+			// Read again within the attempt while its frame is still being drawn, the drawing unfinished after that: nothing is typed (CLIS-2.1)
+			assert.deepStrictEqual((await settled(test.input.submit('fixture', firstMessage), 3_000)).effects, NOTHING);
 			assert.deepStrictEqual(test.writes, []);
 			await settled(new Promise<void>(resolve => terminal.write('\x1b[?2026l', resolve)));
 			assert.strictEqual(read(inputScreenOf(terminal)).state, 'usable');

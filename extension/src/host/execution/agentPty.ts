@@ -107,6 +107,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private readonly mouse = new MouseReports();
 	/** The program's questions written to the editor's terminal, by which its answers reach the program or not (ARCHITECTURE-2.3). */
 	private readonly replies: TerminalReplies;
+	/** Whether Facade holds its tab in front for a mark: the person's keys meanwhile are left out (LIFECYCLE-3.4). */
+	private muted = false;
 	/** Whether its tab spins while the agent works, the frame it shows and what turns it (LIFECYCLE-2.2). */
 	private spinning = false;
 	private frame = 0;
@@ -465,12 +467,19 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.standIn = undefined;
 	}
 
+	/** Leaves out the person's keys while Facade holds its tab in front for its mark, its answers to the program still going (LIFECYCLE-3.4). */
+	muteInput(muted: boolean): void {
+		this.muted = muted;
+	}
+
 	/**
 	 * What the person typed, and what the editor's terminal answered for the program's questions, straight to its process - but for
 	 * the answers ptyd gives itself and those that come too late for the program to wait for them (ARCHITECTURE-2.3).
 	 */
-	handleInput(data: string): void {
-		if (this.binding && !this.ended) {
+	handleInput(given: string): void {
+		// Facade holds its tab in front for its mark: what the person types meanwhile is not its CLI's (LIFECYCLE-3.4)
+		const data = this.muted ? this.replies.answersOnly(given) : given;
+		if (this.binding && !this.ended && data) {
 			// Read for the colours it teaches either way; the answers to the window's own questions kept from the program always, the
 			// others only where its ptyd answers instead
 			const typed = this.mouse.repair(this.replies.typed(data, Date.now(), !this.binding.answersQueries));
