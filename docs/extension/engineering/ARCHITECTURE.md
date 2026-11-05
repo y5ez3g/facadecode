@@ -548,7 +548,7 @@ compatibility engine.
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
 feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
-Open VSX only when the owner asks. Both components carry one release version, 0.0.6, which the changelog's heading
+Open VSX only when the owner asks. Both components carry one release version, 0.0.7, which the changelog's heading
 names; the build refuses a window component of another version. Release packages target darwin-arm64, linux-x64 and
 win32-x64, together with the window component, with how each package was built and verified recorded in the archive
 catalog. The version advances when preparing a release. [Official manifest
