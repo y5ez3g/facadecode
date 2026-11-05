@@ -377,7 +377,8 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		// A native first prompt is also unconfirmed until this explicit handoff; it is never pasted again (MCP-2.3).
 		const unconfirmedPrompt = started.data.prompt.status === 'unknown' ? started.data.prompt.message_id as string : undefined;
 		const initialPastes = received(childAlias).filter(each => each.includes('Wait for my messages.')).length;
-		const readIds = [...unconfirmedPrompt ? [unconfirmedPrompt] : [], third.data.message_id];
+		// The second, held by the draft until its thirty seconds ended, failed as the third did: both are the recipient's to read
+		const readIds = [...unconfirmedPrompt ? [unconfirmedPrompt] : [], second, third.data.message_id];
 		// The recipient reads what is failed or unconfirmed: delivered by that read, and only once (COLLABORATION-3.1).
 		const read = await script(childAlias, [
 			{ tool: 'read_messages', arguments: {} },
@@ -387,6 +388,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		const unread = read.content('read_messages')?.data.messages as { message_id: string; text: string; delivery: { status: string; reason?: string } }[];
 		assert.deepStrictEqual(unread.map(each => [each.message_id, each.text, each.delivery.status, each.delivery.reason]), [
 			...unconfirmedPrompt ? [[unconfirmedPrompt, 'Wait for my messages.', 'unknown', 'submission_unconfirmed']] : [],
+			[second, 'Second message.', 'failure', 'input_draft'],
 			[third.data.message_id, 'Third message.', 'failure', 'input_unknown']
 		], JSON.stringify(unread));
 		assert.deepStrictEqual(read.content('read_messages', 1)?.data.messages, [], JSON.stringify(read.content('read_messages', 1)));
