@@ -63,7 +63,7 @@ const PROBE_SETTINGS = {
 const SESSIONS: readonly { readonly name: string; readonly short: string; readonly facade: boolean; readonly cases: readonly string[] }[] = [
 	{ name: 'native', short: 'n', facade: false, cases: ['N1', 'N2', 'N3', 'N4', 'N5'] },
 	{ name: 'facade', short: 'f', facade: true, cases: ['F1', 'F2', 'F4', 'F6'] },
-	{ name: 'reload', short: 'r', facade: true, cases: ['F3', 'F7'] },
+	{ name: 'reload', short: 'r', facade: true, cases: ['F3', 'F7', 'F8'] },
 	// A floating editor window's, its own reload last
 	{ name: 'floating', short: 'w', facade: true, cases: ['F5'] }
 ];

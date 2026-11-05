@@ -1128,7 +1128,7 @@ function acrossShowing(placed: readonly Placed[], wasAt: (key: Placed) => boolea
 	const first = inOrder.findIndex(key => key.to === cli);
 	return {
 		bad: inOrder.filter(key => !wasAt(key) && key.to !== cli),
-		back: first < 0 ? [] : inOrder.slice(first + 1).filter(key => wasAt(key))
+		back: first < 0 ? [] : inOrder.slice(first + 1).filter(key => key.to !== cli && wasAt(key))
 	};
 }
 
@@ -1293,12 +1293,21 @@ async function f4(variant: 'cmd1' | 'cmd3' | 'ctrltab', via: Via): Promise<CaseR
 	// The agent's tab, which the Pin showed in front of its group: left there by Facade - but where the person's Ctrl+Tab brought back what
 	// was in front of it
 	const shownStays = variant === 'ctrltab' || isAgentLabel(frontsSettled.g2, agent);
+	// The person's shortcut came before the mark could go on where the Pin showed its tab: it waits for that tab's next showing
+	// (LIFECYCLE-3.4), and goes on as the person brings it to the front again
+	let markedLater: number | undefined;
+	if (pinned === undefined) {
+		const asked = Date.now();
+		await cmd('facade.revealAgent', { run_id: agent.runId });
+		const at = await pinnedAt(agent, 3_000);
+		markedLater = at === undefined ? undefined : at - asked;
+	}
 	return {
 		id: `F4-${variant}${via === 'card' ? '-card' : ''}`, title: `${chord.replace('cmd', 'Cmd').replace('ctrl', 'Ctrl').replace('tab', 'Tab')} while a mark is under way (a ${via} Pin of an agent behind in group 2)`,
 		done: `the person at ${whereName(person.d)}; ${pinCall(via)} at 0 ms; the CDP-injected shortcut at ${fired ? `${fired.at - t0} ms (${fired.why})` : 'never'}; 3 keys typed 2.5 s after the mark`,
-		measured: `mark on at ${pinned === undefined ? 'never' : `${pinned - t0} ms`}; shortcut sent ${fired ? `${fired.at - t0}-${(fired.acked ?? fired.at) - t0} ms` : 'never'}; focus path: ${borrow.path.join(' → ') || 'unchanged'}; settled at ${whereName(settled.d)} (active group ${groupSettled}): the person's navigation ${navigated ? 'kept' : 'not kept'}; fronts ${JSON.stringify(frontsBefore)} → ${JSON.stringify(frontsSettled)}: group 2's front ${shownStays ? 'as the Pin and the person left it' : 'changed by Facade'}; the 3 keys: ${tally(got.placed)}`,
-		verdict: navigated && !bad.length && shownStays && pinned !== undefined ? 'PASS' : 'FAILURE',
-		navigated, shownStays, agent, via, intent, wanted: `editor g${targetGroup} ${target}`, shortcut: fired ? { atMs: fired.at - t0, ackMs: fired.acked === undefined ? null : fired.acked - t0, why: fired.why } : null,
+		measured: `mark on at ${pinned === undefined ? 'never' : `${pinned - t0} ms`}; shortcut sent ${fired ? `${fired.at - t0}-${(fired.acked ?? fired.at) - t0} ms` : 'never'}; focus path: ${borrow.path.join(' → ') || 'unchanged'}; settled at ${whereName(settled.d)} (active group ${groupSettled}): the person's navigation ${navigated ? 'kept' : 'not kept'}; fronts ${JSON.stringify(frontsBefore)} → ${JSON.stringify(frontsSettled)}: group 2's front ${shownStays ? 'as the Pin and the person left it' : 'changed by Facade'}; the 3 keys: ${tally(got.placed)}${pinned === undefined ? `; the mark waited, the person's shortcut first, and went on ${markedLater === undefined ? 'never' : `${markedLater} ms`} after they showed its tab again` : ''}`,
+		verdict: navigated && !bad.length && shownStays && (pinned !== undefined || markedLater !== undefined) ? 'PASS' : 'FAILURE',
+		navigated, shownStays, markedLaterMs: markedLater ?? null, agent, via, intent, wanted: `editor g${targetGroup} ${target}`, shortcut: fired ? { atMs: fired.at - t0, ackMs: fired.acked === undefined ? null : fired.acked - t0, why: fired.why } : null,
 		pinnedMs: pinned === undefined ? null : pinned - t0, settled: whereName(settled.d), frontsBefore, frontsSettled, borrow, texts: got.texts,
 		keys: keyRows(got.placed, t0, key => key.to === intent), focus: focusRows(got.focus, t0), host: hostRows(got.host, t0), foreign: got.foreign, log: facadeLog(since)
 	};
@@ -1460,6 +1469,114 @@ async function f7After(activatedAt: number): Promise<CaseResult> {
 		verdict: inOrder && once && frontBack && marksRight && focused ? 'PASS' : 'FAILURE',
 		agents: setup.agents, pinned: setup.pinned, lastActive: setup.lastActive, expected, sequence, once, inOrder, frontsBefore: setup.fronts, frontsAfter, marks, marksRight, focused, focusEnd: whereName(end.d),
 		host: hostRows(host, reloadedAt), log: facadeLog(reloadedAt)
+	};
+}
+
+/**
+ * F8 before its reload: four agents in group 1 and a pinned one, group 1's front, which a reload opens last; the person's files in
+ * front of groups 2 and 3 - and, for `agent`, a pinned agent of group 2's behind its file there, which a reload opens first.
+ */
+async function f8Setup(variant: 'file' | 'agent'): Promise<void> {
+	await activateFacade();
+	await resetFacade();
+	await showFile('f8-3.txt', 3);
+	await showFile('f8-2.txt', 2);
+	let theirs: Card | undefined;
+	if (variant === 'agent') {
+		theirs = await newAgent();
+		await cmd('facade.pinAgent', { run_id: theirs.runId });
+		await until(`${theirs.alias}'s mark`, () => agentTab(theirs!)?.isPinned || undefined, 10_000).catch(() => notes.push('group 2\'s agent was not marked before the reload'));
+		await showFile('f8-2.txt', 2);
+	}
+	await showFile('f8-1.txt', 1);
+	const agents: Card[] = [];
+	for (let index = 0; index < 5; index++) {
+		agents.push(await newAgent());
+	}
+	const front = agents[4];
+	await cmd('facade.pinAgent', { run_id: front.runId });
+	await until(`${front.alias}'s mark`, () => agentTab(front)?.isPinned || undefined, 10_000).catch(() => notes.push('group 1\'s front was not marked before the reload'));
+	for (const agent of agents.slice(0, 4)) {
+		await cmd('facade.revealAgent', { run_id: agent.runId });
+		await sleep(600);
+	}
+	// Group 1's front last, more than 3 s after the others: the reload opens it last of all
+	await sleep(3_500);
+	await cmd('facade.revealAgent', { run_id: front.runId });
+	await sleep(3_500);
+	await cmd('workbench.action.files.saveAll');
+	await pull();
+	const person = await wb.active();
+	write({
+		phase: 'f8-setup', variant, agents: [...agents, ...theirs ? [theirs] : []], groupOne: agents.map(agent => agent.alias), front: front.alias, theirs: theirs?.alias ?? null,
+		fronts: frontsNow(), seen: seen(), person: whereName(person.d),
+		marks: [...agents, ...theirs ? [theirs] : []].map(agent => `${agent.alias}:g${agentTab(agent)?.group.viewColumn}${agentTab(agent)?.isPinned ? '*' : ''}`), log: facadeLog(0).slice(-12), notes: notes.splice(0)
+	});
+	write({ phase: 'reloading' });
+	void vscode.commands.executeCommand('workbench.action.reloadWindow').then(undefined, () => undefined);
+}
+
+/**
+ * F8 after its reload: the person's own navigation as the reload's tabs open - Cmd+3, then Cmd+2, as group 1's first tab opens - with
+ * group 1's later tabs opening after it, its pinned front last: group 2, where the person went last, is the active one at the end, its
+ * front theirs - their file, or for `agent` group 2's agent - the keyboard's focus there and the next keys typed reaching it (LIFECYCLE-3.5).
+ */
+async function f8After(activatedAt: number): Promise<CaseResult> {
+	const lines = said();
+	const setup = lines.filter(line => line.phase === 'f8-setup').pop() as Line & { variant: string; agents: Card[]; groupOne: string[]; front: string; theirs: string | null; fronts: { [column: string]: string }; person: string; marks: string[] };
+	const reloadedAt = lines.filter(line => line.phase === 'reloading').pop()!.at!;
+	const groupOne = setup.agents.filter(agent => setup.groupOne.includes(agent.alias));
+	const chords: { chord: string; at: number; acked?: number }[] = [];
+	const press = async (chord: 'cmd+2' | 'cmd+3') => {
+		const entry: { chord: string; at: number; acked?: number } = { chord, at: Date.now() };
+		chords.push(entry);
+		await wb.chord(chord).then(() => { entry.acked = Date.now(); }, err => notes.push(`${chord} failed: ${messageOf(err)}`));
+	};
+	// As group 1's first agent tab opens, the person goes to group 3, then to group 2
+	let started = false;
+	const watch = vscode.window.tabGroups.onDidChangeTabs(event => {
+		if (started || !event.opened.some(tab => tab.group.viewColumn === 1 && groupOne.some(agent => isAgentLabel(unspun(tab.label), agent)))) {
+			return;
+		}
+		started = true;
+		void press('cmd+3').then(() => sleep(150)).then(() => press('cmd+2'));
+	});
+	const activeAt = await until('Facade active', () => vscode.extensions.getExtension('facade.facadecode')?.isActive ? Date.now() : undefined, 90_000, 25).catch(() => undefined);
+	await until('the panel state', async () => (await state().catch(() => undefined))?.loading === false ? true : undefined, 90_000, 200).catch(() => undefined);
+	const pinnedCards = setup.agents.filter(agent => agent.alias === setup.front || agent.alias === setup.theirs);
+	const back = await until('every tab back, the pinned ones marked', () => setup.agents.every(agent => agentTab(agent)) && pinnedCards.every(agent => agentTab(agent)?.isPinned) ? Date.now() : undefined, 60_000, 25).catch(() => undefined);
+	await sleep(4_000);
+	watch.dispose();
+	await pull();
+	const end = await wb.active();
+	const activeGroup = vscode.window.tabGroups.activeTabGroup.viewColumn;
+	const frontsAfter = frontsNow();
+	// The next keys typed, and where they go
+	const typist = new Typist();
+	const since = Date.now();
+	await typist.at(since, [0, 150, 300]);
+	await sleep(300);
+	const got = await collect(since, typist, setup.agents.map(agent => agent.alias), ['f8-1.txt', 'f8-2.txt', 'f8-3.txt']);
+	const last = chords[chords.length - 1];
+	// Group 1's tabs that opened after the person's last move: what this case is about
+	const later = !last ? [] : hostEvents.filter(each => each.ev === 'tabs' && each.t > (last.acked ?? last.at))
+		.flatMap(each => (each.opened as string[]).filter(entry => groupOne.some(agent => entry.startsWith(`g1:${agent.name}`))).map(entry => `${each.t - reloadedAt}ms ${entry}`));
+	const theirsCard = setup.theirs ? setup.agents.find(agent => agent.alias === setup.theirs) : undefined;
+	const frontKept = theirsCard ? isAgentLabel(frontsAfter.g2, theirsCard) : frontsAfter.g2 === 'f8-2.txt';
+	const focusKept = theirsCard ? inAgent(end, theirsCard) : end.d.where === 'code-editor' && end.d.group === 2 && whereName(end.d).includes('f8-2.txt');
+	const intent = theirsCard ? `pty:${theirsCard.alias}` : 'doc:f8-2.txt';
+	const keysKept = got.placed.length > 0 && got.placed.every(key => key.to === intent);
+	const marked = pinnedCards.every(agent => agentTab(agent)?.isPinned);
+	const ok = activeGroup === 2 && frontKept && frontsAfter.g3 === 'f8-3.txt' && focusKept && keysKept && marked;
+	return {
+		id: setup.variant === 'agent' ? 'F8-agent' : 'F8',
+		title: `the person goes to group 3, then to group 2, as a reload's tabs open in group 1${setup.variant === 'agent' ? ', group 2\'s front an agent\'s tab' : ''}: their last group is the active one at the end`,
+		done: `before the reload: fronts ${JSON.stringify(setup.fronts)}, group 1's agents ${setup.groupOne.join(', ')}, its front ${setup.front} pinned${setup.theirs ? `, group 2's pinned agent ${setup.theirs} behind its file` : ''}; after it, as group 1's first tab opened, ${chords.map(each => `${each.chord} at ${each.at - reloadedAt} ms`).join(', ') || 'no move'}; then 3 keys typed`,
+		measured: `driver up ${activatedAt - reloadedAt} ms, Facade active ${activeAt === undefined ? 'never' : `${activeAt - reloadedAt} ms`}, every tab back ${back === undefined ? 'never' : `${back - reloadedAt} ms`} after the reload request; group 1's tabs after the person's last move: ${later.join(', ') || 'none'}; active group at the end ${activeGroup}; fronts ${JSON.stringify(frontsAfter)}; focus ${whereName(end.d)}; the next keys: ${tally(got.placed)}`,
+		verdict: chords.length < 2 ? 'BLOCKED' : !later.length ? 'BLOCKED' : ok ? 'PASS' : 'FAILURE',
+		agents: setup.agents, chords: chords.map(each => ({ chord: each.chord, atMs: each.at - reloadedAt, ackMs: each.acked === undefined ? null : each.acked - reloadedAt })), later, activeGroup,
+		frontsBefore: setup.fronts, frontsAfter, frontKept, focusKept, keysKept, marked, focusEnd: whereName(end.d), texts: got.texts,
+		keys: keyRows(got.placed, since, key => key.to === intent), focus: focusRows(got.focus, reloadedAt), host: hostRows(hostEvents.filter(each => each.t >= reloadedAt), reloadedAt), log: facadeLog(reloadedAt)
 	};
 }
 
@@ -1765,12 +1882,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 				await run('F5-reload', () => f5ReloadAfter(activatedAt));
 			}
 		} else if (PHASE === 'reload') {
-			// Each case asked for with a reload of its own, in turn: F3, F3-settled, F7 and F7-pinned-front
+			// Each case asked for with a reload of its own, in turn: F3, F3-settled, F7, F7-pinned-front, F8 and F8-agent
 			const cases = [
 				{ id: 'F3', setup: () => f3Setup('quick'), after: f3After },
 				{ id: 'F3-settled', setup: () => f3Setup('settled'), after: f3After },
 				{ id: 'F7', setup: () => f7Setup('front'), after: f7After },
-				{ id: 'F7-pinned-front', setup: () => f7Setup('pinned-front'), after: f7After }
+				{ id: 'F7-pinned-front', setup: () => f7Setup('pinned-front'), after: f7After },
+				{ id: 'F8', setup: () => f8Setup('file'), after: f8After },
+				{ id: 'F8-agent', setup: () => f8Setup('agent'), after: f8After }
 			].filter(each => wanted(each.id));
 			const reloads = said().filter(line => line.phase === 'reloading').length;
 			const measured = cases[reloads - 1];
