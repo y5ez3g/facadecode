@@ -62,12 +62,20 @@ export interface MessageServiceDeps {
 	readonly said?: (run: RunId, text: string, source: SaidSource) => void;
 }
 
-/** The first response comes within this long of the request reaching Facade (RULES-1.2). */
-export const RESPONSE_BUDGET_MS = 2_000;
-/** Each delivery stage - the message, then any Facade result - tries every three seconds for fifteen (RULES-1.5). */
-export const STAGE_MS = 15_000;
+/**
+ * Each delivery stage - a message, a creation prompt, a Facade result - tries every three seconds for thirty, held input or not, a paste
+ * begun only where it fits before the deadline (RULES-1.5).
+ */
+export const STAGE_MS = 30_000;
 export const SLOT_MS = 3_000;
-/** How long from its start a stage waits for an input that another draft or a native question holds (RULES-1.5). */
+/** A creation prompt's first response comes within this long of the request reaching Facade, its outcome its start's result (MCP-2.3). */
+export const RESPONSE_BUDGET_MS = 2_000;
+/**
+ * What an ordinary message's stage keeps of its thirty seconds from ingress for its answer's way back, so that the send answers with
+ * its outcome within them (RULES-1.2); no Facade result follows it (RULES-1.7).
+ */
+export const ANSWER_MARGIN_MS = 500;
+/** How long a window keeps a message another window may have delivered, its outcome not known there (COLLABORATION-4.1). */
 export const HOLD_MS = 10 * 60_000;
 /**
  * Facade results this close together came together - those of sends that ended with their recipient - and go in one paste, the
@@ -103,6 +111,8 @@ type Attempt =
 	| { readonly kind: 'waiting' }
 	| { readonly kind: 'ended' }
 	| { readonly kind: 'expired' }
+	/** A paste that would not fit before the deadline: none is begun, and the stage ends with nothing typed (RULES-1.5). */
+	| { readonly kind: 'unfit' }
 	/** Its launch planned meanwhile, its CLI has no input reader: a permanent obstacle (RULES-1.4, 1.5). */
 	| { readonly kind: 'unsupported' };
 
@@ -112,15 +122,13 @@ interface Stage {
 	/** The record it delivers. */
 	readonly message: string;
 	readonly stop: AbortController;
-	/** When it started, on this process's monotonic clock: its slots and its ten minutes count from then (RULES-1.5). */
+	/** When it started, on this process's monotonic clock: its slots and its thirty seconds count from then (RULES-1.5). */
 	readonly start: number;
 	/**
-	 * Its deadline on this process's monotonic clock: fifteen seconds from its start and the time a paste of its text takes beyond the
-	 * usual (CLIS-2.1), moved on to ten minutes from its start while the input is held (RULES-1.5).
+	 * Its deadline on this process's monotonic clock: thirty seconds from its start - an ordinary message's from its ingress, less what
+	 * its answer keeps for its way back - never moved on while the input is held (RULES-1.2, 1.5).
 	 */
 	deadline: number;
-	/** The time a paste of its text takes beyond the usual, which every deadline of it gives (RULES-1.5). */
-	extra: number;
 	/** Its outcome where something other than an attempt settled it: the recipient's read_messages delivered the record meanwhile. */
 	settled?: Outcome;
 	/** Read delivery resolves the send immediately, independently of finishing an already pasted owned draft. */
@@ -140,8 +148,6 @@ interface Stage {
 	entered: boolean;
 	/** Whether an attempt confirmed its submission: it is ending, and its text is its CLI's (RULES-1.3). */
 	confirmed?: true;
-	/** Epoch ms its deadline moved on to, while another draft or a native question held the input (RULES-1.5). */
-	heldUntil?: number;
 	/** The Facade results it types in one paste, where it delivers results; `message` is the first of them (RULES-1.7). */
 	readonly batch?: ResultBatch;
 	/** Whether it delivers its run's creation prompt, which the input is held for, not by (RULES-1.10, COLLABORATION-2.2). */
@@ -159,8 +165,6 @@ const CONFIRMED: InputEffects = { outcome: 'confirmed', text_written: 'full', en
 
 /** The obstacle an input that is not usable is, as a delivery reports it. */
 const OBSTACLES: { readonly [state: string]: string | undefined } = { draft: 'input_draft', interaction: 'input_interaction', unknown: 'input_unknown' };
-/** What holds an input for a person or its CLI, and is waited for (RULES-1.5): unlike an input that cannot be read. */
-const HELD: ReadonlySet<string> = new Set(['input_draft', 'input_interaction']);
 
 /** Whether `record` is a creation prompt recorded to go after startup and not settled yet: one that holds its run's other messages. */
 function pendingCreation(record: MessageRecord): boolean {
@@ -174,9 +178,9 @@ function creationOf(record: MessageRecord): { readonly to: string; readonly dead
 /**
  * Agent messages (RULES-1, COLLABORATION-2-4): every send is recorded at once with its own ID, then given to its one recipient - the
  * person in this window by notification, or a run's CLI as one paste and Enter, never over a draft or into a menu, trying every
- * three seconds for fifteen, and up to ten minutes while another draft or a native question holds the input. Its text is typed at
- * most once. The first response comes within two seconds; an accepted send's outcome goes back to its sender as a Facade result
- * with its own budget, and ends quietly where it cannot. Attempts for one terminal never run side by side.
+ * three seconds for thirty, held input or not. Its text is typed at most once. An ordinary message's send answers with its outcome
+ * within thirty seconds of ingress, and no Facade result follows it; a creation prompt's first response comes within two seconds.
+ * Attempts for one terminal never run side by side.
  */
 export class MessageService implements Messages, Disposable {
 	private readonly subscriptions: Disposable[] = [];
@@ -185,6 +189,8 @@ export class MessageService implements Messages, Disposable {
 	/** The creation prompts recorded pending that go after startup, once read: see {@link creations}. */
 	private pendingCreations: Map<string, { readonly to: string; readonly deadline?: number }> | undefined;
 	private readonly stages = new Set<Stage>();
+	/** Ordinary messages under way here, by ID: their record once their stage ends, which a repeated request waits for (RULES-1.2). */
+	private readonly outcomes = new Map<string, Promise<MessageRecord>>();
 	/** Each terminal's attempts, one after another (RULES-1.10). */
 	private readonly lanes = new Map<RunId, Promise<void>>();
 	/** The deadlines of deliveries an earlier opening began that this one cannot go on with (RULES-1.9). */
@@ -223,13 +229,33 @@ export class MessageService implements Messages, Disposable {
 		// message ID after a lost reply, but the original request still names the original message (MCP-1.1).
 		const earlier = request.requestId !== undefined ? this.findRequest(request.from, request.requestId) : undefined;
 		if (earlier) {
-			return { record: earlier, status: earlier.delivery.status === 'pending' ? 'accepted' : earlier.delivery.status === 'unknown' ? 'failure' : earlier.delivery.status,
-				...earlier.delivery.reason ? { reason: earlier.delivery.reason } : {} };
+			// A repeat joins its original's delivery, answering its outcome within what remains of its thirty seconds; one ended, its
+			// record as it stands (RULES-1.2)
+			const record = earlier.initialPrompt === undefined ? await this.settledOf(earlier) : earlier;
+			if (earlier.initialPrompt !== undefined) {
+				return { record, status: record.delivery.status === 'pending' ? 'accepted' : record.delivery.status === 'unknown' ? 'failure' : record.delivery.status,
+					...record.delivery.reason ? { reason: record.delivery.reason } : {} };
+			}
+			return { record, status: record.delivery.status === 'success' ? 'success' : 'failure',
+				...record.delivery.status === 'pending' ? { reason: 'submission_unconfirmed' } : record.delivery.reason ? { reason: record.delivery.reason } : {} };
 		}
 		// Queueing and forwarding before Facade had it spent the same budgets, and so does making its record (RULES-1.2, 1.5)
 		const elapsed = Number.isFinite(request.elapsedMs) ? Math.max(0, request.elapsedMs) : 0;
 		const start = this.mono() - elapsed;
-		const deadline = this.deps.clock.now() - elapsed + STAGE_MS;
+		// An ordinary message's send answers with its outcome within thirty seconds of ingress, a creation prompt's within two (RULES-1.2)
+		const ordinary = request.initialPrompt === undefined;
+		const length = ordinary ? STAGE_MS - ANSWER_MARGIN_MS : STAGE_MS;
+		const deadline = this.deps.clock.now() - elapsed + length;
+		// A text no whole stage could take at its recipient's rates - its paste, Enter and their confirmation - is refused before its
+		// record is made: no message ID, nothing for read_messages, and its sender asked for shorter parts (RULES-1.5, MCP-4.1)
+		if (ordinary && request.to !== '@human') {
+			const header = { alias: '#m999999999', from: request.sender?.party ?? this.party(request.from), text: request.text, ...(request.replyTo !== undefined ? { replyTo: request.replyTo } : {}) };
+			if ((this.deps.input.submitTime?.(request.to, formatMessage(header, request.sender ? request.sender.label ?? request.sender.window : '')) ?? 0) > length) {
+				// Its recipient and the CLI whose paste rate here sets the limit, which no fixed length tells (MCP-4.1)
+				const cli = this.cliOf(request.to);
+				throw invalid('invalid_argument', `The message is too long for ${notificationName(this.party(request.to))}'s CLI${cli ? `, ${displayLine(cli, 160)},` : ''} to take within thirty seconds at its paste rate here; send it in shorter parts.`);
+			}
+		}
 		// A creation prompt recorded as its start answered, nothing of it typed yet, goes now under that record; one its agent read
 		// meanwhile through read_messages is delivered already, and nothing is typed (MCP-2.3, COLLABORATION-2.2)
 		const kept = request.id !== undefined && request.initialPrompt !== undefined ? this.deps.store.list().find(each => each.id === request.id) : undefined;
@@ -266,12 +292,29 @@ export class MessageService implements Messages, Disposable {
 			return this.failed(record, 'unsupported', NO_EFFECTS);
 		}
 		const text = formatMessage(record, request.sender ? request.sender.label ?? request.sender.window : '');
-		// A long paste gets the time it takes, beyond the usual, at every deadline of its stage (CLIS-2.1)
-		const extra = this.deps.input.pasteTime?.(request.to, text) ?? 0;
-		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: deadline + extra, start: deadline - STAGE_MS } });
-		const stage = this.newStage(request.to, pending.id, start, extra);
+		// A post-start prompt no whole stage could take at its CLI's rates is given up, nothing typed, its record readable (RULES-1.5, MCP-2.3)
+		if (!ordinary && (this.deps.input.submitTime?.(request.to, text) ?? 0) > length) {
+			this.deps.log.event(`Message ${record.alias} to ${target.alias} not delivered: it is too long for its CLI to take within a stage`);
+			return this.failed(record, 'too_long', NO_EFFECTS);
+		}
+		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline, start: deadline - length } });
+		const stage = this.newStage(request.to, pending.id, start, undefined, length);
 		stage.creation = request.initialPrompt !== undefined;
 		const delivered = Promise.race([this.stage(stage, text, MESSAGE_LEAD), stage.read]);
+		if (ordinary) {
+			// Its send answers with its outcome once its stage ends, by its deadline, which a repeated request of it waits for too (RULES-1.2)
+			const ended = delivered.then(outcome => ({ outcome, record: this.finish(pending.id, outcome) ?? pending }));
+			this.outcomes.set(pending.id, ended.then(each => each.record));
+			void ended.finally(() => this.outcomes.delete(pending.id));
+			const settled = await this.within(ended, start + STAGE_MS - this.mono());
+			if (settled !== 'deadline') {
+				return { record: settled.record, status: settled.outcome.status, ...(settled.outcome.reason ? { reason: settled.outcome.reason } : {}) };
+			}
+			// A stage ends by its deadline: one that did not is answered as unconfirmed, never as accepted (RULES-1.2)
+			const record = this.live.get(pending.id) ?? pending;
+			this.deps.log.event(`Message ${record.alias} to ${target.alias} did not end by its deadline; its send is answered unconfirmed`);
+			return { record, status: 'failure', reason: 'submission_unconfirmed' };
+		}
 		const first = await this.within(delivered, RESPONSE_BUDGET_MS - (this.mono() - start));
 		if (first !== 'deadline') {
 			return { record: this.finish(pending.id, first) ?? pending, status: first.status, ...(first.reason ? { reason: first.reason } : {}) };
@@ -294,6 +337,17 @@ export class MessageService implements Messages, Disposable {
 			status: 'accepted',
 			...(stage.obstacle ? { obstacle: stage.obstacle } : {})
 		};
+	}
+
+	async settledOf(record: MessageRecord): Promise<MessageRecord> {
+		const ending = this.outcomes.get(record.id);
+		const current = () => this.live.get(record.id) ?? this.deps.store.list().find(each => each.id === record.id) ?? record;
+		if (!ending) {
+			return current();
+		}
+		const left = (record.delivery.deadline ?? this.deps.clock.now()) - this.deps.clock.now() + ANSWER_MARGIN_MS;
+		const settled = await this.within(ending, Math.max(0, left));
+		return settled === 'deadline' ? current() : settled;
 	}
 
 	findRequest(from: RunId, requestId: string): MessageRecord | undefined {
@@ -494,6 +548,11 @@ export class MessageService implements Messages, Disposable {
 		if (original.from.run === 'facade') {
 			return;
 		}
+		// An ordinary message's outcome is its send's answer alone; a send repeated with its request ID tells it
+		if (original.kind === 'message' && original.initialPrompt === undefined) {
+			this.deps.log.event(`Message ${original.alias} ended ${original.delivery.status}${original.delivery.reason ? ` (${original.delivery.reason})` : ''}: no Facade result goes to its sender`);
+			return;
+		}
 		const result = this.deps.receipt?.(original, this.cliOf(original.to.run));
 		if (original.fromWindow !== undefined) {
 			// Its sender is in another window: the result is that window's to give, and goes nowhere else if it cannot (RULES-1.7)
@@ -535,28 +594,17 @@ export class MessageService implements Messages, Disposable {
 		// A result's own budget is never cut short: it joins only results with a whole stage's time still before them, or that came
 		// together with it, and never a paste a read has delivered already, which ends at its next slot (RULES-1.5, RULES-1.7)
 		const open = [...this.stages].find(each => each.target === run && each.batch !== undefined && each.batch.typed === undefined && !each.stop.signal.aborted
-			&& !each.settled && each.deadline - start >= STAGE_MS + each.extra - TOGETHER_MS);
+			&& !each.settled && each.deadline - start >= STAGE_MS - TOGETHER_MS);
 		if (open?.batch) {
 			// Typed with the results already waiting for this terminal, one turn of its model for them all, by their deadline (RULES-1.7)
 			open.batch.records.push(record.id);
 			open.batch.texts.set(record.id, text);
-			const extra = this.deps.input.pasteTime?.(run, open.batch.records.map(id => open.batch!.texts.get(id)!).join('\n\n')) ?? 0;
-			// Its whole stage, for one that came a moment after the others; the paste's added time for all of them
-			const deadline = Math.max(open.deadline + Math.max(0, extra - open.extra), start + STAGE_MS + extra);
-			if (deadline > open.deadline) {
-				open.deadline = deadline;
-				open.extra = Math.max(open.extra, extra);
-				open.heldUntil = this.deps.clock.now() + open.deadline - start;
-				for (const id of open.batch.records) {
-					this.progress(id, open);
-				}
-			}
+			// Under the earliest one's deadline: joining never restarts or extends a budget (RULES-1.5)
 			return this.update(record.id, { delivery: { ...record.delivery, deadline: this.deps.clock.now() + (open.deadline - start) } });
 		}
-		const extra = this.deps.input.pasteTime?.(run, text) ?? 0;
 		const now = this.deps.clock.now();
-		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: now + STAGE_MS + extra, start: now } });
-		return this.deliverResults(pending, text, this.newStage(run, record.id, start, extra, { records: [record.id], texts: new Map([[record.id, text]]) }));
+		const pending = this.update(record.id, { delivery: { ...record.delivery, deadline: now + STAGE_MS, start: now } });
+		return this.deliverResults(pending, text, this.newStage(run, record.id, start, { records: [record.id], texts: new Map([[record.id, text]]) }));
 	}
 
 	/** Runs the stage of a paste of Facade results, `record` the first, and records its outcome for each (RULES-1.7). */
@@ -571,11 +619,11 @@ export class MessageService implements Messages, Disposable {
 		return record;
 	}
 
-	private newStage(target: RunId, message: string, start: number, extra: number, batch?: ResultBatch): Stage {
+	private newStage(target: RunId, message: string, start: number, batch?: ResultBatch, length = STAGE_MS): Stage {
 		let resolveRead!: (outcome: Outcome) => void;
 		const read = new Promise<Outcome>(resolve => { resolveRead = resolve; });
 		const stage: Stage = {
-			target, message, stop: new AbortController(), start, read, resolveRead, deadline: start + STAGE_MS + extra, extra, attempts: 0, effects: NO_EFFECTS, submitting: false, written: false, entered: false,
+			target, message, stop: new AbortController(), start, read, resolveRead, deadline: start + length, attempts: 0, effects: NO_EFFECTS, submitting: false, written: false, entered: false,
 			...batch ? { batch } : {}
 		};
 		this.stages.add(stage);
@@ -585,8 +633,8 @@ export class MessageService implements Messages, Disposable {
 	/**
 	 * One delivery stage (RULES-1.4-1.6): an attempt at its start and every three seconds on, each looking at the input first and
 	 * pasting the whole text with Enter only into a usable composer - once: a later attempt presses Enter only over the message's own
-	 * draft. A confirmed submission ends it; a draft, a menu or unknown input spends the slot, and while another draft or a native
-	 * question holds the input its deadline moves on, to ten minutes from its start; an ended run ends it at once. A slot that went by
+	 * draft. A confirmed submission ends it; a draft, a menu or unknown input spends the slot, its deadline never moved on; an
+	 * ended run ends it at once, and a paste that would not fit before the deadline is never begun. A slot that went by
 	 * during an attempt is not made up for. At the deadline, input not yet started is dropped and what went in is reported.
 	 */
 	private async stage(stage: Stage, text: string | (() => string), lead?: string): Promise<Outcome> {
@@ -595,7 +643,8 @@ export class MessageService implements Messages, Disposable {
 			for (let slot = 0; ;) {
 				const due = start + slot * SLOT_MS - this.mono();
 				if (due > 0) {
-					await this.wait(due, stage.stop.signal);
+					// No slot comes past the deadline: the stage ends at it, its answer in time (RULES-1.5)
+					await this.wait(Math.min(due, Math.max(0, stage.deadline - this.mono())), stage.stop.signal);
 				}
 				if (stage.stop.signal.aborted || stage.settled && !stage.written) {
 					return this.ended(stage);
@@ -628,6 +677,10 @@ export class MessageService implements Messages, Disposable {
 				if (attempt.kind === 'expired') {
 					break;
 				}
+				if (attempt.kind === 'unfit') {
+					// Its paste fits in no later slot either: the outcome is known now (RULES-1.2)
+					return { status: 'failure', reason: stage.obstacle ?? 'timeout', effects: stage.effects, attempts: stage.attempts + 1 };
+				}
 				stage.attempts++;
 				if (attempt.kind === 'submitted') {
 					if (attempt.effects.outcome === 'confirmed') {
@@ -639,12 +692,9 @@ export class MessageService implements Messages, Disposable {
 					stage.entered ||= attempt.effects.enter_written !== false;
 					stage.obstacle = undefined;
 				} else if (attempt.kind === 'blocked') {
+					// Another draft, the CLI's own question or an input that cannot be read: the next slot tries again, within the same
+					// thirty seconds (RULES-1.5)
 					stage.obstacle = attempt.obstacle;
-					if (HELD.has(attempt.obstacle) && stage.deadline < start + HOLD_MS + stage.extra) {
-						// Another draft or the CLI's own question: waited for, up to ten minutes from the start (RULES-1.5)
-						stage.deadline = start + HOLD_MS + stage.extra;
-						stage.heldUntil = this.deps.clock.now() + (stage.deadline - this.mono());
-					}
 				}
 				for (const id of stage.batch?.records ?? [stage.message]) {
 					this.progress(id, stage);
@@ -756,6 +806,10 @@ export class MessageService implements Messages, Disposable {
 		}
 		if (this.mono() >= stage.deadline) {
 			return { kind: 'expired' };
+		}
+		// A paste begins only where it, its Enter and their confirmation fit before the deadline, before it is kept as maybe typed (RULES-1.5)
+		if (input !== 'own' && this.mono() + (this.deps.input.submitTime?.(stage.target, text()) ?? 0) > stage.deadline) {
+			return { kind: 'unfit' };
 		}
 		if (input !== 'own' && !this.pasting(stage, text(), lead)) {
 			// Not kept as maybe in its input, it is not pasted: an opening after a reload could not know not to paste it again (RULES-1.6)
@@ -986,8 +1040,7 @@ export class MessageService implements Messages, Disposable {
 		const current = this.live.get(id);
 		if (current && !this.disposed) {
 			const written = stage.effects.outcome === 'none' ? current.delivery.effects : { ...stage.effects, outcome: 'pending' as const };
-			// A deadline moved on while the input was held is the one the record states (RULES-1.5)
-			const deadline = stage.heldUntil ?? current.delivery.deadline;
+			const deadline = current.delivery.deadline;
 			// What a later opening goes on from: the stage's start, whether its text may be in the input, as what, and its Enter (RULES-1.9)
 			const { pasted: _pasted, seen: _seen, entered: _entered, input, ...delivery } = current.delivery;
 			this.save({
@@ -1088,8 +1141,7 @@ export class MessageService implements Messages, Disposable {
 		const text = delivery.input?.text ?? (record.kind === 'result' ? formatResult(record) : formatMessage(record, record.fromWindow ? record.label ?? record.fromWindow : ''));
 		const lead = delivery.input ? delivery.input.lead : MESSAGE_LEAD;
 		const members = record.kind === 'result' && delivery.input ? this.deps.store.list().filter(other => delivery.input!.messages.includes(other.id) && other.delivery.status === 'pending' && other.to.run === run) : [record];
-		const extra = this.deps.input.pasteTime?.(run, text) ?? 0;
-		const stage = this.newStage(run, record.id, this.mono() - (now - delivery.start!), extra, record.kind === 'result' ? { records: members.map(each => each.id), texts: new Map(members.map(each => [each.id, text])) } : undefined);
+		const stage = this.newStage(run, record.id, this.mono() - (now - delivery.start!), record.kind === 'result' ? { records: members.map(each => each.id), texts: new Map(members.map(each => [each.id, text])) } : undefined);
 		stage.deadline = this.mono() + (delivery.deadline! - now);
 		stage.attempts = delivery.attempts;
 		if (delivery.pasted) {
@@ -1110,12 +1162,18 @@ export class MessageService implements Messages, Disposable {
 			this.deliverResults(record, text, stage);
 			return;
 		}
-		void Promise.race([this.stage(stage, text, lead), stage.read]).then(outcome => {
+		const ended = Promise.race([this.stage(stage, text, lead), stage.read]).then(outcome => {
 			const final = this.finish(record.id, outcome);
 			if (final && !this.disposed) {
 				this.reportOutcome(final, undefined);
 			}
+			return final ?? record;
 		});
+		// A repeated request of an ordinary message, its sender's call cut by the reload, waits for this outcome (RULES-1.2)
+		if (record.kind === 'message' && record.initialPrompt === undefined) {
+			this.outcomes.set(record.id, ended);
+			void ended.finally(() => this.outcomes.delete(record.id));
+		}
 	}
 
 	/** Ends at its deadline a pending record this window cannot go on with, as `records` settles it then (RULES-1.9). */

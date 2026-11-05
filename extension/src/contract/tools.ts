@@ -9,9 +9,10 @@
 import type { ScreenStyle } from '../base/screenStyle';
 import { monotonic } from '../base/clock';
 import { isJsonObject } from '../base/json';
+import { displayLine } from '../base/text';
 import { messageOf as errorText } from '../base/errors';
 import { FacadeError } from '../core/errors';
-import { HOLD_MS, RESPONSE_BUDGET_MS, STAGE_MS } from '../core/messages';
+import { HOLD_MS, STAGE_MS } from '../core/messages';
 import type { InputPort, MessageRecord, Messages, SendResult } from '../core/messagePorts';
 import type { Agents, CliChoice, Clock, Location, LocationPort, RunFacts, RunId, StartOutcome } from '../core/ports';
 import { reaches, referenceOf, resolveAgent, ResolveOptions, trailingId } from '../core/reach';
@@ -79,14 +80,14 @@ export interface ToolServiceDeps {
 	readonly agents: Pick<Agents, 'launch' | 'started' | 'warmedUp' | 'close' | 'list' | 'get' | 'requested' | 'creationPending' | 'creationSettled'>;
 	readonly locations: Pick<LocationPort, 'snapshot' | 'resolve'>;
 	readonly clis: StartCatalog;
-	readonly messages: Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest' | 'giveUpPrompt'>;
+	readonly messages: Pick<Messages, 'send' | 'allocate' | 'reserveResult' | 'recordPrompt' | 'report' | 'inbox' | 'markDelivered' | 'keepSent' | 'history' | 'findRequest' | 'giveUpPrompt' | 'settledOf'>;
 	readonly terminal: TerminalPort;
 	/** The execution environment's Facade directory, where long results are written. */
 	readonly home: string;
 	readonly writeResult: ResultWriter;
 	/** Structured event log in this execution environment, for on-demand history. */
 	readonly historyLog?: string;
-	/** `facade.collaboration.waitSeconds`, in seconds: how long a start or stop is waited for before it is answered `accepted` (MCP-1.3). */
+	/** How long a start or stop is waited for before it is answered `accepted`, in seconds (MCP-1.3). */
 	readonly timeout: () => number;
 	/** The destination's `facade.yolo`, which a start would launch with (RULES-4.3). */
 	readonly yolo: () => boolean;
@@ -114,8 +115,8 @@ const CALLER_WAIT_MS = 2_000;
 const ROUTE_INPUT_MS = 30_000;
 
 /**
- * The hops back from another window, charged to a message's two seconds before that window answers it: forwarding spends the same
- * allowance, and the answer comes within them (RULES-1.2). Half a second: a remote window's hops cross its SSH connection.
+ * The way back from another window, kept of a start's or stop's wait before that window answers it, so that the answer comes within
+ * the wait (MCP-1.3). Half a second: a remote window's hops cross its SSH connection.
  */
 const ROUTE_TRANSIT_MS = 500;
 
@@ -289,7 +290,7 @@ class ToolService {
 					typeof args!.location_id === 'string' ? args!.location_id : undefined, args!.details === true);
 			}
 			case 'deliver':
-				return this.deliver(args as unknown as RoutedDelivery, route.from);
+				return this.deliver(args as unknown as RoutedDelivery, route.from, route.deadlineMs);
 			case 'result':
 				return this.receiveResult(args as unknown as RoutedResult);
 			default:
@@ -441,6 +442,14 @@ class ToolService {
 	 * Makes a tool call in `window` for this window's caller (COLLABORATION-1.1): that window validates and acts on its own agents, its
 	 * answer coming back as it gave it. A route that carried no answer says why, and whether the call may have acted there.
 	 */
+	/**
+	 * What remains of a start's or stop's two minutes from the shim's ingress, forwarding included; a call routed here keeps half a second
+	 * of it for its answer's way back (MCP-1.3).
+	 */
+	private waitLeft(caller: Caller, call: Received): number {
+		return Math.max(0, this.deps.timeout() * 1000 - this.elapsed(call) - (caller.window !== undefined ? ROUTE_TRANSIT_MS : 0));
+	}
+
 	private async routeCall(window: string, tool: ToolName, args: object, caller: Caller, call: Received, deadlineMs: number, inline = false): Promise<Outcome> {
 		const routed: RoutedCall = { tool, arguments: args, caller: this.guestOf(caller), callId: call.callId, elapsedMs: this.elapsed(call), protocol: call.protocol, ...inline ? { inline } : {} };
 		this.deps.log?.(`Route ${JSON.stringify({ phase: 'requested', call_id: call.callId, tool, from: this.deps.window.id, to: window, caller: caller.alias, deadline_ms: Math.round(deadlineMs) })}`);
@@ -554,9 +563,10 @@ class ToolService {
 
 	/**
 	 * A message another window's agent sent to one of this window's (RULES-1.4, 1.5): delivered here under this window's input rules,
-	 * within what is left of its two seconds, its later outcome going back to the sender's window (RULES-1.7).
+	 * within what is left of its thirty seconds - the sender's elapsed time or, where the route spent more on its way, what the route
+	 * has left - its outcome this answer (RULES-1.2, MCP-1.3).
 	 */
-	private async deliver(delivery: RoutedDelivery, from: string): Promise<Data> {
+	private async deliver(delivery: RoutedDelivery, from: string, routeLeftMs?: number): Promise<Data> {
 		if (!delivery || typeof delivery.id !== 'string' || typeof delivery.to !== 'string' || typeof delivery.text !== 'string' || !isGuestCaller(delivery.from)
 			|| typeof delivery.elapsedMs !== 'number' || !Number.isFinite(delivery.elapsedMs)) {
 			throw new Error('The routed message was incomplete: it had no effect.');
@@ -564,21 +574,35 @@ class ToolService {
 		const sender: GuestCaller = { ...delivery.from, window: from };
 		const earlier = typeof delivery.requestId === 'string' ? this.deps.messages.findRequest(sender.id, delivery.requestId) : undefined;
 		if (earlier) {
-			return defined({ status: earlier.delivery.status === 'pending' ? 'accepted' : earlier.delivery.status, reason: earlier.delivery.reason, record: earlier });
+			// A repeat joins its original's delivery here (RULES-1.2)
+			const record = await this.deps.messages.settledOf?.(earlier) ?? earlier;
+			return defined({ status: sentStatus(record), reason: record.delivery.status === 'pending' ? 'submission_unconfirmed' : record.delivery.reason, record });
 		}
 		const target = this.deps.agents.get(delivery.to);
 		if (!target || !reaches(sender, target)) {
 			// A refusal before any record or input, answered as one: thrown, the route could only say its effects are not known (MCP-1.2)
 			return { status: 'failure', error: { code: 'NOT_FOUND', reason: 'not_found', message: `No agent ${delivery.to} that the sender reaches is in this window.` } };
 		}
-		const sent = await this.deps.messages.send({
+		let sent: Awaited<ReturnType<typeof this.deps.messages.send>>;
+		try {
+			sent = await this.deps.messages.send({
 			id: delivery.id, from: sender.id, sender: { party: { run: sender.id, alias: sender.alias, name: sender.name }, window: from, ...sender.windowLabel !== undefined ? { label: sender.windowLabel } : {} },
 			to: target.id, text: delivery.text, ...delivery.replyTo !== undefined ? { replyTo: delivery.replyTo } : {},
-			elapsedMs: delivery.elapsedMs, ...delivery.callId !== undefined ? { callId: delivery.callId } : {},
+			// Every forwarding layer charges the same budget: the stage ends half a second before the route gives up, however it got here
+			elapsedMs: Number.isFinite(routeLeftMs) ? Math.max(delivery.elapsedMs, STAGE_MS - routeLeftMs!) : delivery.elapsedMs,
+			...delivery.callId !== undefined ? { callId: delivery.callId } : {},
 			// A request ID is the sender's words, kept as given where it is the shape a call's is (MCP-1.1)
 			...typeof delivery.requestId === 'string' && codePoints(delivery.requestId) > 0 && codePoints(delivery.requestId) <= 200 ? { requestId: delivery.requestId } : {}
-		});
-		return defined({ status: sent.status, reason: sent.reason, obstacle: sent.obstacle, record: sent.record });
+			});
+		} catch (err) {
+			// Refused before its record was made - a text no whole stage could take: answered as a refusal, with no effects (RULES-1.5)
+			if (err instanceof FacadeError && err.code === 'INVALID') {
+				return { status: 'failure', error: { code: err.code, reason: err.reason, message: err.message } };
+			}
+			throw err;
+		}
+		const named = sent.status === 'failure' && (sent.reason ?? sent.record.delivery.reason) === 'input_unknown' && sent.record.to.run !== '@human' ? cliNamed(this.deps.agents.get(sent.record.to.run)) : undefined;
+		return defined({ status: sent.status, reason: sent.reason, obstacle: sent.obstacle, record: sent.record, cli: named });
 	}
 
 	/** A Facade result another window sends for one of this window's agents (RULES-1.7): in its inbox, and its terminal where it can be. */
@@ -640,7 +664,7 @@ class ToolService {
 		if (args.window_id !== this.deps.window.id && this.deps.network && caller.window === undefined) {
 			// The child starts in its window, joining the caller's tree (COLLABORATION-1.1, RULES-4.3)
 			await this.knownWindow(args.window_id);
-			return this.routeCall(args.window_id, 'start_agent', args, caller, call, this.deps.timeout() * 1000 + QUERY_ROUTE_MS);
+			return this.routeCall(args.window_id, 'start_agent', args, caller, call, Math.max(0, this.deps.timeout() * 1000 - this.elapsed(call)));
 		}
 		// Everything that can be checked before acceptance is: a failure here creates no card or terminal (MCP-2.3, RULES-5.1)
 		this.checkWindow(args.window_id);
@@ -685,11 +709,11 @@ class ToolService {
 		});
 		const launched = this.deps.agents.get(run);
 		const start: Start = { resultMessageId, run, args, caller, call, location, ...launched ? { identity: { alias: launched.alias, name: launched.name } } : {},
-			...prompt ? { promptId: prompt.id } : {}, answerBy: Date.now() + this.deps.timeout() * 1000 };
+			...prompt ? { promptId: prompt.id } : {}, answerBy: Date.now() + this.waitLeft(caller, call) };
 		const settled = this.deps.agents.started(run);
 		let outcome: { readonly value: StartOutcome } | undefined;
 		try {
-			outcome = await within(settled, this.deps.timeout() * 1000);
+			outcome = await within(settled, this.waitLeft(caller, call));
 		} catch (err) {
 			// Accepted already: the pair exists, whatever came of its start
 			return { result: errorResult(err, { data: this.startData(start, this.deps.agents.get(run), 'starting'), effects: { outcome: 'unknown', agent_id: run } }) };
@@ -1004,13 +1028,13 @@ class ToolService {
 	private async stopAgent(args: ToolArguments['stop_agent'], caller: Caller, call: Received): Promise<Outcome> {
 		const located = await this.locate(args.agent, caller);
 		if (located.there) {
-			return this.routeCall(located.there.window, 'stop_agent', { agent: located.there.id }, caller, call, this.deps.timeout() * 1000 + QUERY_ROUTE_MS);
+			return this.routeCall(located.there.window, 'stop_agent', { agent: located.there.id }, caller, call, Math.max(0, this.deps.timeout() * 1000 - this.elapsed(call)));
 		}
 		const target = located.here;
 		const shown = `${referenceOf(target)} (${target.id})`;
 		// The card and terminal go at once; only the process's end is waited for, its children untouched (MCP-3.2)
 		const closing = this.deps.agents.close(target.id);
-		const cleanup = await within(closing, this.deps.timeout() * 1000);
+		const cleanup = await within(closing, this.waitLeft(caller, call));
 		if (cleanup) {
 			return stopped(target, cleanup.value);
 		}
@@ -1043,13 +1067,13 @@ class ToolService {
 	private async sendMessage(args: ToolArguments['send_message'], caller: Caller, call: Received): Promise<Outcome> {
 		// A request ID the caller gave a send before: that message as it stands, sent no second time (MCP-1.1)
 		const earlier = args.request_id !== undefined ? this.deps.messages.findRequest(caller.id, args.request_id) : undefined;
-		if (earlier && earlier.window !== this.deps.window.id && earlier.delivery.status === 'pending' && this.deps.network && caller.window === undefined) {
-			// Another window holds it, its outcome not told here yet - its reply lost, or its result: asked there, where it stands, and
-			// never sent to whoever its reference names now (MCP-1.1)
+		if (earlier && earlier.window !== this.deps.window.id && earlier.delivery.status !== 'success' && this.deps.network && caller.window === undefined) {
+			// Another window holds it, and its copy here may lag - its reply lost, or a later inbox handoff there that no result tells:
+			// asked there, where it stands, and never sent to whoever its reference names now (MCP-1.1, 1.2, COLLABORATION-4.1)
 			return this.routeSend(earlier.window, { id: earlier.id, to: earlier.to, text: earlier.text, replyTo: earlier.replyTo, environment: earlier.environment }, args, caller, call, earlier);
 		}
 		if (earlier) {
-			return this.sentBefore(earlier, args);
+			return await this.sentBefore(earlier, args);
 		}
 		const human = await this.isHuman(args.to, caller);
 		const located = human ? undefined : await this.locate(args.to, caller, run => run.lifecycle !== 'ended');
@@ -1071,17 +1095,17 @@ class ToolService {
 			}
 		}
 		const to = target?.id ?? '@human';
-		// The window's time so far comes off the same two seconds as the hops before it (RULES-1.2, 1.5)
+		// The window's time so far comes off the same thirty seconds as the hops before it (RULES-1.2, 1.5)
 		const sent = await this.deps.messages.send({ from: caller.id, to, text: args.text, ...replyTo ? { replyTo } : {}, elapsedMs: this.elapsed(call), callId: call.callId, ...args.request_id !== undefined ? { requestId: args.request_id } : {} });
 		// A concurrent request may already have resolved this key to another target. Report its authoritative record.
 		const { record } = sent;
 		const actual = record.to.run === '@human' ? undefined : this.deps.agents.get(record.to.run);
-		return sendOutcome(record, sent.status, { shown: actual ? referenceOf(actual) : shownOf(record.to), reason: sent.reason, obstacle: sent.obstacle });
+		return sendOutcome(record, sent.status, { shown: actual ? referenceOf(actual) : shownOf(record.to), reason: sent.reason, obstacle: sent.obstacle, cli: cliNamed(actual) });
 	}
 
 	/**
 	 * A message to another window's agent (COLLABORATION-1.1, RULES-1.1-1.7): its ID taken here, delivered there within what is left
-	 * of the two seconds, a copy of its record kept here, and its later outcome coming back here as a Facade result.
+	 * of its thirty seconds, its outcome that window's answer, and a copy of its record kept here.
 	 */
 	private async sendThere(args: ToolArguments['send_message'], caller: Caller, call: Received, target: Reachable): Promise<Outcome> {
 		let replyTo: string | undefined;
@@ -1097,7 +1121,7 @@ class ToolService {
 	}
 
 	/**
-	 * Delivers `message` in `window`, where its record is made under its ID, within what is left of the two seconds (RULES-1.2), and keeps
+	 * Delivers `message` in `window`, where its record is made under its ID, within what is left of its thirty seconds (RULES-1.2), and keeps
 	 * a copy here: the window's answer, or - where the answer may have been lost after the message arrived - the message with its outcome
 	 * not known, so that a retry with its request ID asks that window again, as `earlier` does (MCP-1.1).
 	 */
@@ -1107,11 +1131,13 @@ class ToolService {
 		const shown = shownOf(to);
 		const delivery: RoutedDelivery = {
 			id, from: this.guestOf(caller), to: to.run as RunId, text, ...replyTo ? { replyTo } : {}, callId: call.callId,
-			...args.request_id !== undefined ? { requestId: args.request_id } : {}, elapsedMs: this.elapsed(call) + ROUTE_TRANSIT_MS
+			...args.request_id !== undefined ? { requestId: args.request_id } : {}, elapsedMs: this.elapsed(call)
 		};
-		// The two seconds hold across the hops: that window answers in time for its answer to come back within them (RULES-1.2)
+		// The thirty seconds hold across the hops: that window's stage ends half a second before them, kept once for the answer's way
+		// back however many windows it crosses (MCP-4.1)
 		this.deps.log?.(`Route ${JSON.stringify({ phase: 'requested', call_id: call.callId, request_id: args.request_id, tool: 'send_message', message: alias, agent: to.alias ?? to.run, from: this.deps.window.id, to: window })}`);
-		const response = await this.deps.network!.route(window, 'deliver', delivery, Math.max(0, RESPONSE_BUDGET_MS - this.elapsed(call)));
+		// That window answers once the message's stage there ends, within what remains of the thirty seconds (RULES-1.2)
+		const response = await this.deps.network!.route(window, 'deliver', delivery, Math.max(0, STAGE_MS - this.elapsed(call)));
 		this.deps.log?.(`Route ${JSON.stringify({ phase: response.ok ? 'answered' : 'reply_unavailable', call_id: call.callId, message: alias, from: this.deps.window.id, to: window, ...!response.ok ? { reason: response.reason, effects: response.effects } : {} })}`);
 		const data = defined({
 			message_id: id, alias, target: to.run, target_reference: shown, reply_to: replyTo, length: codePoints(text), window_id: window,
@@ -1138,14 +1164,16 @@ class ToolService {
 			}
 			return { result: failure(routeError(response), data, effects), headline: `Message ${alias} to ${shown}: ${effects === unknown ? 'whether it was delivered is not known' : 'it was not delivered'}. ${response.message}` };
 		}
-		const answered = response.result as { readonly status?: SendResult['status']; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord; readonly error?: unknown } | undefined;
+		const answered = response.result as { readonly status?: SendResult['status']; readonly reason?: string; readonly obstacle?: string; readonly record?: MessageRecord; readonly cli?: unknown; readonly error?: unknown } | undefined;
 		const refused = resultErrorOf(answered?.error);
 		if (refused && !answered?.record) {
 			// A refusal proves this attempt did nothing. It cannot settle an earlier attempt whose original record is missing.
 			if (earlier) {
 				return { result: failure({ ...refused, message: `${refused.message} The earlier delivery still could not be confirmed.` }, data, unknown) };
 			}
-			return { result: failure(refused, data, none), headline: `Message ${alias} to ${shown} was not delivered: ${refused.message}` };
+			// Refused there before its record was made: no message ID is told, as none names a record (MCP-4.1)
+			const unnumbered = Object.fromEntries(Object.entries(data).filter(([key]) => key !== 'message_id' && key !== 'alias')) as Data;
+			return { result: failure(refused, unnumbered, none), headline: `The message to ${shown} was not delivered: ${refused.message}` };
 		}
 		const record = answered?.record;
 		if (!answered || !record || (answered.status !== 'success' && answered.status !== 'accepted' && answered.status !== 'failure')) {
@@ -1154,13 +1182,14 @@ class ToolService {
 		}
 		this.deps.messages.keepSent(args.request_id !== undefined ? { ...record, requestId: args.request_id } : record);
 		// The destination may have deduplicated a retry whose first reply was lost: its original ID, never the proposed new one.
-		return sendOutcome(record, answered.status, { shown, reason: answered.reason, obstacle: answered.obstacle, window, ...earlier ? { requestId: args.request_id } : {} });
+		return sendOutcome(record, answered.status, { shown, reason: answered.reason, obstacle: answered.obstacle, window, ...typeof answered.cli === 'string' ? { cli: displayLine(answered.cli, 160) } : {}, ...earlier ? { requestId: args.request_id } : {} });
 	}
 
-	/** A send whose request ID sent `record` already: that message's delivery as it stands, nothing sent again (MCP-1.1). */
-	private sentBefore(record: MessageRecord, args: ToolArguments['send_message']): Outcome {
-		const status = record.delivery.status === 'pending' ? 'accepted' : record.delivery.status === 'unknown' ? 'failure' : record.delivery.status;
-		return sendOutcome(record, status, { shown: shownOf(record.to), requestId: args.request_id });
+	/** A repeated request: it joins its original's delivery, answering its outcome within what remains of its thirty seconds, nothing sent again (RULES-1.2, MCP-1.1). */
+	private async sentBefore(earlier: MessageRecord, args: ToolArguments['send_message']): Promise<Outcome> {
+		const record = await this.deps.messages.settledOf?.(earlier) ?? earlier;
+		const cli = record.to.run === '@human' ? undefined : cliNamed(this.deps.agents.get(record.to.run));
+		return sendOutcome(record, sentStatus(record), { shown: shownOf(record.to), requestId: args.request_id, cli, ...record.delivery.status === 'pending' ? { reason: 'submission_unconfirmed' } : {} });
 	}
 
 	private async readMessages(args: ToolArguments['read_messages'], caller: Caller): Promise<Outcome> {
@@ -1355,16 +1384,26 @@ function cliChoiceOf(choices: readonly CliChoice[], cli: string, location: Locat
 }
 
 
+/** A run's CLI as a failure names it: its display name and the version Facade found (CLIS-2.1). */
+function cliNamed(facts: RunFacts | undefined): string | undefined {
+	return facts ? `${facts.displayName}${facts.version ? ` ${facts.version}` : ''}` : undefined;
+}
+
 /** A message's recipient as an answer names it: `#human`, or its reference as its record keeps it. */
 function shownOf(party: MessageRecord['to']): string {
 	return party.run === '@human' ? '#human' : party.alias ? referenceOf({ name: party.name ?? '', alias: party.alias }) : party.run;
+}
+
+/** A send's status as its record stands: one still being delivered when its answer is due is unconfirmed, never accepted (RULES-1.2). */
+function sentStatus(record: MessageRecord): 'success' | 'failure' {
+	return record.delivery.status === 'success' ? 'success' : 'failure';
 }
 
 /**
  * What a send came to, as its caller is answered (MCP-4.1): the message's facts and its delivery as it stands - success, accepted with
  * its deadline, or failure with why - and, for a repeated `requestId`, that nothing was sent again (MCP-1.1).
  */
-function sendOutcome(record: MessageRecord, status: SendResult['status'], how: { readonly shown: string; readonly reason?: string; readonly obstacle?: string; readonly window?: string; readonly requestId?: string }): Outcome {
+function sendOutcome(record: MessageRecord, status: SendResult['status'], how: { readonly shown: string; readonly reason?: string; readonly obstacle?: string; readonly window?: string; readonly requestId?: string; readonly cli?: string }): Outcome {
 	const { shown } = how;
 	const repeated = how.requestId !== undefined;
 	const data = defined({
@@ -1382,14 +1421,19 @@ function sendOutcome(record: MessageRecord, status: SendResult['status'], how: {
 			};
 		case 'accepted': {
 			const deadline = record.delivery.deadline !== undefined ? isoOf(record.delivery.deadline) : undefined;
+			// No Facade result follows a message; the same request ID asks for its outcome
+			const ask = how.requestId ?? record.requestId;
+			const later = `No Facade result follows${ask !== undefined ? `; send_message with request_id ${ask} again tells its outcome` : ''}.`;
 			return {
 				result: accepted(defined({ ...data, deadline, obstacle: how.obstacle }), effects),
-				headline: repeated ? `${again}It is still being delivered, and its outcome is ${LATER}.`
-					: `Message ${record.alias} to ${shown} is accepted but not yet submitted${how.obstacle ? ` (${how.obstacle})` : ''}; delivery continues${deadline ? ` until ${deadline}` : ''}, and its outcome is ${LATER}.`
+				headline: repeated ? `${again}It is still being delivered. ${later}`
+					: `Message ${record.alias} to ${shown} is accepted but not yet submitted${how.obstacle ? ` (${how.obstacle})` : ''}; delivery continues${deadline ? ` until ${deadline}` : ''}. ${later}`
 			};
 		}
 		case 'failure': {
-			const error = sendFailureOf(how.reason ?? record.delivery.reason);
+			const known = sendFailureOf(how.reason ?? record.delivery.reason);
+			// An input box its reader never recognized: the answer names the CLI and the version Facade found (MCP-1.2, CLIS-2.1)
+			const error = known.reason === 'input_unknown' && how.cli ? { ...known, message: `${known.message} CLI: ${how.cli}.` } : known;
 			return {
 				result: failure(error, data, effects),
 				headline: repeated ? `${again}It was not delivered: ${error.message} A new request_id sends it anew.` : `Message ${record.alias} to ${shown} was not delivered: ${error.message}`

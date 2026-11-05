@@ -119,7 +119,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		const sections = contributes.configuration.map((section: { id: string; title: string; order: number; properties: Record<string, unknown> }) => [section.id, english(section.title), section.order, Object.keys(section.properties)]);
 		const cli = (setting: string) => [`${setting}.enabled`, `${setting}.path`, `${setting}.launch`];
 		assert.deepStrictEqual(sections, [
-			['facade.agents', 'Agents', 2, ['facade.yolo', 'facade.collaboration.enabled', 'facade.collaboration.waitSeconds']],
+			['facade.agents', 'Agents', 2, ['facade.yolo', 'facade.collaboration.enabled']],
 			['facade.claude', 'Claude Code', 3, cli('facade.claude')],
 			['facade.codex', 'Codex', 4, cli('facade.codex')],
 			['facade.antigravity', 'Antigravity', 5, cli('facade.antigravity')],
@@ -134,7 +134,6 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		assert.deepStrictEqual(Object.entries(settings).map(([key, value]) => [key, value.type, value.default, value.scope]), [
 			['facade.yolo', 'boolean', true, 'machine'],
 			['facade.collaboration.enabled', 'boolean', true, 'machine'],
-			['facade.collaboration.waitSeconds', 'integer', 120, 'machine'],
 			...BUILT_IN_ADAPTERS.flatMap(adapter => [
 				[`${adapter.setting}.enabled`, 'boolean', true, 'machine'],
 				[`${adapter.setting}.path`, 'string', '', 'machine'],
@@ -171,12 +170,10 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		// Every description resolves; no retired setting survives
 		const keys = [...JSON.stringify(contributes).matchAll(/"%([\w.]+)%"/g)].map(match => match[1]);
 		assert.deepStrictEqual(keys.filter(key => nls[key] === undefined), []);
-		for (const retired of ['agentLocation', 'worktrees"', 'taskDelay', 'unattended', 'enterDelay', 'trust', 'facade.agents.']) {
+		// How long a start or stop is waited for is no setting (MCP-1.3)
+		for (const retired of ['agentLocation', 'worktrees"', 'taskDelay', 'unattended', 'enterDelay', 'trust', 'facade.agents.', 'waitSeconds']) {
 			assert.ok(!JSON.stringify(contributes.configuration).includes(retired), retired);
 		}
-		// The timeout's bounds are MCP-1.3's: whole seconds from 1 to 3600
-		const timeout = settings['facade.collaboration.waitSeconds'] as unknown as { minimum: number; maximum: number };
-		assert.deepStrictEqual([timeout.minimum, timeout.maximum], [1, 3600]);
 	});
 
 	suite('what the panel registers', () => {

@@ -193,7 +193,7 @@ function redactedCells(chars) {
 	});
 }
 
-/** A screen as the recorded cases keep it: each row's characters, its trailing spaces cut, and its dim and inverse runs. */
+/** A screen as the recorded cases keep it: each row's characters, its trailing spaces cut, and its dim, inverse and colored runs. */
 function compact(name, expect, term) {
 	const screen = inputScreenOf(term);
 	const runs = (row, key) => {
@@ -213,14 +213,15 @@ function compact(name, expect, term) {
 	return {
 		name, expect, cols, cursor: screen.cursor, rows: screen.rows.map(row => {
 			let end = row.length;
-			while (end > 0 && row[end - 1].chars === ' ' && !row[end - 1].dim && !row[end - 1].inverse) {
+			while (end > 0 && row[end - 1].chars === ' ' && !row[end - 1].dim && !row[end - 1].inverse && !row[end - 1].colored) {
 				end--;
 			}
 			const cut = row.slice(0, end);
 			const chars = redactedCells(cut.map(cell => cell.chars));
 			const dim = runs(cut, 'dim');
 			const inverse = runs(cut, 'inverse');
-			return { cells: chars.every(char => [...char].length === 1) ? chars.join('') : chars, ...dim.length ? { dim } : {}, ...inverse.length ? { inverse } : {} };
+			const colored = runs(cut, 'colored');
+			return { cells: chars.every(char => [...char].length === 1) ? chars.join('') : chars, ...dim.length ? { dim } : {}, ...inverse.length ? { inverse } : {}, ...colored.length ? { colored } : {} };
 		})
 	};
 }

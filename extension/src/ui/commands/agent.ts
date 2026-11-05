@@ -48,11 +48,20 @@ export class AgentActions {
 		return this.deps.execution.reveal(run, { preserveFocus: false });
 	}
 
+	/**
+	 * Pins or Unpins `run`, as the person asked - from its card, the Command Palette or a key: their attention to that agent. Saved, its
+	 * tab is shown as a click on the card shows it, with the focus, and its mark goes on there; a Pin opens it where it has none open,
+	 * while an Unpin leaves a hidden one hidden, and one not saved shows nothing (LIFECYCLE-3.4).
+	 */
 	pin(run: RunId, pinned: boolean): void {
 		const facts = this.deps.agents.get(run);
 		if (!facts) { return; }
 		try {
 			if (pinned) { this.deps.agents.pin(run); } else { this.deps.agents.unpin(run); }
+			if (pinned || this.deps.agents.get(run)?.tab !== 'hidden') {
+				this.deps.model.select(run);
+				void this.deps.execution.reveal(run, { preserveFocus: false });
+			}
 		} catch (err) {
 			// Closed meanwhile: nothing is left to pin, and no run's ID is said
 			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {

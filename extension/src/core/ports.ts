@@ -234,9 +234,10 @@ export interface PairFacts {
 
 /**
  * Where a run's tab is, kept with its process so that a reload brings it back (LIFECYCLE-3.5, ARCHITECTURE-3.1): open in the editor
- * group of `column`, last active at `activeAt`, or hidden. None is a build's that kept no such record.
+ * group of `column`, last active at `activeAt`, `front` where it is that group's front tab, or hidden. None is a build's that kept no
+ * such record.
  */
-export type TabPlace = { readonly column: number; readonly activeAt?: number } | 'hidden';
+export type TabPlace = { readonly column: number; readonly activeAt?: number; readonly front?: true } | 'hidden';
 
 export type Activity = 'working' | 'not_working' | 'unknown';
 
@@ -355,13 +356,8 @@ export interface ExecutionPort {
 	tabLabel?(run: RunId, alias: string, shown: boolean): void;
 	/** Where a run's tab is now, for a reload to bring it back (LIFECYCLE-3.5). */
 	readonly onDidPlaceTab?: Event<{ readonly run: RunId; readonly place: TabPlace }>;
-	/**
-	 * The editor copied a run's tab - a split, a copying drag, Copy into New Window (LIFECYCLE-2.2): `done` is told the agent started in
-	 * its place, or none, and the copy, which has no process, closes then.
-	 */
-	readonly onDidCopyTab?: Event<{ readonly run: RunId; readonly column?: number; readonly done: (started: RunId | undefined) => void }>;
-	/** Opens the next agent's tab in `column`'s group - a copy's (LIFECYCLE-2.2). */
-	openNextIn?(column: number | undefined): void;
+	/** The groups a reload's coming runs were the fronts of, as their records say: nothing else need be in front there meanwhile (LIFECYCLE-3.5). */
+	frontsRecorded?(columns: readonly number[]): void;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */

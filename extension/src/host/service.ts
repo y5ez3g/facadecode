@@ -49,7 +49,7 @@ import { WindowHuman } from './human';
 import { OrdinaryInput } from './input';
 import { createLocationService, createWorktreeService } from './locations/index';
 import { editorEnvironment } from './editorEnvironment';
-import { readSetting, waitSeconds, yolo } from './settings';
+import { WAIT_SECONDS, yolo } from './settings';
 import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
 import { registerShowLaunch } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
@@ -323,7 +323,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		home,
 		writeResult,
 		historyLog: agentLog.eventsFile,
-		timeout: () => waitSeconds(readSetting, text => log.event(text)),
+		timeout: () => WAIT_SECONDS,
 		yolo,
 		input,
 		clock: { now: Date.now },

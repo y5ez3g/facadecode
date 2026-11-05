@@ -216,7 +216,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
-	test('LIFECYCLE-2.2: a split of an agent\'s tab starts, in the new group, a new agent of its CLI and location; the first stays in its group, and no empty tab is left', async function () {
+	test('LIFECYCLE-2.2: a split of an agent\'s tab becomes, in the new group, an ordinary terminal in the agent\'s folder; the agent stays in its group, no agent starts, and no empty tab is left', async function () {
 		if (CLI !== 'claude') { this.skip(); }
 		this.timeout(90_000);
 		const seen = () => JSON.stringify({
@@ -234,31 +234,34 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			const opened: vscode.Terminal[] = [];
 			const listening = vscode.window.onDidOpenTerminal(terminal => opened.push(terminal));
 			await vscode.commands.executeCommand('workbench.action.splitEditorRight');
-			const copied = await until('a copy, or none', async () => opened.length ? true : (await state()).cards.length > 1 ? true : undefined, 5_000).catch(() => false);
-			listening.dispose();
+			const copied = await until('a copy, or none', async () => opened.length ? true : undefined, 5_000).catch(() => false);
 			if (!copied) {
-				// No copy reported, so none to start an agent in place of: the first agent stays as it was, alone (LIFECYCLE-2.2). Only an
-				// editor before 1.144 may make none - 1.105 opens an empty group - so that a later one making none is a regression seen
+				listening.dispose();
+				// No copy reported, so none to put a terminal in place of: the agent stays as it was, alone (LIFECYCLE-2.2). Only an editor
+				// before 1.144 may make none - 1.105 opens an empty group - so that a later one making none is a regression seen
 				const [major, minor] = vscode.version.split('.').map(Number);
 				assert.ok(major === 1 && minor < 144, `VS Code ${vscode.version} copies a terminal tab it splits, and no copy was seen: ${seen()}`);
 				console.log(`  split: VS Code ${vscode.version} makes no copy of a terminal tab it splits: ${seen()}`);
 				assert.deepStrictEqual([(await state()).cards.map(card => card.runId), vscode.window.terminals.length], [[first.runId], 1]);
 				return;
 			}
-			const second = await until('an agent started in the copy\'s place', async () => (await state()).cards.find(card => card.runId !== first.runId), 30_000)
-				.catch(err => { throw new Error(`${(err as Error).message}: before ${before}, after ${seen()}`); });
-			cards.push(second.runId);
+			// The ordinary terminal in the copy's place, in the agent's folder, and the copy gone
+			// New Agent starts in the window's folder: the terminal starts there too
+			const agentFolder = vscode.workspace.workspaceFolders![0].uri.fsPath;
 			let last = '';
-			try {
-				await until('two groups with one agent tab each, the copy gone', async () => {
-					last = seen();
-					const groups = vscode.window.tabGroups.all.map(group => group.tabs.filter(tab => tab.input instanceof vscode.TabInputTerminal).map(tab => unspun(tab.label)));
-					return groups.length === 2 && groups[0].length === 1 && groups[1].length === 1 && groups[0][0] === first.name && groups[1][0] === second.name ? true : undefined;
-				}, 20_000);
-			} catch (err) {
-				throw new Error(`${(err as Error).message}: before ${before}, after ${last}`);
-			}
-			assert.notStrictEqual(second.name, first.name);
+			const shell = await until('an ordinary terminal in the copy\'s place, the copy gone', async () => {
+				last = seen();
+				const ordinary = opened.find(each => !('pty' in each.creationOptions) && (each.creationOptions as vscode.TerminalOptions).cwd !== undefined && each.exitStatus === undefined);
+				const groups = vscode.window.tabGroups.all.map(group => group.tabs.filter(tab => tab.input instanceof vscode.TabInputTerminal).length);
+				return ordinary && groups.length === 2 && groups.every(count => count === 1) ? ordinary : undefined;
+			}, 20_000).catch(err => { throw new Error(`${(err as Error).message}: before ${before}, after ${last}`); });
+			listening.dispose();
+			const cwd = (shell.creationOptions as vscode.TerminalOptions).cwd;
+			const shellFolder = typeof cwd === 'string' ? cwd : cwd?.fsPath ?? '';
+			assert.deepStrictEqual([(await state()).cards.map(card => card.runId), vscode.window.tabGroups.all[0].tabs.some(tab => unspun(tab.label) === first.name)],
+				[[first.runId], true], `the agent stays, alone, in its group: ${seen()}`);
+			assert.strictEqual(fs.realpathSync(shellFolder), fs.realpathSync(agentFolder), `the terminal starts in the agent's folder: ${seen()}`);
+			shell.dispose();
 		} finally {
 			for (const run of cards) {
 				await vscode.commands.executeCommand('facade.closeAgent', { run_id: run }).then(undefined, () => undefined);

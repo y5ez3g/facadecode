@@ -86,6 +86,11 @@ export class TerminalReplies {
 		this.cursors += data.match(CURSOR_QUESTION)?.length ?? 0;
 	}
 
+	/** What of `data` answers a question, the person's keys left out: as while Facade holds a tab in front for its mark (LIFECYCLE-3.4). */
+	answersOnly(data: string): string {
+		return data.match(ANSWER)?.join('') ?? '';
+	}
+
 	/**
 	 * `data`, as the terminal typed it at `at`, without the answers the program is not to have: the answers to the window's own colour
 	 * questions, always; every answer ptyd gives itself - its colour reports too, which teach the window its colours - and one only the
