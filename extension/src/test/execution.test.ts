@@ -783,6 +783,34 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([theirs.isActive, f.tab.isActive, u.tab.isActive], [true, false, false]);
 	});
 
+	test('a reload ends with each group the person brought something to the front in showing what they brought there last, though a later tab of the reload\'s opened over it while they were in another group (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		groupsOf(2);
+		const first = fileIn(1, '/work/app/a.ts');
+		fileIn(2, '/work/app/b.ts');
+		port.frontsRecorded([2]);
+		port.openPair(facts('run-u', { tab: { column: 1 } }), { reveal: false });
+		const u = terminals[0];
+		open(u);
+		opensIn(u, 1);
+		await until('their file in front again', () => first.isActive);
+		// Past the moment an opening's tab still counts as Facade's, the person brings a file to the front of group 2, then one of group 1
+		await new Promise(resolve => setTimeout(resolve, 700));
+		const two = fileIn(2, '/work/app/f2.ts');
+		activate(2);
+		const one = fileIn(1, '/work/app/f1b.ts');
+		activate(1);
+		// Group 2's recorded front opens there afterwards, over their file
+		port.openPair(facts('run-f', { tab: { column: 2, front: true } }), { reveal: false });
+		const f = terminals[1];
+		open(f);
+		opensIn(f, 2);
+		await new Promise(resolve => setTimeout(resolve, 300));
+		await port.finishRestore();
+		await until('their file in front of group 2 again', () => two.isActive);
+		assert.deepStrictEqual([two.isActive, f.tab.isActive, one.isActive, activeGroup().viewColumn], [true, false, true, 1]);
+	});
+
 	test('a reload\'s recorded front whose group is gone - a floating window\'s, opened again only after Facade\'s tabs - opens in the last group, the person\'s file there not shown again over it (LIFECYCLE-3.5)', async () => {
 		const port = portOf();
 		groupsOf(2);

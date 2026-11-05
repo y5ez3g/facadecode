@@ -157,11 +157,12 @@ export class AgentTerminals implements vscode.Disposable {
 	/** Marks go on one at a time, whoever asks - the queue's and a reload's tab just opened alike (LIFECYCLE-3.4). */
 	private markLane: Promise<void> = Promise.resolve();
 	/**
-	 * How often the person has brought something to the front, the groups they did since a reload's capture, the group they did so in
-	 * last, and what was in front last.
+	 * How often the person has brought something to the front, the groups they did since a reload's capture and what they brought to the
+	 * front there last, the group they did so in last, and what was in front last.
 	 */
 	private personMoves = 0;
 	private readonly personColumns = new Set<number>();
+	private readonly personFronts = new Map<number, vscode.Tab>();
 	private personLast: number | undefined;
 	private seenFront: { readonly column?: number; readonly tab?: vscode.Tab } = {};
 	/** Copies of agents' tabs the editor made, each becoming an ordinary terminal: their tabs told apart as they become active (LIFECYCLE-2.2). */
@@ -297,10 +298,16 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 			const theirs = (column?: number) => this.personMoves > capture.moves && (column === undefined || this.personColumns.has(column));
 			for (const column of vscode.window.tabGroups.all.map(group => group.viewColumn).filter(each => each !== capture.active)) {
+				// One the person brought something to the front in since keeps theirs: what they last brought there, in front again though a
+				// later tab of the reload's opened over it
+				if (theirs(column)) {
+					await this.backToTheirs(column);
+					continue;
+				}
 				const front = this.frontAfterReload(column, capture);
 				// One an extension cannot show without its group's focus - a webview, Settings, a terminal of the person's it cannot tell -
 				// stays behind, its group's front not saved as the agent's over it
-				if (front && !theirs(column) && !await this.refront(front, false)) {
+				if (front && !await this.refront(front, false)) {
 					missed.add(column);
 				}
 			}
@@ -312,13 +319,20 @@ export class AgentTerminals implements vscode.Disposable {
 					// In front already, the tabs that opened over it may have left the focus nowhere: it is there again
 					await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup').then(undefined, () => undefined);
 				}
-			} else if (theirs() && this.personLast !== undefined && vscode.window.tabGroups.activeTabGroup.viewColumn !== this.personLast) {
-				// The group the person last brought something to the front in is the active one again, its front theirs and untouched: a later
-				// tab of the reload's made its own group the active one as it opened there
-				await this.activateColumn(this.personLast);
+			} else if (theirs()) {
+				// The active group's too, where the person brought something to the front in it
+				if (capture.active !== undefined && theirs(capture.active)) {
+					await this.backToTheirs(capture.active);
+				}
+				// The group the person last brought something to the front in is the active one again, its front theirs: a later tab of the
+				// reload's made its own group the active one as it opened there
+				if (this.personLast !== undefined && vscode.window.tabGroups.activeTabGroup.viewColumn !== this.personLast) {
+					await this.activateColumn(this.personLast);
+				}
 			}
 		} finally {
 			this.personColumns.clear();
+			this.personFronts.clear();
 			this.recordedFronts = new Set();
 			this.syncFronts(missed);
 		}
@@ -343,6 +357,20 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 		}
 		return this.focusColumn(column);
+	}
+
+	/**
+	 * What the person last brought to the front of `column`'s group since a reload's capture, in front there again without the focus - a
+	 * later tab of the reload's may have opened over it, there or as they were in another group (LIFECYCLE-3.5).
+	 */
+	private async backToTheirs(column: number): Promise<void> {
+		const tab = this.personFronts.get(column);
+		const now = tab && this.currentTab(tab);
+		if (!now || now.isActive || now.group?.viewColumn !== column) {
+			return;
+		}
+		const pair = this.pairOfTab(now);
+		await this.refront({ tab: now, ...pair?.terminal ? { terminal: pair.terminal } : {} }, false);
 	}
 
 	/** What is to be in front of `column`'s group after a reload (restoreFronts). */
@@ -853,6 +881,11 @@ export class AgentTerminals implements vscode.Disposable {
 		this.personLast = seen.column;
 		if (seen.column !== undefined) {
 			this.personColumns.add(seen.column);
+			if (seen.tab) {
+				this.personFronts.set(seen.column, seen.tab);
+			} else {
+				this.personFronts.delete(seen.column);
+			}
 		}
 		// What they showed before is not what a mark waits for to come to the front any longer, the person elsewhere now - but for the
 		// steps of their showing of one past the eighth, which pass other groups on its way
@@ -1187,6 +1220,7 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 		// The groups the person brings something to the front in from now on, which keep theirs
 		this.personColumns.clear();
+		this.personFronts.clear();
 		return { at: Date.now(), moves: this.personMoves, active: vscode.window.tabGroups.activeTabGroup.viewColumn, fronts };
 	}
 
