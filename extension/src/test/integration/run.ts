@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { EDITOR_FLAGS, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 
 /** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
@@ -103,6 +104,10 @@ async function main(): Promise<void> {
 		if (realState) { assertTemporaryState(realState, 'FACADE_IT_REAL_STATE'); }
 		if (prepared && realState) { throw new Error('Choose a prepared home or a state template, not both.'); }
 	}
+	// How many agents each group of the pins journey holds: 6 unless FACADE_IT_PINS_PER_GROUP says
+	const pinsPerGroup = process.env.FACADE_IT_PINS_PER_GROUP;
+	// The focus probe's variables: its cases, such as `N1,F2`, where its evidence goes and how it injects keys
+	const probeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => name.startsWith('FACADE_IT_PROBE_')));
 	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
 	sanitizedEnvironment();
 	// Short paths: the editor's IPC socket under the user data folder must stay within the platform's limit
@@ -302,6 +307,96 @@ async function main(): Promise<void> {
 		} finally {
 			try {
 				await endEditors(editors);
+			} finally {
+				endMatching(user);
+				endMatching(path.join(facade, 'extension', 'ptyd'));
+			}
+		}
+	};
+	/**
+	 * Pins across reloads in a window of two groups, and each way a person changes one (LIFECYCLE-3.4, 3.5, VERIFICATION J12). A driver beside Facade
+	 * Code starts the agents, pins every other one and reloads the window three times; this judges what it saw after each.
+	 */
+	const pins = async () => {
+		const cli = BUILT_INS[0];
+		const folder = path.join(root, 'pins');
+		const user = path.join(root, 'u-p'), extensions = path.join(root, 'x-p'), shared = path.join(root, 's-p');
+		const facade = path.join(home, 'pins');
+		const out = path.join(root, 'pins.jsonl');
+		const driver = path.join(root, 'driver-pins');
+		for (const dir of [folder, path.join(user, 'User'), facade, driver]) {
+			fs.mkdirSync(dir, { recursive: true });
+		}
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
+			...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])) }));
+		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'pins-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
+		fs.copyFileSync(path.join(__dirname, 'pinsDriver.js'), path.join(driver, 'extension.js'));
+		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
+			fs.rmSync(path.join(root, file));
+		}
+		let editorOutput = '';
+		const editor = spawn(executable, [folder, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
+			stdio: ['ignore', 'pipe', 'pipe'],
+			env: { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_PINS: out, CLAUDE_CONFIG_DIR: claudeConfig,
+				...pinsPerGroup ? { FACADE_IT_PINS_PER_GROUP: pinsPerGroup } : {} }
+		});
+		const append = (chunk: unknown) => { editorOutput = (editorOutput + String(chunk)).slice(-16_000); };
+		editor.stdout?.on('data', append);
+		editor.stderr?.on('data', append);
+		const lines = () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line) as { phase: string; [key: string]: unknown }) : [];
+		try {
+			const end = Date.now() + 600_000;
+			while (Date.now() < end && !lines().some(line => line.phase === 'done' || line.phase === 'error')) {
+				await new Promise(resolve => setTimeout(resolve, 500));
+			}
+			const said = lines();
+			const problems: string[] = [];
+			const error = said.find(line => line.phase === 'error');
+			if (error) { problems.push(`driver: ${String(error.error)}`); }
+			if (!said.some(line => line.phase === 'done')) { problems.push('the journey did not finish'); }
+			type Seen = { wrong: string[]; agents: { alias: string; pinned: boolean; marked?: boolean; group?: number; tabs: number }[]; active?: string; activeGroup: number };
+			const shown = (seen: Seen) => seen.agents.map(agent => `${agent.alias}${agent.pinned ? 'P' : ''}${agent.tabs ? `:g${agent.group}${agent.marked ? '*' : ''}` : ':hidden'}`).join(' ');
+			for (const line of said.filter(each => /^reload-\d$/.test(each.phase))) {
+				const later = line.later as Seen;
+				const logged = (line.logged as string[]).filter(each => /(Pinned|Unpinned) #a/.test(each));
+				console.log(`  ${line.phase}: marks agreed after ${line.took} ms; later ${shown(later)}; front ${later.active} in group ${later.activeGroup}`);
+				for (const each of line.logged as string[]) { console.log(`    log: ${each.slice(0, 160)}`); }
+				if (!line.back) { problems.push(`${line.phase}: not every tab came back`); }
+				if (Number(line.took) < 0) { problems.push(`${line.phase}: marks never agreed: ${JSON.stringify((line.settled as Seen).wrong)}`); }
+				if (later.wrong.length) { problems.push(`${line.phase}: marks disagree later: ${JSON.stringify(later.wrong)}`); }
+				if ((line.moved as string[]).length) { problems.push(`${line.phase}: tabs changed group: ${JSON.stringify(line.moved)}`); }
+				if (!line.front) { problems.push(`${line.phase}: the person's file is not in front: ${later.active} in group ${later.activeGroup}`); }
+				if ((line.pinChanged as string[]).length) { problems.push(`${line.phase}: Pins changed: ${JSON.stringify(line.pinChanged)}`); }
+				if (logged.length) { problems.push(`${line.phase}: the reload changed Pins: ${JSON.stringify(logged)}`); }
+			}
+			const actions = said.find(line => line.phase === 'actions');
+			for (const result of (actions?.results ?? []) as { what: string; alias: string; card: boolean; tab: boolean; wrong: string[]; others: string[]; tookMs: number; activeBefore?: string; activeAfter?: string; groupBefore: number; groupAfter: number; logged: string[] }[]) {
+				console.log(`  ${result.what} (${result.alias}): card ${result.card ? 'followed' : 'did NOT follow'}, tab ${result.tab ? 'followed' : 'did NOT follow'} in ${result.tookMs} ms; front ${result.activeBefore} g${result.groupBefore} -> ${result.activeAfter} g${result.groupAfter}`);
+				for (const each of result.logged) { console.log(`    log: ${each.slice(0, 160)}`); }
+				if (!result.card || !result.tab) { problems.push(`${result.what}: card ${result.card}, tab ${result.tab}`); }
+				if (result.wrong.length) { problems.push(`${result.what}: marks disagree after: ${JSON.stringify(result.wrong)}`); }
+				if (result.others.length) { problems.push(`${result.what}: other Pins changed: ${JSON.stringify(result.others)}`); }
+				// A Pin or Unpin the person asks for shows its tab as a click on its card does (LIFECYCLE-3.4)
+				const shows = (result as { shows?: { name: string; group: number } }).shows;
+				if (shows && (!(result.activeAfter === shows.name || result.activeAfter?.startsWith(`${shows.name} `)) || result.groupAfter !== shows.group)) { problems.push(`${result.what}: its tab was not shown in front of group ${shows.group}: ${result.activeAfter} in group ${result.groupAfter}`); }
+				if (result.what.startsWith('palette') && !shows && (result.activeAfter !== result.activeBefore || result.groupAfter !== result.groupBefore)) { problems.push(`${result.what}: the front changed: ${result.activeBefore} in group ${result.groupBefore} became ${result.activeAfter} in group ${result.groupAfter}`); }
+			}
+			const setup = said.find(line => line.phase === 'setup');
+			if (setup) {
+				console.log(`  setup: ${shown(setup.seen as Seen)}; front ${(setup.seen as Seen).active} in group ${(setup.seen as Seen).activeGroup}`);
+				for (const each of (setup.logged ?? []) as string[]) { console.log(`    setup log: ${each.slice(0, 260)}`); }
+			}
+			if (problems.length) {
+				throw new Error(`Pins journey:\n    ${problems.join('\n    ')}`);
+			}
+			console.log('  ✔ Pins: marks follow reloads and every change of a Pin; no reload changes a Pin');
+		} catch (error) {
+			console.error(`Editor output for pins (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput.slice(-4_000)}`);
+			throw error;
+		} finally {
+			try {
+				await endEditors([editor]);
 			} finally {
 				endMatching(user);
 				endMatching(path.join(facade, 'extension', 'ptyd'));
@@ -530,6 +625,15 @@ async function main(): Promise<void> {
 		if (!only || only === 'expiry') {
 			// The shared supervisor's real local grace, not a shortened fixture timer.
 			await conversion(BUILT_INS[0], true, true);
+		}
+		// Asked for alone, as its three reloads of a window of twelve agents or more take minutes
+		if (only === 'pins') {
+			await pins();
+		}
+		// Asked for alone: evidence of keys typed while a mark borrows the focus, and of covered fronts (LIFECYCLE-3.4)
+		if (only === 'probe') {
+			await focusProbe({ executable, root, home, extension, windowComponent, record, claudeConfig, fake, env: probeEnv,
+				settings: { ...settings, ...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])) } });
 		}
 		// Never unasked: it installs a released build's packages
 		if (only === 'update') {
