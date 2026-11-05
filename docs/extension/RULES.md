@@ -20,28 +20,37 @@ There are no recipient arrays or aggregate sends. A caller sending to several ag
 Resolve the target once under 2.3; keep that target and message ID through internal attempts. An optional reply-to ID
 expresses a relationship, not a promise of a reply. Names and conversation IDs are not substitutes for the resolved run.
 A caller may give a send its own request ID: the same one again from that caller within an hour answers the message it
-sent, as it stands, and sends nothing again. Each new send invocation without one gets a new message ID; internal
-attempts for an accepted message retain its ID. Message IDs, including their displayed aliases, are unique across the
+sent as 1.2 says, and sends nothing again. Each new send invocation without one gets a new message ID; internal
+attempts for a message retain its ID. Message IDs, including their displayed aliases, are unique across the
 client network and never reassigned, including after reopening or history expiry: a window that cannot take a number
 from the client network's counter refuses the send rather than give a number twice (ARCHITECTURE-1.1). A request ID is
 kept on its message record, not in a separate deduplication ledger. Report invalid content or an unavailable target
 before writing.
 
-### 1.2 The first response has three outcomes
+### 1.2 A send answers with its outcome
 
-**Try immediately and return success, failure or accepted within two seconds.**
+**Try immediately; an ordinary message's send returns success or failure within thirty seconds of ingress.**
 
 | Response | Meaning |
 | --- | --- |
 | Success | The message was delivered under 1.3. |
-| Failure | Delivery cannot continue; report the reason and actual or uncertain input effects. |
-| Accepted | Finite delivery continues; return the message ID and deadline, then report its outcome to the sender. |
+| Failure | Delivery was refused or could not be confirmed within the thirty seconds; report the reason and actual or uncertain input effects. |
 
-The two seconds start when the complete request reaches the Facade MCP shim or equivalent direct ingress. Internal
-forwarding, including forwarding to another window, consumes the same allowance; do not restart it at each hop. A send
-to another window's agent gives that window what remains of the two seconds less half a second, kept for the answer's
-way back. Return earlier when the result is known. An `accepted` response is not delivery, a model read or completed
-work. B's answer is a separate ordinary message.
+The thirty seconds start when the complete request reaches the Facade MCP shim or equivalent direct ingress, and hold
+queueing, forwarding, the paste and its confirmation. A sender's next step depends on whether its message arrived, so
+its call answers that, and no Facade result follows the answer (1.7); no automatic input occurs after the original
+deadline. Where read_messages delivers the message during a paste already begun, only that unchanged own draft may
+finish its Enter, within the original thirty seconds (1.5). Internal
+forwarding, including forwarding to another window, consumes the same allowance; do not restart it at each hop. A send to
+another window's agent gives that window what remains of the thirty seconds less half a second, kept for the answer's
+way back. A repeated request ID (1.1) joins the original delivery: it answers that delivery's outcome within what remains
+of its thirty seconds, never renewing them, and one already ended answers its record as it stands - a later
+read_messages delivery included (COLLABORATION-3.1). A sender whose call was cut before its answer - its window reloaded
+meanwhile - asks again with its request ID where it gave one; without one, its outcome stays unknown to it (MCP-1.2's
+`inspect_effects`). A call its caller cancels does not stop its delivery, which goes on within the same thirty seconds:
+an MCP cancellation reaches no Facade window, and only a repeat with its request ID tells its outcome. Return earlier
+when the result is known. A creation prompt a start sends after its process starts (COLLABORATION-2.2) is no send of the caller's: its
+outcome goes into the start's own result (MCP-2.3). B's answer is a separate ordinary message.
 
 ### 1.3 Delivery means the recipient has the complete message
 
@@ -79,33 +88,40 @@ add another guard for that race. The recipient's MCP connection is not required 
 Native CLI prompts remain in the terminal. Direct text/keys use COLLABORATION-1.2, which deliberately has no draft
 protection.
 
-### 1.5 Both delivery stages have a finite budget
+### 1.5 Every delivery stage has a finite budget
 
-**Ordinary delivery and a needed system-result handoff each try every three seconds for fifteen seconds, and wait up to ten minutes for an input a person or the CLI holds.**
+**Every delivery stage - an ordinary message, a creation prompt, a system result - tries every three seconds for thirty seconds, held input or not.**
 
 | Value | Policy |
 | --- | --- |
-| Initial response | At most 2 seconds from Facade ingress |
+| Response | An ordinary message's within 30 seconds of Facade ingress, with its outcome (1.2) |
 | Attempts per stage | At stage start, then every 3 seconds |
-| Deadline per stage | 15 seconds from that stage's start |
-| Input held by another draft, another delivery or a pending creation prompt (1.10), or a native menu or question | Once held, the stage's deadline is 10 minutes from its start, whatever the input shows after |
+| Deadline per stage | 30 seconds from that stage's start; an ordinary message's stage starts at Facade ingress and ends half a second before its thirty seconds, kept for its answer's way back, routed or not |
+| Input held by another draft, another delivery or a pending creation prompt (1.10), or a native menu or question | Waited for within the same 30 seconds; the deadline never moves |
 | Permanent obstacle | Finish immediately; do not wait out unused slots |
 
 An unavailable input consumes a slot without typing. Attempts do not overlap. Queueing and forwarding between windows
 or environments consume the same budget. No extra attempts on input-change events, indefinite retries, or bursts to catch
-missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for, so that the
-person can finish typing or answering: Facade never submits the person's text with the message. At the
-deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage
-whose input was never held ends at fifteen seconds; once held, its deadline is ten minutes from its start, whatever the
-input shows after. A long paste adds the time it takes, at CLIS-2.1's paste rates, to each of its stage's deadlines, so
-that its Enter is never cut off by its own size; a part of a message's text in the input, which no wait makes its own, is
-not waited for. An input still unavailable then means failure; delivery is not a promise to overcome a permanently
+missed slots. A draft that is not the message's own, or a native menu, login or question, is waited for within the
+stage, so that the person can finish typing or answering: Facade never submits the person's text with the message. At the
+deadline, cancel unstarted input and return success if confirmed, otherwise failure with the known effects. A stage ends
+at its deadline, held or not: one deadline for every stage, because a sender waits on its send, and a
+message its recipient's input could not take in that time is better sent again, knowingly, than typed in unseen minutes
+later. An attempt begins a paste only where the paste, its Enter and the input's confirmation fit before the deadline at
+CLIS-2.1's measured paste rates: one that would not fit is not begun, nothing typed, and the stage ends then, as no later
+slot has more time. A text whose paste, Enter and confirmation could not fit even a whole stage at its recipient's rates -
+many hundred lines for Antigravity, or eight thousand characters, CJK ones, for Codex on Windows - is a permanent
+obstacle: a send of it fails at once as `invalid_argument` before its record is made - no message ID, nothing for
+read_messages - asking for shorter parts, and a start's post-start prompt of it is given up, nothing typed, its result
+saying so and its record staying readable through read_messages (MCP-2.3). Fitting is an admission, not a guarantee that the CLI finishes in time: a
+CLI that stalls still meets the deadline, the stage ending with its actual full, partial or unknown effects. A part of a message's text in the input, which no wait makes its own, is not waited for. An input still unavailable then means failure; delivery is not a promise to overcome a permanently
 unavailable target. A read through read_messages delivers the message immediately and cancels any paste that has not
 begun. If text is already being written or remains as this message's own complete draft, the existing stage may finish
 its Enter within its original budget. It never types the text again, submits an edited draft or delays the read's result.
-Result handoff starts its own budget once the original result is known; a result joins others typed in one paste only
-while a whole stage's time is still before them, or when it comes within 50 ms of them - results of sends that ended
-together - the paste then keeping the newest one's whole stage; never a paste a read has already delivered (1.7).
+Result handoff - a start's, a stop's or a start's prompt's result - starts its own budget once that outcome is known.
+Results for one terminal that come within 50 ms of one another, of operations that ended together, go in one paste under
+the earliest one's deadline, each keeping its own: joining never restarts or extends a budget, a batch whose whole paste
+would not fit before that deadline is not begun, and a paste a read has already delivered is never joined (1.7).
 Window-close handling is 1.9 and does not extend a deadline.
 
 ### 1.6 A message is typed at most once
@@ -117,7 +133,11 @@ twice. A later attempt of the same delivery reads the input: the message's
 own draft alone - its text, or the placeholder its CLI draws for a paste of its size (CLIS-2.1) - gets Enter; an empty input after an Enter of
 this delivery confirms the submission; anything else is waited for under 1.4 and 1.5. A paste that never showed in the
 input is not typed again either: a CLI busy with its turn draws it late, and its own draft then gets Enter. A paste whose
-answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. Once a paste
+answer was lost on its way counts as written with no Enter after it, so an empty input confirms nothing. A delivery's
+own text in the input - its paste, or its CLI's placeholder for it - is the delivery's to finish while its stage lasts:
+its later attempts press Enter over it, and no later delivery is pasted before it is confirmed or its stage ends (1.10).
+Once its stage ends unconfirmed it is a draft like any other: no later delivery submits, extends or erases it, and that
+stage's own outcome reports its effects as unconfirmed. Once a paste
 showed as its CLI's placeholder, a later Enter goes only over that same placeholder, its paste number included, as a
 person's later paste of the same size draws another. Never press Enter over a draft that is not the message's own: a
 person's text is never submitted, nor appended to, nor erased. Report partial or uncertain effects honestly at the
@@ -132,8 +152,10 @@ instruction. Facade does not add an exactly-once execution or platform deduplica
 
 **Give an operation's result to its sender; an undeliverable system result ends quietly.**
 
-A returned immediate final result needs no second notification. An accepted asynchronous send gives A a clearly labeled
-Facade result with the original message ID, target and outcome - delivered, including delivery through read_messages, or
+A returned immediate final result needs no second notification. An ordinary message's send answers with its outcome
+(1.2), so no Facade result follows it - also where its delivery went on after a reload, whose sender asks again with its
+request ID where it gave one (1.2). An accepted start or stop, and a start's post-start prompt (MCP-1.3, 2.3), give A a clearly labeled Facade
+result with the original IDs, target and outcome - for a prompt: delivered, including delivery through read_messages, or
 not delivered - using the finite result budget if needed. The result is not authored by B and requests no response.
 Results for one terminal that join under 1.5's condition go in one paste, one turn of its model for them all; a result
 read meanwhile is left out of it. Failure to return it never resends the original message. A message whose result
@@ -181,8 +203,8 @@ Reload or temporary disconnect is not closure. Reuse an existing in-flight opera
 deadline still apply; an expired operation does not get a fresh budget. A delivery under way when its window reloads
 goes on once the window shows its recipient again, within its original deadline: a text that may already be in the
 input is never pasted again, and only its own draft gets Enter (1.6). One whose recipient is not shown yet waits for a
-later restoration within that deadline; one whose recipient ended, or whose deadline passed, ends, and its sender is
-told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries. A newly
+later restoration within that deadline; one whose recipient ended, or whose deadline passed, ends - an ordinary
+message's sender asking again with its request ID where it gave one (1.2), a prompt's told (1.7). A window another took its workspace's agents over from goes on with none of their deliveries. A newly
 started agent receives only messages
 addressed to its new run. Closing every window naturally ends the remaining volatile delivery work.
 No notification or message is scheduled for replay on the next opening.

@@ -68,7 +68,7 @@ A window component reaches another window by connecting to the socket the regist
 the request to its own workspace component and returns the answer. The caller's window handles every tool call: its own
 agents directly, other windows' agents through these routes. The recipient's window performs message delivery and
 serializes terminal input, and results return to the sender's window over the same route. A send to another window
-keeps half a second of RULES-1.2's two seconds for its answer's way back.
+keeps half a second of its answer's time for the way back (RULES-1.2).
 
 Agent `#aN` and message `#mN` numbers come from client-wide counters in the client Facade directory, taken under their
 file locks, because each execution environment's own counter would repeat them. A window takes them in blocks ahead of
@@ -85,7 +85,8 @@ replacement on update.
 
 No proposed APIs, internal workbench commands, guessed terminal `$mid`, patched editor files or dependence on private
 vendor editor commands for core functionality. Where no extension API exists, documented user-bindable workbench
-commands are used, such as pinning or unpinning the active editor for a terminal tab's Pin (LIFECYCLE-3.4); the editor's
+commands are used, such as pinning or unpinning the active editor for a terminal tab's Pin and focusing an editor group
+by its number to make a tab's group the active one (LIFECYCLE-2.2, 3.4); the editor's
 internal or underscore-prefixed commands and guessed `$mid` contexts are prohibited. Terminal logos are the extension's
 contributed icons shown as theme icons, because image-backed terminal icons are lost when the color theme changes
 (LIFECYCLE-2.2). A workspace extension runs where its workspace is; extensionKind is placement preference, not two
@@ -229,7 +230,8 @@ sends the activation's current claim again and retries once. Names, empty names 
 Cancellation, expiration, an old claim or ambiguous events do not guess an association. An editor can replace its
 public Tab objects when rebuilding the tab-group model. Discard bindings to Tab objects the current model does not hold,
 then correlate the active terminal and tab through public activation/group events again; never recover them by title or
-index. Pending native Pin changes wait for that exact active association and do not reveal another editor.
+index. A pending native Pin change goes on once its tab is known, by bringing that exact tab to the front of its group
+(LIFECYCLE-3.4).
 
 Queued creation retains only the latest explicit reveal request and cancels it on closure, so an agent queued first
 cannot steal focus after a later selection. Restoration after a reload waits up to ten seconds for each terminal to
@@ -307,8 +309,8 @@ protocol or operation-query service is required.
 
 A run's shim connects to its execution environment's supervisor and names the run it speaks for; a shim of another
 protocol is refused and its connection closed. The supervisor forwards each call to the connection that currently owns
-that run's workspace and returns the answer to the shim that asked. A call waits at most RULES-1.2's two seconds from
-the shim's ingress for a window to hold its run, and a query at most its ten-second route deadline (MCP-1.3); otherwise
+that run's workspace and returns the answer to the shim that asked. A call waits at most two seconds from the shim's
+ingress for a window to hold its run, and a query at most its ten-second route deadline (MCP-1.3); otherwise
 it is refused as window unavailable with no effects. Once forwarded, a query keeps its route deadline for the answer,
 and any other call waits for the window's answer under MCP-1.3. A call that reached a window which then went away
 reports unknown effects. At most 256 calls of one run are under way at once; another is refused as `capacity_exceeded`
@@ -403,7 +405,7 @@ Windows node-pty's console worker - starts no program and says that its installa
 | Store | Contents |
 | --- | --- |
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
-| Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group (LIFECYCLE-3.5) - for as long as ptyd runs (2.3) |
+| Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open, in which editor group, and whether it is that group's front (LIFECYCLE-3.5) - for as long as ptyd runs (2.3) |
 | Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
 | Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs, its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |

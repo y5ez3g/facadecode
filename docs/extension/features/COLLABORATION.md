@@ -74,16 +74,19 @@ is readable in another environment.
 
 **System results are Facade facts; a creation prompt is an ordinary message supplied by the caller.**
 
-A system result starts with 🔔 and reports actual facts in natural English, without JSON or a closing label. Confirmed
-delivery says `Your message #m42 has been passed on to Ada (#a7).`, followed by `It was read through read_messages.`
-where a read delivered it. It references the original message, not a second visible receipt number. A start or stop
+A system result starts with 🔔 and reports actual facts in natural English, without JSON or a closing label. An
+ordinary message has none: its send answers with its outcome (RULES-1.2, 1.7). A start's result that reports its prompt
+delivered says `Your initial message #m42 has been passed on.` - ` through read_messages` before the period where a read
+delivered it, ` with the launch` where its CLI took it as its start argument - referencing the original message, not a
+second visible receipt number. A start or stop
 result, and RULES-1.8's notice of a waiting child, end their first line with ` · #mN`, their own message number - for a
 start or stop the one MCP-1.3 reserved. Full call IDs stay in structured records. Partial input, uncertain submission,
 process/tools/prompt distinctions and created worktrees remain explicit; ordinary success needs no boilerplate. Receipt
 delivery is separate from the operation it reports. RULES-1.8's notice uses the same voice - who waits, on what, and who
-can answer - without changing its recipient, frequency or authority. An unavailable window before execution says the
-message could not be sent and confirms untouched input only when known. After forwarding without an answer, it says
-delivery could not be confirmed; it never recommends a blind resend. These wordings add no notification or recipient.
+can answer - without changing its recipient, frequency or authority. A send's failure answer (MCP-4.1), where the
+window was unavailable before execution, says the message could not be sent and confirms untouched input only when
+known; after forwarding without an answer, it says delivery could not be confirmed; it never recommends a blind
+resend. These wordings add no notification or recipient.
 They are Facade facts, not replies authored by the recipient, and request no response. An unreachable result ends; do
 not notify a person, send another error to B, or resend the original content. Use the native interactive prompt argument
 that CLIS-3.2 maps for the CLI, even while it is unverified, and report its capability state with the prompt outcome.
@@ -101,7 +104,7 @@ message, its budget starting as that preparation is done or given up - never soo
 does once the process runs (MCP-2.3). A window reloaded during the preparation skips what is left of it, as it is kept
 in memory alone: the prompt goes as the input allows, and that first turn may lack the tools. Until that prompt is
 delivered or given up, its preparation included, the run's input is held for it (RULES-1.10): a message sent meanwhile
-goes after it, held from its stage's start, so that its deadline is ten minutes from then (RULES-1.5). A blocked input
+goes after it, within its own thirty seconds (RULES-1.5). A blocked input
 box consumes the normal attempts. Both paths use RULES-1.3's meaning of delivery; native acceptance does not require a
 terminal Enter effect. Report process startup and prompt input separately. Failed prompt submission leaves the started
 agent available. An unverified native prompt remains unconfirmed in its record; it is neither confirmed delivery nor a
