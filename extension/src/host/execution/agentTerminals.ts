@@ -307,7 +307,7 @@ export class AgentTerminals implements vscode.Disposable {
 				const front = this.frontAfterReload(column, capture);
 				// One an extension cannot show without its group's focus - a webview, Settings, a terminal of the person's it cannot tell -
 				// stays behind, its group's front not saved as the agent's over it
-				if (front && !await this.refront(front, false)) {
+				if (front && !await this.refront(front, false, false)) {
 					missed.add(column);
 				}
 			}
@@ -370,7 +370,7 @@ export class AgentTerminals implements vscode.Disposable {
 			return;
 		}
 		const pair = this.pairOfTab(now);
-		await this.refront({ tab: now, ...pair?.terminal ? { terminal: pair.terminal } : {} }, false);
+		await this.refront({ tab: now, ...pair?.terminal ? { terminal: pair.terminal } : {} }, false, false);
 	}
 
 	/** What is to be in front of `column`'s group after a reload (restoreFronts). */
@@ -731,9 +731,11 @@ export class AgentTerminals implements vscode.Disposable {
 	 * terminal by its terminal, a file by `vscode.open`, a text or notebook diff by `vscode.diff`, a notebook or custom editor by
 	 * `vscode.openWith` - and, where that fails in the active group, by its place. One the editor opened instead of it, of the same
 	 * resource but another kind, is closed again; a group made active by bringing a front back without the focus is the person's no
-	 * longer, theirs active again. Whether it is in front after.
+	 * longer, theirs active again - but where `keepActive` is false, as at a reload's end, which makes the person's group the active one
+	 * itself and moves the keyboard's focus once at most, last: a focus command here would move it, and a later step that makes another
+	 * group active without the focus would leave it there, with an agent's CLI perhaps (restoreFronts). Whether it is in front after.
 	 */
-	private async refront(front: Front, focus: boolean): Promise<boolean> {
+	private async refront(front: Front, focus: boolean, keepActive = true): Promise<boolean> {
 		if (this.disposed) {
 			return false;
 		}
@@ -829,7 +831,7 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 			// Shown without the focus, its group may have become the active one while the focus stayed where the person has it: theirs is
 			// the active one again, as the person's next command acts on the active group
-			if (!focus && activeBefore !== undefined && activeBefore !== column && vscode.window.tabGroups.activeTabGroup.viewColumn === column) {
+			if (keepActive && !focus && activeBefore !== undefined && activeBefore !== column && vscode.window.tabGroups.activeTabGroup.viewColumn === column) {
 				await this.focusColumn(activeBefore);
 			}
 			if (!back) {

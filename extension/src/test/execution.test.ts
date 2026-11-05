@@ -806,9 +806,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		open(f);
 		opensIn(f, 2);
 		await new Promise(resolve => setTimeout(resolve, 300));
+		commands.length = 0;
 		await port.finishRestore();
 		await until('their file in front of group 2 again', () => two.isActive);
 		assert.deepStrictEqual([two.isActive, f.tab.isActive, one.isActive, activeGroup().viewColumn], [true, false, true, 1]);
+		// No focus command on the way: one would move the keyboard's focus into a group's front, there to stay as their group becomes the
+		// active one without it
+		assert.deepStrictEqual(commands.filter(each => FOCUS.includes(each) || /^workbench\.action\.focus(Next|Previous)Group$/.test(each)), []);
 	});
 
 	test('a reload\'s recorded front whose group is gone - a floating window\'s, opened again only after Facade\'s tabs - opens in the last group, the person\'s file there not shown again over it (LIFECYCLE-3.5)', async () => {
