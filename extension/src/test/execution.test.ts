@@ -732,6 +732,77 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([u.tab.isActive, mine.isActive, f.tab.isActive, second.isActive, model!.made], [true, false, true, false, []]);
 	});
 
+	test('a reload that ends with another group active than the person\'s last makes theirs the active one again by showing their file there without the focus, no focus command taking it (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		groupsOf(2);
+		const first = fileIn(1, '/work/app/a.ts');
+		fileIn(2, '/work/app/b.ts');
+		port.frontsRecorded([2]);
+		port.openPair(facts('run-u', { tab: { column: 1 } }), { reveal: false });
+		const u = terminals[0];
+		open(u);
+		opensIn(u, 1);
+		await until('their file in front again', () => first.isActive);
+		// Past the moment an opening's tab still counts as Facade's, the person brings another file of theirs to the front of the first group
+		await new Promise(resolve => setTimeout(resolve, 700));
+		const theirs = fileIn(1, '/work/app/c.ts');
+		port.openPair(facts('run-f', { tab: { column: 2, front: true } }), { reveal: false });
+		const f = terminals[1];
+		open(f);
+		opensIn(f, 2);
+		await until('their file in front', () => theirs.isActive && activeGroup().viewColumn === 1);
+		// The editor makes the second group the active one as that tab opens there
+		activate(2);
+		commands.length = 0;
+		await port.finishRestore();
+		await until('their group the active one again', () => activeGroup().viewColumn === 1);
+		assert.deepStrictEqual([theirs.isActive, f.tab.isActive, commands.includes('vscode.open'), commands.includes('workbench.action.focusFirstEditorGroup')], [true, true, true, false]);
+	});
+
+	test('a reload\'s later tab opening over what the person brought to the front of a group meanwhile shows theirs again, though an agent is recorded as that group\'s front (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		groupsOf(1);
+		fileIn(1, '/work/app/a.ts');
+		port.frontsRecorded([1]);
+		port.openPair(facts('run-u', { tab: { column: 1 } }), { reveal: false });
+		const u = terminals[0];
+		open(u);
+		opensIn(u, 1);
+		// Where an agent is the group's front, what one tab of the reload's covers is not shown again
+		await new Promise(resolve => setTimeout(resolve, 700));
+		assert.strictEqual(u.tab.isActive, true);
+		// The person brings a file of theirs to the front; the group's recorded front then opens over it
+		const theirs = fileIn(1, '/work/app/c.ts');
+		port.openPair(facts('run-f', { tab: { column: 1, front: true } }), { reveal: false });
+		const f = terminals[1];
+		open(f);
+		opensIn(f, 1);
+		await until('their file shown again', () => theirs.isActive);
+		await port.finishRestore();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.deepStrictEqual([theirs.isActive, f.tab.isActive, u.tab.isActive], [true, false, false]);
+	});
+
+	test('a reload\'s recorded front whose group is gone - a floating window\'s, opened again only after Facade\'s tabs - opens in the last group, the person\'s file there not shown again over it (LIFECYCLE-3.5)', async () => {
+		const port = portOf();
+		groupsOf(2);
+		fileIn(1, '/work/app/a.ts');
+		const mine = fileIn(2, '/work/app/b.ts');
+		activate(2);
+		// Recorded as the front of group 3, not open now
+		port.frontsRecorded([3]);
+		port.openPair(facts('run-f', { tab: { column: 3, front: true } }), { reveal: false });
+		const f = terminals[0];
+		assert.strictEqual((f.options.location as { viewColumn: number }).viewColumn, 2);
+		open(f);
+		opensIn(f, 2);
+		// What an opening covered would be shown again by now
+		await new Promise(resolve => setTimeout(resolve, 400));
+		assert.deepStrictEqual([f.tab.isActive, mine.isActive], [true, false]);
+		await port.finishRestore();
+		await until('the recorded front in front of the active group', () => f.tab.isActive && activeGroup().viewColumn === 2);
+	});
+
 	test('a mark that lands on the person\'s file - brought to the front just as it went on - is undone at once, and nothing is given back over it (LIFECYCLE-3.4)', async () => {
 		const port = portOf();
 		await port.finishRestore();

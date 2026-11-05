@@ -237,9 +237,12 @@ export class AgentTerminals implements vscode.Disposable {
 		);
 	}
 
-	/** The groups a reload's coming agents were the fronts of, as their records say (LIFECYCLE-3.5). */
+	/**
+	 * The groups a reload's coming agents were the fronts of, as their records say: each where its tab opens - the last group where its
+	 * own is gone, as a floating window's is, which the editor opens again only after Facade's tabs (columnFor; LIFECYCLE-3.5).
+	 */
 	frontsRecorded(columns: readonly number[]): void {
-		this.recordedFronts = new Set(columns);
+		this.recordedFronts = new Set(columns.map(column => this.openingColumn(column) ?? column));
 	}
 
 	/** Facade's Pin of `run` changed: its tab's mark follows at once, in front or not (LIFECYCLE-3.4). */
@@ -312,13 +315,34 @@ export class AgentTerminals implements vscode.Disposable {
 			} else if (theirs() && this.personLast !== undefined && vscode.window.tabGroups.activeTabGroup.viewColumn !== this.personLast) {
 				// The group the person last brought something to the front in is the active one again, its front theirs and untouched: a later
 				// tab of the reload's made its own group the active one as it opened there
-				await this.focusColumn(this.personLast);
+				await this.activateColumn(this.personLast);
 			}
 		} finally {
 			this.personColumns.clear();
 			this.recordedFronts = new Set();
 			this.syncFronts(missed);
 		}
+	}
+
+	/**
+	 * `column`'s group the active one again, its front untouched and the keyboard's focus left where the person has it - the Explorer, the
+	 * panel - where the editor allows: a file in front by showing it again without the focus, which makes its group the active one, as the
+	 * probe saw; a front of another kind by its group's focus command, which takes the focus there.
+	 */
+	private async activateColumn(column: number): Promise<boolean> {
+		const front = vscode.window.tabGroups.all.find(group => group.viewColumn === column)?.activeTab;
+		if (front?.input instanceof vscode.TabInputText) {
+			const withdraw = this.expect(column, tab => sameTab(tab, front));
+			try {
+				await vscode.commands.executeCommand('vscode.open', front.input.uri, { viewColumn: column, preserveFocus: true, preview: front.isPreview }).then(undefined, () => undefined);
+				if (await this.settle(() => vscode.window.tabGroups.activeTabGroup.viewColumn === column, 500)) {
+					return true;
+				}
+			} finally {
+				withdraw();
+			}
+		}
+		return this.focusColumn(column);
 	}
 
 	/** What is to be in front of `column`'s group after a reload (restoreFronts). */
@@ -1172,8 +1196,13 @@ export class AgentTerminals implements vscode.Disposable {
 			// At a reload, the group that was the active one as it began: the others' openings make their groups active meanwhile
 			return pair.background && this.capture?.active !== undefined ? this.capture.active : vscode.ViewColumn.Active;
 		}
+		return this.openingColumn(pair.openIn) ?? vscode.ViewColumn.Active;
+	}
+
+	/** Where a tab whose group was `column` opens: that group, else the last one where it is gone; none where no group is open. */
+	private openingColumn(column: number): number | undefined {
 		const columns = vscode.window.tabGroups.all.map(group => group.viewColumn).filter(Number.isFinite);
-		return columns.length ? Math.min(pair.openIn, Math.max(...columns)) : vscode.ViewColumn.Active;
+		return columns.length ? Math.min(column, Math.max(...columns)) : undefined;
 	}
 
 	private createQueuedTerminal(pair: TerminalEntry): void {
@@ -1465,8 +1494,10 @@ export class AgentTerminals implements vscode.Disposable {
 			return;
 		}
 		// A reload's tabs open one over another, each group's front last: another agent's tab is not shown again between them, nor a file
-		// where an agent is that group's front (LIFECYCLE-3.5)
-		if (this.restoring && (this.pairOfTab(covered) || this.recordedFronts.has(covered.group?.viewColumn))) {
+		// where an agent is that group's front - but in a group the person brought something to the front in since, theirs is (LIFECYCLE-3.5)
+		const coveredColumn = covered.group?.viewColumn;
+		const persons = coveredColumn !== undefined && this.personColumns.has(coveredColumn);
+		if (this.restoring && !persons && (this.pairOfTab(covered) || this.recordedFronts.has(coveredColumn))) {
 			pair.background = { since: pair.background!.since };
 			return;
 		}
