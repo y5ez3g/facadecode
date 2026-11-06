@@ -1,5 +1,5 @@
 {
-	"displayName": "Facade Code",
+	"displayName": "Facade Code: Multi-Agent-Orchestrator",
 	"description": "Der Multi-Agent-Orchestrator für VS Code. Führen Sie Claude Code, Codex, Antigravity, Muse Code, OpenCode und Pi in Ihrer IDE aus.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",

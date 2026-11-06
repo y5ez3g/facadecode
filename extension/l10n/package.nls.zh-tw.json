@@ -1,5 +1,5 @@
 {
-	"displayName": "Facade Code",
+	"displayName": "Facade Code：多 Agent 編排器",
 	"description": "VS Code 的多 Agent 編排器。在你的 IDE 中執行 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi。",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",

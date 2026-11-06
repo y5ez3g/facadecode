@@ -1,5 +1,5 @@
 {
-	"displayName": "Facade Code",
+	"displayName": "Facade Code: マルチエージェント オーケストレーター",
 	"description": "VS Code のためのマルチエージェント オーケストレーター。Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi を IDE の中で実行します。",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",

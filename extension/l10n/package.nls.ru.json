@@ -1,5 +1,5 @@
 {
-	"displayName": "Facade Code",
+	"displayName": "Facade Code: Мультиагентный оркестратор",
 	"description": "Мультиагентный оркестратор для VS Code. Запускайте Claude Code, Codex, Antigravity, Muse Code, OpenCode и Pi прямо в IDE.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
