@@ -39,7 +39,7 @@ Ensuite, installez les CLI d'agents prises en charge que vous prévoyez d'utilis
 Facade Code exécute les CLI natives d'agents (Claude Code, Codex, Antigravity, Muse Code, OpenCode et Pi) dans des onglets de terminal d'éditeur aux côtés de vos fichiers, en s'appuyant sur les commandes, les outils, les comptes et les abonnements propres à chaque CLI. Une carte dans le panneau suit l'état de chaque agent.
 
 - **Travaillez aux côtés de votre code.** Chaque agent tourne dans son propre onglet de terminal au sein de la zone d'édition. Fermer un onglet le masque sans interrompre l'agent ; cliquer sur sa carte l'affiche à nouveau.
-- **Suivez l'état de l'ensemble des agents.** Les cartes indiquent qui a lancé chaque agent, ce qu'il fait et s'il est prêt pour une entrée, attend une autorisation ou a rencontré une erreur. Les agents continuent de fonctionner lors des rechargements de fenêtre et des redémarrages de l'extension.
+- **Suivez l'état de l'ensemble des agents.** Les cartes indiquent ce qui a été envoyé en dernier à chaque agent et s'il travaille, attend une autorisation ou a rencontré une erreur, avec des détails affichant son titre, son dossier et qui l'a lancé. Les agents continuent de fonctionner lors des rechargements de fenêtre et des redémarrages de l'extension.
 - **Dossiers et worktrees.** Exécutez des agents dans n'importe quel dossier de l'espace de travail ou créez un worktree Git à la volée pour isoler les modifications de code. Épinglez une conversation pour la restaurer à la réouverture de l'espace de travail, ou reprenez des sessions passées depuis l'historique.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Grâce à MCP et à un protocole de terminal, les agents peuvent démarrer, arr�
 
 - **Démarrer et arrêter des agents.** Un agent peut démarrer d'autres agents avec n'importe laquelle des six CLI, dans n'importe quel dossier ou nouveau worktree de vos fenêtres Facade sur cet ordinateur, et leur confier leur première tâche. Une requête réessayée avec le même identifiant de requête ne démarre jamais un deuxième agent.
 - **Envoyer des messages.** Les agents échangent des messages entre eux et peuvent vous envoyer des messages. Facade colle le message entier en une seule fois et l'envoie. Si du texte non envoyé ou une question d'invite bloque la saisie, la transmission attend que la saisie soit libre.
-- **Contrôle du terminal.** Un agent peut lire l'écran d'un autre agent, taper des commandes et appuyer sur des touches pour répondre aux invites ou débloquer un pair. Lorsqu'un agent enfant attend une saisie ou une autorisation pendant 20 secondes, l'agent qui l'a démarré est averti.
+- **Contrôle du terminal.** Un agent peut lire l'écran d'un autre agent, taper des commandes et appuyer sur des touches pour répondre aux invites ou débloquer un pair. Lorsqu'un agent enfant attend une autorisation, une réponse ou une connexion pendant 20 secondes, l'agent qui l'a démarré est averti.
 
 ## Agent Mesh
 

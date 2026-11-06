@@ -4,7 +4,6 @@
 
 import * as assert from 'assert';
 import * as path from 'path';
-import { titleText } from '../base/text';
 import type { InputReading } from '../ptyd/composer';
 import { submittedDraft, taken, TypedEnters } from '../host/execution/submissions';
 import type * as AgentPtyModule from '../host/execution/agentPty';
@@ -42,13 +41,6 @@ suite('What the person submits in an agent\'s terminal, for its card\'s second l
 		assert.strictEqual(await taken(read(reading('draft', 'one two'), reading('draft', 'one two three')), wait, [1, 2]), false, 'a line break and more typed');
 		assert.strictEqual(await taken(read(undefined), wait, [1, 2]), false, 'its input could not be read any more');
 		assert.deepStrictEqual(waits, [1, 2, 1, 1, 2, 1, 2, 1]);
-	});
-
-	test('a CLI title\'s words leave out the spinner frame or state symbol before them, for every CLI alike', () => {
-		assert.deepStrictEqual(
-			['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace', '✓ Done', '✳ ★ Release v2 — notes!', 'claude - shop-app', '⠋', '', undefined].map(titleText),
-			['Checking responsive layout', 'Checking responsive layout', '检查标题更新 | workspace', 'Done', 'Release v2 — notes!', 'claude - shop-app', undefined, undefined, undefined]
-		);
 	});
 });
 

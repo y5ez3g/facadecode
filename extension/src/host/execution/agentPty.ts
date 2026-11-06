@@ -57,8 +57,8 @@ function noteLine(text: string): string {
 /**
  * An agent's editor terminal (LIFECYCLE-1.5, 2.2): a Pseudoterminal that exists from the accepted launch on, before any process.
  * It shows Facade's dim progress and failure lines; once the run's process starts, the same terminal shows the run - its screen
- * as it stands, then each numbered output after it, never one twice. Its tab reads only the agent's name; CLI titles and
- * status belong to the panel.
+ * as it stands, then each numbered output after it, never one twice. Its tab reads only the agent's name; its CLI's titles
+ * are shown nowhere, and its status belongs to the panel.
  */
 export class AgentPty implements vscode.Pseudoterminal {
 

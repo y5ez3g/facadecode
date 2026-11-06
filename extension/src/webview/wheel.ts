@@ -165,6 +165,11 @@ let smooth: { readonly to: number; readonly start: number; readonly duration: nu
 const root = () => document.scrollingElement ?? document.documentElement;
 const clamped = (scrollTop: number) => Math.max(0, Math.min(scrollTop, pageDimensions().range));
 
+/** Whether a smooth scroll is under way. */
+export function gliding(): boolean {
+	return smooth !== undefined;
+}
+
 /** Ends a smooth scroll under way where it is: the keyboard moved, or the person took the scrollbar. */
 export function cancelSmoothScroll(): void {
 	if (smooth) {

@@ -53,6 +53,12 @@ button {
 	display: none !important;
 }
 
+/* The theme's quieter colour being its text colour - Light Modern's is - the text colour at 75%, as VS Code's lists draw a label's
+   description lighter: the page sets this where it keeps 4.5:1 (UX-2.1) */
+body.flat-dim {
+	--facade-dim: color-mix(in srgb, var(--vscode-foreground) 75%, transparent);
+}
+
 /*
  * Native page scrolling with a VS Code list scrollbar over the content (PANEL-3.3). Hide the browser's bar so neither it nor
  * the overlay reserves layout width. These unlayered rules also override VS Code's webview-default scrollbar styling.
@@ -211,6 +217,7 @@ body.facade-modern {
  * capitals of its first line 9px from the top, the baseline of its second 9px from the bottom; where it works 9px from the right.
  */
 .item {
+	position: relative;
 	display: flex;
 	align-items: center;
 	gap: 8px;
@@ -220,23 +227,20 @@ body.facade-modern {
 	cursor: pointer;
 }
 
-.item:hover:not(.selected) {
+.item:hover:not(.selected),
+.item.menu-open:not(.selected),
+.item.details-open:not(.selected) {
 	background: var(--vscode-list-hoverBackground);
 	color: var(--vscode-list-hoverForeground, inherit);
 	--facade-row-background: var(--vscode-list-hoverBackground);
 }
 
-/*
- * A card is one node under the pointer, its dot and its Pin apart with a hover of their own (PANEL-1.3, 1.4, 1.5). Crossing from one
- * of a card's parts to another clears the editor's tooltip and sets the same one again, which macOS then rarely shows
- * (electron/electron#49843). The card itself takes every click and menu, its dot's and Pin's coming up to it.
- */
+/* A card is one node under the pointer, its buttons apart (PANEL-1.3): the card itself takes every other click */
 .item.agent * {
 	pointer-events: none;
 }
 
-.item.agent .dot,
-.item.agent .pin {
+.item.agent .action {
 	pointer-events: auto;
 }
 
@@ -386,6 +390,26 @@ body.vscode-reduce-motion .dot.working::after {
 	gap: 4px;
 }
 
+/*
+ * The first line's end is a pinned card's Pin's, and while the pointer is on a card, or its menu or details are open, its buttons':
+ * each over the line at the card's corner, the line's padding keeping their room and 4 px before it (PANEL-1.3)
+ */
+.item.agent.pinned .line.top {
+	padding-right: 16px;
+}
+
+.item.agent:is(.hovered, .menu-open, .details-open) .line.top {
+	padding-right: 38px;
+}
+
+.item.agent.pinnable:is(.hovered, .menu-open, .details-open) .line.top {
+	padding-right: 58px;
+}
+
+.item.agent:is(.hovered, .menu-open, .details-open) .pin {
+	display: none;
+}
+
 .line.bottom {
 	font-size: var(--facade-label);
 }
@@ -414,12 +438,17 @@ body.vscode-reduce-motion .dot.working::after {
 	text-overflow: ellipsis;
 }
 
-/* A status at the line's right: its visible glyph stays smaller than the letters without thinning to a tiny mark. */
+/*
+ * The passive Pin centered on the first line, as far from the card's right as from its top - where the Pin button's icon is, which
+ * takes its place under the pointer (PANEL-1.3). A status at the line's right: its visible glyph stays smaller than the letters
+ * without thinning to a tiny mark.
+ */
 .pin {
-	flex: 0 0 auto;
-	align-self: center;
-	margin-block: -3px;
-	margin-left: auto;
+	position: absolute;
+	top: 7px;
+	right: 7px;
+	width: 14px;
+	height: 14px;
 	color: var(--facade-dim);
 }
 
@@ -428,6 +457,195 @@ body.vscode-reduce-motion .dot.working::after {
 	height: 14px;
 	fill: currentColor;
 	display: block;
+}
+
+/*
+ * The card's buttons - details, menu, Pin - as VS Code's list rows show their actions: an icon with 2 px round it, the toolbar's
+ * hover and pressed colours. 5 px from the card's top and right alike, so that their icons are centered on the first line, the
+ * Pin's where the passive Pin is, and clear of the overlay scrollbar, which may cover the last one's hover colour. Hidden until the
+ * pointer is on the card or what they opened is open (PANEL-1.3).
+ */
+.actions {
+	position: absolute;
+	top: 5px;
+	right: 5px;
+	display: flex;
+	gap: 2px;
+	visibility: hidden;
+}
+
+.item.agent:is(.hovered, .menu-open, .details-open) .actions {
+	visibility: visible;
+}
+
+.action {
+	display: grid;
+	place-items: center;
+	width: 18px;
+	height: 18px;
+	padding: 0;
+	border: 0;
+	border-radius: var(--facade-control-radius);
+	background: transparent;
+	color: var(--facade-dim);
+	cursor: pointer;
+}
+
+/* Quiet as the Pin is, on a selected card too; the one under the pointer or pressed in the icon colour on the toolbar's */
+.item.selected .action {
+	color: inherit;
+	opacity: 0.8;
+}
+
+.action:hover {
+	background: var(--vscode-toolbar-hoverBackground);
+	color: var(--vscode-icon-foreground, var(--vscode-foreground));
+}
+
+/* Pressed, as the pointer holds it - before what it does comes back - and open, while its details or menu are */
+.action:active,
+.action.active {
+	background: var(--vscode-toolbar-activeBackground);
+	color: var(--vscode-icon-foreground, var(--vscode-foreground));
+}
+
+.item.selected .action:is(:hover, :active, .active) {
+	opacity: 1;
+}
+
+/* Every button's icon VS Code's own, at the passive Pin's 14 px, so that none is larger than the Pin whose place they take */
+.action svg {
+	display: block;
+	width: 14px;
+	height: 14px;
+	fill: currentColor;
+}
+
+/*
+ * A card's details (PANEL-1.5): what the card does not show, under it and as wide as it, their arrow at the ⓘ as Fluent's info button
+ * points its popover, in the editor's hover colours, border and corners, with Fluent's popover shadow - close and soft, then deep, the
+ * arrow among what casts it (UX-2.1). 12 px in, each fact after its icon, as a name card lists its facts. They enter as Fluent's popover
+ * does - fading in as they slide 10 px in from the ⓘ's side, 400 ms slowing to a stop - and leave at once; with less motion they only
+ * appear (UX-2.2). Their text can be selected.
+ */
+.details {
+	position: fixed;
+	z-index: 30;
+	display: flex;
+	flex-direction: column;
+	border: 1px solid var(--vscode-editorHoverWidget-border);
+	border-radius: var(--facade-card-radius);
+	background: var(--vscode-editorHoverWidget-background);
+	color: var(--vscode-editorHoverWidget-foreground);
+	filter: drop-shadow(0 0 2px var(--vscode-widget-shadow)) drop-shadow(0 8px 16px var(--vscode-widget-shadow));
+	font-size: var(--facade-body);
+	line-height: 20px;
+	cursor: auto;
+	user-select: text;
+	opacity: 0;
+	translate: 0 -10px;
+	pointer-events: none;
+}
+
+.details.above {
+	translate: 0 10px;
+}
+
+.details.open {
+	opacity: 1;
+	translate: none;
+	pointer-events: auto;
+	transition: opacity 400ms cubic-bezier(0, 0, 0, 1), translate 400ms cubic-bezier(0, 0, 0, 1);
+}
+
+body.vscode-reduce-motion .details.open {
+	transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.details.open {
+		transition: none;
+	}
+}
+
+/* What scrolls where there is no room for all of it: the whole content, its name among it */
+.details-scroll {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	padding: 12px;
+	overflow: auto;
+	overscroll-behavior: contain;
+	scrollbar-width: thin;
+	scrollbar-color: var(--vscode-scrollbarSlider-background) transparent;
+}
+
+.details-scroll:focus {
+	outline: none;
+}
+
+.details-scroll:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder);
+	outline-offset: -1px;
+}
+
+/* Who's line: its name in the text colour, then - quieter, as a picker's description - its short ID */
+.details-more {
+	color: var(--facade-dim);
+}
+
+/* A title it has not got - none yet, or none can come: quieter than a title */
+.details-fact.untitled {
+	color: var(--facade-dim);
+}
+
+/* Its facts, 4 px apart: each after its 16 px icon in the quieter colour, the words in the text colour, whole */
+.details-facts {
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.details-fact {
+	display: grid;
+	grid-template-columns: 16px minmax(0, 1fr);
+	column-gap: 8px;
+	align-items: start;
+	overflow-wrap: anywhere;
+}
+
+.details-fact svg {
+	width: 16px;
+	height: 16px;
+	margin-block: 2px;
+	fill: currentColor;
+	color: var(--facade-dim);
+}
+
+/* The theme's quieter colour reading below 4.5:1 on its hover colour: the icons in its text colour (UX-2.1) */
+.details.plain-quiet :is(.details-more, .details-fact.untitled, .details-fact svg) {
+	color: inherit;
+}
+
+/* Pointing at the ⓘ that opened them: up from under the card, down from over it */
+.details-arrow {
+	position: absolute;
+	top: -6px;
+	width: 10px;
+	height: 10px;
+	border: 1px solid var(--vscode-editorHoverWidget-border);
+	border-right: 0;
+	border-bottom: 0;
+	background: var(--vscode-editorHoverWidget-background);
+	rotate: 45deg;
+}
+
+.details.above .details-arrow {
+	top: auto;
+	bottom: -6px;
+	border: 1px solid var(--vscode-editorHoverWidget-border);
+	border-top: 0;
+	border-left: 0;
 }
 
 /* Its short ID, beside a name another card has too: quieter than the name, whole, the name giving way first (PANEL-1.3) */
@@ -458,25 +676,39 @@ body.vscode-reduce-motion .dot.working::after {
 	opacity: 0.8;
 }
 
+/* Whole where 80% of the theme's selected text would read below 4.5:1 on its selection (UX-2.1) */
+body.whole-quiet-text .item.selected :is(.short-id, .title, .pin, .action) {
+	opacity: 1;
+}
+
 /*
- * A new card opens from nothing, the cards under it moving down with it, and fades in: quick, slowing to a stop, as VS Code's own
- * menus move (UX-2.2). A card whose process ended normally fades out in 160 ms; an explicit close never waits for motion.
+ * A new card opens from nothing, the cards under it moving down with it, and fades in: 200 ms slowing to a stop, as Fluent's normal
+ * motion enters (UX-2.2). A card whose process ended normally, in view, fades as its row closes up from its own height: 150 ms
+ * speeding up, as Fluent's fast motion leaves, the cards under it rising with it; an explicit close never waits for motion.
  */
 .item.closing {
+	overflow: hidden;
+	overflow-anchor: none;
 	pointer-events: none;
-	animation: facade-card-close 160ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+	animation: facade-card-close 150ms cubic-bezier(1, 0, 1, 1) forwards;
 }
 
 @keyframes facade-card-close {
+	from {
+		min-height: var(--facade-closing-height);
+		height: var(--facade-closing-height);
+	}
 	to {
+		min-height: 0;
+		height: 0;
+		padding-block: 0;
 		opacity: 0;
-		transform: translateY(-4px);
 	}
 }
 
 .item.opening {
 	overflow: hidden;
-	animation: facade-card-open 180ms cubic-bezier(0.22, 1, 0.36, 1);
+	animation: facade-card-open 200ms cubic-bezier(0, 0, 0, 1);
 }
 
 @keyframes facade-card-open {
@@ -570,9 +802,17 @@ body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:hover:no
 	outline-offset: -1px;
 }
 
-body.vscode-high-contrast .item.selected :is(.short-id, .title, .pin),
-body.vscode-high-contrast-light .item.selected :is(.short-id, .title, .pin) {
+body.vscode-high-contrast .item.selected :is(.short-id, .title, .pin, .action),
+body.vscode-high-contrast-light .item.selected :is(.short-id, .title, .pin, .action) {
 	opacity: 1;
+}
+
+/* A card's buttons edged as VS Code's toolbars edge theirs */
+body.vscode-high-contrast .action:is(:hover, :active, .active),
+body.vscode-high-contrast-light .action:is(:hover, :active, .active) {
+	background: transparent;
+	outline: 1px dashed var(--vscode-toolbar-hoverOutline, var(--vscode-contrastActiveBorder));
+	outline-offset: -1px;
 }
 
 /* An avatar's edge in the theme's contrast border, as every edge here: a translucent one would fade it */

@@ -47,11 +47,21 @@ export interface Location {
 	/** `folder`: an opened folder that is no Git checkout (or Git is unavailable); `checkout`: a Git checkout. */
 	readonly kind: 'folder' | 'checkout';
 	readonly isMain?: boolean;
+	/**
+	 * A workspace folder opened inside a checkout rather than at its root: a launch location of its own, no checkout root, so its icon
+	 * is a folder's (WORKTREES-1.2, PANEL-1.5).
+	 */
+	readonly subfolder?: true;
 	readonly branch?: string;
 	readonly detached?: boolean;
 	/** Whether this is the location a workspace folder opened (the first in its folder group). */
 	readonly opened: boolean;
 	readonly git: GitState;
+	/**
+	 * For a folder inside a main checkout, worktree or folder - a conversation's own folder, which Resume runs it in - the location it
+	 * is inside: no picker offers it, and its agents count and show as that location's (WORKTREES-1.2).
+	 */
+	readonly within?: LocationId;
 }
 
 export interface Catalog {
@@ -226,20 +236,22 @@ export interface PairFacts {
 	readonly displayName: string;
 	readonly command: string;
 	readonly cwd: string;
-	/** Where its tab is to open, or that it stays hidden, as a reload brings it back (LIFECYCLE-3.5). */
+	/** Where its tab is to open, or that it stays hidden: a reload opens a pinned agent's there, in its turn (LIFECYCLE-3.5). */
 	readonly tab?: TabPlace;
 	/** Its agent holds a Pin: the group's one unpinned agent tab does not count it (LIFECYCLE-2.2). */
 	readonly pinned?: true;
 }
 
 /**
- * Where a run's tab is, kept with its process so that a reload brings it back (LIFECYCLE-3.5, ARCHITECTURE-3.1): open in the editor
- * group of `column`, last active at `activeAt`, `front` where it is that group's front tab, or hidden. None is a build's that kept no
- * such record.
+ * Where a run's tab is, kept with its process - a reload opens a pinned agent's tab in that group (LIFECYCLE-3.5, ARCHITECTURE-3.1): open
+ * in the editor group of `column`, or hidden. None is a build's that kept no such record.
  */
-export type TabPlace = { readonly column: number; readonly activeAt?: number; readonly front?: true } | 'hidden';
+export type TabPlace = { readonly column: number } | 'hidden';
 
 export type Activity = 'working' | 'not_working' | 'unknown';
+
+/** Why a run's activity is unknown: its CLI never reported, has not reported yet, took its report back, or its screen is not read. */
+export type ActivityUnknown = 'not_reporting' | 'waiting' | 'cleared' | 'screen_unrecognized' | 'screen_reset';
 
 /** What a run's CLI reports (CLIS-2.3), mapped to activity; `error` is a known error the CLI reported. */
 export interface ActivityReport {
@@ -249,13 +261,18 @@ export interface ActivityReport {
 	readonly observedAt?: number;
 	/** A native blocker the CLI reports, in its own words where it gives them. */
 	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
-	/** Why activity is unknown or in error, for the card's second line. */
+	/** Why activity is unknown or in error: in English where `unknown` names the reason, as agents read it (MCP-3.1). */
 	readonly reason?: string;
+	/** Which reason it is, where activity is unknown: the card words it in the person's language (PANEL-1.4). */
+	readonly unknown?: ActivityUnknown;
+	/** `reason` in the person's words, where it is Facade's own English and differs: what the card says (UX-2.4). */
+	readonly reasonWords?: string;
+	/** A known error the CLI reported: its own words, else Facade's in English, as agents read it (UX-2.4). */
 	readonly error?: string;
+	/** `error` in the person's words, where it is Facade's own English and differs: what the card says (UX-2.4). */
+	readonly errorWords?: string;
 	/** A missing supervisor connection is infrastructure uncertainty, independent of the CLI's activity. */
 	readonly disconnected?: boolean;
-	/** The CLI's own bounded title, sanitized for display. Empty clears it; absent leaves it unchanged. */
-	readonly title?: string;
 	/** Whether this run's CLI has proven it reports activity (S12). */
 	readonly reporting: boolean;
 	/**
@@ -311,21 +328,37 @@ export interface ExecutionPort {
 	conversations?(): Promise<readonly ConversationKey[]>;
 	/**
 	 * Creates the run's terminal at once, before any process: the same terminal is used through startup (LIFECYCLE-1.5). Its tab opens
-	 * then - `hidden`, as for an agent another agent starts, it opens only as the person opens the agent (LIFECYCLE-2.2).
+	 * then - `hidden`, as for an agent another agent starts, it opens only as the person opens the agent (LIFECYCLE-2.2), or, a pinned
+	 * agent's a reload or a restart brings back, in its turn (openPinned).
 	 */
 	openPair(facts: PairFacts, options: { readonly reveal: boolean; readonly hidden?: boolean }): void;
 	/** Writes a line of startup progress or failure into the run's terminal (UX-1.1: existing surfaces). */
 	note(run: RunId, text: string): void;
 	/** Starts the planned process in the run's existing terminal. Rejects with the actual error when it cannot. */
 	spawn(run: RunId, plan: LaunchPlan, meta: RunMeta): Promise<{ readonly pid: number; readonly startedAt: number }>;
-	/** Reattaches a live run's existing process to a new terminal after reload, without duplicating output. */
+	/** Reattaches a live run's existing process to a new terminal after reload, without duplicating output, its tab hidden (LIFECYCLE-3.5). */
 	attach(live: LiveRun, facts: PairFacts): Promise<void>;
+	/**
+	 * Opens the tab of a pinned agent a reload or a restart brings back, in its turn: in its recorded group, else the active one, in front
+	 * there, its mark put on before this settles - nothing given back, the panel's selection unmoved (LIFECYCLE-3.4, 3.5).
+	 */
+	openPinned?(run: RunId): Promise<void>;
+	/** A reload's or a restart's pinned tabs are open: the panel's selection goes to the last one opened, where one did (PANEL-2.1). */
+	pinnedOpened?(): void;
+	/**
+	 * A pinned sequence is over, none of its tabs still to open: a recreated local registry may retire its predecessor's UI resources for
+	 * the runs registered by now, and releases the old tab of each run hidden (ARCHITECTURE-2.2, LIFECYCLE-3.5). Said once at the end of
+	 * the activation's sequence, and again after each later restoration that brings runs back.
+	 */
+	pinnedSequenceOver?(): Promise<void>;
 	/** Stops further input, then ends the process in the background: graceful, then forced (LIFECYCLE-3.1). */
 	terminate(run: RunId): Promise<CleanupResult>;
 	/** Disposes the run's terminal at once (explicit close, normal exit, removal) and lets ptyd forget the run. */
 	removePair(run: RunId): void;
 	/** Shows the run's own terminal; false where it has none (LIFECYCLE-2.2). */
 	reveal(run: RunId, options: { readonly preserveFocus: boolean }): Promise<boolean>;
+	/** Whether the run's tab is open now - whatever its record says, which a pinned agent's turn and a hidden card keep (LIFECYCLE-3.4). */
+	tabOpen(run: RunId): boolean;
 	/** Opens a live run's terminal again after its tab was closed and the person kept the agent (LIFECYCLE-3.1). */
 	reopen?(run: RunId): void;
 	/** Updates the terminal's tab title for a renamed run (LIFECYCLE-2.2). */
@@ -338,7 +371,10 @@ export interface ExecutionPort {
 	endWindow(): Promise<void>;
 	readonly onDidReport: Event<ActivityReport>;
 	readonly onDidExit: Event<ExitReport>;
-	/** The run whose terminal is the active one, as the editor reports it; undefined when another editor/terminal is active. */
+	/**
+	 * The run whose terminal is the active one, as the editor reports it; undefined when another editor/terminal is active. None is told
+	 * while a reload's or a restart's pinned tab opens in its turn; once they are open, the last one opened is (PANEL-2.1, LIFECYCLE-3.5).
+	 */
 	readonly onDidActivate: Event<RunId | undefined>;
 	/**
 	 * The person renamed a run's terminal tab natively (LIFECYCLE-2.2), told by the run's own terminal: the complete `name` as they
@@ -356,8 +392,6 @@ export interface ExecutionPort {
 	tabLabel?(run: RunId, alias: string, shown: boolean): void;
 	/** Where a run's tab is now, for a reload to bring it back (LIFECYCLE-3.5). */
 	readonly onDidPlaceTab?: Event<{ readonly run: RunId; readonly place: TabPlace }>;
-	/** The groups a reload's coming runs were the fronts of, as their records say: nothing else need be in front there meanwhile (LIFECYCLE-3.5). */
-	frontsRecorded?(columns: readonly number[]): void;
 	/** A successor activation owns the workspace. Detach cards without closing or forgetting transferred runs. */
 	readonly onDidLoseOwnership?: Event<void>;
 	/** A run's MCP shim connected: its tools are available (CLIS-2.2). */
@@ -406,6 +440,14 @@ export interface RunMeta {
 	readonly toolsProblem?: ToolsProblem;
 	readonly toolsFile?: string;
 	readonly promptLine?: string;
+	/** Its conversation's title, as its CLI last kept it (CLIS-2.4), kept across a reload. */
+	readonly title?: string;
+	/** `conversation`: its title came from the native conversation reader; without it a kept title is an earlier build's, dropped (CLIS-2.4). */
+	readonly titleSource?: 'conversation';
+	/** The conversation store its launch used, where its titles are read (CLIS-2.4). */
+	readonly titleStore?: string;
+	/** Whether it resumed a conversation rather than beginning one (PANEL-1.4), kept across a reload. */
+	readonly resumed?: true;
 	/** The last message sent to it, which its card's second line says, kept across a reload (PANEL-1.4). */
 	readonly said?: string;
 	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
@@ -472,6 +514,20 @@ export interface ConversationMeta {
 export interface ConversationStore {
 	get(key: ConversationKey): ConversationMeta | undefined;
 	put(key: ConversationKey, meta: ConversationMeta): void;
+}
+
+/**
+ * A conversation's title as its CLI keeps it in its own history - a name the person gave it, the CLI's summary, or the first prompt -
+ * as Resume Agent lists it, read by the conversation's ID alone in the store its CLI's launches in `cwd` find (CLIS-2.4).
+ */
+export interface ConversationTitlePort {
+	/** None where its CLI keeps no history here, or has not saved it yet, or saved it untitled; rejects where its store cannot be read. */
+	title(key: ConversationKey, cwd: string, store?: string): Promise<string | undefined>;
+	/**
+	 * The store `cli`'s launches in `cwd` find now - its folder - which an accepted launch keeps and its titles are read from for as long
+	 * as it runs, whatever settings change later (CLIS-2.4). None where it has no store here.
+	 */
+	storeOf?(cli: string, cwd: string): string | undefined;
 }
 
 /** Saved intent to restore an exact conversation in this workspace (RULES-2.2, 4.2; LIFECYCLE-3.4). */
@@ -572,6 +628,11 @@ export interface RunFacts {
 	readonly displayName: string;
 	readonly command: string;
 	readonly location: LocationId;
+	/**
+	 * The location its Resume cwd is within, its anchor, kept from its acceptance: the catalog records that cwd only once its process has
+	 * started, and never for a start that failed, yet it shows and reports as its anchor's throughout (WORKTREES-1.2, MCP-3.1).
+	 */
+	readonly within?: LocationId;
 	readonly cwd: string;
 	readonly environment: string;
 	readonly yolo: boolean;
@@ -585,6 +646,8 @@ export interface RunFacts {
 	readonly activitySince?: number;
 	readonly disconnected?: boolean;
 	readonly activityReason?: string;
+	/** Which reason `activityReason` is, where its report named one: the card says it in the person's words (PANEL-1.4). */
+	readonly activityUnknown?: ActivityUnknown;
 	/** Whether the run's CLI proved it reports activity; without it activity is unknown (RULES-3.2). */
 	readonly reporting: boolean;
 	/**
@@ -595,10 +658,29 @@ export interface RunFacts {
 	/** Its bound passed before its CLI showed its activity or its Facade tools connected: it did not start properly, red (RULES-3.2). */
 	readonly notReady?: true;
 	readonly blocker?: { readonly kind: 'permission' | 'question' | 'auth' | 'unknown'; readonly text?: string };
+	/**
+	 * Its conversation's complete title as its CLI stores it in its own history, the one Resume Agent lists (CLIS-2.4): none before its CLI
+	 * saved the conversation. Never its terminal's title, nor a CLI's report's.
+	 */
 	readonly title?: string;
 	/**
+	 * Where `title` came from: `conversation`, the native conversation reader - the only title kept as a conversation's. A kept record
+	 * without it is an earlier build's, which may hold a report's title: that title is dropped (CLIS-2.4).
+	 */
+	readonly titleSource?: 'conversation';
+	/**
+	 * The folder of the conversation store its accepted launch used, as its CLI's settings found it then: its titles are read there
+	 * while it runs and after a reattachment, whatever its CLI's settings say since (CLIS-2.4).
+	 */
+	readonly titleStore?: string;
+	/**
+	 * It resumed a conversation by its ID - Resume Agent's, or a restored Pin's - rather than beginning a new one: its card's second line
+	 * says so before any message (PANEL-1.4).
+	 */
+	readonly resumed?: true;
+	/**
 	 * The last message sent to it (PANEL-1.4): what its CLI took from its input after the person's Enter, or a message Facade
-	 * delivered. Its card's second line says it from then on, never the CLI's title again.
+	 * delivered. Its card's second line says it from then on.
 	 */
 	readonly said?: string;
 	/** Who sent `said`, kept with it (PANEL-1.4, 1.5). */
@@ -612,7 +694,7 @@ export interface RunFacts {
 	/** Its creation tree: the person's agent it comes from, and the agent that started it where an agent did (RULES-2.2, 4.3). */
 	readonly root: RunId;
 	readonly creator?: RunId;
-	/** The creator's reference as its window named it at the start, `@name #aN`: what the card's hover says started it (PANEL-1.5). */
+	/** The creator's label as its window named it at the start, `name #aN`: what the card's details say started it (PANEL-1.5). */
 	readonly creatorLabel?: string;
 	readonly origin: 'human' | 'agent';
 	/** The request ID its creator gave the start: the same one again answers this run, never another start (MCP-1.1). */
@@ -636,7 +718,7 @@ export interface RunFacts {
 	readonly toolsProblem?: ToolsProblem;
 	/** For a conflict, the folder's file Facade would not overwrite, relative to its folder: what the person moves or renames. */
 	readonly toolsFile?: string;
-	/** The first line of an agent's creation prompt, for the card's hover (PANEL-1.5). */
+	/** The first line of an agent's creation prompt, for the card's second line (PANEL-1.4). */
 	readonly promptLine?: string;
 	/** The input reader of its ordinary-message input, as its launch planned it (CLIS-2.1). */
 	readonly inputAdapter?: string;
@@ -732,7 +814,7 @@ export interface LaunchRequest {
 	readonly resultMessageId?: string;
 	/** The creation prompt as the CLI is to receive it, handed to the planner for its native path (COLLABORATION-2.2). */
 	readonly prompt?: string;
-	/** The first line of the caller's own prompt text, shown in the card's hover. */
+	/** The first line of the caller's own prompt text, shown on the card's second line (PANEL-1.4). */
 	readonly promptLine?: string;
 }
 
@@ -772,7 +854,7 @@ export interface Agents {
 	creationPending?(run: RunId): boolean;
 	/** Its post-start creation prompt was delivered or given up: its input is held for it no longer (RULES-1.10). */
 	creationSettled?(run: RunId): void;
-	/** Close Agent, the single close action for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
+	/** End Agent, the single action ending for starting, live and retained runs: pair removed at once, cleanup in the background (LIFECYCLE-3.1). */
 	close(run: RunId): Promise<CleanupResult | 'already_ended' | 'not_started'>;
 	/** Renames a run's display label, trimming it and allowing an empty string (LIFECYCLE-2.1). */
 	rename(run: RunId, name: string): void;

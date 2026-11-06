@@ -13,7 +13,7 @@ import { fileURLToPath } from 'url';
 import type { Environment } from '../environment';
 import { homeOf } from '../executable';
 import { SESSION_ID } from '../identity';
-import { Scope, titleOf } from './scope';
+import { Scope, titlesOf } from './scope';
 import { openReadOnly } from './sqlite';
 import type { Candidate, Found, VendorStore } from './store';
 
@@ -52,39 +52,47 @@ function foldersOf(uris: unknown): string[] {
  * parent - not listed, as Antigravity lists none either, nor one whose file it dropped. Each is read whole from its row.
  */
 export function antigravityCandidates(dir: string, scope: Scope): Candidate[] {
-	const summaries = path.join(dir, 'conversation_summaries.db');
-	const db = openReadOnly(summaries);
+	return rowsOf(dir).flatMap(row => antigravityCandidate(dir, row, scope) ?? []);
+}
+
+/** Conversation `sessionId`, by its summary row alone. */
+export function antigravityCandidateOf(dir: string, scope: Scope, sessionId: string): Candidate | undefined {
+	const [row] = SESSION_ID.test(sessionId) ? rowsOf(dir, sessionId) : [];
+	return row && antigravityCandidate(dir, row, scope);
+}
+
+/** The summary rows of the store at `dir` of the conversations Antigravity lists - `sessionId`'s alone where it is given. */
+function rowsOf(dir: string, sessionId?: string): Row[] {
+	const db = openReadOnly(path.join(dir, 'conversation_summaries.db'));
 	if (!db) {
 		return [];
 	}
-	let rows: Row[];
 	try {
-		rows = db.prepare(`SELECT conversation_id AS id, title, preview, last_modified_time AS at, workspace_uris AS uris
-			FROM conversation_summaries WHERE parent_conversation_id = ''`).all() as unknown as Row[];
+		const query = `SELECT conversation_id AS id, title, preview, last_modified_time AS at, workspace_uris AS uris
+			FROM conversation_summaries WHERE parent_conversation_id = ''`;
+		return (sessionId === undefined ? db.prepare(query).all() : db.prepare(`${query} AND conversation_id = ?`).all(sessionId)) as unknown as Row[];
 	} catch {
 		return [];
 	} finally {
 		db.close();
 	}
-	const candidates: Candidate[] = [];
-	for (const row of rows) {
-		const at = typeof row.at === 'string' ? Date.parse(row.at.replace(' ', 'T')) : NaN;
-		if (typeof row.id !== 'string' || !SESSION_ID.test(row.id) || !(at > 0) || !fs.existsSync(path.join(dir, 'conversations', `${row.id}.db`))) {
-			continue;
-		}
-		// This native set is sorted and loses the original cwd when --add-dir is used. Keep the alternatives, never guess.
-		const folders = [...new Set(foldersOf(row.uris))];
-		const choices = folders.filter(folder => scope.includes(folder));
-		const cwd = choices[0];
-		if (cwd === undefined) {
-			continue;
-		}
-		const named = typeof row.title === 'string' && row.title.trim() ? row.title : typeof row.preview === 'string' ? row.preview : '';
-		const title = titleOf(named);
-		const found: Found = { sessionId: row.id, cwd, ...folders.length > 1 ? { cwdChoices: choices } : {}, ...title ? { title } : {} };
-		candidates.push({ cli: 'agy', file: `${summaries}#${row.id}`, at, sessionId: row.id, found });
+}
+
+/** The conversation `row` of the store at `dir`, read whole from its row; none where it is no conversation of `scope`'s, or its file is dropped. */
+function antigravityCandidate(dir: string, row: Row, scope: Scope): Candidate | undefined {
+	const at = typeof row.at === 'string' ? Date.parse(row.at.replace(' ', 'T')) : NaN;
+	if (typeof row.id !== 'string' || !SESSION_ID.test(row.id) || !(at > 0) || !fs.existsSync(path.join(dir, 'conversations', `${row.id}.db`))) {
+		return undefined;
 	}
-	return candidates;
+	// This native set is sorted and loses the original cwd when --add-dir is used. Keep the alternatives, never guess.
+	const folders = [...new Set(foldersOf(row.uris))];
+	const choices = folders.filter(folder => scope.includes(folder));
+	const cwd = choices[0];
+	if (cwd === undefined) {
+		return undefined;
+	}
+	const found: Found = { sessionId: row.id, cwd, ...folders.length > 1 ? { cwdChoices: choices } : {}, ...titlesOf(typeof row.title === 'string' ? row.title : undefined, typeof row.preview === 'string' ? row.preview : undefined) };
+	return { cli: 'agy', file: `${path.join(dir, 'conversation_summaries.db')}#${row.id}`, at, sessionId: row.id, found };
 }
 
 /** Antigravity's store: `.gemini/antigravity-cli` in the home folder, which no variable of its moves. */
@@ -92,5 +100,6 @@ export const ANTIGRAVITY_STORE: VendorStore = {
 	cli: 'agy',
 	dirOf: (env: Environment) => path.join(homeOf(env), '.gemini', 'antigravity-cli'),
 	candidates: antigravityCandidates,
+	candidateOf: antigravityCandidateOf,
 	read: async candidate => candidate.found
 };

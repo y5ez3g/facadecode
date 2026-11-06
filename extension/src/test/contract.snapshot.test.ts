@@ -29,6 +29,25 @@ suite('Snapshot pagination and targeted recovery', () => {
 		});
 	}
 
+	test('MCP-3.1, WORKTREES-1.2: a Resume cwd within a location is no location of the snapshot - unfiltered, anchor-filtered or targeted - and its agent counts as the anchor\'s', async () => {
+		const s = setUp();
+		try {
+			const caller = runFacts(1, { yolo: true });
+			const [anchor] = s.locations;
+			s.locations = [...s.locations, { ...anchor, id: 'loc-docs', path: `${anchor.path}/docs`, uri: `${anchor.uri}/docs`, label: 'docs', kind: 'folder', git: 'none', opened: false, within: anchor.id }];
+			s.agents.add(caller, runFacts(2, { location: 'loc-docs', cwd: `${anchor.path}/docs` }));
+			const ids = (data: { windows: { locations: { location_id: string }[] }[] }) => data.windows[0].locations.map(each => each.location_id);
+			const all = resultOf(await s.call(caller, 'list_agents')).data;
+			const filtered = resultOf(await s.call(caller, 'list_agents', { window_id: 'win-1', location_id: anchor.id })).data;
+			const targeted = resultOf(await s.call(caller, 'list_agents', { agent: '#a2' })).data;
+			assert.ok(!ids(all).includes('loc-docs'));
+			assert.deepStrictEqual([ids(filtered), filtered.windows[0].counts.agents, filtered.agents.map((each: { agent_id: string }) => each.agent_id).sort()], [[anchor.id], 2, ['#a1', '#a2']]);
+			assert.deepStrictEqual([ids(targeted), targeted.agents[0].location_id], [[anchor.id], anchor.id]);
+		} finally {
+			s.dispose();
+		}
+	});
+
 	test('targeted lookup does not need a working CLI scanner and preserves the requested settings of ended agents', async () => {
 		const s = setUp();
 		try {

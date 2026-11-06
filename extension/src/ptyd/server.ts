@@ -407,7 +407,6 @@ export class PtydServer {
 		this.claims.set(run, connection);
 		const listener: RunListener = {
 			output: (seq, data) => connection.output(run, { event: 'output', run: run.id, seq, data }, () => this.claimedBy(connection)),
-			title: title => connection.send({ event: 'title', run: run.id, title }),
 			status: status => connection.send({ event: 'status', run: run.id, ...(status ? { status } : {}) }),
 			exit: exit => connection.send({ event: 'exit', run: run.id, ...exit })
 		};

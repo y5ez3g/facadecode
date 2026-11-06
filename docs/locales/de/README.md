@@ -39,7 +39,7 @@ Installieren Sie als Nächstes die unterstützten Agenten-CLIs, die Sie verwende
 Facade Code führt native Agenten-CLIs (Claude Code, Codex, Antigravity, Muse Code, OpenCode und Pi) in Editor-Terminal-Tabs neben Ihren Dateien aus – mit den eigenen Befehlen, Werkzeugen, Konten und Abonnements der jeweiligen CLI. Eine Karte im Panel zeigt den Status jedes Agenten an.
 
 - **Arbeiten Sie direkt neben Ihrem Code.** Jeder Agent läuft in einem eigenen Terminal-Tab im Editorbereich. Das Schließen eines Tabs blendet diesen lediglich aus, während der Agent weiterläuft; ein Klick auf die Karte öffnet ihn wieder.
-- **Status aller Agenten im Blick behalten.** Die Karten zeigen, wer den jeweiligen Agenten gestartet hat, was er gerade tut und ob er bereit für Eingaben ist, eine Berechtigung benötigt oder auf einen Fehler gestoßen ist. Agenten laufen bei Fenster-Reloads und Neustarts der Erweiterung unterbrechungsfrei weiter.
+- **Status aller Agenten im Blick behalten.** Die Karten zeigen, was zuletzt an den jeweiligen Agenten gesendet wurde und ob er arbeitet, eine Berechtigung benötigt oder auf einen Fehler gestoßen ist, während die Details seinen Titel, seinen Ordner und wer ihn gestartet hat zeigen. Agenten laufen bei Fenster-Reloads und Neustarts der Erweiterung unterbrechungsfrei weiter.
 - **Ordner und Worktrees.** Führen Sie Agenten in beliebigen Ordnern des Arbeitsbereichs aus oder erstellen Sie spontan einen Git-Worktree, um Codeänderungen voneinander getrennt zu halten. Heften Sie eine Unterhaltung an, um sie beim erneuten Öffnen des Arbeitsbereichs wiederherzustellen, oder setzen Sie frühere Sitzungen aus dem Verlauf fort.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Facade Code führt native Agenten-CLIs (Claude Code, Codex, Antigravity, Muse Co
 
 - **Agenten starten und stoppen.** Ein Agent kann andere Agenten mit jeder der sechs CLIs in jedem beliebigen Ordner oder neuen Worktree Ihrer Facade-Fenster auf diesem Computer starten und ihnen die erste Aufgabe zuweisen. Eine wiederholte Anfrage mit derselben Anfrage-ID startet niemals einen zweiten Agenten.
 - **Nachrichten senden.** Agenten tauschen untereinander Nachrichten aus und können auch Ihnen Nachrichten schicken. Facade fügt die vollständige Nachricht auf einmal ein und sendet sie ab. Befindet sich noch ungesendeter Text oder eine Eingabeaufforderung im Eingabefeld, wartet die Zustellung, bis das Feld frei ist.
-- **Terminalsteuerung.** Ein Agent kann den Bildschirm eines anderen Agenten lesen, Befehle eingeben und Tasten drücken, um Eingabeaufforderungen zu beantworten oder einem feststeckenden Kollegen zu helfen. Wenn ein Kind-Agent 20 Sekunden lang auf eine Eingabe oder Bestätigung wartet, wird der Agent benachrichtigt, der ihn gestartet hat.
+- **Terminalsteuerung.** Ein Agent kann den Bildschirm eines anderen Agenten lesen, Befehle eingeben und Tasten drücken, um Eingabeaufforderungen zu beantworten oder einem feststeckenden Kollegen zu helfen. Wenn ein Kind-Agent 20 Sekunden lang auf eine Berechtigung, eine Antwort oder eine Anmeldung wartet, wird der Agent benachrichtigt, der ihn gestartet hat.
 
 ## Agent Mesh
 

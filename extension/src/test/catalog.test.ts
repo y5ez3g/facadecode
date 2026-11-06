@@ -25,7 +25,8 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.unpinAgent', 'Unpin Agent'],
 	['facade.showActiveAgents', 'Go to Agent...'],
 	['facade.renameAgent', 'Rename Agent...'],
-	['facade.closeAgent', 'Close Agent'],
+	['facade.closeAgent', 'End Agent'],
+	['facade.showAgentDetails', 'Show Agent Details'],
 	['facade.filter', 'Filter by Working Location...', '$(filter)'],
 	['facade.configureAgents', 'Configure Agents...'],
 	['facade.showAgentLaunch', 'Show Agent Launch...'],
@@ -69,7 +70,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		}
 	});
 
-	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, Close Agent for every card; the palette by availability, context-only commands hidden', () => {
+	test('menus: Filter by Working Location - filled while a filter is on - then New Agent in the title; the card menu in PANEL-2.2\'s groups, End Agent for every card; the palette by availability, context-only commands hidden', () => {
 		const card = "webviewId == 'facade.agents' && webviewSection == 'agent'";
 		assert.deepStrictEqual(contributes.menus, {
 			'view/title': [
@@ -85,8 +86,6 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			],
 			'webview/context': [
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
-				{ command: 'facade.unpinAgent', when: `${card} && webviewUnpin`, group: '1_agent@2' },
-				{ command: 'facade.pinAgent', when: `${card} && webviewPin`, group: '1_agent@2' },
 				{ command: 'facade.moveUp', when: `${card} && webviewMoveUp`, group: '2_move@1' },
 				{ command: 'facade.moveDown', when: `${card} && webviewMoveDown`, group: '2_move@2' },
 				{ command: 'facade.closeAgent', when: card, group: '4_close@1' }
@@ -94,6 +93,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			commandPalette: [
 				{ command: 'facade.renameAgent', when: 'facade.agentSelected' },
 				{ command: 'facade.closeAgent', when: 'facade.agentSelected' },
+				{ command: 'facade.showAgentDetails', when: 'facade.agentSelected && facade.agentSelectedVisible' },
 				...HIDDEN.map(([command]) => ({ command, when: 'false' })),
 				{ command: 'facade.pinAgent', when: 'facade.agentSelected && facade.agentSelectedPinnable && !facade.agentSelectedPinned' },
 				{ command: 'facade.unpinAgent', when: 'facade.agentSelectedPinned' },
@@ -202,7 +202,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 					locations: { snapshot: () => ({ locations: [], folders: [], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: emitter.event, onDidRemove: emitter.event, removalOf: () => undefined },
 					clis: { list: async () => ({ clis: [], problems: [] }) },
 					history: { last: () => ({}), remember: () => undefined },
-					execution: { reveal: async () => false, onDidActivate: emitter.event },
+					execution: { reveal: async () => false, tabOpen: () => false, onDidActivate: emitter.event },
 					workspaceState: { get: () => undefined, update: async () => undefined, keys: () => [] } as never,
 					extensionUri: { path: '/extension' } as never,
 					log: { event: () => undefined },

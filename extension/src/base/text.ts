@@ -55,19 +55,16 @@ const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
  * Untrusted text - a CLI's title or status - as one line to display: invisible formatting removed, controls and line breaks as
  * spaces, runs of whitespace as one, trimmed, and at most `max` code points with an ellipsis (CLIS-2.3).
  */
-/**
- * The symbols, spaces and bullets a CLI puts before its title's words to show its state - a spinner's frame, `✳`, `●`, `✓` - which
- * change as it works while its words stay (PANEL-1.4).
- */
-const STATUS_PREFIX = /^[\p{S}\p{Z}\p{M}\p{Cf}\s\u00b7\u2022\u2027\u2219*]+/u;
-
-/** A CLI title's words without the state shown before them; undefined where it has none (PANEL-1.4). */
-export function titleText(title: string | undefined): string | undefined {
-	return title?.replace(STATUS_PREFIX, '').trim() || undefined;
-}
-
 export function displayLine(text: string, max: number): string {
 	return truncateCodePoints(text.replace(INVISIBLE_FORMATTING, '').replace(CONTROL_CHARACTERS, ' ').replace(/\s+/g, ' ').trim(), max);
+}
+
+/**
+ * Untrusted text kept whole as several lines - a conversation's complete stored title (CLIS-2.4): invisible formatting removed, each
+ * line break one `\n`, other controls as spaces, trimmed, never cut.
+ */
+export function displayLines(text: string): string {
+	return text.replace(INVISIBLE_FORMATTING, '').replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f-\u009f]/g, ' ').trim();
 }
 
 /** A preview of at most `maxLength` UTF-16 units, including its ellipsis, cut only between complete graphemes. */

@@ -273,9 +273,9 @@ whatever their case; any other name without `@` resolves as `@name` does.
 
 A plain folder is sufficient. Preserve the opened path for display and defaults; compare path components and canonical
 paths in the owning environment. Nested folders use the matching workspace association; related worktrees can be outside
-the folder. A successful Git read can discover worktrees made by any tool. Removing a workspace folder, actually
-deleting a worktree, or finding a remembered Resume folder gone (WORKTREES-3.3) closes the agents belonging to that
-removed location. A failed Git read or temporary remote disconnect is not proof of deletion.
+the folder. A successful Git read can discover worktrees made by any tool. Removing a workspace folder or actually
+deleting a worktree closes the agents belonging to that removed location; finding a Resume cwd recorded within a location
+gone (WORKTREES-1.2, 3.3) ends only the agents working in it, the location staying. A failed Git read or temporary remote disconnect is not proof of deletion.
 
 ## 3 State and feedback
 
@@ -310,7 +310,9 @@ lost connection to its process, an error its CLI reported, Facade tools it canno
 went away - or a start not ready within its bound. Red comes before green. A native permission, answer or sign-in
 question waiting for the person shows no dot even where its Facade tools are unusable or its start was not ready in
 time, as the second line says what it waits for (PANEL-1.4); an error or an ended run stays red. Idle, a reported
-blocker without a recognized kind and unknown activity show no dot either; the hover and accessible label say which. A
+blocker without a recognized kind and unknown activity show no dot either - a start whose CLI reports nothing within
+the bound is red, while activity unknown later in a run shows no dot until the CLI's next report; the card's accessible
+label says which in words, and its second line what a blocker waits for (PANEL-1.4, 1.5). Neither the details nor a hover says a state. A
 blocker stays a blocker, never idle; idle still requires reliable evidence. Work that stops is shown so a second later,
 as a CLI between two steps does not blink; a blocker or a problem is shown at once. A quiet screen or an unrecognized
 working indicator does not prove idle. Screen evidence is invalidated by a full reset or an unrecognized completed
@@ -323,7 +325,7 @@ never prove idle.
 
 ### 3.3 Exit classification is independent of who caused it
 
-**Normal CLI exit removes the pair; abnormal exit retains a red pair until closed.**
+**Normal CLI exit removes the pair; abnormal exit retains a red pair until the person ends it with End Agent.**
 
 Normal means exit 0, a completed explicit stop, or a verified native exit/interrupt outcome such as the adapter's
 Ctrl+C handling. An unexplained nonzero/signal exit is abnormal. Record its actual code/signal; do not guess a cause
@@ -390,9 +392,10 @@ Existing processes keep their actual plan.
 
 Explicit agent close, a person's close of the agent's editor tab showing its pin mark (LIFECYCLE-3.4), normal exit or
 actual location removal Unpins. Abnormal exit, whole-window close and a tab hidden any other way preserve Pin. Unpin
-alone does not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation. Each activation
-restores in the background, after reattachment, the Pins no run holds, so a reload restarts none that still run or were
-retained as failures; a failure is retained without a restart loop. If the exact conversation already runs in Facade,
+alone does not stop. Manual Resume does not silently re-pin a deliberately unpinned conversation. Each activation,
+after reattachment, restores the Pins no run holds (LIFECYCLE-3.4's Pin restoration), so a reload restarts none that
+still run or were retained as failures; a failure is retained without a restart loop. Only their processes start in the
+background: their tabs then open in front, by LIFECYCLE-3.5's tab procedure. If the exact conversation already runs in Facade,
 later windows skip launching it. Human UX stays local. Facade does not inspect or block an external application's
 writer; vendor resume errors are returned as actual errors.
 
@@ -444,7 +447,7 @@ own operations without turning them into a public feature.
 
 **Cancellation ends unstarted work and does not undo files or submitted input.**
 
-Canceling a picker has no effects. Closing an accepted launch - Close Agent or stop_agent; hiding its tab is no close
+Canceling a picker has no effects. Closing an accepted launch - End Agent or stop_agent; hiding its tab is no close
 (LIFECYCLE-2.2) - prevents later spawn and ends its own pending input; created worktrees/branches remain. Native
 post-create environment preparation is not a Facade-managed job. There is no message-recall tool, worktree-delete API or
 stop-with-delete option; a person deletes a clean linked worktree only by WORKTREES-3.2's confirmed picker action,

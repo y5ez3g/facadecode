@@ -207,6 +207,14 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const history = new WorkspaceLaunchHistory(workspaceState, log);
 	const human = new WindowHuman(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
 	const conversations = new ConversationFile(home);
+	// The CLIs' own conversation stores where they run - this extension runs where its window's CLIs do: Resume lists them, and each
+	// run's card says its conversation's title from them (LIFECYCLE-3.2, CLIS-2.4). A custom CLI has none
+	const vendorHistory = new VendorHistory({
+		knownCwd: key => conversations.get(key)?.cwd,
+		arguments: () => clis.storeArguments(),
+		environment: cwd => { const location = locations.conversationLocation(cwd); return location ? clis.storeEnvironments(location) : {}; },
+		unavailable: (cli, cwd) => { const location = locations.conversationLocation(cwd); return location ? clis.resumeProblem(cli, location) : 'The original working directory is unavailable.'; }
+	});
 	const agents = new AgentService({
 		execution,
 		planner: clis,
@@ -215,6 +223,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		history,
 		human,
 		conversations,
+		titles: vendorHistory,
 		pinStore: new WorkspacePins(workspaceState, log),
 		newPinId: () => `pin-${crypto.randomBytes(16).toString('hex')}`,
 		retained: new RetainedFile<RetainedRun>(record.dir, writeIfOwned),
@@ -349,7 +358,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		if (disposed) { return; }
 		const catalog = locations.snapshot();
 		const fields = { folders: catalog.folders.map(({ name, uri, path }) => ({ name, uri, path })),
-			locations: catalog.locations.map(({ id, path, kind, branch, isMain }) => ({ location_id: id, path, kind, branch, is_main: isMain })), pending: catalog.pending };
+			locations: catalog.locations.filter(each => !each.within).map(({ id, path, kind, branch, isMain }) => ({ location_id: id, path, kind, branch, is_main: isMain })), pending: catalog.pending };
 		const signature = JSON.stringify(fields);
 		if (signature !== lastLocations) { lastLocations = signature; log.fact?.('locations_scanned', fields); }
 		for (const location of catalog.locations) {
@@ -377,12 +386,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		...registerUi({
 			agents,
 			savedName: key => conversations.get(key)?.name,
-			conversations: new VendorHistory({
-				knownCwd: key => conversations.get(key)?.cwd,
-				arguments: () => clis.storeArguments(),
-				environment: cwd => { const location = locations.conversationLocation(cwd); return location ? clis.storeEnvironments(location) : {}; },
-				unavailable: (cli, cwd) => { const location = locations.conversationLocation(cwd); return location ? clis.resumeProblem(cli, location) : 'The original working directory is unavailable.'; }
-			}),
+			conversations: vendorHistory,
+			readsTitles: cli => vendorHistory.readsTitles(cli),
 			locations,
 			clis,
 			history,

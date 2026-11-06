@@ -189,7 +189,7 @@ function summary(evidence: { generatedAt: string; input: string; snapshot: objec
 		'',
 		`Build: ${cell(JSON.stringify(evidence.snapshot))}.`,
 		'',
-		'A native case (N) judges its method: a lost or misdirected key, or a front not brought back, is a FAILURE. Facade\'s cases (F) are judged by the rules as they stand (LIFECYCLE-3.4, 3.5): the person\'s own Pin or Unpin shows its agent\'s tab with the focus, as a click on its card does, and the keys after it are that agent\'s CLI\'s; a key reaching anything the person did not type into, or a front not as those rules leave it, is a FAILURE; a reload\'s lost keys, which reached nothing and which the owner accepts, are counted apart from misdirected ones. BLOCKED means the case could not be measured.',
+		'A native case (N) judges its method: a lost or misdirected key, or a front not brought back, is a FAILURE. Facade\'s cases (F) are judged by the rules as they stand (LIFECYCLE-3.4, 3.5): the person\'s own Pin or Unpin shows its agent\'s tab with the focus, as a click on its card does, and the keys after it are that agent\'s CLI\'s; a reload brings back the pinned agents\' tabs alone, one at a time in the Pins\' order, each marked before the next opens, nothing given back, the last in front of the active group with the panel\'s selection on it; a key reaching anything the person did not type into, or a front not as those rules leave it, is a FAILURE; a reload\'s lost keys, which reached nothing and which the owner accepts, are counted apart from misdirected ones. BLOCKED means the case could not be measured.',
 		'',
 		'| Case | Question | Done | Measured | Verdict |',
 		'| --- | --- | --- | --- | --- |',

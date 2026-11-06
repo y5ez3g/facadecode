@@ -47,7 +47,8 @@ trigger a Git initialization suggestion. Cancel closes without effects or changi
 **The remembered location is the last human launch whose CLI process successfully started in this workspace.**
 
 On first use, or when that exact location does not exist or is not offered now, use the first workspace folder's first
-location. WORKTREES-1 keeps the folder as opened first in the catalog; its picker displays the main checkout first
+location; one remembered in a Resume cwd recorded within a location - a resumed conversation's own - normalizes to that
+anchor location (WORKTREES-1.2), no separate choice. WORKTREES-1 keeps the folder as opened first in the catalog; its picker displays the main checkout first
 without changing this default. History is a qualified location ID, never just a branch name. Remember the last
 successful human CLI choice alongside it. Picker choices, cancellation, setup completion without CLI start, failure and
 automatic Pin restoration (3.4) do not update human launch history. A panel filter does not select a launch location,
@@ -68,8 +69,8 @@ New Worktree row; when nothing can be chosen - one folder whose only location is
 location change, as an action that does nothing would be. Once Git found no repository there, or is missing, that folder
 is the window's one place to work, which goes without saying: the title does not name it, nor does a Resume Agent line
 (3.2), and where every agent works there neither do Go to Agent rows (2.3), and the panel offers no filter (PANEL-2.3);
-hovers keep it, and cards show no location anywhere (PANEL-1.3). A second folder, a repository found there, a worktree
-or a location Resume remembered ends it, and an agent working elsewhere ends it for the panel and Go to Agent: each
+details keep it, and cards show no location anywhere (PANEL-1.3). A second folder, a repository found there or a worktree
+ends it, and an agent working elsewhere ends it for the panel and Go to Agent: each
 names its location again. Retain Back/selections; Escape cancels the launch. A proposed new branch/location is only
 created when the person accepts a CLI. There is no Git initialization or initial-commit path.
 
@@ -97,9 +98,9 @@ returns to it unchanged. While two or more folders are open, each folder row has
 `Delete worktree "{0}"?` with `Delete`; its detail is `Folder {0} will be deleted; branch {1} is kept.`, or
 `Folder {0} will be deleted (detached HEAD).` for a detached one. The path is complete and untruncated in that detail,
 so a long absolute path remains inspectable without turning the decision question into a block of bold text.
-Both confirmations add `Its agent will be closed.` or `{0} associated agents will be closed.` to the detail where
-agents would close, counting for a worktree the agents of every location inside it, such as a resumed conversation's
-subfolder; the worktree detail separates this consequence with a blank line. Cancel changes nothing. A removed folder's
+Both confirmations add `Its agent will be ended.` or `{0} associated agents will be ended.` to the detail where
+agents would close, counting for a worktree the agents of every location inside it and of every Resume cwd within them,
+recorded or not yet (WORKTREES-1.2); the worktree detail separates this consequence with a blank line. Cancel changes nothing. A removed folder's
 agents close under WORKTREES-3.3, and the folder step shows again, or with one folder left that folder's location step;
 removing the first folder restarts the extensions and ends the picker. A confirmed deletion shows the location step
 again at once without that worktree and the locations inside it, busy until it ends; one deletion runs at a time, so
@@ -153,7 +154,7 @@ descriptive; stale display text must not redirect the run.
 ### 2.2 Terminal placement and focus
 
 **Each agent has one terminal, shown in at most one editor tab, open wherever the person opened it until they close it
-or the agent goes; closing a tab hides it.**
+or the agent goes - a reload or an extension-host restart aside (3.5); closing a tab hides it.**
 
 An agent's card is the agent; its terminal's editor tab is a view of it, opened where the person wants to see it, and
 the panel is where the person switches between agents. The person's New Agent and Resume open the new agent's tab in the
@@ -166,7 +167,7 @@ group active, and the person's next command acts on the active group's front tab
 editors, as it shows any editors: opening one hides no other, because a tab is a view the person chose to open, and
 no other tab's opening closes it. Closing an agent's tab - its close button, Close Editor, Close All, Close Others, Close Editors and
 Group, Kill All Terminals - hides it, without a question: the agent runs on and its card opens it again; ending an agent
-is Close Agent's (3.1). The person's close of a tab showing its pin mark Unpins its agent as well (3.4). Hiding keeps
+is End Agent's (3.1). The person's close of a tab showing its pin mark Unpins its agent as well (3.4). Hiding keeps
 the agent's screen, its draft and its Facade tools, and a starting agent hidden goes on starting. A hidden agent keeps
 the size its tab last had, and one whose tab never opened has 120 columns and 30 rows. Tabs moved, dragged, joined into
 one group or restored there stay open as they are. Facade knows which agent a tab
@@ -187,8 +188,11 @@ tells an extension nothing more. That is what the editor's own split of a termin
 agent - a process, a card, a number and a conversation - is too lasting a thing for a gesture to leave behind; New Agent
 starts one beside on purpose. The copy, which has no process, closes as that terminal comes to the front, so that its
 group never goes empty; the editor draws the copy before Facade hears of it, so it shows for a moment, which no
-extension can prevent. The agent stays as it was throughout. A reload brings the open tabs back (3.5). Every open
-agent tab draws its agent's screen, while ptyd keeps every agent's process and screen (ARCHITECTURE-2.3).
+extension can prevent. The agent stays as it was throughout. A reload or an extension-host restart is the one exception to
+a tab staying open (3.5): every agent's process and card survive it, but only the pinned agents' tabs open again; every other agent's
+tab stays hidden until the person opens it from its card, and once the pinned tabs are open the last one opened
+successfully is in front, its group the active one, and its card selected. Every open agent tab draws its agent's screen, while ptyd keeps every agent's process and screen
+(ARCHITECTURE-2.3).
 
 The tab shows only the agent name beside the CLI's theme-appropriate logo - custom CLIs use a terminal icon - with
 ` #aN` after the name where PANEL-1.3's cards show it, `#aN` alone for an empty name. An open tab follows as a duplicate
@@ -200,59 +204,66 @@ When the agent is not busy the tab shows its name alone, keeping no blank space 
 `workbench.reduceMotion` `on`, or `auto` with the system asking for it - the tab keeps one frame still (UX-2.2).
 Built-in tab logos use contributed native icons, with their brand colors and theme foreground for monochrome marks. They
 remain recognizable in light, dark and high-contrast themes, including after a theme change or terminal restoration.
-This uses the public icon API; it does not patch editor styles or change the person's theme. CLI titles and other status
-remain in PANEL-1.4's second line, never appended to the tab name. Do not add a name length limit or change the editor's
-tab-width settings. Native tab renames synchronize the complete display name when valid, without removing text that
-resembles a CLI title, apart from the tab's own short ID: on `#a12`'s tab, `auditor` and `auditor #a12` both mean the
-name `auditor`, and `#a12` alone an empty name - at most one trailing occurrence of its own ID, whatever the duplicates
-are by then; no other `#aN` is touched. A name that is to end in that tab's own ID is given through Rename Agent, whose
-input holds the stored name alone. Facade's own title changes never become a rename. Match terminals by actual identity,
-never by a duplicate title. Facade never offers panel placement as an alternative. An agent's terminal passes the
-person's input to its CLI as typed, except a mouse report the editor could not measure, and keys that reach it while
-Facade steps through groups to show a chosen tab or holds the focus there for a mark of its own (3.4). The editor reports a click's
-release after it opens a clicked link, and a link opened over an editor terminal takes the terminal out of the page
-first: the release then has no position (`ESC[<0;NaN;NaNm` in the SGR encoding), which a CLI shows as typed text. Such a
-report, in any mouse encoding, takes the position of the report before it - for a release, its press; one with none
-before it is left out. An Enter the person types waits briefly for the CLI's input reader to read what it submits
-(CLIS-2.1, PANEL-1.4); a CLI without an input reader takes it at once. A file dropped onto an agent's terminal gives it
-its path only with Shift held, as the editor requires of every terminal in the editor area; an extension cannot change
-that.
+This uses the public icon API; it does not patch editor styles or change the person's theme. Neither a CLI's terminal
+title, shown nowhere (CLIS-2.3), nor other status - PANEL-1.4's second line's - is appended to the tab name. Do not add
+a name length limit or change the editor's tab-width settings. Native tab renames synchronize the complete display name
+when valid, without removing text that resembles a CLI title, apart from the tab's own short ID: on `#a12`'s tab,
+`auditor` and `auditor #a12` both mean the name `auditor`, and `#a12` alone an empty name - at most one trailing
+occurrence of its own ID, whatever the duplicates are by then; no other `#aN` is touched. A name that is to end in that
+tab's own ID is given through Rename Agent, whose input holds the stored name alone. Facade's own title changes never
+become a rename. Match terminals by actual identity, never by a duplicate title. Facade never offers panel placement as
+an alternative. An agent's terminal passes the person's input to its CLI as typed, except a mouse report the editor
+could not measure, and keys that reach it while Facade steps through groups to show a chosen tab or holds the focus
+there for a mark of its own (3.4). The editor reports a click's release after it opens a clicked link, and a link opened
+over an editor terminal takes the terminal out of the page first: the release then has no position (`ESC[<0;NaN;NaNm` in
+the SGR encoding), which a CLI shows as typed text. Such a report, in any mouse encoding, takes the position of the
+report before it - for a release, its press; one with none before it is left out. An Enter the person types waits
+briefly for the CLI's input reader to read what it submits (CLIS-2.1, PANEL-1.4); a CLI without an input reader takes it
+at once. A file dropped onto an agent's terminal gives it its path only with Shift held, as the editor requires of every
+terminal in the editor area; an extension cannot change that.
 
 ### 2.3 Finding an agent
 
 **Go to Agent searches and opens agents in the current window only.**
 
-Match name, CLI, title, state, working location and run ID. Accept the existing short ID and a copied agent reference as
+Match name, CLI, title, working location and run ID. Accept the existing short ID and a copied agent reference as
 search input; an ID in a copied reference matches that run even if its descriptive name is stale. Use one native picker
-line: CLI icon, prominent name, then quieter short ID, current state, working location - none where every agent works in
-the window's one place to work (1.3), which search still matches - and CLI title, in that order. An empty name uses the
-short ID as the prominent identifier, with state/location/title after it. The icon identifies the CLI; its name stays
-searchable without being repeated in the row. Keep name and title even when equal; omit only missing fields. Native
-width clipping never changes the stored or searchable text. Include starting/running and retained-error cards in panel
-order, whatever the panel's filter shows; rows follow changes while the picker is open. Choosing a row closes the picker
-and reveals that terminal. Each row's buttons copy its reference (2.1) and close that exact run, both keeping the picker
-open. No cross-window picker, focus transfer or proxy card is provided. The person switches editor windows to manage
-another window; agents can use MCP across windows.
+line: CLI icon, prominent name, then quieter short ID, working location - none where every agent works in the window's
+one place to work (1.3), which search still matches - and its conversation's title (CLIS-2.4), in that order, joined
+with ` · `. It says no state: the card's dot and second line do (PANEL-1.4). An empty name uses the short ID as the
+prominent identifier, with location/title after it. The icon
+identifies the CLI; its name stays searchable without being repeated in the row. Keep name and title even when equal;
+omit only missing fields. Native width clipping never changes the stored or searchable text. Include starting/running
+and retained-error cards in panel order, whatever the panel's filter shows; rows follow changes while the picker is
+open. Choosing a row closes the picker and reveals that terminal. Each row's buttons copy its reference (2.1) and end
+that exact run with End Agent (3.1), both keeping the picker open. No cross-window picker, focus transfer or proxy card is provided. The
+person switches editor windows to manage another window; agents can use MCP across windows.
 
 ## 3 End and continuity
 
-### 3.1 Close Agent
+### 3.1 End Agent
 
-**Close Agent is the single human action for removing a starting, live or retained-ended agent.**
+**End Agent is the single human action for ending a starting, live or retained-ended agent.**
 
-Card menus, Go to Agent's close button and the Command Palette use the lifecycle effect in RULES-4.1: immediate pair
-removal and Unpin, with process cleanup in the background where a process exists. There is no separate human Stop Agent
-command. MCP keeps `stop_agent` under MCP-3.2 and uses the same close service. Return actual cleanup status to the
-initiator without recreating a closed card or claiming an unreachable process is dead: a person whose close - from a
-card menu, Go to Agent or the Command Palette - could not end the process is told `{0} was closed, but its process could
-not be terminated.`, and an unconfirmed cleanup is reported as neither. A close while the process is being started
-answers how that start's cleanup ended. A close ptyd has not confirmed is recorded, so that a reload ends that run
-rather than showing it again. No worktree/files/history deletion is attached. Closing an agent does not close the agents
-it started. Unsolicited exits follow RULES-3.3. A close whose Unpin cannot be saved keeps the agent (RULES-4.1); from
-the card, the palette or Go to Agent the person is told `Could not close {0}: {1}`.
+It is named for what the person sees happen: its card and terminal go at once and its Pin with them, and Facade then
+ends its process in the background where one still runs; a retained-ended card is removed, with no second process to
+end. Its CLI's native history is kept as it is, and Resume Agent (3.2) can continue the conversation only where the CLI
+saved it and Facade can read and resume it - not for a custom CLI without a history reader (CLIS-2.4), nor for a run
+that ended before its CLI saved anything. It is not `Close`, which closing its terminal tab is and which only hides it
+(2.2), nor `Archive`, which would promise an archived place and a way back that Facade has not got. Card menus, Go to Agent's End
+Agent button and the Command Palette use the lifecycle effect in RULES-4.1: immediate pair removal and Unpin, with
+process cleanup in the background where a process exists. There is no separate human Stop Agent command. MCP keeps
+`stop_agent` under MCP-3.2 and uses the same close service. Return actual cleanup status to the initiator without
+recreating a closed card or claiming an unreachable process is dead: a person whose End Agent - from a card menu, Go to
+Agent or the Command Palette - could not end the process is told `{0}'s card and terminal were closed, but its process could
+not be terminated.`, and an unconfirmed cleanup is reported as neither. A close while the process is being started answers how
+that start's cleanup ended. A close ptyd has not confirmed is recorded, so that a reload ends that run rather than
+showing it again. No worktree/files/history deletion is attached. Ending an agent does not end the agents it started.
+Unsolicited exits follow RULES-3.3. A close whose Unpin cannot be saved keeps the agent (RULES-4.1); from the card, the
+palette or Go to Agent the person is told `Could not end {0}: {1}`.
 
 Closing an agent's terminal tab, alone or with other editors, never ends it: the tab is hidden (2.2), with no question,
-whether the agent is starting, running or ended, and its card stays until the person closes it here. These are a
+whether the agent is starting, running or ended, and its card stays until the person ends it with End Agent. These are a
 person's ways to end an agent by hand; its own exit, a removed location and a closed window still end it as RULES-3.3,
 2.4 and 4.1 say. Messages name an agent with an empty name by its `#aN`.
 
@@ -322,9 +333,12 @@ is shown as a click on the card shows it - in front of its group with the focus,
 editor's focus commands, past the eighth group by group, each step checked, or, where it has no tab open, opened so in the
 active group - and its mark goes on there, as the active group's front, nothing given back; an Unpin of an agent with no tab
 open keeps it hidden, and a Pin that cannot be saved opens nothing. A tab that is the active group's front is marked where
-it is: nothing is taken from the person, and keys pass to its CLI as typed. Any other tab - such as one a reload brings,
-one whose Pin another card's took, or another agent's whose mark a mark's command changed - Facade brings to the front of
-its group - that group made the active one through the editor's focus commands,
+it is: nothing is taken from the person, and keys pass to its CLI as typed. A pinned agent's tab that 3.5's tab procedure
+opens - after a reload, an extension-host restart or Pin restoration - takes its mark as it opens, the newest tab in front of its group - that group made the active one through the
+editor's focus commands where the editor did not make it so, the keys its terminal receives meanwhile not passed to its
+CLI - and nothing is given back (3.5). Any other tab - such as one whose Pin another card's took, or another agent's whose
+mark a mark's command changed - Facade brings to the front of its group - that group made the active one through the
+editor's focus commands,
 the first eight groups by their own and one past them from the eighth group by group, each step checked, the keyboard's
 focus there for a moment - applies the command and checks that the tab took it. It then gives back what the mark took:
 its tab's group's front, and the person's group with the focus and its front. A front comes back, in the active
@@ -339,9 +353,10 @@ while Facade holds the focus there are not passed to its CLI. Where the person b
 mark goes on, theirs stands, and nothing is given back over it; a mark that the command put on another of their tabs is
 undone at once.
 Marks go on one tab at a time and only while no tab of Facade's is opening, as an opening tab takes the front a mark
-goes on; a mark that lands on another tab is undone and never taken for the person's Pin or Unpin, and one that does not
-go on is tried again only once its tab is known anew, its Pin or Unpin is asked again, or the person brings its tab to the
-front, where it goes on as it is - never in a loop. While a mark that borrows the focus goes on, its tab's group may be
+goes on - but for that of a pinned tab 3.5's procedure opens, which goes on as it opens; a mark that lands on
+another tab is undone and never taken for the person's Pin or Unpin, and one that does not go on is tried again only
+once its tab is known anew, its Pin or Unpin is asked again, or the person brings its tab to the front, where it goes on
+as it is - never in a loop. While a mark that borrows the focus goes on, its tab's group may be
 the active one and the panel's selection may follow its agent for a moment; what the person had in front, and the focus,
 come back after as above - for that borrowing alone, never after the person's Pin or Unpin, whose showing of the tab is
 their choice of front, as a click on the card is. Ordinary files
@@ -366,20 +381,25 @@ substitute a folder's latest conversation. Keep the run's link to its saved Pin 
 saving the new identity fails. Report that failure; reattachment reconciles the linked Pin before restoration, so a
 stale saved key cannot start a second, old conversation. Pin and Unpin are acknowledged only after durable storage
 succeeds. If a normal exit cannot remove its Pin, retain an ended failure card with the reason, tell the person
-`Could not unpin {0}: {1}`, and allow Unpin or Close to retry; do not silently restore that stale intent on reload. A
+`Could not unpin {0}: {1}`, and allow Unpin or End Agent to retry; do not silently restore that stale intent on reload. A
 conversation has one Pin: pinning a card whose conversation is already pinned takes that Pin, moved last among the Pins
-(PANEL-2.1), and a pinned card whose CLI switches to a pinned conversation replaces that conversation's other Pin. Each
-activation, after reattachment (3.5), restores in the background the Pins no run holds, in saved order, their processes
-started at most two at a time, each with its tab open in the active group, without focus, its pin mark put on
-as above - one tab at a time, whatever starts at once; a reload
-therefore restarts none that still run or were
-retained as failures. A session already running in Facade is skipped by later windows. A failure keeps its own red card,
-which holds its Pin and says why, without auto-looping; closing it Unpins. One notification for the restoration says
+(PANEL-2.1), and a pinned card whose CLI switches to a pinned conversation replaces that conversation's other Pin. **Pin restoration** is
+each activation's start, after reattachment (3.5), of new runs for the saved Pins no run holds, their earlier processes
+having ended: in saved order, their processes started in the background at most two at a time; a reload therefore
+restarts none that still run or were retained as failures. An extension-host restart, as a reload, instead reattaches
+the runs ptyd still holds (3.5). Only the processes start in the background: the restored Pins' tabs then take the
+front by 3.5's tab procedure, in the active group, each once its process has started, in the one sequence of the
+activation's pinned tabs - the reattached ones' too - whatever starts at once. Every run that is no longer eligible
+when its turn comes drops out of that tab opening, its tab hidden, and then takes its own lifecycle's outcome: a failed
+start or an abnormal exit keeps its red card and its Pin; End Agent removes both (3.1); a normal exit removes both as
+RULES-3.3 and 4.2 say, a Pin it cannot remove keeping its ended card with the reason, as above. A session already
+running in Facade is skipped by later windows. A failure keeps its own red card, which holds its Pin and says why, without auto-looping;
+End Agent on it Unpins. One notification for the restoration says
 what failed, with Show: `Could not restore {0}: {1}` for one Pin,
 `Could not restore {0} pinned agents. Their cards show why.` for several. A Pin refused before any card - its window
 cannot number agents (RULES-2.2), or `facade.yolo` holds neither true nor false (UX-4.1) - has no card and is kept for
-the next opening; the notification then names it with its reason, which holds for the others too. Explicit agent
-close/normal exit removes Pin; whole-window close preserves it.
+the next opening; the notification then names it with its reason, which holds for the others too. End Agent and
+a normal exit remove the Pin; whole-window close preserves it.
 
 ### 3.5 Reload and remote loss
 
@@ -389,36 +409,43 @@ RULES-4.1 keeps runs for its grace after disconnect. Reattach those runs before 
 conversation still held by Facade: Pins are restored only once the conversations every ptyd of the window holds are
 known, and one that does not answer yet delays them. A run that exits between the listing and its reattachment shows
 that exit. A failure to clean up a kept record never stops the window's agents from showing. A retained failed
-restoration is not retried on reload. A reload brings each agent's open tab back (2.2) in its group - the last group
-where theirs is gone, so that one of a floating editor window, which the editor opens again after Facade's tabs, comes back
-in the main window - in the background, and unpinned hidden ones stay hidden, while a pinned one's tab, hidden or from a
-build that kept no record, opens in the active group. The tabs open one at a time, each once: first the pinned agents'
-tabs not recorded as a group's front; then the other tabs not recorded so, from the least to the most recently active;
-and last of all each tab recorded as its group's front, pinned or not, which is then in front with nothing switched
-back. Each pinned tab's mark is put on as it opens, in front of its group, before the next opens (3.4), one that opens
-last included - the panel's selection may follow each agent as its tab opens. Where a file or other editor of the
-person's was the active group's front, and no agent's tab was, it comes back in front after each tab that opens over it.
-Before the reload's first tab opens, Facade takes each group's front as the editor restored it, and the active group. Once the reload's tabs are open,
-each group's front is again what it was before the reload: the agent tab recorded as that group's front where that agent
-came back, else the front the editor restored there, else the agent tab last active there - the other groups' without the
-focus, then the active group's with it and the focus there, each brought back as 3.4 brings a front back; in another
-group, a front an
-extension cannot show without its group's focus - a webview, Settings, a terminal of the person's that Facade cannot tell
-- stays behind, and that group's front is not saved as the agent tab in front of it. A group the person brought
-something to the front in since, and the active group where they did so anywhere, keeps theirs, and the group they
-did so in last is the active one at the end - its front untouched, though a later tab of the reload's made another
-group the active one as it opened there. A run or retained
-failure from a build that kept no tab record comes back hidden, a pinned one's tab opening in the active group. A run
-keeps whether its tab is open, in which group, and whether it is that group's front, with its process (ARCHITECTURE-3.1),
-told as the person changes them - Facade's own showing of a tab for its mark changes none; a retained failure and a
-start waiting its turn keep them with their records.
+restoration is not retried on reload.
+
+A reload, an extension-host restart and Pin restoration (3.4) bring back the tabs of pinned agents alone (2.2): every
+other agent's process runs on and its card stays, its tab hidden - though it was open, even in front, before - until the
+person opens it from its card as usual. A retained failure without a Pin comes back with its tab hidden too, and so,
+always, does an agent that cannot be pinned, such as a custom CLI without exact-session integration or a run whose
+session integration failed. The pinned tabs open by one procedure, in one sequence for the whole activation, whichever
+of these brought each run back:
+
+1. Reconstruct the runs: reattach every run the window's ptyds hold; Pin restoration then starts its new runs (3.4), once
+   the tabs ahead of the first saved Pin no run holds have opened. Those need no listing of the conversations; every tab
+   after that Pin, and the final selection, wait for it, a ptyd that does not answer delaying them as it delays the Pins.
+2. Choose the eligible Pins in their global saved order (PANEL-2.1), each pinned agent's tab once - a reattached run's,
+   a retained failure's with a Pin, a restored Pin's once its process has started; a run no longer eligible when its turn
+   comes drops out (3.4).
+3. Open and mark each in its group, one at a time: the group its record names - the last group where theirs is gone, so
+   that one of a floating editor window, which the editor opens again after Facade's tabs, comes back in the main
+   window - else, hidden or from a build that kept no record, in the active group. It comes to the front of its group as it
+   opens, the newest tab there, and its mark is put on there before the next opens (3.4); one whose terminal does not
+   open within ARCHITECTURE-2.2's ten seconds is passed over.
+4. Keep the last one active: nothing is given back, after any tab or at the end - no group's recorded front, no file or
+   editor of the person's that was in front, no active group. The last tab opened stays in front of its group, that
+   group the active one.
+5. Finalize the selection once: it does not move while they open; once they are open it is on the last one opened, and
+   where none opened it stays as it was (PANEL-2.1).
+
+A run keeps whether its tab is open and in which group, with its process (ARCHITECTURE-3.1) - the placement this
+procedure needs - told as the person changes them - Facade's own showing of a tab for its mark changes none - and a
+pinned agent's tab opens in that group at the next reload; a retained failure and a start waiting its turn keep them
+with their records.
 
 Reconnect output, process/run identity and location before accepting further input. Do not infer closure from terminal
 silence or a remote disconnect; RULES-4.1's grace after the extension host disconnects is the only time-based cleanup.
 Reconcile actual process state; never restart an unknown original run as a replacement: a window that claims the
 workspace while the grace is ending its runs waits for those ends, within the five seconds cleanup takes (4.2), before
 it restores Pins. A run whose end is not confirmed stays listed as uncertain, holding its conversation, its Pin not
-restored beside it, and shows a red card whose second line says `Could not confirm that it stopped`, where Close Agent
+restored beside it, and shows a red card whose second line says `Stop unconfirmed · check process`, where End Agent
 ends it again; once its exit is heard the card goes and its Pin is restored as an ended run's. Proven folder/worktree
 removal closes affected agents, whereas a temporary Git/read/remote failure does not; a removal found as the extensions
 restart closes and unpins as one heard while running does.
@@ -448,8 +475,8 @@ once. No UI waits for it.
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
-| 2.1–2.3 | Empty/duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, tabs restored per group, reload order and fronts as 3.5, each pinned tab marked as it opens, ID/copied-reference search, distinguishable picker details |
-| 3.1–3.5 | One human Close action shared with `stop_agent`, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, reload order and fronts as 3.5, each pinned tab marked as it opens, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, no restoration beside an uncertain end, an uncertain end's red card, proven folder/worktree removal |
+| 2.1–2.3 | Empty/duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
+| 3.1–3.5 | One human End Agent action shared with `stop_agent`, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, no restoration beside an uncertain end, an uncertain end's red card, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
 
 Evidence: [Verification](../engineering/VERIFICATION.md).

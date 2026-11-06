@@ -12,7 +12,7 @@ import { labelOf, normalizeName, repeatedNames, suggestName } from './names';
 import { REQUEST_MS } from './requests';
 import { dotOf } from './status';
 import {
-	ConversationEntry, ConversationKey, ConversationStore, Pin, PinStore, conversationId, LocationId,
+	ConversationEntry, ConversationKey, ConversationStore, ConversationTitlePort, Pin, PinStore, conversationId, LocationId,
 	ActivityReport, Agents, AliasPort, CleanupResult, Clock, Disposable, Event, ExecutionPort, ExitReport, HumanPort, LaunchHistoryPort,
 	FacadeReason, LaunchPlan, LaunchPlanner, LaunchRequest, LiveRun, Location, LocationPort, LocationRemoval, LogPort, McpServerLaunch, PairFacts, PlanError, SaidSource, TabPlace,
 	RetainedStore, RunChange, RunFacts, RunId, RunMeta, StartOutcome, WindowLifetimePort, WorktreeCreationEffects, WorktreeError, WorktreePort
@@ -47,6 +47,22 @@ export interface AgentServiceDeps {
 	readonly newRunId: () => RunId;
 	/** Waits `ms` before a listing that failed is asked again; the service's own timer where none is given. */
 	readonly wait?: (ms: number) => Promise<void>;
+	/** Each run's conversation's title, from its CLI's own history (CLIS-2.4); none, and no run has one. */
+	readonly titles?: ConversationTitlePort;
+	/** Runs `fn` after `ms`, answering how to stop it first: the service's own timer where none is given. */
+	readonly after?: (ms: number, fn: () => void) => Disposable;
+}
+
+/** A run's reads of its conversation's title (CLIS-2.4). */
+interface TitleReads {
+	/** Whether a read is under way. */
+	reading?: boolean;
+	/** Whether a read was asked while one was under way or the last began less than {@link TITLE_READS_MS} ago: it follows them. */
+	again?: boolean;
+	/** The {@link TITLE_READS_MS} after the last read began, in which no other begins. */
+	resting?: Disposable;
+	/** Why the last read failed, said in the log once until it changes. */
+	failed?: string;
 }
 
 interface Run {
@@ -71,6 +87,8 @@ interface Run {
 	uncertain?: boolean;
 	/** Whether its tab was told to spin: while its dot is green (LIFECYCLE-2.2). */
 	spinning?: boolean;
+	/** Its conversation's title reads, once one was asked (CLIS-2.4). */
+	titles?: TitleReads;
 }
 
 interface StartOptions {
@@ -115,6 +133,8 @@ const LOCATION_GONE: FacadeReason = { kind: 'location_gone', values: [] };
 const locationNotHere = (path: string): FacadeReason => ({ kind: 'location_not_here', values: [path] });
 /** How often a run whose grace end is not confirmed is looked for again, until its exit is heard (LIFECYCLE-3.5). */
 const UNCERTAIN_CHECK_MS = 5_000;
+/** The least time between the beginnings of two reads of a run's conversation's title (CLIS-2.4). */
+export const TITLE_READS_MS = 30_000;
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] };
 
@@ -136,6 +156,20 @@ export class AgentService implements Agents, Disposable {
 	private readonly elsewhere = new Set<string>();
 	private readonly restoring = new Set<RunId>();
 	private pinsRestored = false;
+	/**
+	 * The pinned runs this activation's reattachment brought back - running, or retained red with their Pin - whose tabs wait behind a
+	 * saved Pin no run of this window holds, for Pin restoration to decide on it: they open with the Pins it starts in one sequence, in
+	 * the Pins' saved order (LIFECYCLE-3.5).
+	 */
+	private readonly reattachedPins: RunId[] = [];
+	/** The turns of this activation's sequence already taken, with its one final selection still to come. */
+	private readonly pinTurns: Promise<void>[] = [];
+	/** Set once Pin restoration took {@link reattachedPins} into its sequence: a run reattached after opens its tab in a sequence of its own. */
+	private pinSequenceTaken = false;
+	/** Set once the execution was told this activation's pinned sequence is over. */
+	private pinSequenceOver = false;
+	/** The pinned tabs a reload, an extension-host restart or Pin restoration brings back open one at a time, each after the one before took its mark (LIFECYCLE-3.5). */
+	private tabTurn: Promise<void> = Promise.resolve();
 	private get pinStore(): PinStore {
 		if (!this.deps.pinStore) { throw new Error('Pin storage is unavailable.'); }
 		return this.deps.pinStore;
@@ -160,8 +194,17 @@ export class AgentService implements Agents, Disposable {
 		return { dispose: () => this.listeners.delete(listener) };
 	};
 
+	/** Runs a function after a time, answering how to stop it first. */
+	private readonly after: (ms: number, fn: () => void) => Disposable;
+
 	constructor(private readonly deps: AgentServiceDeps) {
 		const { execution } = deps;
+		this.after = deps.after ?? ((ms, fn) => {
+			const timer = setTimeout(fn, ms);
+			// Never what keeps the process it runs in going
+			timer.unref?.();
+			return { dispose: () => clearTimeout(timer) };
+		});
 		this.subscriptions.push(
 			execution.onDidReport(report => this.reported(report)),
 			execution.onDidExit(exit => this.exited(exit)),
@@ -195,8 +238,9 @@ export class AgentService implements Agents, Disposable {
 		if (execution.onDidLoseOwnership) {
 			this.subscriptions.push(execution.onDidLoseOwnership(() => {
 				this.ownershipLost = true;
-				for (const id of [...this.runs.keys()]) {
+				for (const [id, run] of [...this.runs]) {
 					this.runs.delete(id);
+					this.stopTitles(run);
 					this.emit({ run: id, kind: 'removed', cause: 'transfer' });
 				}
 			}));
@@ -206,6 +250,9 @@ export class AgentService implements Agents, Disposable {
 	dispose(): void {
 		this.disposed = true;
 		this.stopping.abort();
+		for (const run of this.runs.values()) {
+			this.stopTitles(run);
+		}
 		for (const subscription of this.subscriptions) {
 			subscription.dispose();
 		}
@@ -293,6 +340,10 @@ export class AgentService implements Agents, Disposable {
 		}
 		this.unpinRemoved();
 		const liveIds = new Set(live.map(run => run.run));
+		// The pinned agents coming back, whose tabs open once every run is back; every other agent's tab stays hidden (LIFECYCLE-3.5)
+		const pinned: RunId[] = [];
+		/** How many runs this restoration brought back: cards retained, uncertain or reattached. */
+		let brought = 0;
 		for (const kept of this.deps.retained.list()) {
 			if (isRequestRun(kept)) {
 				if (kept.createdAt <= this.deps.clock.now() - REQUEST_MS) {
@@ -317,24 +368,23 @@ export class AgentService implements Agents, Disposable {
 			if (!this.runs.has(facts.id) && !this.released.has(facts.id)) {
 				const pin = facts.pin && this.pins().find(pin => pin.id === facts.pin);
 				const { pin: _previousPin, ...rest } = facts;
-				this.runs.set(facts.id, { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, exactResume: facts.resumable, settled: Promise.resolve() });
-				// Its tab as it was; from a build that kept no record, hidden unless pinned (LIFECYCLE-3.5)
-				this.deps.execution.openPair(pairOf(facts), { reveal: false, ...facts.tab === undefined && !pin ? { hidden: true } : {} });
+				const run: Run = { facts: { ...rest, ...pin ? { pin: pin.id } : {} }, exactResume: facts.resumable, settled: Promise.resolve() };
+				this.runs.set(facts.id, run);
+				// Its card, its tab hidden: one without a Pin stays so until the person opens it; a pinned one's opens in its turn (LIFECYCLE-3.5)
+				this.deps.execution.openPair(pairOf(run.facts), { reveal: false, hidden: true });
 				if (facts.error) {
 					this.deps.execution.note(facts.id, facts.error.reason);
 				}
 				this.emit({ run: facts.id, kind: 'added' });
+				brought++;
+				if (pin) {
+					pinned.push(facts.id);
+				}
 			}
 		}
 		let elsewhere = 0;
-		// The pinned ones come back first, one after another, each tab's mark put on as it opens; then the others in the order they were
-		// last active; and each group's front last of all, in front then with nothing switched back (LIFECYCLE-3.5)
-		const activeAt = (run: LiveRun) => { const place = run.meta.tab; return typeof place === 'object' ? place.activeAt ?? 0 : 0; };
-		const recordedFront = (run: LiveRun) => typeof run.meta.tab === 'object' && run.meta.tab.front === true;
-		const turn = (run: LiveRun) => recordedFront(run) ? 2 : this.restoredPin(run.meta) ? 0 : 1;
-		const coming = live.filter(each => !this.runs.has(each.run) && !this.released.has(each.run) && !each.claimedElsewhere && !each.uncertain);
-		this.deps.execution.frontsRecorded?.(coming.filter(recordedFront).map(each => (each.meta.tab as Exclude<TabPlace, 'hidden'>).column));
-		for (const each of [...live].sort((a, b) => turn(a) - turn(b) || activeAt(a) - activeAt(b))) {
+		// Each run reattached with its tab hidden, its process untouched (LIFECYCLE-3.5)
+		for (const each of live) {
 			if (this.ownershipLost) {
 				return 0;
 			}
@@ -347,6 +397,7 @@ export class AgentService implements Agents, Disposable {
 			}
 			if (each.uncertain) {
 				this.showUncertain(each);
+				brought++;
 				continue;
 			}
 			const facts: RunFacts = {
@@ -374,21 +425,121 @@ export class AgentService implements Agents, Disposable {
 				continue;
 			}
 			this.emit({ run: each.run, kind: 'added' });
+			brought++;
+			if (facts.pin) {
+				pinned.push(each.run);
+			}
 			if (this.deps.locations.removalOf(facts.location)) {
 				// Its location went while the host restarted: removal closes it, as it would have (RULES-2.4)
 				void this.close(each.run).catch(() => undefined);
 			} else if (each.exited) {
 				this.exited({ run: each.run, ...each.exited });
+			} else {
+				// Its conversation's title as its CLI keeps it now, once for each run a reload brings back (CLIS-2.4)
+				this.readTitle(run);
 			}
 		}
 		this.settlePins();
 		this.watchUncertain();
+		// Then the pinned agents' tabs, a retained failure's with a Pin among them, one at a time in the Pins' order (LIFECYCLE-3.5): at an
+		// activation, in one sequence with the Pins its restoration starts; a run found after that, in its own
+		if (!this.pinSequenceTaken) {
+			this.reattachedPins.push(...pinned.filter(id => !this.reattachedPins.includes(id)));
+			await this.openHeldPins();
+		} else {
+			await this.openPinnedTabs(pinned);
+			// A later restoration's runs whose tabs stay hidden: their predecessors' tabs are released as at the activation's end, which
+			// is over by now - before it, that end takes them in itself (ARCHITECTURE-2.2)
+			if (brought && this.pinSequenceOver && !this.ownershipLost && !this.disposed) {
+				await this.sayPinSequenceOver();
+			}
+		}
 		return elsewhere;
 	}
 
 	/**
+	 * Opens the tabs of the pinned agents `runs` a reload brought back, one at a time in the Pins' order: each in its recorded group, else
+	 * the active one, in front there, its mark put on before the next opens, nothing given back; the panel's selection, unmoved meanwhile,
+	 * then on the last one opened (LIFECYCLE-3.5, PANEL-2.1). One closed or unpinned before its turn drops out.
+	 */
+	private async openPinnedTabs(runs: readonly RunId[]): Promise<void> {
+		if (!runs.length) {
+			return;
+		}
+		const order = new Map(this.pins().map((pin, index) => [pin.id, index] as const));
+		const rank = (id: RunId) => order.get(this.runs.get(id)?.facts.pin ?? '') ?? Infinity;
+		await Promise.all([...runs].sort((a, b) => rank(a) - rank(b)).map(id => this.inTurn(() => this.openPinnedTab(id))));
+		this.deps.execution.pinnedOpened?.();
+	}
+
+	/**
+	 * Opens, in the Pins' saved order, the reattached runs' tabs up to the first saved Pin no run of this window holds (LIFECYCLE-3.5).
+	 * Nothing need be started before them, so they wait for neither a Git read nor any ptyd's listing of its conversations; only those
+	 * after such a Pin wait, for Pin restoration to decide on it. With no such Pin the sequence is over, its selection final.
+	 */
+	private async openHeldPins(): Promise<void> {
+		const holders = new Map([...this.runs.values()].map(run => [run.facts.pin, run.facts.id] as const));
+		let waiting = false;
+		for (const pin of this.pins()) {
+			const holder = holders.get(pin.id);
+			if (holder === undefined) {
+				waiting = true;
+				break;
+			}
+			const at = this.reattachedPins.indexOf(holder);
+			if (at >= 0) {
+				this.reattachedPins.splice(at, 1);
+				this.pinTurns.push(this.inTurn(() => this.openPinnedTab(holder)));
+			}
+		}
+		if (waiting) {
+			await Promise.all([...this.pinTurns]);
+			return;
+		}
+		const turns = this.pinTurns.splice(0);
+		if (turns.length) {
+			await Promise.all(turns);
+			this.deps.execution.pinnedOpened?.();
+		}
+		await this.endPinSequence();
+	}
+
+	/** This activation's pinned sequence is over: said once, after its last tab opened and its selection was finalized. */
+	private async endPinSequence(): Promise<void> {
+		if (this.pinSequenceOver) {
+			return;
+		}
+		this.pinSequenceOver = true;
+		await this.sayPinSequenceOver();
+	}
+
+	/** Tells the execution a pinned sequence is over: the activation's, once, and each later restoration's after it (ARCHITECTURE-2.2). */
+	private async sayPinSequenceOver(): Promise<void> {
+		try {
+			await this.deps.execution.pinnedSequenceOver?.();
+		} catch (err) {
+			this.deps.log.event(`Could not finish this window's restoration: ${messageOf(err)}`);
+		}
+	}
+
+	/** `open` once every pinned tab before it - a reload's or a restart's - opened and took its mark, or dropped out (LIFECYCLE-3.4, 3.5). */
+	private inTurn(open: () => Promise<void>): Promise<void> {
+		const turn = this.tabTurn.then(open).catch(err => this.deps.log.event(`Could not open a pinned agent's tab: ${messageOf(err)}`));
+		this.tabTurn = turn;
+		return turn;
+	}
+
+	/** `id`'s tab, its turn come: opened and marked where its run still holds a Pin (LIFECYCLE-3.5). */
+	private async openPinnedTab(id: RunId): Promise<void> {
+		if (this.disposed || this.ownershipLost || !this.runs.get(id)?.facts.pin) {
+			return;
+		}
+		await this.deps.execution.openPinned?.(id);
+	}
+
+	/**
 	 * A run its grace ended without that end confirmed (LIFECYCLE-3.5): a red card that says so, holding its conversation and Pin -
-	 * its Pin is not restored beside it - and never reattached. Close Agent ends it again.
+	 * its Pin is not restored beside it - and never reattached. End Agent ends it again.
 	 */
 	private showUncertain(each: LiveRun): void {
 		const english = 'Could not confirm that it stopped';
@@ -596,6 +747,7 @@ export class AgentService implements Agents, Disposable {
 			displayName: request.cli,
 			command: request.cli,
 			location: location.id,
+			...location.within !== undefined ? { within: location.within } : {},
 			cwd: location.path,
 			environment: location.environment,
 			// A child keeps its creator's tree, not its creator's YOLO (RULES-4.3)
@@ -619,8 +771,9 @@ export class AgentService implements Agents, Disposable {
 			...(request.effort !== undefined ? { effort: request.effort.trim() } : {}),
 			tools: 'not_injected',
 			...(promptLine ? { promptLine } : {}),
-			// One another agent starts has its card alone (LIFECYCLE-2.2)
-			...(byAgent ? { tab: 'hidden' as const } : {})
+			// One another agent starts has its card alone (LIFECYCLE-2.2); a restored Pin's tab is hidden until its turn, and stays so where
+			// its start fails (LIFECYCLE-3.4)
+			...(byAgent || options.restoring ? { tab: 'hidden' as const } : {})
 		};
 		if (options.pin) {
 			for (const other of this.runs.values()) { if (other.facts.pin === options.pin) { this.losePin(other); } }
@@ -632,12 +785,16 @@ export class AgentService implements Agents, Disposable {
 		if (options.restoring) { this.restoring.add(id); }
 		this.runs.set(id, run);
 		// The person's own launch shows its terminal; an agent another agent starts has its card alone, its tab opening only as the
-		// person opens it - covering nothing, taking no focus (LIFECYCLE-2.2)
-		this.deps.execution.openPair(pairOf(facts), byAgent ? { reveal: false, hidden: true } : { reveal: options.reveal !== false });
+		// person opens it - covering nothing, taking no focus (LIFECYCLE-2.2); a restored Pin's opens in its turn (LIFECYCLE-3.4)
+		this.deps.execution.openPair(pairOf(facts), byAgent || options.restoring ? { reveal: false, hidden: true } : { reveal: options.reveal !== false });
 		if (options.pin) { this.deps.execution.pinTab?.(id, true); }
 		this.emit({ run: id, kind: 'added' });
 		this.deps.log.event(`Accepted ${facts.alias} ${JSON.stringify(facts.name)} (${facts.cli}) in ${facts.cwd} [${id}]${byAgent ? ` for agent ${byAgent.run}` : ''}`);
 		this.recordFact('agent_start_requested', facts);
+		// A conversation it resumes is known by its ID from its acceptance on, a restored Pin's too: its title is read at once (CLIS-2.4)
+		if (options.resume) {
+			this.readTitle(run);
+		}
 		void this.start(run, request, location, options).catch(err => this.deps.log.event(`The start of ${run.facts.alias} failed unexpectedly: ${messageOf(err)}`)).finally(settle);
 		return id;
 	}
@@ -691,15 +848,22 @@ export class AgentService implements Agents, Disposable {
 		}
 		run.exactResume = plan.exactResume;
 		const sessionId = plan.sessionId ?? run.facts.sessionId;
+		// Its launch resumes the conversation it was asked to by its ID - Resume Agent's, or a restored Pin's: its card says so before any
+		// message (PANEL-1.4), also where its CLI could not be given what keeps naming its conversation
+		const resuming = !!options.resume && sessionId === options.resume.key.sessionId;
 		// A conversation it resumes is saved already: it can be pinned from the start, its Pin following its CLI should that name
 		// another (LIFECYCLE-3.4). A new one, an ID given it or not, waits for its CLI to name it.
-		const resumed = !!options.resume && !!plan.exactResume && sessionId === options.resume.key.sessionId;
+		const resumed = resuming && !!plan.exactResume;
 		if (plan.prompt) {
 			run.prompt = plan.prompt;
 			run.creationPending = plan.prompt?.path === 'post_start';
 		}
+		// The conversation store this launch uses, kept with it: its titles are read there whatever its CLI's settings say later (CLIS-2.4)
+		const titleStore = this.deps.titles?.storeOf?.(run.facts.cli, plan.cwd);
 		this.update(run, {
 			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: resumed,
+			...titleStore !== undefined ? { titleStore } : {},
+			...resuming ? { resumed: true as const } : {},
 			...(plan.version !== undefined ? { version: plan.version } : {}),
 			tools: plan.tools.state === 'injected' ? 'connecting' : plan.tools.state === 'unavailable' ? 'unavailable' : 'not_injected',
 			...(plan.tools.state === 'unavailable' && plan.tools.reason ? { toolsReason: plan.tools.reason } : {}),
@@ -826,6 +990,7 @@ export class AgentService implements Agents, Disposable {
 		const kept = this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 		this.runs.delete(id);
 		this.released.add(id);
+		this.stopTitles(run);
 		const key = keyOf(run.facts);
 		if (key) { this.elsewhere.delete(conversationId(key)); }
 		this.deps.execution.removePair(id);
@@ -957,7 +1122,7 @@ export class AgentService implements Agents, Disposable {
 
 	/**
 	 * A message sent to the run: what its CLI took from its input after the person's Enter, or a message Facade delivered. Its card's
-	 * second line says the last one, its CLI's title no more (PANEL-1.4); kept with its process across a reload.
+	 * second line says the last one (PANEL-1.4); kept with its process across a reload.
 	 */
 	said(id: RunId, text: string, source?: SaidSource): void {
 		const run = this.runs.get(id);
@@ -1057,26 +1222,58 @@ export class AgentService implements Agents, Disposable {
 		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holdingPin(pin) && (!only || only.has(pin.id)));
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
 		const failed: { readonly id?: RunId; readonly name: string; readonly reason: string }[] = [];
+		// One sequence of this activation's pinned tabs, in the Pins' saved order (LIFECYCLE-3.5): after those already open, the runs
+		// reattachment brought back, ready now, and the Pins restored here, each once its process started - their processes two at a time,
+		// whatever their tabs wait for
+		if (!only) { this.pinSequenceTaken = true; }
+		const reattached = only ? [] : this.reattachedPins.splice(0);
+		const turns = new Map<string, { readonly ready: Promise<RunId | undefined>; readonly settle: (id: RunId | undefined) => void; readonly restored: boolean }>();
+		for (const id of reattached) {
+			const pin = this.runs.get(id)?.facts.pin;
+			if (pin && !turns.has(pin)) { turns.set(pin, { ready: Promise.resolve(id), settle: () => undefined, restored: false }); }
+		}
+		for (const pin of queue) {
+			let settle!: (id: RunId | undefined) => void;
+			const ready = new Promise<RunId | undefined>(resolve => { settle = resolve; });
+			turns.set(pin.id, { ready, settle, restored: true });
+		}
+		const tabs = [...only ? [] : this.pinTurns.splice(0), ...this.pins().filter(pin => turns.has(pin.id)).map(pin => {
+			const turn = turns.get(pin.id)!;
+			// Its turn: once every earlier one opened and took its mark, or dropped out. One no longer eligible by then drops out of the tab
+			// opening, its tab hidden, and keeps its own lifecycle's outcome: a failed start or an abnormal exit its red card and Pin; End
+			// Agent removes both; a normal exit removes both, a Pin it could not remove keeping its ended card (LIFECYCLE-3.4, RULES-3.3, 4.2)
+			return this.inTurn(async () => {
+				const id = await turn.ready;
+				const run = id !== undefined ? this.runs.get(id) : undefined;
+				await run?.settled;
+				if (id !== undefined && run && this.runs.get(id) === run && (!turn.restored || run.facts.lifecycle !== 'ended')) {
+					await this.openPinnedTab(id);
+				}
+			});
+		})];
 		// A Pin refused before any card - a facade.yolo neither true nor false, no number to give (UX-4.1, RULES-2.2) - fails as
 		// itself, kept for the next opening, and the others are restored all the same (LIFECYCLE-3.4)
 		const restoreOne = async (pin: Pin): Promise<void> => {
+			let id: RunId | undefined;
 			try {
-				await restoring(pin);
+				id = await restoring(pin, accepted => turns.get(pin.id)?.settle(accepted));
 			} catch (err) {
 				this.deps.log.event(`Could not restore the Pin of ${pin.name || pin.conversation.cli}: ${messageOf(err)}`);
 				failed.push({ name: pin.name || pin.conversation.cli, reason: this.wording(err) });
+			} finally {
+				turns.get(pin.id)?.settle(id);
 			}
 		};
-		const restoring = async (pin: Pin): Promise<void> => {
+		const restoring = async (pin: Pin, accepted: (id: RunId) => void): Promise<RunId | undefined> => {
 			// One whose location was removed is no failure to show: its removal unpins it, even where that write failed (RULES-2.4)
-			if (!this.pins().some(saved => saved.id === pin.id) || this.holdingPin(pin) || this.deps.locations.removalOf(pin.location)) { return; }
+			if (!this.pins().some(saved => saved.id === pin.id) || this.holdingPin(pin) || this.deps.locations.removalOf(pin.location)) { return undefined; }
 			const location = this.locationFor(pin.location, pin.cwd);
 			if (!location || location.environment !== pin.conversation.environment) {
 				const english = `Its working location ${pin.cwd} is not available in this window.`;
 				const reason = this.deps.describe?.(new FacadeError('UNAVAILABLE', 'not_found', english, locationNotHere(pin.cwd)), english) ?? english;
 				const id = this.unrestorable(pin, reason, english);
 				failed.push({ id, name: labelOf(this.runs.get(id)?.facts ?? { name: pin.name, alias: '' }), reason });
-				return;
+				return id;
 			}
 			// One pinned before its CLI named a conversation starts a new one, which its Pin takes once named (LIFECYCLE-3.4)
 			const key = pinKey(pin);
@@ -1085,12 +1282,16 @@ export class AgentService implements Agents, Disposable {
 				location,
 				{ ...key ? { resume: { key } } : {}, reveal: false, remember: false, pin: pin.id, restoring: true }
 			);
-			await this.runs.get(id)?.settled;
+			const run = this.runs.get(id);
+			// Its tab's turn, kept in the Pins' order, waits for its process to start
+			accepted(id);
+			await run?.settled;
 			this.restoring.delete(id);
 			const facts = this.runs.get(id)?.facts;
 			if (facts?.end?.kind === 'failed') {
 				failed.push({ id, name: labelOf(facts), reason: facts.error?.reason ?? '' });
 			}
+			return id;
 		};
 		const workers = Array.from({ length: Math.min(RESTORE_CONCURRENCY, queue.length) }, async () => {
 			for (let pin = queue.shift(); pin && !this.ownershipLost && !this.disposed; pin = queue.shift()) {
@@ -1098,6 +1299,18 @@ export class AgentService implements Agents, Disposable {
 			}
 		});
 		await Promise.all(workers);
+		// A Pin left unstarted - the window gave up its workspace meanwhile - drops out of the sequence
+		for (const turn of turns.values()) {
+			turn.settle(undefined);
+		}
+		// Their tabs open, the panel's selection finalized once, on the last one opened (LIFECYCLE-3.4, 3.5, PANEL-2.1)
+		if (tabs.length) {
+			await Promise.all(tabs);
+			this.deps.execution.pinnedOpened?.();
+		}
+		if (!only && !this.ownershipLost && !this.disposed) {
+			await this.endPinSequence();
+		}
 		if (failed.length && !this.ownershipLost && !this.disposed) {
 			// A known failure no agent is responsible for: one notification for this opening (RULES-1.8). A Pin refused before any card
 			// has no card to show why, and its reason - the window's numbers, its facade.yolo - holds for the others: it is the one told
@@ -1108,7 +1321,7 @@ export class AgentService implements Agents, Disposable {
 	}
 
 	/**
-	 * A Pin that cannot start here keeps its own red card, holding the Pin, so the person sees why and can Close it, which
+	 * A Pin that cannot start here keeps its own red card, holding the Pin, so the person sees why and can end it with End Agent, which
 	 * Unpins (LIFECYCLE-3.4: failures retain their individual entries).
 	 */
 	private unrestorable(pin: Pin, reason: string, english = reason): RunId {
@@ -1120,11 +1333,14 @@ export class AgentService implements Agents, Disposable {
 			location: pin.location, cwd: pin.cwd, environment: pin.conversation.environment, yolo,
 			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false,
 			...pin.conversation.sessionId ? { sessionId: pin.conversation.sessionId, resumable: true, pinnable: true } : {},
-			pin: pin.id, end: { kind: 'failed', at }, error: { reason, ...reason !== english ? { english } : {}, source: 'location', at }
+			pin: pin.id, end: { kind: 'failed', at }, error: { reason, ...reason !== english ? { english } : {}, source: 'location', at },
+			// Its tab never opens: an Unpin of it keeps it hidden (LIFECYCLE-3.4)
+			tab: 'hidden'
 		};
 		const run: Run = { facts, exactResume: true, settled: Promise.resolve() };
 		this.runs.set(id, run);
-		this.deps.execution.openPair(pairOf(facts), { reveal: false });
+		// Its tab hidden: it drops out of the restored Pins' turns (LIFECYCLE-3.4)
+		this.deps.execution.openPair(pairOf(facts), { reveal: false, hidden: true });
 		this.deps.execution.note(id, reason);
 		this.retain(run);
 		this.emit({ run: id, kind: 'added' });
@@ -1208,7 +1424,9 @@ export class AgentService implements Agents, Disposable {
 			return;
 		}
 		// Keep the last saved key while a native new/home screen has no conversation. Its existing Pin stays associated across reload.
-		this.update(run, { sessionId: sessionId ?? run.facts.sessionId, resumable: !!sessionId && run.exactResume, ...cwd ? { cwd } : {} }, 'lifecycle');
+		// Another conversation has its own title, none until it is read (CLIS-2.4)
+		const switched = !!sessionId && sessionId !== run.facts.sessionId;
+		this.update(run, { sessionId: sessionId ?? run.facts.sessionId, resumable: !!sessionId && run.exactResume, ...cwd ? { cwd } : {}, ...switched ? { title: undefined, titleSource: undefined } : {} }, 'lifecycle');
 		const pin = run.facts.pin ? this.pins().find(each => each.id === run.facts.pin) : undefined;
 		if (pin && sessionId) {
 			try {
@@ -1226,6 +1444,10 @@ export class AgentService implements Agents, Disposable {
 		}
 		this.deps.execution.setMeta(id, metaOf(run.facts, run.exactResume));
 		this.remember(run);
+		// Its conversation known now, or another: its title as its CLI keeps it (CLIS-2.4)
+		if (sessionId) {
+			this.readTitle(run);
+		}
 	}
 
 	private reported(report: ActivityReport): void {
@@ -1233,6 +1455,8 @@ export class AgentService implements Agents, Disposable {
 		if (!run || run.facts.lifecycle === 'ended') {
 			return;
 		}
+		// Its turn ended: what its CLI keeps of its conversation may have changed with it (CLIS-2.4)
+		const turnEnded = run.facts.activity === 'working' && report.activity === 'not_working';
 		const changes: Partial<Mutable<RunFacts>> = {
 			activity: report.activity,
 			activitySince: report.disconnected ? run.facts.activitySince
@@ -1242,20 +1466,21 @@ export class AgentService implements Agents, Disposable {
 			awaitingActivity: report.awaitingActivity,
 			notReady: report.notReady,
 			activityReason: report.reason,
-			blocker: report.blocker,
-			title: report.title === '' ? undefined : report.title ?? run.facts.title
+			activityUnknown: report.unknown,
+			blocker: report.blocker
 		};
 		let kind: RunChange['kind'] = 'reported';
 		if (report.disconnected && report.reason && !run.facts.error) {
-			changes.error = { reason: report.reason, source: 'connection', at: this.deps.clock.now() };
+			// What the card says in the person's words; agents read the English (UX-2.4, MCP-3.1)
+			changes.error = { reason: report.reasonWords ?? report.reason, ...report.reasonWords ? { english: report.reason } : {}, source: 'connection', at: this.deps.clock.now() };
 			kind = 'lifecycle';
 		} else if (!report.disconnected && run.facts.error?.source === 'connection') {
 			changes.error = undefined;
 			kind = 'lifecycle';
 		}
 		if (report.error) {
-			if (run.facts.error?.source !== 'cli' || run.facts.error.reason !== report.error) {
-				changes.error = { reason: report.error, source: 'cli', at: this.deps.clock.now() };
+			if (run.facts.error?.source !== 'cli' || (run.facts.error.english ?? run.facts.error.reason) !== report.error) {
+				changes.error = { reason: report.errorWords ?? report.error, ...report.errorWords ? { english: report.error } : {}, source: 'cli', at: this.deps.clock.now() };
 				kind = 'lifecycle';
 			}
 		} else if (!report.disconnected && run.facts.error?.source === 'cli') {
@@ -1264,6 +1489,9 @@ export class AgentService implements Agents, Disposable {
 			kind = 'lifecycle';
 		}
 		this.update(run, changes, kind);
+		if (turnEnded) {
+			this.readTitle(run);
+		}
 	}
 
 	private exited(exit: ExitReport): void {
@@ -1289,6 +1517,7 @@ export class AgentService implements Agents, Disposable {
 			this.rememberRequest({ ...run.facts, lifecycle: 'ended' });
 			this.runs.delete(exit.run);
 			this.released.add(exit.run);
+			this.stopTitles(run);
 			const key = keyOf(run.facts);
 			if (key) { this.elsewhere.delete(conversationId(key)); }
 			this.deps.execution.removePair(exit.run);
@@ -1311,7 +1540,9 @@ export class AgentService implements Agents, Disposable {
 
 	private locationsRemoved(removal: LocationRemoval): void {
 		const removed = new Set(removal.ids);
-		const closing = [...this.runs.values()].filter(run => removed.has(run.facts.location));
+		// Its location, or - a Resume cwd the catalog has no record of, still starting or failed - the anchor it kept (WORKTREES-1.2)
+		const unrecorded = (run: Run) => run.facts.within !== undefined && removed.has(run.facts.within) && !this.deps.locations.resolve(run.facts.location);
+		const closing = [...this.runs.values()].filter(run => removed.has(run.facts.location) || unrecorded(run));
 		this.unpinGone(this.pins().filter(pin => removed.has(pin.location) || closing.some(run => run.facts.pin === pin.id)));
 		for (const run of closing) {
 			this.deps.log.event(`Closing ${run.facts.alias}: its working location was ${removal.cause === 'folder' ? 'removed from the workspace' : 'deleted'}`);
@@ -1335,10 +1566,84 @@ export class AgentService implements Agents, Disposable {
 			delete next.pinnable;
 		}
 		run.facts = next;
+		if (next.lifecycle === 'ended') {
+			this.stopTitles(run);
+		}
 		if (kind === 'lifecycle') {
 			this.rememberRequest(next);
 		}
 		this.emit({ run: run.facts.id, kind });
+	}
+
+	/**
+	 * Reads `run`'s conversation's title from its CLI's own history (CLIS-2.4): at once, else - a read under way, or begun less than
+	 * {@link TITLE_READS_MS} ago - once both are over, one read however many were asked meanwhile. A run's reads never overlap, and none
+	 * is asked for a run that ended or went.
+	 */
+	private readTitle(run: Run): void {
+		if (!this.deps.titles || !this.live(run) || run.facts.lifecycle === 'ended' || !keyOf(run.facts)) {
+			return;
+		}
+		const reads = run.titles ??= {};
+		if (reads.reading || reads.resting) {
+			reads.again = true;
+			return;
+		}
+		reads.again = false;
+		reads.reading = true;
+		reads.resting = this.after(TITLE_READS_MS, () => {
+			reads.resting = undefined;
+			if (reads.again && !reads.reading) {
+				this.readTitle(run);
+			}
+		});
+		void this.titleOf(run, reads).catch(err => this.deps.log.event(`Could not show the title of ${run.facts.alias}'s conversation: ${messageOf(err)}`)).finally(() => {
+			reads.reading = false;
+			if (reads.again && !reads.resting) {
+				this.readTitle(run);
+			}
+		});
+	}
+
+	/**
+	 * Reads `run`'s conversation's title once: one found is its title from then on, the card told where it changed; none found, or a read
+	 * that failed - said in the log, never shown - keeps the last. A read of a conversation the run no longer holds changes nothing.
+	 */
+	private async titleOf(run: Run, reads: TitleReads): Promise<void> {
+		const key = keyOf(run.facts);
+		if (!key || !this.deps.titles) {
+			return;
+		}
+		let title: string | undefined;
+		try {
+			title = await this.deps.titles.title(key, run.facts.cwd, run.facts.titleStore);
+			reads.failed = undefined;
+		} catch (err) {
+			if (messageOf(err) !== reads.failed) {
+				reads.failed = messageOf(err);
+				this.deps.log.event(`Could not read the title of ${run.facts.alias}'s conversation: ${reads.failed}`);
+			}
+			return;
+		}
+		const now = keyOf(run.facts);
+		if (!title || title === run.facts.title || !this.live(run) || run.facts.lifecycle === 'ended' || !now || conversationId(now) !== conversationId(key)) {
+			return;
+		}
+		this.update(run, { title, titleSource: 'conversation' }, 'reported');
+		// Kept with its process: a reload shows it at once (CLIS-2.4)
+		if (run.facts.pid !== undefined) {
+			this.deps.execution.setMeta(run.facts.id, metaOf(run.facts, run.exactResume));
+		}
+	}
+
+	/** `run` ended or went: no read of its title is asked any more, and none waits (CLIS-2.4). */
+	private stopTitles(run: Run): void {
+		const reads = run.titles;
+		if (reads) {
+			reads.again = false;
+			reads.resting?.dispose();
+			reads.resting = undefined;
+		}
 	}
 
 	private emit(change: RunChange): void {
@@ -1400,21 +1705,29 @@ function isRequestRun(value: unknown): value is RunFacts & { readonly requestOnl
 /** A retained record as this build keeps runs: one an earlier build wrote is a root of its own, without tools (ARCHITECTURE-4.2). */
 function retainedFacts(kept: RunFacts): RunFacts {
 	const record = kept as RunFacts & { readonly [key: string]: unknown };
-	// Ended, it can be pinned where its conversation is saved (LIFECYCLE-3.4)
-	const { pinnable: _pinnable, ...facts } = kept;
+	// Ended, it can be pinned where its conversation is saved (LIFECYCLE-3.4). Its title only where it is proven its conversation's: an
+	// earlier build kept a CLI report's title as well, which is no conversation title (CLIS-2.4)
+	const { pinnable: _pinnable, resumed: _resumed, title, titleSource: _titleSource, ...facts } = kept;
 	return {
 		...facts,
+		...title && record.titleSource === 'conversation' ? { title, titleSource: 'conversation' as const } : {},
 		...kept.resumable ? { pinnable: true } : {},
+		...record.resumed === true ? { resumed: true as const } : {},
 		root: typeof record.root === 'string' && record.root ? record.root : kept.id,
 		origin: record.origin === 'agent' ? 'agent' : 'human',
 		tools: record.tools === 'connecting' || record.tools === 'available' || record.tools === 'unavailable' ? record.tools : 'not_injected'
 	};
 }
 
+/** A kept tab place: an earlier build's with when it was last active and whether it was its group's front, which nothing reads, among them. */
 function isTabPlace(value: unknown): value is TabPlace {
 	const place = value as Exclude<TabPlace, 'hidden'> | 'hidden' | undefined;
-	return place === 'hidden' || (typeof place === 'object' && place !== null && Number.isSafeInteger(place.column) && (place.activeAt === undefined || typeof place.activeAt === 'number')
-		&& (place.front === undefined || place.front === true));
+	return place === 'hidden' || (typeof place === 'object' && place !== null && Number.isSafeInteger(place.column));
+}
+
+/** `place` as this build keeps it: its group alone. */
+function tabOf(place: TabPlace): TabPlace {
+	return place === 'hidden' ? place : { column: place.column };
 }
 
 function isSaidSource(value: unknown): value is SaidSource {
@@ -1458,9 +1771,13 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(meta.toolsProblem === 'cmd' || meta.toolsProblem === 'files' || meta.toolsProblem === 'conflict' || meta.toolsProblem === 'variable' || meta.toolsProblem === 'disconnected' ? { toolsProblem: meta.toolsProblem } : {}),
 		...(typeof meta.toolsFile === 'string' ? { toolsFile: meta.toolsFile } : {}),
 		...(typeof meta.promptLine === 'string' ? { promptLine: meta.promptLine } : {}),
+		// A title proven to be its conversation's; an earlier build's, which may be a CLI report's, is dropped and read again (CLIS-2.4)
+		...(typeof meta.title === 'string' && meta.title && meta.titleSource === 'conversation' ? { title: meta.title, titleSource: 'conversation' as const } : {}),
+		...(typeof meta.titleStore === 'string' && meta.titleStore ? { titleStore: meta.titleStore } : {}),
+		...(meta.resumed === true ? { resumed: true as const } : {}),
 		...(typeof meta.said === 'string' && meta.said ? { said: meta.said } : {}),
 		...(isSaidSource(meta.saidSource) ? { saidSource: meta.saidSource } : {}),
-		...(isTabPlace(meta.tab) ? { tab: meta.tab } : {}),
+		...(isTabPlace(meta.tab) ? { tab: tabOf(meta.tab) } : {}),
 		...(typeof meta.inputAdapter === 'string' ? { inputAdapter: meta.inputAdapter } : {}),
 		...(isCapability(meta.inputCapability) ? { inputCapability: meta.inputCapability } : {})
 	};
@@ -1498,6 +1815,9 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.toolsProblem !== undefined ? { toolsProblem: facts.toolsProblem } : {}),
 		...(facts.toolsFile !== undefined ? { toolsFile: facts.toolsFile } : {}),
 		...(facts.promptLine !== undefined ? { promptLine: facts.promptLine } : {}),
+		...(facts.title !== undefined && facts.titleSource === 'conversation' ? { title: facts.title, titleSource: 'conversation' as const } : {}),
+		...(facts.titleStore !== undefined ? { titleStore: facts.titleStore } : {}),
+		...(facts.resumed ? { resumed: true as const } : {}),
 		...(facts.said !== undefined ? { said: facts.said } : {}),
 		...(facts.saidSource !== undefined ? { saidSource: facts.saidSource } : {}),
 		...(facts.tab !== undefined ? { tab: facts.tab } : {}),
@@ -1510,7 +1830,7 @@ function isCapability(value: unknown): value is NonNullable<RunMeta['inputCapabi
 	return isJsonObject(value) && typeof value.reason === 'string' && (value.state === 'supported' || value.state === 'unavailable' || value.state === 'unverified');
 }
 
-/** The first line of a creation prompt as a card's hover shows it: one trimmed line, or none. */
+/** The first line of a creation prompt as a card's second line shows it: one trimmed line, or none. */
 function firstLine(prompt: string | undefined): string | undefined {
 	const line = prompt?.split(/\r?\n/).map(each => each.trim()).find(each => !!each);
 	return line ? displayLine(line, 300) : undefined;

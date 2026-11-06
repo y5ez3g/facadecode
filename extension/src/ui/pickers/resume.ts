@@ -175,7 +175,8 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 			picker.busy = false;
 			return;
 		}
-		reals = catalog.locations.map(location => ({ location, real: realFolderOf(location.path) }));
+		// Where a conversation was is the main checkout, worktree or folder it was in: no folder inside one names it (WORKTREES-1.2)
+		reals = catalog.locations.filter(location => !location.within).map(location => ({ location, real: realFolderOf(location.path) }));
 		pager = deps.conversations.open({ environment: catalog.locations[0].environment, directories: [...new Set(catalog.locations.map(location => location.path))] });
 		// A search typed meanwhile goes on past the first batch
 		await readNext();

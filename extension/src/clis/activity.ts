@@ -2,16 +2,16 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// What a run's CLI reports, as activity and title (CLIS-2.3, RULES-3.2). Only the root process's OSC 7501 reports count; a run
-// counts as reporting once its CLI takes part in the protocol - it asked whether the terminal takes reports, or sent a valid
-// one - whatever its version (CLIS-2.3). Without that its activity is unknown, which the card shows red with the reason once its
-// run's startup is over (CLIS-2.3): a quiet screen proves nothing. Titles are the CLI's own words, sanitized and capped; the actual
-// terminal title (OSC 0/2) takes precedence over a status report's title (CLIS-2.3).
+// What a run's CLI reports, as activity (CLIS-2.3, RULES-3.2). Only the root process's OSC 7501 reports count; a run counts as
+// reporting once its CLI takes part in the protocol - it asked whether the terminal takes reports, or sent a valid one - whatever
+// its version (CLIS-2.3). Without that its activity is unknown, which the card shows red with the reason once its run's startup is
+// over (CLIS-2.3): a quiet screen proves nothing. Neither a report's title nor its terminal's (OSC 0/2) is shown: a run's title is
+// its conversation's, as its CLI keeps it (CLIS-2.4).
 
 import { displayLine } from '../base/text';
 import { BUILT_IN_ADAPTERS } from './catalog';
 
-/** A report's status, as ptyd keeps it for a run (OSC 7501): its state, what it waits for, its words and its title. */
+/** A report's status, as ptyd keeps it for a run (OSC 7501): its state, what it waits for and its words. */
 export interface ReportedStatus {
 	readonly state: 'idle' | 'working' | 'done' | 'blocked' | 'error' | 'pending';
 	/** Pending because the CLI asked whether the terminal takes reports and has not reported yet. */
@@ -19,7 +19,6 @@ export interface ReportedStatus {
 	readonly unavailable?: 'screen_unrecognized' | 'screen_reset';
 	readonly kind?: 'permission' | 'question' | 'auth';
 	readonly msg?: string;
-	readonly title?: string;
 }
 
 /** Activity as a run's reports establish it (RULES-3.1, 3.2). */
@@ -34,7 +33,7 @@ export interface ActivityFacts {
 	readonly error?: { readonly text?: string };
 }
 
-/** Keep the complete bounded CLI text for hover; card width is handled by CSS (CLIS-2.3). */
+/** Keep the complete bounded CLI text for the accessible label; card width is handled by CSS (CLIS-2.3). */
 export const MOST_SHOWN = 4096;
 
 /**
@@ -59,20 +58,6 @@ export function activityOf(status: ReportedStatus | undefined): ActivityFacts {
 		case 'pending':
 			return { activity: 'unknown', reporting: true, unknown: status.unavailable ?? (status.negotiating ? 'waiting' : 'cleared') };
 	}
-}
-
-/**
- * The title a run shows for its CLI (CLIS-2.3): the terminal's nonempty OSC 0/2 title over the report's title, with visible
- * symbols and words intact. Invisible formatting and controls removed; no additional short-preview cap.
- */
-export function cliTitle(titles: { readonly reported?: string; readonly terminal?: string }): string | undefined {
-	for (const raw of [titles.terminal, titles.reported]) {
-		const text = displayLine(raw ?? '', MOST_SHOWN);
-		if (text) {
-			return text;
-		}
-	}
-	return undefined;
 }
 
 /**

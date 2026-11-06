@@ -333,12 +333,29 @@ class ToolService {
 		}
 	}
 
+	/**
+	 * The location `id` names, as agents may name it (MCP-3.1, WORKTREES-1.2): a `location_id` once issued for a Resume cwd recorded
+	 * within a location - a resumed conversation's subfolder - is its anchor's, so a new start and a filter use the anchor.
+	 */
 	private location(id: string): Location {
 		const location = this.deps.locations.resolve(id);
 		if (!location) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No working location ${JSON.stringify(id)} is in window ${this.deps.window.label}.`);
 		}
-		return location;
+		return location.within !== undefined ? this.deps.locations.resolve(location.within) ?? location : location;
+	}
+
+	/** A run's `location_id` as agents see it: a Resume cwd recorded within a location reports its anchor's, its `cwd` exact (MCP-3.1). */
+	private anchorOf(run: Pick<RunFacts, 'location' | 'within'>): string {
+		// The catalog decides where it has the location - a folder added to the workspace since is a location of its own - and the
+		// anchor the run kept at acceptance only where it has none (WORKTREES-1.2)
+		const known = this.deps.locations.snapshot().locations.find(each => each.id === run.location);
+		return known ? known.within ?? known.id : run.within ?? run.location;
+	}
+
+	/** `run` as the tools describe it (MCP-3.1), its location its anchor's where it works in a Resume cwd within one. */
+	private agentData(run: RunFacts, now: number): Data {
+		return { ...agentOf(run, this.deps.window, now, this.deps.input?.capability(run.id)), location_id: this.anchorOf(run) };
 	}
 
 	/** The run `reference` names within the caller's reach (RULES-2.3, 4.3). */
@@ -533,15 +550,16 @@ class ToolService {
 	}
 
 	private async localSnapshot(caller: Caller, selected?: string, locationId?: string, details = false): Promise<{ window: WindowSnapshot; agents: Data[] }> {
-		if (locationId !== undefined) { this.location(locationId); }
+		// A filter by a Resume cwd's once-issued ID is its anchor's (MCP-3.1)
+		const anchor = locationId !== undefined ? this.location(locationId).id : undefined;
 		const agents = this.agentsFor(caller, selected !== undefined)
-			.filter(agent => (selected === undefined || agent.agent_id === selected) && (locationId === undefined || agent.location_id === locationId));
+			.filter(agent => (selected === undefined || agent.agent_id === selected) && (anchor === undefined || agent.location_id === anchor));
 		// A facade.yolo neither true nor false is one of this window's configuration problems: the snapshot is still given (UX-4.1)
 		let yolo = true;
 		let yoloProblem: string | undefined;
 		try { yolo = this.deps.yolo(); } catch (err) { yoloProblem = errorText(err); }
 		const window = await windowSnapshot({ window: this.deps.window, catalog: this.deps.locations.snapshot(), clis: this.deps.clis,
-			yolo, now: () => this.now(), agentCount: agents.length, location: locationId ?? (selected !== undefined ? String(agents[0]?.location_id ?? '') : undefined), targeted: selected !== undefined, details,
+			yolo, now: () => this.now(), agentCount: agents.length, location: anchor ?? (selected !== undefined ? String(agents[0]?.location_id ?? '') : undefined), targeted: selected !== undefined, details,
 			logFile: this.deps.historyLog });
 		return { agents, window: yoloProblem === undefined ? window : { ...window, problems: [{ setting: 'facade.yolo', problem: yoloProblem }, ...window.problems as readonly Data[]] } };
 	}
@@ -551,7 +569,7 @@ class ToolService {
 		const now = this.now();
 		return this.deps.agents.list()
 			.filter(run => reaches(caller, run) && (includeEnded || run.lifecycle !== 'ended'))
-			.map(run => agentOf(run, this.deps.window, now, this.deps.input?.capability(run.id)));
+			.map(run => this.agentData(run, now));
 	}
 
 	/** How a guest caller's message or prompt says who sent it, and where its result goes (RULES-1.7). */
@@ -746,7 +764,7 @@ class ToolService {
 		const prompt = facts.promptId !== undefined ? this.originalPrompt(facts) : undefined;
 		// Its later result is still to come while it starts, or while its prompt is pending after it started (MCP-2.3)
 		const later = facts.lifecycle === 'starting' || prompt?.status === 'pending';
-		const data = defined({ ...agentOf(facts, this.deps.window, this.now(), this.deps.input?.capability(facts.id)), request_id: args.request_id, repeated: true,
+		const data = defined({ ...this.agentData(facts, this.now()), request_id: args.request_id, repeated: true,
 			...prompt ? { prompt } : {}, result_message_id: later ? facts.resultMessageId : undefined, call_id: later ? facts.startCallId : undefined });
 		const before = `Request ${args.request_id} started ${referenceOf(facts)} (${facts.id}) already, at ${isoOf(facts.createdAt)}: nothing was started again.`;
 		const effects: Effects = { outcome: 'none', agent_id: facts.id };
@@ -853,7 +871,7 @@ class ToolService {
 			window_id: window.id,
 			window: window.label,
 			environment: facts?.environment ?? location.environment,
-			location_id: facts?.location ?? location.id,
+			location_id: facts ? this.anchorOf(facts) : location.id,
 			cwd: facts?.cwd,
 			cli: args.cli,
 			creator: caller.id,

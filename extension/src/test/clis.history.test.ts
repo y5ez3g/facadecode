@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
-import { BATCH, MOST_READS_PER_BATCH, VendorHistory } from '../clis/history';
+import { BATCH, MOST_READS_PER_BATCH, VENDOR_STORES, VendorHistory } from '../clis/history';
 import { claudeProjectFolderName } from '../clis/history/claude';
 import { piCandidates, piSessionDirectory, piSessionFolderName } from '../clis/history/pi';
 import { Scope } from '../clis/history/scope';
@@ -543,5 +543,287 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		// Asked once per directory in a picker session, not per page or per file
 		await pager.next();
 		assert.deepStrictEqual(asked, [repo, other]);
+	});
+	/** One conversation's title, read by its ID in the store its CLI's launches in `cwd` find, as a run's card asks (CLIS-2.4). */
+	const titleOf = (cli: string, sessionId: string, cwd = repo, of = history) => of.title({ cli, sessionId }, cwd);
+	/** The stores, each counting how often it is listed: a read by ID lists none. */
+	const counted = () => {
+		const listed: string[] = [];
+		const stores = VENDOR_STORES.map(store => ({ ...store, candidates: (...args: Parameters<typeof store.candidates>) => { listed.push(store.cli); return store.candidates(...args); } }));
+		return { stores, listed };
+	};
+
+	test('CLIS-2.4: a Claude Code conversation is read by its ID alone - its own file in a project folder its directory names, once per version of it - with the list\'s precedence; another folder\'s, a fork\'s copy and a child\'s are none', async () => {
+		const base = Date.UTC(2026, 10, 1);
+		const user = (sessionId: string, content: string, more: object = {}) => ({ type: 'user', sessionId, cwd: repo, message: { role: 'user', content }, ...more });
+		claude(repo, id(1), base, [user(id(1), 'Initial ask'), { type: 'ai-title', sessionId: id(1), aiTitle: 'Generated' }, { type: 'custom-title', sessionId: id(1), customTitle: 'Named by the person' }]);
+		const parser = claude(repo, id(2), base, [user(id(2), 'Fix the parser'), { type: 'ai-title', sessionId: id(2), aiTitle: 'Parser fix' }]);
+		claude(repo, id(3), base, [user(id(3), 'Add tests\nfor the parser')]);
+		claude(path.join(repo, 'pkg'), id(4), base, [{ ...user(id(4), 'Package work'), cwd: path.join(repo, 'pkg') }]);
+		// A neighbour whose project folder's name begins as the repo's does, a child's transcript, and a fork's copy of another's records
+		claude(`${repo}-other`, id(5), base, [{ ...user(id(5), 'Neighbour'), cwd: `${repo}-other` }]);
+		claude(repo, id(6), base, [user(id(6), 'Internal', { isSidechain: true })]);
+		claude(repo, id(7), base, [user(id(99), 'Parent prompt')]);
+		const { stores, listed } = counted();
+		const reading = new VendorHistory({ stores, environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, ...homeEnv(path.join(temp.dir, 'home')) }) });
+		const nodeFs: typeof fs = require('fs');
+		const original = nodeFs.promises.open;
+		let opened = 0;
+		nodeFs.promises.open = (async (...args: Parameters<typeof original>) => {
+			opened++;
+			return original(...args);
+		}) as typeof original;
+		try {
+			const titles = [];
+			for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
+				titles.push(await titleOf('claude', id(n), repo, reading));
+			}
+			const inPkg = await titleOf('claude', id(4), path.join(repo, 'pkg'), reading);
+			// Read again unchanged: from what was read; renamed since: its file once more
+			const before = opened;
+			const again = await titleOf('claude', id(2), repo, reading);
+			const unchanged = opened - before;
+			fs.appendFileSync(parser, JSON.stringify({ type: 'custom-title', sessionId: id(2), customTitle: 'Parser, renamed' }) + '\n');
+			const renamed = await titleOf('claude', id(2), repo, reading);
+			assert.deepStrictEqual([titles, inPkg, again, unchanged, renamed, opened - before, listed], [
+				['Named by the person', 'Parser fix', 'Add tests', 'Package work', undefined, undefined, undefined, undefined],
+				'Package work', 'Parser fix', 0, 'Parser, renamed', 1, []
+			]);
+		} finally {
+			nodeFs.promises.open = original;
+		}
+	});
+
+	test('CLIS-2.4: a run\'s titles are read in the store its launch found - a CLI home changed or the CLI turned off since moves nothing - while a new launch finds the store its settings give now', async () => {
+		const user = (sessionId: string, content: string) => ({ type: 'user', sessionId, cwd: repo, message: { role: 'user', content } });
+		claude(repo, id(31), Date.UTC(2026, 10, 3), [user(id(31), 'ask'), { type: 'custom-title', sessionId: id(31), customTitle: 'In the old home' }]);
+		const moved = path.join(temp.dir, 'claude-moved');
+		let env: { readonly [name: string]: string } | undefined = { CLAUDE_CONFIG_DIR: claudeDir, ...homeEnv(path.join(temp.dir, 'home')) };
+		const reading = new VendorHistory({ environment: () => env ? { claude: env } : {} });
+		const launched = reading.storeOf('claude', repo);
+		// Its CLI home moved, then the CLI turned off
+		env = { CLAUDE_CONFIG_DIR: moved, ...homeEnv(path.join(temp.dir, 'home')) };
+		const afterMove = [await reading.title({ cli: 'claude', sessionId: id(31) }, repo, launched), await reading.title({ cli: 'claude', sessionId: id(31) }, repo), reading.storeOf('claude', repo)];
+		env = undefined;
+		const afterOff = [await reading.title({ cli: 'claude', sessionId: id(31) }, repo, launched), reading.storeOf('claude', repo)];
+		assert.deepStrictEqual([afterMove, afterOff], [['In the old home', undefined, moved], ['In the old home', undefined]]);
+		assert.strictEqual(launched, claudeDir);
+	});
+
+	test('CLIS-2.4, PANEL-1.5: a native stored title is the run\'s whole - longer than 120 code points, its Unicode and its lines kept - while Resume\'s list says it on one capped line; a first prompt stays a preview', async () => {
+		const base = Date.UTC(2026, 10, 2);
+		const long = `${'Überprüfung '.repeat(12)}👨‍👩‍👧‍👦 der Anmeldung\nZweite Zeile\r\ndritte`;
+		const user = (sessionId: string, content: string) => ({ type: 'user', sessionId, cwd: repo, message: { role: 'user', content } });
+		claude(repo, id(21), base, [user(id(21), 'Initial ask'), { type: 'custom-title', sessionId: id(21), customTitle: long }]);
+		claude(repo, id(22), base + 1, [user(id(22), `${'a'.repeat(130)}\nmore of the prompt`)]);
+		const reading = new VendorHistory({ environment: everywhere({ CLAUDE_CONFIG_DIR: claudeDir, ...homeEnv(path.join(temp.dir, 'home')) }) });
+		const [full, prompted] = [await titleOf('claude', id(21), repo, reading), await titleOf('claude', id(22), repo, reading)];
+		const listed = (await reading.open({ environment: 'local', directories: [repo] }).next()).entries;
+		const line = listed.find(entry => entry.key.sessionId === id(21))?.title ?? '';
+		assert.strictEqual(full, long.replace('\r\n', '\n'));
+		assert.ok([...full!].length > 120 && full!.includes('\n'));
+		assert.deepStrictEqual([[...line].length <= 120, line.includes('\n'), line.startsWith('Überprüfung'), line.endsWith('…')], [true, false, true, true]);
+		// A first prompt's preview is no stored title: the same one line in both
+		assert.strictEqual(prompted, listed.find(entry => entry.key.sessionId === id(22))?.title);
+		assert.ok(!prompted!.includes('more of the prompt'));
+	});
+
+	test('CLIS-2.4: each reader keeps a native stored title whole for the run - over 120 code points, its lines kept - while Resume lists one capped line; Muse Code\'s, Pi\'s and Antigravity\'s first prompts stay previews', async () => {
+		const { DatabaseSync } = await import('node:sqlite');
+		const long = `${'Überprüfung '.repeat(12)}👨‍👩‍👧‍👦 der Anmeldung\nZweite Zeile`;
+		const prompt = `${'a'.repeat(130)}\nmore of the prompt`;
+		const base = Date.UTC(2026, 10, 4);
+		fs.mkdirSync(codexHome, { recursive: true });
+		const threads = new DatabaseSync(path.join(codexHome, 'state_5.sqlite'));
+		threads.exec('CREATE TABLE threads (id TEXT, cwd TEXT, name TEXT, title TEXT, updated_at INTEGER, recency_at_ms INTEGER, rollout_path TEXT, history_mode TEXT, archived INTEGER, source TEXT)');
+		threads.prepare('INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id(41), repo, long, 'First prompt', 1, base, '', 'paginated', 0, 'cli');
+		threads.close();
+		const data = path.join(temp.dir, 'titles-data');
+		fs.mkdirSync(path.join(data, 'opencode'), { recursive: true });
+		const sessions = new DatabaseSync(path.join(data, 'opencode', 'opencode.db'));
+		sessions.exec('PRAGMA journal_mode=WAL; CREATE TABLE session_v2 (id TEXT, directory TEXT, title TEXT, time_updated INTEGER, parent_id TEXT, time_archived INTEGER)');
+		sessions.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)').run('ses_long', repo, long, base, null, null);
+		sessions.close();
+		muse(path.join(data, 'muse'), [{ id: id(42), cwd: repo, prompt: 'Asked', name: long, at: base }, { id: id(43), cwd: repo, prompt, at: base }]);
+		const home = path.join(temp.dir, 'titles-home');
+		agy(home, [{ id: id(44), folders: [repo], at: base, title: long }, { id: id(45), folders: [repo], at: base, preview: prompt }]).db.close();
+		const agent = path.join(temp.dir, 'titles-pi');
+		const piDir = path.join(agent, 'sessions', piSessionFolderName(repo));
+		fs.mkdirSync(piDir, { recursive: true });
+		const piFile = (n: number, lines: readonly object[]) => fs.writeFileSync(path.join(piDir, `2026-11-01T00-00-00-000Z_${id(n)}.jsonl`), [{ type: 'session', version: 3, id: id(n), timestamp: '2026-11-01T00:00:00Z', cwd: repo }, ...lines].map(line => JSON.stringify(line)).join('\n'));
+		const asked = { type: 'message', message: { role: 'user', content: [{ type: 'text', text: prompt }] } };
+		piFile(46, [asked, { type: 'session_info', name: long }]);
+		piFile(47, [asked]);
+		const env = { CODEX_HOME: codexHome, XDG_DATA_HOME: data, PI_CODING_AGENT_DIR: agent, ...homeEnv(home) };
+		const reading = new VendorHistory({ environment: () => ({ codex: env, opencode: env, muse: env, agy: env, pi: env }) });
+		const stored = [['codex', id(41)], ['opencode', 'ses_long'], ['muse', id(42)], ['agy', id(44)], ['pi', id(46)]];
+		const titles: unknown[] = [];
+		for (const [cli, each] of stored) { titles.push(await titleOf(cli, each, repo, reading)); }
+		assert.deepStrictEqual(titles, stored.map(() => long));
+		const listed = (await reading.open({ environment: 'local', directories: [repo] }).next()).entries;
+		for (const [cli, each] of stored) {
+			const line = listed.find(entry => entry.key.cli === cli && entry.key.sessionId === each)?.title ?? '';
+			assert.deepStrictEqual([cli, [...line].length <= 120, line.includes('\n'), line.endsWith('…')], [cli, true, false, true]);
+		}
+		const previews: unknown[] = [];
+		for (const [cli, each] of [['muse', id(43)], ['agy', id(45)], ['pi', id(47)]]) { previews.push(await titleOf(cli, each, repo, reading)); }
+		assert.ok(previews.every(each => typeof each === 'string' && [...each].length <= 120 && !each.includes('more of the prompt')), JSON.stringify(previews));
+	});
+
+	test('CLIS-2.4: an ID that is no session ID of its store reads nothing - none taken into a file path or a query - and Facade reads titles for the built-ins alone', async () => {
+		const base = Date.UTC(2026, 10, 5);
+		// A file named for an ID Claude Code never gives, its own lines claiming it
+		claude(repo, 'not-a-session', base, [{ type: 'user', sessionId: 'not-a-session', cwd: repo, message: { role: 'user', content: 'ask' } }, { type: 'custom-title', sessionId: 'not-a-session', customTitle: 'Named' }]);
+		const { DatabaseSync } = await import('node:sqlite');
+		const data = path.join(temp.dir, 'ids-data');
+		fs.mkdirSync(path.join(data, 'opencode'), { recursive: true });
+		const db = new DatabaseSync(path.join(data, 'opencode', 'opencode.db'));
+		db.exec('PRAGMA journal_mode=WAL; CREATE TABLE session_v2 (id TEXT, directory TEXT, title TEXT, time_updated INTEGER, parent_id TEXT, time_archived INTEGER)');
+		db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)').run('not a session', repo, 'Row title', base, null, null);
+		db.close();
+		const reading = new VendorHistory({ environment: () => ({ claude: { CLAUDE_CONFIG_DIR: claudeDir, ...homeEnv(path.join(temp.dir, 'home')) }, opencode: { XDG_DATA_HOME: data } }) });
+		assert.deepStrictEqual([await titleOf('claude', 'not-a-session', repo, reading), await titleOf('opencode', 'not a session', repo, reading),
+			['claude', 'codex', 'agy', 'muse', 'opencode', 'pi', 'my-cli'].map(cli => reading.readsTitles(cli))], [undefined, undefined, [true, true, true, true, true, true, false]]);
+	});
+
+	test('CLIS-2.4: a Codex conversation is read by its ID: its thread in the index decides - an archived, a subagent\'s or another folder\'s is none, its rollout never read - and one not indexed is read from the rollout named for it', async () => {
+		const { DatabaseSync } = await import('node:sqlite');
+		fs.mkdirSync(codexHome, { recursive: true });
+		const db = new DatabaseSync(path.join(codexHome, 'state_5.sqlite'));
+		try {
+			db.exec('CREATE TABLE threads (id TEXT, cwd TEXT, name TEXT, title TEXT, updated_at INTEGER, recency_at_ms INTEGER, rollout_path TEXT, history_mode TEXT, archived INTEGER, source TEXT)');
+			const insert = db.prepare('INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+			insert.run(id(1), repo, 'User rename', 'First prompt', 1, 12345, '', 'paginated', 0, 'cli');
+			insert.run(id(2), repo, null, 'Archived', 2, 20000, codex(repo, id(2), 20_000), 'legacy', 1, 'cli');
+			insert.run(id(3), repo, null, 'Subagent', 3, 30000, '', 'paginated', 0, '{"subagent":{}}');
+			insert.run(id(4), path.join(temp.dir, 'elsewhere'), null, 'Elsewhere', 4, 40000, '', 'paginated', 0, 'cli');
+			insert.run(id(5), repo, null, 'Indexed title', 5, 50000, '', 'paginated', 0, 'cli');
+		} finally { db.close(); }
+		// Not indexed: an earlier Codex's rollouts, the most recently changed of two for one conversation read
+		codex(repo, id(6), 60_000);
+		const older = codex(repo, id(7), 70_000, `rollout-1-${id(7)}.jsonl`);
+		const newer = codex(repo, id(7), 71_000, `rollout-2-${id(7)}.jsonl`);
+		fs.writeFileSync(older, fs.readFileSync(older, 'utf8').replace('Add tests', 'Older rollout'));
+		fs.utimesSync(older, 70, 70);
+		fs.writeFileSync(newer, fs.readFileSync(newer, 'utf8').replace('Add tests', 'Newer rollout'));
+		fs.utimesSync(newer, 71, 71);
+		const { stores, listed } = counted();
+		const reading = new VendorHistory({ stores, environment: everywhere({ CODEX_HOME: codexHome, ...homeEnv(path.join(temp.dir, 'home')) }) });
+		const titles = [];
+		for (const n of [1, 2, 3, 4, 5, 6, 7, 8]) {
+			titles.push(await titleOf('codex', id(n), repo, reading));
+		}
+		assert.deepStrictEqual([titles, listed], [['User rename', undefined, undefined, undefined, 'Indexed title', 'Add tests', 'Newer rollout', undefined], []]);
+	});
+
+	test('CLIS-2.4: OpenCode\'s, Muse Code\'s and Antigravity\'s conversations are read by their rows alone, by the rules their lists have: a child\'s, an archived, an invalid or untitled, a dropped and another folder\'s are none', async () => {
+		const { DatabaseSync } = await import('node:sqlite');
+		const data = path.join(temp.dir, 'data');
+		fs.mkdirSync(path.join(data, 'opencode'), { recursive: true });
+		const db = new DatabaseSync(path.join(data, 'opencode', 'opencode.db'));
+		try {
+			db.exec('PRAGMA journal_mode=WAL; CREATE TABLE session_v2 (id TEXT, directory TEXT, title TEXT, time_updated INTEGER, parent_id TEXT, time_archived INTEGER)');
+			const insert = db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)');
+			insert.run('ses_a1', repo, 'Native work', 1000, null, null);
+			insert.run('ses_child', repo, 'Child', 2000, 'ses_a1', null);
+			insert.run('ses_archived', repo, 'Archived', 3000, null, 3000);
+			insert.run('ses_other', `${repo}-other`, 'Neighbour', 4000, null, null);
+		} finally { db.close(); }
+		const base = Date.UTC(2026, 9, 29, 10);
+		muse(path.join(data, 'muse'), [
+			{ id: id(1), cwd: repo, prompt: 'Refactor the login form\ninto two parts.', name: 'login-refactor', at: base },
+			{ id: id(2), cwd: repo, prompt: 'Explain the build script.', at: base },
+			{ id: id(3), cwd: repo, prompt: 'Broken', at: base, status: 'invalid' },
+			{ id: id(4), cwd: repo, at: base },
+			{ id: id(5), cwd: repo, prompt: 'Old plan', at: base, log: false },
+			{ id: id(6), cwd: path.join(temp.dir, 'elsewhere'), prompt: 'Elsewhere', at: base }
+		]);
+		const home = path.join(temp.dir, 'agy-home');
+		agy(home, [
+			{ id: id(1), folders: [repo], at: base, title: 'Fix Login Redirect' },
+			{ id: id(2), folders: [path.join(repo, 'pkg')], at: base, preview: 'please look at the failing test\nin src/app.ts' },
+			{ id: id(3), folders: [repo], at: base, title: 'Explore Codebase', parent: id(1) },
+			{ id: id(4), folders: [repo], at: base, title: 'Old Migration Plan', file: false },
+			{ id: id(5), folders: [path.join(temp.dir, 'elsewhere')], at: base, title: 'Elsewhere' }
+		]).db.close();
+		const env = { XDG_DATA_HOME: data, ...homeEnv(home) };
+		const { stores, listed } = counted();
+		const reading = new VendorHistory({ stores, environment: () => ({ opencode: env, muse: env, agy: env }) });
+		const read = async (cli: string, ids: readonly string[]) => { const titles = []; for (const each of ids) { titles.push(await titleOf(cli, each, repo, reading)); } return titles; };
+		assert.deepStrictEqual([
+			await read('opencode', ['ses_a1', 'ses_child', 'ses_archived', 'ses_other', 'ses_none']),
+			await read('muse', [id(1), id(2), id(3), id(4), id(5), id(6), id(7)]),
+			await read('agy', [id(1), id(2), id(3), id(4), id(5), id(6)]),
+			listed
+		], [
+			['Native work', undefined, undefined, undefined, undefined],
+			['login-refactor', 'Explain the build script.', undefined, undefined, undefined, undefined, undefined],
+			['Fix Login Redirect', 'please look at the failing test', undefined, undefined, undefined, undefined],
+			[]
+		]);
+	});
+
+	test('CLIS-2.4: a Pi session is read by its file, named for its ID, in the folder Pi keeps its directory\'s sessions in, or an override\'s - its header confirming the conversation and its folder', async () => {
+		const agent = path.join(temp.dir, 'pi');
+		const flat = path.join(temp.dir, 'pi-sessions');
+		const write = (n: number, cwd: string, dir: string, header = id(n), name?: string) => {
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, `2026-11-01T00-00-00-000Z_${id(n)}.jsonl`), [
+				{ type: 'session', version: 3, id: header, timestamp: '2026-11-01T00:00:00Z', cwd },
+				{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `First ask ${n}\nDetails` }] } },
+				...name ? [{ type: 'session_info', name }] : []
+			].map(line => JSON.stringify(line)).join('\n'));
+		};
+		const folder = (cwd: string) => path.join(agent, 'sessions', piSessionFolderName(cwd));
+		write(1, repo, folder(repo), id(1), 'Named native work');
+		write(2, repo, folder(repo));
+		write(3, `${repo}-other`, folder(`${repo}-other`));
+		// A file named for one session, its header another's
+		write(4, repo, folder(repo), id(40));
+		write(5, repo, flat);
+		const native = new VendorHistory({ environment: () => ({ pi: { PI_CODING_AGENT_DIR: agent } }) });
+		const overridden = new VendorHistory({ environment: () => ({ pi: { PI_CODING_AGENT_SESSION_DIR: flat } }) });
+		assert.deepStrictEqual([
+			await titleOf('pi', id(1), repo, native), await titleOf('pi', id(2), repo, native), await titleOf('pi', id(3), repo, native),
+			await titleOf('pi', id(4), repo, native), await titleOf('pi', id(5), repo, native), await titleOf('pi', id(5), repo, overridden)
+		], ['Named native work', 'First ask 2', undefined, undefined, undefined, 'First ask 5']);
+	});
+
+	test('CLIS-2.4: a custom CLI keeps no history Facade reads: its conversation has no title; nor has one of a CLI the directory\'s launches find no store for', async () => {
+		claude(repo, id(1), Date.now());
+		assert.deepStrictEqual([
+			await titleOf('claude', id(1)),
+			await titleOf('my-cli', id(1)),
+			await titleOf('claude', id(1), repo, new VendorHistory({ environment: () => ({ codex: { CODEX_HOME: codexHome } }) }))
+		], ['Work 01', undefined, undefined]);
+	});
+
+	test('CLIS-2.4: each store\'s conversation read by its ID has the title the Resume list gives it', async () => {
+		const base = Date.UTC(2026, 10, 2);
+		const data = path.join(temp.dir, 'data'), home = path.join(temp.dir, 'home'), agent = path.join(temp.dir, 'pi');
+		claude(repo, id(1), base + 1, [{ type: 'user', sessionId: id(1), cwd: repo, message: { content: 'Claude work' } }, { type: 'summary', summary: 'Summarized work' }]);
+		claude(path.join(repo, 'pkg'), id(2), base + 2, [{ type: 'user', sessionId: id(2), cwd: path.join(repo, 'pkg'), message: { content: 'Package work' } }]);
+		codex(repo, id(3), base + 3);
+		const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
+		fs.mkdirSync(path.join(data, 'opencode'), { recursive: true });
+		const db = new DatabaseSync(path.join(data, 'opencode', 'opencode.db'));
+		db.exec('CREATE TABLE session_v2 (id TEXT, directory TEXT, title TEXT, time_updated INTEGER, parent_id TEXT, time_archived INTEGER)');
+		db.prepare('INSERT INTO session_v2 VALUES (?, ?, ?, ?, ?, ?)').run('ses_b1', repo, 'OpenCode work', base + 4, null, null);
+		db.close();
+		muse(path.join(data, 'muse'), [{ id: id(5), cwd: repo, prompt: 'Muse work', name: 'muse-named', at: base + 5 }]);
+		agy(home, [{ id: id(6), folders: [repo], at: base + 6, preview: 'Antigravity work' }]).db.close();
+		fs.mkdirSync(path.join(agent, 'sessions', piSessionFolderName(repo)), { recursive: true });
+		fs.writeFileSync(path.join(agent, 'sessions', piSessionFolderName(repo), `2026-11-02T00-00-00-000Z_${id(7)}.jsonl`), [
+			{ type: 'session', version: 3, id: id(7), cwd: repo }, { type: 'message', message: { role: 'user', content: 'Pi work' } }
+		].map(line => JSON.stringify(line)).join('\n'));
+		const env = { CLAUDE_CONFIG_DIR: claudeDir, CODEX_HOME: codexHome, XDG_DATA_HOME: data, PI_CODING_AGENT_DIR: agent, ...homeEnv(home) };
+		const every = new VendorHistory({ environment: () => Object.fromEntries(VENDOR_STORES.map(store => [store.cli, env])) });
+		const listed = (await every.open({ environment: 'local', directories: [repo] }).next()).entries;
+		const read = [];
+		for (const entry of listed) {
+			read.push(await every.title(entry.key, entry.cwd));
+		}
+		assert.deepStrictEqual([listed.map(entry => entry.key.cli).sort(), read], [['agy', 'claude', 'claude', 'codex', 'muse', 'opencode', 'pi'], listed.map(entry => entry.title)]);
+		assert.ok(listed.every(entry => entry.title), 'every one has a title to compare');
 	});
 });

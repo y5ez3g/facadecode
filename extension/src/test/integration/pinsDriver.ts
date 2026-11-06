@@ -2,11 +2,14 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The pins journey's driver (LIFECYCLE-3.4, 3.5, VERIFICATION J12): agents in two groups, some of them pinned, a text file in front, and the window
-// reloaded. With no tab revealed, every pinned agent's tab shows its mark and no other does, no Pin changes and each tab is back in
-// its group; then the ways a person changes a Pin - a card's Pin and Unpin of an agent whose tab is behind, a tab's own Pin and Unpin,
-// a close of a pinned tab - each leave its card and its tab agreeing, and a last reload shows what they came to. It runs in an editor
-// that runs no tests, as the window reloads; each step is a line of FACADE_IT_PINS for the runner to judge.
+// The pins journey's driver (LIFECYCLE-3.4, 3.5, PANEL-2.1, VERIFICATION J12): agents in two groups, some of them pinned, a text file in
+// front, and the window reloaded. With no tab revealed, the pinned agents' tabs alone come back, each in its group with its mark, one at
+// a time in the Pins' order, each marked before the next opens; every other agent's tab stays hidden, no Pin changes, and nothing is
+// given back - the last pinned agent's tab is in front of its group, that group the active one, the panel's selection on it. Then,
+// the hidden agents opened again from their cards in their groups, the ways a person changes a Pin - a card's Pin and Unpin of an agent
+// whose tab is behind, a tab's own Pin and Unpin, a close of a pinned tab - each leave its card and its tab agreeing, and a last reload
+// shows what they came to. It runs in an editor that runs no tests, as the window reloads; each step is a line of FACADE_IT_PINS for the
+// runner to judge.
 
 import * as fs from 'fs';
 import * as path from 'path';
@@ -91,6 +94,24 @@ async function seen(): Promise<Seen> {
 	};
 }
 
+/** Whether a tab title is `agent`'s: its name, or its name and short ID (LIFECYCLE-2.2). */
+const isAgentLabel = (label: string | undefined, agent: { readonly name: string }) => !!label && (label === agent.name || label.startsWith(`${agent.name} `));
+
+/**
+ * The agent tabs that opened since this activation, in turn - as a reload's open, the driver watching from its activation, which
+ * comes before Facade's restoration begins - and whether every agent tab that opened before each one showed its mark as it opened.
+ */
+const openings: { readonly label: string; readonly group: number; readonly earlierMarked: boolean }[] = [];
+function watchOpenings(): vscode.Disposable {
+	return vscode.window.tabGroups.onDidChangeTabs(event => {
+		for (const tab of event.opened.filter(each => each.input instanceof vscode.TabInputTerminal)) {
+			const earlier = new Set(openings.map(each => each.label));
+			const tabs = agentTabs().filter(each => earlier.has(each.label));
+			openings.push({ label: unspun(tab.label), group: tab.group.viewColumn, earlierMarked: tabs.every(each => each.pinned) });
+		}
+	});
+}
+
 /** The Pins and Unpins the window logged since `since`, which a reload or a mark must never make. */
 function pinLines(since: number): string[] {
 	const dir = path.join(process.env.FACADE_HOME!, 'extension', 'workspaces');
@@ -140,25 +161,59 @@ async function fileIn(column: vscode.ViewColumn, name: string): Promise<void> {
 	await vscode.window.showTextDocument(vscode.Uri.file(file), { viewColumn: column, preview: false });
 }
 
-/** After a reload: the tabs back, each one's mark agreeing with its card with none revealed, and no Pin changed. */
+/**
+ * After a reload: the pinned agents' tabs alone back, each in its group with its mark agreeing with its card, none revealed, one at a
+ * time in the Pins' order - the panel's, which lists the pinned cards in it (PANEL-2.1) - each marked before the next opened; every other
+ * agent's tab hidden; no Pin changed; the last pinned agent's tab in front of its group, that group the active one, nothing given back,
+ * and the panel's selection on it (LIFECYCLE-3.5).
+ */
 async function afterReload(which: number, reloadedAt: number, expected: readonly Agent[]): Promise<void> {
 	await until('the panel state', async () => (await state())?.loading === false ? true : undefined, 90_000);
-	const back = await until('every agent tab back', async () => {
+	const pinned = expected.filter(agent => agent.pinned);
+	const back = await until('every pinned agent\'s tab back, the others hidden', async () => {
 		const now = await seen();
-		return expected.every(agent => agent.tabs === 0 || now.agents.some(each => each.runId === agent.runId && each.tabs === 1)) ? now : undefined;
+		return expected.every(agent => now.agents.some(each => each.runId === agent.runId && each.tabs === (agent.pinned ? 1 : 0))) ? now : undefined;
 	}, 60_000).catch(() => undefined);
 	const settled = await agreed();
 	// Marks that come late, or go: what the window shows a while after
 	await sleep(3_000);
 	const later = await seen();
+	const last = pinned[pinned.length - 1];
+	const lastNow = last && later.agents.find(each => each.runId === last.runId);
+	const aliasOf = (label: string) => expected.find(agent => isAgentLabel(label, agent))?.alias ?? label;
 	write({
 		phase: `reload-${which}`, back: !!back, took: settled.took, settled: settled.seen, later,
-		moved: expected.filter(agent => agent.tabs === 1 && later.agents.find(each => each.runId === agent.runId)?.group !== agent.group).map(agent => agent.alias),
-		// The file the person had in front, in front again, its group active
-		front: later.active === 'one.md' && later.activeGroup === 1,
+		// Each pinned agent's tab in the group it was in
+		moved: pinned.filter(agent => agent.group !== undefined && later.agents.find(each => each.runId === agent.runId)?.group !== agent.group).map(agent => agent.alias),
+		// No other agent's tab opened, though it was open before the reload
+		shown: expected.filter(agent => !agent.pinned && later.agents.find(each => each.runId === agent.runId)?.tabs !== 0).map(agent => agent.alias),
+		// The agent tabs in the order they opened, each once, and those that opened before the one before them showed its mark
+		order: openings.map(each => aliasOf(each.label)), expectedOrder: pinned.map(agent => agent.alias),
+		unmarkedBefore: openings.filter(each => !each.earlierMarked).map(each => aliasOf(each.label)),
+		// Nothing given back: the last pinned agent's tab in front of its group, that group the active one, the panel's selection on it
+		last: last?.alias ?? null,
+		front: !last || (isAgentLabel(later.active, last) && later.activeGroup === lastNow?.group),
+		selected: !last || (await state()).cards.find(card => card.selected)?.runId === last.runId,
 		pinChanged: expected.filter(agent => later.agents.find(each => each.runId === agent.runId)?.pinned !== agent.pinned).map(agent => agent.alias),
 		logged: pinLines(reloadedAt)
 	});
+}
+
+/**
+ * The agents a reload left hidden, opened again from their cards as a person does, each in the group it was in at `setup`: that
+ * group made the active one, then the agent revealed there (LIFECYCLE-2.2).
+ */
+async function reopenHidden(setup: readonly Agent[]): Promise<void> {
+	const focus = ['workbench.action.focusFirstEditorGroup', 'workbench.action.focusSecondEditorGroup'];
+	for (const agent of setup.filter(each => !each.pinned && each.group !== undefined)) {
+		const now = (await seen()).agents.find(each => each.runId === agent.runId);
+		if (!now || now.tabs > 0) {
+			continue;
+		}
+		await vscode.commands.executeCommand(focus[agent.group! - 1]);
+		await vscode.commands.executeCommand('facade.revealAgent', { run_id: agent.runId });
+		await until(`${agent.alias}'s tab again`, async () => (await seen()).agents.find(each => each.runId === agent.runId && each.tabs === 1), 10_000).catch(() => undefined);
+	}
 }
 
 function reload(): void {
@@ -189,7 +244,9 @@ async function act(what: string, run: () => Thenable<unknown>, alias: string, pi
 	};
 }
 
-export async function activate(): Promise<void> {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
+	// Watched from the first moment, before Facade's restoration opens a tab
+	context.subscriptions.push(watchOpenings());
 	try {
 		await vscode.extensions.getExtension('facade.facadecode')!.activate();
 		await until('the panel state', async () => (await state())?.loading === false ? true : undefined, 90_000);
@@ -229,7 +286,10 @@ export async function activate(): Promise<void> {
 				reload();
 				return;
 			}
-			// What a person does with Pins, each on an agent of its own
+			// The agents the reloads left hidden opened again from their cards, in their groups; then what a person does with Pins, each on
+			// an agent of its own
+			await reopenHidden(setup.agents);
+			await fileIn(vscode.ViewColumn.One, 'one.md');
 			const agents = (await seen()).agents;
 			const inGroup = (column: number) => agents.filter(agent => agent.group === column);
 			const [g1, g2] = [inGroup(1), inGroup(2)];

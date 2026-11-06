@@ -39,7 +39,7 @@ Tiếp theo, hãy cài đặt và đăng nhập vào bất kỳ CLI agent đư�
 Facade Code chạy các CLI agent chính hãng (Claude Code, Codex, Antigravity, Muse Code, OpenCode và Pi) trong các tab terminal biên tập bên cạnh các tệp của bạn, sử dụng các lệnh, công cụ, tài khoản và gói đăng ký riêng của từng CLI. Một thẻ trong bảng điều khiển sẽ theo dõi trạng thái của từng agent.
 
 - **Làm việc ngay cạnh mã nguồn.** Mỗi agent chạy trong tab terminal riêng ở khu vực soạn thảo. Việc đóng một tab chỉ ẩn nó đi trong khi agent vẫn tiếp tục chạy; bấm vào thẻ của nó để mở lại tab.
-- **Theo dõi trạng thái giữa các agent.** Các thẻ hiển thị ai đã khởi chạy từng agent, nó đang làm gì, và liệu nó đã sẵn sàng nhập liệu, cần cấp quyền hay gặp lỗi. Các agent vẫn tiếp tục chạy xuyên suốt quá trình tải lại cửa sổ và khởi động lại tiện ích.
+- **Theo dõi trạng thái giữa các agent.** Các thẻ hiển thị nội dung gần nhất được gửi tới từng agent và liệu nó đang làm việc, cần cấp quyền hay gặp lỗi, cùng phần chi tiết cho biết tiêu đề, thư mục và ai đã khởi chạy nó. Các agent vẫn tiếp tục chạy xuyên suốt quá trình tải lại cửa sổ và khởi động lại tiện ích.
 - **Thư mục và worktree.** Chạy agent trong bất kỳ thư mục không gian làm việc nào hoặc tạo Git worktree nhanh chóng để tách biệt các thay đổi mã nguồn. Ghim một cuộc trò chuyện (Pin) để khôi phục khi bạn mở lại không gian làm việc, hoặc tiếp tục các phiên trước từ lịch sử.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Thông qua MCP và giao thức terminal, các agent có thể khởi chạy, d�
 
 - **Khởi chạy và dừng agent.** Một agent có thể khởi chạy các agent khác bằng bất kỳ CLI nào trong số sáu CLI, trong bất kỳ thư mục hoặc worktree mới nào thuộc các cửa sổ Facade trên máy tính này, và giao cho chúng nhiệm vụ đầu tiên. Một yêu cầu thử lại có cùng ID yêu cầu (request ID) sẽ không bao giờ khởi chạy agent thứ hai trùng lặp.
 - **Gửi tin nhắn.** Các agent trao đổi tin nhắn với nhau và có thể nhắn tin cho bạn. Facade dán toàn bộ tin nhắn một lần và gửi đi. Nếu văn bản chưa gửi hoặc câu hỏi prompt đang chắn dòng nhập, việc gửi sẽ chờ cho đến khi ô nhập sẵn sàng.
-- **Điều khiển terminal.** Một agent có thể đọc màn hình của agent khác, nhập lệnh và nhấn phím để trả lời prompt hoặc hỗ trợ đồng đội đang bị kẹt. Khi một agent con chờ nhập liệu hoặc cấp quyền quá 20 giây, agent đã khởi chạy nó sẽ nhận được thông báo.
+- **Điều khiển terminal.** Một agent có thể đọc màn hình của agent khác, nhập lệnh và nhấn phím để trả lời prompt hoặc hỗ trợ đồng đội đang bị kẹt. Khi một agent con chờ cấp quyền, câu trả lời hoặc đăng nhập quá 20 giây, agent đã khởi chạy nó sẽ nhận được thông báo.
 
 ## Agent Mesh
 

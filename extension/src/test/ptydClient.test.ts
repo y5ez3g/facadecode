@@ -90,8 +90,9 @@ suite('Earlier supervisor connections across asynchronous boundaries', () => {
 				}
 			}, error => socket.destroy(error)));
 		});
+		const joined: number[] = [];
 		const held = new EarlierPtyds(directory, path.join(directory, 'own.sock'), { owner: 'window', generation: 1, token: 'claim' }, {
-			log: () => undefined, lost: () => undefined, ownerLost: () => undefined, busy: () => busy
+			log: () => undefined, lost: () => undefined, ownerLost: () => undefined, busy: () => busy, joined: (_client, protocol) => void joined.push(protocol)
 		});
 		try {
 			await new Promise<void>((resolve, reject) => {
@@ -99,7 +100,8 @@ suite('Earlier supervisor connections across asynchronous boundaries', () => {
 				server.listen(socketPath, resolve);
 			});
 			await held.find();
-			assert.strictEqual(held.clients.length, 1);
+			// Joined: told, with its protocol, so that the window tells it its colours where it takes them (ARCHITECTURE-2.3)
+			assert.deepStrictEqual([held.clients.length, joined], [1, [protocol]]);
 			deferList = true;
 			const checking = held.check();
 			await waiting;

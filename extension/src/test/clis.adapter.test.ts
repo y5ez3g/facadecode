@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { activityOf, cliTitle, interruptVerified, MOST_SHOWN } from '../clis/activity';
+import { activityOf, interruptVerified, MOST_SHOWN } from '../clis/activity';
 import { composeEnvironment, runEnvironment, setVariable, variableOf, withHostVariables } from '../clis/environment';
 import { displayLine, truncateCodePoints } from '../base/text';
 
@@ -65,17 +65,12 @@ suite('CLIs: the environment composer (CLIS-1.2)', () => {
 	});
 });
 
-suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
+suite('CLIs: activity from what a run reports (CLIS-2.3)', () => {
 
 	test('status review: an unspecified blocker is still blocked, and the native words survive', () => {
 		assert.deepStrictEqual(activityOf({ state: 'blocked', msg: 'Check the terminal' }), {
 			activity: 'not_working', reporting: true, blocker: { kind: 'unknown', text: 'Check the terminal' }
 		});
-	});
-
-	test('status review: titles retain their bounded full text for the hover', () => {
-		const title = 'x'.repeat(298) + '👨‍👩‍👧‍👦' + ' the full title';
-		assert.strictEqual(cliTitle({ terminal: title }), title);
 	});
 
 	test('status review: preview limits never split a grapheme', () => {
@@ -112,50 +107,11 @@ suite('CLIs: activity and titles from what a run reports (CLIS-2.3)', () => {
 		assert.deepStrictEqual(activityOf(undefined), { activity: 'unknown', reporting: false, unknown: 'not_reporting' });
 	});
 
-	test('the CLI\'s actual terminal title wins over a plain report title; a missing terminal title falls back without stripping symbols (CLIS-2.3)', () => {
-		assert.deepStrictEqual([
-			cliTitle({ reported: 'Fixing the tests', terminal: '✳ Something else' }),
-			cliTitle({ reported: '', terminal: '⠐ Refactoring parser' }),
-			cliTitle({ reported: ' \u202e\u200b\t ', terminal: '✳ ★ Release v2 — notes!' }),
-			cliTitle({ reported: '  \u202eevil\u200b  ' }),
-			cliTitle({ terminal: '  \u202eevil\u200b  ' }),
-			cliTitle({ reported: 'Fallback title', terminal: '' }),
-			cliTitle({ reported: 'Fallback title', terminal: '\u200b' }),
-			cliTitle({ reported: '\u200b', terminal: ' \t ' }),
-			cliTitle({})
-		], ['✳ Something else', '⠐ Refactoring parser', '✳ ★ Release v2 — notes!', 'evil', 'evil', 'Fallback title', 'Fallback title', undefined, undefined]);
-	});
-
-	test('every CLI keeps visible decorations and titles naming the CLI, folder or agent, alone or joined (CLIS-2.3)', () => {
-		for (const title of [
-			'⠐ Refactoring parser', '✳ Claude Code', '✳ ★ Release v2 — notes!', 'claude - shop-app',
-			'Codex', 'codex - shop-app', 'π - shop-app', 'π - Fix login - shop-app', 'pi',
-			'OpenCode', 'OC | shop-app', 'OC | Fix the login bug',
-			'Muse Code', 'muse - shop-app', 'Refactoring the parser',
-			'agy', 'Antigravity · shop-app', 'shop-app', 'Ada', 'Other'
-		]) {
-			assert.strictEqual(cliTitle({ terminal: title }), title);
-			assert.strictEqual(cliTitle({ reported: 'Plain status title', terminal: title }), title);
-			assert.strictEqual(cliTitle({ reported: title }), title);
-		}
-	});
-
-	test('OpenCode keeps the title it sets, including generic titles; a report remains the fallback when no terminal title exists (CLIS-2.3)', () => {
-		const placeholder = 'New session - 2026-10-31T03:29:22.759Z';
-		assert.deepStrictEqual([
-			cliTitle({ reported: placeholder, terminal: 'OpenCode' }),
-			cliTitle({ reported: placeholder, terminal: 'OC | Reply OK only' }),
-			cliTitle({ reported: 'Child session - 2026-10-31T03:29:22.759Z' }),
-			cliTitle({ reported: 'New session - plan the release' }),
-			cliTitle({ reported: 'Fix the login bug', terminal: 'OC | Fix the login bug' })
-		], ['OpenCode', 'OC | Reply OK only', 'Child session - 2026-10-31T03:29:22.759Z', 'New session - plan the release', 'OC | Fix the login bug']);
-	});
-
 	test('bounded CLI text and shorter previews keep complete visible characters', () => {
 		const long = `${'a'.repeat(MOST_SHOWN - 2)}🌍🌍tail`;
-		const title = cliTitle({ terminal: long })!;
-		assert.strictEqual([...title].length, MOST_SHOWN);
-		assert.strictEqual(title, `${'a'.repeat(MOST_SHOWN - 2)}🌍…`);
+		const text = activityOf({ state: 'blocked', msg: long }).blocker!.text!;
+		assert.strictEqual([...text].length, MOST_SHOWN);
+		assert.strictEqual(text, `${'a'.repeat(MOST_SHOWN - 2)}🌍…`);
 		assert.deepStrictEqual([truncateCodePoints('ab🌍cd', 4), truncateCodePoints('ab🌍', 3), truncateCodePoints('abc', 0)], ['ab🌍…', 'ab🌍', '']);
 		assert.strictEqual(displayLine('a\tb\r\nc\u0007d\u202e', 10), 'a b c d');
 	});

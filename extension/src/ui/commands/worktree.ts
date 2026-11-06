@@ -85,8 +85,8 @@ function failureText(err: unknown, branch: string): string {
 }
 
 /** The selected workspace folder itself is the source, including a linked checkout or a subfolder (WORKTREES-2.1). */
-function sourceIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location | undefined {
-	return catalog.locations.find(each => each.folders.some(other => other.uri === folder.uri)
+export function sourceIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location | undefined {
+	return catalog.locations.find(each => !each.within && each.folders.some(other => other.uri === folder.uri)
 		&& (each.uri === folder.uri || folderKeyOf(each.path) === folderKeyOf(folder.path)));
 }
 

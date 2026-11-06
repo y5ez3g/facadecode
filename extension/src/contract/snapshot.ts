@@ -34,7 +34,8 @@ export async function windowSnapshot(options: {
 	readonly logFile?: string;
 }): Promise<WindowSnapshot> {
 	const { window, catalog } = options;
-	const locations = catalog.locations.filter(each => options.location === undefined || each.id === options.location);
+	// The window's places to work: never a folder inside one, which no picker offers either (WORKTREES-1.2)
+	const locations = catalog.locations.filter(each => !each.within && (options.location === undefined || each.id === options.location));
 	const folders = options.location === undefined ? catalog.folders : catalog.folders.filter(folder => locations.some(location => location.folders.some(each => each.uri === folder.uri)));
 	const choices = new Map<string, { value: Data; locations: string[] }>();
 	const problems = new Map<string, { value: Data; locations: string[] }>();

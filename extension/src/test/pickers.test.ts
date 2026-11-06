@@ -253,11 +253,11 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		assert.deepStrictEqual(asked, ['feat/x']);
 	});
 
-	test('UX-2.4: list ages follow VS Code short words, unit thresholds and rounding, including old conversations', () => {
+	test('UX-2.4: list ages follow VS Code\'s short words - but just now under 30 s - its unit thresholds and rounding, including old conversations', () => {
 		const { ago } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
 		const now = Date.UTC(2026, 10, 1, 12);
 		const cases: readonly [number, string][] = [
-			[0, 'now'], [29.499, 'now'], [29.5, '30 secs ago'], [59.499, '59 secs ago'],
+			[0, 'just now'], [29.499, 'just now'], [29.5, '30 secs ago'], [59.499, '59 secs ago'],
 			[59.5, '1 min ago'], [90, '2 mins ago'], [300, '5 mins ago'], [3_599, '60 mins ago'],
 			[3_600, '1 hr ago'], [79_200, '22 hrs ago'], [86_399, '24 hrs ago'],
 			[86_400, '1 day ago'], [259_200, '3 days ago'], [604_799, '7 days ago'],
@@ -279,7 +279,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		const { ago } = withModules({ vscode: translated })<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
 		const now = Date.UTC(2026, 10, 1, 12);
 		assert.deepStrictEqual([0, 60, 300, 79_200, 86_400, 1_209_600, 7_776_000, 63_072_000].map(seconds => ago(now - seconds * 1_000, now, 'zh-cn')),
-			['现在', '1 分钟前', '5 分钟前', '22 小时前', '1 天前', '2 周前', '3 个月前', '2 年前']);
+			['刚刚', '1 分钟前', '5 分钟前', '22 小时前', '1 天前', '2 周前', '3 个月前', '2 年前']);
 	});
 
 	test('a remote environment is named as VS Code\'s remote indicator names it, from the authority the local window sees (LIFECYCLE-1.1)', () => {
@@ -539,6 +539,17 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.hide();
 			await done;
 			assert.deepStrictEqual([offered, planned, chosen], ['from login-fix', ['loc-login feat/api'], 'New worktree feat/api from login-fix']);
+		});
+
+		test('WORKTREES-1.2, LIFECYCLE-1.3: a Resume cwd recorded within a lone plain folder is no place to change to: Options still offers only Change Name', async () => {
+			catalog = { locations: [GUIDE, place('loc-guide-notes', 'notes', DOCS, { path: '/guide/notes', kind: 'folder', git: 'none', within: GUIDE.id })], folders: [DOCS], pending: false };
+			last = { location: GUIDE.id, cli: 'claude' };
+			const done = start();
+			await settle();
+			const labels = ui.current!.labels();
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual(labels, ['Claude Code', 'Options', 'Change Name...']);
 		});
 
 		test('LIFECYCLE-1.1, 1.3: a lone plain folder - the window\'s one place to work - goes unsaid in the title and offers no location change, under Options only Change Name, never an action that does nothing; a repository\'s only checkout still opens its step, saying why New Worktree is unavailable', async () => {
@@ -863,7 +874,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		test('LIFECYCLE-1.3: a folder\'s X asks first, saying the agents its removal closes, and Cancel does nothing; Remove calls updateWorkspaceFolders(index, 1) and leaves its agents to the removal; one folder left goes on to its locations', async () => {
 			catalog = { locations: [MAIN, LOGIN, GUIDE], folders: [SHOP, DOCS], pending: false };
 			last = { location: GUIDE.id, cli: 'claude' };
-			runs = [runAt(1, GUIDE), runAt(2, GUIDE), runAt(3, MAIN)];
+			// One of docs' two a Resume in a cwd the catalog has no record of yet, still starting: it counts with the anchor it kept
+			// And one accepted within shop whose cwd has since become docs' own location: shop's removal leaves it, docs' ends it
+			runs = [runAt(1, GUIDE), { ...runAt(2, GUIDE), location: 'loc-guide-notes', within: GUIDE.id, cwd: '/guide/notes' }, runAt(3, MAIN), { ...runAt(4, GUIDE), within: MAIN.id }];
 			ui.folders = () => {
 				catalog = { locations: [MAIN, LOGIN], folders: [SHOP], pending: false };
 				changed.fire();
@@ -890,9 +903,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([ui.dialogs, back, ui.updates, left, cli, closed, launched], [
 				[
-					{ kind: 'warning', args: ['Remove "shop" from this workspace? Files stay on disk.', { modal: true, detail: 'Its agent will be closed.' }, 'Remove'], over: undefined },
-					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '2 associated agents will be closed.' }, 'Remove'], over: undefined },
-					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '2 associated agents will be closed.' }, 'Remove'], over: undefined }
+					{ kind: 'warning', args: ['Remove "shop" from this workspace? Files stay on disk.', { modal: true, detail: 'Its agent will be ended.' }, 'Remove'], over: undefined },
+					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '3 associated agents will be ended.' }, 'Remove'], over: undefined },
+					{ kind: 'warning', args: ['Remove "docs" from this workspace? Files stay on disk.', { modal: true, detail: '3 associated agents will be ended.' }, 'Remove'], over: undefined }
 				],
 				['New Agent · Select Folder', 'Select a folder', ['shop', 'docs', '', 'Add Folder to Workspace...'], []],
 				[[1, 1]],
@@ -962,7 +975,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.hide();
 			await done;
 			assert.deepStrictEqual([ui.dialogs[0], cancelled, removing.map(each => each.id), during, after, errors], [
-				{ kind: 'warning', args: ['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\nIts agent will be closed.' }, 'Delete'], over: undefined },
+				{ kind: 'warning', args: ['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\nIts agent will be ended.' }, 'Delete'], over: undefined },
 				[['main', 'login-fix', '', 'New Worktree...'], 0],
 				[LOGIN.id],
 				[['main', '', 'New Worktree...'], true, [], ['run-1']],
@@ -990,7 +1003,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([offered, ui.dialogs[0].args, closed, errors], [
 				[['login-fix', 'close: Delete Worktree']],
-				['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\n2 associated agents will be closed.' }, 'Delete'],
+				['Delete worktree "login-fix"?', { modal: true, detail: 'Folder /login-fix will be deleted; branch login-fix is kept.\n\n2 associated agents will be ended.' }, 'Delete'],
 				['run-1', 'run-2'],
 				[]
 			]);
@@ -1037,6 +1050,30 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			'Cannot delete worktree "feat": it contains a link to another folder (node_modules\\dep), which this version of Git would delete through. Remove the link, or update Git to 2.54 or later, then try again.',
 			'Deleted worktree "feat", but folder C:\\repo.worktrees\\feat was left behind.'
 		]);
+	});
+
+	suite('Resume cwds within a location (WORKTREES-1.2)', () => {
+		const NESTED = place('loc-main-api', 'api', SHOP, { path: '/main/api', uri: 'file:///main/api', kind: 'folder', git: 'none', within: MAIN.id });
+
+		test('no picker offers a Resume cwd within a location: New Agent\'s remembered default is its anchor, a folder\'s locations leave it out, a filter on it starts at its anchor, and New Worktree\'s source is the folder\'s own', () => {
+			const { defaultLocation } = load<typeof import('../ui/pickers/newAgent')>(require.resolve('../ui/pickers/newAgent'));
+			const { locationsIn } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+			const { locationOfFilter } = load<typeof import('../ui/model')>(require.resolve('../ui/model'));
+			const { sourceIn } = load<typeof import('../ui/commands/worktree')>(require.resolve('../ui/commands/worktree'));
+			const catalog: Catalog = { locations: [NESTED, MAIN, LOGIN], folders: [SHOP], pending: false };
+			assert.deepStrictEqual([
+				defaultLocation(catalog, NESTED.id)?.id,
+				locationsIn(catalog, SHOP).map(each => each.id),
+				locationOfFilter({ kind: 'location', id: NESTED.id, label: 'api' }, catalog.locations),
+				sourceIn(catalog, SHOP)?.id
+			], [MAIN.id, [MAIN.id, LOGIN.id], MAIN.id, MAIN.id]);
+		});
+
+		test('Show Agent Launch offers no Resume cwd within a location: with one location besides it, that one is shown without asking', async () => {
+			const { chosen } = withModules({ vscode: { window: { createQuickPick: () => { throw new Error('asked'); } }, ThemeIcon: class { }, Uri: { from: (parts: object) => parts }, QuickPickItemKind: { Separator: -1 }, l10n: { t: (text: string) => text } } })<typeof import('../host/showLaunch')>(require.resolve('../host/showLaunch'));
+			const locations = { snapshot: () => ({ locations: [NESTED, MAIN], folders: [SHOP], pending: false }), resolve: () => undefined, refresh: async () => undefined, onDidChange: () => ({ dispose() { } }) } as never;
+			assert.strictEqual((await chosen(locations, undefined, { event: () => undefined } as never))?.id, MAIN.id);
+		});
 	});
 
 	suite('Resume Agent', () => {
@@ -1098,7 +1135,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([scopes, first, early, scrolled, searched, reads, disposed], [
 				[{ environment: 'local', directories: [MAIN.path, LOGIN.path] }],
-				['Resume Agent', 100, 1, [['Conversation 0', 'now \u00b7 login-fix/api', undefined], ['Conversation 1', '1 min ago \u00b7 main', undefined]]],
+				['Resume Agent', 100, 1, [['Conversation 0', 'just now \u00b7 login-fix/api', undefined], ['Conversation 1', '1 min ago \u00b7 main', undefined]]],
 				1,
 				[200, 2],
 				[250, 3, false],
@@ -1130,6 +1167,16 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([lines, found], [['1 min ago', '2 mins ago \u00b7 shop/api'], ['Conversation 1']]);
 		});
 
+		test('WORKTREES-1.2, LIFECYCLE-3.2: a conversation in a Resume cwd recorded within a location is named by that location, the cwd below it, never as a location of its own', async () => {
+			const nested = place('loc-main-api', 'api', SHOP, { path: '/main/api', uri: 'file:///main/api', kind: 'folder', git: 'none', within: MAIN.id });
+			const done = open([[entry(1, { cwd: '/main/api' })]], 'run-new', [MAIN, LOGIN, nested]);
+			await settle();
+			const description = ui.current!.items[0].description;
+			ui.current!.hide();
+			await done;
+			assert.strictEqual(description, '1 min ago · main/api');
+		});
+
 		test('LIFECYCLE-2.3: title leads, saved names follow time/location even when equal; absent names stay absent and CLI search reaches later pages', async () => {
 			savedNames.set('s0', 'Same title');
 			savedNames.set('s1', '');
@@ -1138,7 +1185,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await settle();
 			const picker = ui.current!;
 			assert.deepStrictEqual(picker.items.map(item => [item.label, item.description, item.detail]), [
-				['Same title', 'now · login-fix/api · Same title', undefined],
+				['Same title', 'just now · login-fix/api · Same title', undefined],
 				['Conversation 1', '1 min ago · main', undefined],
 				['Conversation 2', '2 mins ago · main', undefined]
 			]);
@@ -1585,24 +1632,15 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			activity: 'working', reporting: true, root: `run-${String(n).padStart(32, '0')}`, origin: 'human', tools: 'not_injected', ...more
 		});
 
-		test('U06, LIFECYCLE-2.3: single-line names, IDs, state, location and titles; empty/equal names, hidden CLI search, copied references and item actions', async () => {
+		test('U06, LIFECYCLE-2.3: single-line names, IDs, location and conversation titles - none where its CLI saved none, and never a state; empty/equal names, hidden CLI search, copied references and item actions', async () => {
 			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
 			let placesShown = true;
 			let runs = [run(1, { title: 'Fix login' }), run(2, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'Not found', source: 'launch', at: 1 } }), run(3, { lifecycle: 'starting', phase: 'launching_cli' }), run(4, { name: '', title: 'Unnamed work' }), run(5, { name: 'Same', title: 'Same', cli: 'muse', displayName: 'Muse Code' })];
 			const changed = new TestEmitter<RunChange>();
 			const did: string[] = [];
-			const words = {
-				worktreeFailure: (reason: string) => reason,
-				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, window: (label: string) => `Window: ${label}`,
-				agent: (value: string) => `Agent: ${value}`, title: (value: string) => `Title: ${value}`, prompt: (value: string) => `Prompt: ${value}`, status: (value: string) => `Status: ${value}`, reason: (value: string) => `Reason: ${value}`, tools: (value: string) => `Tools: ${value}`, location: (value: string) => `Location: ${value}`, path: (value: string) => `Path: ${value}`,
-				toolsUnavailable: (problem?: string) => `Can't work with other agents: ${problem}`, from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, startedBy: (creator: string) => `Started by: ${creator}`,
-				exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
-			};
 			const done = goToAgent({
-				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => placesShown },
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' as const }), placesShown: () => placesShown },
 				agents: { onDidChange: changed.event as never },
-				words,
 				media: { path: '/extension/media' } as never,
 				reveal: async run => void did.push(`reveal ${run}`),
 				copyReference: async run => void did.push(`copy ${run}`),
@@ -1639,13 +1677,13 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await done;
 			assert.deepStrictEqual([picker.title, listed, searched, byId, byReference, all, afterClose, onePlace, byOnePlace, did], [
 				'Go to Agent',
-				[['Ada', '#a1 · Working · main · Fix login', undefined], ['Ada', '#a2 · Error: Not found · main', undefined], ['Ada', '#a3 · Starting · main', undefined], ['#a4', 'Working · main · Unnamed work', undefined], ['Same', '#a5 · Working · main · Same', undefined]],
+				[['Ada', '#a1 · main · Fix login', undefined], ['Ada', '#a2 · main', undefined], ['Ada', '#a3 · main', undefined], ['#a4', 'main · Unnamed work', undefined], ['Same', '#a5 · main · Same', undefined]],
 				[true, false],
-				[['#a2 · Error: Not found · main', true]],
-				['#a1 · Working · main · Fix login'],
+				[['#a2 · main', true]],
+				['#a1 · main · Fix login'],
 				5,
-				['#a1 · Working · main · Fix login', '#a3 · Starting · main', 'Working · main · Unnamed work', '#a5 · Working · main · Same'],
-				['#a1 · Working · Fix login', '#a3 · Starting', 'Working · Unnamed work', '#a5 · Working · Same'],
+				['#a1 · main · Fix login', '#a3 · main', 'main · Unnamed work', '#a5 · main · Same'],
+				['#a1 · Fix login', '#a3', 'Unnamed work', '#a5 · Same'],
 				4,
 				[`copy ${run(1).id}`, `close ${run(2).id}`, `reveal ${run(1).id}`]
 			]);
@@ -1656,23 +1694,9 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const runs = [run(1)];
 			const changed = new TestEmitter<RunChange>();
 			let reads = 0;
-			const words = {
-				worktreeFailure: (reason: string) => reason,
-				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				agent: (value: string) => `Agent: ${value}`,
-				title: (value: string) => `Title: ${value}`,
-				prompt: (value: string) => `Prompt: ${value}`,
-				status: (value: string) => `Status: ${value}`,
-				reason: (value: string) => `Reason: ${value}`,
-				tools: (value: string) => `Tools: ${value}`,
-				location: (value: string) => `Location: ${value}`,
-				path: (value: string) => `Path: ${value}`,
-				from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
-			};
 			const done = goToAgent({
-				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => true },
+				model: { ordered: () => { reads++; return runs; }, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' as const }), placesShown: () => true },
 				agents: { onDidChange: changed.event },
-				words,
 				media: { path: '/extension/media' } as never,
 				reveal: async () => undefined,
 				copyReference: async () => undefined,
@@ -1693,27 +1717,61 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([burst, coalesced, added], [0, 1, 2]);
 		});
 
-		test('a name or CLI title that holds $(...) is shown word for word, not as the theme icon the editor would draw (PANEL-3.2)', async () => {
+		test('PANEL-1.5, WORKTREES-1.2: a location picker\'s icon is repo for a main checkout\'s root, worktree for a linked root, folder for a workspace folder opened inside a checkout and for a plain folder', () => {
+			const { locationIcon } = load<typeof import('../ui/pickers/location')>(require.resolve('../ui/pickers/location'));
+			const at = (more: Partial<Location>) => (locationIcon({ ...MAIN, ...more } as Location) as unknown as { id: string }).id;
+			assert.deepStrictEqual([at({ kind: 'checkout', isMain: true }), at({ kind: 'checkout', isMain: false }), at({ kind: 'checkout', isMain: false, subfolder: true }), at({ kind: 'folder' })],
+				['repo', 'worktree', 'folder', 'folder']);
+		});
+
+		test('LIFECYCLE-2.3: a stored title\'s lines are joined with a space in Go to Agent\'s one-line row, its stored text kept whole', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const runs = [run(1, { title: 'Fix the login\nand the logout\r\nflows' })];
+			const done = goToAgent({
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' as const }), placesShown: () => true },
+				agents: { onDidChange: new TestEmitter<void>().event as never },
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined,
+				copyReference: async () => undefined,
+				close: async () => undefined
+			});
+			const described = ui.current!.items[0].description;
+			ui.current!.hide();
+			await done;
+			assert.deepStrictEqual([described, runs[0].title], ['#a1 · main · Fix the login and the logout flows', 'Fix the login\nand the logout\r\nflows']);
+		});
+
+		test('LIFECYCLE-2.3: Go to Agent says no state - working, idle, starting, waiting, red - only the ID, location and title', async () => {
+			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
+			const runs = [
+				run(1, { title: 'Fix login' }),
+				run(2, { activity: 'not_working' }),
+				run(3, { lifecycle: 'starting', phase: 'launching_cli', activity: 'unknown', reporting: false }),
+				run(4, { activity: 'not_working', blocker: { kind: 'permission', text: 'Allow Bash?' } }),
+				run(5, { lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'claude was not found on PATH.', source: 'launch', at: 1 }, title: 'Parser' })
+			];
+			const done = goToAgent({
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' as const }), placesShown: () => true },
+				agents: { onDidChange: new TestEmitter<void>().event as never },
+				media: { path: '/extension/media' } as never,
+				reveal: async () => undefined,
+				copyReference: async () => undefined,
+				close: async () => undefined
+			});
+			const picker = ui.current!;
+			const described = picker.items.map(item => item.description);
+			picker.hide();
+			await done;
+			assert.deepStrictEqual(described, ['#a1 · main · Fix login', '#a2 · main', '#a3 · main', '#a4 · main', '#a5 · main · Parser']);
+		});
+
+		test('a name or conversation title that holds $(...) is shown word for word, not as the theme icon the editor would draw (PANEL-3.2)', async () => {
 			const { goToAgent } = load<typeof import('../ui/pickers/goToAgent')>(require.resolve('../ui/pickers/goToAgent'));
 			const { plainText } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
 			const runs = [run(1, { name: '$(rocket) Ada', title: 'Fix $(build) and $(x' })];
-			const words = {
-				worktreeFailure: (reason: string) => reason,
-				starting: 'Starting', startingCli: (cli: string) => `Starting ${cli}...`, working: 'Working', notWorking: 'Idle', error: (reason: string) => `Error: ${reason}`, activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer', creatingWorktree: 'Creating worktree...',
-				agent: (value: string) => `Agent: ${value}`,
-				title: (value: string) => `Title: ${value}`,
-				prompt: (value: string) => `Prompt: ${value}`,
-				status: (value: string) => `Status: ${value}`,
-				reason: (value: string) => `Reason: ${value}`,
-				tools: (value: string) => `Tools: ${value}`,
-				location: (value: string) => `Location: ${value}`,
-				path: (value: string) => `Path: ${value}`,
-				from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, exitedWithCode: (code: string) => `Exited with code ${code}`, endedBySignal: (signal: string) => `Ended by signal ${signal}`, exitUnknown: 'Disconnected; exit cause unknown', window: (label: string) => `Window: ${label}`, locale: 'en', toolsUnavailable: (problem?: string) => `Tools unavailable: ${problem}`, startedBy: (creator: string) => `Started by: ${creator}`
-			};
 			const done = goToAgent({
-				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path }), placesShown: () => true },
+				model: { ordered: () => runs, placeOf: () => ({ label: 'main', qualified: 'main', context: 'main', path: MAIN.path, kind: 'repo' as const }), placesShown: () => true },
 				agents: { onDidChange: new TestEmitter<void>().event as never },
-				words,
 				media: { path: '/extension/media' } as never,
 				reveal: async () => undefined,
 				copyReference: async () => undefined,
@@ -1723,7 +1781,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			const shown = [picker.items[0].label, picker.items[0].description];
 			picker.hide();
 			await done;
-			assert.deepStrictEqual([shown, plainText('no icon here')], [['\\$(rocket) Ada', '#a1 · Working · main · Fix \\$(build) and \\$(x'], 'no icon here']);
+			assert.deepStrictEqual([shown, plainText('no icon here')], [['\\$(rocket) Ada', '#a1 · main · Fix \\$(build) and \\$(x'], 'no icon here']);
 		});
 	});
 });

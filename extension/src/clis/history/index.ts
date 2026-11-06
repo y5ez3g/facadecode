@@ -6,7 +6,8 @@
 // directories and every folder below them, recent activity first, in batches of 100. A picker session lists each store's files
 // once and reads each file's head at most once; a bound on the reads of one batch only ends that batch early - the next one goes
 // on, so older matches stay reachable. No age cutoff, no hiding, no store of Facade's own. Each directory's stores are the ones
-// its CLIs' launches there find, by the same environment (CLIS-1.2). Only stores with fixture-tested readers are advertised.
+// its CLIs' launches there find, by the same environment (CLIS-1.2). Only stores with fixture-tested readers are advertised. A run's
+// own conversation is read by its ID alone, for its title (CLIS-2.4), through the same reading of each file.
 
 import * as fs from 'fs';
 import type { Environment } from '../environment';
@@ -240,6 +241,42 @@ export class VendorHistory {
 			listed.push(...store.candidates(dir, scope).map(candidate => ({ ...candidate, scope })));
 		}
 		return listed;
+	}
+
+	/**
+	 * The complete title of one conversation - `conversation.sessionId` of `conversation.cli`, in the store its CLI's launches in
+	 * `directory` find, by the environment and arguments the picker reads it with (CLIS-1.2) - the one the picker lists on one line: found by its ID alone, never
+	 * by listing the store, and read once per version of its file (CLIS-2.4). None where its CLI has no store here - a custom CLI - or has
+	 * not saved it, or saved it without a title.
+	 */
+	async title(conversation: { readonly cli: string; readonly sessionId: string }, directory: string, storeDir?: string): Promise<string | undefined> {
+		const store = this.stores.get(conversation.cli);
+		// The store its launch used, where the run kept it: a setting changed since, or the CLI turned off, does not move it (CLIS-2.4)
+		const dir = store && (storeDir ?? this.storeOf(conversation.cli, directory));
+		if (!store || dir === undefined) {
+			return undefined;
+		}
+		const scope = new Scope([directory]);
+		const candidate = store.candidateOf(dir, scope, conversation.sessionId);
+		const found = candidate && await this.read(candidate);
+		// Its own lines confirm it, as they do for the picker: this conversation, of a folder whose launches find this store
+		// Its complete stored title, which Resume's one line presents shortened (CLIS-2.4)
+		return found && found.sessionId === conversation.sessionId && scope.includes(found.cwd) ? found.fullTitle ?? found.title : undefined;
+	}
+
+	/**
+	 * The folder of `cli`'s store its launches in `directory` find now, by the current environment and arguments (CLIS-1.2): what a
+	 * launch keeps, so that its conversation's title is read there for as long as it runs. None where its CLI has no store here.
+	 */
+	storeOf(cli: string, directory: string): string | undefined {
+		const store = this.stores.get(cli);
+		const env = store && this.environment(directory)[cli];
+		return store && env ? store.dirOf(env, directory, this.arguments()[cli]) : undefined;
+	}
+
+	/** Whether a reader of `cli`'s store is here: a custom CLI has none, so its runs never have a title (CLIS-2.4). */
+	readsTitles(cli: string): boolean {
+		return this.stores.has(cli);
 	}
 
 	/** A candidate's metadata: read once per version of its file. */

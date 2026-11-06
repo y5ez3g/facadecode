@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { SessionIdentity } from './sessionIdentity';
-import type { ConversationKey, TabPlace } from '../../core/ports';
+import type { ActivityUnknown, ConversationKey, TabPlace } from '../../core/ports';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -13,7 +13,7 @@ import { replaceFile } from '../../base/files';
 import { writeAsOwner } from '../../record/ownership';
 import { timeout } from '../../base/async';
 import type { TerminalOwner } from '../../base/windowIdentity';
-import { activityOf, cliTitle, interruptVerified } from '../../clis/activity';
+import { activityOf, interruptVerified } from '../../clis/activity';
 import {
 	ActivityReport, CleanupResult, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, PairFacts, RunId, RunMeta
 } from '../../core/ports';
@@ -31,7 +31,31 @@ import { PTYD_PROTOCOL, QUERY_ANSWERS_PROTOCOL } from '../../ptyd/protocol';
 /** How long a CLI has to end on the hang-up before ptyd kills its process group (LIFECYCLE-4.2): no UI waits for it. */
 const GRACE_MS = 3_000;
 
-/** How long restoring waits for one terminal to open before it restores the next: VS Code can leave a terminal unopened. */
+/** Why a run's activity is unknown, in English whatever the window's language: what agents read as its `activity_reason` (MCP-3.1). */
+const UNKNOWN_REASONS: { readonly [why in ActivityUnknown]: string } = {
+	screen_unrecognized: "The CLI's current screen is not recognized",
+	screen_reset: 'The terminal was reset; waiting for activity',
+	not_reporting: 'CLI has not reported activity',
+	waiting: 'Waiting for first CLI activity report',
+	cleared: 'CLI cleared activity report'
+};
+
+/** A lost connection to a run's process, in English as agents read it (UX-2.4); the card says it in the person's words. */
+const CONNECTION_LOST = 'Connection to agent process lost; reconnecting';
+/** An error a CLI reported without words of its own, in English as agents read it (UX-2.4). */
+const CLI_ERROR = 'CLI reported an error';
+
+/** `shown`, the person's words for Facade's own English `english`, as `key`, where they differ. */
+function words<K extends 'reasonWords' | 'errorWords'>(english: string, shown: string, key: K): { [P in K]?: string } {
+	return (shown !== english ? { [key]: shown } : {}) as { [P in K]?: string };
+}
+
+/** A CLI's reported error: its own words where it gave some, else Facade's, in English for agents and the person's words for the card. */
+function cliError(text: string | undefined): Pick<ActivityReport, 'error' | 'errorWords'> {
+	return text !== undefined ? { error: text } : { error: CLI_ERROR, ...words(CLI_ERROR, vscode.l10n.t("CLI reported an error"), 'errorWords') };
+}
+
+/** How long a pinned tab opening in its turn waits for its terminal to open before the next opens: VS Code can leave a terminal unopened. */
 const OPEN_WAIT_MS = 10_000;
 
 /** The size `info` gives its run, where it gives one: a supervisor of any protocol may leave it out. */
@@ -77,6 +101,8 @@ export interface AgentExecutionOptions {
 	readonly shimScript?: string;
 	/** How long a run is still starting while its CLI shows no activity: {@link STARTUP_MS}, or a test's. */
 	readonly startupMs?: number;
+	/** How long a pinned tab opening in its turn waits for its terminal: {@link OPEN_WAIT_MS}, or a test's. */
+	readonly openWaitMs?: number;
 	/** How long an Enter the person typed waits for the reading of the input it submits: {@link READ_BEFORE_ENTER_MS}, or a test's. */
 	readonly readBeforeEnterMs?: number;
 }
@@ -124,8 +150,7 @@ interface Pair {
 	lost?: boolean;
 	exited?: RunExit;
 	status?: RunStatus;
-	terminalTitle: string;
-	/** How many status and title events it heard: a listing asked before the last of them is no newer than they are. */
+	/** How many status events it heard: a listing asked before the last of them is no newer than they are. */
 	heard?: number;
 	/** The last report told, to tell each change once. */
 	told?: string;
@@ -254,7 +279,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
 				activated: run => this.activations.fire(run),
 				closed: (run, marked) => this.closes.fire({ run, marked }),
-				placed: (run, column, activeAt, front) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column, ...activeAt !== undefined ? { activeAt } : {}, ...front ? { front: true } : {} } }),
+				placed: (run, column) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column } }),
 				renamed: (run, name) => this.tabRenames.fire({ run, name }),
 			pinned: (run, pinned) => this.tabPins.fire({ run, pinned }),
 				colours: this.colours
@@ -267,7 +292,15 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	pinTab(run: RunId, pinned: boolean): void { this.terminals.pin(run, pinned); }
 
-	frontsRecorded(columns: readonly number[]): void { this.terminals.frontsRecorded(columns); }
+	tabOpen(run: RunId): boolean { return this.pairs.get(run)?.terminal.isOpen() ?? false; }
+
+	/** A reload's or a restart's pinned tabs are open: the panel's selection goes to the last one opened (PANEL-2.1, LIFECYCLE-3.5). */
+	pinnedOpened(): void { this.terminals.turnsOver(); }
+
+	/** The activation's pinned tabs are open: a recreated local registry may retire its predecessor's UI resources (ARCHITECTURE-2.2). */
+	async pinnedSequenceOver(): Promise<void> {
+		await this.terminals.retirePredecessor();
+	}
 	/** The system's reduced-motion preference, as the panel's page says it: the tab spinners follow it at `auto` (LIFECYCLE-2.2). */
 	systemMotion(reduced: boolean): void { this.terminals.systemMotion(reduced); }
 	/**
@@ -293,7 +326,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		this.create(facts, options.reveal, options.hidden === true || facts.tab === 'hidden');
 	}
 
-	/** The initial restoration batch is complete; a recreated local registry may retire its predecessor's UI resources. */
+	/** This window's runs are reattached: the marks that waited go on, and pinned tabs behind a Pin yet to be restored are still to open. */
 	async finishRestore(): Promise<void> {
 		try {
 			await this.terminals.finishRestore();
@@ -451,8 +484,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.cli = plan.cli;
 		pair.inputAdapter = plan.input.adapter;
 		pair.toolsPending = plan.tools.state === 'injected';
-		// Where it runs now - a new worktree's folder, not the one it was accepted in - and as what: the title rules read them (CLIS-2.3)
-		pair.facts = { ...pair.facts, cwd: plan.cwd, displayName: plan.displayName, command: plan.command, cli: plan.cli };
 		this.listen(pair, client);
 		const size = pair.terminal.pty.dimensions;
 		let info: RunInfo;
@@ -493,7 +524,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.startupEnds = this.startupEndOf(info.startedAt);
 		pair.starting = false;
 		pair.status = info.status;
-		pair.terminalTitle = info.title;
 		pair.terminal.pty.bind(this.binding(client, run), snapshot);
 		this.keepPendingMeta(pair);
 		this.tell(pair);
@@ -540,7 +570,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 
 	async attach(live: LiveRun, facts: PairFacts): Promise<void> {
 		if (live.meta.exactResume) { this.identity.track(live.run); this.identity.process(live.run, live.pid); }
-		// Restore the run's screen before opening its background terminal; input waits until the process is claimed again.
+		// Restore the run's screen with its tab hidden; input waits until the process is claimed again. A pinned agent's tab opens after,
+		// in its turn (openPinned; LIFECYCLE-3.5)
 		const pair = this.pairs.get(live.run) ?? this.create(facts, false, true);
 		pair.cli = live.meta.cli;
 		pair.inputAdapter = typeof live.meta.inputAdapter === 'string' ? live.meta.inputAdapter : undefined;
@@ -569,7 +600,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				pair.process = { pid: live.pid, startedAt: live.startedAt };
 				this.options.log(`${live.run} ended with its ptyd of protocol ${pair.protocol}: ${messageOf(err)}`);
 				this.endedUnknown(pair);
-				return this.openRestored(pair, live.run);
+				return;
 			}
 			if ((err instanceof PtydLost || err instanceof PtydNotSent) && this.pairs.get(live.run) === pair && !this.session.closed) {
 				// The connection went as it reattached: the run is kept, told as lost, and claimed again with the others once the
@@ -578,7 +609,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				pair.startupEnds = this.startupEndOf(live.startedAt);
 				this.tellLost(pair);
 				this.options.log(`${live.run} could not be claimed again yet: ${messageOf(err)}`);
-				return this.openRestored(pair, live.run);
+				return;
 			}
 			// Claimed by another window meanwhile, or gone: this window shows no pair of it
 			this.detachPair(live.run);
@@ -596,14 +627,12 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		pair.lost = false;
 		pair.exited = info.exited;
 		pair.status = info.status;
-		pair.terminalTitle = info.title;
 		pair.terminal.pty.bind(this.binding(client, live.run), { screen, seq, ...sizeOf(info) });
 		this.keepPendingMeta(pair);
 		if (info.exited) {
 			pair.terminal.pty.exited(this.endLine(info.exited));
 		}
 		this.tell(pair);
-		await this.openRestored(pair, live.run);
 		const exit = info.exited;
 		if (exit && !live.exited) {
 			// It ended after it was listed, before it was claimed: ptyd told nobody, as nobody claimed it. Told once the core shows it,
@@ -617,31 +646,26 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	}
 
 	/**
-	 * Opens a reattached run's terminal. Opening another editor terminal before this one's xterm is ready can detach its container
-	 * and prevent VS Code from ever opening its pseudoterminal: the next run is restored only after this native terminal is ready.
+	 * Opens the tab of a pinned agent a reload or a restart brings back, in its turn (LIFECYCLE-3.4, 3.5): in the group its record names -
+	 * the last one where that is gone - else the active one, in front there as the newest tab, and once VS Code opened its terminal its
+	 * mark goes on there, nothing given back; the next opens after. Opening another editor terminal before this one's xterm is ready can
+	 * detach its container and prevent VS Code from ever opening its pseudoterminal: one that does not open in time keeps its card and
+	 * process, and the next goes on. One the person opened already takes its mark as any open tab does.
 	 */
-	private async openRestored(pair: Pair, run: RunId): Promise<void> {
-		// Its tab back in its group, hidden if it was - but a pinned one's, whose Pin keeps its tab in the editor: back in the active group
-		// where it had none open, as from a build that kept no record (LIFECYCLE-3.4, 3.5)
-		const place = pair.facts.tab;
-		if ((place === 'hidden' || place === undefined) && !pair.facts.pinned) {
+	async openPinned(run: RunId): Promise<void> {
+		const pair = this.pairs.get(run);
+		const place = pair?.facts.tab;
+		if (!pair || !pair.terminal.openInTurn(typeof place === 'object' ? place.column : undefined)) {
 			return;
 		}
-		pair.terminal.open(false, typeof place === 'object' ? place.column : undefined, typeof place === 'object' ? place.activeAt : undefined, typeof place === 'object' && place.front === true);
 		// This opening's: a run this window had already opened before has its first long ago
-		const opened = await Promise.race([pair.terminal.pty.nextOpen(), timeout(OPEN_WAIT_MS).then(() => undefined)]);
-		if (opened === false || this.pairs.get(run) !== pair) {
-			throw new Error('The agent was closed while reattaching.');
-		}
+		const wait = this.options.openWaitMs ?? OPEN_WAIT_MS;
+		const opened = await Promise.race([pair.terminal.pty.nextOpen(), timeout(wait).then(() => undefined)]);
 		if (opened === undefined) {
 			// Its card and process are kept; its terminal draws the run's screen once VS Code opens it
-			this.options.log(`The terminal of ${run} did not open within ${OPEN_WAIT_MS / 1000} seconds; the agents after it are restored meanwhile.`);
-			return;
+			this.options.log(`The terminal of ${run} did not open within ${wait / 1000} seconds; the pinned tabs after it open meanwhile.`);
 		}
-		// A pinned one's mark goes on now, its tab in front as it opened: the next run's tab opens after (LIFECYCLE-3.4)
-		if (pair.facts.pinned) {
-			await pair.terminal.markOpened();
-		}
+		await pair.terminal.markOpened(opened === true && this.pairs.get(run) === pair);
 	}
 
 	terminate(run: RunId): Promise<CleanupResult> {
@@ -860,12 +884,11 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private create(facts: PairFacts, reveal: boolean, deferTerminal = false): Pair {
 		const terminal = this.terminals.create(facts, reveal);
 		const pair: Pair = {
-			run: facts.run, holder: this.session.own, protocol: PTYD_PROTOCOL, facts, terminal, lifetime: new AbortController(), cli: facts.cli, terminalTitle: '', enters: new TypedEnters()
+			run: facts.run, holder: this.session.own, protocol: PTYD_PROTOCOL, facts, terminal, lifetime: new AbortController(), cli: facts.cli, enters: new TypedEnters()
 		};
 		this.pairs.set(facts.run, pair);
 		if (!deferTerminal) {
-			terminal.open(reveal, typeof facts.tab === 'object' ? facts.tab.column : undefined, typeof facts.tab === 'object' ? facts.tab.activeAt : undefined,
-				typeof facts.tab === 'object' && facts.tab.front === true);
+			terminal.open(reveal, typeof facts.tab === 'object' ? facts.tab.column : undefined);
 		}
 		return pair;
 	}
@@ -958,9 +981,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				pair.terminal.pty.output(event.seq, event.data);
 				break;
 			case 'title':
-				pair.terminalTitle = event.title;
-				pair.heard = (pair.heard ?? 0) + 1;
-				this.tell(pair);
+				// Sent by a ptyd of an earlier build alone: a terminal's title (OSC 0/2) is no window's to show (CLIS-2.3, 2.4)
 				break;
 			case 'status':
 				pair.status = event.status;
@@ -1007,10 +1028,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			: vscode.l10n.t("[Agent process exited with code {0}]", exit.exitCode);
 	}
 
-	/** Tells the core what `pair`'s CLI reports now, including its title for the panel: each change once (CLIS-2.3). */
+	/** Tells the core what `pair`'s CLI reports now: each change once (CLIS-2.3). */
 	private tell(pair: Pair): void {
 		const facts = activityOf(pair.status);
-		const title = this.titleOf(pair);
 		// What it showed before its connection was lost is no news: claimed again, it is told what it shows then
 		if (!pair.process || pair.exited || pair.lost) {
 			return;
@@ -1056,19 +1076,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				return;
 			}
 		}
-		const reason = awaiting
-			? undefined
-			: facts.unknown === 'screen_unrecognized'
-				? vscode.l10n.t("The CLI's current screen is not recognized")
-				: facts.unknown === 'screen_reset'
-					? vscode.l10n.t("The terminal was reset; waiting for activity")
-					: facts.unknown === 'not_reporting'
-						? vscode.l10n.t("CLI has not reported activity")
-						: facts.unknown === 'waiting'
-							? vscode.l10n.t("Waiting for first CLI activity report")
-							: facts.unknown === 'cleared'
-								? vscode.l10n.t("CLI cleared activity report")
-								: undefined;
+		// Why its activity is unknown, in English as agents read it; the card words it from which reason it is (MCP-3.1, PANEL-1.4)
+		const unknown = awaiting ? undefined : facts.unknown;
+		const reason = unknown ? UNKNOWN_REASONS[unknown] : undefined;
 		const report: ActivityReport = {
 			run: pair.run,
 			activity: facts.activity,
@@ -1078,9 +1088,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			...(notReady ? { notReady: true } : {}),
 			...(facts.blocker ? { blocker: facts.blocker } : {}),
 			...(reason ? { reason } : {}),
-			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("CLI reported an error") } : {}),
-			// This is the complete current title selection, including an explicit clear when both sources are empty.
-			title: title ?? ''
+			...(unknown ? { unknown } : {}),
+			...(facts.error ? cliError(facts.error.text) : {})
 		};
 		const told = JSON.stringify(report);
 		if (told !== pair.told) {
@@ -1098,11 +1107,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	private startupEndOf(startedAt: number): number {
 		const bound = this.options.startupMs ?? STARTUP_MS;
 		return performance.now() + Math.max(0, Math.min(bound, startedAt + bound - Date.now()));
-	}
-
-	/** The CLI title reported to the panel (CLIS-2.3). */
-	private titleOf(pair: Pair): string | undefined {
-		return cliTitle({ reported: pair.status?.title, terminal: pair.terminalTitle });
 	}
 
 	/** Ends `run`'s process in the background, once, and forgets it: the actual result for whoever asks (LIFECYCLE-3.1, 4.2). */
@@ -1186,16 +1190,16 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 	/** `pair`'s run is not heard until it is claimed again: its activity is not known meanwhile, and its card says why (RULES-3.1, 3.2). */
 	private tellLost(pair: Pair): void {
 		const facts = activityOf(pair.status);
-		const title = this.titleOf(pair);
 		pair.lost = true;
 		const report: ActivityReport = {
 			run: pair.run,
 			activity: 'unknown',
 			reporting: facts.reporting,
-			reason: vscode.l10n.t("Connection to agent process lost; reconnecting"),
+			// In English as agents read it, the card saying it in the person's words (UX-2.4)
+			reason: CONNECTION_LOST,
+			...words(CONNECTION_LOST, vscode.l10n.t("Connection lost · reconnecting"), 'reasonWords'),
 			disconnected: true,
-			...(facts.error ? { error: facts.error.text ?? vscode.l10n.t("CLI reported an error") } : {}),
-			...(title ? { title } : {})
+			...(facts.error ? cliError(facts.error.text) : {})
 		};
 		// Told as the last report, so that the same report as before the loss is told again once the run is claimed
 		pair.told = JSON.stringify(report);
@@ -1238,7 +1242,6 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 					this.ended(pair, info.exited);
 				} else {
 					pair.status = info.status;
-					pair.terminalTitle = info.title;
 					this.tell(pair);
 				}
 			} catch (err) {
@@ -1307,7 +1310,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			try {
 				const client = await holder;
 				// What each pair heard before it asked: an event heard since - before the answer, or in the same chunk after it, its
-				// continuation coming later - is at least as new as the answer, which never puts an older status or title back
+				// continuation coming later - is at least as new as the answer, which never puts an older status back
 				const heard = new Map(mine.map(pair => [pair, pair.heard ?? 0]));
 				// One listing at a time for each ptyd, until it is answered: one that does not answer is not asked again meanwhile
 				const request = client.request('list', { owner: this.options.owner });
@@ -1324,9 +1327,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 						this.endedUnknown(pair);
 					} else if (run.exited) {
 						this.ended(pair, run.exited);
-					} else if ((pair.heard ?? 0) === heard.get(pair) && (run.status?.at !== pair.status?.at || run.title !== pair.terminalTitle)) {
+					} else if ((pair.heard ?? 0) === heard.get(pair) && run.status?.at !== pair.status?.at) {
 						pair.status = run.status;
-						pair.terminalTitle = run.title;
 						this.tell(pair);
 					}
 				}

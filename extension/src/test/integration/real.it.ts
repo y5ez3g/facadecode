@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import type { MessageRecord } from '../../core/messagePorts';
 import type { Card, PanelState } from '../../webview/protocol';
+import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
 
 const REAL = process.env.FACADE_IT_REAL;
@@ -146,7 +147,7 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 		terminal.sendText('\r', false);
 
 		const second: Card = await until('the agent it starts', async () => (await state()).cards.find(each => !before.has(each.runId) && each.runId !== first.runId), 240_000);
-		assert.ok(second.tooltip.some(line => line.startsWith('Started by') && line.includes(first.name)), second.tooltip.join(' | '));
+		assert.ok(linesOf(second).some(line => line.startsWith('Started by') && line.includes(first.name)), linesOf(second).join(' | '));
 
 		const delivered = (from: string, to: string, text: string) => messages().find(each => each.kind === 'message' && each.from.run === from && each.to.run === to
 			&& each.text === text && each.delivery.status === 'success' ? each : undefined);
@@ -157,8 +158,8 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 		// Natively where its CLI takes a first prompt it can use; Antigravity's after its tools are ready (COLLABORATION-2.2)
 		assert.strictEqual(task.initialPrompt?.path, REAL === 'agy' ? 'post_start' : 'native', JSON.stringify(task));
 		assert.ok(task.delivery.via === (REAL === 'agy' ? 'terminal' : 'launch') || task.delivery.via === 'read', JSON.stringify(task));
-		const firstAlias = first.tooltip.join(' ').match(/#a\d+/)![0];
-		const secondAlias = second.tooltip.join(' ').match(/#a\d+/)![0];
+		const firstAlias = linesOf(first).join(' ').match(/#a\d+/)![0];
+		const secondAlias = linesOf(second).join(' ').match(/#a\d+/)![0];
 		const expectedContext = `CONTEXT ${firstAlias} ${secondAlias} ${task.alias}`;
 		// Observe the first task before sending the next one: a native CLI may steer an in-progress turn with later input.
 		// Concurrent delivery has its own tests; this journey measures launch-context availability independently of that race.
@@ -177,7 +178,7 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 		assert.strictEqual((await state()).cards.filter(each => !before.has(each.runId)).length, 2, 'one agent started by the first');
 		const calls = toolCalls();
 		for (const card of [first, second]) {
-			const alias = card.tooltip[0].split(' · ')[1];
+			const alias = linesOf(card)[0].split(' · ')[1];
 			const own = calls.filter(each => each.by === alias);
 			for (const [tool, most] of Object.entries(LOOKS)) {
 				assert.ok(own.filter(each => each.tool === tool).length <= most, `${card.name} called ${tool} more than ${most} times: ${own.map(each => each.tool).join(', ')}`);

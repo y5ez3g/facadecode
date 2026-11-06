@@ -105,11 +105,32 @@ export const MOST_RUN_BUFFER = 8 * 1024 * 1024;
 const PROGRAM_STATUS_OSC = 7501;
 const PROMPT_MARK_OSC = 133;
 
-/** A colour question - OSC 10, 11 or 12, foreground, background, cursor - as a program writes it, BEL or ST ending it. */
+/**
+ * A question of its terminal's colours ptyd answers as it arrives: a colour - OSC 10, 11 or 12, foreground, background, cursor, BEL
+ * or ST ending it - whether the terminal reports its colour scheme turning dark or light (DECRQM of mode 2031), or which it is now
+ * (DSR 996); and the program's own asking for those reports, or no longer - mode 2031 among the modes a DEC set or reset names, or a
+ * full reset - which every question and report after it follows, in the order the output arrives.
+ */
 // eslint-disable-next-line no-control-regex
-const COLOUR_QUESTION = /\x1b\](1[0-2]);\?(?:\x07|\x1b\\)/g;
-/** The length of the longest colour question: a shorter start of one at the end of an arrival waits for the next. */
-const COLOUR_QUESTION_MOST = 8;
+const COLOUR_QUESTION = /\x1b\](1[0-2]);\?(?:\x07|\x1b\\)|\x1b\[\?(2031)\$p|\x1b\[\?(996)n|\x1b\[\?([\d;]*)([hl])|(\x1bc)/g;
+/** The length of the longest such question: a shorter start of one at the end of an arrival waits for the next. */
+const COLOUR_QUESTION_MOST = 32;
+/** A DEC set or reset whose modes are still arriving, which may name mode 2031 after many others; kept up to this length. */
+// eslint-disable-next-line no-control-regex
+const DEC_MODES_OPEN = /^\x1b\[\?[\d;]*$/;
+const DEC_MODES_MOST = 1024;
+/** The mode by which a program asks its terminal to report its colour scheme turning dark or light: `CSI ? 997 ; 1 | 2 n`. */
+const COLOUR_SCHEME_MODE = 2031;
+
+/** Whether colours are dark or light, by their background's relative luminance; unknown where the window gave none. */
+export function schemeOf(colours: TerminalColours): 'dark' | 'light' | undefined {
+	const channels = colours.background?.split('/').map(channel => parseInt(channel, 16) / (16 ** channel.length - 1));
+	if (!channels || channels.length !== 3 || channels.some(channel => !Number.isFinite(channel))) {
+		return undefined;
+	}
+	const [r, g, b] = channels.map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4);
+	return 0.2126 * r + 0.7152 * g + 0.0722 * b < 0.5 ? 'dark' : 'light';
+}
 /**
  * A program waits for its terminal's colours a moment only - Codex 200 to 300 ms - and reads a later answer as typed keys
  * (ARCHITECTURE-2.3). ptyd's one thread is held while it creates a program - on Windows up to two seconds, as several agents start
@@ -214,7 +235,6 @@ export function releaseConsole(pty: object): void {
 /** What a run tells the window that claims it, as it happens. */
 export interface RunListener {
 	output(seq: number, data: string): void;
-	title(title: string): void;
 	status(status: RunStatus | undefined): void;
 	exit(exit: RunExit): void;
 }
@@ -298,6 +318,12 @@ export class Run {
 	/** The mouse encoding its program set, of {@link MOUSE_ENCODINGS}; none for the default one. */
 	private mouseEncoding: number | undefined;
 	private cursorHidden = false;
+	/**
+	 * Whether its program asked to be told as its terminal's colour scheme turns dark or light (mode 2031): as the window's theme
+	 * does, it is, and asks its colours again (ARCHITECTURE-2.3). Kept by its output as it arrives, across arrivals, never as it is
+	 * drawn: drawing far behind neither delays it nor sets back a later asking.
+	 */
+	private schemeReports = false;
 	/** The last frame its program drew on the alternate screen, kept as it left it or ended there (MCP-5.1). */
 	private frame: ScreenFrame | undefined;
 	/** Set once ptyd let go of it: its headless terminal is gone. */
@@ -334,9 +360,9 @@ export class Run {
 		const { Unicode11Addon } = loadUnicode11();
 		terminal.loadAddon(new Unicode11Addon() as never);
 		terminal.unicode.activeVersion = '11';
+		// Kept for `list` alone: no window shows a terminal's title, so none is told it as it changes (CLIS-2.3)
 		terminal.onTitleChange(title => {
 			this.title = boundedTitle(title);
-			this.listener?.title(this.title);
 		});
 		this.followStatus();
 		this.followModes();
@@ -499,9 +525,18 @@ export class Run {
 		};
 	}
 
-	/** The colours its claimant's terminals draw with, from now on (ARCHITECTURE-2.3). */
+	/**
+	 * The colours its claimant's terminals draw with, from now on (ARCHITECTURE-2.3). Where they turned dark or light - the window's
+	 * theme changed - a program that asked for colour scheme reports is told, as a terminal of its own would tell it, and asks its
+	 * colours again: a program picks its light or dark look from its terminal's background once, and a terminal that changed under it
+	 * leaves its plain text in the new theme's colour on its old theme's backgrounds.
+	 */
 	useColours(colours: TerminalColours): void {
+		const before = schemeOf(this.colours), after = schemeOf(colours);
 		this.colours = colours;
+		if (this.schemeReports && after !== undefined && after !== before && this.writable) {
+			this.send(schemeReport(after));
+		}
 	}
 
 	/** Tells `listener` what the run does from now on: its claimant. */
@@ -972,6 +1007,10 @@ export class Run {
 		for (const osc of [10, 11, 12]) {
 			parser.registerOscHandler(osc, data => data === '?');
 		}
+		// So too the colour scheme's questions, whose headless answer to the mode would say it knows none
+		const first = (params: (number | number[])[]) => [params[0]].flat()[0];
+		parser.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, params => params.length === 1 && first(params) === COLOUR_SCHEME_MODE);
+		parser.registerCsiHandler({ prefix: '?', final: 'n' }, params => params.length === 1 && first(params) === 996);
 	}
 
 	/**
@@ -983,24 +1022,48 @@ export class Run {
 	private answerColourQuestions(data: string): void {
 		const text = this.colourTail + data;
 		this.colourTail = '';
-		if (!text.includes('\x1b]')) {
-			return;
-		}
-		COLOUR_QUESTION.lastIndex = 0;
 		let end = 0;
-		for (let match = COLOUR_QUESTION.exec(text); match; match = COLOUR_QUESTION.exec(text)) {
-			end = COLOUR_QUESTION.lastIndex;
-			const osc = Number(match[1]) as 10 | 11 | 12;
-			const rgb = this.colours[osc === 10 ? 'foreground' : osc === 11 ? 'background' : 'cursor'];
-			if (rgb && this.writable && !ptydHeldUp()) {
-				this.send(`\x1b]${osc};rgb:${rgb}\x1b\\`);
+		if (text.includes('\x1b]') || text.includes('\x1b[?') || text.includes('\x1bc')) {
+			COLOUR_QUESTION.lastIndex = 0;
+			for (let match = COLOUR_QUESTION.exec(text); match; match = COLOUR_QUESTION.exec(text)) {
+				end = COLOUR_QUESTION.lastIndex;
+				// The program's asking for scheme reports, as its output has it so far: what every question and report after it follows
+				if (match[6] !== undefined) {
+					this.schemeReports = false;
+					continue;
+				}
+				if (match[5] !== undefined) {
+					if (match[4]!.split(';').some(mode => Number(mode) === COLOUR_SCHEME_MODE)) {
+						this.schemeReports = match[5] === 'h';
+					}
+					continue;
+				}
+				const reports = this.schemeReports;
+				const scheme = schemeOf(this.colours);
+				const answer = match[1] !== undefined ? this.colourAnswer(Number(match[1]) as 10 | 11 | 12)
+					// Mode 2031 is known: set where the program asked for the reports, reset otherwise (DECRPM)
+					: match[2] !== undefined ? `\x1b[?${COLOUR_SCHEME_MODE};${reports ? 1 : 2}$y`
+						: scheme && schemeReport(scheme);
+				if (answer && this.writable && !ptydHeldUp()) {
+					this.send(answer);
+				}
 			}
 		}
-		// The start of a question the next arrival completes
-		const open = text.lastIndexOf('\x1b]');
-		if (open >= end && text.length - open < COLOUR_QUESTION_MOST) {
-			this.colourTail = text.slice(open);
+		// The start of a question the next arrival completes, wherever it was split: a lone Escape, which may begin a full reset, or an
+		// `ESC [` or `ESC ]` with what followed it. A DEC set or reset still naming its modes can run longer than any question
+		const open = Math.max(text.lastIndexOf('\x1b]'), text.lastIndexOf('\x1b['), text.endsWith('\x1b') ? text.length - 1 : -1);
+		if (open >= end && open >= 0) {
+			const tail = text.slice(open);
+			if (tail.length < COLOUR_QUESTION_MOST || (tail.length < DEC_MODES_MOST && DEC_MODES_OPEN.test(tail))) {
+				this.colourTail = tail;
+			}
 		}
+	}
+
+	/** The answer to colour question OSC `osc`, with its window's colour; none where the window gave none. */
+	private colourAnswer(osc: 10 | 11 | 12): string | undefined {
+		const rgb = this.colours[osc === 10 ? 'foreground' : osc === 11 ? 'background' : 'cursor'];
+		return rgb && `\x1b]${osc};rgb:${rgb}\x1b\\`;
 	}
 
 	private followStatus(): void {
@@ -1031,4 +1094,9 @@ export class Run {
 			return false;
 		});
 	}
+}
+
+/** A terminal's report of its colour scheme, dark or light, as mode 2031 and DSR 996 have it: `CSI ? 997 ; 1 n` dark, `2` light. */
+function schemeReport(scheme: 'dark' | 'light'): string {
+	return `\x1b[?997;${scheme === 'dark' ? 1 : 2}n`;
 }

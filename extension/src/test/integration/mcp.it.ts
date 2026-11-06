@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { linesOf as cardLines } from '../detailLines';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
 
@@ -100,14 +101,14 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	void vscode.commands.executeCommand('facade.newAgent');
 	// The picker shows once its CLIs are found: accepted as soon as it is there, however long that takes
 	const card = await until('a new card', async () => {
-		const mine = (await state()).cards.find(each => !before.has(each.runId) && !each.tooltip.some(line => line.startsWith('Started by')));
+		const mine = (await state()).cards.find(each => !before.has(each.runId) && !cardLines(each).some(line => line.startsWith('Started by')));
 		if (mine) {
 			return mine;
 		}
 		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 		return undefined;
 	});
-	const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
+	const alias = cardLines(card).join(' ').match(/#a\d+/)![0];
 	// Its server answered: the agent's Facade tools are there
 	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined);
 	return { card, alias };
@@ -270,7 +271,7 @@ const EIGHT = [ 'start_agent', 'list_agents', 'stop_agent', 'send_message', 'rea
 		// The child's card opens in the background, says who started it, and the person's focus stays (LIFECYCLE-2.2, PANEL-1.5)
 		const childCard = (await state()).cards.find(each => each.alias === child);
 		assert.ok(childCard, 'the child has a card in this window');
-		assert.ok(childCard.tooltip.includes(`Started by: ${card.name} ${alias}`), childCard.tooltip.join(' | '));
+		assert.ok(cardLines(childCard).includes(`Started by: ${card.name} ${alias}`), cardLines(childCard).join(' | '));
 		const listed = ran.content('list_agents', 1)?.data.agents as { agent_id: string; creator?: string; root: string }[];
 		assert.deepStrictEqual(listed.filter(each => each.agent_id === child).map(each => [each.creator, each.root]), [[card.runId, card.runId]], 'the child joins its creator\'s tree');
 

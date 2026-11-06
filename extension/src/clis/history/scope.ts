@@ -8,7 +8,7 @@
 import * as fs from 'fs';
 import { isEqualPath, isInsideFolder } from '../../base/files';
 import { isJsonObject } from '../../base/json';
-import { displayLine } from '../../base/text';
+import { displayLine, displayLines } from '../../base/text';
 
 /** The most of a conversation file read for its list metadata. */
 export const HEAD_BYTES = 64 * 1024;
@@ -153,6 +153,18 @@ function objectsOf(lines: readonly string[], most = Infinity): { readonly [key: 
 /** `text` as a picker's title: its first line, one line of display text, capped. */
 export function titleOf(text: string): string | undefined {
 	return displayLine(text.trim().split(/\r?\n/)[0] ?? '', MOST_TITLE) || undefined;
+}
+
+/**
+ * A conversation's titles (CLIS-2.4): its native stored title - a name, title or summary its CLI keeps - as Resume's one line says it
+ * and, where longer or of several lines, whole for the details and the API; else, where its store falls back to a prompt, that
+ * prompt's preview alone, which is no stored title to keep whole.
+ */
+export function titlesOf(native: string | undefined, prompt?: string): { readonly title?: string; readonly fullTitle?: string } {
+	const stored = native?.trim() ? native : undefined;
+	const title = titleOf(stored ?? prompt ?? '');
+	const full = stored !== undefined ? displayLines(stored) : undefined;
+	return { ...title ? { title } : {}, ...full && full !== title ? { fullTitle: full } : {} };
 }
 
 /** The names in `dir` that `pattern` takes, sorted; none where it cannot be read. */

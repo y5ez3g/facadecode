@@ -251,7 +251,7 @@ export function locationArgument(argument: unknown): string | undefined {
 }
 
 /** The location the command shows: the one its argument names, the only one, or the person's choice; null when they cancel. */
-async function chosen(locations: Pick<LocationPort, 'snapshot' | 'resolve' | 'refresh' | 'onDidChange'>, argument: unknown, log: LogPort): Promise<Location | undefined | null> {
+export async function chosen(locations: Pick<LocationPort, 'snapshot' | 'resolve' | 'refresh' | 'onDidChange'>, argument: unknown, log: LogPort): Promise<Location | undefined | null> {
 	const id = locationArgument(argument);
 	if (id !== undefined) {
 		const location = locations.resolve(id);
@@ -260,9 +260,10 @@ async function chosen(locations: Pick<LocationPort, 'snapshot' | 'resolve' | 're
 		}
 		return location;
 	}
-	const catalog = locations.snapshot();
-	if (catalog.locations.length <= 1) {
-		return catalog.locations[0];
+	// A folder inside a location is no launch choice of its own (WORKTREES-1.2)
+	const offered = locations.snapshot().locations.filter(each => !each.within);
+	if (offered.length <= 1) {
+		return offered[0];
 	}
 	return chooseLaunchLocation(locations, log);
 }

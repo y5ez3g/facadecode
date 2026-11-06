@@ -9,7 +9,6 @@ import { CardWords } from '../cardView';
 import { AGENT_SETTINGS, COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
 import { locationOfFilter, PanelModel } from '../model';
 import { PanelView } from '../panel';
-import { withWorktreeEffects } from '../presentation';
 import { pickFilter } from '../pickers/filter';
 import { goToAgent } from '../pickers/goToAgent';
 import { environmentLabel } from '../pickers/location';
@@ -26,13 +25,15 @@ declare const FACADE_TEST_MODE: boolean;
 export interface UiDeps {
 	readonly agents: Agents;
 	readonly conversations?: ConversationDiscoveryPort;
+	/** Whether Facade has a history reader for a CLI's conversations, so its runs' titles can come (PANEL-1.5, CLIS-2.4). */
+	readonly readsTitles?: (cli: string) => boolean;
 	readonly savedName: (key: ConversationKey) => string | undefined;
 	readonly locations: LocationPort;
 	readonly clis: CliCatalogPort;
 	readonly history: LaunchHistoryPort;
 	/** New worktrees through the editor's native Git (WORKTREES-2.1). */
 	readonly worktrees: WorktreePort;
-	readonly execution: Pick<ExecutionPort, 'reveal' | 'onDidActivate'>;
+	readonly execution: Pick<ExecutionPort, 'reveal' | 'tabOpen' | 'onDidActivate'>;
 	readonly workspaceState: vscode.Memento;
 	readonly extensionUri: vscode.Uri;
 	readonly log: LogPort;
@@ -40,8 +41,6 @@ export interface UiDeps {
 	readonly notifyError: HumanPort['error'];
 	/** Settles once this window's runs are reconciled; until then the view shows its own progress (PANEL-1.1). */
 	readonly ready: Promise<unknown>;
-	/** This window's name: the hover says it with an agent's location (PANEL-1.5). */
-	readonly window?: string;
 	/** The window's remote authority, as the local window component sees it: how its environment is named (LIFECYCLE-1.1). */
 	readonly remote?: string;
 	/** The system's reduced-motion preference, as the panel's page says it, which the extension host cannot read (LIFECYCLE-2.2). */
@@ -51,54 +50,58 @@ export interface UiDeps {
 /** The words a card is said in, in the window's language (PANEL-1.4). */
 function cardWords(): CardWords {
 	return {
-		agent: value => vscode.l10n.t("Agent: {0}", value),
 		title: value => vscode.l10n.t("Title: {0}", value),
-		prompt: value => vscode.l10n.t("Prompt: {0}", value),
-		status: value => vscode.l10n.t("Status: {0}", value),
-		reason: value => vscode.l10n.t("Reason: {0}", value),
-		tools: value => vscode.l10n.t("Tools: {0}", value),
+		// The details' first row where a run has no title: its CLI has not saved one yet; or Facade has no history reader for its CLI
+		untitledPending: vscode.l10n.t("No title yet"),
+		untitledUnreadable: vscode.l10n.t("Title unavailable"),
 		location: value => vscode.l10n.t("Location: {0}", value),
 		path: value => vscode.l10n.t("Path: {0}", value),
-		worktreeFailure: withWorktreeEffects,
 		pinned: vscode.l10n.t("Pinned"),
 		starting: vscode.l10n.t("Starting"),
 		// {0} is the CLI's name, such as Claude Code
-		startingCli: cli => vscode.l10n.t("Starting {0}...", cli),
-		creatingWorktree: vscode.l10n.t("Creating worktree..."),
+		startingCli: cli => vscode.l10n.t("Starting {0}…", cli),
+		creatingWorktree: vscode.l10n.t("Creating worktree…"),
+		// A card's second line before any message: its agent began a new conversation, or resumed one
+		started: vscode.l10n.t("New conversation started"),
+		resumed: vscode.l10n.t("Conversation resumed"),
 		working: vscode.l10n.t("Working"),
 		notWorking: vscode.l10n.t("Idle"),
 		// {0} is why: the failure the agent ended with, or the error its CLI reported
-		error: reason => vscode.l10n.t("Error: {0}", reason),
-		activityUnavailable: vscode.l10n.t("Activity unavailable"),
-		needsAttention: vscode.l10n.t("Needs attention"),
-		toolsConnecting: vscode.l10n.t("Not connected to other agents yet"),
-		needsPermission: vscode.l10n.t("Needs permission"),
-		needsSignIn: vscode.l10n.t("Sign-in required"),
-		hasQuestion: vscode.l10n.t("Waiting for an answer"),
+		error: reason => vscode.l10n.t("Error · {0}", reason),
+		activityUnavailable: vscode.l10n.t("Status unavailable · check terminal"),
+		// Why its activity is unknown: no report yet since its start, none ever, one taken back, a screen not recognized, or a terminal reset
+		activityUnknown: why => why === 'waiting' ? vscode.l10n.t("No initial status · check terminal")
+			: why === 'not_reporting' ? vscode.l10n.t("No status from CLI · check terminal")
+				: why === 'cleared' ? vscode.l10n.t("Status cleared · check terminal")
+					: why === 'screen_unrecognized' ? vscode.l10n.t("Status unrecognized · check terminal")
+						: vscode.l10n.t("Status reset · check terminal"),
+		needsAttention: vscode.l10n.t("Attention needed"),
+		toolsConnecting: vscode.l10n.t("Collaboration not connected yet"),
+		needsPermission: vscode.l10n.t("Permission needed"),
+		needsSignIn: vscode.l10n.t("Sign-in needed"),
+		hasQuestion: vscode.l10n.t("Answer needed"),
 		// {0} is the exit code of the agent's CLI
-		exitedWithCode: code => vscode.l10n.t("Exited with code {0}", code),
+		exitedWithCode: code => vscode.l10n.t("Process exited · code {0}", code),
 		// {0} is the signal that ended the agent's CLI, such as SIGKILL
-		endedBySignal: signal => vscode.l10n.t("Terminated by signal {0}", signal),
+		endedBySignal: signal => vscode.l10n.t("Process terminated · {0}", signal),
 		// A run its supervisor no longer had: it ended, how is not known
-		exitUnknown: vscode.l10n.t("Disconnected; exit cause unknown"),
-		// {0} is the name of the editor window the agent is in
-		window: label => vscode.l10n.t("Window: {0}", label),
+		exitUnknown: vscode.l10n.t("Process lost · reason unknown"),
+		// {0} is why its start failed, without its closing period, such as: claude was not found on PATH
+		startFailed: reason => vscode.l10n.t("Start failed · {0}", reason),
+		// {0} is why its new worktree could not be created, without its closing period
+		worktreeFailed: reason => vscode.l10n.t("Worktree failed · {0}", reason),
 		toolsUnavailable: (problem, file) => problem === 'cmd'
-			? vscode.l10n.t("Cannot work with other agents: in Configure Agents, set the path to the CLI's own program, not a .cmd file")
+			? vscode.l10n.t("Collaboration off · replace .cmd with CLI in Configure Agents")
 			: problem === 'conflict' && file
 				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
-				? vscode.l10n.t("Cannot work with other agents: move or rename {0}", file)
+				? vscode.l10n.t("Collaboration off · move or rename {0}", file)
 				: problem === 'variable' && file
 					// {0} is an environment variable of the person's own that Facade could not read, such as OPENCODE_CONFIG_CONTENT
-					? vscode.l10n.t("Cannot work with other agents: could not read {0}", file)
+					? vscode.l10n.t("Collaboration off · {0} unreadable", file)
 					: problem === 'disconnected'
 						// The agent's CLI stopped the Facade tools it had started with, or they ended on their own
-						? vscode.l10n.t("Cannot work with other agents: its Facade tools stopped")
-						: vscode.l10n.t("Cannot work with other agents: could not create files"),
-		// {0} is the agent that started this one: its name and short ID, such as Ada #a3
-		startedBy: creator => vscode.l10n.t("Started by: {0}", creator),
-		from: sender => vscode.l10n.t("From: {0}", sender),
-		sourceWindow: label => vscode.l10n.t("Source window: {0}", label),
+						? vscode.l10n.t("Collaboration stopped · end and resume")
+						: vscode.l10n.t("Collaboration off · file creation failed"),
 		// {0} the agent that sent it, with its window where that is another; {1} its text
 		saidByAgent: (sender, line) => vscode.l10n.t("Last message from agent {0}: {1}", sender, line),
 		saidByPerson: line => vscode.l10n.t("Your last input: {0}", line),
@@ -120,9 +123,9 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		prefs: new PanelPrefs(deps.workspaceState, deps.log),
 		words,
 		remote: vscode.env.remoteName !== undefined,
-		window: deps.window ?? vscode.workspace.name,
 		ready: deps.ready,
-		environmentLabel: environment => environmentLabel(environment, deps.remote)
+		environmentLabel: environment => environmentLabel(environment, deps.remote),
+		...deps.readsTitles ? { readsTitles: deps.readsTitles } : {}
 	});
 	const agent = new AgentActions({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError });
 	const flows = {
@@ -143,7 +146,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
 		},
 		newAgent: (startAt?: LocationId) => newAgent({ agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history, select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media, ...(deps.remote ? { remote: deps.remote } : {}) }, startAt),
-		goToAgent: () => goToAgent({ model, agents: deps.agents, words, media, reveal: run => agent.reveal(run), copyReference: run => agent.copyReference(run), close: run => agent.close(run) })
+		goToAgent: () => goToAgent({ model, agents: deps.agents, media, reveal: run => agent.reveal(run), copyReference: run => agent.copyReference(run), close: run => agent.close(run) })
 	};
 	/** What the page's actions do, their targets revalidated by run ID (PANEL-3.1). */
 	const act = async (what: Act, target: string | undefined): Promise<Outcome['reason'] | undefined> => {
@@ -171,6 +174,14 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 				// Back on the card F2 was pressed on, as a VS Code list has it: the editor gives a closed input box's focus to the editor
 				void vscode.commands.executeCommand(`${PANEL_VIEW}.focus`);
 				return undefined;
+			case 'pin':
+			case 'unpin':
+				// The card's Pin button does what Pin Agent and Unpin Agent do (PANEL-1.3, LIFECYCLE-3.4)
+				if (target === undefined || !deps.agents.get(target)) {
+					return 'gone';
+				}
+				agent.pin(target, what === 'pin');
+				return undefined;
 		}
 	};
 	const view = new PanelView(deps.extensionUri, model, act, deps.log, deps.motion);
@@ -184,6 +195,11 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		vscode.commands.registerCommand(COMMANDS.filter, () => pickFilter(model, deps.locations, deps.log)),
 		// The same, its title button filled while a filter is on (UX-3.2)
 		vscode.commands.registerCommand(COMMANDS.filterOn, () => pickFilter(model, deps.locations, deps.log)),
+		// The selected card's details, for the keyboard: the view shown, the focus in them (PANEL-1.5, UX-2.3)
+		vscode.commands.registerCommand(COMMANDS.showAgentDetails, (arg?: unknown) => {
+			const run = targetOf(arg, model, deps.agents, true);
+			return run === undefined ? undefined : view.showDetails(run);
+		}),
 		...registerAgentCommands({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError }, agent, flows),
 		// Configure Agents...: the editor's Settings showing this extension's settings alone (CLIS-1.1)
 		vscode.commands.registerCommand(COMMANDS.configureAgents, () => vscode.commands.executeCommand('workbench.action.openSettings', AGENT_SETTINGS)),

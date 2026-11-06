@@ -5,7 +5,7 @@
 import { homeRelative } from '../base/files';
 import type { Agents, Catalog, Disposable, Event, Location, LocationId, LocationPort, RunChange, RunFacts, RunId } from '../core/ports';
 import { repeatedNames } from '../core/names';
-import type { CardMenu, PanelFilter, PanelState } from '../webview/protocol';
+import type { CardMenu, PanelFilter, PanelState, PlaceKind } from '../webview/protocol';
 import { cardOf, CardPlace, CardWords, folderPrefixOf, locationLabel, onePlaceOf } from './cardView';
 import { arranged, atEnd, atStart, moved, PanelPrefs, withNew } from './order';
 
@@ -35,7 +35,8 @@ export function locationOfFilter(filter: PanelFilter | undefined, locations: rea
 	}
 	const location = filter.kind === 'location' ? locations.find(each => each.id === filter.id)
 		: locations.find(each => each.uri === filter.id) ?? locations.find(each => each.folders[0]?.uri === filter.id);
-	return location?.id;
+	// A folder inside a location starts nothing of its own: the location it is inside
+	return location?.within ?? location?.id;
 }
 
 interface PanelModelDeps {
@@ -44,12 +45,12 @@ interface PanelModelDeps {
 	readonly prefs: PanelPrefs;
 	readonly words: CardWords;
 	readonly remote: boolean;
-	/** This window's name, as the hover says where an agent is (PANEL-1.5). */
-	readonly window?: string;
 	/** Settles once this window's runs are reconciled: until then the panel is loading (PANEL-1.1). */
 	readonly ready: Promise<unknown>;
-	/** How a remote environment is named in a hover (LIFECYCLE-1.1): as VS Code's remote indicator names it. */
+	/** How a remote environment is named in a card's details (LIFECYCLE-1.1): as VS Code's remote indicator names it. */
 	readonly environmentLabel?: (environment: string) => string;
+	/** Whether Facade has a history reader for a CLI, so a run's title can come: a custom CLI has none (PANEL-1.5, CLIS-2.4). */
+	readonly readsTitles?: (cli: string) => boolean;
 	readonly timers?: Timers;
 }
 
@@ -204,19 +205,24 @@ export class PanelModel implements Disposable {
 	 */
 	placesShown(catalog: Catalog = this.deps.locations.snapshot()): boolean {
 		const one = onePlaceOf(catalog);
-		return !one || this.deps.agents.list().some(run => run.location !== one.id);
+		return !one || this.deps.agents.list().some(run => this.anchorOf(run) !== one.id);
 	}
 
 	/** Where a run works, as its card says it (PANEL-1.3): its location's label, after its folder's name in a multi-folder window. */
 	placeOf(facts: RunFacts, catalog: Catalog = this.deps.locations.snapshot()): CardPlace {
-		const location = this.known.get(facts.location) ?? catalog.locations.find(each => each.id === facts.location);
+		// A folder inside a main checkout, worktree or folder - a resumed conversation's own - shows as the location it is inside, with
+		// its own path (WORKTREES-1.2)
+		const own = this.known.get(facts.location) ?? catalog.locations.find(each => each.id === facts.location);
+		// The catalog decides where it has the location; the anchor the run kept at acceptance only where it has none (WORKTREES-1.2)
+		const anchor = own ? own.within : facts.within;
+		const location = anchor !== undefined ? this.known.get(anchor) ?? catalog.locations.find(each => each.id === anchor) ?? own : own;
 		const label = location?.label ?? baseName(facts.cwd);
 		const folderPrefix = location ? folderPrefixOf(location, catalog) : undefined;
 		const qualified = location ? locationLabel(location, catalog) : label;
 		const environment = facts.environment !== 'local' ? this.deps.environmentLabel?.(facts.environment) ?? facts.environment : undefined;
-		// Keep location context and path separate so hover labels never parse user-provided newlines (PANEL-1.5).
+		// Keep location context and path separate so the details never parse user-provided newlines (PANEL-1.5).
 		const context = [qualified, environment].filter(Boolean).join(' · ');
-		return { label, ...(folderPrefix ? { folderPrefix } : {}), qualified, context, path: homeRelative(location?.path ?? facts.cwd) };
+		return { label, ...(folderPrefix ? { folderPrefix } : {}), qualified, context, path: homeRelative(own?.path ?? facts.cwd), kind: placeKindOf(location) };
 	}
 
 	private changed(change: RunChange): void {
@@ -355,7 +361,7 @@ export class PanelModel implements Disposable {
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
 				moveDown: moved(ids, id, 1, withinArea) !== undefined
 			};
-			return cardOf(facts, { place: this.placeOf(facts, catalog), repeated: repeated.has(facts.name.trim()), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.window ? { window: this.deps.window } : {} });
+			return cardOf(facts, { place: this.placeOf(facts, catalog), repeated: repeated.has(facts.name.trim()), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.readsTitles ? { readsTitles: this.deps.readsTitles(facts.cli) } : {} });
 		});
 		const exited = [...this.exited];
 		this.exited.clear();
@@ -419,9 +425,20 @@ export class PanelModel implements Disposable {
 			return true;
 		}
 		if (filter.kind === 'location') {
-			return facts.location === filter.id;
+			return this.anchorOf(facts) === this.locationOf(filter.id);
 		}
-		return this.known.get(facts.location)?.folders.some(folder => folder.uri === filter.id) ?? false;
+		return (this.known.get(facts.location) ?? (facts.within !== undefined ? this.known.get(facts.within) : undefined))?.folders.some(folder => folder.uri === filter.id) ?? false;
+	}
+
+	/** The location `id` counts as: the one it is inside, for a folder inside a main checkout, worktree or folder (WORKTREES-1.2). */
+	private locationOf(id: LocationId): LocationId {
+		return this.known.get(id)?.within ?? id;
+	}
+
+	/** The location a run counts as: also where the catalog has no record of its Resume cwd yet, or never will, its start having failed. */
+	private anchorOf(facts: Pick<RunFacts, 'location' | 'within'>): LocationId {
+		const known = this.known.get(facts.location);
+		return known ? known.within ?? known.id : facts.within ?? facts.location;
 	}
 }
 
@@ -432,4 +449,12 @@ function same(a: readonly string[], b: readonly string[]): boolean {
 /** The last name of a path in any environment's separators. */
 function baseName(path: string): string {
 	return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/**
+ * A location's kind as its icon says it (PANEL-1.5, WORKTREES-1.2): a checkout's root is a main checkout or a worktree; a folder - one
+ * opened inside a checkout among them - is a folder. Resolve a Resume cwd to its anchor first.
+ */
+export function placeKindOf(location: Pick<Location, 'kind' | 'isMain' | 'subfolder'> | undefined): PlaceKind {
+	return location?.kind !== 'checkout' || location.subfolder ? 'folder' : location.isMain ? 'repo' : 'worktree';
 }
