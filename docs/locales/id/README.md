@@ -39,7 +39,7 @@ Selanjutnya, pasang dan masuk ke CLI agen yang didukung yang ingin Anda gunakan:
 Facade Code menjalankan CLI agen native (Claude Code, Codex, Antigravity, Muse Code, OpenCode, dan Pi) di tab terminal editor di samping berkas Anda, menggunakan perintah, alat, akun, dan langganan milik masing-masing CLI. Sebuah kartu di panel melacak status setiap agen.
 
 - **Bekerja di samping kode Anda.** Setiap agen berjalan di tab terminalnya sendiri di area editor. Menutup tab hanya menyembunyikannya sementara agen tetap berjalan; mengeklik kartunya akan membukanya kembali.
-- **Lacak status di seluruh agen.** Kartu menampilkan siapa yang memulai setiap agen, apa yang sedang dilakukannya, dan apakah agen siap menerima input, memerlukan izin, atau mengalami kesalahan. Agen tetap berjalan melalui muat ulang jendela dan mulai ulang ekstensi.
+- **Lacak status di seluruh agen.** Kartu menampilkan apa yang terakhir dikirim ke setiap agen dan apakah agen sedang bekerja, memerlukan izin, atau mengalami kesalahan, dengan detail yang menampilkan judul, folder, dan siapa yang memulainya. Agen tetap berjalan melalui muat ulang jendela dan mulai ulang ekstensi.
 - **Folder dan worktree.** Jalankan agen di folder ruang kerja mana pun atau buat Git worktree secara instan untuk memisahkan perubahan kode. Sematkan percakapan untuk memulihkannya saat Anda membuka ruang kerja kembali, atau lanjutkan sesi sebelumnya dari riwayat.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Melalui MCP dan protokol terminal, agen dapat memulai, menghentikan, menemukan, 
 
 - **Mulai dan hentikan agen.** Agen dapat memulai agen lain dengan salah satu dari enam CLI, di folder mana pun atau worktree baru pada jendela Facade Anda di komputer ini, serta memberi mereka tugas pertama. Permintaan yang dicoba ulang dengan ID permintaan yang sama tidak akan pernah memulai agen kedua.
 - **Kirim pesan.** Agen saling bertukar pesan satu sama lain dan dapat mengirim pesan kepada Anda. Facade menempelkan seluruh pesan sekaligus dan mengirimkannya. Jika ada teks yang belum terkirim atau pertanyaan prompt yang menghalangi, pengiriman akan menunggu hingga input bersih.
-- **Kontrol terminal.** Agen dapat membaca layar agen lain, mengetik perintah, dan menekan tombol keyboard untuk menjawab prompt atau membantu rekan yang macet. Ketika agen turunan menunggu selama 20 detik untuk menerima input atau izin, agen yang memulainya akan diberi tahu.
+- **Kontrol terminal.** Agen dapat membaca layar agen lain, mengetik perintah, dan menekan tombol keyboard untuk menjawab prompt atau membantu rekan yang macet. Ketika agen turunan menunggu selama 20 detik untuk izin, jawaban, atau proses masuk, agen yang memulainya akan diberi tahu.
 
 ## Agent Mesh
 

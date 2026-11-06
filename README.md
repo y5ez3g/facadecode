@@ -39,7 +39,7 @@ Next, install and sign in to any supported agent CLIs you plan to use: Claude Co
 Facade Code runs native agent CLIs (Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi) in editor terminal tabs beside your files, using each CLI's own commands, tools, accounts, and coding plans. A card in the panel tracks each agent's status.
 
 - **Work beside your code.** Each agent runs in its own terminal tab in the editor area. Closing a tab hides it while the agent keeps running; clicking its card opens it again.
-- **Track status across agents.** Cards show who started each agent, what it is doing, and whether it is ready for input, needs permission, or encountered an error. Agents keep running through window reloads and extension restarts.
+- **Track status across agents.** Cards show what was last sent to each agent and whether it is working, needs permission, or encountered an error, with details showing its title, folder, and who started it. Agents keep running through window reloads and extension restarts.
 - **Folders and worktrees.** Run agents in any workspace folder or create a Git worktree on the fly to keep code changes separate. Pin a conversation to restore it when you open the workspace again, or resume past sessions from history.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Through MCP and a terminal protocol, agents can start, stop, find, and message o
 
 - **Start and stop agents.** An agent can start other agents with any of the six CLIs, in any folder or new worktree of your Facade windows on this computer, and give them their first task. A retried request with the same request ID never starts a second agent.
 - **Send messages.** Agents exchange messages with each other and can message you. Facade pastes the whole message once and sends it. If unsent text or a prompt question is in the way, delivery waits until the input is clear.
-- **Terminal control.** An agent can read another agent's screen, type commands, and press keys to answer prompts or help a stuck peer. When a child agent waits 20 seconds for input or permission, the agent that started it is notified.
+- **Terminal control.** An agent can read another agent's screen, type commands, and press keys to answer prompts or help a stuck peer. When a child agent waits 20 seconds for permission, an answer, or sign-in, the agent that started it is notified.
 
 ## Agent Mesh
 

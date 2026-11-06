@@ -39,7 +39,7 @@ Em seguida, instale e faça login nas CLIs de agentes suportadas que planeja usa
 O Facade Code executa CLIs nativas de agentes (Claude Code, Codex, Antigravity, Muse Code, OpenCode e Pi) em guias de terminal do editor ao lado dos seus arquivos, usando os comandos, as ferramentas, as contas e os planos de assinatura de cada CLI. Um cartão no painel monitora o status de cada agente.
 
 - **Trabalhe ao lado do seu código.** Cada agente roda em sua própria guia de terminal na área do editor. Fechar uma guia apenas a oculta enquanto o agente continua em execução; clicar no cartão dele o abre novamente.
-- **Acompanhe o status entre os agentes.** Os cartões mostram quem iniciou cada agente, o que ele está fazendo e se está pronto para receber comandos, precisa de permissão ou encontrou um erro. Os agentes continuam em execução após recarregar a janela e reiniciar a extensão.
+- **Acompanhe o status entre os agentes.** Os cartões mostram o que foi enviado por último a cada agente e se ele está trabalhando, precisa de permissão ou encontrou um erro, com detalhes mostrando seu título, sua pasta e quem o iniciou. Os agentes continuam em execução após recarregar a janela e reiniciar a extensão.
 - **Pastas e worktrees.** Execute agentes em qualquer pasta do espaço de trabalho ou crie um worktree do Git em tempo real para manter as alterações de código isoladas. Fixe uma conversa para restaurá-la ao reabrir o espaço de trabalho ou retome sessões anteriores a partir do histórico.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Por meio do MCP e de um protocolo de terminal, os agentes podem iniciar, parar, 
 
 - **Iniciar e parar agentes.** Um agente pode iniciar outros agentes com qualquer uma das seis CLIs, em qualquer pasta ou novo worktree das suas janelas do Facade neste computador, e atribuir a eles sua primeira tarefa. Uma solicitação repetida com o mesmo ID de solicitação nunca inicia um segundo agente.
 - **Enviar mensagens.** Os agentes trocam mensagens entre si e podem enviar mensagens para você. O Facade cola a mensagem inteira de uma só vez e a envia. Se houver texto não enviado ou uma pergunta na linha de comando no caminho, o envio aguarda até que a entrada esteja livre.
-- **Controle de terminal.** Um agente pode ler a tela de outro agente, digitar comandos e pressionar teclas para responder a perguntas ou ajudar um colega que esteja travado. Quando um agente filho aguarda 20 segundos por uma entrada ou permissão, o agente que o iniciou é notificado.
+- **Controle de terminal.** Um agente pode ler a tela de outro agente, digitar comandos e pressionar teclas para responder a perguntas ou ajudar um colega que esteja travado. Quando um agente filho aguarda 20 segundos por permissão, uma resposta ou login, o agente que o iniciou é notificado.
 
 ## Agent Mesh
 

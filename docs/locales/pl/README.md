@@ -39,7 +39,7 @@ Następnie zainstaluj i zaloguj się do obsługiwanych CLI agentów, których za
 Facade Code uruchamia natywne CLI agentów (Claude Code, Codex, Antigravity, Muse Code, OpenCode i Pi) na kartach terminala edytora obok Twoich plików, korzystając z własnych poleceń, narzędzi, kont i subskrypcji każdego CLI. Karta w panelu śledzi stan każdego agenta.
 
 - **Pracuj obok swojego kodu.** Każdy agent działa na własnej karcie terminala w obszarze edytora. Zamknięcie karty ukrywa ją, podczas gdy agent nadal działa; kliknięcie jego karty w panelu otwiera ją ponownie.
-- **Śledź stan wszystkich agentów.** Karty pokazują, kto uruchomił danego agenta, co robi oraz czy jest gotowy na dane wejściowe, wymaga uprawnień czy napotkał błąd. Agenci działają nieprzerwanie podczas przeładowań okna i restartów rozszerzenia.
+- **Śledź stan wszystkich agentów.** Karty pokazują, co ostatnio wysłano do każdego agenta oraz czy pracuje, wymaga uprawnień czy napotkał błąd, a szczegóły pokazują jego tytuł, folder i kto go uruchomił. Agenci działają nieprzerwanie podczas przeładowań okna i restartów rozszerzenia.
 - **Foldery i drzewa robocze.** Uruchamiaj agentów w dowolnym folderze obszaru roboczego lub twórz drzewo robocze Git (worktree) w locie, aby odseparować zmiany w kodzie. Przypnij konwersację (Pin), aby przywrócić ją po ponownym otwarciu obszaru roboczego, lub wznawiaj wcześniejsze sesje z historii.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Dzięki MCP i protokołowi terminala agenci mogą uruchamiać, zatrzymywać, wys
 
 - **Uruchamiaj i zatrzymuj agentów.** Agent może uruchamiać innych agentów za pomocą dowolnego z sześciu CLI, w dowolnym folderze lub nowym drzewie roboczym Twoich okien Facade na tym komputerze, i zlecać im pierwsze zadanie. Ponowione żądanie o tym samym identyfikatorze (request ID) nigdy nie uruchomi drugiego agenta.
 - **Wysyłaj wiadomości.** Agenci wymieniają wiadomości między sobą i mogą pisać do Ciebie. Facade wkleja całą wiadomość na raz i ją wysyła. Jeśli niewysłany tekst lub monit z pytaniem blokuje wprowadzanie, dostarczenie czeka, aż pole będzie wolne.
-- **Kontrola terminala.** Agent może czytać ekran innego agenta, wpisywać polecenia i naciskać klawisze, aby odpowiadać na pytania lub pomagać zablokowanemu współpracownikowi. Gdy agent podrzędny czeka 20 sekund na dane wejściowe lub uprawnienia, agent, który go uruchomił, otrzymuje powiadomienie.
+- **Kontrola terminala.** Agent może czytać ekran innego agenta, wpisywać polecenia i naciskać klawisze, aby odpowiadać na pytania lub pomagać zablokowanemu współpracownikowi. Gdy agent podrzędny czeka 20 sekund na uprawnienia, odpowiedź lub logowanie, agent, który go uruchomił, otrzymuje powiadomienie.
 
 ## Agent Mesh
 

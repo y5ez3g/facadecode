@@ -39,7 +39,7 @@ A continuación, instale las CLI de agentes compatibles que planee usar e inicie
 Facade Code ejecuta CLI nativas de agentes (Claude Code, Codex, Antigravity, Muse Code, OpenCode y Pi) en pestañas de terminal del editor junto a sus archivos, usando los comandos, herramientas, cuentas y planes de suscripción propios de cada CLI. Una tarjeta en el panel supervisa el estado de cada agente.
 
 - **Trabaje junto a su código.** Cada agente se ejecuta en su propia pestaña de terminal en el área del editor. Cerrar una pestaña la oculta mientras el agente sigue ejecutándose; al hacer clic en su tarjeta, se vuelve a abrir.
-- **Supervise el estado de los agentes.** Las tarjetas muestran quién inició cada agente, qué está haciendo y si está listo para recibir instrucciones, necesita permisos o encontró un error. Los agentes siguen ejecutándose durante las recargas de ventana y los reinicios de la extensión.
+- **Supervise el estado de los agentes.** Las tarjetas muestran qué se envió por última vez a cada agente y si está trabajando, necesita permisos o encontró un error, con detalles que muestran su título, su carpeta y quién lo inició. Los agentes siguen ejecutándose durante las recargas de ventana y los reinicios de la extensión.
 - **Carpetas y worktrees.** Ejecute agentes en cualquier carpeta del área de trabajo o cree un worktree de Git sobre la marcha para mantener separados los cambios de código. Ancle una conversación para restaurarla al volver a abrir el área de trabajo o reanude sesiones anteriores desde el historial.
 
 ## Agent Use
@@ -50,7 +50,7 @@ Mediante MCP y un protocolo de terminal, los agentes pueden iniciar, detener, bu
 
 - **Iniciar y detener agentes.** Un agente puede iniciar otros agentes con cualquiera de las seis CLI, en cualquier carpeta o nuevo worktree de sus ventanas de Facade en este equipo, y asignarles su primera tarea. Una solicitud reintentada con el mismo ID de solicitud nunca inicia un segundo agente.
 - **Enviar mensajes.** Los agentes intercambian mensajes entre sí y también pueden enviarle mensajes a usted. Facade pega el mensaje completo de una sola vez y lo envía. Si hay texto sin enviar o una pregunta interactiva bloqueando la entrada, el envío espera hasta que la entrada esté despejada.
-- **Control de terminal.** Un agente puede leer la pantalla de otro agente, escribir comandos y pulsar teclas para responder preguntas o desbloquear a un compañero. Cuando un agente secundario espera 20 segundos una entrada o permiso, el agente que lo inició recibe una notificación.
+- **Control de terminal.** Un agente puede leer la pantalla de otro agente, escribir comandos y pulsar teclas para responder preguntas o desbloquear a un compañero. Cuando un agente secundario espera 20 segundos un permiso, una respuesta o un inicio de sesión, el agente que lo inició recibe una notificación.
 
 ## Agent Mesh
 

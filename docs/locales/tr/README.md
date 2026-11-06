@@ -39,7 +39,7 @@ Ardından, kullanmayı planladığınız desteklenen aracı CLI'larını yükley
 Facade Code, yerel aracı CLI'larını (Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi) dosyalarınızın yanında düzenleyici terminal sekmelerinde çalıştırır; her CLI'nın kendi komutlarını, araçlarını, hesaplarını ve aboneliklerini kullanır. Paneldeki bir kart her aracının durumunu izler.
 
 - **Kodunuzun yanında çalışın.** Her aracı, düzenleyici alanında kendi terminal sekmesinde çalışır. Bir sekmeyi kapatmak, aracı çalışmaya devam ederken onu gizler; kartına tıklamak sekmeyi yeniden açar.
-- **Aracıların durumunu takip edin.** Kartlar her aracıyı kimin başlattığını, ne yaptığını ve girdi için hazır mı, izin mi bekliyor yoksa bir hatayla mı karşılaştı gösterir. Aracılar pencere yeniden yüklemeleri ve uzantı yeniden başlatmaları boyunca çalışmaya devam eder.
+- **Aracıların durumunu takip edin.** Kartlar her aracıya son olarak ne gönderildiğini ve çalışıyor mu, izin mi bekliyor yoksa bir hatayla mı karşılaştı gösterir; ayrıntılar ise başlığını, klasörünü ve onu kimin başlattığını gösterir. Aracılar pencere yeniden yüklemeleri ve uzantı yeniden başlatmaları boyunca çalışmaya devam eder.
 - **Klasörler ve çalışma ağaçları.** Aracıları herhangi bir çalışma alanı klasöründe çalıştırın veya kod değişikliklerini ayrı tutmak için anında bir Git çalışma ağacı (worktree) oluşturun. Çalışma alanını tekrar açtığınızda geri yüklemek için bir konuşmayı sabitleyin (Pin) veya geçmişten önceki oturumları devam ettirin.
 
 ## Agent Use
@@ -50,7 +50,7 @@ MCP ve bir terminal protokolü aracılığıyla aracılar diğer aracıları ba�
 
 - **Aracıları başlatın ve durdurun.** Bir aracı, bu bilgisayardaki Facade pencerelerinizin herhangi bir klasöründe veya yeni çalışma ağacında altı CLI'dan herhangi biriyle başka aracılar başlatabilir ve onlara ilk görevlerini verebilir. Aynı istek kimliğiyle (request ID) yinelenen bir istek asla ikinci bir aracı başlatmaz.
 - **Mesaj gönderin.** Aracılar birbiriyle mesajlaşır ve size mesaj gönderebilir. Facade tüm mesajı tek seferde yapıştırır ve gönderir. Gönderilmemiş bir metin veya bir komut istemi sorusu aradaysa, teslimat girdi alanı temizlenene kadar bekler.
-- **Terminal kontrolü.** Bir aracı, istemleri yanıtlamak veya takılan bir çalışma arkadaşına yardımcı olmak için başka bir aracının ekranını okuyabilir, komutlar yazabilir ve tuşlara basabilir. Bir alt aracı girdi veya izin için 20 saniye beklediğinde, onu başlatan aracıya bildirim gönderilir.
+- **Terminal kontrolü.** Bir aracı, istemleri yanıtlamak veya takılan bir çalışma arkadaşına yardımcı olmak için başka bir aracının ekranını okuyabilir, komutlar yazabilir ve tuşlara basabilir. Bir alt aracı izin, yanıt veya oturum açma için 20 saniye beklediğinde, onu başlatan aracıya bildirim gönderilir.
 
 ## Agent Mesh
 
