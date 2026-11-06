@@ -3,7 +3,6 @@
 	"displayName": "%windowDisplayName%",
 	"description": "%windowDescription%",
 	"version": "0.0.7",
-	"preview": true,
 	"private": true,
 	"publisher": "facade",
 	"repository": { "type": "git", "url": "https://github.com/y5ez3g/facadecode.git", "directory": "extension" },
