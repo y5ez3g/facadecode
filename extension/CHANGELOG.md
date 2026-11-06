@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0
+
+- **A card's second line says one of three things.** 🧑‍💻 what you typed; 📨 another agent's message, including the task an agent was started with; or, with no mark, Facade's own line: a start such as `Starting Claude Code…` or `Creating worktree…`, what the CLI waits for (`Permission needed · Run npm test?`, `Sign-in needed`, `Answer needed`, `Attention needed`), why the dot is red (`Process exited · code 1`, `Start failed · claude was not found on PATH`), or, before any message, `New conversation started` or `Conversation resumed`. The line never says Working, Idle or a title. Facade's results typed into an agent still start with 🔔.
+- **Card details.** The ⓘ button opens five rows, always all shown: the conversation's title (`No title yet` until the CLI saves one, `Title unavailable` for a custom CLI), the name and `#aN`, when the agent started and who started it - such as `Started 5 mins ago by Ada #a3` - its location and its path.
+- **Titles from each CLI's own conversation store,** the one Resume Agent lists, read when the conversation is identified and as each turn ends. Terminal titles are shown nowhere.
+- **End Agent replaces Close Agent.** It ends the agent's process, and its conversation stays resumable. The card's gear menu holds Rename Agent..., Move Up, Move Down and End Agent; its pin button pins, and a right click on a card opens nothing.
+- **A reload opens only the pinned agents' tabs,** one at a time in the Pins' order, each pinned as it opens; the last one stays in front, and the panel selects it. Unpinned agents keep running and keep their cards; their tabs open when you click their cards.
+- **Locations are main checkouts and worktrees.** A conversation in a subfolder runs there and shows the checkout or worktree it belongs to.
+- **Go to Agent shows each agent's ID, location and title.** Times under 30 seconds read `just now`, in Resume Agent, Go to Agent and the details.
+- **The green dot breathes again,** and stays still where your system reduces motion.
+- **Terminals follow the theme.** CLIs that change between dark and light, such as OpenCode, now change with your window.
+- **On the Marketplace and Open VSX:** Facade Code is no longer marked Preview, and its listing is now called Facade Code: Multi-Agent Orchestrator, with a new description and page.
+
 ## 0.0.7
 
 - **A message's delivery outcome within 30 seconds.** An agent's message to another agent now returns within 30 seconds whether it was delivered, refused, or its delivery could not be confirmed, with the reason. Nothing about it comes later, and no 🔔 result follows; the other agent's reply is a message of its own. A message held up by someone's unsent text or a question of that CLI waits within those 30 seconds and then fails, kept for the other agent to read. Retrying with the same `request_id` never types the message again and returns its current delivery state, and a message too long for the other agent's CLI is refused before anything is typed. Starting or stopping an agent waits up to 120 seconds, and the `facade.collaboration.waitSeconds` setting is gone.
