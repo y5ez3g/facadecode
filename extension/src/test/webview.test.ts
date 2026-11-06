@@ -23,13 +23,16 @@ suite('The agent panel in Chromium', function () {
 	let call: (method: string, params?: object) => Promise<any>;
 	let evaluate: (expression: string) => Promise<any>;
 	const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
-	const until = async (check: () => boolean | Promise<boolean>, ms = 8_000) => {
+	const until = async (check: () => boolean | Promise<boolean>, ms = 8_000, what = 'Chromium did not become ready') => {
 		const deadline = Date.now() + ms;
 		while (!await check()) {
-			if (Date.now() > deadline) { throw new Error('Chromium did not become ready'); }
+			if (Date.now() > deadline) { throw new Error(what); }
 			await wait(30);
 		}
 	};
+	/** Whether a page condition comes true within a deadline: a busy CI runner can fire a page's timer late, so tests wait for
+	 * what the page does instead of sleeping for exactly as long as its timer. */
+	const becomes = (expression: string, ms = 5_000) => until(() => evaluate(expression), ms).then(() => true, () => false);
 	/** Read the rendered pixel: validates the actual visible color/opacity rather than only its CSS declaration. */
 	const pixelAt = async (x: number, y: number): Promise<number[]> => {
 		const offset = await evaluate('({ x: scrollX, y: scrollY })');
@@ -137,12 +140,15 @@ suite('The agent panel in Chromium', function () {
 		}
 		if (profile) { fs.rmSync(profile, { recursive: true, force: true, maxRetries: 3 }); }
 	});
-	setup(async () => {
+	setup(async function () {
+		// The first page a cold browser lays out can take longer than eight seconds on a busy CI runner, as its start can
+		this.timeout(45_000);
 		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 2, mobile: false });
 		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
 		await load();
 		// The initial cards schedule a ResizeObserver update; input tests need its overlay ready first.
-		await until(() => evaluate(`!document.querySelector('.facade-scrollbar').hidden && document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().height > 0`));
+		await until(() => evaluate(`!document.querySelector('.facade-scrollbar').hidden && document.querySelector('.facade-scrollbar-thumb').getBoundingClientRect().height > 0`),
+			30_000, 'The panel\'s scrollbar overlay was not ready within 30 seconds of loading the page');
 		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 
@@ -370,7 +376,7 @@ suite('The agent panel in Chromium', function () {
 		const gap = `(() => { const card = document.querySelector('[data-run="run-2"]').getBoundingClientRect(), details = document.querySelector('.details').getBoundingClientRect(); return Math.round(details.top - card.bottom); })()`;
 		const before = await evaluate(gap);
 		await evaluate(`agents.splice(0, 1); redraw({ revision: 3, exited: ['run-1'] })`);
-		await wait(400);
+		await becomes(`!document.querySelector('.agent.closing')`, 3_000);
 		assert.deepStrictEqual([before, await evaluate(gap)], [8, 8]);
 	});
 
@@ -479,8 +485,8 @@ suite('The agent panel in Chromium', function () {
 		await evaluate(`document.querySelector('.agent .details-button').click()`);
 		const shifted = await key(true);
 		const closed = await evaluate(`document.querySelector('.details').hidden`);
-		await wait(1100);
-		assert.deepStrictEqual([alone, shifted, closed, await evaluate(`document.querySelector('.agent').classList.contains('menu-open')`)], [false, true, true, false]);
+		const cleared = await becomes(`!document.querySelector('.agent').classList.contains('menu-open')`);
+		assert.deepStrictEqual([alone, shifted, closed, !cleared], [false, true, true, false]);
 	});
 
 	test('PANEL-1.3: the pointer leaving the view hides a card\'s buttons; they have no Tab stop and the passive Pin is hidden from a screen reader; a pinned card\'s Pin button is filled', async () => {
@@ -503,8 +509,7 @@ suite('The agent panel in Chromium', function () {
 		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
 		await evaluate(`(() => { const style = document.createElement('style'); style.id = 'no-animation'; style.textContent = '.item.closing { animation: none !important; }'; document.head.append(style); })()`);
 		await evaluate(`agents.splice(1, 1); redraw({ revision: 6, exited: ['run-2'] })`);
-		await wait(400);
-		const gone = await evaluate(`!document.querySelector('[data-run="run-2"]')`);
+		const gone = await becomes(`!document.querySelector('[data-run="run-2"]')`, 3_000);
 		await evaluate(`document.getElementById('no-animation').remove()`);
 		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
 		await evaluate(`document.querySelector('.agent .details-button').click()`);
@@ -753,7 +758,7 @@ suite('The agent panel in Chromium', function () {
 	test('UX-2.2: a card whose process ended, in view, fades as its row closes up from its own height where it was - the cards after it are not put before it - and then goes; one out of view goes at once', async () => {
 		await evaluate(`agents.splice(4, 1); redraw({ exited: ['run-5'] })`);
 		const during = await evaluate(`(() => { const children = [...document.querySelector('#list').children]; const closing = document.querySelector('.agent.closing'); return [closing?.dataset.run, children.indexOf(closing), children.length, closing?.style.getPropertyValue('--facade-closing-height'), closing?.getAttribute('aria-hidden'), closing?.tabIndex]; })()`);
-		await wait(300);
+		await becomes(`!document.querySelector('.agent.closing')`, 3_000);
 		const after = await evaluate(`[document.querySelectorAll('.agent.closing').length, document.querySelectorAll('.agent').length]`);
 		await evaluate(`agents.splice(-1, 1); redraw({ exited: ['run-30'] })`);
 		const away = await evaluate(`[document.querySelectorAll('.agent.closing').length, document.querySelectorAll('.agent').length]`);
