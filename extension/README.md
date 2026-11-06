@@ -4,116 +4,73 @@
 
 # Facade Code
 
-**Your coding agents, side by side in VS Code.**
+**The multi-agent orchestrator for VS Code.**
 
-A VS Code extension that runs your native agent CLIs: Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi, with Qwen Code under development.
+Run native agent CLIs, edit code, and review changes in the same IDE window. Use your own accounts and coding plans, and let agents collaborate across windows and machines.
 
-[Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ·
-[Open VSX](https://open-vsx.org/extension/facade/facadecode) ·
-[Specs](https://github.com/y5ez3g/facadecode/tree/main/docs/extension) ·
-[Report a Bug](https://github.com/y5ez3g/facadecode/issues)
+[![Website: facadecode.com](https://img.shields.io/badge/Website-facadecode.com-335e78?style=flat)](https://facadecode.com)
+[![GitHub: y5ez3g/facadecode](https://img.shields.io/badge/GitHub-y5ez3g%2Ffacadecode-335e78?style=flat)](https://github.com/y5ez3g/facadecode)
+[![Feature guide: read](https://img.shields.io/badge/Feature%20guide-read-335e78?style=flat)](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md)
+[![Issues: report a bug](https://img.shields.io/badge/Issues-report%20a%20bug-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 </div>
 
-Facade Code brings coding agents into the VS Code you already use. Each agent runs your own CLI in its own terminal and has a card in one panel, so you can see what every agent is doing and step in at any time.
+[![Watch the 2-minute demo on facadecode.com](https://raw.githubusercontent.com/y5ez3g/facadecode/main/docs/assets/readme/demo-poster.jpg)](https://facadecode.com)
 
-- 🤖 **Your own CLIs and accounts.** Each CLI runs in a VS Code terminal with its own sign-in, plans and interactive experience.
-- 🗂️ **Every agent in one panel.** Each card shows the agent's name, where it works and a live status dot. Agents keep running when the window reloads.
-- 💬 **Agents that talk to each other.** Agents start and stop other agents, message each other and you, and read and type into each other's terminals when one is stuck, across your Facade windows on your computer.
-
-> **Preview.** This release covers Claude Code, Codex, Antigravity, Muse Code, OpenCode and Pi with the whole panel, and agents that work together. Features marked *Under development* come in later releases.
+> **Preview.** Works with Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi. Qwen Code support is under development. For verified configurations and known limitations, see [Status and Known Limitations](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#status-and-known-limitations).
 
 ## Install
 
-Install **Facade Code** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). VS Code also installs its **Window Component** with it. It always runs on your computer, even for remote windows, lets Facade recognize each window after a reload and connects your windows.
+Install **Facade Code** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). VS Code automatically installs the companion **Window Component** alongside it. The Window Component always runs on your local computer—even for remote windows—allowing Facade to recognize windows across reloads and connect them together.
 
-Packages are available for macOS (Apple silicon), Linux (x64) and Windows (x64). Other platforms are under development.
+Packages are available for macOS (Apple silicon), Linux (x64), and Windows (x64). Support for other platforms is under development.
 
-**Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your computer for local folders, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): Facade Code does not start 1.x (`opencode-ai`), and says how to update it. Git is required if you use worktrees.
+**Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your local computer for local projects, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): Facade Code does not launch 1.x (`opencode-ai`) and explains how to upgrade. Git is required if you use worktrees.
 
-**Agents run without approval prompts by default.** With `facade.yolo` on, the default, agents can run commands and change files without asking first. Turn it off to use each CLI's normal approvals and supported sandbox; the change applies to agents you start afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. **Configure Agents...** in the panel's `...` menu opens the settings. Facade also trusts the folder an agent starts in, as you would by accepting the CLI's own trust question. With `facade.yolo` on, agents can also stop, message and type into every agent in your Facade windows. A custom CLI is the exception to the launch mapping and folder trust: `facade.yolo` does not change how it starts, and Facade gives it no folder trust.
+**Agents run without approval prompts by default.** By default, `facade.yolo` is enabled, allowing agents to run commands and modify files without asking for confirmation. Turn it off to restore each CLI's standard approval prompts and supported sandbox; this change applies to agents started afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. To open settings, select **Configure Agents...** from the panel's `...` menu. Facade also trusts the folder an agent starts in, equivalent to accepting the CLI's own workspace trust prompt. With `facade.yolo` on, agents can also stop, message, and type into every agent across your Facade windows. Custom CLIs are the exception to launch mapping and folder trust: `facade.yolo` does not alter how they start, and Facade grants them no folder trust.
 
 ## Quick Start
 
-1. **Open a folder**: Use **File > Open Folder...** to open your project.
+1. **Open a folder**: Open your project directory via **File > Open Folder...**.
+2. **Start an agent**: Click **Facade Code** in the Activity Bar, select **New Agent...**, and choose an installed CLI. The agent opens in an editor terminal tab; type prompts as you would in any terminal.
+3. **Add more**: Launch additional agents the same way. Click any card in the panel to focus its terminal, or run **Go to Agent...** to search by name.
+4. **Let agents collaborate**: Instruct an agent in plain English, for example: "Start a Codex agent to write the tests, and have it message you when it is done."
 
-2. **Start an agent**: Click **Facade Code** in the activity bar, then **New Agent...**, and choose an installed CLI. Before you choose, **Change Name...** renames the agent and **Change Working Location...** starts it in another folder, a worktree or a new worktree.
+## Agent Panel
 
-3. **Work with it**: The agent opens in its own editor terminal. Type to it as you would in any terminal.
+**Your agents and your IDE, in the same window.**
 
-4. **Add more**: Start more agents the same way. Click a card to show its terminal, or run **Go to Agent...** to search by name, CLI, title, location or ID.
+The **Facade Code** panel in the Activity Bar shows all agents in your window. Each card displays the agent's name, its CLI, and a status dot, with hover details showing its folder and creator.
 
-5. **Reload freely**: Run **Developer: Reload Window**. The agents keep running, and their terminals come back.
+- **Start and configure.** Click **New Agent...** to choose a CLI. In the picker, select **Change Name...** to name your session or **Change Working Location...** to pick a folder or create a Git worktree.
+- **Navigate terminals.** Click any card to show its editor terminal tab, or run **Go to Agent...** from the Command Palette to search agents by name. Closing a tab hides it; right-click the card and choose **Close Agent** to end the session.
+- **Pin and resume.** Use **Pin Agent** to keep essential agents at the top of the panel and restore them when the workspace opens again. Use **Resume Agent...** in the panel header to search history and restore past conversations in their original folders.
 
-6. **Let agents work together**: Ask an agent in your own words, for example: "Start a Codex agent to write the tests, and have it message you when it is done."
+For details on agent cards, resuming sessions, pinning, git worktrees, and window reloads, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#one-panel-for-every-agent).
 
-## Features
+## Agent Use
 
-### One panel for every agent
+**Let agents operate other agents, just like you.**
 
-- **Cards**: Each card shows the agent's name and what its CLI reports; where it works is in its hover. Two agents of the window with the same name each show their `#aN`. The dot is green while the agent starts or works, and red when something is wrong: it could not start, it exited abnormally or lost its connection, its CLI reported an error, it cannot work with other agents, or it was not ready a minute after starting. Any other time there is none, and the card's hover says whether the agent is idle, needs permission, an answer or sign-in, or its activity is unavailable. The second line says what was last sent to the agent - by you, with Enter, or by another agent, marked 📨 - and before anything was, its CLI's title; a red card says why, and one that waits for you says what for. A busy agent's tab turns a spinner before its name. See [`PANEL.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/PANEL.md).
-- **Card actions**: Rename Agent..., Pin or Unpin, Move Up, Move Down and Close Agent, from each card's context menu. New agents join at the bottom; a card you pin goes to the bottom of the pinned cards, and one you unpin to the top of the others, just below them.
-- **A terminal for each agent**: Every agent runs in its own editor terminal, shown in at most one tab. Closing the tab hides it: the agent keeps running, its card opens it again, and Close Agent ends it. A group can show any number of agent tabs, and an agent another agent starts shows its card alone. Splitting an agent's tab gives an ordinary terminal in the agent's folder. To give an agent a file, drag it onto its terminal with Shift held, as VS Code requires for terminals in the editor area. See [`LIFECYCLE.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/LIFECYCLE.md).
-- **Filter**: Show only the agents in one working location or workspace folder with **Filter by Working Location...** in the panel's title bar. Its first item shows every agent again; the panel's badge always counts them all.
-- **Resume Agent...**: Search Claude Code, Codex, Antigravity, Muse Code, OpenCode 2.x and Pi histories for this workspace, its subfolders and worktrees. Resume the exact conversation in its original CLI and folder, with current launch settings.
-- **Pin and Unpin**: Pin a conversation in any of the six built-in CLIs to restore it in the background when this workspace opens again. Pinned cards stay above other agents, and the native terminal tab follows the same Pin/Unpin state. Pin or Unpin from a card, the Command Palette or a key shows the agent's tab, as clicking its card does, and pins or unpins it there; pinning an agent whose tab is hidden opens it, and unpinning a hidden one leaves it hidden. A reload opens each group's saved front tab last, and other pinned tabs before unpinned ones. Unpin keeps the agent running; closing an agent, or closing its tab while the tab shows its pin mark, removes its Pin. Pin is available from an agent's start, before its first message too: until its CLI names the conversation, the Pin keeps the agent's CLI, name and folder, and a workspace opened before then starts a new conversation there in its place. A resumed conversation can be pinned at once.
-- **Show Agent Launch... and Show Agents Log**: In the Command Palette. **Show Agent Launch...** shows how each CLI would start in a working location - its program, environment, arguments, YOLO, sandbox, approvals and folder trust - without starting it, with secrets hidden. **Show Agents Log** opens Facade's own log.
+You do not need special commands to have agents collaborate—simply ask any agent in your own words.
 
-### Folders and worktrees
+- **Delegate tasks.** Tell an agent to start another agent for a specific task, for example: "Start a Codex agent in a new worktree to write tests, and message me when finished." The new agent appears in the panel without taking focus.
+- **Work as a team.** Have one agent write code and another review the changes. When agents message each other, the text appears in the recipient's terminal marked with a 📨 icon.
+- **Help stuck agents.** If an agent needs input or gets stuck at an interactive CLI prompt, other agents can inspect its screen, type answers, or send you a notification in VS Code.
 
-- **Any folder**: Start agents in any folder of a single-folder or multi-root workspace. Ordinary folders, repositories and worktrees work alike. See [`WORKTREES.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/WORKTREES.md).
-- **New Worktree**: Create a Git worktree from the chosen working location's current commit while starting an agent, or from the selected workspace folder's current checkout through the panel's `...` menu. In the standalone flow, review the source and path in the branch input and confirm to create directly. Prepare worktrees from other starting commits with Git; Facade discovers them too.
-- **Workspace folders and worktrees**: In **Change Working Location...**, add a folder to the workspace, remove one (its files stay on disk), or delete a linked worktree that is not a workspace folder and has no uncommitted changes (its branch is kept).
+For details on cross-agent messaging, automatic retries, and workspace files, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#a-team-that-works-together).
 
-### Agents keep running
+## Agent Mesh
 
-- **Reloads and workspace changes**: Agents keep running when the window reloads, when the extension host restarts, when a folder window becomes a multi-root workspace, and after **Save Workspace As...**.
-- **Remote - SSH**: Agents run on the remote host, with the CLIs and accounts there. Facade names the environment as VS Code does, for example `SSH: my-server`.
-- **Exits**: An agent whose CLI exits normally leaves the panel; one that exits abnormally keeps a red card until you close it.
+**Connect agents across windows, machines, and locations.**
 
-### More CLIs
+Facade Code connects agents across your Facade windows on this computer. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
 
-- **Custom CLIs**: Add any interactive CLI in `facade.custom`: its program, the arguments for a new conversation, and the arguments that resume one by its session ID. The resume arguments are required; a custom CLI also needs a history and live-identity adapter before it can appear in Resume or support Pin. **New Agent** offers it after the built-in CLIs, and its cards show the first letter of its ID in place of a logo. Facade passes its arguments exactly as written: `facade.yolo` does not change them, and Facade adds no sandbox or folder trust. See [`CLIS.md`](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/engineering/CLIS.md).
-- **Qwen Code** *(Under development)*: Qwen Code as a built-in CLI.
+- **Work across windows.** Open multiple project folders in separate VS Code windows. With `facade.yolo` on, agents in one window can see, message, and direct agents in any other window on your computer; with it off, agents reach only their own group.
+- **Connect over SSH.** In a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window, agents run directly on the remote machine with its tools, files, and accounts, and can be started and directed by local agents.
+- **Check in from your phone.** In a Claude Code terminal, type `/remote-control` to enable [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control), then connect using the Claude app on iOS or Android. From your phone, ask for progress updates and let that session coordinate other agents through Facade.
 
-### A team that works together
-
-- **Agents start agents**: An agent can start other agents, with any of the six CLIs, in any folder or new worktree of any Facade window on your computer, and give them their first task. Their cards appear without taking your focus, and their hover says who started them. An agent can also stop the agents it can reach.
-- **Messages**: Agents send each other messages. Facade pastes the whole message into the other agent's input box once and sends it. While someone's unsent text, or a question of that CLI, is in the way, it waits, and never sends their text with it. Within 30 seconds the sender learns whether the message was delivered, refused, or its delivery could not be confirmed, with the reason, and nothing about it comes later; the other agent's reply is a message of its own. A message that was kept but not delivered stays for the other agent to read. Facade's notices to an agent that come together arrive in one paste. Agents can also message you: you get a notification in that agent's window with **Open Message** and **Show Agent**.
-- **No duplicates on retry**: An agent that retries starting an agent or sending a message with the same `request_id` never starts a second agent or types the message again: it gets the start's answer, or the message's current delivery state.
-- **A stuck helper is reported**: When an agent started by another agent waits 20 seconds for permission, an answer or a sign-in, the agent that started it is told once, with who can answer.
-- **Unsticking each other**: An agent can read another agent's terminal, type into it and press keys, to answer a prompt or help a stuck agent continue without interrupting you. Unlike messages, this typing does not wait for unsent text.
-- **Across windows**: With `facade.yolo` on, an agent reaches every agent in your Facade windows on your computer, local and Remote - SSH alike; with it off, it reaches only its own group: the agent you started and every agent started from it.
-- **No approval prompts for Facade itself**: With `facade.yolo` off, each CLI's own commands and file changes still ask for approval, but starting, stopping and messaging agents and the other actions above do not. Muse Code has no setting for this, so there its own approval rules decide.
-- **Standard MCP**: Facade adds these as standard MCP tools when it starts each agent, without changing your CLI settings. Some CLIs read them only from the agent's folder, so while such agents run there Facade also puts its files in it: `.agents/skills/facade/SKILL.md` for Codex and Muse Code, `.agents/plugins/facade` for Antigravity, and on Windows a `facade` entry in `.mcp.json` for Muse Code, next to your own entries. It removes them when the last of those agents ends, unless you changed them. Files an earlier Facade left there are brought up to date; a `facade` skill or server of your own is left as it is, and those agents then start without Facade's tools. Turn all of this off for new agents with `facade.collaboration.enabled` in **Configure Agents...**.
-- **Antigravity's first turn**: Antigravity loads Facade's tools only once it is in use. Facade opens and closes its MCP list right after it starts, so that its first task can already use them.
-- **Trusting the folder**: So that an agent starts without its CLI's trust question, Facade trusts the folder it starts in, as you would by answering that question: for that start alone with Codex, Muse Code and Pi, and in the CLI's own settings with Claude Code and Antigravity. It never trusts your home folder, a folder above it or a drive's root for Claude Code, which would trust every folder below; Claude Code asks there as usual.
-
-### Languages
-
-The interface is in English, 简体中文, 繁體中文, Português (Brasil), Español, Русский, Deutsch, 日本語, Français, 한국어, Türkçe and Polski.
-
-## Two Ways to Work
-
-| Workflow | **Super Engineer** | **Super Team** |
-|---|---|---|
-| **Your role** | Hands-on engineer | Engineering manager |
-| **Who you work with** | Several agents, directly | A lead agent, one to one |
-| **Who coordinates agents** | You | The lead agent |
-| **Best for** | Work that needs close guidance: exploration, design decisions you want to judge yourself, changing requirements | Large, well-defined features that split cleanly |
-
-These are ways of using Facade, not modes in the interface, and you can move between them freely. Super Engineer: start several agents and direct each one yourself. Super Team: ask one lead agent for a large piece of work, and let it start and coordinate the other agents. Facade does not tell a lead when its agents finish: ask the lead to have its agents message it when they are done.
-
-## Why
-
-You keep your editor, your projects, your CLIs and their accounts. Facade takes over the work of managing agents' terminals, without a new process to learn.
-
-Facade runs the infrastructure, the CLIs do the work, and you decide the goals and permissions: what to ask, what to review, and when to commit or publish. Facade supplies no model service, account, billing or hosted compute.
-
-## Works the VS Code Way
-
-- Agents run in VS Code's own editor terminals. The panel uses VS Code's views, menus, Command Palette, settings and keyboard shortcuts.
-- An agent runs where its workspace runs, with that environment's CLIs, settings, Git and files. A local CLI never stands in for a missing remote one.
+<sub>Remote Control requires a supported Claude Code version, an eligible plan, and full-scope sign-in. See its [setup requirements](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
 ## Settings
 
@@ -143,22 +100,11 @@ For example, a CLI started as `my-cli --fast` and resumed as `my-cli resume <ses
 
 ## Status and Known Limitations
 
-- **Tested so far**: macOS (Apple silicon), Linux (x64) and Windows (x64) as the local computer, with local folders: each of the six CLIs started from the panel, and its Facade tools and messages, with a stand-in that draws its input box as that CLI does. Real agents, each starting a second agent of the same CLI with a first task and exchanging messages with it: with `facade.yolo` off, Claude Code, Codex, Antigravity, OpenCode and Pi on macOS and Windows, and Claude Code and Codex on Linux; Muse Code with `facade.yolo` on, on all three. Remote - SSH from a macOS client to Linux (x64) and Windows (x64) hosts, and between windows of both; a WSL window and a container window working with a local window; 100 agents in one window on Windows, with stand-ins; the minimum VS Code 1.105 on Linux.
-- **Resume and Pin on Linux x64**: Native checks cover Claude Code 2.1.316, Codex 0.166.0, Antigravity 1.4.12, Muse Code 1.4.14, OpenCode 2.2.5 and Pi 1.4.0: native histories, exact resume and session changes. Isolated VS Code 1.144.0 and minimum 1.105.0 checks cover all six adapters' Resume, Pin/Unpin, actual window reloads and folder-to-workspace conversion using fake CLIs. Current VS Code also checks immediate close/reopen for every built-in and exact Pin restoration after a closed local window's real 90-second grace. These new integrations still need native Windows, macOS and remote regression checks before a full platform-support claim.
-- **Antigravity multi-folder conversations**: Its native history saves the workspace folder set, without identifying the original working directory. Facade reuses a directory it previously recorded; otherwise Resume asks you to choose a working location from that conversation's folders in this window.
-- **Not yet verified**: Muse Code as a real agent with `facade.yolo` off, where it applies its own approvals to Facade's tools; real Antigravity, OpenCode and Pi agents on Linux; Linux and Windows as Remote - SSH clients; running the suites inside a container window; other editors compatible with VS Code; the minimum VS Code 1.105 on macOS and Windows; 100 agents in one window on macOS and Linux; and long-running sessions.
-- **Muse Code on Windows**: Muse Code does not report its activity on Windows, so Facade reads it from Muse Code's own screen: working while it shows *esc to interrupt*, ready for input when its input is empty or holds a draft, and waiting at its sign-in screen. While it asks for approval, with `facade.yolo` off, its card shows no dot. On Linux it reports as the other CLIs do.
-- **Window Component**: Facade Code needs its Window Component on your computer; VS Code installs it with Facade Code. If it is missing or turned off, the panel says so and offers **Show Window Component**; install or enable it, then reload the window. Agents that are already running go on for a while: five minutes in a Remote-SSH, WSL or container window, so a reload within that time shows them again, and 90 seconds in a local window, which leaves no time to install the component and reload.
-- **Updating**: Agents started before an update keep running and keep their cards and terminals; after updating from 0.0.5 or earlier their tabs come back hidden, pinned ones' opening in the active group. Where the update changes Facade's tool protocol, as 0.0.3 did from 0.0.2, their Facade tool calls are refused; close such an agent and resume its conversation to give it the current tools.
-- **Rare runtime failures in English**: When Facade's own agent runtime fails unexpectedly - for example, its connection drops while an agent starts - the card and notification show its technical English message, which can name internal parts. Everyday reasons are in your language.
-- **Remote - SSH reconnects**: If VS Code stops reconnecting to an SSH host and asks you to reload the window, reload it once the network is back. The agents keep running on the host, and the reloaded window shows them again.
-- **Closing a window**: Facade ends a local window's agents 90 seconds after you close it, and a Remote-SSH, WSL or container window's five minutes after its extension host disconnects and nothing reconnects. Opening the folder or workspace again within that time shows them again.
-- **Reloads and focus**: A few keys typed while a reload opens its tabs can be lost. A tab you bring to the front within half a second of the reload opening it can go back behind its group's saved front tab, and where a reload's tab covered the file you were typing in, the file comes back in front but needs a click before you can type there again.
-- **Custom CLIs**: Facade knows a custom CLI's activity only if the CLI reports it in its terminal with OSC 7501 sequences, as the built-in CLIs do. Otherwise the agent still starts and works, but its dot turns red with *Activity unavailable* a minute after it starts.
+This extension is currently in preview. For tested configurations and known limitations, see the [feature guide](https://github.com/y5ez3g/facadecode/blob/main/extension/GUIDE.md#status-and-known-limitations).
 
 ## Building from Source
 
-Hand [`extension/AGENTS.md`](https://github.com/y5ez3g/facadecode/blob/main/extension/AGENTS.md) to your agent, and let it build. For contribution guidelines, see [`CONTRIBUTING.md`](https://github.com/y5ez3g/facadecode/blob/main/CONTRIBUTING.md).
+Provide [`extension/AGENTS.md`](https://github.com/y5ez3g/facadecode/blob/main/extension/AGENTS.md) to your coding agent to build the extension. For contribution guidelines, see [`CONTRIBUTING.md`](https://github.com/y5ez3g/facadecode/blob/main/CONTRIBUTING.md).
 
 <!-- repository-only:start -->
 
@@ -222,3 +168,5 @@ version override and the original CI commit rather than claiming a newly rebuilt
 ## License
 
 MIT. See [`LICENSE.txt`](https://github.com/y5ez3g/facadecode/blob/main/extension/LICENSE.txt). Facade Code builds on Visual Studio Code; inherited source and bundled third-party materials retain their own notices in [`ThirdPartyNotices.txt`](https://github.com/y5ez3g/facadecode/blob/main/extension/ThirdPartyNotices.txt).
+
+<sub>Facade Code is an independent product and is not affiliated with, endorsed by, or sponsored by the providers of the third-party tools shown. All third-party trademarks and logos belong to their respective owners.</sub>

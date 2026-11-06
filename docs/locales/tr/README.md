@@ -1,134 +1,93 @@
 <div align="center">
 
-<img src="../../../ide/resources/linux/code.png" alt="Facade Code" width="128">
+<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
 
 # Facade Code
 
-**Sizin ve yapay zekâ ekibiniz için tek bir IDE.**
+**VS Code için çoklu aracı orkestratörü.**
 
-VS Code üzerine kurulu. Claude Code, Codex, Antigravity, Muse Code ve Qwen Code gibi yerel ajan CLI'larınızı doğrudan çalıştırır.
+Yerel aracı CLI'larını çalıştırın, kod düzenleyin ve değişiklikleri aynı IDE penceresinde inceleyin. Kendi hesaplarınızı ve aboneliklerinizi kullanın, aracıların pencereler ve makineler arasında iş birliği yapmasını sağlayın.
 
-[İndir](https://github.com/y5ez3g/facadecode/releases) ·
-[Spesifikasyonlar](../../ide/) ·
-[Hata Bildir](https://github.com/y5ez3g/facadecode/issues)
+[![Web Sitesi: facadecode.com](https://img.shields.io/badge/Web%20Sitesi-facadecode.com-335e78?style=flat)](https://facadecode.com)
+[![VS Code Marketplace: yükle](https://img.shields.io/badge/VS%20Code%20Marketplace-y%C3%BCkle-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
+[![Open VSX: yükle](https://img.shields.io/badge/Open%20VSX-y%C3%BCkle-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
+[![Sürümler: IDE'yi indir](https://img.shields.io/badge/S%C3%BCr%C3%BCmler-IDE'yi%20indir-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Sorunlar: hata bildir](https://img.shields.io/badge/Sorunlar-hata%20bildir-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · **Türkçe** · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
 
 </div>
 
-https://github.com/user-attachments/assets/35e2c317-8040-49c6-bb56-ab81196e8ebc
-
-Facade Code, VS Code'un bir fork'udur. Her sağlayıcının yerel ajanları projeleriniz ve özellikleriniz üzerinde birlikte çalışır; siz de aynı pencerede kodu inceler ve istediğiniz ajanı yönlendirirsiniz.
-
-- 🧑‍💻 **Projelere ve özelliklere göre düzenlenmiş eksiksiz VS Code.** Tek pencerede birden çok proje ve özellik geliştirin. Her özellik bir git worktree'dir ve kendine ait bir ajan ekibi vardır.
-- 🤖 **Farklı sağlayıcılardan yerel ajan CLI'larından oluşan bir ekip.** Ajanlar mevcut aboneliklerinizle çalışır. Facade Code'da ajanlar birbirini başlatır, birbirine mesaj gönderir ve takılan birine yardım eder.
-- 👥 **Super Engineer ya da Super Team.** Birden çok ajanı kendiniz yönetin ya da uzmanları paralel olarak koordine edecek bir lider model belirleyin.
+[![facadecode.com adresinde 2 dakikalık demoyu izleyin](../../assets/readme/demo-poster.jpg)](https://facadecode.com)
 
 ## Kurulum
 
-En son sürümü [Releases](https://github.com/y5ez3g/facadecode/releases) sayfasından indirin: macOS (Apple silicon) için `.dmg`, Windows (x64) için bir yükleyici veya Ubuntu (x64) için `.deb`.
+```sh
+code --install-extension facade.facadecode
+```
 
-**Ön koşullar**: Kullanmak istediğiniz ajan CLI'larını kurun ve oturum açın (Claude Code, Codex, Antigravity, Muse Code veya Qwen Code'un herhangi bir birleşimi). Facade Code bunları kendi yerel kimlik doğrulamaları ve abonelikleriyle doğrudan çalıştırır.
+Veya **Facade Code**'u [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) ya da [Open VSX](https://open-vsx.org/extension/facade/facadecode) üzerinden yükleyin. macOS (Apple silicon), Linux (x64) ve Windows (x64) üzerinde çalışır.
 
-Facade Code, VS Code'un yanına kurulur ve onunla hiçbir şey paylaşmaz: ayarlar, eklentiler ve `facade` komut satırı aracı tamamen ayrıdır.
+Ardından, kullanmayı planladığınız desteklenen aracı CLI'larını yükleyin ve oturum açın: Claude Code, Codex, Antigravity, Muse Code, OpenCode veya Pi. Facade Code her CLI'yı kendi oturum açma bilgilerini ve aboneliklerini kullanarak başlatır.
 
-## Hızlı Başlangıç
+> **Aracılar varsayılan olarak onay istemi olmadan çalışır.** `facade.yolo` varsayılan olarak etkinken aracılar komutları çalıştırabilir ve dosyaları önceden sormadan değiştirebilir. Her CLI'nın standart onay istemlerini geri getirmek için bunu kapatın. [Uzantı README](../../../extension/README.md#install) dosyasına bakın.
 
-1. **Bir proje açın**:
-   ```sh
-   facade ~/code/space-shooter
-   ```
-   Ya da **File > Open Folder** (Dosya > Klasör Aç) kullanın veya bir klasörü çalışma alanı çubuğuna sürükleyip bırakın. Klasörün bir git deposu olması gerekir (worktree'ler git gerektirir; sıfırdan başlıyorsanız önce `git init` çalıştırın).
+## Agent Panel
 
-2. **Bir teknik lider başlatın**:
-   Başlık çubuğundaki robot simgesine (Agent menüsü) tıklayın ya da Komut Paleti'nde **Agents: Start Agent...** (ajan başlat) komutunu çalıştırın ve Claude Code veya Codex'i seçin. Facade Code içinden başlatılan ajan, Facade'ın MCP araçlarıyla donatılır.
+**Aracılarınız ve IDE'niz aynı pencerede.**
 
-3. **Ona teknik lider prompt'unu verin**:
-   ```text
-   Sen teknik lidersin. Facade'ı kullanarak bir demo için tarayıcıda (masaüstü) çalışan
-   neon bir uzay nişancı oyunu yap. Ekipte Codex üzerinden GPT Sol 6 (gpt-6-sol, max)
-   kullanan, görünüm ve oyun hissinden sorumlu bir PD ile paralel çalışan üç Muse 1.3
-   mühendisi (muse-spark-1.3, max) olsun. Küçük tut, yaklaşık yarım saatlik bir iş:
-   bir bölüm, üç düşman türü, iki aşamalı bir boss, güçlendirmeler, skor ve kombolar.
-   Daha fazla özellik eklemektense oyunu bitirip iyice cilalamak daha iyi. Mühendisler kendi işlerini kendileri
-   birleştirsin, sen sonra incele. Bana kısa bir plan, bir kulvar diyagramı ve PD'nin
-   maketini içeren tek bir HTML sayfası gönder ve başlamadan önce onayımı bekle.
-   ```
+Facade Code, yerel aracı CLI'larını (Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi) dosyalarınızın yanında düzenleyici terminal sekmelerinde çalıştırır; her CLI'nın kendi komutlarını, araçlarını, hesaplarını ve aboneliklerini kullanır. Paneldeki bir kart her aracının durumunu izler.
 
-4. **Ekibin birlikte çalışmasını izleyin**:
-   Başlatılan PD ve mühendisler, çalışma alanı çubuğunda kendi proje ve özelliklerinin altında görünür. HTML planı onayladığınızda geliştirmeye başlarlar. İstediğiniz zaman herhangi bir ajanın terminaline tıklayıp çıktısına bakabilir ya da onunla doğrudan konuşabilirsiniz.
+- **Kodunuzun yanında çalışın.** Her aracı, düzenleyici alanında kendi terminal sekmesinde çalışır. Bir sekmeyi kapatmak, aracı çalışmaya devam ederken onu gizler; kartına tıklamak sekmeyi yeniden açar.
+- **Aracıların durumunu takip edin.** Kartlar her aracıyı kimin başlattığını, ne yaptığını ve girdi için hazır mı, izin mi bekliyor yoksa bir hatayla mı karşılaştı gösterir. Aracılar pencere yeniden yüklemeleri ve uzantı yeniden başlatmaları boyunca çalışmaya devam eder.
+- **Klasörler ve çalışma ağaçları.** Aracıları herhangi bir çalışma alanı klasöründe çalıştırın veya kod değişikliklerini ayrı tutmak için anında bir Git çalışma ağacı (worktree) oluşturun. Çalışma alanını tekrar açtığınızda geri yüklemek için bir konuşmayı sabitleyin (Pin) veya geçmişten önceki oturumları devam ettirin.
 
-*(Not: Bu örnek prompt, 5 ajanı en yüksek akıl yürütme düzeyinde başlatır. CLI'ları, modelleri, akıl yürütme düzeylerini ve mühendis sayısını sahip olduğunuz aboneliklere göre ayarlayın.)*
+## Agent Use
 
-## Özellikler
+**Tıpkı sizin gibi, aracıların diğer aracıları yönetmesine izin verin.**
 
-### Oturumlar değil, projeler ve özellikler
+MCP ve bir terminal protokolü aracılığıyla aracılar diğer aracıları başlatabilir, durdurabilir, bulabilir, onlara mesaj gönderebilir, terminal ekranlarını okuyabilir, metin yazabilir ve tuşlara basabilir.
 
-https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
+- **Aracıları başlatın ve durdurun.** Bir aracı, bu bilgisayardaki Facade pencerelerinizin herhangi bir klasöründe veya yeni çalışma ağacında altı CLI'dan herhangi biriyle başka aracılar başlatabilir ve onlara ilk görevlerini verebilir. Aynı istek kimliğiyle (request ID) yinelenen bir istek asla ikinci bir aracı başlatmaz.
+- **Mesaj gönderin.** Aracılar birbiriyle mesajlaşır ve size mesaj gönderebilir. Facade tüm mesajı tek seferde yapıştırır ve gönderir. Gönderilmemiş bir metin veya bir komut istemi sorusu aradaysa, teslimat girdi alanı temizlenene kadar bekler.
+- **Terminal kontrolü.** Bir aracı, istemleri yanıtlamak veya takılan bir çalışma arkadaşına yardımcı olmak için başka bir aracının ekranını okuyabilir, komutlar yazabilir ve tuşlara basabilir. Bir alt aracı girdi veya izin için 20 saniye beklediğinde, onu başlatan aracıya bildirim gönderilir.
 
-Çoğu ajan aracı her ajan oturumu için bir worktree oluşturur. Facade Code bunun tersini yapar: her worktree bir özelliktir, kendi deposunun altında listelenir ve ona ajanları siz atarsınız.
+## Agent Mesh
 
-Bir özellik çoğu zaman birden fazla ajana ihtiyaç duyar. Kodu yazan ajan, yaptığı işi iyi anlatamayabilir ya da tasarım konusunda iyi bir gözü olmayabilir; bu yüzden diğer ajanlar belgeleme, tasarım ve incelemede yardım eder, hepsi aynı worktree'de. Ajanlar gelir gider; özellik kalır.
+**Aracıları pencereler, makineler ve konumlar arasında bağlayın.**
 
-- **Çalışma alanı çubuğu**: Tüm depoları ve özellikleri tek bir sütunda listeler. Birine tıkladığınızda tüm pencere (gezgin, düzenleyiciler, terminaller ve kaynak denetimi) değişir ve bıraktığınız gibi geri yüklenir. Projeler asla birbirine karışmaz. Bkz. [`WORKSPACE.md`](../../ide/WORKSPACE.md).
-- **Worktree yaşam döngüsü**: **New Worktree** (yeni worktree) dalı oluşturur, `.worktreeinclude` içinde listelenen yerel dosyaları eşitler ve kurulumu çalıştırır. **Delete Worktree** (worktree'yi sil), kaldırmadan önce nelerin kaybolacağını ayrıntılı olarak gösterir. Bkz. [`WORKTREE.md`](../../ide/WORKTREE.md).
-- **Paralel alt görevler**: Birbirinden bağımsız görevler ayrı worktree'lere ayrılabilir.
+Facade Code, bu bilgisayardaki Facade pencerelerinizdeki aracıları tek bir ağda birleştirir. Bu iş birliğini başka bir makineye genişletmek için bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresi açın.
 
-### Her sağlayıcıdan bir ekip
+- **Pencereler arasında.** `facade.yolo` açıkken bir aracı, bu bilgisayardaki Facade pencerelerinizdeki yerel ve Remote - SSH dahil tüm aracılara ulaşır. Kapalıyken yalnızca kendi grubuna ulaşır: başlattığınız aracı ve ondan başlatılanlar.
+- **SSH üzerinden genişletin.** Bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresinde aracılar doğrudan uzak makinede oradaki araçlar, dosyalar ve hesaplarla çalışır. Yerel aracılar, Remote - SSH pencerelerindeki aracıları doğrudan başlatabilir ve onlara mesaj gönderebilir.
+- **Telefonunuzdan koordine edin.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) kullanarak Claude mobil uygulamasını bilgisayarınızdaki bir Claude Code oturumuna bağlayın. Bu oturum diğer aracıları Facade üzerinden koordine edebilir ve ilerlemeyi telefonunuza bildirebilir.
 
-- **Kendi aboneliklerinizle yerel CLI'lar**: Claude Code, Codex, Muse Code, Antigravity ve Qwen Code, mevcut aboneliklerinizi kullanarak kendi tümleşik terminallerinde çalışır.
-- **Ajanlar ajan başlatır**: Bir ajan, mevcut özellikte ya da yeni bir worktree'de başka ajanlar (herhangi bir sağlayıcının CLI'ı veya modeliyle) başlatabilir ve onlara görev atayabilir. Bkz. [`AGENT-LAUNCHER.md`](../../ide/AGENT-LAUNCHER.md) ve [`AGENT-ORCHESTRATION.md`](../../ide/AGENT-ORCHESTRATION.md).
-- **Mesajlaşma**: Ajanlar birbirine mesaj gönderir, sonuçları kendilerini çağırana bildirir ve bir karar insan onayı gerektirdiğinde size haber verir. Bkz. [`AGENT-MESSAGES.md`](../../ide/AGENT-MESSAGES.md).
-- **Takılan ajanlara yardım**: Bir ajan, başka bir ajanın terminalini okuyabilir, istemlerini yanıtlayabilir ve tuş vuruşları göndererek takılan bir çalışana sizi rahatsız etmeden yardım edebilir. Bkz. [`AGENT-DEBUGGING.md`](../../ide/AGENT-DEBUGGING.md).
-- **Her birine müdahale edebilirsiniz**: Her ajanın, kendi özelliğinin altında kendine ait bir terminal satırı vardır. Ne yaptığını görürsünüz ve istediğiniz an doğrudan içine yazabilirsiniz.
-- **Standart MCP**: Tüm orkestrasyon araçları standart bir MCP sunucusu üzerinden sunulur.
+<sub>Remote Control desteklenen bir Claude Code sürümü, uygun bir abonelik ve tam kapsamlı oturum açma gerektirir. [Kurulum gereksinimlerine](https://code.claude.com/docs/en/remote-control#requirements) bakın.</sub>
 
-## İki Çalışma Biçimi
+## Facade Code IDE (Preview)
 
-Darboğaz, geliştiricinin dikkatidir. İki mod, iki farklı yetki devri düzeyini temsil eder:
+**Birden çok proje. Tek pencere.**
 
-| | **Super Engineer** | **Super Team** |
-|---|---|---|
-| **Rolünüz** | Kodu bizzat yazan mühendis | Mühendislik yöneticisi |
-| **Muhatabınız** | Doğrudan birden çok ajan | Bir teknik lider ajan, birebir |
-| **Ajanları kim koordine eder** | Siz | Teknik lider |
-| **En uygun olduğu durumlar** | Yakından yönlendirme isteyen özellikler: keşif niteliğindeki işler, kendiniz değerlendirmek istediğiniz tasarım kararları, değişen gereksinimler | Temiz bir şekilde bölünebilen, büyük ve iyi tanımlanmış özellikler |
+Projeleri, özellik çalışma ağaçlarını ve aracı ekiplerini özel bir çalışma alanı çubuğunda düzenleyin. Aracılar arka planda çalışmaya devam ederken ilgili dosyaları ve terminalleriyle projeler arasında geçiş yapın.
 
-İkisini aynı pencerede birlikte kullanabilirsiniz: hassas özellikleri yakından kontrol ederken kapsamı net işleri bir lidere devredin.
+IDE önizlemesini indirin: [macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [Tüm sürümler](https://github.com/y5ez3g/facadecode/releases)
 
-- **Super Engineer**: Worktree'leri siz açar, depolar arasında ajanlara görev atar ve her biri bitirdikçe kodu incelersiniz.
-- **Super Team**: Bir özelliği, teknik lider olarak bir ajana teslim edersiniz. Lider görevleri böler, arayüz sözleşmelerini belirler, çalışanları başlatır ve çıktılarını inceler.
-  - Güçlü bir model liderlik eder; daha hızlı ve daha ucuz modeller mevcut aboneliklerinizle paralel olarak uygular; farklı sağlayıcıların modelleri de birbirinin işini inceler.
-  - Kurmak için bir prompt yeterlidir (bkz. [Hızlı Başlangıç](#hızlı-başlangıç)); tekrar tekrar kullandığınız ekip iş akışları skill olarak yazılabilir.
-
-*(Bu README de aynı şekilde yazıldı: bir ajan analiz etti, bir ajan taslağı yazdı ve son kararı bir insan verdi.)*
-
-## Neden
-
-Çoğu yapay zekâ kodlama aracı iki kampa ayrılır: insanın satır satır takip etmesi gereken Copilot tarzı IDE'ler ve kod incelemesi ile hata ayıklamanın harici bir düzenleyiciye bırakıldığı ajan IDE'leri. Hiçbiri, farklı sağlayıcılardan yerel ajanlardan oluşan bir ekibi ana IDE'nizin içinde bir araya getirmez.
-
-Geleceğin, bir ajan ekibiyle birden çok proje ve özelliği yürüten tek bir geliştirici olduğuna inanıyoruz. Farklı modeller farklı işlerde öne çıkar; bu yüzden ekip birden çok sağlayıcıyı kapsamalıdır. Ve incelediğiniz kodu ajanlar yazdığına göre, o ekibin yeri sizin IDE'nizdir.
-
-## Hâlâ VS Code
-
-Facade Code yalnızca çoklu proje ve ajan yönetiminin gerektirdiği yerleri değiştirir:
-
-- **Çalışma alanı çubuğu** ilk sütunu kaplar; **etkinlik çubuğu** başlık çubuğunun sağ üstüne taşınır (`workbench.activityBar.location` ile geri alınabilir).
-- Upstream'deki Copilot ve sohbet varsayılan olarak kapalıdır (tek bir ayarla yeniden açılabilir).
-- Geri kalan her şey standart VS Code'dur: düzenleyici, ayarlar, tuş atamaları, `.vscode/` ve `.code-workspace` dosyaları.
-- Eklentiler [Open VSX](https://open-vsx.org) üzerinden kurulur. Remote Development ve C/C++ gibi bazı tescilli Microsoft eklentileri yalnızca resmî Microsoft derlemeleri için lisanslıdır ve fork'larda çalışamaz.
+IDE, mevcut düzenleyicinizin yanına yüklenen ve onunla hiçbir şey paylaşmayan bir VS Code çatalıdır (fork): ayarlar, uzantılar ve `facade` komutu tamamen ayrıdır. Uzantıları [Open VSX](https://open-vsx.org) üzerinden gelir; Remote Development ve C/C++ gibi birkaç tescilli Microsoft uzantısı yalnızca resmi Microsoft derlemelerinde çalışır. Mimari ve spesifikasyonlar [`docs/ide/`](../../ide/) altındadır.
 
 ## Kaynaktan Derleme
 
-[`docs/ide/RELEASE.md`](../../ide/RELEASE.md) dosyasını ajanınıza verin, derlemeyi o yapsın.
+- **Uzantı:** Paketi derlemesi için kodlama aracınıza [`extension/AGENTS.md`](../../../extension/AGENTS.md) dosyasını verin.
+- **IDE:** Uygulamayı derlemesi için kodlama aracınıza [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) dosyasını verin.
 
-Katkı yönergeleri ve dal kuralları için [`CONTRIBUTING.md`](CONTRIBUTING.md) ve [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) dosyalarına bakın.
+Katkıda bulunma yönergeleri ve dal disiplini için [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) ve [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) dosyalarına bakın.
 
 ## Geri Bildirim
 
-- **Hatalar ve fikirler**: [GitHub Issues](https://github.com/y5ez3g/facadecode/issues) ya da düzenleyicideki **Help > Report Issue** (Yardım > Sorun Bildir).
-- **Güvenlik açıkları**: Lütfen [`SECURITY.md`](SECURITY.md) dosyasındaki yönergelere göre gizli olarak bildirin.
+- **Hatalar ve fikirler:** [GitHub Issues](https://github.com/y5ez3g/facadecode/issues) veya IDE içinde **Yardım > Sorun Bildir**.
+- **Güvenlik açıkları:** Lütfen [`SECURITY.md`](../../../SECURITY.md) dosyasına göre gizli olarak bildirin.
 
 ## Lisans
 
-MIT, upstream VS Code ile aynı. Microsoft'un telif hakkı bildirimi ve Facade Code katkıcılarının bildirimleri için [`LICENSE.txt`](../../../LICENSE.txt) dosyasına bakın.
+Yukarı akış VS Code ile eşleşen MIT. Microsoft'un telif hakkı bildirimi ve Facade Code katkıda bulunanların bildirimleri için [`LICENSE.txt`](../../../LICENSE.txt) dosyasına bakın.
+
+<sub>Facade Code bağımsız bir üründür ve gösterilen üçüncü taraf araçların sağlayıcılarına bağlı değildir, onlar tarafından onaylanmamıştır veya desteklenmemektedir. Tüm üçüncü taraf ticari markaları ve logoları ilgili sahiplerine aittir.</sub>

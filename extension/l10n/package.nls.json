@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "Run Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi agents side by side in VS Code.",
+	"description": "The multi-agent orchestrator for VS Code. Run Claude Code, Codex, Antigravity, Muse Code, OpenCode, and Pi in your IDE.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "New Agent...",
@@ -27,7 +27,7 @@
 	"config.pi.title": "Pi",
 	"config.pi.path": "Path to Pi. Leave empty to use \"pi\" from the terminal environment's PATH.",
 	"windowDisplayName": "Facade Code Window Component",
-	"windowDescription": "Window identity and session continuity coordinator for Facade Code.",
+	"windowDescription": "Required by Facade Code and installed automatically with it to connect your windows and restore agents after reloads.",
 	"config.collaboration.enabled": "Let agents start and stop each other, send messages to each other and to you, and read and type in each other's terminals. Applies to new agents only.",
 	"command.filter": "Filter by Working Location...",
 	"command.showAgentLaunch": "Show Agent Launch...",
