@@ -6,7 +6,7 @@ import * as path from 'path';
 import { messageOf } from '../../base/errors';
 import type { OwnerClaim } from '../../base/ownership';
 import { ptydBuild } from '../../base/ptydRegistry';
-import { PTYD_PROTOCOL, type TerminalColours } from '../../ptyd/protocol';
+import { COLOURS_PROTOCOL, PTYD_PROTOCOL, type TerminalColours } from '../../ptyd/protocol';
 import { nextOwnerClaim } from '../../record/ownership';
 import { EarlierPtyds, OtherPtyd, otherPtyds, ownPtydSocket, PtydClient, PtydNotSent } from './ptydClient';
 
@@ -56,7 +56,13 @@ export class ExecutionSession {
 		this.own = ownPtydSocket(options.home, options.ptydScript, options.version);
 		this.earlier = new EarlierPtyds(options.home, this.own, this.claim, {
 			log: options.log, lost: socket => this.lose(socket), ownerLost: () => this.transfer(), ...options.busy ? { busy: options.busy } : {},
-			...options.connected ? { connected: options.connected } : {}
+			...options.connected ? { connected: options.connected } : {},
+			// Its runs' programs ask it their terminal's colours as they ask this window's own: it is told them too (ARCHITECTURE-2.3)
+			joined: (client, protocol) => {
+				if (protocol >= COLOURS_PROTOCOL) {
+					this.tellColours(client);
+				}
+			}
 		});
 		this.reconcileTimer = setInterval(() => void options.reconcile(), RECONCILE_MS);
 		this.reconcileTimer.unref?.();
@@ -194,9 +200,18 @@ export class ExecutionSession {
 		}
 	}
 
-	/** Tells this window's own ptyd the colours its terminals draw with now, where it is connected (ARCHITECTURE-2.3). */
+	/**
+	 * Tells each ptyd that holds this window's runs the colours its terminals draw with now: its own, where it is connected, and those
+	 * of earlier builds it holds - a reload into an update leaves its agents there, and a theme changed after must reach their
+	 * programs too (ARCHITECTURE-2.3).
+	 */
 	coloursChanged(): void {
 		void this.connection?.then(client => this.tellColours(client), () => undefined);
+		for (const [socket, client] of this.earlierHeld) {
+			if ((this.earlier.protocolOf(socket) ?? 0) >= COLOURS_PROTOCOL) {
+				this.tellColours(client);
+			}
+		}
 	}
 
 	private tellColours(client: PtydClient): void {

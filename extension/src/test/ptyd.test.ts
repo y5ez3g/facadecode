@@ -903,6 +903,117 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
+	// OpenCode picks its light or dark look from its terminal's background as it starts; on 2026-11-05 the person turned the editor
+	// from Light Modern to Dark Modern while it ran, and its plain text took the dark theme's light grey on its light backgrounds
+	test('a program that asks for colour scheme reports (mode 2031) is told as its window\'s colours turn dark or light, and asks again; ptyd says it reports them and answers which it is now (ARCHITECTURE-2.3)', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const written: string[] = [];
+		const pty = { pid: 4345, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); }, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const server = new Server(pipe('scheme'));
+		assert.strictEqual(await server.listen(), true);
+		try {
+			const window = await PtydClient.connect(pipe('scheme'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			clients.push(window);
+			await window.request('claim', { owner: 'w1', generation: 1, token: 'scheme-1' });
+			await spawn(window, 'looks', IDLE);
+			const sent = async (output: string) => {
+				const before = written.length;
+				emit(output);
+				await window.request('read', { run: 'looks', lines: 1 });
+				return written.slice(before).join('');
+			};
+			const told = async (colours: { foreground: string; background: string }) => {
+				const before = written.length;
+				await window.request('colours', colours);
+				return written.slice(before).join('');
+			};
+			const light = { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff' }, dark = { foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' };
+			// Known, and not asked for yet; which it is unknown before the window says its colours
+			assert.strictEqual(await sent('\x1b[?2031$p'), '\x1b[?2031;2$y');
+			assert.strictEqual(await sent('\x1b[?996n'), '');
+			assert.strictEqual(await told(light), '', 'not asked for: no report');
+			assert.strictEqual(await sent('\x1b[?996n'), '\x1b[?997;2n');
+			// Asked for, and the question in the same arrival follows it; a theme of the same kind again reports nothing
+			assert.strictEqual(await sent('\x1b[?2031h\x1b[?2031$p'), '\x1b[?2031;1$y');
+			assert.strictEqual(await told({ foreground: '0000/0000/0000', background: 'f3f3/f3f3/f3f3' }), '');
+			assert.strictEqual(await told(dark), '\x1b[?997;1n', 'turned dark');
+			assert.strictEqual(await sent('\x1b[?996n'), '\x1b[?997;1n');
+			assert.strictEqual(await told(light), '\x1b[?997;2n', 'turned light');
+			// No longer asked for, and a full reset forgets it was
+			assert.strictEqual(await sent('\x1b[?2031l'), '');
+			assert.strictEqual(await told(dark), '');
+			await sent('\x1b[?2031h');
+			assert.strictEqual(await sent('\x1bc\x1b[?2031$p'), '\x1b[?2031;2$y', 'a reset in the same arrival');
+			assert.strictEqual(await sent('\x1b[?2031$p'), '\x1b[?2031;2$y');
+			assert.strictEqual(await told(light), '');
+			// The headless terminal answers neither question itself: each is answered once
+			assert.strictEqual(await sent('\x1b[?2031h'), '');
+			assert.strictEqual([await sent('\x1b[?2031$p'), await sent('\x1b[?996n')].join(''), '\x1b[?2031;1$y\x1b[?997;2n');
+		} finally {
+			server.close();
+		}
+	});
+
+	test('ARCHITECTURE-2.3: the asking for scheme reports follows the output as it arrives - in separate arrivals not yet drawn, split across arrivals, a full reset alone or split, a reset naming other modes too - and drawing that catches up never sets it back', async () => {
+		let emit: (data: string) => void = () => undefined;
+		const written: string[] = [];
+		const pty = { pid: 4346, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); }, resize() {}, pause() {}, resume() {} };
+		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const server = new Server(pipe('arrival'));
+		assert.strictEqual(await server.listen(), true);
+		try {
+			const window = await PtydClient.connect(pipe('arrival'), '/nonexistent/ptyd.js', path.join(socketDir, 'unused.log'));
+			clients.push(window);
+			await window.request('claim', { owner: 'w1', generation: 1, token: 'arrival-1' });
+			await spawn(window, 'arrives', IDLE);
+			await window.request('colours', { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff' });
+			// Arrivals one after another, with nothing drawn in between: each answered at once, by the asking before it
+			const at = (...arrivals: string[]) => {
+				const before = written.length;
+				arrivals.forEach(each => emit(each));
+				return written.slice(before).join('');
+			};
+			const asked = [
+				at('\x1b[?2031h', '\x1b[?2031$p'),
+				at('\x1b[?2031l', '\x1b[?2031$p'),
+				at('\x1b[?20', '31h', '\x1b[?2031$p'),
+				at('\x1b', 'c', '\x1b[?2031$p'),
+				at('\x1b[?2031h', '\x1bc', '\x1b[?996n', '\x1b[?2031$p'),
+				at('\x1b[?1049;2031h', '\x1b[?2031$p'),
+				at('\x1b[?25;2031l\x1b[?2031$p'),
+				// Split right after `ESC [`, an arrival with nothing else of a question in it, then its reset counterpart
+				at('text\x1b[', '?2031h', '\x1b[?2031$p'),
+				at('\x1b[', '?2031l', '\x1b[?2031$p'),
+				// A long DEC set split past where any question would have ended, still naming its modes; then one past what is kept
+				at(`\x1b[?1000;1002;1003;1006;1015;1016;`, '2031h', '\x1b[?2031$p'),
+				at(`\x1b[?1000;1002;1003;1006;1015;1016;2031l`, '\x1b[?2031$p'),
+				at(`\x1b[?${'1;'.repeat(600)}`, '2031h', '\x1b[?2031$p'),
+				// Split inside a set naming another mode first, and inside the longest question itself
+				at('\x1b[?1049;20', '31h', '\x1b[?2031$p'),
+				at('\x1b[?2031$', 'p')
+			];
+			assert.deepStrictEqual(asked, ['\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?997;2n\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;2$y',
+				'\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;1$y']);
+			// Asked for again and the theme turned at once, before drawing caught up: reported
+			emit('\x1b[?2031l');
+			emit('\x1b[?2031h');
+			const before = written.length;
+			await window.request('colours', { foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' });
+			const report = written.slice(before).join('');
+			// Colours whose scheme is unknown - no background - turn it neither dark nor light: no report
+			const unknown = written.length;
+			await window.request('colours', { foreground: 'cccc/cccc/cccc' } as never);
+			const noReport = written.slice(unknown).join('');
+			await window.request('colours', { foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' });
+			// Drawing caught up: what it drew changes nothing - still asked for, and one answer each
+			await window.request('read', { run: 'arrives', lines: 1 });
+			assert.deepStrictEqual([report, noReport, at('\x1b[?2031$p'), at('\x1b[?996n')], ['\x1b[?997;1n', '', '\x1b[?2031;1$y', '\x1b[?997;1n']);
+		} finally {
+			server.close();
+		}
+	});
+
 	test('a screen taken puts its cursor where the run\'s is, a last row filled to its last column included (ARCHITECTURE-2.3)', async () => {
 		let emit: (data: string) => void = () => undefined;
 		const pty = { pid: 4344, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write() {}, resize() {}, pause() {}, resume() {} };

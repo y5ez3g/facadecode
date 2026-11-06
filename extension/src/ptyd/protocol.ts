@@ -13,7 +13,13 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 15;
+export const PTYD_PROTOCOL = 16;
+/**
+ * The first protocol whose ptyd takes its window's terminal colours, `colours`, and answers its runs' programs' OSC 10, 11 and 12 with
+ * them (ARCHITECTURE-2.3). Colour scheme reports - mode 2031 and DSR 996 - are 16's: a run of a 15 ptyd gets the new colours as its
+ * window's theme changes, and has them when it asks again, but is sent no report.
+ */
+export const COLOURS_PROTOCOL = 15;
 
 /**
  * The earlier protocols of released builds, each still spoken: a window shows and operates the runs their ptyds hold for it
@@ -26,9 +32,11 @@ export const PTYD_PROTOCOL = 15;
  * probe answered before a window has its output, a local window's 90 seconds, and a run its grace could not confirm ended listed as
  * uncertain (ARCHITECTURE-2.2, 2.3, CLIS-2.3): it ignores whether a claim's window is local, and its window passes its terminal's
  * answers on.
+ * 15 lacks 16's colour scheme reports (mode 2031, DSR 996): it answers its runs' colour questions, but tells none of a program that
+ * its colour scheme turned dark or light, nor whether it would (ARCHITECTURE-2.3).
  * New runs go to none of these.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13, 14];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13, 14, 15];
 
 /** The first protocol whose ptyd answers its runs' terminal queries itself: a window filters its editor terminal's answers (ARCHITECTURE-2.3). */
 export const QUERY_ANSWERS_PROTOCOL = 15;
