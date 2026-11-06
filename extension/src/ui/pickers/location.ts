@@ -10,6 +10,7 @@ import { isJsonObject } from '../../base/json';
 import { isDeletableWorktree, runsLaunchedIn } from '../../core/locations/catalog';
 import { WorktreeProblem, worktreeProblemOf } from '../../core/locations/problems';
 import type { Agents, Catalog, HumanPort, Location, LocationId, LocationPort, LogPort, WorkspaceFolderInfo, WorktreePlan, WorktreePort } from '../../core/ports';
+import { placeKindOf } from '../model';
 import { plainText } from '../presentation';
 import { BACK, Flow, StepAction } from './stepping';
 
@@ -90,7 +91,7 @@ export function worktreeSourceLabel(location: Location): string {
 }
 
 /**
- * The environment a location runs in, as the New Agent picker and a card's hover say it beside the location (LIFECYCLE-1.1):
+ * The environment a location runs in, as the New Agent picker and a card's details say it beside the location (LIFECYCLE-1.1):
  * as VS Code's remote indicator names it. `authority` is the window's remote authority, which only the local window component
  * sees: the workspace extension host has its folders as `file:` URIs.
  */
@@ -130,9 +131,9 @@ function hostOf(encoded: string): string {
 	}
 }
 
-/** A location's icon: a plain folder, a repository's main checkout, or another worktree. */
+/** A location's icon: a folder - a plain one, or one opened inside a checkout - a repository's main checkout, or another worktree. */
 export function locationIcon(location: Location): vscode.ThemeIcon {
-	return new vscode.ThemeIcon(location.kind === 'folder' ? 'folder' : location.isMain ? 'repo' : 'worktree');
+	return new vscode.ThemeIcon(placeKindOf(location));
 }
 
 type LocationItem = vscode.QuickPickItem & { readonly location?: Location };
@@ -140,7 +141,8 @@ type FolderItem = vscode.QuickPickItem & { readonly folder?: WorkspaceFolderInfo
 
 /** The locations of a workspace folder, in the catalog's order (WORKTREES-1.2): every one associated with it. */
 export function locationsIn(catalog: Catalog, folder: WorkspaceFolderInfo): Location[] {
-	return catalog.locations.filter(location => location.folders.some(each => each.uri === folder.uri));
+	// A folder inside one of them is none of their own (WORKTREES-1.2)
+	return catalog.locations.filter(location => !location.within && location.folders.some(each => each.uri === folder.uri));
 }
 
 /** A workspace folder's icon: that of the location it opened - a plain folder, a repository's main checkout or another worktree. */
@@ -440,7 +442,7 @@ export async function chooseLocation(flow: Flow, deps: LocationDeps, titles: { r
 /** The sentence a removal's confirmation adds where it closes agents (WORKTREES-3.3): none where it closes none. */
 function closingText(count: number): string | undefined {
 	// {0} is how many agents, two or more
-	return count === 0 ? undefined : count === 1 ? vscode.l10n.t("Its agent will be closed.") : vscode.l10n.t("{0} associated agents will be closed.", count);
+	return count === 0 ? undefined : count === 1 ? vscode.l10n.t("Its agent will be ended.") : vscode.l10n.t("{0} associated agents will be ended.", count);
 }
 
 /** Whether the person confirmed `message` with `action`, asked in a modal warning: anything else is no (LIFECYCLE-1.3). */
@@ -479,7 +481,9 @@ async function addFolder(deps: FolderStepDeps): Promise<WorkspaceFolderInfo | un
 async function removeFolder(deps: FolderStepDeps, folder: WorkspaceFolderInfo): Promise<void> {
 	// The locations no other folder keeps: those the removal takes, with their agents
 	const gone = new Set(deps.locations.snapshot().locations.filter(each => each.folders.every(of => of.uri === folder.uri)).map(each => each.id));
-	const closing = deps.agents.list().filter(run => gone.has(run.location)).length;
+	// Those in a Resume cwd the catalog has no record of yet count with the anchor they kept (WORKTREES-1.2)
+	const known = new Set(deps.locations.snapshot().locations.map(each => each.id));
+	const closing = deps.agents.list().filter(run => gone.has(run.location) || (run.within !== undefined && gone.has(run.within) && !known.has(run.location))).length;
 	// {0} is the workspace folder's name
 	if (!await confirmed(vscode.l10n.t("Remove \"{0}\" from this workspace? Files stay on disk.", folder.name), vscode.l10n.t("Remove"), closingText(closing))) {
 		return;

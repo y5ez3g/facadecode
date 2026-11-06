@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The panel's wire contract (PANEL-3.1): plain types shared by the host (`src/ui`) and the page. The host applies every business
-// rule - order, filter, dot, second line, hover, menu - and the page only draws what it is sent and reports what the person did.
+// rule - order, filter, dot, second line, details, menu - and the page only draws what it is sent and reports what the person did.
 
 /** What a card's context menu offers beyond its fixed actions (PANEL-2.2): each only where it would do something now. */
 export interface CardMenu {
@@ -15,6 +15,48 @@ export interface CardMenu {
 
 /** The `charts` colours a custom CLI's avatar can take: none that a status dot uses (UX-2.1). */
 export type AvatarColor = 'blue' | 'orange' | 'purple';
+
+/** Which fact a field of a card's details is (PANEL-1.5): stable whatever its words say, in every language. */
+export type DetailId = 'title' | 'location' | 'path';
+
+/**
+ * One fact of a card's details: its value, and what a screen reader says before it - its label as the window's language says it,
+ * its colon among it - where the details show the value alone.
+ */
+export interface DetailField {
+	readonly id: DetailId;
+	readonly label: string;
+	readonly value: string;
+}
+
+/** What a location is, which its icon says as Facade's location pickers have it: a main checkout, a worktree, or a folder (PANEL-1.5). */
+export type PlaceKind = 'repo' | 'worktree' | 'folder';
+
+/**
+ * A card's details (PANEL-1.5): what it works on - its conversation's title - who the agent is - its name and short ID, which the
+ * card has - when it started, and where it works. When it started the page says, from the card's time.
+ */
+export interface CardDetails {
+	/** Its conversation's complete title as its CLI stores it, where its CLI saved one; else the first row says `untitled`. */
+	readonly summary?: DetailField;
+	/** The first row's localized `Title: ` label, which a screen reader hears before it, title or not (PANEL-1.5). */
+	readonly titleLabel: string;
+	/**
+	 * What the first row says where there is no title: `No title yet` while its CLI has not saved one, `Title unavailable` where Facade
+	 * has no history reader for its CLI - a custom CLI - so none can come (PANEL-1.5, CLIS-2.4).
+	 */
+	readonly untitled?: string;
+	/** The agent that started it, where an agent did: `name #aN`. */
+	readonly startedBy?: string;
+	/** Where it works, always: its main checkout, worktree or folder, its icon saying which - then, always, its path. */
+	readonly location: DetailField & { readonly kind: PlaceKind };
+	readonly path: DetailField;
+	/**
+	 * What a screen reader is told beyond the card's label, of the facts the label does not say already, in the details' order: its
+	 * title, then - after when it started, which the page says - where it works and its path.
+	 */
+	readonly description: { readonly title: string; readonly place: string };
+}
 
 /** One card (PANEL-1.3-1.5), every text already in the person's language. */
 export interface Card {
@@ -28,21 +70,17 @@ export interface Card {
 	readonly avatar?: { readonly file: string } | { readonly initial: string; readonly color: AvatarColor };
 	/** Its short ID shows beside its name: another card of this window has that name too (PANEL-1.3). */
 	readonly repeated?: true;
-	/** The hover's and accessible label's alone: no card shows its location (PANEL-1.3). */
-	readonly location: { readonly full: string };
 	/** Green for work, red for an error, none for anything else (RULES-3.2). */
 	readonly dot: 'working' | 'error' | 'none';
 	/** The state in words, dot or none: startup, work, idle, the native blocker's kind, an error or unavailable activity. */
 	readonly stateText: string;
 	/** The second line (PANEL-1.4). */
 	readonly line: string;
-	/** The hover's lines before its start time and location (PANEL-1.5). */
-	readonly tooltip: readonly string[];
+	/** Its details, its location among them: no card shows its location (PANEL-1.3, 1.5). */
+	readonly details: CardDetails;
 	/** The accessible label (PANEL-1.5). */
 	readonly label: string;
 	readonly startedAt?: number;
-	/** Epoch ms its CLI reported the work it is doing, where it is working: the hover says how long ago (RULES-3.2). */
-	readonly workingSince?: number;
 	readonly menu: CardMenu;
 }
 
@@ -76,8 +114,8 @@ export interface PanelState {
 	readonly exited?: readonly string[];
 }
 
-/** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons). */
-export type Act = 'open' | 'new' | 'resume' | 'clearFilter' | 'openFolder' | 'rename';
+/** What the page asks the host to do, with the card's run ID where it is a card's (PANEL-3.1; PANEL-1.2's buttons; PANEL-1.3's Pin). */
+export type Act = 'open' | 'new' | 'resume' | 'clearFilter' | 'openFolder' | 'rename' | 'pin' | 'unpin';
 
 /** The host's answer to one action of the page that asked: `gone` (its card's run is gone) or `failed`. */
 export interface Outcome {
@@ -102,12 +140,29 @@ export interface Scrolling {
 	readonly modernUI?: boolean;
 }
 
+/** How long ago, as Resume Agent's list says it: one word for now, and for each unit its one and its many. */
+export interface AgoWords {
+	readonly now: string;
+	readonly secs: string;
+	readonly min: string;
+	readonly mins: string;
+	readonly hr: string;
+	readonly hrs: string;
+	readonly day: string;
+	readonly days: string;
+	readonly wk: string;
+	readonly wks: string;
+	readonly mo: string;
+	readonly mos: string;
+	readonly yr: string;
+	readonly yrs: string;
+}
+
 /** The words the page draws itself; every card text comes with its card. */
 export interface Strings {
 	readonly agents: string;
 	readonly newAgent: string;
 	readonly resumeAgent?: string;
-	readonly pinnedHint?: string;
 	readonly clearFilter: string;
 	/** The empty panel's words (PANEL-1.2): why it is empty. */
 	readonly noAgents: string;
@@ -118,7 +173,10 @@ export interface Strings {
 	readonly otherAgent: string;
 	readonly noFolder: string;
 	readonly openFolder: string;
-	/** `Started {0}`, {0} a relative time. */
+	/** `Started {0}`, {0} how long ago as {@link ago} says it (PANEL-1.5). */
 	readonly started: string;
-	readonly workingSince: string;
+	/** `Started {0} by {1}`, {0} as in `started`, {1} the agent that started it. */
+	readonly startedBy: string;
+	/** How long ago, in Resume Agent's words: `now`, `{0} secs ago`, `{0} min ago` and the rest, each `{0}` the count (LIFECYCLE-3.2). */
+	readonly ago: AgoWords;
 }

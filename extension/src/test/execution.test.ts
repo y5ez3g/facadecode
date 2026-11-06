@@ -9,7 +9,7 @@ import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import type * as vscode from 'vscode';
-import type { ActivityReport, ExitReport, LaunchPlan, PairFacts, RunId, RunMeta, TabPlace } from '../core/ports';
+import type { ActivityReport, ExitReport, LaunchPlan, PairFacts, RunId, RunMeta } from '../core/ports';
 import type { AgentExecution } from '../host/execution/agentExecution';
 import { EarlierPtyds, otherPtyds, ownPtydSocket, PtydClient, PtydGone, PtydLost, PtydNotSent, ptydSocketPath, within } from '../host/execution/ptydClient';
 import { lineReader } from '../base/lines';
@@ -101,7 +101,11 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	let delayAttach: number;
 	let loseAttach: boolean;
 	/** Where the next listing's answer waits, once had, until opened: what the run says meanwhile reaches the window first. */
-	let listGate: { entered(): void; readonly open: Promise<void> } | undefined;
+	let listGate: { entered(): void; readonly open: Promise<void>; readonly answer?: (runs: Requests['list']['result']) => Requests['list']['result'] } | undefined;
+	/** The person's words for an English text, where a test gives them; its English else. */
+	let translations: Record<string, string>;
+	/** Each run's listener of its ptyd's events, as the window gave it: what a test tells it, it heard. */
+	let runListeners: Map<string, (event: never) => void>;
 	/** Where the next spawn's answer waits, once had, until opened; and each request's method in order. */
 	let spawnGate: { entered(): void; readonly open: Promise<void> } | undefined;
 	let requested: string[];
@@ -142,6 +146,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		spawnGate = undefined;
 		requested = [];
 		listGate = undefined;
+		translations = {};
+		runListeners = new Map();
 		const vscodeApi = {
 			TabInputTerminal,
 			TabInputText,
@@ -162,7 +168,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: path.posix.join(base.path, ...parts) }) },
 			ViewColumn: { Active: -1 },
 			TerminalExitReason: EXIT_REASON,
-			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, i: string) => String(args[Number(i)])) },
+			l10n: { t: (text: string, ...args: unknown[]) => (translations[text] ?? text).replace(/\{(\d+)\}/g, (_, i: string) => String(args[Number(i)])) },
 			workspace: {
 				getConfiguration: () => ({ get: (key: string) => config[key] }),
 				onDidChangeConfiguration: configChanged.event
@@ -239,12 +245,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 						await closed;
 						throw new PtydLost('injected loss of the connection as it reattached');
 					}
-					const result = await real.request(method, params);
+					let result = await real.request(method, params);
 					if (method === 'list' && listGate) {
 						const gate = listGate;
 						listGate = undefined;
 						gate.entered();
 						await gate.open;
+						result = gate.answer ? gate.answer(result as never) as never : result;
 					}
 					if (method === 'attach' && delayAttach) {
 						// The answer is late; what the run writes meanwhile reaches the window before it, as it can on a busy host
@@ -259,7 +266,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 					}
 					return result;
 				},
-				onRunEvent: (...args: Parameters<PtydClient['onRunEvent']>) => real.onRunEvent(...args),
+				onRunEvent: (...args: Parameters<PtydClient['onRunEvent']>) => { runListeners.set(args[0], args[1] as never); return real.onRunEvent(...args); },
 				onDidClose: (...args: Parameters<PtydClient['onDidClose']>) => real.onDidClose(...args),
 				onDidLoseOwner: (...args: Parameters<PtydClient['onDidLoseOwner']>) => real.onDidLoseOwner(...args),
 				onCall: (...args: Parameters<PtydClient['onCall']>) => real.onCall(...args),
@@ -310,6 +317,16 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 	const open = (terminal: FakeTerminal) => {
 		terminal.opened = true;
 		terminal.options.pty.open({ columns: 80, rows: 24 });
+	};
+	/**
+	 * A reattached run's tab, hidden as an unpinned agent's is after a reload, opened by the person from its card - the `at`th terminal -
+	 * and VS Code's terminal opening: it draws the run's screen (LIFECYCLE-2.2, 3.5).
+	 */
+	const openedAgain = async (port: AgentExecution, run: RunId, at: number) => {
+		await port.reveal(run, { preserveFocus: true });
+		const terminal = await until(`${run}'s tab`, () => terminals[at]);
+		open(terminal);
+		return terminal;
 	};
 	/**
 	 * The tab of `terminal` titled `title` - by the editor or by the person - as VS Code 1.143.1 does it: the terminal's name first, then
@@ -450,6 +467,17 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		}
 	};
 
+	test('ARCHITECTURE-2.2: finishRestore retires nothing; the activation\'s pinned sequence being over sends the retire, once it is told', async () => {
+		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined,
+			terminalOwner: { session: 'session-1', claim: { owner: 'workspace-1', generation: 1, token: 'token-1' }, remote: false } });
+		ports.push(port);
+		await port.finishRestore();
+		const told = () => commands.filter(command => command === 'facade.window.terminals').length;
+		const before = told();
+		await port.pinnedSequenceOver();
+		assert.deepStrictEqual([before, told()], [0, 1]);
+	});
+
 	test('a Pin marks its tab at once: in front of the active group where it is, the keys typed meanwhile its CLI\'s; behind, brought to the front for its mark, the keys meanwhile reaching no CLI, and the person\'s front given back (LIFECYCLE-3.4)', async () => {
 		const port = portOf();
 		await port.finishRestore();
@@ -552,58 +580,134 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([commands, activeGroup().viewColumn, third.isActive], [['workbench.action.focusSecondEditorGroup', 'workbench.action.pinEditor'], 3, true]);
 	});
 
-	test('a reload leaves each group\'s front as before it: the agent tab that was a group\'s front, else the file the editor restored in front, the active group\'s last and with the focus (LIFECYCLE-3.5)', async () => {
+	test('a reload\'s pinned tabs open one at a time in their turns, each in its recorded group, else the active one, in front there and marked before the next opens; nothing is given back - neither the person\'s file nor a group\'s front - and the last stays in front, its group the active one (LIFECYCLE-3.4, 3.5)', async () => {
 		const port = portOf();
-		groupsOf(3);
+		groupsOf(2);
 		const mine = fileIn(1, '/work/app/a.ts');
 		const second = fileIn(2, '/work/app/b.ts');
-		const third = fileIn(3, '/work/app/c.ts');
-		const restored = (run: RunId, tab: Exclude<TabPlace, 'hidden'>) => {
-			port.openPair(facts(run, { tab }), { reveal: false });
-			const terminal = terminals.at(-1)!;
+		// Three pinned agents back, their tabs hidden until their turns: one recorded in group 1, one as group 2's front, one hidden
+		port.openPair(facts('run-a', { tab: { column: 1 }, pinned: true }), { reveal: false, hidden: true });
+		port.openPair(facts('run-b', { tab: { column: 2 }, pinned: true }), { reveal: false, hidden: true });
+		port.openPair(facts('run-c', { tab: 'hidden', pinned: true }), { reveal: false, hidden: true });
+		assert.strictEqual(terminals.length, 0);
+		/** `run`'s turn: its tab opens where the editor puts it, the turn over once its terminal opened and its mark went on. */
+		const turn = async (run: RunId, column: (asked: number) => number) => {
+			let over = false;
+			const count = terminals.length;
+			const opening = port.openPinned(run).then(() => { over = true; });
+			const terminal = await until(`${run}'s terminal`, () => terminals[count]);
+			const asked = (terminal.options.location as { viewColumn: number }).viewColumn;
+			await new Promise(resolve => setTimeout(resolve, 50));
+			// The next waits for this terminal to open
+			assert.strictEqual(over, false, `${run}'s turn ended before its terminal opened`);
 			open(terminal);
-			opensIn(terminal, tab.column);
-			return terminal;
+			opensIn(terminal, column(asked));
+			await opening;
+			return { terminal, asked };
 		};
-		// Group 2's front was this agent; group 3 had its file in front; the active group's front was this agent
-		const a = restored('run-a', { column: 2, front: true });
-		const b = restored('run-b', { column: 3 });
-		const c = restored('run-c', { column: 1, front: true });
+		commands.length = 0;
+		// In front of the active group as it opens: marked there, the person's file not brought back over it
+		const a = await turn('run-a', asked => asked);
+		assert.deepStrictEqual([a.asked, a.terminal.tab.isPinned, a.terminal.tab.isActive, mine.isActive, activeGroup().viewColumn], [1, true, true, false, 1]);
+		// In front of its group, which the editor does not make the active one: that group made the active one for its mark, nothing given back
+		const b = await turn('run-b', asked => asked);
+		assert.deepStrictEqual([b.asked, b.terminal.tab.isPinned, b.terminal.tab.isActive, second.isActive, activeGroup().viewColumn], [2, true, true, false, 2]);
+		// Its record hidden: in the active group, the one the last tab's mark made so
+		const c = await turn('run-c', () => activeGroup().viewColumn);
+		assert.deepStrictEqual([c.asked, c.terminal.tab.isPinned, c.terminal.tab.isActive, (c.terminal.tab as unknown as ModelTab).group.viewColumn, activeGroup().viewColumn], [-1, true, true, 2, 2]);
 		await port.finishRestore();
-		await until('each group\'s front back', () => a.tab.isActive && third.isActive && c.tab.isActive && activeGroup().viewColumn === 1);
-		assert.deepStrictEqual([second.isActive, mine.isActive, b.tab.isActive, model!.made], [false, false, false, []]);
+		await new Promise(resolve => setTimeout(resolve, 300));
+		// The marks' own commands alone: no front brought back, no group made the active one again, the last tab in front of the active group
+		assert.deepStrictEqual(commands, ['workbench.action.pinEditor', 'workbench.action.focusSecondEditorGroup', 'workbench.action.pinEditor', 'workbench.action.pinEditor']);
+		assert.deepStrictEqual([activeGroup().activeTab === (c.terminal.tab as unknown), groupAt(1).activeTab === (a.terminal.tab as unknown), mine.isActive, second.isActive, model!.made], [true, true, false, false, []]);
 	});
 
-	test('whether a run\'s tab is its group\'s front is kept with it as the person changes it, never as a mark shows it for a moment (LIFECYCLE-3.5)', async () => {
+	test('while a reload\'s or a restart\'s pinned tabs open in their turns no activation moves the panel\'s selection; once they are open it is on the last one opened, and where none opened it stays as it was (PANEL-2.1, LIFECYCLE-3.5)', async () => {
 		const port = portOf();
 		await port.finishRestore();
-		const places: { readonly run: RunId; readonly place: TabPlace }[] = [];
-		port.onDidPlaceTab!(each => places.push(each));
+		const activations: (RunId | undefined)[] = [];
+		port.onDidActivate(run => activations.push(run));
+		groupsOf(2);
+		fileIn(1, '/work/app/a.ts');
+		fileIn(2, '/work/app/b.ts');
+		port.openPair(facts('run-a', { tab: { column: 1 }, pinned: true }), { reveal: false, hidden: true });
+		port.openPair(facts('run-b', { tab: { column: 2 }, pinned: true }), { reveal: false, hidden: true });
+		const opensA = port.openPinned('run-a');
+		const a = await until('the first terminal', () => terminals[0]);
+		open(a);
+		opensIn(a, 1);
+		activeTerminal = a;
+		activeChanged.fire(a);
+		await opensA;
+		const opensB = port.openPinned('run-b');
+		const b = await until('the second terminal', () => terminals[1]);
+		// Its tab opens at once, in front of group 2; its terminal opens - its xterm ready - well past the moment an opening's own
+		// activation is told apart, the editor making it the active terminal meanwhile, its turn still on
+		opensIn(b, 2);
+		await new Promise(resolve => setTimeout(resolve, 2_100));
+		activeTerminal = b;
+		activeChanged.fire(b);
+		open(b);
+		await opensB;
+		// The second's group made the active one for its mark: still no selection moved
+		assert.deepStrictEqual([[a.tab.isPinned, b.tab.isPinned], activeGroup().viewColumn, activations], [[true, true], 2, []]);
+		// Their tabs open: the selection on the last one opened
+		port.pinnedOpened();
+		assert.deepStrictEqual(activations, ['run-b']);
+		// None opened since: the selection stays as it was
+		port.pinnedOpened();
+		assert.deepStrictEqual(activations, ['run-b']);
+		// Past the turns, an agent's terminal the editor makes active moves it again
+		activeTerminal = a;
+		activeChanged.fire(a);
+		assert.deepStrictEqual(activations, ['run-b', 'run-a']);
+	});
+
+	test('LIFECYCLE-3.4: whether a tab is open is what the editor has now, not its record: a pinned agent\'s before its turn and a hidden card\'s are not, though their records name a group; one opened in its turn or shown is, until Facade hides it', async () => {
+		const port = portOf();
+		await port.finishRestore();
 		groupsOf(1);
-		const file = fileIn(1, '/work/app/a.ts');
-		port.openPair(facts('run-1'), { reveal: false });
-		const agent = terminals[0];
-		open(agent);
-		opensIn(agent, 1);
-		await until('the file in front again', () => file.isActive);
-		// Past the moment Facade's own showing is told apart by
-		await new Promise(resolve => setTimeout(resolve, 900));
-		const front = (each: { readonly place: TabPlace }) => typeof each.place === 'object' && each.place.front === true;
-		// The person brings it to the front, then their file again
-		places.length = 0;
-		modelShow(agent, false);
-		await until('told as its group\'s front', () => places.some(front));
-		places.length = 0;
-		toFront(file);
-		await until('told as not', () => places.some(each => typeof each.place === 'object' && !front(each)));
-		// A mark showing it a moment tells nothing
-		await new Promise(resolve => setTimeout(resolve, 900));
-		places.length = 0;
-		port.pinTab('run-1', true);
-		await until('its tab marked', () => agent.tab.isPinned);
-		await until('the file in front again', () => file.isActive);
-		await new Promise(resolve => setTimeout(resolve, 900));
-		assert.deepStrictEqual(places.filter(front), []);
+		port.openPair(facts('run-turn', { tab: { column: 1 }, pinned: true }), { reveal: false, hidden: true });
+		port.openPair(facts('run-uncertain', { tab: { column: 1 } }), { reveal: false, hidden: true });
+		const before = [port.tabOpen('run-turn'), port.tabOpen('run-uncertain'), port.tabOpen('run-none')];
+		const opening = port.openPinned('run-turn');
+		const turn = await until('its terminal', () => terminals[0]);
+		open(turn);
+		opensIn(turn, 1);
+		await opening;
+		const opened = port.tabOpen('run-turn');
+		port.hideTab('run-turn');
+		assert.deepStrictEqual([before, opened, port.tabOpen('run-turn'), port.tabOpen('run-uncertain')], [[false, false, false], true, false, false]);
+	});
+
+	test('ARCHITECTURE-2.2, LIFECYCLE-3.5: a pinned tab whose terminal does not open within its wait is passed over - no mark, and no final selection on it; one the person already opened is not opened in a turn, nor taken for the last one opened', async () => {
+		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined, openWaitMs: 100 });
+		ports.push(port);
+		await port.finishRestore();
+		const activations: (RunId | undefined)[] = [];
+		port.onDidActivate(run => activations.push(run));
+		groupsOf(1);
+		fileIn(1, '/work/app/a.ts');
+		// Its tab opens in front, its terminal never: passed over once its wait is over
+		port.openPair(facts('run-late', { tab: { column: 1 }, pinned: true }), { reveal: false, hidden: true });
+		const opening = port.openPinned('run-late');
+		const late = await until('its terminal', () => terminals[0]);
+		opensIn(late, 1);
+		await opening;
+		const marked = late.tab.isPinned;
+		port.pinnedOpened();
+		const afterLate = [...activations];
+		// One the person opened from its card before its turn: its turn opens nothing, and it is not the last one opened
+		port.openPair(facts('run-open', { tab: { column: 1 }, pinned: true }), { reveal: true });
+		const shown = await until('its terminal', () => terminals[1]);
+		open(shown);
+		opensIn(shown, 1);
+		await new Promise(resolve => setTimeout(resolve, 50));
+		const count = terminals.length;
+		activations.length = 0;
+		await port.openPinned('run-open');
+		port.pinnedOpened();
+		assert.deepStrictEqual([marked, afterLate, terminals.length - count, activations], [false, [], 0, []]);
 	});
 
 	test('a mark that does not take is not tried again on its tab\'s changes, only on another Pin or as the person brings its tab to the front anew (LIFECYCLE-3.4)', async () => {
@@ -686,136 +790,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('its tab marked as it is', () => agent.tab.isPinned);
 	});
 
-	test('a reload\'s fronts come back but where the person brought something to the front meanwhile: theirs stands, the active group\'s too (LIFECYCLE-3.5)', async () => {
-		const port = portOf();
-		groupsOf(2);
-		fileIn(1, '/work/app/a.ts');
-		const theirs = fileIn(2, '/work/app/b.ts');
-		port.openPair(facts('run-a', { tab: { column: 2 } }), { reveal: false });
-		const a = terminals[0];
-		open(a);
-		opensIn(a, 2);
-		port.openPair(facts('run-b', { tab: { column: 1, front: true } }), { reveal: false });
-		const b = terminals[1];
-		open(b);
-		opensIn(b, 1);
-		// Past the moment an opening's tab still counts as Facade's, the person goes to the second group, the agent's tab in front there
-		await new Promise(resolve => setTimeout(resolve, 700));
-		activate(2);
-		await port.finishRestore();
-		await new Promise(resolve => setTimeout(resolve, 600));
-		assert.deepStrictEqual([a.tab.isActive, theirs.isActive, activeGroup().viewColumn], [true, false, 2]);
-	});
-
-	test('a reload whose later tab opens in another group, after the person brought something to the front, ends with their group the active one, its front theirs (LIFECYCLE-3.5)', async () => {
-		const port = portOf();
-		groupsOf(2);
-		const mine = fileIn(1, '/work/app/a.ts');
-		const second = fileIn(2, '/work/app/b.ts');
-		port.frontsRecorded([2]);
-		port.openPair(facts('run-u', { tab: { column: 1 } }), { reveal: false });
-		const u = terminals[0];
-		open(u);
-		opensIn(u, 1);
-		await until('their file in front again', () => mine.isActive);
-		// Past the moment an opening's tab still counts as Facade's, the person brings the agent's tab to the front of the first group
-		await new Promise(resolve => setTimeout(resolve, 700));
-		modelShow(u, false);
-		// The second group's recorded front opens last, there, the editor making its group the active one as it opens
-		port.openPair(facts('run-f', { tab: { column: 2, front: true } }), { reveal: false });
-		const f = terminals[1];
-		open(f);
-		opensIn(f, 2);
-		activate(2);
-		await port.finishRestore();
-		await until('their group the active one again', () => activeGroup().viewColumn === 1);
-		assert.deepStrictEqual([u.tab.isActive, mine.isActive, f.tab.isActive, second.isActive, model!.made], [true, false, true, false, []]);
-	});
-
-	test('a reload that ends with another group active than the person\'s last makes theirs the active one again by showing their file there without the focus, no focus command taking it (LIFECYCLE-3.5)', async () => {
-		const port = portOf();
-		groupsOf(2);
-		const first = fileIn(1, '/work/app/a.ts');
-		fileIn(2, '/work/app/b.ts');
-		port.frontsRecorded([2]);
-		port.openPair(facts('run-u', { tab: { column: 1 } }), { reveal: false });
-		const u = terminals[0];
-		open(u);
-		opensIn(u, 1);
-		await until('their file in front again', () => first.isActive);
-		// Past the moment an opening's tab still counts as Facade's, the person brings another file of theirs to the front of the first group
-		await new Promise(resolve => setTimeout(resolve, 700));
-		const theirs = fileIn(1, '/work/app/c.ts');
-		port.openPair(facts('run-f', { tab: { column: 2, front: true } }), { reveal: false });
-		const f = terminals[1];
-		open(f);
-		opensIn(f, 2);
-		await until('their file in front', () => theirs.isActive && activeGroup().viewColumn === 1);
-		// The editor makes the second group the active one as that tab opens there
-		activate(2);
-		commands.length = 0;
-		await port.finishRestore();
-		await until('their group the active one again', () => activeGroup().viewColumn === 1);
-		assert.deepStrictEqual([theirs.isActive, f.tab.isActive, commands.includes('vscode.open'), commands.includes('workbench.action.focusFirstEditorGroup')], [true, true, true, false]);
-	});
-
-	test('a reload\'s later tab opening over what the person brought to the front of a group meanwhile shows theirs again, though an agent is recorded as that group\'s front (LIFECYCLE-3.5)', async () => {
-		const port = portOf();
-		groupsOf(1);
-		fileIn(1, '/work/app/a.ts');
-		port.frontsRecorded([1]);
-		port.openPair(facts('run-u', { tab: { column: 1 } }), { reveal: false });
-		const u = terminals[0];
-		open(u);
-		opensIn(u, 1);
-		// Where an agent is the group's front, what one tab of the reload's covers is not shown again
-		await new Promise(resolve => setTimeout(resolve, 700));
-		assert.strictEqual(u.tab.isActive, true);
-		// The person brings a file of theirs to the front; the group's recorded front then opens over it
-		const theirs = fileIn(1, '/work/app/c.ts');
-		port.openPair(facts('run-f', { tab: { column: 1, front: true } }), { reveal: false });
-		const f = terminals[1];
-		open(f);
-		opensIn(f, 1);
-		await until('their file shown again', () => theirs.isActive);
-		await port.finishRestore();
-		await new Promise(resolve => setTimeout(resolve, 300));
-		assert.deepStrictEqual([theirs.isActive, f.tab.isActive, u.tab.isActive], [true, false, false]);
-	});
-
-	test('a reload ends with each group the person brought something to the front in showing what they brought there last, though a later tab of the reload\'s opened over it while they were in another group (LIFECYCLE-3.5)', async () => {
-		const port = portOf();
-		groupsOf(2);
-		const first = fileIn(1, '/work/app/a.ts');
-		fileIn(2, '/work/app/b.ts');
-		port.frontsRecorded([2]);
-		port.openPair(facts('run-u', { tab: { column: 1 } }), { reveal: false });
-		const u = terminals[0];
-		open(u);
-		opensIn(u, 1);
-		await until('their file in front again', () => first.isActive);
-		// Past the moment an opening's tab still counts as Facade's, the person brings a file to the front of group 2, then one of group 1
-		await new Promise(resolve => setTimeout(resolve, 700));
-		const two = fileIn(2, '/work/app/f2.ts');
-		activate(2);
-		const one = fileIn(1, '/work/app/f1b.ts');
-		activate(1);
-		// Group 2's recorded front opens there afterwards, over their file
-		port.openPair(facts('run-f', { tab: { column: 2, front: true } }), { reveal: false });
-		const f = terminals[1];
-		open(f);
-		opensIn(f, 2);
-		await new Promise(resolve => setTimeout(resolve, 300));
-		commands.length = 0;
-		await port.finishRestore();
-		await until('their file in front of group 2 again', () => two.isActive);
-		assert.deepStrictEqual([two.isActive, f.tab.isActive, one.isActive, activeGroup().viewColumn], [true, false, true, 1]);
-		// No focus command on the way: one would move the keyboard's focus into a group's front, there to stay as their group becomes the
-		// active one without it
-		assert.deepStrictEqual(commands.filter(each => FOCUS.includes(each) || /^workbench\.action\.focus(Next|Previous)Group$/.test(each)), []);
-	});
-
-	test('a reload\'s pinned tab marked by borrowing the focus, the person having brought something to the front meanwhile, gives them back their group and front with the focus (LIFECYCLE-3.4, 3.5)', async function () {
+	test('a reload\'s pinned tab opening in a group that is not the active one - the person gone to another meanwhile - is marked there, its group made the active one, and nothing is given back: the person\'s group and file stay behind (LIFECYCLE-3.4, 3.5)', async function () {
 		this.timeout(20_000);
 		const first = portOf();
 		first.openPair(facts('run-p'), { reveal: false, hidden: true });
@@ -825,41 +800,42 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		groupsOf(2);
 		fileIn(1, '/work/app/a.ts');
 		const mine = fileIn(2, '/work/app/b.ts');
+		// Reattached, its tab hidden: no terminal opens until its turn
 		const at = terminals.length;
-		const attaching = second.attach(live.find(each => each.run === 'run-p')!, facts('run-p', { tab: { column: 1 }, pinned: true }));
+		await second.attach(live.find(each => each.run === 'run-p')!, facts('run-p', { tab: { column: 1 }, pinned: true }));
+		assert.strictEqual(terminals.length, at, 'reattached with its tab hidden');
+		const opening = second.openPinned('run-p');
 		await until('its tab opening', () => terminals.length > at);
 		const p = terminals[at];
-		// Past the moment its opening still counts as Facade's, the person goes to their file in group 2
-		await new Promise(resolve => setTimeout(resolve, 700));
+		// The person goes to their file in group 2; its tab then opens in group 1, which does not become the active one
 		activate(2);
-		// Its tab opens in group 1, which does not become the active one: its mark borrows the focus
+		commands.length = 0;
 		open(p);
 		opensIn(p, 1);
-		await attaching;
-		await until('its tab marked', () => p.tab.isPinned);
-		await until('their group the active one again', () => activeGroup().viewColumn === 2 && mine.isActive);
-		assert.ok(commands.lastIndexOf('workbench.action.focusSecondEditorGroup') > commands.lastIndexOf('workbench.action.focusFirstEditorGroup'), JSON.stringify(commands));
+		await opening;
 		await second.finishRestore();
+		await new Promise(resolve => setTimeout(resolve, 300));
+		assert.deepStrictEqual([p.tab.isPinned, p.tab.isActive, activeGroup().viewColumn, mine.isActive, commands], [true, true, 1, true, ['workbench.action.focusFirstEditorGroup', 'workbench.action.pinEditor']]);
 	});
 
-	test('a reload\'s recorded front whose group is gone - a floating window\'s, opened again only after Facade\'s tabs - opens in the last group, the person\'s file there not shown again over it (LIFECYCLE-3.5)', async () => {
+	test('a reload\'s pinned tab whose recorded group is gone - a floating window\'s, opened again only after Facade\'s tabs - opens in the last group, in front there and marked, the person\'s file there not shown again over it (LIFECYCLE-3.5)', async () => {
 		const port = portOf();
 		groupsOf(2);
 		fileIn(1, '/work/app/a.ts');
 		const mine = fileIn(2, '/work/app/b.ts');
 		activate(2);
 		// Recorded as the front of group 3, not open now
-		port.frontsRecorded([3]);
-		port.openPair(facts('run-f', { tab: { column: 3, front: true } }), { reveal: false });
-		const f = terminals[0];
+		port.openPair(facts('run-f', { tab: { column: 3 }, pinned: true }), { reveal: false, hidden: true });
+		const opening = port.openPinned('run-f');
+		const f = await until('its terminal', () => terminals[0]);
 		assert.strictEqual((f.options.location as { viewColumn: number }).viewColumn, 2);
 		open(f);
 		opensIn(f, 2);
+		await opening;
+		await port.finishRestore();
 		// What an opening covered would be shown again by now
 		await new Promise(resolve => setTimeout(resolve, 400));
-		assert.deepStrictEqual([f.tab.isActive, mine.isActive], [true, false]);
-		await port.finishRestore();
-		await until('the recorded front in front of the active group', () => f.tab.isActive && activeGroup().viewColumn === 2);
+		assert.deepStrictEqual([f.tab.isActive, f.tab.isPinned, mine.isActive, activeGroup().viewColumn], [true, true, false, 2]);
 	});
 
 	test('a mark that lands on the person\'s file - brought to the front just as it went on - is undone at once, and nothing is given back over it (LIFECYCLE-3.4)', async () => {
@@ -1080,7 +1056,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(screenOf(terminals[0]).split('ready').length - 1, 1, 'its output once');
 	});
 
-	test('CLI activity and title reach the core while the tab keeps only the agent name; until its first report its run is still starting (CLIS-2.3, LIFECYCLE-2.2)', async () => {
+	test('CLI activity reaches the core - its terminal\'s and its reports\' titles never - while the tab keeps only the agent name; until its first report its run is still starting (CLIS-2.3, LIFECYCLE-2.2)', async () => {
 		const port = portOf();
 		const reports: ActivityReport[] = [];
 		port.onDidReport(report => reports.push(report));
@@ -1088,9 +1064,9 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		open(terminals[0]);
 		const title = Buffer.from('Fixing tests').toString('base64');
 		await port.spawn('run-3', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]0;\\u2733 Claude Code\\x07\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => { if (d.toString().includes('7501;?:')) process.stdout.write('\\x1b]7501;state=working:title=${title}\\x1b\\\\'); }); setInterval(() => {}, 1000);`), meta('run-3'));
-		assert.deepStrictEqual(reports[0], { run: 'run-3', activity: 'unknown', reporting: false, awaitingActivity: true, title: '' });
+		assert.deepStrictEqual(reports[0], { run: 'run-3', activity: 'unknown', reporting: false, awaitingActivity: true });
 		await until('its report', () => reports.some(report => report.activity === 'working'));
-		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', observedAt: reports[reports.length - 1].observedAt, reporting: true, title: '✳ Claude Code' });
+		assert.deepStrictEqual(reports[reports.length - 1], { run: 'run-3', activity: 'working', observedAt: reports[reports.length - 1].observedAt, reporting: true });
 		// Its probe answered, it was still starting until it reported: never unknown with a reason meanwhile
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity && !report.reason), JSON.stringify(reports));
 		// CLI titles never reach the tab: it says the agent's name alone (LIFECYCLE-2.2)
@@ -1190,25 +1166,24 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual({ unreported, allowed, reduced, off, on }, { unreported: false, allowed: true, reduced: false, off: true, on: false });
 	});
 
-	test('terminal decorations survive later plain reports, decoration-only updates and reattachment (CLIS-2.3)', async () => {
+	test('neither its terminal\'s titles (OSC 0/2) nor its reports\' reach the core, before or after reattachment: what it reports is its activity alone (CLIS-2.3)', async () => {
 		const first = portOf();
 		const reports: ActivityReport[] = [];
 		first.onDidReport(report => reports.push(report));
 		first.openPair(facts('run-title'), { reveal: false });
 		open(terminals[0]);
 		const plain = Buffer.from('Checking tests').toString('base64');
-		const decorated = ['✳ Checking tests', '⠐ Checking tests', '✓ Checking tests | workspace', `✳ ${'x'.repeat(298)}👨‍👩‍👧‍👦 full title | workspace`];
-		// Emit an undecorated report both before the first title and after every later title.
+		const decorated = ['✳ Checking tests', '⠐ Checking tests', '✓ Checking tests | workspace', ''];
+		// A report with a title of its own before the first terminal title and after every later one, then working at a key
 		const program = `process.stdin.setRawMode(true); const titles = ${JSON.stringify(decorated)}; let i = 0;
-		const status = () => process.stdout.write('\\x1b]7501;state=idle:title=${plain}\\x1b\\\\');
+		const status = state => process.stdout.write('\\x1b]7501;state=' + state + ':title=${plain}\\x1b\\\\');
 		const title = () => process.stdout.write('\\x1b]2;' + titles[i] + '\\x1b\\\\');
-		status(); title(); process.stdin.on('data', () => { i++; title(); status(); }); setInterval(() => {}, 1000);`;
+		status('idle'); title(); process.stdin.on('data', () => { i++; title(); status(i % 2 ? 'working' : 'idle'); }); setInterval(() => {}, 1000);`;
 		await first.spawn('run-title', plan(program), meta('run-title'));
-		await until('the decorated initial title', () => reports.at(-1)?.title === decorated[0]);
-		for (const title of decorated.slice(1)) {
+		await until('its first report', () => reports.some(report => report.reporting));
+		for (const [i] of decorated.slice(1).entries()) {
 			terminals[0].options.pty.handleInput!('x');
-			await until('the next decorated title', () => reports.at(-1)?.title === title);
-			assert.strictEqual(reports.at(-1)?.activity, 'not_working', 'activity remains independent of title decoration');
+			await until('its next report', () => reports.at(-1)?.activity === (i % 2 ? 'not_working' : 'working'));
 		}
 		first.dispose();
 		ports.splice(ports.indexOf(first), 1);
@@ -1219,47 +1194,10 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			const runs = await next.live();
 			return runs.length === 1 && !runs[0].claimedElsewhere && runs[0];
 		});
-		const count = terminals.length;
-		const attaching = next.attach(live, facts('run-title'));
-		await until('the restored terminal', () => terminals.length > count);
-		open(terminals.at(-1)!);
-		await attaching;
-		assert.strictEqual(restored.at(-1)?.title, decorated.at(-1), 'reattachment chooses the saved OSC title, not the report title');
+		await next.attach(live, facts('run-title'));
+		assert.deepStrictEqual([...reports, ...restored].filter(report => 'title' in report), []);
+		assert.ok(restored.length > 0, 'the reattached run is told again');
 		assert.strictEqual(await next.terminate('run-title'), 'terminated');
-	});
-
-	test('an empty CLI title clears the previous title and stays empty after reattachment (CLIS-2.3)', async () => {
-		const first = portOf();
-		const reports: ActivityReport[] = [];
-		first.onDidReport(report => reports.push(report));
-		first.openPair(facts('run-title-clear'), { reveal: false });
-		open(terminals[0]);
-		const program = `process.stdin.setRawMode(true);
-		process.stdout.write('\\x1b]7501;state=idle\\x1b\\\\\\x1b]2;Fix tests\\x07');
-		process.stdin.on('data', () => process.stdout.write('\\x1b]2;\\x07'));
-		setInterval(() => {}, 1000);`;
-		await first.spawn('run-title-clear', plan(program), meta('run-title-clear'));
-		await until('the initial title', () => reports.at(-1)?.title === 'Fix tests');
-		const count = reports.length;
-		terminals[0].options.pty.handleInput!('c');
-		await until('the cleared title event', () => reports.length > count);
-		assert.strictEqual(reports.at(-1)?.title, '', 'an explicit clear must reach the core');
-		first.dispose();
-		ports.splice(ports.indexOf(first), 1);
-		const next = portOf();
-		const restored: ActivityReport[] = [];
-		next.onDidReport(report => restored.push(report));
-		const live = await until('the untitled run to be unclaimed', async () => {
-			const runs = await next.live();
-			return runs.length === 1 && !runs[0].claimedElsewhere && runs[0];
-		});
-		const before = terminals.length;
-		const attaching = next.attach(live, facts('run-title-clear'));
-		await until('the restored terminal', () => terminals.length > before);
-		open(terminals.at(-1)!);
-		await attaching;
-		assert.strictEqual(restored.at(-1)?.title, '', 'restoration must also replace a stale saved title');
-		assert.strictEqual(await next.terminate('run-title-clear'), 'terminated');
 	});
 
 	test('a listing answered before what the run said since is no newer than that: a reconcile never puts back an older status (CLIS-2.3, UX-5.2)', async function () {
@@ -1286,6 +1224,45 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(await port.terminate('run-46'), 'terminated');
 	});
 
+	test('ARCHITECTURE-2.3: a title event of an earlier build\'s ptyd is not heard as the run\'s report: a listing answered meanwhile still puts its newer status', async function () {
+		this.timeout(20_000);
+		const port = portOf();
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		port.openPair(facts('run-47'), { reveal: false });
+		open(terminals[0]);
+		await port.spawn('run-47', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => { if (d.toString().includes('7501;?:')) process.stdout.write('\\x1b]7501;state=working\\x1b\\\\'); }); setInterval(() => {}, 1000);`), meta('run-47'));
+		await until('working', () => reports.some(report => report.activity === 'working'));
+		let entered!: () => void;
+		let release!: () => void;
+		const asked = new Promise<void>(resolve => { entered = resolve; });
+		// The listing says the run went idle since, which the window did not hear
+		listGate = { entered, open: new Promise<void>(resolve => { release = resolve; }),
+			answer: runs => runs.map(run => run.run === 'run-47' && run.status ? { ...run, status: { ...run.status, state: 'idle' as const, at: run.status.at + 1 } } : run) };
+		await asked;
+		runListeners.get('run-47')!({ event: 'title', run: 'run-47', title: 'Fixing tests' } as never);
+		release();
+		await until('the listing\'s status', () => reports[reports.length - 1]?.activity === 'not_working', 5_000);
+		assert.strictEqual(await port.terminate('run-47'), 'terminated');
+	});
+
+	test('UX-2.4, MCP-3.1: a CLI error without words of its own is reported in English for agents and in the person\'s words for the card; a CLI\'s own words are its own, for both', async function () {
+		this.timeout(20_000);
+		translations = { 'CLI reported an error': 'CLI hat einen Fehler gemeldet' };
+		const port = portOf();
+		const reports: ActivityReport[] = [];
+		port.onDidReport(report => reports.push(report));
+		port.openPair(facts('run-48'), { reveal: false });
+		open(terminals[0]);
+		const words = Buffer.from('Rate limited').toString('base64');
+		await port.spawn('run-48', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); process.stdin.on('data', d => process.stdout.write(d.toString().includes('7501;?:') ? '\\x1b]7501;state=error\\x1b\\\\' : '\\x1b]7501;state=error:msg=${words}\\x1b\\\\')); setInterval(() => {}, 1000);`), meta('run-48'));
+		const bare = await until('its error', () => reports.find(report => report.error !== undefined));
+		terminals[0].options.pty.handleInput!('x');
+		const own = await until('its own words', () => reports.find(report => report.error === 'Rate limited'));
+		assert.deepStrictEqual([[bare.error, bare.errorWords], [own.error, own.errorWords]], [['CLI reported an error', 'CLI hat einen Fehler gemeldet'], ['Rate limited', undefined]]);
+		assert.strictEqual(await port.terminate('run-48'), 'terminated');
+	});
+
 	/** A CLI that says it is ready and then nothing, taking no part in the protocol. */
 	const QUIET = `process.stdout.write('ready\\r\\n'); setInterval(() => {}, 1000);`;
 
@@ -1299,7 +1276,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		open(terminals[0]);
 		const before = performance.now();
 		await first.spawn('run-40', plan(QUIET), meta('run-40'));
-		assert.deepStrictEqual(reports, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true, title: '' }]);
+		assert.deepStrictEqual(reports, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true }]);
 		/** The window `from` reloads: the next one claims the run again, and what it tells of it. */
 		const reload = async (from: AgentExecution) => {
 			ports.splice(ports.indexOf(from), 1);
@@ -1311,22 +1288,18 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				const runs = await next.live();
 				return runs.length === 1 && !runs[0].claimedElsewhere && runs;
 			});
-			const count = terminals.length;
-			const attaching = next.attach(live[0], facts('run-40'));
-			await until('its restored terminal', () => terminals.length > count);
-			open(terminals[terminals.length - 1]);
-			await attaching;
+			await next.attach(live[0], facts('run-40'));
 			return { next, told };
 		};
 		// Reloaded within its bound: still starting, until the bound from its process start passes
 		const { next, told } = await reload(first);
-		assert.deepStrictEqual(told, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true, title: '' }]);
+		assert.deepStrictEqual(told, [{ run: 'run-40', activity: 'unknown', reporting: false, awaitingActivity: true }]);
 		const over = await until('its startup over', () => told.find(report => !report.awaitingActivity), 6_000);
 		assert.ok(performance.now() - before >= BOUND - 50, 'not before its bound');
-		assert.deepStrictEqual(over, { run: 'run-40', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", title: '' });
+		assert.deepStrictEqual(over, { run: 'run-40', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", unknown: 'not_reporting' });
 		// Reloaded past it: unknown at once, its startup not begun again
 		const last = await reload(next);
-		assert.deepStrictEqual(last.told, [{ run: 'run-40', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", title: '' }]);
+		assert.deepStrictEqual(last.told, [{ run: 'run-40', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", unknown: 'not_reporting' }]);
 		assert.strictEqual(await last.next.terminate('run-40'), 'terminated');
 	});
 
@@ -1341,7 +1314,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await port.spawn('run-41', plan(`process.stdin.setRawMode(true); process.stdout.write('\\x1b]7501;?\\x1b\\\\'); setInterval(() => {}, 1000);`), meta('run-41'));
 		await until('its probe answered', () => reports.some(report => report.reporting));
 		const over = await until('its startup over', () => reports.find(report => !report.awaitingActivity), 10_000);
-		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, notReady: true, reason: "Waiting for first CLI activity report", title: '' }, JSON.stringify(reports));
+		assert.deepStrictEqual(over, { run: 'run-41', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, notReady: true, reason: "Waiting for first CLI activity report", unknown: 'waiting' }, JSON.stringify(reports));
 		assert.ok(reports.slice(0, -1).every(report => report.awaitingActivity), JSON.stringify(reports));
 		assert.strictEqual(reports.at(-2)?.reporting, true);
 	});
@@ -1357,35 +1330,15 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await port.spawn('run-43', { ...plan(script), cli: 'muse', displayName: 'Muse Code', command: 'muse', screenStatus: 'muse' }, meta('run-43'));
 		await until('its screen read', () => reports.some(report => report.activity === 'not_working'));
 		const asked = await until('its probe told', () => reports.find(report => report.reporting && report.activity === 'unknown'), 5_000);
-		assert.deepStrictEqual(asked, { run: 'run-43', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, reason: "Waiting for first CLI activity report", title: '' });
+		assert.deepStrictEqual(asked, { run: 'run-43', activity: 'unknown', observedAt: reports[reports.length - 1].observedAt, reporting: true, reason: "Waiting for first CLI activity report", unknown: 'waiting' });
 		assert.strictEqual(await port.terminate('run-43'), 'terminated');
-	});
-
-	test('a run started in a new worktree keeps its CLI-and-folder terminal title (CLIS-2.3)', async function () {
-		this.timeout(15_000);
-		const port = portOf();
-		const reports: ActivityReport[] = [];
-		port.onDidReport(report => reports.push(report));
-		const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-wt-'));
-		try {
-			// Accepted in its source folder; the worktree made, it starts in the worktree's folder.
-			port.openPair(facts('run-47', { cli: 'pi', displayName: 'Pi', command: 'pi', cwd: os.tmpdir() }), { reveal: false });
-			open(terminals[0]);
-			await port.spawn('run-47', { ...plan(`process.stdout.write('\\x1b]0;π - ${path.basename(worktree)}\\x07ready\\r\\n'); setInterval(() => {}, 1000);`), cli: 'pi', displayName: 'Pi', command: 'pi', cwd: worktree }, meta('run-47'));
-			await until('its screen', () => screenOf(terminals[0]).includes('ready'));
-			const titled = await until('its CLI-and-folder title', () => reports.find(report => !!report.title));
-			assert.strictEqual(titled.title, `π - ${path.basename(worktree)}`);
-			assert.strictEqual(await port.terminate('run-47'), 'terminated');
-		} finally {
-			fs.rmSync(worktree, { recursive: true, force: true });
-		}
 	});
 
 	/** A CLI that says a numbered line every 20 ms, from 1 on. */
 	const COUNTING = `let n = 0; setInterval(() => process.stdout.write('line ' + (++n) + '\\r\\n'), 20);`;
 	/** The numbers of `text`'s lines, in the order written. */
 	const numbersIn = (text: string) => [...text.matchAll(/line (\d+)/g)].map(match => Number(match[1]));
-	/** The window `from` reloads: the next one finds the run and claims it again, its terminal opened; what it tells and shows. */
+	/** The window `from` reloads: the next one finds the run and claims it again, its tab then opened by the person; what it tells and shows. */
 	const reloadWith = async (from: AgentExecution, run: RunId) => {
 		ports.splice(ports.indexOf(from), 1);
 		from.dispose();
@@ -1397,11 +1350,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			return runs.length === 1 && !runs[0].claimedElsewhere && runs;
 		});
 		const count = terminals.length;
-		const attaching = next.attach(live[0], facts(run));
-		await until('its restored terminal', () => terminals.length > count);
-		const terminal = terminals[terminals.length - 1];
-		open(terminal);
-		await attaching;
+		await next.attach(live[0], facts(run));
+		const terminal = await openedAgain(next, run, count);
 		return { next, told, terminal, live: live[0] };
 	};
 
@@ -1456,14 +1406,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		});
 		await until('the run ended, unclaimed', async () => (await next.live())[0]?.exited, 10_000);
 		const count = terminals.length;
-		const attaching = next.attach(listed[0], facts('run-46'));
-		await until('its restored terminal', () => terminals.length > count);
-		open(terminals[terminals.length - 1]);
-		await attaching;
+		await next.attach(listed[0], facts('run-46'));
 		assert.deepStrictEqual(exits, [], 'told once the core has shown it');
 		await until('its end told', () => exits.length > 0);
 		assert.deepStrictEqual(exits, [{ run: 'run-46', code: 5, interruptVerified: false }]);
-		assert.ok(screenOf(terminals[terminals.length - 1]).includes('[Agent process exited with code 5]'));
+		// Its tab opened by the person: its screen drawn as it opens, the line of its end after it
+		const terminal = await openedAgain(next, 'run-46', count);
+		await until('its end said on its screen', () => screenOf(terminal).includes('[Agent process exited with code 5]'));
 	});
 
 	test('a run whose reattach failed, or that went to another window, has its conversation watched by this window no more (CLIS-2.4)', async function () {
@@ -1535,12 +1484,12 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('the loss told', () => heard.some(each => each.report.disconnected));
 		port.rename('run-42', 'Grace');
 		const back = await until('the run claimed again', () => heard.find(each => !each.report.disconnected && heard.indexOf(each) > heard.findIndex(lost => lost.report.disconnected)), 10_000);
-		assert.deepStrictEqual(back, { report: { run: 'run-42', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", title: '' }, connections: 2 });
+		assert.deepStrictEqual(back, { report: { run: 'run-42', activity: 'unknown', reporting: false, notReady: true, reason: "CLI has not reported activity", unknown: 'not_reporting' }, connections: 2 });
 		assert.strictEqual(await port.terminate('run-42'), 'terminated');
 	});
 
-	/** A CLI that titles its terminal "Fixing tests" and says it is ready, then retitles it with whatever it is typed. */
-	const TITLED = `process.stdin.setRawMode(true); process.stdout.write('\\x1b]0;Fixing tests\\x07ready\\r\\n'); process.stdin.on('data', d => process.stdout.write('\\x1b]0;' + d.toString() + '\\x07')); setInterval(() => {}, 1000);`;
+	/** A CLI that titles its terminal "Fixing tests" and says it is ready, then retitles it with whatever it is typed, and says so. */
+	const TITLED = `process.stdin.setRawMode(true); process.stdout.write('\\x1b]0;Fixing tests\\x07ready\\r\\n'); process.stdin.on('data', d => process.stdout.write('\\x1b]0;' + d.toString() + '\\x07titled ' + d.toString() + '\\r\\n')); setInterval(() => {}, 1000);`;
 	/** The core's part, as AgentService does it: a label renames the agent and its tab, including an empty string. */
 	const renamesOf = (port: AgentExecution) => {
 		const renames: { run: RunId; name: string }[] = [];
@@ -1550,15 +1499,13 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		});
 		return renames;
 	};
-	/** A new agent whose CLI reports a title to the panel while the editor tab keeps the agent name. */
+	/** A new agent whose CLI titles its terminal, which neither its tab nor the panel shows: the tab keeps the agent name. */
 	const agentTitled = async (port: AgentExecution, run: RunId, name = 'Ada') => {
-		const reports: ActivityReport[] = [];
-		port.onDidReport(report => reports.push(report));
 		port.openPair(facts(run, { name }), { reveal: false });
 		const terminal = terminals[terminals.length - 1];
 		open(terminal);
 		await port.spawn(run, plan(TITLED), meta(run));
-		await until('the CLI title reported', () => reports.some(report => report.run === run && report.title === 'Fixing tests'));
+		// Its title came first, in the same write as what it says
 		await until('its screen', () => screenOf(terminal).includes('ready'));
 		shows(terminal);
 		assert.strictEqual(unspun(terminal.name), name);
@@ -1585,7 +1532,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual(renames.map(each => each.name), ['Bob', 'Ada']);
 	});
 
-	test('native renames preserve title-like suffixes in full while changing CLI titles stay in reports, with no tab-name events (LIFECYCLE-2.2)', async () => {
+	test('native renames preserve title-like suffixes in full while the CLI\'s changing titles reach neither its tab nor a report, with no tab-name events (LIFECYCLE-2.2, CLIS-2.3)', async () => {
 		const port = portOf();
 		const renames = renamesOf(port);
 		const reports: ActivityReport[] = [];
@@ -1597,10 +1544,10 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		// The CLI changes its title twice, but the tab and the stored name stay stable.
 		const names = [...terminal.names];
 		terminal.options.pty.handleInput!('Writing docs');
-		await until('the new title reported', () => reports.some(report => report.title === 'Writing docs'));
+		await until('the new title written', () => screenOf(terminal).includes('titled Writing docs'));
 		terminal.options.pty.handleInput!('Reading');
-		await until('the next title reported', () => reports.some(report => report.title === 'Reading'));
-		assert.deepStrictEqual(terminal.names, names);
+		await until('the next title written', () => screenOf(terminal).includes('titled Reading'));
+		assert.deepStrictEqual([terminal.names, reports.filter(report => 'title' in report)], [names, []]);
 		assert.strictEqual(unspun(terminal.name), 'Lin | Fixing tests');
 		titled(terminal, 'Kim | Writing docs');
 		shows(terminal);
@@ -1696,7 +1643,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		await until('its report', () => reports.some(report => report.activity === 'working'));
 		server.close();
 		const lost = await until('the loss told', () => reports.find(report => report.activity === 'unknown' && /connection/i.test(report.reason ?? '')));
-		assert.deepStrictEqual(lost, { run: 'run-30', activity: 'unknown', reporting: true, reason: "Connection to agent process lost; reconnecting", disconnected: true, title: 'Fixing tests' });
+		assert.deepStrictEqual(lost, { run: 'run-30', activity: 'unknown', reporting: true, reason: "Connection to agent process lost; reconnecting", reasonWords: 'Connection lost · reconnecting', disconnected: true });
 		// ptyd stays away past the first try to connect again, which gives up; it comes back, and a later check claims the run again
 		await new Promise(resolve => setTimeout(resolve, 7_000));
 		assert.deepStrictEqual(exits, []);
@@ -1826,29 +1773,39 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.strictEqual(tab.names.at(-1), 'Ada');
 	});
 
-	test('a reload brings each tab back as its record says: open in its group, the last one where that is gone; hidden hidden; from a build that kept no record hidden, unless pinned (LIFECYCLE-3.5)', async () => {
+	test('a reload reattaches each run with its tab hidden; a pinned agent\'s tab opens in its turn as its record says - in its group, the last one where that is gone, else the active one, hidden or kept by no record - and an unpinned one\'s stays hidden whatever its record (LIFECYCLE-3.5)', async function () {
+		this.timeout(30_000);
 		const first = portOf();
-		for (const run of ['in-2', 'in-gone', 'hid', 'old', 'old-pinned']) {
+		const places: Record<string, Partial<PairFacts>> = {
+			'in-2': { tab: { column: 2 }, pinned: true }, 'in-gone': { tab: { column: 5 }, pinned: true }, hid: { tab: 'hidden', pinned: true }, old: { tab: undefined, pinned: true },
+			'open-2': { tab: { column: 2 } }, 'old-unpinned': { tab: undefined }
+		};
+		for (const run of Object.keys(places)) {
 			first.openPair(facts(run), { reveal: false, hidden: true });
 			await first.spawn(run, plan(ECHO), meta(run));
 		}
 		const second = portOf();
 		const live = await second.live();
-		visibleGroups = [{ viewColumn: 1 }, { viewColumn: 2 }];
+		groupsOf(2);
 		const before = terminals.length;
-		const places: Record<string, Partial<PairFacts>> = { 'in-2': { tab: { column: 2 } }, 'in-gone': { tab: { column: 5 } }, hid: { tab: 'hidden' }, old: { tab: undefined }, 'old-pinned': { tab: undefined, pinned: true } };
-		const opened: Record<string, unknown> = {};
 		for (const run of Object.keys(places)) {
-			const at = terminals.length;
-			const attaching = second.attach(live.find(each => each.run === run)!, facts(run, places[run]));
-			await new Promise(resolve => setTimeout(resolve, 50));
-			if (terminals.length > at) { open(terminals[at]); }
-			await attaching;
-			opened[run] = terminals.length > at ? (terminals[at].options.location as { viewColumn: number }).viewColumn : 'none';
+			await second.attach(live.find(each => each.run === run)!, facts(run, places[run]));
 		}
-		visibleGroups = undefined;
-		assert.ok(terminals.length >= before);
-		assert.deepStrictEqual(opened, { 'in-2': 2, 'in-gone': 2, hid: 'none', old: 'none', 'old-pinned': -1 });
+		assert.strictEqual(terminals.length, before, 'no tab opens as the runs are reattached');
+		// The pinned ones' turns, as the core gives them: each tab where its record says, the next once it opened and took its mark
+		const opened: Record<string, unknown> = {};
+		for (const run of Object.keys(places).filter(each => places[each].pinned)) {
+			const at = terminals.length;
+			const opening = second.openPinned(run);
+			const terminal = await until(`${run}'s terminal`, () => terminals[at]);
+			const asked = (terminal.options.location as { viewColumn: number }).viewColumn;
+			open(terminal);
+			opensIn(terminal, asked === -1 ? activeGroup().viewColumn : asked);
+			opened[run] = asked;
+			await opening;
+		}
+		await second.finishRestore();
+		assert.deepStrictEqual([opened, terminals.length - before, terminals.slice(before).every(each => each.tab.isPinned)], [{ 'in-2': 2, 'in-gone': 2, hid: -1, old: -1 }, 4, true]);
 	});
 
 	test('a copy of an agent\'s tab - no shell or pseudoterminal of its own, the name its tab was opened under - becomes at once an ordinary terminal in its agent\'s folder, in the copy\'s group, the copy closing as that terminal is in front; each of several copies alike, a person\'s own shell untouched, and no agent starts (LIFECYCLE-2.2)', async () => {
@@ -2200,14 +2157,17 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		});
 		assert.deepStrictEqual([live[0].meta, live[0].exited], [meta('run-8'), undefined]);
 		const count = terminals.length;
-		let attached = false;
-		const attaching = reloaded.attach(live[0], facts('run-8')).then(() => { attached = true; });
+		await reloaded.attach(live[0], facts('run-8', { pinned: true }));
+		assert.strictEqual(terminals.length, count, 'reattached with its tab hidden until its turn');
+		let opened = false;
+		const opening = reloaded.openPinned('run-8').then(() => { opened = true; });
 		await until('the restored native terminal', () => terminals.length > count);
 		const terminal = terminals[terminals.length - 1];
 		assert.strictEqual(unspun(terminal.name), 'Ada', 'a restored background tab has only the agent name even before its pseudoterminal opens');
-		assert.strictEqual(attached, false, 'restoring the next editor waits for this terminal to open');
+		await new Promise(resolve => setTimeout(resolve, 50));
+		assert.strictEqual(opened, false, 'the next pinned tab waits for this terminal to open');
 		open(terminal);
-		await attaching;
+		await opening;
 		await until('its screen', () => screenOf(terminal).includes('ready'));
 		terminal.options.pty.handleInput!('back');
 		await until('its answer', () => screenOf(terminal).includes('got back'));
@@ -2264,10 +2224,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			const port = portOf();
 			const live = await port.live();
 			assert.deepStrictEqual(live.map(run => [run.run, run.meta.name, run.claimedElsewhere]), [['run-old', 'Ada', false]]);
-			const attaching = port.attach(live[0], facts('run-old'));
-			const terminal = await until('its terminal', () => terminals[0]);
-			open(terminal);
-			await attaching;
+			await port.attach(live[0], facts('run-old'));
+			const terminal = await openedAgain(port, 'run-old', 0);
 			await until('its screen', () => screenOf(terminal).includes('ready'));
 			terminal.options.pty.handleInput!('old');
 			await until('its answer, through the earlier ptyd', () => screenOf(terminal).includes('got old'));
@@ -2328,10 +2286,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 				const port = portOf();
 				const live = await port.live();
 				assert.deepStrictEqual(live.map(run => [run.run, run.claimedElsewhere]), [['run-kept', false]]);
-				const attaching = port.attach(live[0], facts('run-kept'));
-				const terminal = await until('its terminal', () => terminals[0]);
-				open(terminal);
-				await attaching;
+				await port.attach(live[0], facts('run-kept'));
+				const terminal = await openedAgain(port, 'run-kept', 0);
 				await until('its screen', () => screenOf(terminal).includes('ready'));
 				terminal.options.pty.handleInput!('kept');
 				await until('its answer, through the other build\'s ptyd', () => screenOf(terminal).includes('got kept'));
@@ -2423,10 +2379,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			const exits: ExitReport[] = [];
 			port.onDidExit(exit => exits.push(exit));
 			const [live] = await port.live();
-			const attaching = port.attach(live, facts('run-gone'));
-			const terminal = await until('its terminal', () => terminals[0]);
-			open(terminal);
-			await attaching;
+			await port.attach(live, facts('run-gone'));
+			const terminal = await openedAgain(port, 'run-gone', 0);
 			await until('its screen', () => screenOf(terminal).includes('ready'));
 			// Its ptyd goes with the run, telling the window nothing more
 			earlier.server.close();
@@ -2468,10 +2422,8 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			port.onDidReport(report => reports.push(report));
 			const [live] = await port.live();
 			failEarlierClients = 1;
-			const attaching = port.attach(live, facts('run-late'));
-			const terminal = await until('its terminal', () => terminals[0]);
-			open(terminal);
-			await attaching;
+			await port.attach(live, facts('run-late'));
+			const terminal = await openedAgain(port, 'run-late', 0);
 			assert.ok(reports.some(report => report.run === 'run-late' && report.disconnected), 'told as lost');
 			await until('its screen, claimed again', () => screenOf(terminal).includes('ready'), 10_000);
 			terminal.options.pty.handleInput!('back');

@@ -34,7 +34,9 @@ export interface NewAgentDeps {
  * else the first workspace folder's first location. A filter never chooses it.
  */
 export function defaultLocation(catalog: Catalog, last: LocationId | undefined): Location | undefined {
-	const remembered = last === undefined ? undefined : catalog.locations.find(location => location.id === last);
+	const found = last === undefined ? undefined : catalog.locations.find(location => location.id === last);
+	// A folder inside a location - a resumed conversation's own - is no launch choice: the location it is inside (WORKTREES-1.2)
+	const remembered = found?.within ? catalog.locations.find(location => location.id === found.within) : found;
 	if (remembered) {
 		return remembered;
 	}
@@ -166,7 +168,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	 * plain folder - is said as a label, never an action that does nothing; a folder Git then finds in a repository offers its change.
 	 */
 	const bottomOf = (now: Catalog): Item[] => {
-		const inFolder = now.locations.filter(each => each.folders.some(folder => folder.uri === location.folders[0]?.uri));
+		const inFolder = now.locations.filter(each => !each.within && each.folders.some(folder => folder.uri === location.folders[0]?.uri));
 		const changeable = now.folders.length > 1 || inFolder.length > 1 || inFolder.some(each => each.kind === 'checkout') || !!worktree;
 		return [
 			// A labeled line: the editor draws one without a label as all but invisible, and a label right of the item below it

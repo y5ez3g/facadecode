@@ -12,7 +12,7 @@ import * as path from 'path';
 import type { Environment } from '../environment';
 import { xdgDirOf } from '../executable';
 import { SESSION_ID } from '../identity';
-import { Scope, titleOf } from './scope';
+import { Scope, titlesOf } from './scope';
 import { openReadOnly } from './sqlite';
 import type { Candidate, Found, VendorStore } from './store';
 
@@ -36,38 +36,46 @@ export function museDataDir(env: Environment, platform: NodeJS.Platform = proces
  * with a prompt, valid, whose log is there. Each is read whole from its row; columns a version lacks are done without.
  */
 export function museCandidates(dir: string, scope: Scope): Candidate[] {
-	const index = path.join(dir, 'session-index.db');
-	const db = openReadOnly(index);
+	return rowsOf(dir).flatMap(row => museCandidate(dir, row, scope) ?? []);
+}
+
+/** Conversation `sessionId`, by its row alone. */
+export function museCandidateOf(dir: string, scope: Scope, sessionId: string): Candidate | undefined {
+	const [row] = SESSION_ID.test(sessionId) ? rowsOf(dir, sessionId) : [];
+	return row && museCandidate(dir, row, scope);
+}
+
+/** The rows of the index at `dir` of the conversations Muse Code would offer to resume - `sessionId`'s alone where it is given. */
+function rowsOf(dir: string, sessionId?: string): Row[] {
+	const db = openReadOnly(path.join(dir, 'session-index.db'));
 	if (!db) {
 		return [];
 	}
-	let rows: Row[];
 	try {
 		const columns = new Set((db.prepare('PRAGMA table_info(sessions)').all() as unknown as { readonly name: unknown }[]).map(column => column.name));
 		const at = columns.has('msp_last_activity_at_us') ? 'COALESCE(msp_last_activity_at_us, updated_at_us)' : 'updated_at_us';
 		const name = columns.has('session_name') ? 'session_name' : 'NULL';
 		const root = columns.has('msp_kind') ? `AND (msp_kind IS NULL OR msp_kind = 'root')` : '';
-		rows = db.prepare(`SELECT session_id AS id, workspace_root AS cwd, first_user_prompt AS prompt, ${name} AS name, ${at} AS at, session_log_path AS log
-			FROM sessions WHERE status = 'valid' AND prompt_count > 0 ${root}`).all() as unknown as Row[];
+		const query = `SELECT session_id AS id, workspace_root AS cwd, first_user_prompt AS prompt, ${name} AS name, ${at} AS at, session_log_path AS log
+			FROM sessions WHERE status = 'valid' AND prompt_count > 0 ${root}`;
+		return (sessionId === undefined ? db.prepare(query).all() : db.prepare(`${query} AND session_id = ?`).all(sessionId)) as unknown as Row[];
 	} catch {
 		return [];
 	} finally {
 		db.close();
 	}
-	const candidates: Candidate[] = [];
-	for (const row of rows) {
-		const at = typeof row.at === 'number' || typeof row.at === 'bigint' ? Number(row.at) / 1000 : NaN;
-		if (typeof row.id !== 'string' || !SESSION_ID.test(row.id) || typeof row.cwd !== 'string' || !scope.includes(row.cwd)
-			|| !(at > 0) || typeof row.log !== 'string' || !fs.existsSync(row.log)) {
-			continue;
-		}
-		// A name the person gave it, else what they first asked
-		const named = typeof row.name === 'string' && row.name.trim() ? row.name : typeof row.prompt === 'string' ? row.prompt : '';
-		const title = titleOf(named);
-		const found: Found = { sessionId: row.id, cwd: row.cwd, ...title ? { title } : {} };
-		candidates.push({ cli: 'muse', file: `${index}#${row.id}`, at: Math.floor(at), sessionId: row.id, found });
+}
+
+/** The conversation `row` of the index at `dir`, read whole from its row; none where it is not one of `scope`'s, or its log is gone. */
+function museCandidate(dir: string, row: Row, scope: Scope): Candidate | undefined {
+	const at = typeof row.at === 'number' || typeof row.at === 'bigint' ? Number(row.at) / 1000 : NaN;
+	if (typeof row.id !== 'string' || !SESSION_ID.test(row.id) || typeof row.cwd !== 'string' || !scope.includes(row.cwd)
+		|| !(at > 0) || typeof row.log !== 'string' || !fs.existsSync(row.log)) {
+		return undefined;
 	}
-	return candidates;
+	// A name the person gave it, else what they first asked
+	const found: Found = { sessionId: row.id, cwd: row.cwd, ...titlesOf(typeof row.name === 'string' ? row.name : undefined, typeof row.prompt === 'string' ? row.prompt : undefined) };
+	return { cli: 'muse', file: `${path.join(dir, 'session-index.db')}#${row.id}`, at: Math.floor(at), sessionId: row.id, found };
 }
 
 /** Muse Code's store: its data folder, which `XDG_DATA_HOME` moves and no variable of its own does. */
@@ -75,5 +83,6 @@ export const MUSE_STORE: VendorStore = {
 	cli: 'muse',
 	dirOf: (env: Environment) => museDataDir(env),
 	candidates: museCandidates,
+	candidateOf: museCandidateOf,
 	read: async candidate => candidate.found
 };

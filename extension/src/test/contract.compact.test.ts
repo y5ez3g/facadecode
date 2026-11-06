@@ -49,10 +49,10 @@ suite('Contract: current-protocol compact results through the real tool boundary
 
 	test('targeted detail handles empty/duplicate names, retained ended agents and a conflicting window', async () => {
 		const lead = runFacts(1, { yolo: true });
-		s.agents.add(lead, runFacts(2, { name: '', lifecycle: 'ended', title: 'CLI details' }), runFacts(3, { name: 'same' }), runFacts(4, { name: 'same' }));
+		s.agents.add(lead, runFacts(2, { name: '', lifecycle: 'ended', title: 'Fix the login redirect' }), runFacts(3, { name: 'same' }), runFacts(4, { name: 'same' }));
 		const detail = resultOf(await s.call(lead, 'list_agents', { agent: '#a2', details: true }));
 		assert.strictEqual(detail.data.agents.length, 1);
-		assert.deepStrictEqual([detail.data.agents[0].agent_id, detail.data.agents[0].name, detail.data.agents[0].title, detail.data.agents[0].process_state], ['#a2', '', 'CLI details', 'ended']);
+		assert.deepStrictEqual([detail.data.agents[0].agent_id, detail.data.agents[0].name, detail.data.agents[0].title, detail.data.agents[0].process_state], ['#a2', '', 'Fix the login redirect', 'ended']);
 		assert.strictEqual(detail.data.agents[0].created_at, new Date(1002).toISOString());
 		assert.strictEqual(resultOf(await s.call(lead, 'list_agents', { agent: '@same' })).error?.reason, 'ambiguous_reference');
 		assert.strictEqual(resultOf(await s.call(lead, 'list_agents', { agent: '#a2', window_id: 'other' })).error?.reason, 'invalid_argument');
@@ -60,6 +60,17 @@ suite('Contract: current-protocol compact results through the real tool boundary
 		const page = resultOf(await s.call(lead, 'list_agents', { limit: 1 }));
 		const next = resultOf(await s.call(lead, 'list_agents', { limit: 1, cursor: page.data.next_cursor }));
 		assert.strictEqual(next.data.agents[0].agent_id, '#a3');
+	});
+
+	test('MCP-3.1: details:true gives each agent\'s conversation title, as its CLI keeps it - none where it saved none - and compact rows leave it out', async () => {
+		const lead = runFacts(1, { yolo: true });
+		s.agents.add(lead, runFacts(2, { title: 'Fix the login redirect' }), runFacts(3));
+		const detailed = resultOf(await s.call(lead, 'list_agents', { details: true }));
+		const compact = resultOf(await s.call(lead, 'list_agents'));
+		assert.deepStrictEqual([
+			detailed.data.agents.map((each: { agent_id: string; title?: string }) => [each.agent_id, 'title' in each, each.title]),
+			compact.data.agents.map((each: object) => 'title' in each)
+		], [[['#a1', false, undefined], ['#a2', true, 'Fix the login redirect'], ['#a3', false, undefined]], [false, false, false]]);
 	});
 
 	test('pending and unknown send outcomes retain deadlines, diagnostics and actual effects', async () => {

@@ -55,7 +55,7 @@ suite('ptyd: a run\'s screen and its numbered output meet once (ARCHITECTURE-2.3
 			try {
 				output(before);
 				const stream: { seq: number; data: string }[] = [];
-				const listener: RunListener = { output: (seq, data) => stream.push({ seq, data }), title() { }, status() { }, exit() { } };
+				const listener: RunListener = { output: (seq, data) => stream.push({ seq, data }), status() { }, exit() { } };
 				run.listen(listener);
 				const taking = run.snapshot();
 				output(after);
@@ -104,7 +104,7 @@ suite('ptyd: a run\'s screen and its numbered output meet once (ARCHITECTURE-2.3
 	test('its exit is told once what it wrote last is drawn, with a Ctrl+C typed just before as evidence', async () => {
 		const { run, output, end } = runOf();
 		const told: unknown[] = [];
-		run.listen({ output() { }, title() { }, status() { }, exit: exit => told.push(exit) });
+		run.listen({ output() { }, status() { }, exit: exit => told.push(exit) });
 		try {
 			run.write('\x03');
 			output('bye');

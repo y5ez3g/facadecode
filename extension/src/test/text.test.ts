@@ -3,7 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import { truncateCodePoints, truncateText } from '../base/text';
+import { displayLines, truncateCodePoints, truncateText } from '../base/text';
 import { shown } from '../clis/config';
 
 suite('Text previews keep Unicode characters whole', () => {
@@ -32,5 +32,9 @@ suite('Text previews keep Unicode characters whole', () => {
 		const previews = [55, 57].map(length => shown(`${'a'.repeat(length)}🌍tail`));
 		assert.deepStrictEqual(previews, [`"${'a'.repeat(55)}🌍t…`, `"${'a'.repeat(57)}…`]);
 		assert.ok(previews.every(preview => Buffer.from(preview, 'utf8').toString('utf8') === preview));
+	});
+
+	test('CLIS-2.3, 2.4: a complete stored title keeps its lines and every character, its invisible formatting and other controls gone', () => {
+		assert.strictEqual(displayLines('  \u202eFix\u200b the\u0007login\tflow\r\nsecond line\rthird\u0085 '), 'Fix the login flow\nsecond line\nthird');
 	});
 });

@@ -308,13 +308,12 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		}
 	});
 
-	test('a terminal title longer than any tab shows is kept and told cut, so that no message of the run outgrows a frame (ARCHITECTURE-2.4)', async () => {
+	test('a terminal title longer than any tab shows is kept cut for its listing, so that no message of the run outgrows a frame, and told as no event: no window shows it (ARCHITECTURE-2.4, CLIS-2.3)', async () => {
 		const client = await connect();
 		const events = eventsOf(client, 'titled');
 		await spawn(client, 'titled', `process.stdout.write('\\x1b]0;' + 'x'.repeat(20000) + '\\x07ready'); ${IDLE}`);
-		const told = await until('its title', () => events.find(event => event.event === 'title') as { title: string } | undefined);
-		const listed = (await client.request('list', { owner: 'w1' })).find(run => run.run === 'titled');
-		assert.deepStrictEqual([told.title.length, listed?.title.length, told.title.startsWith('xxx')], [4096, 4096, true]);
+		const listed = await until('its title', async () => (await client.request('list', { owner: 'w1' })).find(run => run.run === 'titled' && run.title.length > 0));
+		assert.deepStrictEqual([listed.title.length, listed.title.startsWith('xxx'), events.some(event => event.event === 'title')], [4096, true, false]);
 		await client.request('terminate', { run: 'titled', graceMs: 200 });
 	});
 

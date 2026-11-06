@@ -11,8 +11,8 @@ import * as vscode from 'vscode';
 import { piSessionFolderName } from '../../clis/history/pi';
 import { SUGGESTED_NAMES } from '../../core/names';
 import type { PanelState } from '../../webview/protocol';
+import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
-import { titleText } from '../../base/text';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 const CLI = process.env.FACADE_IT_CLI ?? 'claude';
@@ -142,7 +142,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const card = await newCard();
 		const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
 		assert.ok(terminal, 'its editor terminal shows only the agent name');
-		const alias = card.tooltip.join(' ').match(/#a\d+/)?.[0];
+		const alias = linesOf(card).join(' ').match(/#a\d+/)?.[0];
 		assert.ok(alias, 'the card shows its short ID');
 		const pidFile = `${RECORD}.${alias}`;
 		const pid = await until('the fake CLI to start', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
@@ -199,20 +199,19 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.ok(!dots.has('error'), `never red as it started: ${[...dots].join(', ')}`);
 		for (const title of ['✳ Checking responsive layout', '⠐ Checking responsive layout', '● 检查标题更新 | workspace']) {
 			fs.writeFileSync(`${RECORD}.quirks.${alias}`, JSON.stringify({ title, reportedTitle: 'Plain activity title' }));
-			// Before any message, the second line says the title's words, the state symbol before them left out; the hover keeps the
-			// title as the CLI set it (PANEL-1.4)
-			await until('the CLI title in the hover', async () => (await state()).cards.find(each => each.runId === card.runId)?.tooltip.some(line => line.includes(title)) ? true : undefined);
-			// The activity report follows the OSC title in the same write cycle; it must not replace it a moment later.
-			await new Promise(resolve => setTimeout(resolve, 250));
+			// Its terminal's title and its report's are no card's: its second line is Facade's own, unmarked, before any message, and its details' title
+			// is its conversation's, from its CLI's own history (PANEL-1.4, 1.5, CLIS-2.4). The CLI writes both within a fifth of a second
+			await new Promise(resolve => setTimeout(resolve, 1_000));
 			const shown = (await state()).cards.find(each => each.runId === card.runId);
-			assert.deepStrictEqual([shown?.line, shown?.tooltip.some(line => line.includes(title))], [titleText(title), true]);
+			const said = shown ? [shown.line, ...linesOf(shown)] : [];
+			assert.deepStrictEqual([!!shown && !/^(?:\u{1F9D1}|\u{1F4E8}|\u{1F514})/u.test(shown.line), said.filter(line => /Checking responsive layout|检查标题更新|Plain activity title/.test(line))], [true, []], JSON.stringify(shown));
 			assert.strictEqual(unspun(terminal.name), card.name, 'CLI titles never change the native terminal name');
 			await until('the name-only editor tab', async () => vscode.window.tabGroups.all.flatMap(group => group.tabs)
 				.some(tab => tab.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name) ? true : undefined);
 		}
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
-		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'Close Agent removes the card at once');
+		assert.ok(!(await state()).cards.some(each => each.runId === card.runId), 'End Agent removes the card at once');
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
@@ -313,7 +312,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			return undefined;
 		});
 		assert.ok(SUGGESTED_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
-		const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
+		const alias = linesOf(card).join(' ').match(/#a\d+/)![0];
 		const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 		assert.ok(sameFolder(launch.cwd, cwd));
 		const resumeAt = launch.args.indexOf(fixture.args[0]);

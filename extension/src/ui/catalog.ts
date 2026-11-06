@@ -16,6 +16,8 @@ export const COMMANDS = {
 	showActiveAgents: 'facade.showActiveAgents',
 	renameAgent: 'facade.renameAgent',
 	closeAgent: 'facade.closeAgent',
+	/** The selected card's details, for the keyboard (PANEL-1.5, UX-2.3). */
+	showAgentDetails: 'facade.showAgentDetails',
 	filter: 'facade.filter',
 	configureAgents: 'facade.configureAgents',
 	/** Registered by the host, which has the CLIs' launch and the agents log (CLIS-4.1, ARCHITECTURE-3.3). */
@@ -43,6 +45,8 @@ export const CONTEXT = {
 	agentSelectedEnded: 'facade.agentSelectedEnded',
 	agentSelectedPinned: 'facade.agentSelectedPinned',
 	agentSelectedPinnable: 'facade.agentSelectedPinnable',
+	/** The selected agent's card is shown: no filter hides it (PANEL-2.3). */
+	agentSelectedVisible: 'facade.agentSelectedVisible',
 	filtered: 'facade.filtered',
 	/** The window's one place to work holds every agent: there is no location to filter by (PANEL-2.3). */
 	onePlace: 'facade.onePlace'

@@ -12,7 +12,7 @@ import { isJsonObject } from '../../base/json';
 import { variableOf } from '../environment';
 import { homeOf } from '../executable';
 import { SESSION_ID } from '../identity';
-import { headLines, mtimeOf, namesIn, PROMPT_BYTES, Scope, tailLines, titleOf } from './scope';
+import { headLines, mtimeOf, namesIn, PROMPT_BYTES, Scope, tailLines, titlesOf } from './scope';
 import type { Candidate, Found, VendorStore } from './store';
 
 /** The folder Pi 1.4 keeps the sessions of `cwd` in by default: its path, a leading separator dropped, each separator and colon a dash, between `--`. */
@@ -26,16 +26,44 @@ export function piSessionFolderName(cwd: string): string {
  * out by its header - and every file a session-dir override keeps directly, which has no folder per cwd.
  */
 export function piCandidates(dir: string, scope: Scope = new Scope([])): Candidate[] {
-	const caseless = process.platform === 'win32' || process.platform === 'darwin';
-	const compared = (name: string) => caseless ? name.toLowerCase() : name;
-	const prefixes = [...new Set(scope.forms.map(each => compared(piSessionFolderName(each).slice(0, -2))))];
-	const scoped = (name: string) => !scope.directories.length || prefixes.some(prefix => compared(name) === `${prefix}--` || compared(name).startsWith(`${prefix}-`));
-	const folders = [dir, ...namesIn(dir, /^--.*--$/).filter(scoped).map(name => path.join(dir, name))];
-	return folders.flatMap(directory => namesIn(directory, /\.jsonl$/).flatMap(name => {
+	return piFolders(dir, scope).flatMap(directory => namesIn(directory, /\.jsonl$/).flatMap(name => {
 		const file = path.join(directory, name);
 		const at = mtimeOf(file);
 		return at === undefined ? [] : [{ cli: 'pi', file, at }];
 	}));
+}
+
+/**
+ * Session `sessionId`'s file, by its name - `<ID>.jsonl`, or after the time Pi names it by, `<time>_<ID>.jsonl` - in the folders
+ * `piCandidates` reads: its most recently changed, where several have one. Its header confirms it.
+ */
+export function piCandidateOf(dir: string, scope: Scope, sessionId: string): Candidate | undefined {
+	if (!SESSION_ID.test(sessionId)) {
+		return undefined;
+	}
+	let found: Candidate | undefined;
+	for (const directory of piFolders(dir, scope)) {
+		for (const name of namesIn(directory, /\.jsonl$/)) {
+			if (name !== `${sessionId}.jsonl` && !name.endsWith(`_${sessionId}.jsonl`)) {
+				continue;
+			}
+			const file = path.join(directory, name);
+			const at = mtimeOf(file);
+			if (at !== undefined && (!found || at > found.at)) {
+				found = { cli: 'pi', file, at };
+			}
+		}
+	}
+	return found;
+}
+
+/** The folders of the store at `dir` that may keep sessions of `scope` or a folder below it: its own, and those named for them. */
+function piFolders(dir: string, scope: Scope): string[] {
+	const caseless = process.platform === 'win32' || process.platform === 'darwin';
+	const compared = (name: string) => caseless ? name.toLowerCase() : name;
+	const prefixes = [...new Set(scope.forms.map(each => compared(piSessionFolderName(each).slice(0, -2))))];
+	const scoped = (name: string) => !scope.directories.length || prefixes.some(prefix => compared(name) === `${prefix}--` || compared(name).startsWith(`${prefix}-`));
+	return [dir, ...namesIn(dir, /^--.*--$/).filter(scoped).map(name => path.join(dir, name))];
 }
 
 /** Whether `line` is a user's message: the first gives a session its title where it has no name. */
@@ -60,8 +88,7 @@ export async function piConversation(candidate: Candidate): Promise<Found | unde
 	const content = message?.content;
 	const prompt = typeof content === 'string' ? content : Array.isArray(content)
 		? content.flatMap(part => isJsonObject(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : []).join('\n') : '';
-	const title = titleOf(typeof name === 'string' && name.trim() ? name : prompt);
-	return { sessionId: header.id, cwd: header.cwd, ...title ? { title } : {} };
+	return { sessionId: header.id, cwd: header.cwd, ...titlesOf(typeof name === 'string' ? name : undefined, prompt) };
 }
 
 /** Pi's precedence: --session-dir, environment, project settings, global settings, default. */
@@ -90,5 +117,6 @@ export const PI_STORE: VendorStore = {
 	cli: 'pi',
 	dirOf: piSessionDirectory,
 	candidates: piCandidates,
+	candidateOf: piCandidateOf,
 	read: piConversation
 };

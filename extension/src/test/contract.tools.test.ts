@@ -6,7 +6,7 @@ import * as assert from 'assert';
 import { FacadeError } from '../core/errors';
 import { TOOL_PROTOCOL } from '../schema/protocol';
 import { MESSAGE_LIMIT } from '../schema/tools';
-import { assertSameFacts, resultOf, runFacts, runId, Setup, setUp, WORKTREE } from './contractFakes';
+import { assertSameFacts, LOCATION, resultOf, runFacts, runId, Setup, setUp, WORKTREE } from './contractFakes';
 import { waitFor } from './util';
 
 /** A root the person started, YOLO off, with a child, a grandchild, and an unrelated YOLO root. */
@@ -178,6 +178,49 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			s.deps.clis.describe = () => { throw new Error('Unreadable adapter'); };
 			const unknown = resultOf(await s.call(lead, 'list_agents')).data.windows[0].clis;
 			assert.deepStrictEqual(unknown[0].overrides, { model: 'unknown', effort: 'unknown' });
+		});
+
+		test('MCP-3.1, WORKTREES-1.2: an agent in a Resume cwd within a location reports and filters by its anchor\'s location_id, its cwd exact, in unfiltered, anchor-filtered and targeted rows and counts; a subfolder\'s once-issued ID starts a new agent at the anchor', async () => {
+			const { lead } = team(s);
+			const nested = { ...LOCATION, id: 'loc-docs', path: '/work/app/docs', uri: 'file:///work/app/docs', label: 'docs', kind: 'folder' as const, git: 'none' as const, opened: false, isMain: undefined, branch: undefined, within: 'loc-1' };
+			s.locations = [...s.locations, nested];
+			const resumed = runFacts(5, { name: 'resumed', root: lead.id, creator: lead.id, origin: 'agent', location: 'loc-docs', cwd: '/work/app/docs' });
+			s.agents.add(resumed);
+			const row = (agents: { agent_id: string; location_id: string; cwd: string }[]) => agents.filter(each => each.agent_id === resumed.alias || each.agent_id === resumed.id).map(each => [each.location_id, each.cwd]);
+			const all = resultOf(await s.call(lead, 'list_agents')).data;
+			const anchored = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-1' })).data;
+			const byOldId = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-docs' })).data;
+			const targeted = resultOf(await s.call(lead, 'list_agents', { agent: resumed.id, details: true })).data;
+			assert.deepStrictEqual([row(all.agents), row(anchored.agents), row(byOldId.agents), row(targeted.agents)], Array(4).fill([['loc-1', '/work/app/docs']]));
+			assert.deepStrictEqual([anchored.agents.length, byOldId.agents.length, anchored.windows[0].counts.agents], [anchored.agents.length, anchored.agents.length, anchored.agents.length]);
+			assert.ok(all.windows[0].locations.every((each: { location_id: string }) => each.location_id !== 'loc-docs'));
+			assert.deepStrictEqual([targeted.windows[0].counts.locations, targeted.windows[0].locations.map((each: { location_id: string }) => each.location_id)], [1, ['loc-1']]);
+			await s.call(lead, 'start_agent', { ...START, location_id: 'loc-docs' });
+			assert.strictEqual(s.agents.launched.at(-1)?.location, 'loc-1');
+		});
+
+		test('MCP-3.1, WORKTREES-1.2: a resumed run in a nested cwd the catalog has no record of - still starting, or its start failed - reports and filters by its anchor all the same', async () => {
+			const { lead } = team(s);
+			const pending = runFacts(5, { name: 'pending', root: lead.id, creator: lead.id, origin: 'agent', location: 'loc-docs', within: 'loc-1', cwd: '/work/app/docs', lifecycle: 'starting', phase: 'launching_cli' });
+			const failed = runFacts(6, { name: 'failed', root: lead.id, creator: lead.id, origin: 'agent', location: 'loc-docs', within: 'loc-1', cwd: '/work/app/docs', lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'no', source: 'launch', at: 1 } });
+			s.agents.add(pending, failed);
+			assert.ok(!s.locations.some(each => each.id === 'loc-docs'), 'no record in the catalog');
+			const rows = (agents: { agent_id: string; location_id: string; cwd: string }[]) => agents.filter(each => [pending.alias, failed.alias].includes(each.agent_id)).map(each => [each.agent_id, each.location_id, each.cwd]);
+			const anchored = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-1' })).data;
+			assert.deepStrictEqual(rows(resultOf(await s.call(lead, 'list_agents')).data.agents), [['#a5', 'loc-1', '/work/app/docs']]);
+			assert.deepStrictEqual([rows(anchored.agents), anchored.windows[0].counts.agents], [[['#a5', 'loc-1', '/work/app/docs']], anchored.agents.length]);
+			const targeted = resultOf(await s.call(lead, 'list_agents', { agent: failed.alias })).data;
+			assert.deepStrictEqual([rows(targeted.agents), targeted.windows[0].locations.map((each: { location_id: string }) => each.location_id)], [[['#a6', 'loc-1', '/work/app/docs']], ['loc-1']]);
+		});
+
+		test('WORKTREES-1.2: a run whose Resume cwd was added to the workspace since reports and filters by that folder of its own, whatever anchor it kept at acceptance', async () => {
+			const { lead } = team(s);
+			s.locations = [...s.locations, { ...LOCATION, id: 'loc-docs', path: '/work/app/docs', uri: 'file:///work/app/docs', label: 'docs', kind: 'folder', git: 'none', opened: true, isMain: undefined, branch: undefined }];
+			const resumed = runFacts(5, { name: 'resumed', root: lead.id, creator: lead.id, origin: 'agent', location: 'loc-docs', within: 'loc-1', cwd: '/work/app/docs' });
+			s.agents.add(resumed);
+			const row = (agents: { agent_id: string; location_id: string }[]) => agents.filter(each => each.agent_id === resumed.alias).map(each => each.location_id);
+			const own = resultOf(await s.call(lead, 'list_agents', { window_id: 'win-1', location_id: 'loc-docs' })).data;
+			assert.deepStrictEqual([row(resultOf(await s.call(lead, 'list_agents')).data.agents), row(own.agents), own.windows[0].counts.agents], [['loc-docs'], ['loc-docs'], 1]);
 		});
 
 		test('a location needs its window; invalid selections and the removed discovery tool fail without effects', async () => {

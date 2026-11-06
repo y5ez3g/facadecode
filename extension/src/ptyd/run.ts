@@ -235,7 +235,6 @@ export function releaseConsole(pty: object): void {
 /** What a run tells the window that claims it, as it happens. */
 export interface RunListener {
 	output(seq: number, data: string): void;
-	title(title: string): void;
 	status(status: RunStatus | undefined): void;
 	exit(exit: RunExit): void;
 }
@@ -361,9 +360,9 @@ export class Run {
 		const { Unicode11Addon } = loadUnicode11();
 		terminal.loadAddon(new Unicode11Addon() as never);
 		terminal.unicode.activeVersion = '11';
+		// Kept for `list` alone: no window shows a terminal's title, so none is told it as it changes (CLIS-2.3)
 		terminal.onTitleChange(title => {
 			this.title = boundedTitle(title);
-			this.listener?.title(this.title);
 		});
 		this.followStatus();
 		this.followModes();

@@ -23,7 +23,13 @@ export interface Found {
 	readonly cwd: string;
 	/** Native workspace roots where the vendor did not record which one was the original cwd. */
 	readonly cwdChoices?: readonly string[];
+	/** What Resume's one-line list says of its title: its first line, capped - or a preview of its first prompt where it has none. */
 	readonly title?: string;
+	/**
+	 * Its complete native stored title, every line of it, where that differs from `title`: what a card's details and the API hold
+	 * (CLIS-2.4). None where its title is a first prompt's preview, which is no stored title.
+	 */
+	readonly fullTitle?: string;
 	/** Native conversation activity, when distinct from the candidate's file mtime. */
 	readonly activityAt?: number;
 }
@@ -35,6 +41,11 @@ export interface VendorStore {
 	dirOf(env: Environment, directory: string, args?: readonly string[]): string;
 	/** What in the store at `dir` may keep a conversation of `scope` - its directories or a folder below them: listed with its last change. */
 	candidates(dir: string, scope: Scope): Candidate[];
+	/**
+	 * What in the store at `dir` may keep the one conversation `sessionId` of `scope`, found by that ID alone - never by listing the
+	 * store - by the rules `candidates` lists by: none where the store keeps no such conversation (CLIS-2.4).
+	 */
+	candidateOf(dir: string, scope: Scope, sessionId: string): Candidate | undefined;
 	/** Register additional files before reading them so their creation, removal or changes invalidate cached metadata. */
 	read(candidate: Candidate, dependOn?: (file: string) => void): Promise<Found | undefined>;
 }

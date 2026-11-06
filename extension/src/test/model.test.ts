@@ -5,27 +5,24 @@
 import * as assert from 'assert';
 import type { Catalog, Pin, Location, LocationRemoval, RunChange, RunFacts, WorkspaceFolderInfo } from '../core/ports';
 import type { CardWords } from '../ui/cardView';
-import { locationOfFilter, PanelModel, REPORT_COALESCE_MS, Timers } from '../ui/model';
+import { locationOfFilter, PanelModel, placeKindOf, REPORT_COALESCE_MS, Timers } from '../ui/model';
 import { PanelPrefs, Storage } from '../ui/order';
 import type { PanelState } from '../webview/protocol';
 import { TestEmitter } from './withModules';
+import { placeOf } from './detailLines';
 
 const WORDS: CardWords = {
-	agent: value => `Agent: ${value}`,
 	title: value => `Title: ${value}`,
-	prompt: value => `Prompt: ${value}`,
-	status: value => `Status: ${value}`,
-	reason: value => `Reason: ${value}`,
-	tools: value => `Tools: ${value}`,
 	location: value => `Location: ${value}`,
 	path: value => `Path: ${value}`,
+	untitledPending: 'No title yet', untitledUnreadable: 'Title unavailable',
 
-	worktreeFailure: reason => reason, pinned: 'Pinned',
-	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', working: 'Working', notWorking: 'Idle', error: reason => `Error: ${reason}`,
-	activityUnavailable: 'Activity unavailable', needsAttention: 'Needs attention', toolsConnecting: 'Not connected to other agents yet', needsPermission: 'Needs permission', needsSignIn: 'Sign-in required', hasQuestion: 'Waiting for an answer',
-	exitedWithCode: code => `Exited with code ${code}`, endedBySignal: signal => `Ended by signal ${signal}`, window: label => `Window: ${label}`,
-	toolsUnavailable: problem => `Can't work with other agents: ${problem}`, from: (sender: string) => `From: ${sender}`, sourceWindow: (label: string) => `Source window: ${label}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`, startedBy: creator => `Started by: ${creator}`,
-	exitUnknown: 'Disconnected; exit cause unknown', locale: 'en'
+	pinned: 'Pinned',
+	starting: 'Starting', startingCli: cli => `Starting ${cli}...`, creatingWorktree: 'Creating worktree...', started: 'New conversation started', resumed: 'Conversation resumed', working: 'Working', notWorking: 'Idle', error: reason => `Error · ${reason}`,
+	activityUnavailable: 'Status unavailable · check terminal', activityUnknown: why => `Status ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Collaboration not connected yet', needsPermission: 'Permission needed', needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed',
+	exitedWithCode: code => `Process exited · code ${code}`, endedBySignal: signal => `Process terminated · ${signal}`,
+	toolsUnavailable: problem => `Collaboration off · ${problem}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
+	exitUnknown: 'Process lost · reason unknown', startFailed: reason => `Start failed · ${reason}`, worktreeFailed: reason => `Worktree failed · ${reason}`, locale: 'en'
 };
 
 const SHOP: WorkspaceFolderInfo = { index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' };
@@ -175,12 +172,12 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		clock.advance(REPORT_COALESCE_MS - 100);
 		await tick();
 		const trailing = sent() - first;
-		const line = model.state().cards[0].line;
+		const title = model.state().cards[0].details.summary?.value;
 		// An error is a lifecycle change: it does not wait for the coalescer
 		clock.advance(10);
 		agents.update(id(1), { error: { reason: 'Rate limited', source: 'cli', at: 1 } }, 'lifecycle');
 		await tick();
-		assert.deepStrictEqual([leading, held, trailing, line, sent() - first, model.state().cards[0].dot], [1, 1, 2, 'Three', 3, 'error']);
+		assert.deepStrictEqual([leading, held, trailing, title, sent() - first, model.state().cards[0].dot], [1, 1, 2, 'Three', 3, 'error']);
 	});
 
 	test('U05: the badge counts every card - starting, failed and filtered out alike; a new card goes last; the order is kept in workspace storage (PANEL-2.1)', async () => {
@@ -343,17 +340,17 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		]);
 	});
 
-	test('a card\'s hover says its location by branch or folder, its workspace folder first in a multi-folder window - and keeps it while the location is only unlisted (PANEL-1.3)', async () => {
+	test('a card\'s details say its location by branch or folder, its workspace folder first in a multi-folder window - and keeps it while the location is only unlisted (PANEL-1.3)', async () => {
 		const model = make();
 		agents.add(run(1, { location: LOGIN.id, cwd: LOGIN.path }));
 		await tick();
-		const multi = model.state().cards[0].location;
+		const multi = placeOf(model.state().cards[0]);
 		locations.catalog = { locations: [{ ...MAIN, folders: [SHOP] }], folders: [SHOP], pending: true };
 		locations.changed.fire();
 		await tick();
-		assert.deepStrictEqual([multi, model.state().cards[0].location], [
-			{ full: 'Location: shop · login-fix\nPath: /login-fix' },
-			{ full: 'Location: login-fix\nPath: /login-fix' }
+		assert.deepStrictEqual([multi, placeOf(model.state().cards[0])], [
+			'Location: shop · login-fix\nPath: /login-fix',
+			'Location: login-fix\nPath: /login-fix'
 		]);
 	});
 
@@ -364,12 +361,12 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(1, { location: plain.id, cwd: plain.path }));
 		agents.add(run(2, { location: MAIN.id, cwd: MAIN.path }));
 		await tick();
-		assert.deepStrictEqual(model.state().cards.map(card => card.location), [
-			{ full: 'Location: docs\nPath: /docs' }, { full: 'Location: shop · main\nPath: /main' }
+		assert.deepStrictEqual(model.state().cards.map(card => placeOf(card)), [
+			'Location: docs\nPath: /docs', 'Location: shop · main\nPath: /main'
 		]);
 	});
 
-	test('LIFECYCLE-1.3: the window has its one place to work until a second place holds an agent or Git finds a repository there; while Git reads it, it has none; a card\'s hover says the location all along', async () => {
+	test('LIFECYCLE-1.3: the window has its one place to work until a second place holds an agent or Git finds a repository there; while Git reads it, it has none; a card\'s details say the location all along', async () => {
 		const ORCA: WorkspaceFolderInfo = { index: 0, name: 'orca', uri: 'file:///orca', path: '/orca' };
 		const plain: Location = { ...location('loc-orca', 'orca', ORCA), kind: 'folder', git: 'none', opened: true };
 		const one: Catalog = { locations: [plain], folders: [ORCA], pending: false };
@@ -378,7 +375,7 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(1, { location: plain.id, cwd: plain.path }));
 		agents.add(run(2, { location: plain.id, cwd: plain.path }));
 		await tick();
-		const seen = () => [model.state().cards.map(card => card.location), model.placesShown()];
+		const seen = () => [model.state().cards.map(card => placeOf(card)), model.placesShown()];
 		const alone = seen();
 		// Git still reading: it may be a repository, whose branch is said
 		locations.catalog = { ...one, locations: [{ ...plain, git: 'pending' }], pending: true };
@@ -396,8 +393,91 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		agents.add(run(3, { location: 'loc-elsewhere', cwd: '/elsewhere' }));
 		await tick();
 		const elsewhere = seen()[1];
-		const said = { full: 'Location: orca\nPath: /orca' };
+		const said = 'Location: orca\nPath: /orca';
 		assert.deepStrictEqual([alone, reading, repository, elsewhere], [[[said, said], false], [[said, said], true], true, true]);
+	});
+
+	test('PANEL-1.5, 2.3, WORKTREES-1.2: a resumed run in a nested cwd the catalog has no record of - still starting, or its start failed - shows and filters as its anchor\'s, its path its own', async () => {
+		const model = make();
+		agents.add(run(1, { location: 'loc-docs', within: MAIN.id, cwd: `${MAIN.path}/docs`, lifecycle: 'starting', phase: 'launching_cli' }));
+		agents.add(run(2, { location: 'loc-docs', within: MAIN.id, cwd: `${MAIN.path}/docs`, lifecycle: 'ended', end: { kind: 'failed', at: 1 }, error: { reason: 'no', source: 'launch', at: 1 } }));
+		agents.add(run(3, { location: LOGIN.id, cwd: LOGIN.path }));
+		await tick();
+		assert.deepStrictEqual(model.state().cards.slice(0, 2).map(card => [card.details.location.kind, card.details.location.value.endsWith(MAIN.label), card.details.path.value, card.label.includes('docs')]),
+			[[placeKindOf(MAIN), true, `${MAIN.path}/docs`, false], [placeKindOf(MAIN), true, `${MAIN.path}/docs`, false]]);
+		model.setFilter({ kind: 'location', id: MAIN.id, label: MAIN.label });
+		await tick();
+		const byLocation = model.state().cards.map(card => card.runId);
+		model.setFilter({ kind: 'folder', id: MAIN.folders[0].uri, label: MAIN.folders[0].name });
+		await tick();
+		assert.deepStrictEqual([byLocation, model.state().cards.slice(0, 2).map(card => card.runId)], [[id(1), id(2)], [id(1), id(2)]]);
+	});
+
+	test('WORKTREES-1.2, PANEL-2.3: a run whose Resume cwd was added to the workspace since shows and filters as that folder of its own, whatever anchor it kept', async () => {
+		const added: Location = { ...location('loc-docs', 'docs', MAIN.folders[0]), path: `${MAIN.path}/docs`, kind: 'folder', git: 'none', opened: true };
+		locations.catalog = { ...locations.catalog, locations: [...locations.catalog.locations, added] };
+		const model = make();
+		agents.add(run(1, { location: added.id, within: MAIN.id, cwd: added.path }));
+		await tick();
+		const shown = [model.state().cards[0].details.location.kind, model.state().cards[0].details.location.value.endsWith('docs')];
+		model.setFilter({ kind: 'location', id: added.id, label: 'docs' });
+		await tick();
+		const own = model.state().cards.map(card => card.runId);
+		model.setFilter({ kind: 'location', id: MAIN.id, label: MAIN.label });
+		await tick();
+		assert.deepStrictEqual([shown, own, model.state().cards.map(card => card.runId)], [['folder', true], [id(1)], []]);
+	});
+
+	test('PANEL-1.5, CLIS-2.4: the model says of each card whether Facade has a history reader for its CLI: a custom CLI\'s untitled card says its title is unavailable, a built-in\'s that there is none yet', async () => {
+		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(new Memory(), { event: () => undefined }), words: WORDS, remote: false, ready: Promise.resolve(), readsTitles: cli => cli !== 'my-cli' });
+		agents.add(run(1, { cli: 'my-cli', displayName: 'my-cli' }));
+		agents.add(run(2));
+		await tick();
+		assert.deepStrictEqual(model.state().cards.map(card => card.details.untitled), ['Title unavailable', 'No title yet']);
+		model.dispose();
+	});
+
+	test('PANEL-1.5, WORKTREES-1.2: a location\'s icon is repo for a main checkout\'s root, worktree for a linked root, folder for a workspace folder opened inside a checkout and for a plain folder; a resumed nested cwd shows as its anchor\'s, its path its own', async () => {
+		const ORCA: WorkspaceFolderInfo = { index: 0, name: 'orca', uri: 'file:///orca', path: '/orca' };
+		const main: Location = { ...location('loc-main', 'main', ORCA), path: '/orca', isMain: true, opened: true };
+		const linked: Location = { ...location('loc-linked', 'fix', ORCA), path: '/orca.worktrees/fix', isMain: false };
+		const opened: Location = { ...location('loc-app', 'app', ORCA), path: '/orca/packages/app', isMain: false, subfolder: true };
+		const plain: Location = { ...location('loc-plain', 'notes', ORCA), path: '/notes', kind: 'folder', git: 'none' };
+		const nested: Location = { ...location('loc-nested', 'docs', ORCA), path: '/orca.worktrees/fix/docs', kind: 'folder', git: 'none', within: linked.id };
+		locations.catalog = { locations: [main, linked, opened, plain, nested], folders: [ORCA], pending: false };
+		const model = make();
+		[main, linked, opened, plain, nested].forEach((each, i) => agents.add(run(i + 1, { location: each.id, cwd: each.path })));
+		await tick();
+		assert.deepStrictEqual(model.state().cards.map(card => [card.details.location.kind, card.details.location.value, card.details.path.value]), [
+			['repo', 'main', '/orca'], ['worktree', 'fix', '/orca.worktrees/fix'], ['folder', 'app', '/orca/packages/app'], ['folder', 'notes', '/notes'], ['worktree', 'fix', '/orca.worktrees/fix/docs']
+		]);
+	});
+
+	test('WORKTREES-1.2, PANEL-1.5, 2.3: an agent in a folder inside a location - a resumed conversation\'s own - shows and counts as that location\'s, its own path said; the window keeps its one place to work', async () => {
+		const ORCA: WorkspaceFolderInfo = { index: 0, name: 'orca', uri: 'file:///orca', path: '/orca' };
+		const root: Location = { ...location('loc-orca', 'main', ORCA), path: '/orca', isMain: true, opened: true };
+		const inner: Location = { ...location('loc-orca-docs', 'docs', ORCA), path: '/orca/docs', kind: 'folder', git: 'none', within: root.id };
+		locations.catalog = { locations: [root, inner], folders: [ORCA], pending: false };
+		const model = make();
+		agents.add(run(1, { location: inner.id, cwd: inner.path }));
+		agents.add(run(2, { location: root.id, cwd: root.path }));
+		await tick();
+		const shown = model.state().cards.map(card => [card.details.location.kind, placeOf(card)]);
+		model.setFilter({ kind: 'location', id: root.id, label: 'main' });
+		await tick();
+		const filtered = model.state().cards.length;
+		// A window whose one place to work is a plain folder keeps it with an agent in a folder inside it
+		model.setFilter(undefined);
+		const plain: Location = { ...root, kind: 'folder', git: 'none', label: 'orca', isMain: undefined };
+		locations.catalog = { locations: [plain, inner], folders: [ORCA], pending: false };
+		locations.changed.fire();
+		await tick();
+		assert.deepStrictEqual([shown, filtered, model.placesShown(), model.state().cards.map(card => placeOf(card))], [
+			[['repo', 'Location: main\nPath: /orca/docs'], ['repo', 'Location: main\nPath: /orca']],
+			2,
+			false,
+			['Location: orca\nPath: /orca/docs', 'Location: orca\nPath: /orca']
+		]);
 	});
 
 	test('PANEL-1.3: equal names among all of this window\'s cards each show their short ID, those the filter hides counted; a duplicate going removes it; empty names are no duplicates', async () => {
@@ -415,18 +495,17 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		assert.deepStrictEqual(repeated(), [false, false, false, false, false]);
 	});
 
-	test('PANEL-1.5: the hover names the window; a rename is shown at once; the state carries only the remote capability', async () => {
-		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(storage), words: WORDS, remote: false, window: 'shop', ready: Promise.resolve(), timers: clock });
-		models.push(model);
+	test('PANEL-1.5: the details say where it works, never the window; a rename is shown at once; the state carries only the remote capability', async () => {
+		const model = make();
 		agents.add(run(1, { name: 'Lead' }));
 		await tick();
 		const before = model.state().cards.map(card => card.name);
 		agents.update(id(1), { name: 'Chief' }, 'renamed');
 		await tick();
-		assert.deepStrictEqual([before, model.state().cards.map(card => card.name), model.state().cards[0].location.full, model.state().capabilities], [
+		assert.deepStrictEqual([before, model.state().cards.map(card => card.name), placeOf(model.state().cards[0]), model.state().capabilities], [
 			['Lead'],
 			['Chief'],
-			'Location: shop · main\nPath: /main\nWindow: shop',
+			'Location: shop · main\nPath: /main',
 			{ remote: false }
 		]);
 	});

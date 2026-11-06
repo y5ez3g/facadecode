@@ -19,7 +19,8 @@ export interface TerminalOwner {
 
 export type TerminalRegistration = TerminalOwner & (
 	{ readonly kind: 'activate'; readonly handedOver?: boolean }
-	| { readonly kind: 'retire'; readonly runs: readonly string[] }
+	/** `runs`, every run this restoration reattached, its tab open again or hidden; `hidden`, those of them whose tab it keeps hidden. */
+	| { readonly kind: 'retire'; readonly runs: readonly string[]; readonly hidden?: readonly string[] }
 	| { readonly kind: 'begin'; readonly run: string }
 	| { readonly kind: 'finish' | 'cancel'; readonly run: string; readonly ticket: string }
 );
@@ -29,7 +30,8 @@ export function isTerminalRegistration(value: unknown): value is TerminalRegistr
 		return false;
 	}
 	return (value.kind === 'activate' && (value.handedOver === undefined || typeof value.handedOver === 'boolean'))
-		|| (value.kind === 'retire' && Array.isArray(value.runs) && value.runs.every(run => typeof run === 'string' && !!run))
+		|| (value.kind === 'retire' && Array.isArray(value.runs) && value.runs.every(run => typeof run === 'string' && !!run)
+			&& (value.hidden === undefined || (Array.isArray(value.hidden) && value.hidden.every(run => typeof run === 'string' && !!run))))
 		|| (typeof value.run === 'string' && !!value.run
 		&& (value.kind === 'begin' || ((value.kind === 'finish' || value.kind === 'cancel') && typeof value.ticket === 'string' && !!value.ticket)));
 }

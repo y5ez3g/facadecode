@@ -83,7 +83,10 @@ export class WindowTerminals implements vscode.Disposable {
 		if (!owner || owner.claim.generation !== value.claim.generation || owner.claim.token !== value.claim.token) {
 			return false;
 		}
-		if (value.kind === 'retire') { return this.retire(owner, value.runs); }
+		if (value.kind === 'retire') {
+			this.releaseHidden(owner, value.hidden ?? []);
+			return this.retire(owner, value.runs);
+		}
 		if (value.kind === 'begin') {
 			if (this.capture) { return false; }
 			const ticket = randomUUID();
@@ -106,6 +109,20 @@ export class WindowTerminals implements vscode.Disposable {
 		owner.runs.set(value.run, terminal);
 		if (old && old !== terminal) { old.dispose(); }
 		return true;
+	}
+
+	/**
+	 * Runs the restoration brought back with their tab hidden: a terminal still registered for one is the predecessor's, left open as the
+	 * extension host restarted - its keys going nowhere - and is disposed of, where this registry outlived that host (LIFECYCLE-3.5).
+	 */
+	private releaseHidden(owner: Registration, hidden: readonly string[]): void {
+		for (const run of hidden) {
+			const old = owner.runs.get(run);
+			if (old) {
+				owner.runs.delete(run);
+				old.dispose();
+			}
+		}
 	}
 
 	/** This retires a whole old resource group; it never associates an old candidate with an individual run. */
@@ -137,7 +154,8 @@ export class WindowTerminals implements vscode.Disposable {
 			if (!current()) { return false; }
 			let retired = false;
 			for (const [title, group] of groups) {
-				if (!group.every(run => runs.has(run) && owner.runs.has(run))) { continue; }
+				// Every run of the group reattached, its tab open again or hidden (LIFECYCLE-3.5): the old objects are the predecessor's alone
+				if (!group.every(run => runs.has(run))) { continue; }
 				// A working agent's tab title has a spinner's frame before its name, a tick apart from one to the next (LIFECYCLE-2.2)
 				const old = found.filter(each => unspun(each.name) === title && unspun(each.terminal.name) === title && eligible(each.terminal)
 					&& vscode.window.terminals.includes(each.terminal) && !(each.pid !== undefined && each.pid > 0));

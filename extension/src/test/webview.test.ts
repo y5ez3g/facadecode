@@ -53,7 +53,8 @@ suite('The agent panel in Chromium', function () {
 	let tested: string;
 	let css: string;
 	/** The page's words: each its own key, the templates as the extension gives them. */
-	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started: {0}', workingSince: 'Reported working: {0}' };
+	const words = { noAgentsIn: 'No agents found in "{0}".', otherAgents: '{0} other agents are in this workspace.', otherAgent: '1 other agent is in this workspace.', started: 'Started {0}', startedBy: 'Started {0} by {1}',
+		ago: { now: 'just now', secs: '{0} secs ago', min: '{0} min ago', mins: '{0} mins ago', hr: '{0} hr ago', hrs: '{0} hrs ago', day: '{0} day ago', days: '{0} days ago', wk: '{0} wk ago', wks: '{0} wks ago', mo: '{0} mo ago', mos: '{0} mos ago', yr: '{0} yr ago', yrs: '{0} yrs ago' } };
 	/** Loads a new page of the panel, as the view does each time it shows. */
 	const load = async (bundle = shipped, saved?: unknown) => {
 		await call('Page.navigate', { url: 'about:blank' });
@@ -68,12 +69,24 @@ suite('The agent panel in Chromium', function () {
 	const deliver = (message: object) => evaluate(`window.dispatchEvent(new MessageEvent('message', {data: {page: panel.page, ...${JSON.stringify(message)}}}))`);
 	/** Thirty working cards, `window.agents`, drawn by `redraw()`; `newCard(i, more)` and `stateOf(cards, more)` make others as the host does. */
 	const CARDS = `
+		// A card's details as the host sends them: where it works and its path always, its title and who started it where it has them
+		window.detailsFor = (i, more = {}) => ({ location: { id: 'location', label: 'Location: ', value: 'main', kind: 'repo' }, path: { id: 'path', label: 'Path: ', value: '/project' }, titleLabel: 'Title: ', ...more.summary ? { description: { title: '', place: '' } } : { untitled: 'No title yet', description: { title: 'Title: No title yet', place: '' } }, ...more });
 		window.newCard = (i, more = {}) => ({ runId: 'run-' + i, selected: false, name: 'Agent ' + i, alias: '#a' + i, avatar: { file: 'avatar-claude.png' },
-			location: { full: 'project · /project' }, dot: 'working', stateText: 'Working', line: 'Step one', tooltip: ['Agent ' + i + ' · #a' + i + ' · Claude Code', 'Working'],
+			dot: 'working', stateText: 'Working', line: 'Step one', details: detailsFor(i),
 			label: 'Agent ' + i + ', #a' + i + ', Working, project, Claude Code, Step one', startedAt: Date.now(), menu: { moveUp: false, moveDown: false }, ...more });
 		window.stateOf = (cards, more = {}) => ({ revision: 1, loading: false, cards, cardCount: cards.length, capabilities: { remote: false }, ...more });
 		window.agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1));
 		window.redraw = (more = {}) => panel.render(stateOf(agents, more));
+		// A row of the details as the person reads it: its words after its icon, what only a screen reader hears left out, a no-break
+		// space read as a space
+		window.wordsOf = row => [...row.children].filter(child => !(child instanceof SVGElement) && !child.classList.contains('visually-hidden')).map(child => child.textContent).join('').replace(/\u00a0/g, ' ');
+		// A card's details as lines, its ⓘ opening and closing them: each shown row's words
+		window.detailsOf = card => {
+			card.querySelector('.details-button').click();
+			const lines = [...document.querySelectorAll('.details .details-fact')].filter(row => !row.hidden).map(wordsOf);
+			card.querySelector('.details-button').click();
+			return lines;
+		};
 		redraw();`;
 	suiteSetup(async function () {
 		if (!executable) { this.skip(); return; }
@@ -133,33 +146,513 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 
-	test('a card keeps its element, face and dot through every change of what it says; its dot, second line, label and hover are the host\'s (PANEL-1.4, 1.5, 3.2)', async () => {
+	test('a card keeps its element, face and dot through every change of what it says; its dot, second line, label and details are the host\'s (PANEL-1.4, 1.5, 3.2)', async () => {
 		assert.deepStrictEqual(await evaluate(`(() => {
 			const card = document.querySelector('.agent'), dot = card.querySelector('.dot'), face = card.querySelector('.face');
-			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle', line: 'Fix the login', label: 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', tooltip: ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle'] });
+			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle', line: 'Fix the login', label: 'Agent 1, #a1, Idle, project, Claude Code, Fix the login',
+				details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: 'Fix the login' }, description: { title: 'Title: Fix the login', place: 'Path: /project' } }) });
 			redraw({ revision: 2 });
-			return [card === document.querySelector('.agent'), dot === card.querySelector('.dot'), face === card.querySelector('.face'), dot.className, dot.title, card.querySelector('.title').textContent, card.getAttribute('aria-label'), card.title.split('\\n')];
-		})()`), [true, true, true, 'dot none', 'Idle', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login', ['Agent 1 · #a1 · Claude Code', 'Fix the login', 'Idle', 'Started: now', 'project · /project']]);
+			return [card === document.querySelector('.agent'), dot === card.querySelector('.dot'), face === card.querySelector('.face'), dot.className, card.querySelector('.title').textContent, card.getAttribute('aria-label'), detailsOf(card), card.getAttribute('aria-description').replace(/\u00a0/g, ' ')];
+		})()`), [true, true, true, 'dot none', 'Fix the login', 'Agent 1, #a1, Idle, project, Claude Code, Fix the login',
+			['Fix the login', 'Agent 1 #a1', 'Started just now', 'main', '/project'],
+			'Title: Fix the login, Started just now, Path: /project']);
 	});
 
-	test('PANEL-1.5: a card\'s hover says how long ago it started, then its location and window', async () => {
-		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { location: { full: 'project · /project · Window: shop' } }), newCard(2)])`) });
-		assert.deepStrictEqual(await evaluate(`[window.errors, [...document.querySelectorAll('.agent')].map(card => card.title.split('\\n').slice(-2))]`), [[], [
-			['Started: now', 'project · /project · Window: shop'],
-			['Started: now', 'project · /project']
-		]]);
+	test('PANEL-1.5: a card\'s details are five rows, each an icon and one line: its title, No title yet where it has none and Title unavailable where none can come, after the same Title: label; its name and short ID, an empty name its ID alone; when it started - and who started it; where it works, its icon its kind\'s; its path', async () => {
+		const worktree = { location: { id: 'location', label: 'Location: ', value: 'rrr', kind: 'worktree' }, path: { id: 'path', label: 'Path: ', value: '~/shop.worktrees/rrr' } };
+		await deliver({ type: 'state', state: await evaluate(`stateOf([
+			newCard(1, { startedAt: Date.now() - 5 * 60_000, details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: 'Fix the login' }, startedBy: 'Maker #a7', ...${JSON.stringify(worktree)} }) }),
+			newCard(2),
+			newCard(3, { details: detailsFor(3, { location: { id: 'location', label: 'Location: ', value: 'shop', kind: 'folder' }, path: { id: 'path', label: 'Path: ', value: '~/shop' } }) }),
+			// An empty name: its ID is its name, the separator right after it; a custom CLI's, whose title can never come
+			newCard(4, { name: '', details: detailsFor(4, { untitled: 'Title unavailable', description: { title: 'Title: Title unavailable', place: '' } }) })
+		])`) });
+		// The theme's text and quieter colours apart, as a theme has them
+		await evaluate(`document.documentElement.style.cssText = '--vscode-foreground:#cccccc;--vscode-descriptionForeground:#999999;--vscode-editorHoverWidget-foreground:#cccccc;--vscode-editorHoverWidget-background:#202020'`);
+		const seen = await evaluate(`(() => [...document.querySelectorAll('.agent')].map(card => {
+			card.querySelector('.details-button').click();
+			const rows = [...document.querySelectorAll('.details .details-fact')];
+			const color = element => getComputedStyle(element).color;
+			const shown = { lines: rows.filter(row => !row.hidden).map(wordsOf), heard: rows.map(row => row.querySelector('.visually-hidden')?.textContent ?? null),
+				untitled: rows[0].classList.contains('untitled'), icons: rows.map(row => row.querySelector('svg path')?.getAttribute('d')),
+				// The start's words in the text colour, as where it works; its icon and the short ID quieter
+				colors: [color(rows[2].querySelector('span')), color(rows[3].querySelector('span:not(.visually-hidden)')), color(rows[2].querySelector('svg')), color(rows[1].querySelector('.details-more'))],
+				named: document.getElementById(document.querySelector('.details').getAttribute('aria-labelledby')).parentElement === rows[1] };
+			card.querySelector('.details-button').click();
+			return shown;
+		}))()`);
+		await evaluate(`document.documentElement.style.cssText = ''`);
+		assert.deepStrictEqual(seen.map((each: { lines: string[] }) => each.lines), [
+			['Fix the login', 'Agent 1 #a1', 'Started 5 mins ago by Maker #a7', 'rrr', '~/shop.worktrees/rrr'],
+			['No title yet', 'Agent 2 #a2', 'Started just now', 'main', '/project'],
+			['No title yet', 'Agent 3 #a3', 'Started just now', 'shop', '~/shop'],
+			['Title unavailable', '#a4', 'Started just now', 'main', '/project']
+		]);
+		// What a screen reader says before each value; a title it has not got is quieter; the dialog is named by who
+		assert.deepStrictEqual([seen[0].heard, seen[1].heard, seen.map((each: { untitled: boolean }) => each.untitled), seen.every((each: { named: boolean }) => each.named)],
+			[['Title: ', null, null, 'Location: ', 'Path: '], ['Title: ', null, null, 'Location: ', 'Path: '], [false, true, true, true], true]);
+		const [startText, placeText, startIcon, alias] = seen[0].colors;
+		assert.deepStrictEqual([startText === placeText, startIcon === alias, startText !== alias], [true, true, true]);
+		// Its title's, who's and its start's icons; a worktree's icon, a main checkout's and a folder's are three; the path's is the folder's
+		const [worktreeIcons, repoIcons, folderIcons] = seen.map((each: { icons: string[] }) => each.icons);
+		assert.deepStrictEqual([new Set(worktreeIcons).size, new Set([worktreeIcons[3], repoIcons[3], folderIcons[3]]).size, folderIcons[3] === folderIcons[4], worktreeIcons[4] === folderIcons[4], worktreeIcons.every(Boolean)], [5, 3, true, true, true]);
+		assert.ok(worktreeIcons[2].startsWith('M2 8C2 4.68629'), 'the start\'s icon is codicon clockface');
+		assert.deepStrictEqual(await evaluate('window.errors'), []);
 	});
 
-	test('working hover uses the execution clock, with absolute time for a future observation (PANEL-1.5)', async () => {
+	test('PANEL-1.5, UX-2.4: the start says how long ago by the host\'s clock in Resume Agent\'s words - just now under 30 s - lower-cased within the sentence and kept whole on a wrap; a time ahead of the clock, its date and time', async () => {
 		const sourceNow = Date.UTC(2020, 0, 1, 12);
-		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { workingSince: ${sourceNow - 25 * 60_000}, startedAt: ${sourceNow - 40 * 60_000} })], { clockAt: ${sourceNow} })`) });
-		const title = await evaluate(`document.querySelector('.agent').title`);
-		assert.match(title, /Reported working: 25 min/);
-		assert.match(title, /Started: 40 min/);
-		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { workingSince: ${sourceNow + 60_000} })], { revision: 2, clockAt: ${sourceNow} })`) });
-		const future = await evaluate(`document.querySelector('.agent').title`);
-		assert.match(future, /2020/);
-		assert.ok(!future.includes('Reported working: now'));
+		const ago = [10_000, 45_000, 60_000, 40 * 60_000, 2 * 3_600_000, 3 * 86_400_000];
+		await deliver({ type: 'state', state: await evaluate(`stateOf(${JSON.stringify(ago)}.map((ms, i) => newCard(i + 1, { startedAt: ${sourceNow} - ms })), { clockAt: ${sourceNow} })`) });
+		// The start's row: its words as they are, a no-break space among them
+		const startOf = `(card => { card.querySelector('.details-button').click(); const start = document.querySelectorAll('.details .details-fact')[2].querySelector('span').textContent; card.querySelector('.details-button').click(); return start; })`;
+		const seen = await evaluate(`[...document.querySelectorAll('.agent')].map(${startOf})`);
+		assert.deepStrictEqual(seen.map((start: string) => start.replace(/\u00a0/g, ' ')), [
+			'Started just now', 'Started 45 secs ago', 'Started 1 min ago', 'Started 40 mins ago', 'Started 2 hrs ago', 'Started 3 days ago'
+		]);
+		// One unit: no line breaks inside "Started 40 mins ago"
+		assert.strictEqual(seen[3], 'Started\u00a040\u00a0mins\u00a0ago');
+		// A language whose word for it begins a list's line in upper case says it in lower case within the sentence
+		await evaluate(`window.FACADE_STRINGS.ago.mins = 'Vor {0} Minuten'`);
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { startedAt: ${sourceNow} - 5 * 60_000 })], { revision: 2, clockAt: ${sourceNow} })`) });
+		const lowered = (await evaluate(`${startOf}(document.querySelector('.agent'))`)).replace(/\u00a0/g, ' ');
+		await evaluate(`window.FACADE_STRINGS.ago.mins = '{0} mins ago'`);
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { startedAt: ${sourceNow} + 60_000 })], { revision: 3, clockAt: ${sourceNow} })`) });
+		const future = await evaluate(`detailsOf(document.querySelector('.agent'))[2]`);
+		assert.deepStrictEqual([lowered, /2020/.test(future), future.includes('just now')], ['Started vor 5 Minuten', true, false]);
+	});
+
+	test('UX-2.4: a start ahead of the clock says the locale\'s whole date and time, its capitals kept, while a past start is lower-cased within the sentence', async () => {
+		const sourceNow = Date.UTC(2020, 0, 1, 12);
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { startedAt: ${sourceNow} + 60_000 }), newCard(2, { startedAt: ${sourceNow} - 5 * 60_000 })], { clockAt: ${sourceNow} })`) });
+		const [future, past] = await evaluate(`[...document.querySelectorAll('.agent')].map(card => detailsOf(card)[2])`);
+		const absolute = await evaluate(`new Intl.DateTimeFormat(document.documentElement.lang || undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(${sourceNow} + 60_000)`);
+		assert.deepStrictEqual([future, past.replace(/\u00a0/g, ' ')], [`Started ${absolute}`, 'Started 5 mins ago']);
+		assert.ok(/[A-Z]/.test(absolute), absolute);
+	});
+
+	test('PANEL-1.5, UX-2.4: open details say their start again at the next age where its words change - 30 rounded seconds, each second, each half minute the minutes round up - a start ahead of the clock as it stops being ahead, and anew as their card\'s start changes', async () => {
+		const sourceNow = Date.UTC(2020, 0, 1, 12);
+		// A clock the test moves, and the page's timers recorded rather than run
+		await evaluate(`(() => {
+			window.fakeNow = 1_000_000; window.timers = []; window.realSetTimeout = window.setTimeout;
+			Object.defineProperty(performance, 'now', { configurable: true, value: () => window.fakeNow });
+			window.setTimeout = (run, wait) => { window.timers.push({ run, wait }); return window.timers.length; };
+			window.startNow = () => document.querySelectorAll('.details .details-fact')[2].querySelector('span').textContent.replace(/\u00a0/g, ' ');
+			// Opened on the first card, then each next timer run: what the start says, and how long until its next
+			window.clockSteps = count => {
+				document.querySelector('.agent .details-button').click();
+				const steps = [[startNow(), timers.at(-1).wait]];
+				for (let i = 0; i < count; i++) {
+					const timer = timers.at(-1);
+					fakeNow += timer.wait;
+					timer.run();
+					steps.push([startNow(), timers.at(-1).wait]);
+				}
+				return steps;
+			};
+		})()`);
+		let revision = 10;
+		const opened = async (age: number, count: number) => {
+			await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { startedAt: ${sourceNow} - ${age} })], { revision: ${++revision}, clockAt: ${sourceNow} })`) });
+			const steps = await evaluate(`clockSteps(${count})`);
+			await evaluate(`document.querySelector('.agent .details-button').click()`);
+			return steps;
+		};
+		try {
+			assert.deepStrictEqual(await opened(10_000, 3), [['Started just now', 19_500], ['Started 30 secs ago', 1_000], ['Started 31 secs ago', 1_000], ['Started 32 secs ago', 1_000]]);
+			// The last second, then the minutes as they round up: 59.5 s, 89.5 s, 149.5 s
+			assert.deepStrictEqual(await opened(58_000, 4), [['Started 58 secs ago', 500], ['Started 59 secs ago', 1_000], ['Started 1 min ago', 30_000], ['Started 2 mins ago', 60_000], ['Started 3 mins ago', 60_000]]);
+			// Opened within a minute's words: to where they next change, not a minute on
+			assert.deepStrictEqual(await opened(75_000, 1), [['Started 1 min ago', 14_500], ['Started 2 mins ago', 60_000]]);
+			// The last of the minutes gives way to the hour; past it, a look each minute
+			assert.deepStrictEqual(await opened(3_569_000, 2), [['Started 59 mins ago', 500], ['Started 60 mins ago', 30_000], ['Started 1 hr ago', 60_000]]);
+			// Ahead of the clock by 5 s: its date and time for those 5 s, then how long ago; far ahead, looked at again within a minute
+			const ahead = await opened(-5_000, 1);
+			assert.deepStrictEqual([/2020/.test(ahead[0][0]), ahead[0][1], ahead[1]], [true, 5_000, ['Started just now', 29_500]]);
+			assert.deepStrictEqual((await opened(-3_600_000, 0))[0][1], 60_000);
+			// Its card's start changing while they are open: from the new start at once
+			const moved = await evaluate(`(() => { clockSteps(0); return timers.at(-1).wait; })()`);
+			await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { startedAt: ${sourceNow} - 75_000 })], { revision: ${++revision}, clockAt: ${sourceNow} })`) });
+			assert.deepStrictEqual([moved, await evaluate(`[startNow(), timers.at(-1).wait]`)], [60_000, ['Started 1 min ago', 14_500]]);
+			await evaluate(`document.querySelector('.agent .details-button').click()`);
+		} finally {
+			await evaluate(`window.setTimeout = window.realSetTimeout; delete performance.now;`);
+		}
+	});
+
+	test('PANEL-1.5: with the focus in the details - pressed in, by real input - the ⓘ closes them once and gives the focus to the card, not closing and opening them again', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		const middle = (selector: string) => evaluate(`(() => { const box = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2 }; })()`);
+		const press = async ({ x, y }: { x: number; y: number }) => {
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+			await call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+			await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+			await wait(30);
+		};
+		// Its buttons show under the pointer
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...await middle('.agent .title') });
+		await wait(30);
+		const info = await middle('.agent .details-button');
+		await press(info);
+		const open = await evaluate(`!document.querySelector('.details').hidden`);
+		await press(await middle('.details .details-fact'));
+		const inside = await evaluate(`document.querySelector('.details').contains(document.activeElement)`);
+		await evaluate(`(() => { window.hiddenChanges = 0; new MutationObserver(records => { window.hiddenChanges += records.length; }).observe(document.querySelector('.details'), { attributes: true, attributeFilter: ['hidden'] }); })()`);
+		await press(info);
+		assert.deepStrictEqual([open, inside, await evaluate(`[document.querySelector('.details').hidden, window.hiddenChanges, document.activeElement === document.querySelector('.agent')]`)], [true, true, [true, 1, true]]);
+		// With none open, a press on it opens them, the keyboard on its card
+		await press(info);
+		assert.deepStrictEqual(await evaluate(`[document.querySelector('.details').hidden, document.activeElement === document.querySelector('.agent')]`), [false, true]);
+		await press(info);
+	});
+
+	test('PANEL-1.5: a card\'s accessible description says how long ago it started as of when it gets the focus, with no new state, writing only where its words changed', async () => {
+		const sourceNow = Date.UTC(2020, 0, 1, 12);
+		await call('Emulation.setFocusEmulationEnabled', { enabled: true });
+		await evaluate(`(() => { window.fakeNow = 1_000_000; Object.defineProperty(performance, 'now', { configurable: true, value: () => window.fakeNow }); })()`);
+		try {
+			await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { startedAt: ${sourceNow} - 5_000 }), newCard(2, { startedAt: ${sourceNow} - 5_000 })], { clockAt: ${sourceNow} })`) });
+			const said = `document.querySelector('.agent').getAttribute('aria-description').replace(/\\u00a0/g, ' ')`;
+			const before = await evaluate(said);
+			await evaluate(`document.activeElement?.blur(); window.fakeNow += 3_600_000`);
+			const unfocused = await evaluate(said);
+			await evaluate(`document.querySelector('.agent').focus()`);
+			const focused = await evaluate(said);
+			// Focused again at once: the same words, and no attribute written
+			const writes = await evaluate(`new Promise(resolve => { const seen = []; new MutationObserver(records => seen.push(records.length)).observe(document.querySelector('.agent'), { attributes: true, attributeFilter: ['aria-description'] }); document.querySelector('.agent').blur(); document.querySelector('.agent').focus(); setTimeout(() => resolve(seen.length), 20); })`);
+			assert.deepStrictEqual([before.includes('Started just now'), unfocused, focused.includes('Started 1 hr ago'), writes], [true, before, true, 0]);
+		} finally {
+			await evaluate(`delete performance.now`);
+		}
+	});
+
+	// ---- Batch 3: the details, the buttons, the menu and the stylesheet, each rule proved where a break of it would pass unnoticed
+
+	/** A long title, so that details too tall for a short view scroll within themselves. */
+	const LONG = Array.from({ length: 30 }, (_, i) => `Line ${i + 1} of a long native title`).join('\n');
+	const frames = () => evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+	const middleOf = (selector: string) => evaluate(`(() => { const box = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2 }; })()`);
+	const pressAt = async ({ x, y }: { x: number; y: number }) => {
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+		await call('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+		await call('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 });
+		await wait(30);
+	};
+	const longCard = `newCard(1, { details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: ${JSON.stringify(LONG)} }, description: { title: '', place: '' } }) })`;
+
+	test('PANEL-1.5, UX-2.3: open details keep where the person scrolled them across a new state and a clock tick', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 300, height: 220, deviceScaleFactor: 2, mobile: false });
+		await evaluate(`(() => { window.fakeNow = 1_000_000; window.timers = []; window.realSetTimeout = window.setTimeout; Object.defineProperty(performance, 'now', { configurable: true, value: () => window.fakeNow }); window.setTimeout = (run, wait) => { window.timers.push({ run, wait }); return window.timers.length; }; })()`);
+		try {
+			const sourceNow = Date.UTC(2020, 0, 1, 12);
+			await deliver({ type: 'state', state: await evaluate(`stateOf([${longCard.replace('newCard(1, {', `newCard(1, { startedAt: ${sourceNow} - 40_000,`)}, newCard(2)], { clockAt: ${sourceNow} })`) });
+			await evaluate(`document.querySelector('.agent .details-button').click()`);
+			await frames();
+			const scroll = `document.querySelector('.details-scroll')`;
+			const room = await evaluate(`${scroll}.scrollHeight > ${scroll}.clientHeight + 120`);
+			await evaluate(`${scroll}.scrollTop = 120`);
+			await deliver({ type: 'state', state: await evaluate(`stateOf([${longCard.replace('newCard(1, {', `newCard(1, { startedAt: ${sourceNow} - 40_000,`)}, newCard(2, { line: 'Another' })], { revision: 2, clockAt: ${sourceNow} })`) });
+			const afterState = await evaluate(`${scroll}.scrollTop`);
+			await evaluate(`(() => { const timer = timers.at(-1); fakeNow += timer.wait; timer.run(); })()`);
+			const afterTick = await evaluate(`${scroll}.scrollTop`);
+			assert.deepStrictEqual([room, afterState, afterTick, await evaluate(`!document.querySelector('.details').hidden`)], [true, 120, 120, true]);
+		} finally {
+			await evaluate(`window.setTimeout = window.realSetTimeout; delete performance.now;`);
+		}
+	});
+
+	test('PANEL-1.5: open details follow their card when a card above it closes up and goes', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		await evaluate(`document.querySelectorAll('.agent')[1].querySelector('.details-button').click()`);
+		// Past their entrance, which slides them 10 px
+		await wait(450);
+		const gap = `(() => { const card = document.querySelector('[data-run="run-2"]').getBoundingClientRect(), details = document.querySelector('.details').getBoundingClientRect(); return Math.round(details.top - card.bottom); })()`;
+		const before = await evaluate(gap);
+		await evaluate(`agents.splice(0, 1); redraw({ revision: 3, exited: ['run-1'] })`);
+		await wait(400);
+		assert.deepStrictEqual([before, await evaluate(gap)], [8, 8]);
+	});
+
+	test('UX-2.3: a press on any of a card\'s buttons puts the keyboard on that card, never on the button - the ⓘ of its open details too, with the keyboard on another card', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		const keyed = `[document.activeElement?.dataset?.run, [...document.querySelectorAll('.agent')].find(card => card.tabIndex === 0)?.dataset.run]`;
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...await middleOf('.agent .title') });
+		await wait(30);
+		const info = await middleOf('.agent .details-button');
+		await pressAt(info);
+		// The keyboard moved on to the next card, the details still open on the first
+		await evaluate(`document.querySelectorAll('.agent')[1].focus()`);
+		await pressAt(info);
+		const afterInfo = await evaluate(keyed);
+		await evaluate(`document.querySelectorAll('.agent')[2].focus()`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...await middleOf('.agent .title') });
+		await wait(30);
+		await pressAt(await middleOf('.agent .menu-button'));
+		const afterGear = await evaluate(keyed);
+		assert.deepStrictEqual([afterInfo, afterGear, await evaluate(`document.activeElement.classList.contains('action')`)], [['run-1', 'run-1'], ['run-1', 'run-1'], false]);
+	});
+
+	test('PANEL-1.5: the view losing the focus closes the details; so does the gear, whose menu opens', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		await evaluate(`document.querySelector('.agent .details-button').click()`);
+		await evaluate(`window.dispatchEvent(new Event('blur'))`);
+		const blurred = await evaluate(`document.querySelector('.details').hidden`);
+		await evaluate(`document.querySelector('.agent .details-button').click()`);
+		await evaluate(`document.querySelector('.agent .menu-button').click()`);
+		assert.deepStrictEqual([blurred, await evaluate(`[document.querySelector('.details').hidden, document.querySelector('.agent').classList.contains('menu-open')]`)], [true, [true, true]]);
+	});
+
+	test('PANEL-1.5, U01: a fact with selected text keeps its words across a new state, and takes the new ones once the selection ends', async () => {
+		const titled = (value: string, revision: number) => evaluate(`stateOf([newCard(1, { details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: ${JSON.stringify(value)} } }) })], { revision: ${revision} })`);
+		await deliver({ type: 'state', state: await titled('First title', 2) });
+		await evaluate(`document.querySelector('.agent .details-button').click()`);
+		const words = `document.querySelectorAll('.details .details-fact')[0].querySelector('span:not(.visually-hidden)').textContent`;
+		await evaluate(`(() => { const range = document.createRange(); range.selectNodeContents(document.querySelectorAll('.details .details-fact')[0].querySelector('span:not(.visually-hidden)')); getSelection().removeAllRanges(); getSelection().addRange(range); })()`);
+		await deliver({ type: 'state', state: await titled('Second title', 3) });
+		const held = await evaluate(words);
+		await evaluate(`getSelection().removeAllRanges()`);
+		await wait(30);
+		assert.deepStrictEqual([held, await evaluate(words)], ['First title', 'Second title']);
+	});
+
+	test('PANEL-1.5: details open above only where they do not fit below, and keep the side they opened on while they fit there', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 300, height: 400, deviceScaleFactor: 2, mobile: false });
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents.slice(0, 8))`) });
+		await frames();
+		const side = (index: number) => evaluate(`(() => { const card = document.querySelectorAll('.agent')[${index}]; card.querySelector('.details-button').click(); const above = document.querySelector('.details').classList.contains('above'); return above; })()`);
+		// Near the top there is room below; near the bottom there is not
+		const top = await side(0);
+		await evaluate(`document.querySelectorAll('.agent')[0].querySelector('.details-button').click()`);
+		const bottom = await side(7);
+		// The view grown: they would now fit below, and stay above while they fit there
+		await call('Emulation.setDeviceMetricsOverride', { width: 300, height: 900, deviceScaleFactor: 2, mobile: false });
+		await frames();
+		const kept = await evaluate(`[document.querySelector('.details').classList.contains('above'), !document.querySelector('.details').hidden]`);
+		await evaluate(`document.querySelectorAll('.agent')[7].querySelector('.details-button').click()`);
+		// A card past the middle of a longer list: more room above it, but they fit below, where they open
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents, { revision: 5 })`) });
+		await frames();
+		const middle = await evaluate(`(() => { const card = [...document.querySelectorAll('.agent')].find(each => { const at = each.getBoundingClientRect(); return at.top > innerHeight * 0.55 && at.bottom < innerHeight * 0.65; }); card.querySelector('.details-button').click(); const at = card.getBoundingClientRect(), shown = document.querySelector('.details').getBoundingClientRect(); return [at.top > innerHeight - at.bottom, shown.height < innerHeight - at.bottom - 14, document.querySelector('.details').classList.contains('above')]; })()`);
+		assert.deepStrictEqual([top, bottom, kept, middle], [false, true, [true, true], [true, true, false]]);
+	});
+
+	test('UX-2.3: with the focus in the details Home scrolls them and the wheel scrolls them, never the list under them', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 300, height: 220, deviceScaleFactor: 2, mobile: false });
+		await deliver({ type: 'state', state: await evaluate(`stateOf([${longCard}, ...agents.slice(1)])`) });
+		await deliver({ type: 'details', run: 'run-1' });
+		await frames();
+		const scroll = `document.querySelector('.details-scroll')`;
+		await evaluate(`${scroll}.scrollTop = 100`);
+		const listBefore = await evaluate(`document.scrollingElement.scrollTop`);
+		await evaluate(`${scroll}.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }))`);
+		const home = await evaluate(`${scroll}.scrollTop`);
+		const at = await middleOf('.details');
+		await call('Input.dispatchMouseEvent', { type: 'mouseWheel', x: at.x, y: at.y, deltaX: 0, deltaY: 60 });
+		await wait(200);
+		assert.deepStrictEqual([home, (await evaluate(`${scroll}.scrollTop`)) > 0, await evaluate(`document.scrollingElement.scrollTop`)], [0, true, listBefore]);
+	});
+
+	test('UX-2.3: their card going with the focus in its details puts the focus on the keyboard\'s card', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		await deliver({ type: 'details', run: 'run-1' });
+		await frames();
+		const inside = await evaluate(`document.querySelector('.details').contains(document.activeElement)`);
+		await evaluate(`agents.splice(0, 1); redraw({ revision: 5 })`);
+		assert.deepStrictEqual([inside, await evaluate(`document.activeElement?.dataset?.run`)], [true, 'run-2']);
+	});
+
+	test('UX-2.3: Show Agent Details scrolls its card into view, as little as it takes, and opens them; another card\'s then leaves the first unmarked', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		await deliver({ type: 'details', run: 'run-25' });
+		await frames();
+		const shown = await evaluate(`(() => { const card = document.querySelector('[data-run="run-25"]').getBoundingClientRect(); return card.top >= 0 && card.bottom <= innerHeight && !document.querySelector('.details').hidden; })()`);
+		await deliver({ type: 'details', run: 'run-24' });
+		await frames();
+		assert.deepStrictEqual([shown, await evaluate(`[...document.querySelectorAll('.agent.details-open')].map(card => card.dataset.run)`)], [true, ['run-24']]);
+	});
+
+	test('UX-2.3: Shift+F10 opens the card\'s menu, F10 alone does not, and opening the menu closes the details; a menu the editor never shows leaves no mark after a second', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		const key = (shiftKey: boolean) => evaluate(`(() => { const card = document.querySelector('.agent'); card.focus(); card.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: ${shiftKey}, bubbles: true, cancelable: true })); return card.classList.contains('menu-open'); })()`);
+		const alone = await key(false);
+		await evaluate(`document.querySelector('.agent .details-button').click()`);
+		const shifted = await key(true);
+		const closed = await evaluate(`document.querySelector('.details').hidden`);
+		await wait(1100);
+		assert.deepStrictEqual([alone, shifted, closed, await evaluate(`document.querySelector('.agent').classList.contains('menu-open')`)], [false, true, true, false]);
+	});
+
+	test('PANEL-1.3: the pointer leaving the view hides a card\'s buttons; they have no Tab stop and the passive Pin is hidden from a screen reader; a pinned card\'s Pin button is filled', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { pinned: true, menu: { moveUp: false, moveDown: true, unpin: true } }), newCard(2, { menu: { moveUp: true, moveDown: false, pin: true } })])`) });
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...await middleOf('.agent .title') });
+		await wait(30);
+		const hovered = await evaluate(`document.querySelector('.agent').classList.contains('hovered')`);
+		await evaluate(`document.dispatchEvent(new PointerEvent('pointerout', { bubbles: true, relatedTarget: null }))`);
+		const facts = await evaluate(`(() => { const [one, two] = document.querySelectorAll('.agent'); return [one.classList.contains('hovered'), [...one.querySelectorAll('.action')].every(button => button.tabIndex === -1), one.querySelector('.pin')?.getAttribute('aria-hidden'), one.querySelector('.pin-button path').getAttribute('d') !== two.querySelector('.pin-button path').getAttribute('d'), one.querySelector('.pin-button path').getAttribute('d').split('Z').length - 1]; })()`);
+		assert.deepStrictEqual([hovered, ...facts], [true, false, true, 'true', true, 1]);
+	});
+
+	test('PANEL-1.5: a starter\'s name and its #aN stay together on a wrap', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { details: detailsFor(1, { startedBy: 'Maker #a7' }) })])`) });
+		const start = await evaluate(`(() => { document.querySelector('.agent .details-button').click(); const text = document.querySelectorAll('.details .details-fact')[2].querySelector('span').textContent; document.querySelector('.agent .details-button').click(); return text; })()`);
+		assert.ok(start.includes('Maker #a7'), JSON.stringify(start));
+	});
+
+	test('UX-2.2: a closing card where its animation does not run goes all the same; with reduced motion details only appear', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		await evaluate(`(() => { const style = document.createElement('style'); style.id = 'no-animation'; style.textContent = '.item.closing { animation: none !important; }'; document.head.append(style); })()`);
+		await evaluate(`agents.splice(1, 1); redraw({ revision: 6, exited: ['run-2'] })`);
+		await wait(400);
+		const gone = await evaluate(`!document.querySelector('[data-run="run-2"]')`);
+		await evaluate(`document.getElementById('no-animation').remove()`);
+		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+		await evaluate(`document.querySelector('.agent .details-button').click()`);
+		await frames();
+		const transition = await evaluate(`document.querySelector('.details').classList.contains('open') && getComputedStyle(document.querySelector('.details')).transitionDuration`);
+		await evaluate(`document.querySelector('.agent .details-button').click()`);
+		assert.deepStrictEqual([gone, String(transition).split(',').every((each: string) => parseFloat(each) === 0)], [true, true]);
+	});
+
+	test('UX-2.2: with the editor\'s workbench.reduceMotion - its mark on the page, the system asking for nothing - details only appear', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		await evaluate(`document.body.classList.add('vscode-reduce-motion')`);
+		try {
+			await evaluate(`document.querySelector('.agent .details-button').click()`);
+			await frames();
+			const transition = await evaluate(`document.querySelector('.details').classList.contains('open') && getComputedStyle(document.querySelector('.details')).transitionDuration`);
+			assert.ok(String(transition).split(',').every((each: string) => parseFloat(each) === 0), String(transition));
+		} finally {
+			await evaluate(`document.body.classList.remove('vscode-reduce-motion')`);
+		}
+	});
+
+	test('UX-2.3: details the pointer opened, the keyboard on their card, are replaced by another card\'s that Show Agent Details opens: the first left unmarked, its ⓘ released', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...await middleOf('.agent .title') });
+		await wait(30);
+		await pressAt(await middleOf('.agent .details-button'));
+		await frames();
+		const first = await evaluate(`[!document.querySelector('.details').hidden, document.querySelector('.details').contains(document.activeElement)]`);
+		await deliver({ type: 'details', run: 'run-2' });
+		await frames();
+		assert.deepStrictEqual([first, await evaluate(`[[...document.querySelectorAll('.agent.details-open')].map(card => card.dataset.run), document.querySelector('.agent .details-button').classList.contains('active')]`)],
+			[[true, false], [['run-2'], false]]);
+	});
+
+	test('UX-2.1, D7, PANEL-1.3: the stylesheet - a card\'s close is 150 ms; its line keeps room for two buttons, three where it can be pinned; an untitled first row is quieter; a selected card\'s buttons at 80%, whole where 80% reads below 4.5:1 and in high contrast, edged there under the pointer', async () => {
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { selected: true, menu: { moveUp: false, moveDown: true, pin: true } }), newCard(2)])`) });
+		const close = await evaluate(`(() => { const probe = document.createElement('div'); probe.className = 'item agent closing'; document.querySelector('#list').append(probe); const duration = getComputedStyle(probe).animationDuration; probe.remove(); return duration; })()`);
+		const room = await evaluate(`[...document.querySelectorAll('.agent')].map(card => { card.classList.add('hovered'); const padding = getComputedStyle(card.querySelector('.line.top')).paddingRight; card.classList.remove('hovered'); return padding; })`);
+		await evaluate(`document.documentElement.style.cssText = '--vscode-foreground:#cccccc;--vscode-descriptionForeground:#999999;--vscode-editorHoverWidget-foreground:#cccccc;--vscode-editorHoverWidget-background:#202020'`);
+		await wait(60);
+		const untitled = await evaluate(`(() => { document.querySelectorAll('.agent')[1].querySelector('.details-button').click(); const row = document.querySelectorAll('.details .details-fact')[0]; const seen = [row.classList.contains('untitled'), getComputedStyle(row).color !== getComputedStyle(document.querySelectorAll('.details .details-fact')[4]).color]; document.querySelectorAll('.agent')[1].querySelector('.details-button').click(); return seen; })()`);
+		// Each read once the page has looked at the theme again: a body class is a theme's change to it
+		await evaluate(`document.documentElement.style.cssText = ''`);
+		const opacity = async () => { await wait(60); return evaluate(`getComputedStyle(document.querySelector('.agent.selected .action')).opacity`); };
+		const quiet = await opacity();
+		// A selection whose foreground at 80% reads below 4.5:1: the page draws its quieter text whole
+		await evaluate(`document.documentElement.style.cssText = '--vscode-list-activeSelectionForeground:#ffffff;--vscode-list-activeSelectionBackground:#8a8a8a'`);
+		const whole = [await opacity(), await evaluate(`document.body.classList.contains('whole-quiet-text')`)];
+		await evaluate(`document.documentElement.style.cssText = '--vscode-contrastActiveBorder:#f38518'; document.body.classList.add('vscode-high-contrast')`);
+		const contrast = await opacity();
+		await evaluate(`document.querySelector('.agent .menu-button').classList.add('active')`);
+		await wait(60);
+		const edge = await evaluate(`(() => { const button = document.querySelector('.agent .menu-button'); const outline = [getComputedStyle(button).outlineStyle, getComputedStyle(button).outlineWidth]; button.classList.remove('active'); return outline; })()`);
+		await evaluate(`document.body.classList.remove('vscode-high-contrast'); document.documentElement.style.cssText = ''`);
+		assert.deepStrictEqual([close, room, untitled, quiet, whole, contrast, edge], ['0.15s', ['58px', '38px'], [true, true], '0.8', ['1', true], '1', ['dashed', '1px']]);
+	});
+
+	test('UX-2.1: flat dim takes the text colour at 75% only where that keeps 4.5:1, and selected quiet text goes whole where 80% of it reads below 4.5:1', async () => {
+		const set = async (style: string) => {
+			await evaluate(`document.body.className = 'vscode-light'; document.documentElement.style.cssText = '${style}';`);
+			await evaluate('new Promise(resolve => setTimeout(resolve, 0))');
+			return evaluate(`[document.body.classList.contains('flat-dim'), document.body.classList.contains('whole-quiet-text')]`);
+		};
+		await deliver({ type: 'state', state: await evaluate(`stateOf([newCard(1, { selected: true })])`) });
+		const flat = await set('--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#3b3b3b;--vscode-sideBar-background:#f8f8f8;--vscode-editorHoverWidget-background:#f8f8f8');
+		const dim = await evaluate(`getComputedStyle(document.body).getPropertyValue('--facade-dim')`);
+		// Text too faint for 75% to keep 4.5:1: no flat dim
+		const faint = await set('--vscode-foreground:#8a8a8a;--vscode-descriptionForeground:#8a8a8a;--vscode-sideBar-background:#f8f8f8;--vscode-editorHoverWidget-background:#f8f8f8');
+		// A selection whose foreground at 80% reads below 4.5:1
+		const selection = await set('--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#717171;--vscode-sideBar-background:#f8f8f8;--vscode-editorHoverWidget-background:#f8f8f8;--vscode-list-activeSelectionForeground:#ffffff;--vscode-list-activeSelectionBackground:#8a8a8a;--vscode-list-inactiveSelectionForeground:#ffffff;--vscode-list-inactiveSelectionBackground:#8a8a8a');
+		await evaluate(`document.body.className = ''; document.documentElement.style.cssText = '';`);
+		assert.deepStrictEqual([flat[0], dim.includes('75%'), faint[0], selection[1]], [true, true, false, true], dim);
+	});
+
+	test('PANEL-1.5: a view resize\'s own scroll re-places open details on their card', async () => {
+		const size = (width: number, height: number) => call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: false });
+		try {
+			await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+			await evaluate(`document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight`);
+			await frames();
+			await evaluate(`[...document.querySelectorAll('.agent')].at(-1).querySelector('.details-button').click()`);
+			await wait(450);
+			// The page's own scroll as it fits the new size, after the resize was said
+			await evaluate(`window.addEventListener('resize', () => { document.scrollingElement.scrollTop -= 40; }, { once: true })`);
+			await size(400, 500);
+			await frames();
+			const gap = await evaluate(`(() => { const card = [...document.querySelectorAll('.agent')].at(-1).getBoundingClientRect(), details = document.querySelector('.details').getBoundingClientRect(); return [Math.round(details.top - card.bottom), Math.round(card.top - details.bottom)]; })()`);
+			assert.ok(gap.some((each: number) => each === 8), JSON.stringify(gap));
+		} finally {
+			await size(400, 300);
+			await frames();
+		}
+	});
+
+	test('PANEL-1.5: a view resize keeps open details open, placed again as wide as their card and on the side they opened on; a scroll the page makes as it fits the new size does not close them, and the person\'s scroll still does', async () => {
+		const size = (width: number, height: number) => call('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 2, mobile: false });
+		const frames = () => evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
+		const seen = `(() => { const details = document.querySelector('.details'), card = document.querySelector('.agent.details-open'); return [!!card && !details.hidden, card && Math.round(details.getBoundingClientRect().width) === Math.round(card.getBoundingClientRect().width), Math.round(details.getBoundingClientRect().width)]; })()`;
+		try {
+			await deliver({ type: 'state', state: await evaluate(`stateOf(agents)`) });
+			await evaluate(`document.querySelector('.agent .details-button').click()`);
+			await frames();
+			const [open, matched, wide] = await evaluate(seen);
+			await size(260, 300);
+			await frames();
+			const [openNarrow, matchedNarrow, narrow] = await evaluate(seen);
+			assert.deepStrictEqual([open, matched, openNarrow, matchedNarrow, narrow < wide], [true, true, true, true, true]);
+			await evaluate(`document.querySelector('.agent .details-button').click()`);
+			// Scrolled to the end, then the view grows: the list no longer reaches as far, and the page scrolls by itself
+			await size(400, 300);
+			await evaluate(`document.scrollingElement.scrollTop = document.scrollingElement.scrollHeight`);
+			await frames();
+			const before = await evaluate(`document.scrollingElement.scrollTop`);
+			await evaluate(`[...document.querySelectorAll('.agent')].at(-1).querySelector('.details-button').click()`);
+			await frames();
+			await size(400, 500);
+			await frames();
+			const after = await evaluate(`document.scrollingElement.scrollTop`);
+			const [stayed] = await evaluate(seen);
+			assert.deepStrictEqual([after < before, stayed], [true, true]);
+			// The person's own scroll closes them, as ever
+			await evaluate(`document.scrollingElement.scrollTop = 0`);
+			await frames();
+			assert.strictEqual((await evaluate(seen))[0], false);
+		} finally {
+			await size(400, 300);
+			await frames();
+		}
+	});
+
+	test('PANEL-1.5, UX-2.1: where the theme\'s quieter colour is its text colour, the panel\'s quieter words take the text colour at 75%; never in high contrast; details whose quieter colour reads below 4.5:1 take the text colour', async () => {
+		const flat = async (style: string, kind = 'vscode-light') => {
+			await evaluate(`document.body.className = '${kind}'; document.documentElement.style.cssText = '${style}';`);
+			await evaluate('new Promise(resolve => setTimeout(resolve, 0))');
+			return evaluate(`[document.body.classList.contains('flat-dim'), getComputedStyle(document.querySelector('.agent .title')).color]`);
+		};
+		const light = '--vscode-foreground:#3b3b3b;--vscode-descriptionForeground:#3b3b3b;--vscode-sideBar-background:#f8f8f8;--vscode-editorHoverWidget-background:#f8f8f8';
+		const same = await flat(light);
+		const own = await flat(light.replace('--vscode-descriptionForeground:#3b3b3b', '--vscode-descriptionForeground:#717171'));
+		const contrast = await flat(light, 'vscode-high-contrast-light');
+		assert.deepStrictEqual([same[0], own, contrast[0]], [true, [false, 'rgb(113, 113, 113)'], false]);
+		assert.notStrictEqual(same[1], 'rgb(59, 59, 59)', 'the quieter words are quieter than the text');
+		// A quieter colour too faint on the hover colour: the details' quieter words in the text colour
+		await flat('--vscode-foreground:#333333;--vscode-descriptionForeground:#bbbbbb;--vscode-sideBar-background:#ffffff;--vscode-editorHoverWidget-background:#ffffff');
+		const plain = await evaluate(`(() => { const card = document.querySelector('.agent'); card.querySelector('.details-button').click(); const details = document.querySelector('.details'); const seen = [details.classList.contains('plain-quiet'), getComputedStyle(details.querySelector('.details-more')).color]; card.querySelector('.details-button').click(); return seen; })()`);
+		await evaluate(`document.body.className = ''; document.documentElement.style.cssText = '';`);
+		assert.deepStrictEqual(plain[0], true);
 	});
 
 	// Two shadows stacked the same size each smoothed their edge, and the side bar's under the row's showed through it at 125%: a light
@@ -174,9 +667,9 @@ suite('The agent panel in Chromium', function () {
 		]);
 	});
 
-	test('J05: green work breathes and a red error is still; idle, a blocker and unknown activity show no dot, each named in its card\'s hover (RULES-3.2)', async () => {
+	test('J05: green work breathes and a red error is still; idle, a blocker and unknown activity show no dot, each named in its card\'s label (RULES-3.2)', async () => {
 		await evaluate(`document.documentElement.style.cssText = '--vscode-charts-green:#00ff00;--vscode-descriptionForeground:#888888;--vscode-charts-yellow:#ffff00;--vscode-charts-red:#ff0000;--vscode-sideBar-background:#202020';`);
-		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'none', stateText: 'Idle' }), newCard(3, { dot: 'none', stateText: 'Needs permission', line: 'Needs permission · Run tests?' }), newCard(4, { dot: 'none', stateText: 'Activity unavailable', line: 'Activity unavailable · This CLI reports no activity' }), newCard(5, { dot: 'error', stateText: 'Error: Exited with code 2' })]`);
+		const cards = await evaluate(`[newCard(1), newCard(2, { dot: 'none', stateText: 'Idle' }), newCard(3, { dot: 'none', stateText: 'Permission needed', line: 'Permission needed · Run tests?' }), newCard(4, { dot: 'none', stateText: 'Status unavailable · check terminal', line: 'Status unavailable · check terminal' }), newCard(5, { dot: 'error', stateText: 'Error · Process exited · code 2' })]`);
 		await deliver({ type: 'state', state: { revision: 2, loading: false, cards, cardCount: 5, capabilities: { remote: false } } });
 		const seen = await evaluate(`(() => { return [...document.querySelectorAll('.agent')].map(card => { const dot = card.querySelector('.dot'), style = getComputedStyle(dot); const paint = style.backgroundImage.match(/rgba?\\([^)]+\\)/)?.[0] ?? style.backgroundColor; return [dot.className, style.display === 'none' ? 'hidden' : paint, getComputedStyle(dot, '::after').animationName, style.boxShadow.includes('inset')]; }); })()`);
 		assert.deepStrictEqual(seen, [
@@ -193,9 +686,9 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(await evaluate(`(() => { const cards = [...document.querySelectorAll('.agent')]; return [document.querySelectorAll('.unread-dot, .done-mark, .codicon-check, .item.unread, .item.attention, .badge').length, new Set(cards.map(card => getComputedStyle(card.querySelector('.name')).fontWeight)).size, getComputedStyle(cards[0].querySelector('.name')).fontWeight, cards[0].querySelector('.line.bottom').children.length]; })()`), [0, 1, '400', 1]);
 	});
 
-	test('CLI words in the card, accessible label and hover are literal text, never HTML or command links (PANEL-3.2)', async () => {
+	test('CLI words in the card, accessible label and details are literal text, never HTML or command links (PANEL-3.2)', async () => {
 		const text = '[Review](command:test.run) <a href="command:test.run">Review</a>';
-		assert.deepStrictEqual(await evaluate(`(() => { agents = [newCard(1, { name: ${JSON.stringify(text)}, line: ${JSON.stringify(text)}, label: ${JSON.stringify(text)}, tooltip: [${JSON.stringify(text)}] })]; redraw({ revision: 2 }); const card = document.querySelector('.agent'); const name = card.querySelector('.name').textContent; return [name === ${JSON.stringify(text)} || name.endsWith('…') && ${JSON.stringify(text)}.startsWith(name.slice(0, -1)), card.querySelector('.title').textContent, card.title.includes(${JSON.stringify(text)}), card.getAttribute('aria-label'), card.querySelectorAll('a').length]; })()`), [true, text, true, text, 0]);
+		assert.deepStrictEqual(await evaluate(`(() => { agents = [newCard(1, { name: ${JSON.stringify(text)}, line: ${JSON.stringify(text)}, label: ${JSON.stringify(text)}, details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: ${JSON.stringify(text)} } }) })]; redraw({ revision: 2 }); const card = document.querySelector('.agent'); const name = card.querySelector('.name').textContent; card.querySelector('.details-button').click(); const links = document.querySelectorAll('a').length; card.querySelector('.details-button').click(); return [name === ${JSON.stringify(text)} || name.endsWith('…') && ${JSON.stringify(text)}.startsWith(name.slice(0, -1)), card.querySelector('.title').textContent, detailsOf(card).join('\\n').includes(${JSON.stringify(text)}), card.getAttribute('aria-label'), links]; })()`), [true, text, true, text, 0]);
 	});
 
 	test('working dots breathe without per-frame style recalculation, and both reduced-motion settings leave them still', async () => {
@@ -217,7 +710,7 @@ suite('The agent panel in Chromium', function () {
 		assert.strictEqual(await evaluate(`getComputedStyle(document.querySelector('.dot')).backgroundImage.match(/rgba?\\([^)]+\\)/)[0]`), 'rgb(137, 209, 133)');
 	});
 
-	test('UX-2.2: a new card opens in 180 ms, but not on the first draw, a change of filter or with reduced motion; a card that goes is removed at once, never animated out', async () => {
+	test('UX-2.2: a new card opens in 200 ms, but not on the first draw, a change of filter or with reduced motion; a card that goes is removed at once, never animated out', async () => {
 		const seen = await evaluate(`(() => {
 			const first = document.querySelectorAll('.agent.opening').length;
 			agents = [newCard(31), ...agents]; redraw({ revision: 2 });
@@ -233,7 +726,7 @@ suite('The agent panel in Chromium', function () {
 			agents = [newCard(33), ...agents]; redraw({ revision: 6, filter: { kind: 'location', id: 'loc-1', label: 'project' } });
 			return [first, opened, gone, filtered, sameFilter, document.querySelector('.agent').classList.contains('opening')];
 		})()`);
-		assert.deepStrictEqual(seen, [0, '0.18s', [29, 0, false], false, true, false]);
+		assert.deepStrictEqual(seen, [0, '0.2s', [29, 0, false], false, true, false]);
 	});
 
 	test('filtering preserves keyboard navigation and F2 targets the visible custom agent', async () => {
@@ -257,30 +750,32 @@ suite('The agent panel in Chromium', function () {
 		assert.strictEqual(await evaluate(`document.querySelector('[role="status"]').textContent`), '#a1: Idle');
 	});
 
-	test('UX-2.2: a card whose process ended fades out where it was - the cards after it are not put before it - and then goes', async () => {
+	test('UX-2.2: a card whose process ended, in view, fades as its row closes up from its own height where it was - the cards after it are not put before it - and then goes; one out of view goes at once', async () => {
 		await evaluate(`agents.splice(4, 1); redraw({ exited: ['run-5'] })`);
-		const during = await evaluate(`(() => { const children = [...document.querySelector('#list').children]; const closing = document.querySelector('.agent.closing'); return [closing?.dataset.run, children.indexOf(closing), children.length]; })()`);
+		const during = await evaluate(`(() => { const children = [...document.querySelector('#list').children]; const closing = document.querySelector('.agent.closing'); return [closing?.dataset.run, children.indexOf(closing), children.length, closing?.style.getPropertyValue('--facade-closing-height'), closing?.getAttribute('aria-hidden'), closing?.tabIndex]; })()`);
 		await wait(300);
 		const after = await evaluate(`[document.querySelectorAll('.agent.closing').length, document.querySelectorAll('.agent').length]`);
-		assert.deepStrictEqual([during, after], [['run-5', 4, 30], [0, 29]]);
+		await evaluate(`agents.splice(-1, 1); redraw({ exited: ['run-30'] })`);
+		const away = await evaluate(`[document.querySelectorAll('.agent.closing').length, document.querySelectorAll('.agent').length]`);
+		assert.deepStrictEqual([during, after, away], [['run-5', 4, 30, '44px', 'true', -1], [0, 29], [0, 28]]);
 	});
 
 	test('a state change is said politely, once, in a live region; a repeated state says nothing new (PANEL-1.5)', async () => {
 		const said = await evaluate(`(() => {
 			const status = document.querySelector('[role=status]');
-			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle' }); agents[1] = newCard(2, { dot: 'error', stateText: 'Error: Exited with code 2' }); redraw({ revision: 2 });
+			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle' }); agents[1] = newCard(2, { dot: 'error', stateText: 'Error · Process exited · code 2' }); redraw({ revision: 2 });
 			const first = status.textContent;
 			agents[0] = newCard(1, { dot: 'none', stateText: 'Idle', line: 'Another line' }); redraw({ revision: 3 });
 			return [status.getAttribute('aria-live'), first, status.textContent];
 		})()`);
-		assert.deepStrictEqual(said, ['polite', 'Agent 1: Idle. Agent 2: Error: Exited with code 2', 'Agent 1: Idle. Agent 2: Error: Exited with code 2']);
+		assert.deepStrictEqual(said, ['polite', 'Agent 1: Idle. Agent 2: Error · Process exited · code 2', 'Agent 1: Idle. Agent 2: Error · Process exited · code 2']);
 	});
 
 	test('PANEL-1.3: no card shows a location; a short name and its short ID stay together, the Pin at the line\'s right; a long name gives way first, ending between whole graphemes, and comes back whole as the panel widens', async () => {
 		const seen = await evaluate(`(async () => {
 			const long = 'Refactor the authentication middleware 👩🏽‍💻👩🏽‍💻👩🏽‍💻 Cafe\u0301 and everything around it';
 			agents = [
-				newCard(1, { name: long, repeated: true, location: { full: 'Location: api · main' } }),
+				newCard(1, { name: long, repeated: true, details: detailsFor(1, { location: { id: 'location', label: 'Location: ', value: 'api · main', kind: 'repo' } }) }),
 				newCard(2, { name: 'Ada', repeated: true, pinned: true }),
 				newCard(3, { name: long, repeated: true, pinned: true }),
 				newCard(4, { name: '' }),
@@ -293,12 +788,13 @@ suite('The agent panel in Chromium', function () {
 			const read = () => [...document.querySelectorAll('.agent')].map(card => {
 				const top = card.querySelector('.top').getBoundingClientRect(), name = card.querySelector('.name'), id = card.querySelector('.short-id'), pin = card.querySelector('.pin');
 				const nameBox = name.getBoundingClientRect(), idBox = id?.getBoundingClientRect(), pinBox = pin?.getBoundingClientRect();
-				return { name: name.textContent, id: id?.textContent, idGap: idBox && idBox.left - nameBox.right, pinGap: pinBox && pinBox.left - (idBox ?? nameBox).right, pinEnd: pinBox && top.right - pinBox.right, end: top.right - (pinBox ?? idBox ?? nameBox).right, text: card.textContent };
+				// The Pin's place: 7 px in from the card's right, as from its top
+				return { name: name.textContent, id: id?.textContent, idGap: idBox && idBox.left - nameBox.right, pinGap: pinBox && pinBox.left - (idBox ?? nameBox).right, pinEnd: pinBox && card.getBoundingClientRect().right - 7 - pinBox.right, end: top.right - (pinBox ?? idBox ?? nameBox).right, text: card.textContent };
 			});
 			const narrow = read();
 			const segment = text => [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].map(each => each.segment);
 			const whole = narrow.filter(row => row.name.endsWith('…')).every(row => segment(row.name.slice(0, -1)).every(part => segment(long).includes(part)));
-			const hover = document.querySelector('.agent').title, label = document.querySelector('.agent').getAttribute('aria-label');
+			const hover = detailsOf(document.querySelector('.agent')).join('\\n'), label = document.querySelector('.agent').getAttribute('aria-label');
 			document.body.style.width = '900px';
 			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			const wide = read();
@@ -308,7 +804,7 @@ suite('The agent panel in Chromium', function () {
 		const [cut, short, cutPinned, empty, pinned, plain] = seen.narrow;
 		assert.deepStrictEqual([seen.errors, seen.whole], [[], true]);
 		assert.ok(seen.narrow.every((row: { text: string }) => !row.text.includes('project') && !row.text.includes('main')), 'no card says where it works');
-		assert.ok(seen.hover.includes('Location: api · main'), 'the hover does');
+		assert.ok(seen.hover.split('\n').includes('api · main'), 'its details do');
 		assert.ok(cut.name.endsWith('…') && cut.id === '#a1' && cut.idGap >= 3.5 && cut.end >= -1, JSON.stringify(cut));
 		assert.ok(short.name === 'Ada' && short.id === '#a2' && Math.abs(short.idGap - 4) <= 1 && short.pinGap > 40 && Math.abs(short.pinEnd) <= 1, JSON.stringify(short));
 		assert.ok(cutPinned.name.endsWith('…') && cutPinned.id === '#a3' && cutPinned.pinGap >= 3.5 && Math.abs(cutPinned.pinEnd) <= 1, JSON.stringify(cutPinned));
@@ -322,8 +818,9 @@ suite('The agent panel in Chromium', function () {
 		// Every field a card can have: a field the host's cards gain that the page's check does not know fails here, as `repeated` did
 		const every: { readonly [K in keyof Required<Card>]: Card[K] } = {
 			pinned: true, runId: 'run-1', selected: true, name: 'Ada', alias: '#a1', avatar: { file: 'avatar-claude.png' }, repeated: true,
-			location: { full: 'Location: project · /project' }, dot: 'working', stateText: 'Working', line: '📨 Check the build', tooltip: ['Ada · #a1 · Claude Code', 'Working'],
-			label: 'Ada, #a1, Working', startedAt: Date.now(), workingSince: Date.now(), menu: { pin: false, unpin: true, moveUp: false, moveDown: true }
+			dot: 'working', stateText: 'Working', line: '📨 Check the build',
+			details: { summary: { id: 'title', label: 'Title: ', value: 'Check the build' }, titleLabel: 'Title: ', untitled: 'No title yet', startedBy: 'Maker #a7', location: { id: 'location', label: 'Location: ', value: 'main', kind: 'repo' }, path: { id: 'path', label: 'Path: ', value: '/project' }, description: { title: 'Title: Check the build', place: 'Path: /project' } },
+			label: 'Ada, #a1, Working', startedAt: Date.now(), menu: { pin: false, unpin: true, moveUp: false, moveDown: true }
 		};
 		const twin: Card = { ...every, pinned: undefined, selected: false, runId: 'run-2', alias: '#a2', avatar: { initial: 'A', color: 'blue' }, menu: { pin: true, moveUp: true, moveDown: false } };
 		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3' };
@@ -380,8 +877,8 @@ suite('The agent panel in Chromium', function () {
 				agents = [
 					newCard(1, { name: 'Ada', repeated: true, line: '✳ Improving the panel layout' }),
 					newCard(2, { name: 'Moss', dot: 'none', stateText: 'Idle', line: 'Ready for input' }),
-					newCard(3, { name: 'Luna', dot: 'none', stateText: 'Needs permission', line: 'Needs permission · Run tests?' }),
-					newCard(4, { name: 'Nova', dot: 'error', stateText: 'Error: Connection lost', line: 'Error: Connection lost' }),
+					newCard(3, { name: 'Luna', dot: 'none', stateText: 'Permission needed', line: 'Permission needed · Run tests?' }),
+					newCard(4, { name: 'Nova', dot: 'error', stateText: 'Error · Connection lost', line: 'Connection lost' }),
 					newCard(5, { name: 'Authentication middleware helper with a long name', repeated: true, pinned: true, line: 'OC | Update the login flow' }),
 					newCard(6, { name: '小林 👩🏽‍💻', pinned: true, line: '正在调整工作区显示' })
 				]; redraw({ revision: 3 });
@@ -394,9 +891,10 @@ suite('The agent panel in Chromium', function () {
 					await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
 					const result = await evaluate(`(() => {
 						const rows = [...document.querySelectorAll('.agent')].map(card => {
-							const top = card.querySelector('.top').getBoundingClientRect();
-							const parts = [card.querySelector('.name'), card.querySelector('.short-id'), card.querySelector('.pin')].filter(Boolean).map(part => part.getBoundingClientRect());
-							return { gaps: parts.slice(1).map((part, i) => part.left - parts[i].right), over: parts[parts.length - 1].right - top.right, pinned: !!card.querySelector('.pin'), pinAtEnd: Math.abs(top.right - parts[parts.length - 1].right) };
+							const top = card.querySelector('.top').getBoundingClientRect(), pin = card.querySelector('.pin')?.getBoundingClientRect();
+							const flow = [card.querySelector('.name'), card.querySelector('.short-id')].filter(Boolean).map(part => part.getBoundingClientRect()), parts = pin ? [...flow, pin] : flow;
+							// The Pin in its place 7 px in from the card's right; the name and ID within the line
+							return { gaps: parts.slice(1).map((part, i) => part.left - parts[i].right), over: flow[flow.length - 1].right - top.right, pinned: !!pin, pinAtEnd: pin ? Math.abs(card.getBoundingClientRect().right - 7 - pin.right) : 0 };
 						});
 						return { rows, overflow: document.documentElement.scrollWidth > window.innerWidth, errors: window.errors, colours: [...document.querySelectorAll('.dot')].slice(0, 4).map(dot => getComputedStyle(dot).display === 'none' ? 'none' : getComputedStyle(dot).backgroundImage.match(/rgba?\\([^)]+\\)/)[0]) };
 					})()`);
@@ -418,55 +916,220 @@ suite('The agent panel in Chromium', function () {
 		}
 	});
 
-	test('PANEL-1.4, 1.5: under the pointer a card is the card itself or its dot, so crossing it never clears and sets the same tooltip again (electron/electron#49843)', async () => {
+	test('PANEL-1.5: nothing in the panel has a native tooltip, and with its buttons hidden a card is the card itself under the pointer, its dot and Pin included', async () => {
 		const seen = await evaluate(`(async () => {
 			document.body.style.width = '300px';
 			agents = [
-				newCard(1, { selected: true, location: { full: 'demo · main · /demo' } }),
-				newCard(2, { name: 'Refactor the authentication middleware', repeated: true, location: { full: 'x' } }),
-				newCard(3)
+				newCard(1, { selected: true }),
+				newCard(2, { name: 'Refactor the authentication middleware', repeated: true, pinned: true, menu: { unpin: true, moveUp: false, moveDown: true } }),
+				newCard(3, { menu: { pin: true, moveUp: true, moveDown: false } })
 			];
 			redraw({ revision: 3 });
 			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
 			const under = new Set();
 			for (const card of document.querySelectorAll('.agent')) {
-				const box = card.getBoundingClientRect(), dot = card.querySelector('.dot');
+				const box = card.getBoundingClientRect();
 				for (let y = box.top + 1; y < box.bottom - 1; y += 3) {
 					for (let x = box.left + 5; x < box.right - 5; x += 3) {
 						const at = document.elementFromPoint(x, y);
-						under.add(at === card ? 'card' : at === dot ? 'dot' : at.className || at.tagName);
+						under.add(at === card ? 'card' : String(at.className?.baseVal ?? at.className) || at.tagName);
 					}
 				}
 			}
-			const ownHover = [...document.querySelectorAll('.agent')].every(card => card.title !== '' && card.querySelector('.dot').title !== '' && card.querySelector('.dot').title !== card.title);
 			document.body.style.width = '';
-			return [[...under].sort(), ownHover];
+			return [[...under].sort(), document.querySelectorAll('[title]').length];
 		})()`);
-		assert.deepStrictEqual(seen, [['card', 'dot'], true]);
+		assert.deepStrictEqual(seen, [['card'], 0]);
 	});
 
-	test('PANEL-1.3: a pinned card\'s Pin is under the pointer with its own tooltip, the rest of the card still the card or its dot, and a click on the Pin opens the card', async () => {
+	test('PANEL-1.3: the pointer on a pinned card puts its Pin button where its Pin was, whose click Unpins without opening the card', async () => {
 		const seen = await evaluate(`(async () => {
-			agents = [newCard(1, { pinned: true }), newCard(2)];
+			agents = [newCard(1, { pinned: true, menu: { unpin: true, moveUp: false, moveDown: true } }), newCard(2)];
 			redraw({ revision: 2 });
 			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-			const card = document.querySelector('.agent'), dot = card.querySelector('.dot'), pin = card.querySelector('.pin');
-			const box = card.getBoundingClientRect(), under = new Set();
-			for (let y = box.top + 1; y < box.bottom - 1; y += 2) {
-				for (let x = box.left + 5; x < box.right - 5; x += 2) {
-					const at = document.elementFromPoint(x, y);
-					under.add(at === card ? 'card' : at === dot ? 'dot' : at === pin ? 'pin' : at.className || at.tagName);
-				}
-			}
-			const mark = pin.getBoundingClientRect();
+			const mark = document.querySelector('.agent .pin svg').getBoundingClientRect();
 			window.posted = [];
-			return { under: [...under].sort(), own: pin.title !== '' && pin.title !== card.title, x: mark.left + mark.width / 2, y: mark.top + mark.height / 2 };
+			return { x: mark.left + mark.width / 2, y: mark.top + mark.height / 2 };
+		})()`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: seen.x, y: seen.y });
+		const shown = await evaluate(`(() => {
+			const card = document.querySelector('.agent'), icon = card.querySelector('.pin-button svg').getBoundingClientRect();
+			return { mark: getComputedStyle(card.querySelector('.pin')).display, visible: getComputedStyle(card.querySelector('.actions')).visibility, under: document.elementFromPoint(${seen.x}, ${seen.y}).className, x: icon.left + icon.width / 2, y: icon.top + icon.height / 2 };
 		})()`);
 		for (const type of ['mousePressed', 'mouseReleased']) {
 			await call('Input.dispatchMouseEvent', { type, x: seen.x, y: seen.y, button: 'left', clickCount: 1 });
 		}
-		const opened = await evaluate(`window.posted.filter(message => message.type === 'act').map(message => [message.what, message.target])`);
-		assert.deepStrictEqual([seen.under, seen.own, opened], [['card', 'dot', 'pin'], true, [['open', 'run-1']]]);
+		const acted = await evaluate(`window.posted.filter(message => message.type === 'act').map(message => [message.what, message.target])`);
+		assert.deepStrictEqual([shown.mark, shown.visible, shown.under, acted], ['none', 'visible', 'action pin-button', [['unpin', 'run-1']]]);
+		assert.ok(Math.abs(shown.x - seen.x) <= 1 && Math.abs(shown.y - seen.y) <= 1, JSON.stringify([seen, shown]));
+	});
+
+	test('PANEL-1.3: the pointer on a card shows its ⓘ, gear and - where it has one - Pin at the first line\'s end, its name giving them room, and they go with the pointer', async () => {
+		const seen = await evaluate(`(async () => {
+			document.body.style.width = '260px';
+			agents = [newCard(1, { name: 'A name long enough to need most of the first line of its card', menu: { pin: true, moveUp: false, moveDown: true } }), newCard(2, { name: 'Short' }), newCard(3)];
+			redraw({ revision: 2 });
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			const [first, second] = [...document.querySelectorAll('.agent')].map(card => card.getBoundingClientRect());
+			return { first: { x: first.left + 40, y: first.top + 10 }, second: { x: second.left + 40, y: second.top + 10 }, name: document.querySelector('.agent .name').textContent };
+		})()`);
+		const read = () => evaluate(`[...document.querySelectorAll('.agent')].slice(0, 2).map(card => {
+			const buttons = [...card.querySelectorAll('.action')].filter(button => !button.hidden), boxes = buttons.map(button => button.getBoundingClientRect());
+			const name = card.querySelector('.name').getBoundingClientRect(), box = card.getBoundingClientRect(), icon = buttons[0].querySelector('svg').getBoundingClientRect();
+			return { visible: getComputedStyle(card.querySelector('.actions')).visibility, kinds: buttons.map(button => button.classList[1]), name: card.querySelector('.name').textContent, room: boxes[0].left - name.right,
+				insets: [boxes[0].top - box.top, box.right - boxes[boxes.length - 1].right].map(Math.round), iconTop: Math.round(icon.top - box.top), sizes: boxes.map(each => [each.width, each.height]) };
+		})`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: seen.first.x, y: seen.first.y });
+		const over = await read();
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: seen.second.x, y: seen.second.y });
+		const moved = await read();
+		assert.deepStrictEqual([over[0].visible, over[0].kinds, over[1].visible, moved[0].visible, moved[1].visible, moved[1].kinds],
+			['visible', ['details-button', 'menu-button', 'pin-button'], 'hidden', 'hidden', 'visible', ['details-button', 'menu-button']]);
+		assert.ok(over[0].name.endsWith('…') && over[0].name.length < seen.name.length && over[0].room >= 3.5, JSON.stringify([seen, over[0]]));
+		// As far from the card's top as from its right, the icons centered on the first line
+		assert.deepStrictEqual([over[0].insets, over[0].iconTop, moved[1].insets], [[5, 5], 7, [5, 5]]);
+		assert.ok(over[0].sizes.every(([width, height]: number[]) => width === 18 && height === 18), JSON.stringify(over[0].sizes));
+		assert.strictEqual(moved[0].name, seen.name, 'the name takes its room back as the pointer goes');
+	});
+
+	test('PANEL-2.2: the gear opens its card\'s native menu under it, Shift+F10 and the menu key too, the card keeping its buttons while the editor shows it; a right click opens nothing', async () => {
+		const seen = await evaluate(`(async () => {
+			agents = [newCard(1, { menu: { moveUp: false, moveDown: true } }), newCard(2)];
+			redraw({ revision: 2 });
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			// A context menu event as the editor's webview takes it: the card it is on, where, and whether the page let it through
+			window.menus = [];
+			window.addEventListener('contextmenu', event => window.menus.push([event.target.closest?.('.agent')?.dataset.run ?? null, Math.round(event.clientX), Math.round(event.clientY), event.isTrusted, event.defaultPrevented]));
+			window.posted = [];
+			const [first, second] = [...document.querySelectorAll('.agent')].map(card => card.getBoundingClientRect());
+			return { first: { x: first.left + 40, y: first.top + 10 }, second: { x: Math.round(second.left + 40), y: Math.round(second.top + 10) } };
+		})()`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: seen.first.x, y: seen.first.y });
+		const gear = await evaluate(`(() => { const box = document.querySelector('.agent .menu-button').getBoundingClientRect(); return { x: box.left + box.width / 2, y: box.top + box.height / 2, left: Math.round(box.left), bottom: Math.round(box.bottom) }; })()`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: gear.x, y: gear.y });
+		for (const type of ['mousePressed', 'mouseReleased']) {
+			await call('Input.dispatchMouseEvent', { type, x: gear.x, y: gear.y, button: 'left', clickCount: 1 });
+		}
+		const opened = await evaluate(`(() => { const card = document.querySelector('.agent'); return [card.classList.contains('menu-open'), card.querySelector('.menu-button').classList.contains('active'), window.posted.filter(message => message.type === 'act').length]; })()`);
+		// The editor marks the page while its menu shows, and unmarks it as the menu closes
+		const closed = await evaluate(`(async () => {
+			document.body.classList.add('vscode-context-menu-visible');
+			await new Promise(resolve => setTimeout(resolve, 0));
+			document.body.classList.remove('vscode-context-menu-visible');
+			await new Promise(resolve => setTimeout(resolve, 0));
+			return document.querySelector('.agent').classList.contains('menu-open');
+		})()`);
+		for (const type of ['mousePressed', 'mouseReleased']) {
+			await call('Input.dispatchMouseEvent', { type, x: seen.second.x, y: seen.second.y, button: 'right', clickCount: 1 });
+		}
+		const menus = await evaluate(`(() => {
+			const card = document.querySelector('.agent');
+			card.focus();
+			card.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true }));
+			card.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true, cancelable: true }));
+			return window.menus;
+		})()`);
+		assert.deepStrictEqual([opened, closed], [[true, true, 0], false]);
+		assert.deepStrictEqual(menus, [
+			['run-1', gear.left, gear.bottom, false, false],
+			['run-2', seen.second.x, seen.second.y, true, true],
+			['run-1', gear.left, gear.bottom, false, false],
+			['run-1', gear.left, gear.bottom, false, false]
+		]);
+	});
+
+	test('PANEL-1.5, UX-2.2: the ⓘ opens its card\'s details under it, as wide as it, their arrow at the ⓘ, fading in as they slide 10 px down over 400 ms; Esc, a press elsewhere, the ⓘ again and the card going close them at once; the same words again keep their rows and a selection in them', async () => {
+		const seen = await evaluate(`(async () => {
+			const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			agents = [newCard(1, { pinned: true, menu: { unpin: true, moveUp: false, moveDown: true }, details: detailsFor(1, { summary: { id: 'title', label: 'Title: ', value: 'Fix the login' } }) }), newCard(2), newCard(3)];
+			redraw({ revision: 2 });
+			await frames();
+			const card = document.querySelector('.agent'), info = card.querySelector('.details-button'), details = document.querySelector('.details');
+			// Closed as the person asked: gone at once, out of the accessibility tree
+			const closed = () => details.hidden && !details.classList.contains('open') && details.getAttribute('aria-hidden') === 'true';
+			info.click();
+			const entering = [getComputedStyle(details).opacity, getComputedStyle(details).translate];
+			await frames();
+			const style = getComputedStyle(details);
+			const motion = [style.transitionProperty, style.transitionDuration];
+			// Settled once the 400 ms have gone
+			await new Promise(resolve => setTimeout(resolve, 450));
+			motion.push(style.opacity, style.translate);
+			const box = card.getBoundingClientRect(), shown = details.getBoundingClientRect(), arrow = details.querySelector('.details-arrow').getBoundingClientRect(), button = info.getBoundingClientRect();
+			const open = { role: details.getAttribute('role'), named: wordsOf(document.getElementById(details.getAttribute('aria-labelledby')).parentElement), ariaHidden: details.getAttribute('aria-hidden'), shown: details.classList.contains('open'),
+				below: shown.top >= box.bottom, width: Math.round(shown.width) === Math.round(box.width), left: Math.round(shown.left) === Math.round(box.left), arrowAtInfo: Math.abs(arrow.left + arrow.width / 2 - (button.left + button.width / 2)) <= 2,
+				rows: details.querySelectorAll('.details-fact').length, extras: details.querySelectorAll('.face, .details-note, .details-head, .details-group').length,
+				buttons: card.querySelector('.actions').getAttribute('aria-hidden'), visible: getComputedStyle(card.querySelector('.actions')).visibility, pressed: info.classList.contains('active') };
+			const first = details.querySelector('.details-fact');
+			getSelection().selectAllChildren(details.querySelector('.details-scroll'));
+			redraw({ revision: 3 });
+			const kept = details.querySelector('.details-fact') === first && getSelection().toString().includes('Fix the login');
+			getSelection().removeAllRanges();
+			card.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+			const escaped = closed();
+			info.click();
+			document.querySelectorAll('.agent')[2].dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }));
+			const pressed = closed();
+			info.click(); info.click();
+			const again = closed();
+			info.click();
+			agents = agents.slice(1); redraw({ revision: 4 });
+			const gone = closed();
+			return { entering, motion, open, kept, closed: [escaped, pressed, again, gone], acts: window.posted.filter(message => message.type === 'act').length, errors: window.errors };
+		})()`);
+		assert.deepStrictEqual([seen.entering, seen.motion], [['0', '0px -10px'], ['opacity, translate', '0.4s, 0.4s', '1', 'none']]);
+		assert.deepStrictEqual(seen.open, { role: 'dialog', named: 'Agent 1 #a1', ariaHidden: null, shown: true, below: true, width: true, left: true, arrowAtInfo: true, rows: 5, extras: 0, buttons: 'true', visible: 'visible', pressed: true });
+		assert.deepStrictEqual([seen.kept, seen.closed, seen.acts, seen.errors], [true, [true, true, true, true], 0, []]);
+	});
+
+	test('PANEL-1.5, UX-2.3: Show Agent Details opens a card\'s details with the focus in them; the scroll keys scroll them alone, Esc takes the focus back to the card, and the focus leaving them closes them', async () => {
+		// Focus events as a focused window has them
+		await call('Emulation.setFocusEmulationEnabled', { enabled: true });
+		const seen = await evaluate(`(async () => {
+			const frames = (count = 3) => new Promise(resolve => { const next = left => left ? requestAnimationFrame(() => next(left - 1)) : resolve(); next(count); });
+			const long = Array.from({ length: 120 }, (_, i) => 'word' + i).join(' ');
+			agents = [newCard(1), newCard(2, { details: detailsFor(2, { summary: { id: 'title', label: 'Title: ', value: long } }) }), newCard(3)];
+			redraw({ revision: 2 });
+			await frames();
+			const details = document.querySelector('.details'), scroll = details.querySelector('.details-scroll'), [, second, third] = document.querySelectorAll('.agent');
+			window.dispatchEvent(new MessageEvent('message', { data: { page: panel.page, type: 'details', run: 'run-2' } }));
+			await frames();
+			const opened = [document.activeElement === scroll, scroll.tabIndex, second.classList.contains('details-open'), scroll.scrollHeight > scroll.clientHeight];
+			const listTop = (document.scrollingElement ?? document.documentElement).scrollTop;
+			scroll.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }));
+			const scrolled = [scroll.scrollTop > 0, (document.scrollingElement ?? document.documentElement).scrollTop === listTop, details.classList.contains('open')];
+			scroll.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+			const escaped = [document.activeElement === second, details.getAttribute('aria-hidden')];
+			window.dispatchEvent(new MessageEvent('message', { data: { page: panel.page, type: 'details', run: 'run-2' } }));
+			await frames();
+			third.focus();
+			const left = [document.activeElement === third, details.getAttribute('aria-hidden'), details.hidden];
+			return { opened, scrolled, escaped, left, errors: window.errors };
+		})()`);
+		assert.deepStrictEqual(seen, { opened: [true, 0, true, true], scrolled: [true, true, true], escaped: [true, 'true'], left: [true, 'true', true], errors: [] });
+	});
+
+	test('PANEL-1.3, 2.2: the Pin button Pins or Unpins its card, and shows only where it can; a button\'s press opens no card and never puts the focus on the button', async () => {
+		const seen = await evaluate(`(async () => {
+			agents = [newCard(1, { menu: { pin: true, moveUp: false, moveDown: true } }), newCard(2, { pinned: true, menu: { unpin: true, moveUp: true, moveDown: true } }), newCard(3)];
+			redraw({ revision: 2 });
+			await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+			window.posted = [];
+			const cards = [...document.querySelectorAll('.agent')];
+			const shown = cards.map(card => !card.querySelector('.pin-button').hidden), looks = cards.map(card => card.querySelector('.pin-button').dataset.look);
+			cards[0].querySelector('.pin-button').click();
+			cards[1].querySelector('.pin-button').click();
+			const card = cards[2].getBoundingClientRect(), info = cards[2].querySelector('.details-button').getBoundingClientRect();
+			return { shown, looks, card: { x: card.left + 40, y: card.top + 10 }, info: { x: info.left + info.width / 2, y: info.top + info.height / 2 }, focused: document.activeElement === document.body };
+		})()`);
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: seen.card.x, y: seen.card.y });
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: seen.info.x, y: seen.info.y });
+		for (const type of ['mousePressed', 'mouseReleased']) {
+			await call('Input.dispatchMouseEvent', { type, x: seen.info.x, y: seen.info.y, button: 'left', clickCount: 1 });
+		}
+		const after = await evaluate(`[!document.activeElement.closest('.action'), window.posted.filter(message => message.type === 'act').map(message => [message.what, message.target]), !document.querySelector('.details').hidden]`);
+		assert.deepStrictEqual([seen.shown, seen.looks, seen.focused], [[true, true, false], ['outline', 'filled', 'outline'], true]);
+		assert.deepStrictEqual(after, [true, [['pin', 'run-1'], ['unpin', 'run-2']], true]);
 	});
 
 	test('PANEL-2.2: outside a card there is no menu at all - the webview\'s default Cut/Copy/Paste included - below the last card too', async () => {
@@ -477,10 +1140,12 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(at, [{ preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }, { preventDefaultContextMenuItems: true }]);
 	});
 
-	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; Rename and Close always', async () => {
-		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 2).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
+	test('PANEL-2.2: a card\'s menu is given its run ID and only the actions that apply: Move Up or Down where it moves; Rename and End always; never Pin or Unpin, its button\'s', async () => {
+		assert.deepStrictEqual(await evaluate(`(() => { agents[0] = newCard(1, { menu: { moveUp: false, moveDown: true } }); agents[1] = newCard(2, { menu: { pin: true, moveUp: true, moveDown: false } }); agents[2] = newCard(3, { pinned: true, menu: { unpin: true, moveUp: false, moveDown: false } }); redraw({ revision: 7 }); return [...document.querySelectorAll('.agent')].slice(0, 4).map(card => JSON.parse(card.dataset.vscodeContext)); })()`), [
 			{ webviewSection: 'agent', run_id: 'run-1', webviewMoveDown: true, preventDefaultContextMenuItems: true },
-			{ webviewSection: 'agent', run_id: 'run-2', preventDefaultContextMenuItems: true }
+			{ webviewSection: 'agent', run_id: 'run-2', webviewMoveUp: true, preventDefaultContextMenuItems: true },
+			{ webviewSection: 'agent', run_id: 'run-3', preventDefaultContextMenuItems: true },
+			{ webviewSection: 'agent', run_id: 'run-4', preventDefaultContextMenuItems: true }
 		]);
 	});
 
@@ -855,12 +1520,13 @@ suite('The agent panel in Chromium', function () {
 		}
 		await evaluate(`document.documentElement.style.setProperty('--vscode-cornerRadius-small', '2px')`);
 		assert.equal((await geometry()).radius, '2px', 'the native size token takes precedence over the 4 px fallback');
-		// At x=390 the old 10 px bar covered the card; the inset modern 8 px bar must leave it clickable.
+		// At x=390 the old 10 px bar covered the card; the inset modern 8 px bar must leave it clickable. The card's second line there,
+		// clear of the buttons at its first line's corner (PANEL-1.3)
 		await evaluate('scrollTo(0, 0); window.posted = []');
 		const click = async () => {
-			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 390, y: 200 });
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 390, y: 212 });
 			for (const type of ['mousePressed', 'mouseReleased']) {
-				await call('Input.dispatchMouseEvent', { type, x: 390, y: 200, button: 'left', clickCount: 1 });
+				await call('Input.dispatchMouseEvent', { type, x: 390, y: 212, button: 'left', clickCount: 1 });
 			}
 		};
 		await click();
@@ -1158,6 +1824,31 @@ suite('The agent panel in Chromium', function () {
 		const refused = (await evaluate('window.errors')).map((error: string) => error.startsWith('The panel refused a message'));
 		assert.deepStrictEqual({ glides: glided.some((at: number) => at > 0 && at < 50), glided: glided[glided.length - 1], taken, still, refused },
 			{ glides: true, glided: 50, taken: [true, 400], still: 450, refused: [true] });
+	});
+
+	test('UX-2.2, PANEL-3.3: a card that ends while the list glides goes at once, with no closing animation, and the glide reaches its target; one that ends with no glide under way closes as ever', async () => {
+		await call('Emulation.setDeviceMetricsOverride', { width: 400, height: 300, deviceScaleFactor: 1, mobile: false });
+		await deliver({ type: 'scrolling', scrolling: { sensitivity: 1, fastSensitivity: 5, smooth: true, zoomFactor: 1 } });
+		await deliver({ type: 'state', state: await evaluate(`stateOf(agents, { revision: 5 })`) });
+		const glided = await evaluate(`(async () => {
+			const before = document.scrollingElement.scrollTop;
+			window.dispatchEvent(new WheelEvent('wheel', { deltaY: 100, wheelDeltaY: -120, cancelable: true }));
+			// A card in view ends, mid-glide
+			agents.splice(1, 1);
+			panel.render(stateOf(agents, { revision: 6, exited: ['run-2'] }));
+			const closing = document.querySelectorAll('.closing').length;
+			const gone = !document.querySelector('[data-run="run-2"]');
+			await new Promise(resolve => setTimeout(resolve, 400));
+			return [closing, gone, document.scrollingElement.scrollTop - before];
+		})()`);
+		const settled = await evaluate(`(async () => {
+			const [{ runId }] = agents.splice(3, 1);
+			panel.render(stateOf(agents, { revision: 7, exited: [runId] }));
+			const closing = document.querySelectorAll('.closing').length;
+			await new Promise(resolve => setTimeout(resolve, 400));
+			return [closing, document.querySelectorAll('.closing').length];
+		})()`);
+		assert.deepStrictEqual([glided, settled], [[0, true, 50], [1, 0]]);
 	});
 
 	test('New Agent\'s own icon draws where codicons\' `new-session` does: at 300 px, ink from 38 to 281 px of a 300 px advance, as its outline is placed in VS Code\'s codicon.ttf (PANEL-1.1)', async () => {
