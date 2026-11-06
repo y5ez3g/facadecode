@@ -1,6 +1,6 @@
 {
 	"displayName": "Facade Code",
-	"description": "在 VS Code 中並排執行 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi Agent。",
+	"description": "VS Code 的多 Agent 編排器。在你的 IDE 中執行 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi。",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "新增 Agent...",
@@ -27,7 +27,7 @@
 	"config.pi.title": "Pi",
 	"config.pi.path": "Pi 的程式路徑。留空則使用終端環境 PATH 中的 \"pi\"。",
 	"windowDisplayName": "Facade Code 視窗元件",
-	"windowDescription": "Facade Code 的視窗身分與工作階段連續性協調元件。",
+	"windowDescription": "Facade Code 必需的元件，會隨它自動安裝，用來連接你的各個視窗，並在重新載入後還原 Agent。",
 	"config.collaboration.enabled": "允許 Agent 互相啟動和停止，互相傳送訊息並傳送訊息給您，以及讀取彼此的終端機並在其中輸入。僅對新啟動的 Agent 生效。",
 	"command.filter": "依工作位置篩選...",
 	"command.showAgentLaunch": "顯示 Agent 啟動方式...",

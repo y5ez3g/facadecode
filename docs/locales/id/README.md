@@ -1,135 +1,93 @@
 <div align="center">
 
-<img src="../../../ide/resources/linux/code.png" alt="Facade Code" width="128">
+<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
 
 # Facade Code
 
-**Satu IDE untuk Anda dan tim AI Anda.**
+**Orkestrator multi-agen untuk VS Code.**
 
-Dibangun di atas VS Code. Menjalankan CLI agen native Anda, seperti Claude Code, Codex, Antigravity, Muse Code, dan Qwen Code.
+Jalankan CLI agen native, edit kode, dan tinjau perubahan dalam jendela IDE yang sama. Gunakan akun dan langganan Anda sendiri, dan biarkan agen berkolaborasi lintas jendela dan mesin.
 
-[Unduh](https://github.com/y5ez3g/facadecode/releases) ·
-[Spesifikasi](../../ide/) ·
-[Laporkan Bug](https://github.com/y5ez3g/facadecode/issues)
+[![Situs web: facadecode.com](https://img.shields.io/badge/Situs%20web-facadecode.com-335e78?style=flat)](https://facadecode.com)
+[![VS Code Marketplace: pasang](https://img.shields.io/badge/VS%20Code%20Marketplace-pasang-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
+[![Open VSX: pasang](https://img.shields.io/badge/Open%20VSX-pasang-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
+[![Releases: unduh IDE](https://img.shields.io/badge/Releases-unduh%20IDE-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Issues: laporkan bug](https://img.shields.io/badge/Issues-laporkan%20bug-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · **Bahasa Indonesia** · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
 
 </div>
 
-https://github.com/user-attachments/assets/35e2c317-8040-49c6-bb56-ab81196e8ebc
-
-Facade Code adalah fork VS Code tempat agen native dari semua vendor berkolaborasi di proyek dan fitur Anda, sementara Anda meninjau kode dan mengarahkan agen mana pun di jendela yang sama.
-
-- 🧑‍💻 **VS Code lengkap, ditata per proyek dan fitur.** Kembangkan banyak proyek dan fitur dalam satu jendela. Setiap fitur adalah sebuah git worktree, dengan tim agen khusus.
-- 🤖 **Tim CLI agen native lintas vendor.** Agen berjalan dengan langganan yang sudah Anda miliki. Di Facade Code, agen dapat menjalankan agen lain, saling berkirim pesan, dan saling membantu saat ada yang macet.
-- 👥 **Super Engineer atau Super Team.** Arahkan sendiri banyak agen, atau tunjuk satu model pemimpin untuk mengoordinasikan para spesialis secara paralel.
+[![Tonton demo 2 menit di facadecode.com](../../assets/readme/demo-poster.jpg)](https://facadecode.com)
 
 ## Instalasi
 
-Unduh rilis terbaru dari [Releases](https://github.com/y5ez3g/facadecode/releases): `.dmg` untuk macOS (Apple silicon), installer untuk Windows (x64), atau `.deb` untuk Ubuntu (x64).
+```sh
+code --install-extension facade.facadecode
+```
 
-**Prasyarat**: Instal dan login ke CLI agen yang ingin Anda gunakan (kombinasi apa pun dari Claude Code, Codex, Antigravity, Muse Code, atau Qwen Code). Facade Code menjalankannya secara langsung dengan autentikasi dan langganan native masing-masing.
+Atau pasang **Facade Code** dari [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) atau [Open VSX](https://open-vsx.org/extension/facade/facadecode). Ekstensi ini dapat dijalankan di macOS (Apple silicon), Linux (x64), dan Windows (x64).
 
-Facade Code terpasang berdampingan dengan VS Code dan tidak berbagi apa pun dengannya: pengaturan, ekstensi, dan alat baris perintah `facade` sepenuhnya terpisah.
+Selanjutnya, pasang dan masuk ke CLI agen yang didukung yang ingin Anda gunakan: Claude Code, Codex, Antigravity, Muse Code, OpenCode, atau Pi. Facade Code menjalankan setiap CLI menggunakan akun dan langganan miliknya sendiri.
 
-## Mulai Cepat
+> **Agen berjalan tanpa konfirmasi persetujuan secara default.** Dengan `facade.yolo` yang aktif secara default, agen dapat menjalankan perintah dan mengubah berkas tanpa meminta izin terlebih dahulu. Nonaktifkan pengaturan ini untuk memulihkan konfirmasi persetujuan standar setiap CLI. Lihat [README ekstensi](../../../extension/README.md#install).
 
-1. **Buka sebuah proyek**:
-   ```sh
-   facade ~/code/space-shooter
-   ```
-   Atau gunakan **File > Open Folder** (Berkas > Buka Folder), atau seret folder ke bilah workspace. Folder tersebut harus berupa repositori git (worktree memerlukan git; jalankan `git init` terlebih dahulu jika memulai dari nol).
+## Agent Panel
 
-2. **Jalankan seorang tech lead**:
-   Klik ikon robot di bilah judul (menu Agent), atau jalankan **Agents: Start Agent...** (jalankan agen) di Command Palette, lalu pilih Claude Code atau Codex. Agen yang dijalankan dari dalam Facade Code dibekali alat MCP milik Facade.
+**Agen dan IDE Anda, dalam jendela yang sama.**
 
-3. **Berikan prompt untuk tech lead kepadanya**:
-   ```text
-   Kamu adalah tech lead. Gunakan Facade untuk membuat game tembak-tembakan luar angkasa
-   bergaya neon untuk browser (desktop) sebagai demo, dengan seorang PD di GPT Sol 6
-   (gpt-6-sol, max) lewat Codex yang bertanggung jawab atas tampilan dan nuansa game,
-   serta tiga engineer Muse 1.3 (muse-spark-1.3, max) yang bekerja paralel. Buat tetap
-   kecil, kira-kira setengah jam pengerjaan: satu level, tiga jenis musuh, bos dua fase,
-   power-up, skor, dan kombo. Lebih baik game kecil yang selesai dan dipoles daripada
-   banyak fitur. Para engineer me-merge pekerjaan mereka sendiri dan kamu meninjaunya
-   setelahnya. Kirimi aku satu halaman HTML berisi rencana singkat, diagram swimlane, dan mockup dari PD, lalu
-   tunggu persetujuanku sebelum mulai.
-   ```
+Facade Code menjalankan CLI agen native (Claude Code, Codex, Antigravity, Muse Code, OpenCode, dan Pi) di tab terminal editor di samping berkas Anda, menggunakan perintah, alat, akun, dan langganan milik masing-masing CLI. Sebuah kartu di panel melacak status setiap agen.
 
-4. **Saksikan tim berkolaborasi**:
-   PD dan para engineer yang dijalankan muncul di bilah workspace, di bawah proyek dan fitur mereka. Begitu Anda menyetujui rencana HTML tersebut, mereka mulai membangun. Anda bisa masuk ke terminal agen mana pun kapan saja untuk melihat output atau berbicara langsung dengannya.
+- **Bekerja di samping kode Anda.** Setiap agen berjalan di tab terminalnya sendiri di area editor. Menutup tab hanya menyembunyikannya sementara agen tetap berjalan; mengeklik kartunya akan membukanya kembali.
+- **Lacak status di seluruh agen.** Kartu menampilkan siapa yang memulai setiap agen, apa yang sedang dilakukannya, dan apakah agen siap menerima input, memerlukan izin, atau mengalami kesalahan. Agen tetap berjalan melalui muat ulang jendela dan mulai ulang ekstensi.
+- **Folder dan worktree.** Jalankan agen di folder ruang kerja mana pun atau buat Git worktree secara instan untuk memisahkan perubahan kode. Sematkan percakapan untuk memulihkannya saat Anda membuka ruang kerja kembali, atau lanjutkan sesi sebelumnya dari riwayat.
 
-*(Catatan: Contoh prompt ini menjalankan 5 agen pada tingkat penalaran maksimum. Sesuaikan CLI, model, tingkat penalaran, dan jumlah engineer dengan langganan yang Anda miliki.)*
+## Agent Use
 
-## Fitur
+**Biarkan agen mengoperasikan agen lain, sama seperti Anda.**
 
-### Proyek dan fitur, bukan sesi
+Melalui MCP dan protokol terminal, agen dapat memulai, menghentikan, menemukan, dan mengirim pesan ke agen lain, membaca layar terminal mereka, mengetik teks, dan menekan tombol keyboard.
 
-https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
+- **Mulai dan hentikan agen.** Agen dapat memulai agen lain dengan salah satu dari enam CLI, di folder mana pun atau worktree baru pada jendela Facade Anda di komputer ini, serta memberi mereka tugas pertama. Permintaan yang dicoba ulang dengan ID permintaan yang sama tidak akan pernah memulai agen kedua.
+- **Kirim pesan.** Agen saling bertukar pesan satu sama lain dan dapat mengirim pesan kepada Anda. Facade menempelkan seluruh pesan sekaligus dan mengirimkannya. Jika ada teks yang belum terkirim atau pertanyaan prompt yang menghalangi, pengiriman akan menunggu hingga input bersih.
+- **Kontrol terminal.** Agen dapat membaca layar agen lain, mengetik perintah, dan menekan tombol keyboard untuk menjawab prompt atau membantu rekan yang macet. Ketika agen turunan menunggu selama 20 detik untuk menerima input atau izin, agen yang memulainya akan diberi tahu.
 
-Kebanyakan alat agen membuat satu worktree untuk setiap sesi agen. Facade Code justru sebaliknya: setiap worktree adalah sebuah fitur, tercantum di bawah repositorinya, dan Anda yang menugaskan agen ke sana.
+## Agent Mesh
 
-Sebuah fitur sering membutuhkan lebih dari satu agen. Agen yang menulis kode belum tentu bisa menjelaskan pekerjaannya dengan jelas atau punya selera desain yang baik, jadi agen lain membantu dengan dokumentasi, desain, dan review, semuanya di worktree yang sama. Agen datang dan pergi; fiturnya tetap ada.
+**Hubungkan agen lintas jendela, mesin, dan lokasi.**
 
-- **Bilah workspace**: Menampilkan setiap repositori dan fitur dalam satu kolom. Klik salah satunya untuk mengganti seluruh jendela (explorer, editor, terminal, dan source control), dipulihkan seperti saat Anda meninggalkannya. Proyek tidak pernah tercampur. Lihat [`WORKSPACE.md`](../../ide/WORKSPACE.md).
-- **Siklus hidup worktree**: **New Worktree** (worktree baru) membuat branch, menyinkronkan file lokal yang tercantum di `.worktreeinclude`, dan menjalankan setup. **Delete Worktree** (hapus worktree) merinci apa saja yang akan hilang sebelum menghapus. Lihat [`WORKTREE.md`](../../ide/WORKTREE.md).
-- **Subtugas paralel**: Tugas-tugas yang independen bisa dipecah ke worktree terpisah.
+Facade Code menghubungkan agen di seluruh jendela Facade Anda di komputer ini ke dalam satu jaringan. Buka jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) untuk memperluas kolaborasi tersebut ke mesin lain.
 
-### Tim dari semua vendor
+- **Lintas jendela.** Dengan `facade.yolo` aktif, agen dapat menjangkau setiap agen di seluruh jendela Facade Anda di komputer ini, baik lokal maupun Remote - SSH. Dengan pengaturan tersebut nonaktif, agen hanya menjangkau grupnya sendiri: agen yang Anda mulai dan agen yang dimulai darinya.
+- **Perluas melalui SSH.** Di jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), agen berjalan langsung di mesin jarak jauh dengan alat, berkas, dan akun di sana. Agen lokal dapat memulai dan mengirim pesan ke agen di jendela Remote - SSH secara langsung.
+- **Koordinasikan dari ponsel Anda.** Hubungkan aplikasi seluler Claude ke sesi Claude Code di komputer Anda menggunakan [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Sesi tersebut dapat mengoordinasikan agen lain melalui Facade dan melaporkan kemajuan kembali ke ponsel Anda.
 
-- **CLI native dengan langganan Anda sendiri**: Claude Code, Codex, Muse Code, Antigravity, dan Qwen Code berjalan di terminal terintegrasi masing-masing, memakai langganan yang sudah Anda miliki.
-- **Agen menjalankan agen**: Sebuah agen dapat menjalankan agen lain (dengan CLI atau model dari vendor mana pun) di fitur saat ini atau di worktree baru, lalu memberikan tugas. Lihat [`AGENT-LAUNCHER.md`](../../ide/AGENT-LAUNCHER.md) dan [`AGENT-ORCHESTRATION.md`](../../ide/AGENT-ORCHESTRATION.md).
-- **Pesan**: Agen saling berkirim pesan, melaporkan hasil kepada pemanggilnya, dan memberi tahu Anda ketika sebuah keputusan memerlukan persetujuan manusia. Lihat [`AGENT-MESSAGES.md`](../../ide/AGENT-MESSAGES.md).
-- **Saling membantu saat macet**: Agen dapat membaca terminal agen lain, menjawab prompt, dan mengirim input keyboard untuk membantu agen lain yang macet tanpa mengganggu Anda. Lihat [`AGENT-DEBUGGING.md`](../../ide/AGENT-DEBUGGING.md).
-- **Anda bisa turun tangan di setiap agen**: Setiap agen punya baris terminalnya sendiri di bawah fiturnya. Anda melihat apa yang sedang dikerjakannya dan bisa mengetik langsung di dalamnya kapan saja.
-- **MCP standar**: Semua alat orkestrasi disediakan melalui server MCP standar.
+<sub>Remote Control memerlukan versi Claude Code yang didukung, langganan yang memenuhi syarat, dan proses masuk dengan cakupan penuh. Lihat [persyaratan penyiapannya](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
-## Dua Cara Bekerja
+## Facade Code IDE (Preview)
 
-Perhatian developer adalah hambatan utamanya. Kedua mode ini mewakili dua tingkat pendelegasian:
+**Banyak proyek. Satu jendela.**
 
-| | **Super Engineer** | **Super Team** |
-|---|---|---|
-| **Peran Anda** | Engineer yang turun langsung | Engineering manager |
-| **Dengan siapa Anda berinteraksi** | Langsung dengan banyak agen | Dengan satu agen tech lead, 1:1 |
-| **Siapa yang mengoordinasikan agen** | Anda | Tech lead |
-| **Paling cocok untuk** | Fitur yang butuh arahan dekat: pekerjaan eksploratif, keputusan desain yang ingin Anda nilai sendiri, kebutuhan yang terus berubah | Fitur besar yang terdefinisi jelas dan bisa dipecah dengan rapi |
+Atur proyek, worktree fitur, dan tim agen dalam bilah ruang kerja khusus. Beralih antar proyek beserta berkas dan terminal yang relevan, sementara agen terus bekerja di latar belakang.
 
-Anda bisa memadukan keduanya di jendela yang sama: mengawasi langsung fitur yang sensitif sambil mendelegasikan pekerjaan yang lingkupnya jelas kepada seorang pemimpin.
+Unduh pratinjau IDE: [macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [Semua rilis](https://github.com/y5ez3g/facadecode/releases)
 
-- **Super Engineer**: Anda membuka worktree, memberikan tugas kepada agen di berbagai repositori, dan meninjau kode setiap kali satu agen selesai.
-- **Super Team**: Anda menyerahkan sebuah fitur kepada satu agen sebagai tech lead. Ia memecah tugas, menetapkan kontrak antarmuka, menjalankan para pekerja, dan meninjau hasil kerja mereka.
-  - Model yang kuat memimpin; model yang lebih cepat dan lebih murah, dengan langganan yang sudah Anda miliki, mengimplementasikan secara paralel; dan model dari vendor berbeda saling meninjau pekerjaan.
-  - Satu prompt sudah cukup untuk menyiapkannya (lihat [Mulai Cepat](#mulai-cepat)); alur kerja tim yang Anda pakai berulang kali bisa ditulis sebagai skill.
+IDE ini adalah fork dari VS Code yang dipasang berdampingan dengan editor Anda yang sudah ada dan tidak berbagi apa pun dengannya: pengaturan, ekstensi, dan perintah `facade` sepenuhnya terpisah. Ekstensinya berasal dari [Open VSX](https://open-vsx.org); beberapa ekstensi berpemilik Microsoft, seperti Remote Development dan C/C++, hanya dapat berjalan di build resmi Microsoft. Arsitektur dan spesifikasi tersedia di [`docs/ide/`](../../ide/).
 
-*(README ini ditulis dengan cara yang sama: satu agen menganalisis, satu agen menyusun draf, dan seorang manusia membuat keputusan akhir.)*
+## Membangun dari Sumber
 
-## Mengapa
+- **Ekstensi:** Berikan [`extension/AGENTS.md`](../../../extension/AGENTS.md) kepada agen coding Anda untuk membangun paket.
+- **IDE:** Berikan [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) kepada agen coding Anda untuk membangun aplikasi.
 
-Kebanyakan alat coding AI terbagi dalam dua kubu: IDE bergaya Copilot, tempat manusia harus mengikuti baris demi baris, dan IDE agen, tempat review kode dan debugging diserahkan ke editor eksternal. Tidak satu pun yang menyatukan tim agen native lintas vendor di dalam IDE utama Anda.
-
-Kami percaya masa depan adalah satu developer yang menjalankan banyak proyek dan fitur bersama sebuah tim agen. Model yang berbeda unggul di tugas yang berbeda, jadi tim itu sebaiknya lintas vendor. Dan karena agenlah yang menulis kode yang Anda tinjau, tim itu seharusnya berada di dalam IDE Anda.
-
-## Tetap VS Code
-
-Facade Code hanya mengubah apa yang dibutuhkan untuk mengelola banyak proyek dan agen:
-
-- **Bilah workspace** menempati kolom pertama; **bilah aktivitas** pindah ke kanan atas bilah judul (bisa dikembalikan dengan `workbench.activityBar.location`).
-- Copilot dan chat dari upstream dinonaktifkan secara default (satu pengaturan dapat mengaktifkannya kembali).
-- Selebihnya adalah VS Code standar: editor, pengaturan, keybinding, `.vscode/`, dan file `.code-workspace`.
-- Ekstensi dipasang dari [Open VSX](https://open-vsx.org). Beberapa ekstensi proprietary Microsoft, seperti Remote Development dan C/C++, hanya dilisensikan untuk build resmi Microsoft dan tidak bisa berjalan di fork.
-
-## Membangun dari Kode Sumber
-
-Serahkan [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) kepada agen Anda, dan biarkan ia yang membangun.
-
-Untuk panduan kontribusi dan aturan branch, lihat [`CONTRIBUTING.md`](CONTRIBUTING.md) dan [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).
+Untuk panduan kontribusi dan aturan branch, lihat [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) dan [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).
 
 ## Masukan
 
-- **Bug dan ide**: [GitHub Issues](https://github.com/y5ez3g/facadecode/issues) atau **Help > Report Issue** (Bantuan > Laporkan Masalah) di editor.
-- **Kerentanan keamanan**: Mohon laporkan secara privat sesuai [`SECURITY.md`](SECURITY.md).
+- **Bug & ide**: [GitHub Issues](https://github.com/y5ez3g/facadecode/issues), atau **Help > Report Issue** di IDE.
+- **Kerentanan keamanan**: Harap laporkan secara privat sesuai dengan [`SECURITY.md`](../../../SECURITY.md).
 
 ## Lisensi
 
-MIT, sama seperti VS Code upstream. Lihat [`LICENSE.txt`](../../../LICENSE.txt) untuk pemberitahuan hak cipta Microsoft dan pemberitahuan para kontributor Facade Code.
+MIT, sesuai dengan upstream VS Code. Lihat [`LICENSE.txt`](../../../LICENSE.txt) untuk pemberitahuan hak cipta Microsoft dan pemberitahuan kontributor Facade Code.
+
+<sub>Facade Code adalah produk independen dan tidak berafiliasi dengan, didukung oleh, atau disponsori oleh penyedia alat pihak ketiga yang ditampilkan. Semua merek dagang dan logo pihak ketiga adalah milik pemiliknya masing-masing.</sub>
