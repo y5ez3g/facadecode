@@ -77,6 +77,17 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 	const spawn = (client: PtydClient, run: string, source: string, more: Partial<SpawnParams> = {}) => client.request('spawn', {
 		run, owner: 'w1', ...program(source), cwd: os.tmpdir(), cols: 80, rows: 24, meta: { name: run }, ...more
 	});
+	/** ptyd leaves a terminal question unanswered for a second after its thread was held up (ARCHITECTURE-2.3), and this test process,
+	 * which runs ptyd's code, can be held by a busy CI runner: a question whose answer a test expects is asked again until answered. */
+	const answeredAgain = async (ask: () => string | Promise<string>, ms = 4_000): Promise<string> => {
+		const deadline = Date.now() + ms;
+		let answer = await ask();
+		while (!answer && Date.now() < deadline) {
+			await new Promise(resolve => setTimeout(resolve, 100));
+			answer = await ask();
+		}
+		return answer;
+	};
 	const until = async <T>(what: string, check: () => T | undefined | false | Promise<T | undefined | false>, ms = 5_000): Promise<T> => {
 		const deadline = Date.now() + ms;
 		for (; ;) {
@@ -871,15 +882,17 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			};
 			const window = await open(1);
 			await spawn(window, 'asks', IDLE);
-			const answered = async (client: PtydClient, question: string) => {
+			const asked = async (client: PtydClient, question: string) => {
 				const before = written.length;
 				emit(question);
 				await client.request('read', { run: 'asks', lines: 1 });
 				return written.slice(before).join('');
 			};
+			// Asked again where an answer is expected and ptyd was held up by the test process; not where none is
+			const answered = (client: PtydClient, question: string, expected = false) => expected ? answeredAgain(() => asked(client, question)) : asked(client, question);
 			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'no colours said yet: no answer, and the program uses its own');
 			await window.request('colours', { foreground: 'cccc/cccc/cccc', background: '1919/1a1a/1b1b', cursor: 'aeaf/adad/b0b0' });
-			assert.strictEqual(await answered(window, '\x1b]10;?\x1b\\\x1b]11;?\x07\x1b]12;?\x1b\\'),
+			assert.strictEqual(await answered(window, '\x1b]10;?\x1b\\\x1b]11;?\x07\x1b]12;?\x1b\\', true),
 				'\x1b]10;rgb:cccc/cccc/cccc\x1b\\\x1b]11;rgb:1919/1a1a/1b1b\x1b\\\x1b]12;rgb:aeaf/adad/b0b0\x1b\\');
 			// A program setting its colours is no question; a window not saying its own yet leaves the run those it had
 			assert.strictEqual(await answered(window, '\x1b]11;rgb:0000/0000/0000\x1b\\'), '');
@@ -890,12 +903,12 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			await new Promise(resolve => setTimeout(resolve, 30));
 			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'just held up: not answered');
 			await new Promise(resolve => setTimeout(resolve, 1_100));
-			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\', 'answered again a second after');
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\', true), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\', 'answered again a second after');
 			const reloaded = await open(2);
 			await reloaded.request('attach', { run: 'asks' });
-			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\');
+			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\', true), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\');
 			await reloaded.request('colours', { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff' });
-			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:ffff/ffff/ffff\x1b\\', 'the theme changed');
+			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\', true), '\x1b]11;rgb:ffff/ffff/ffff\x1b\\', 'the theme changed');
 			await assert.rejects(reloaded.request('colours', { background: 'white' } as never), /Terminal colours are rrrr\/gggg\/bbbb/);
 		} finally {
 			asking.close();
@@ -916,12 +929,14 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			clients.push(window);
 			await window.request('claim', { owner: 'w1', generation: 1, token: 'scheme-1' });
 			await spawn(window, 'looks', IDLE);
-			const sent = async (output: string) => {
+			const once = async (output: string) => {
 				const before = written.length;
 				emit(output);
 				await window.request('read', { run: 'looks', lines: 1 });
 				return written.slice(before).join('');
 			};
+			// A question whose answer is expected is asked again where ptyd was held up; asking twice changes nothing
+			const sent = (output: string, answered = false) => answered ? answeredAgain(() => once(output)) : once(output);
 			const told = async (colours: { foreground: string; background: string }) => {
 				const before = written.length;
 				await window.request('colours', colours);
@@ -929,26 +944,26 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			};
 			const light = { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff' }, dark = { foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' };
 			// Known, and not asked for yet; which it is unknown before the window says its colours
-			assert.strictEqual(await sent('\x1b[?2031$p'), '\x1b[?2031;2$y');
+			assert.strictEqual(await sent('\x1b[?2031$p', true), '\x1b[?2031;2$y');
 			assert.strictEqual(await sent('\x1b[?996n'), '');
 			assert.strictEqual(await told(light), '', 'not asked for: no report');
-			assert.strictEqual(await sent('\x1b[?996n'), '\x1b[?997;2n');
+			assert.strictEqual(await sent('\x1b[?996n', true), '\x1b[?997;2n');
 			// Asked for, and the question in the same arrival follows it; a theme of the same kind again reports nothing
-			assert.strictEqual(await sent('\x1b[?2031h\x1b[?2031$p'), '\x1b[?2031;1$y');
+			assert.strictEqual(await sent('\x1b[?2031h\x1b[?2031$p', true), '\x1b[?2031;1$y');
 			assert.strictEqual(await told({ foreground: '0000/0000/0000', background: 'f3f3/f3f3/f3f3' }), '');
 			assert.strictEqual(await told(dark), '\x1b[?997;1n', 'turned dark');
-			assert.strictEqual(await sent('\x1b[?996n'), '\x1b[?997;1n');
+			assert.strictEqual(await sent('\x1b[?996n', true), '\x1b[?997;1n');
 			assert.strictEqual(await told(light), '\x1b[?997;2n', 'turned light');
 			// No longer asked for, and a full reset forgets it was
 			assert.strictEqual(await sent('\x1b[?2031l'), '');
 			assert.strictEqual(await told(dark), '');
 			await sent('\x1b[?2031h');
-			assert.strictEqual(await sent('\x1bc\x1b[?2031$p'), '\x1b[?2031;2$y', 'a reset in the same arrival');
-			assert.strictEqual(await sent('\x1b[?2031$p'), '\x1b[?2031;2$y');
+			assert.strictEqual(await sent('\x1bc\x1b[?2031$p', true), '\x1b[?2031;2$y', 'a reset in the same arrival');
+			assert.strictEqual(await sent('\x1b[?2031$p', true), '\x1b[?2031;2$y');
 			assert.strictEqual(await told(light), '');
 			// The headless terminal answers neither question itself: each is answered once
 			assert.strictEqual(await sent('\x1b[?2031h'), '');
-			assert.strictEqual([await sent('\x1b[?2031$p'), await sent('\x1b[?996n')].join(''), '\x1b[?2031;1$y\x1b[?997;2n');
+			assert.strictEqual([await sent('\x1b[?2031$p', true), await sent('\x1b[?996n', true)].join(''), '\x1b[?2031;1$y\x1b[?997;2n');
 		} finally {
 			server.close();
 		}
@@ -968,29 +983,31 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			await spawn(window, 'arrives', IDLE);
 			await window.request('colours', { foreground: '3b3b/3b3b/3b3b', background: 'ffff/ffff/ffff' });
 			// Arrivals one after another, with nothing drawn in between: each answered at once, by the asking before it
-			const at = (...arrivals: string[]) => {
+			const once = (...arrivals: string[]) => {
 				const before = written.length;
 				arrivals.forEach(each => emit(each));
 				return written.slice(before).join('');
 			};
+			// Each expects an answer: asked again where ptyd was held up by the test process; the same arrivals again change nothing
+			const at = (...arrivals: string[]) => answeredAgain(() => once(...arrivals));
 			const asked = [
-				at('\x1b[?2031h', '\x1b[?2031$p'),
-				at('\x1b[?2031l', '\x1b[?2031$p'),
-				at('\x1b[?20', '31h', '\x1b[?2031$p'),
-				at('\x1b', 'c', '\x1b[?2031$p'),
-				at('\x1b[?2031h', '\x1bc', '\x1b[?996n', '\x1b[?2031$p'),
-				at('\x1b[?1049;2031h', '\x1b[?2031$p'),
-				at('\x1b[?25;2031l\x1b[?2031$p'),
+				await at('\x1b[?2031h', '\x1b[?2031$p'),
+				await at('\x1b[?2031l', '\x1b[?2031$p'),
+				await at('\x1b[?20', '31h', '\x1b[?2031$p'),
+				await at('\x1b', 'c', '\x1b[?2031$p'),
+				await at('\x1b[?2031h', '\x1bc', '\x1b[?996n', '\x1b[?2031$p'),
+				await at('\x1b[?1049;2031h', '\x1b[?2031$p'),
+				await at('\x1b[?25;2031l\x1b[?2031$p'),
 				// Split right after `ESC [`, an arrival with nothing else of a question in it, then its reset counterpart
-				at('text\x1b[', '?2031h', '\x1b[?2031$p'),
-				at('\x1b[', '?2031l', '\x1b[?2031$p'),
+				await at('text\x1b[', '?2031h', '\x1b[?2031$p'),
+				await at('\x1b[', '?2031l', '\x1b[?2031$p'),
 				// A long DEC set split past where any question would have ended, still naming its modes; then one past what is kept
-				at(`\x1b[?1000;1002;1003;1006;1015;1016;`, '2031h', '\x1b[?2031$p'),
-				at(`\x1b[?1000;1002;1003;1006;1015;1016;2031l`, '\x1b[?2031$p'),
-				at(`\x1b[?${'1;'.repeat(600)}`, '2031h', '\x1b[?2031$p'),
+				await at(`\x1b[?1000;1002;1003;1006;1015;1016;`, '2031h', '\x1b[?2031$p'),
+				await at(`\x1b[?1000;1002;1003;1006;1015;1016;2031l`, '\x1b[?2031$p'),
+				await at(`\x1b[?${'1;'.repeat(600)}`, '2031h', '\x1b[?2031$p'),
 				// Split inside a set naming another mode first, and inside the longest question itself
-				at('\x1b[?1049;20', '31h', '\x1b[?2031$p'),
-				at('\x1b[?2031$', 'p')
+				await at('\x1b[?1049;20', '31h', '\x1b[?2031$p'),
+				await at('\x1b[?2031$', 'p')
 			];
 			assert.deepStrictEqual(asked, ['\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?997;2n\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;2$y',
 				'\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;2$y', '\x1b[?2031;2$y', '\x1b[?2031;1$y', '\x1b[?2031;1$y']);
@@ -1007,7 +1024,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			await window.request('colours', { foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' });
 			// Drawing caught up: what it drew changes nothing - still asked for, and one answer each
 			await window.request('read', { run: 'arrives', lines: 1 });
-			assert.deepStrictEqual([report, noReport, at('\x1b[?2031$p'), at('\x1b[?996n')], ['\x1b[?997;1n', '', '\x1b[?2031;1$y', '\x1b[?997;1n']);
+			assert.deepStrictEqual([report, noReport, await at('\x1b[?2031$p'), await at('\x1b[?996n')], ['\x1b[?997;1n', '', '\x1b[?2031;1$y', '\x1b[?997;1n']);
 		} finally {
 			server.close();
 		}
