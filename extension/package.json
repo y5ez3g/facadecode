@@ -14,13 +14,12 @@
 	"bugs": {
 		"url": "https://github.com/y5ez3g/facadecode/issues"
 	},
-	"homepage": "https://github.com/y5ez3g/facadecode/tree/main/extension#readme",
+	"homepage": "https://facadecode.com",
 	"engines": {
 		"vscode": "^1.105.0"
 	},
 	"categories": [
-		"AI",
-		"Other"
+		"AI"
 	],
 	"capabilities": {
 		"virtualWorkspaces": false,
@@ -753,6 +752,31 @@
 		"antigravity",
 		"muse code",
 		"opencode",
-		"pi"
-	]
+		"pi",
+		"claude",
+		"muse",
+		"ai agents",
+		"coding agent",
+		"multi-agent",
+		"agent orchestration",
+		"orchestrator",
+		"mcp",
+		"model context protocol",
+		"git worktree",
+		"worktree",
+		"remote ssh",
+		"ssh",
+		"terminal",
+		"agent mesh",
+		"agent panel",
+		"remote control",
+		"subagents",
+		"autonomous agents",
+		"ai pair programming",
+		"cli"
+	],
+	"galleryBanner": {
+		"color": "#f5f3ed",
+		"theme": "light"
+	}
 }

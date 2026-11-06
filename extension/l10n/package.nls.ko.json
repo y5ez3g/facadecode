@@ -1,5 +1,5 @@
 {
-	"displayName": "Facade Code",
+	"displayName": "Facade Code: 멀티 에이전트 오케스트레이터",
 	"description": "VS Code를 위한 멀티 에이전트 오케스트레이터입니다. IDE에서 Claude Code, Codex, Antigravity, Muse Code, OpenCode, Pi를 실행합니다.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",

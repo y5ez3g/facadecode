@@ -8,11 +8,12 @@
 	"publisher": "facade",
 	"repository": { "type": "git", "url": "https://github.com/y5ez3g/facadecode.git", "directory": "extension" },
 	"bugs": { "url": "https://github.com/y5ez3g/facadecode/issues" },
-	"homepage": "https://github.com/y5ez3g/facadecode/tree/main/extension#readme",
+	"homepage": "https://facadecode.com",
 	"engines": {
 		"vscode": "^1.105.0"
 	},
 	"categories": ["Other"],
+	"keywords": ["facade code", "window component", "facade"],
 	"extensionKind": ["ui"],
 	"api": "none",
 	"activationEvents": ["onStartupFinished"],

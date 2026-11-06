@@ -1,5 +1,5 @@
 {
-	"displayName": "Facade Code",
+	"displayName": "Facade Code: Çoklu Aracı Orkestratörü",
 	"description": "VS Code için çoklu aracı orkestratörü. Claude Code, Codex, Antigravity, Muse Code, OpenCode ve Pi'yi IDE'nizde çalıştırın.",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
