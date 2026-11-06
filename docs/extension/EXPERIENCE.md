@@ -70,7 +70,7 @@ it, without moving the list or taking focus (LIFECYCLE-2.2). Progress is shown i
 **A failed accepted launch retains its card and terminal; a usable CLI remains available if its Facade tools fail.**
 
 The second line explains the actual error. Operation errors go to the initiator: human UI errors to that window's
-person, agent operation errors to that agent, with no extra human popup. Close Agent removes the retained pair
+person, agent operation errors to that agent, with no extra human popup. End Agent removes the retained pair
 immediately; closing its tab only hides it. Native Git post-create preparation does not gate CLI startup once the
 worktree exists and Git recognizes it.
 
@@ -81,11 +81,13 @@ worktree exists and Git recognizes it.
 **The panel shows this window's agents; each editor terminal remains directly usable by the person.**
 
 Starting or working is green and a problem is red; idle, native permission/answer/sign-in blockers and unavailable
-activity show no dot, the hover saying which (RULES-3.2). The second line says what was last sent to the agent - before
-anything, its CLI title's words - unless the dot is red, when it says why, or the CLI waits for the person, when it says
-what for (PANEL-1.4); absence of reliable status is never claimed as idle. A turn ending removes the dot without a
-notification or a claim that the task is complete. A busy agent's tab turns a spinner before its name (LIFECYCLE-2.2).
-Clicking a card opens that same terminal. Human search and management stay within the current window.
+activity show no dot, the card's accessible label saying which in words and its second line what a blocker waits for
+(RULES-3.2, PANEL-1.4). Its details add no state (PANEL-1.5). The second line says what was last sent to the agent - before
+anything, whether its run began or resumed a conversation - unless Facade says, while it lasts, how it starts, why its
+dot is red or what the CLI waits for (PANEL-1.4); absence of reliable status is never claimed as idle. A turn ending
+removes the dot without a notification or a claim that the task is complete. A busy agent's tab turns a spinner before
+its name (LIFECYCLE-2.2). Clicking a card opens that same terminal. Human search and management stay within the current
+window.
 
 ### 2.2 Only errors and explicit calls to the person notify
 
@@ -95,13 +97,13 @@ Agent-operation errors return to the calling agent. Agent-to-agent delivery, rep
 automatically fall back to a person; if no agent can receive an error, the report ends. Native runtime failures follow
 RULES-1.8. No startup, idle, turn-end, permission or login news is announced. Each window shows only its own notifications.
 
-### 2.3 A turn ends, a process exits, or the person closes an agent
+### 2.3 A turn ends, a process exits, or the person ends an agent
 
-**A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until closed.**
+**A turn end leaves the CLI available; normal process exit removes it; abnormal exit retains a red pair until End Agent.**
 
-Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. Close Agent
+Unknown abnormal-exit cause has no guessed popup. Known errors follow the initiator/relevant-window rule. End Agent
 removes card and terminal immediately and cleans up the owned process in the background; closing an agent's tab only
-hides it (LIFECYCLE-2.2). It does not delete a worktree or close the agents it started. There is no visible Stopping
+hides it (LIFECYCLE-2.2). It does not delete a worktree or end the agents it started. There is no visible Stopping
 wait.
 
 ### 2.4 Reloading, closing and reconnecting
@@ -111,7 +113,11 @@ wait.
 Temporary remote loss retains observations and reconciles the original processes. A closed window's agents end after
 RULES-4.1's grace - 90 seconds for a local window, five minutes for a remote one, and five minutes for agents a released
 build's execution supervisor still holds - unless the workspace is opened again first, which shows them again, as a
-reload does within that time (RULES-4.1), and Pins restore once their agents ended. Other windows continue their work.
+reload does within that time (RULES-4.1), and Pins restore once their agents ended. A reload - an update's included -
+brings every agent's process and card back but opens only the pinned agents' tabs again: every other agent's tab stays
+hidden until the person opens it from its card, and the last pinned tab opened is in front with its card selected
+(LIFECYCLE-3.5). An agent that cannot be pinned - a custom CLI without exact-session integration, or a run whose
+session integration failed - always comes back with its tab hidden. Other windows continue their work.
 Pending messages to ended runs fail to their agent senders where reachable and are never replayed on reopening. If only
 the sender closes, delivery already executing elsewhere may finish; work left at the closing side may end. No extra
 handover machinery guarantees that edge case. System results that cannot return simply end.
@@ -124,9 +130,10 @@ Resume lists relevant vendor histories with the original CLI and location. Pin a
 same intent: a pinned agent's card is kept at the top of the panel, and its tab is pinned in the editor, there to be seen.
 Pin, and Unpin of an agent whose tab is open, from its card, the Command Palette or a key shows that tab as clicking the
 card does, marked or unmarked there, a Pin opening it where it has none; Unpin keeps the current agent running, and a
-hidden one hidden. Close Agent, a person's close of the agent's tab showing its pin
+hidden one hidden. End Agent, a person's close of the agent's tab showing its pin
 mark and normal exit Unpin; abnormal exit and whole-window close preserve the intent, and a Pin restored opens its tab
-in the background. RULES-4.2 and LIFECYCLE-3.2–3.4 own restoration and capability limits.
+again, the pinned agents' tabs one after another in the Pins' order. RULES-4.2 and LIFECYCLE-3.2–3.5 own restoration
+and capability limits.
 
 ## 3 Working with other agents
 
@@ -209,7 +216,7 @@ notification in that agent's window.
 
 **Stopping or cancellation does not undo completed input or user files.**
 
-Canceling an unaccepted picker changes nothing. Close Agent on an accepted launch immediately removes UI and prevents
+Canceling an unaccepted picker changes nothing. End Agent on an accepted launch immediately removes UI and prevents
 later CLI startup; a worktree already created stays. Hiding its tab does neither. Facade does not manage Git
 initialization, initial commits, or native post-create preparation jobs; it deletes only a clean linked worktree the
 person confirms. External removal of a window folder/worktree closes its affected agents. An unconfirmed remote cleanup

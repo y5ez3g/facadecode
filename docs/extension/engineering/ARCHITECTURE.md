@@ -225,8 +225,9 @@ capture bounded to ten seconds, create its terminal, wait for that object's publ
 component accepts only one still-live object opened during that capture; every extra open makes it ambiguous even if
 that extra object closes before finish. Older objects' late close events do not contaminate the capture. Same-host
 completion additionally validates the actual Terminal reference. Only successful registration replaces and disposes the
-prior registered object for that run. A registration a restarted local component refuses, as it knows no owner yet,
-sends the activation's current claim again and retries once. Names, empty names and CLI titles may repeat freely.
+prior registered object for that run - or, for a run its restoration brings back with its tab hidden, the end of that
+restoration's pinned sequence (LIFECYCLE-3.5), as its old tab would stay, dead. A registration a restarted local component refuses, as it knows no owner yet,
+sends the activation's current claim again and retries once. Names, empty names and, from earlier builds, CLI titles may repeat freely.
 Cancellation, expiration, an old claim or ambiguous events do not guess an association. An editor can replace its
 public Tab objects when rebuilding the tab-group model. Discard bindings to Tab objects the current model does not hold,
 then correlate the active terminal and tab through public activation/group events again; never recover them by title or
@@ -234,9 +235,12 @@ index. A pending native Pin change goes on once its tab is known, by bringing th
 (LIFECYCLE-3.4).
 
 Queued creation retains only the latest explicit reveal request and cancels it on closure, so an agent queued first
-cannot steal focus after a later selection. Restoration after a reload waits up to ten seconds for each terminal to
-open before it restores the next, so a terminal the editor never opens does not hold up the others; its card and
-process are kept.
+cannot steal focus after a later selection. The pinned tabs LIFECYCLE-3.5's procedure opens one after another - after a reload,
+an extension-host restart or Pin restoration - wait up to ten seconds each for their terminal to open before the next
+opens, so a terminal the editor never opens does not hold up the others; its card and process are kept. Once the ten
+seconds pass the sequence goes on to the next tab and is not opened again: a tab that becomes ready later takes its mark
+by LIFECYCLE-3.4's ordinary repair - as a mark that did not go on does, once its tab is known or comes to the front -
+and changes neither the order nor the final selection.
 
 A remote workspace-host restart can retain these registrations while its local companion lives. A graceful local
 component shutdown synchronously records only its registered owner/run IDs and the actual final complete terminal
@@ -247,10 +251,11 @@ per-output persistence or polling.
 Only a proven same-window handover into that recreated registry may dispose of an old UI resource set after
 restoration. This is a bounded heuristic cleanup, not terminal identity: it never binds an old object to any run. It
 examines only the activation snapshot, excluding current PTYs and every shell/cwd/environment field, and requires known
-nonpositive PIDs. The creation-time name may differ from the final displayed title, including an empty original name
-followed by a CLI title. It is not compared with the final title; the shutdown record's complete title defines the old
-resource group. For each complete-title group in the shutdown record, every recorded run must have been successfully
-registered again in this restoration batch, and the old eligible group count must exactly agree. Then the entire old
+nonpositive PIDs. The creation-time name may differ from the final displayed title: a current name by a rename or by the short
+ID its duplicate shows (LIFECYCLE-2.2), and - historical compatibility input from builds whose tabs took a CLI's title -
+an empty original name followed by a CLI title. No current displayed title comes from a terminal (CLIS-2.3). It is not compared with the final title; the shutdown record's complete title defines the old
+resource group. For each complete-title group in the shutdown record, every recorded run must have been brought back in
+this restoration batch - reattached, or shown again as a retained or uncertain card - its tab open again or hidden (LIFECYCLE-3.5), and the old eligible group count must exactly agree. Then the entire old
 group is disposed of once. Empty and duplicate names are valid groups; new CLI titles do not stand in for the recorded
 old titles. An extra matching third-party object, missing run or uncertain PID leaves that group untouched.
 Canonical-only new-window takeover does not enable this path. If a missing owned object is replaced by an
@@ -287,8 +292,30 @@ and ptyd, which on a busy machine can pass that moment. So ptyd answers whether 
 headless terminal what it can - the cursor position, the device attributes, the terminal's status, a
 mode, a setting - and a colour query (OSC 10, 11, 12) with the colours the window that claims the run, or claimed it
 last, told it - its theme kind's until one of its editor terminals reports its own, answering the window's question as
-it opens or a program's - and not at all where none was told, the program then using its own. The editor's answers to
-these reach no program of a supervisor that answers them (protocol 15 on); for a run of an earlier supervisor (2.4),
+it opens or a program's - and not at all where none was told, the program then using its own. A program may pick its light
+or dark look from those colours once, as it starts, so ptyd also implements colour scheme reports (mode 2031), which the
+editor's terminal does not:
+
+| Program sends | ptyd |
+| --- | --- |
+| `CSI ? 2031 h` | subscribes the run to scheme reports |
+| `CSI ? 2031 l`, or a full reset | unsubscribes it |
+| `CSI ? 2031 $ p` (DECRQM) | answers `CSI ? 2031 ; 1 $ y` while subscribed, `CSI ? 2031 ; 2 $ y` otherwise |
+| `CSI ? 996 n` (DSR) | answers `CSI ? 997 ; 1 n` for a dark window's colours, `CSI ? 997 ; 2 n` for a light one's, nothing while the scheme is unknown - no window has told its colours |
+
+Once the colours the window tells it turn dark or light, a subscribed run is sent that report, `CSI ? 997 ; 1 n` or
+`CSI ? 997 ; 2 n`, as its terminal would send it, and the program asks its colours again. Subscription and reset follow
+the order of the program's output as it arrives, across chunks and split sequences, whatever its drawing has caught up
+with: an answer or report uses the state of the output before it. Scheme queries, subscriptions and reports - mode 2031 and DSR 996 - are
+protocol 16's; colour updates, and ptyd's ownership of the answers to the terminal queries above - the colour queries
+OSC 10, 11 and 12 among them - start at protocol 15. A run of a protocol-15 supervisor therefore receives updated
+colours and answers its OSC 10, 11 and 12 queries with them, but has no scheme-query support and sends no automatic
+scheme report: it has the new colours if it asks again. The window
+tells its colours to each supervisor that holds its runs and takes them (protocol 15 on), whichever of these
+capabilities it has: its own as it connects, an earlier build's as it joins one - a reload into an update leaves its
+agents there - and each of them again as its theme changes. The editor's answers to
+those terminal queries - the colour queries OSC 10, 11 and 12 and mode requests (DECRQM), mode 2031's among them -
+reach no program of a supervisor that answers them (protocol 15 on); for a run of an earlier supervisor (2.4),
 which leaves its queries to a window that shows the run, the window passes its terminal's answers on as it did, but for
 those to the window's own colour questions, which reach no program; what
 only the editor knows - its kitty keyboard flags, its name, its size in pixels - reaches the program where the editor
@@ -405,7 +432,7 @@ Windows node-pty's console worker - starts no program and says that its installa
 | Store | Contents |
 | --- | --- |
 | Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
-| Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open, in which editor group, and whether it is that group's front (LIFECYCLE-3.5) - for as long as ptyd runs (2.3) |
+| Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group, which LIFECYCLE-3.5's restoration needs - for as long as ptyd runs (2.3) |
 | Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
 | Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs, its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged |
 | Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
@@ -659,7 +686,7 @@ what was tested and what remains. Task assignments, pauses and discussion author
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.3 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package |
-| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; pressure/upgrades from every released build with agents running |
+| 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; colour scheme reports with current and earlier supervisors (VERIFICATION E07); pressure/upgrades from every released build with agents running |
 | 3.1–3.3 | Storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |
 | 5.1–5.4 | Evidence and command logs, isolated profile/config paths, dirty-tree preservation, no unrequested Git publication |

@@ -17,8 +17,8 @@ This document owns common surfaces, presentation, accessibility, commands and se
 
 **Use native Quick Pick for choices, Input Box for names and editor terminals for CLI interaction.**
 
-The webview contains cards/empty state only. Context menus are native, flat and show relevant actions; no nested custom
-popover or global chat composer. Multi-step choices retain one flow with Back and previous selections. Show validation
+The webview contains cards, their details (PANEL-1.5) and the empty state only. Context menus are native, flat and
+show relevant actions, opened from a card's gear (PANEL-2.2); no other custom popover and no global chat composer. Multi-step choices retain one flow with Back and previous selections. Show validation
 beneath the input while typing; asynchronous checks show busy and disable acceptance until complete. Cancel changes no
 selection history or filesystem state. A person's accepted launch closes the picker and shows card and terminal
 immediately; an agent's start shows its card (LIFECYCLE-2.2).
@@ -35,7 +35,7 @@ RULES-3.4 and RULES-1.8 decide eligibility and error ownership. Errors use nativ
 agent-to-person messages use native information notifications, even while that agent is viewed. No ordinary
 news/warning/progress toasts. Agent-operation errors return to the caller; no message-delivery or result-handoff failure
 creates a human popup. Show a permitted human notification only in its related window. There is no durable
-notification-recovery protocol. Example: `Could not start Ada: {CLI error}`. Show opens the exact source run or final
+notification-recovery protocol. Example: `Could not start Ada: {CLI error}.` Show opens the exact source run or final
 screen; a launch that failed on its CLI's configuration also offers Configure Agents, and ARCHITECTURE-4.3's
 missing-component notice offers Show Window Component, while Reload Window comes on a notice of its own once the
 component answers. A message to the person reads `{agent name}
@@ -90,16 +90,26 @@ No contributed color palette. A custom CLI's avatar uses a stable hash of its no
 `charts.orange` or `charts.purple` as a 30% tint over `sideBar.background` behind `foreground`; in any theme where that
 pair has less than 4.5:1 contrast it falls back to a 12% tint, then to `sideBar.background` alone. Status colors are not
 reused as avatar meanings. High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never
-over keyboard focus. Do not fade high-contrast text. Other secondary selection text can use 80% opacity only if contrast
-remains adequate. Whole-pixel layout at supported zoom; preserve diacritics/descenders. Paragraphs wrap, card lines
+over keyboard focus. Do not fade high-contrast text. Other secondary selection text uses 80% opacity only where it
+keeps 4.5:1 on the theme's selection, the page measuring it as the theme draws it, and full opacity otherwise; a card's
+details draw their quieter words and icons in the quieter color only where it keeps 4.5:1 on
+`editorHoverWidget.background`, the text color otherwise (PANEL-1.5). Where a theme's `descriptionForeground` is its
+`foreground` - Light Modern's is - nothing would read as quieter: the panel's quieter text and icons take `foreground`
+at 75%, the dimming chosen for them, where that keeps 4.5:1 on `sideBar.background` and on
+`editorHoverWidget.background`, and `foreground` whole otherwise; a high contrast theme keeps its colors whole. A card's buttons use the toolbar's `toolbar.hoverBackground` and `toolbar.activeBackground`,
+their 14 px icons at rest in the quieter color with PANEL-1.3's exceptions - a selected card's, high contrast's and the
+75% `foreground` above - and `icon.foreground` under the pointer or pressed (PANEL-1.3). Whole-pixel layout at supported zoom; preserve diacritics/descenders. Paragraphs wrap, card lines
 ellipsize with full accessible text.
 
 ### 2.2 Motion and responsive layout
 
 **Motion is brief, does not delay input, and disappears when reduced motion is requested.**
 
-Card insertion 180 ms and removal after a normal process exit 160 ms, `cubic-bezier(0.22,1,0.36,1)`; text changes in
-place. No motion on first draw/filter change. Explicit close and confirmed location removal remove the card and terminal
+Durations and curves are Fluent's, chosen and decided: a card's insertion 200 ms, `cubic-bezier(0,0,0,1)`, as its normal motion enters; a
+card in view after a normal process exit fades as its row closes up from its own height in 150 ms, `cubic-bezier(1,0,1,1)`,
+as its fast motion leaves - one out of view or cut by an edge, or the list gliding, goes at once; a card's details enter
+as Fluent's popover does, fading in as they slide 10 px in from the ⓘ's side over 400 ms, `cubic-bezier(0,0,0,1)`, and
+leave at once (PANEL-1.5); text changes in place. No motion on first draw/filter change. End Agent and confirmed location removal remove the card and terminal
 immediately, without animation. Dot and scrolling durations belong to PANEL. Long-running animation changes only
 opacity/transform. The panel and a busy tab's spinner (LIFECYCLE-2.2) follow both `workbench.reduceMotion` and the
 system preference; as the extension host cannot read the system preference, the tab takes it from the panel's page, and
@@ -114,9 +124,14 @@ not an intended unsupported theme.
 
 One roving Tab stop; Tab/Shift+Tab leave. Up/Down/Home/End/Page Up/Page Down move focus, scroll minimally into view.
 Typeahead combines characters within 750 ms and wraps to the next matching name; a Space within that time continues the
-typeahead. Otherwise Enter/Space opens, F2 renames; native context-menu key opens the current card's menu. A click or
-right-click focuses without a keyboard outline, and the card a context menu is open on gets no other frame than its
-keyboard outline, unlike the editor's own lists (2.1). Escape closes transient UI. Use semantic listbox/options,
+typeahead. Otherwise Enter/Space opens, F2 renames; Shift+F10 or the menu key opens the current card's menu under its gear
+(PANEL-2.2). Show Agent Details (3.1) opens the selected card's details with the focus in them: the arrows, Page Up/Down,
+Home and End scroll them and never the list, Tab and Shift+Tab leave and close them, Escape takes the focus back to the
+card; copy, selection and a screen reader's keys stay theirs. A click focuses without a keyboard outline; a press on a card's button puts the keyboard on that card, never on the
+button, and never reaches the card's own click, the press itself changing no selection - a Pin or Unpin then selects
+and shows its card's tab as LIFECYCLE-3.4 says; and
+the card a menu is open on gets no other frame than its keyboard outline, unlike the editor's own lists (2.1). Escape
+closes transient UI, a card's details among it. Use semantic listbox/options,
 aria-selected and current state labels. No unbounded live-region chatter. No global shortcuts are preassigned; existing
 commands are bindable through normal Keyboard Shortcuts.
 
@@ -127,12 +142,13 @@ commands are bindable through normal Keyboard Shortcuts.
 Languages: `zh-cn`, `zh-tw`, `pt-br`, `es`, `ru`, `de`, `ja`, `fr`, `ko`, `tr`, `pl`. Use VS Code's language selection
 and English fallback. Facade Code, Facade, CLI, MCP and YOLO are not translated. Use Microsoft's established editor
 terms; Chinese keeps the English word `Agent`, capitalized in every string, and uses `工作树` / `工作樹`. Resume list times
-follow VS Code's short `fromNow` wording and rounding, with `ago` retained: `now` below 30 rounded seconds, then
-seconds, minutes, hours, days, weeks, months and years. Use the editor's translated singular/plural phrases. Units
+and a card's details' start follow the time steps and rounding of VS Code's short `fromNow` helper, with `ago` retained,
+the chosen `just now` replacing its `now` phrase below 30 rounded seconds; then seconds, minutes, hours, days, weeks, months and years. Use the editor's translated singular/plural phrases. Units
 change at 60 seconds, 60 minutes, 24 hours, 7 days, 30 days and 365 days; round the selected unit as VS Code does. Do
 not replace elapsed days with calendar labels or automatically switch old history to dates. A future source timestamp is
-shown as a localized absolute time instead of an invented recent activity. Panel hover relative times use
-`Intl.RelativeTimeFormat`; full timestamps are localized in human details, UTC ISO strings in APIs/journals. Locale
+shown as a localized absolute time instead of an invented recent activity. Within a sentence - `Started 5 mins ago` - the
+time's first letter is in lower case, as a language's word that begins a list's line - `Vor`, `Il y a` - would not be
+there. Full timestamps are localized in human details, UTC ISO strings in APIs/journals. Locale
 updates refresh text; API IDs/paths never change with locale. Translations cover settings, pickers, errors, menus,
 access labels and empty states in the same implementation change. Facade's own failure reasons - CLI configuration and
 worktree problems, another window owning the workspace, a working location gone or not in this window, no agent or
@@ -152,8 +168,8 @@ as menu-only. Arguments bypass a picker only
 when their schema fully identifies the target; invalid arguments fail without guessing. The table is the authoritative
 command inventory, not a second description of behavior.
 
-For Rename, Pin, Unpin and Close Agent, a palette invocation without an explicit target uses PANEL-2.1's current
-selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does not
+For Rename, Pin, Unpin, End Agent and Show Agent Details, a palette invocation without an explicit target uses
+PANEL-2.1's current selected run. If no selected run exists or the action is unavailable for it, the command is unavailable; it does not
 open a target picker. Rename still asks for the new name. Explicit arguments and the card menu target that exact run and
 are validated against current state, without falling back to the selection.
 
@@ -161,11 +177,12 @@ are validated against current state, without falling back to the selection.
 | --- | --- | --- | --- |
 | `newAgent` | New Agent... | Always; panel/empty state | LIFECYCLE-1.1 |
 | `history` | Resume Agent... | Always; panel/empty state | LIFECYCLE-3.2 |
-| `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too; card | LIFECYCLE-3.4 |
-| `unpinAgent` | Unpin Agent | Pinned record; card | LIFECYCLE-3.4 |
+| `pinAgent` | Pin Agent | Unpinned agent whose CLI can resume its exact conversation, before it names one too; the card's Pin button | LIFECYCLE-3.4 |
+| `unpinAgent` | Unpin Agent | Pinned record; the card's Pin button | LIFECYCLE-3.4 |
 | `showActiveAgents` | Go to Agent... | Always; Command Palette | LIFECYCLE-2.3 |
 | `renameAgent` | Rename Agent... | Known owned record; card/F2 | LIFECYCLE-2.1 |
-| `closeAgent` | Close Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
+| `closeAgent` | End Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
+| `showAgentDetails` | Show Agent Details | A selected record whose card the filter shows; the card's ⓘ | PANEL-1.5 |
 | `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
 | `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
 | `showAgentLaunch` | Show Agent Launch... | Always; Command Palette | CLIS-4.1 |
@@ -185,7 +202,8 @@ its notification (UX-1.2).
 Hidden from palette: `newWorktree` (view-menu creation), `moveUp` (Move Up) and `moveDown` (Move Down) in the card menu,
 `filterOn` (the filled-icon form of `filter`, shown while a filter is active) and `revealAgent` (Show Agent,
 notification navigation). The worktree command follows WORKTREES-4.3. Facade contributes no terminal-tab context
-entries; the card menu and the palette's selected-agent actions cover renaming, pinning and closing, and no internal
+entries; the card's gear menu covers Rename, Move Up, Move Down and End Agent, its Pin button pinning and unpinning
+(PANEL-1.3, 2.2), and the palette's selected-agent actions Rename, Pin, Unpin, End Agent and Show Agent Details (3.1), and no internal
 `$mid` terminal-context trick is used. There is no scripted-start command; UI and MCP use the same internal launch
 service.
 
@@ -196,7 +214,8 @@ Test commands `state`, `selectRow` (selects a card by run ID), `probe`, `screen`
 `diagnostics` (the diagnostics report, ARCHITECTURE-3.3) are registered only in test mode and excluded from production
 manifests/bundles. Context keys: `facade.hasAgents` includes any visible owned record; `agentSelected` identifies
 PANEL-2.1's current selected run for 3.1's palette actions; `agentSelectedEnded`, `agentSelectedPinned`,
-`agentSelectedPinnable` and `filtered` reflect current state; `onePlace` says every agent works in the window's one
+`agentSelectedPinnable` and `filtered` reflect current state; `agentSelectedVisible` says the selected run's card is
+shown, no filter hiding it (PANEL-2.3); `onePlace` says every agent works in the window's one
 place to work (LIFECYCLE-1.3).
 
 ## 4 Settings
