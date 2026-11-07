@@ -4,9 +4,9 @@
 
 # Facade Code
 
-**在 VS Code 里同时指挥多个 coding agent。**
+**在 VS Code 里，同时跑多个 Coding Agent。**
 
-在同一个 IDE 窗口里运行原生 agent CLI、写代码并审查改动。用你自己的账号和订阅，让 agent 跨窗口、跨机器协同工作。
+直接在 VS Code 里跑各家 Agent CLI，用你自己的 Coding Plan。支持多 Agent 协作，还能跨机器组网。
 
 [![官网: facadecode.com](https://img.shields.io/badge/%E5%AE%98%E7%BD%91-facadecode.com-335e78?style=flat)](https://facadecode.com)
 [![VS Code Marketplace: 安装](https://img.shields.io/badge/VS%20Code%20Marketplace-%E5%AE%89%E8%A3%85-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
@@ -28,39 +28,39 @@ code --install-extension facade.facadecode
 
 或从 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) 或 [Open VSX](https://open-vsx.org/extension/facade/facadecode) 安装 **Facade Code**。它支持 macOS（Apple 芯片）、Linux (x64) 和 Windows (x64)。
 
-接下来，安装并登录你想使用的任何 agent CLI：Claude Code、Codex、Antigravity、Muse Code、OpenCode 或 Pi。Facade Code 会直接用各 CLI 自己的登录状态和订阅启动它们。
+接着装好并登录你要用的 Agent CLI：Claude Code、Codex、Antigravity、Muse Code、OpenCode 或 Pi。Facade Code 直接用各家 CLI 自己的登录和 Coding Plan 把它们跑起来。
 
-> **注意：默认情况下 agent 会直接运行命令和改动文件，不会先问你。** 在 `facade.yolo` 开启时，agent 所有操作都不会弹框请求确认。如果你希望恢复各 CLI 原本的确认提示，可以在设置里关掉它。详见[扩展 README](../../../extension/README.md#install)。
+> **注意：默认情况下 Agent 会直接跑命令、改文件，不会先问你。** `facade.yolo` 会跳过 CLI 原来的确认提示，关掉它就能恢复。详见[扩展 README](../../../extension/README.md#install)。
 
 ## Agent Panel
 
-**你的 agent 和你的 IDE，都在同一个窗口里。**
+**在 VS Code 里直接跑各家 Agent CLI。**
 
-Facade Code 在代码文件旁边的编辑器终端标签页中直接运行原生 agent CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi），使用各 CLI 自己的命令、工具、账号和订阅。每个 agent 在面板里都有一张卡片，一眼就能看清当前状态。
+Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi 都直接跑在编辑器标签页里，用的是各家 CLI 自己的命令、工具、账号和 Coding Plan。每个 Agent 在面板里都有一张卡片，状态一眼看清。
 
-- **终端直接开在编辑器里。** 每个 agent 的终端都是编辑器里的专属标签页。关掉标签页也只是收起，agent 在后台继续跑，点一下面板卡片就能随时切回来。
-- **所有 agent 状态一目了然。** 卡片上直接显示你发给它的上一句话，以及它是在干活、等权限还是报了错；点开详情能看标题、工作目录和是谁启动的。窗口刷新或者扩展重启，agent 依然都在。
-- **文件夹与独立 worktree。** 可以在任何工作区目录下起 agent，也能顺手新开一个 Git worktree，各做各的代码互不冲突。常用会话可以固定在面板上，下次打开工作区自动恢复，或者随时从历史记录里把旧会话翻出来。
+- **终端就开在编辑器里。** 每个 Agent 的终端都是编辑器里的一个标签页。关掉标签页只是收起来，Agent 在后台照常跑，点一下面板卡片就能切回来。
+- **Agent 状态一眼看清。** 卡片上显示你最后发给它的话，以及它在干活、等权限还是报错了；点开能看标题、目录和是谁起的。窗口刷新、扩展重启，Agent 都还在。
+- **文件夹和独立 Worktree。** 可以在任意工作区目录起 Agent，也能顺手新建一个 Git Worktree。会话可以固定，下次打开工作区自动恢复；旧会话也能从历史记录里翻出来。
 
 ## Agent Use
 
-**让 agent 像你一样，直接操作其他 agent。**
+**Agent 之间能互相控制——直接给对方敲命令、看对方的屏幕。**
 
-借助 MCP 和终端协议，不同厂商的 agent 之间能相互启动、停止、查找和发消息（比如让 Claude Code 指挥 Codex）。每个 CLI 保留各自原有的工具和上下文管理方式，还能读取彼此的终端屏幕、敲入命令、发送按键。
+走 MCP 和终端协议，各家 Agent 能互相起、停、查、发消息（比如让 Claude Code 去调 Codex）。每个 CLI 用的还是自己的工具和上下文，还能看对方的终端、直接敲命令、按键。
 
-- **互相启动与停止。** 任何 agent 都能用这六款 CLI 中的任意一款，在当前电脑任意窗口的目录或新 worktree 里启动其他 agent 并交代第一个任务。即使遇到重试，只要请求 ID 一样，就不会误启动重复的 agent。
-- **互发消息汇报。** agent 之间能互相发消息，也能主动给你发通知。Facade 会把整段消息直接送达；如果输入框里还有没发出去的字或弹出的提示没处理完，会等输入框空出来再发。
-- **终端接管与解困。** 一个 agent 能直接看另一个 agent 的终端屏幕、代敲命令和按键，帮队友回答提示或解决卡住的问题。如果子 agent 等待权限、输入或登录超过 20 秒，启动它的 agent 就会收到提醒。
+- **互相起、互相停。** 任何 Agent 都能用这六款 CLI 里的任意一款，在这台电脑的任意窗口、目录或新 Worktree 里起别的 Agent，并交代第一个任务。同一个请求 ID 重试，不会重复起 Agent。
+- **互发消息。** Agent 之间能互相发消息，也能主动通知你。消息整段送达；如果对方输入框里还有没发出去的字，或者有提示没处理，会等输入框空了再发。
+- **接管终端、帮忙解围。** 一个 Agent 能直接看另一个的终端、帮它敲命令和按键，替它解卡。Agent 等权限、输入或登录超过 20 秒，起它的 Agent 会收到提醒。
 
 ## Agent Mesh
 
-**不管在哪个窗口、哪台机器，所有 agent 全都互通。**
+**所有 Agent 都在同一个网里：连上一个，就能调所有的。**
 
-Facade Code 能打通你电脑上所有编辑器窗口里的 agent。打开一个 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 窗口，协作网络就能立刻延伸到另一台机器上。
+Facade Code 会把你电脑上所有 VS Code 窗口里的 Agent 连起来。开个 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 窗口，远程机器也能加进来。
 
-- **所有窗口自动组网。** 在默认开启 `facade.yolo` 时，agent 能直接找到你电脑上任何一个 Facade 窗口里的所有 agent，不管本地还是 Remote - SSH。关掉它后，agent 只能联系它自己的小团队：即你启动的那个 agent，以及它后面一路启动起来的下级 agent。
-- **用 SSH 把其他机器拉进团队。** 在 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 窗口里，agent 直接运行在远程机器上，就地使用远程机器上的环境、文件和账号。本地电脑上的 agent 可以直接给它们派任务、互发消息。
-- **出门在外用手机指挥。** 给电脑上的带队会话开启 [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control)，手机上的 Claude app 就能直接连上来。电脑上的 CLI 照常跑，手机和电脑消息实时同步。你可以随时看进展、拍板做决定，让带队会话继续调度其他 agent。
+- **所有窗口自动连起来。** `facade.yolo` 开着时，Agent 能找到你电脑上所有 Facade 窗口里的 Agent，本地和 Remote - SSH 都算。关掉后，Agent 只能联系自己这一组：你起的那个 Agent，以及它一路起出来的下级 Agent。
+- **SSH 把别的机器也拉进来。** 在 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 窗口里，Agent 直接跑在远程机器上，用那台机器的环境、文件和账号。本地的 Agent 可以直接给它们派活、发消息。
+- **出门用手机调。** 给电脑上带队的会话开 [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control)，手机上的 Claude app 连上就行。CLI 照常跑，消息实时同步。随时看进展、拍板，让带队会话继续调其他 Agent。
 
 <sub>使用 Remote Control 需要支持此特性的 Claude Code 版本、对应的订阅方案以及完整权限登录。详见其[设置要求](https://code.claude.com/docs/en/remote-control#requirements)。</sub>
 
@@ -68,7 +68,7 @@ Facade Code 能打通你电脑上所有编辑器窗口里的 agent。打开一�
 
 **项目再多，窗口只要一个。**
 
-在专用的工作区栏里统一管理项目、功能 worktree 和 agent 团队。随时切换项目，对应的文件和终端都在原处，后台跑着的 agent 照样不受打扰。
+在专门的工作区栏里管项目、功能 Worktree 和 Agent 团队。切项目时文件和终端都还在，后台的 Agent 继续跑。
 
 下载 IDE 预览版：[macOS (Apple 芯片, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [所有发布版本](https://github.com/y5ez3g/facadecode/releases)
 

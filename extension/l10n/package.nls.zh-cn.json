@@ -1,6 +1,6 @@
 {
-	"displayName": "Facade Code：同时指挥多个 coding agent",
-	"description": "在 VS Code 里同时指挥多个 coding agent，让 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi 在同一个窗口里协同工作。",
+	"displayName": "Facade Code：同时跑多个 Coding Agent",
+	"description": "在 VS Code 里同时跑多个 Coding Agent，让 Claude Code、Codex、Antigravity、Muse Code、OpenCode 和 Pi 在同一个窗口里互相配合。",
 	"view.container": "Facade Code",
 	"command.category": "Facade Code",
 	"command.newAgent": "新建 agent...",
