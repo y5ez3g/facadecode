@@ -575,10 +575,11 @@ compatibility engine.
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
 feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
-Open VSX only when the owner asks. Both components carry one release version, 0.1.0, which the changelog's heading
-names; the build refuses a window component of another version. Release packages target darwin-arm64, linux-x64 and
-win32-x64, together with the window component, with how each package was built and verified recorded in the archive
-catalog. The version advances when preparing a release. [Official manifest
+Open VSX only when the owner asks. Both components carry one release version, 0.1.1, which the changelog's heading
+names; the build refuses a window component of another version. Release candidates target darwin-x64, darwin-arm64,
+linux-x64, linux-arm64, win32-x64 and win32-arm64, together with the window component. Publication requires each
+platform's build and verification evidence recorded in the archive catalog. The version advances when preparing a
+release; already published versions retain their original artifacts. [Official manifest
 reference](https://code.visualstudio.com/api/references/extension-manifest).
 
 The extension checks workflow builds candidate packages for darwin-x64, darwin-arm64, linux-x64, linux-arm64,
@@ -590,7 +591,10 @@ that requires the corresponding results and release evidence under VERIFICATION-
 
 GitHub Packages stores the extension's build snapshots as `@y5ez3g/facade-extension`, separately from IDE downloads in GitHub
 Releases. Each snapshot contains the original platform VSIX files and window component, their SHA-256 checksums and
-source/evidence metadata; it has no installer or runtime scripts. Tags use `extension/<version>`. Archiving and later
+source/evidence metadata; it has no installer or runtime scripts. Catalog validation requires the historical three-platform
+set before 0.1.1 and the complete six-platform set from 0.1.1, each with one universal window component; missing or
+duplicate targets fail.
+Tags use `extension/<version>`. Archiving and later
 marketplace publication reuse the verified VSIX bytes without rebuilding either product. Historical backfills retain
 the published files and explicitly record source or release-metadata differences. The catalog in `extension/archive/`
 pins the artifacts and evidence. `node scripts/archive.mjs --through <version>` prepares and checks them under
