@@ -554,6 +554,13 @@ win32-x64, together with the window component, with how each package was built a
 catalog. The version advances when preparing a release. [Official manifest
 reference](https://code.visualstudio.com/api/references/extension-manifest).
 
+The extension checks workflow builds candidate packages for darwin-x64, darwin-arm64, linux-x64, linux-arm64,
+win32-x64 and win32-arm64. It uses `macos-15-intel` for Intel Macs, `ubuntu-24.04-arm` for Linux ARM64 and
+`windows-11-arm` for Windows ARM64. Each job verifies its requested target against its native host before
+installation, passes that target to packaging, and runs the same unit, package-content and isolated editor suites.
+Artifacts and editor logs name the target. A configured CI target does not establish verified or published support;
+that requires the corresponding results and release evidence under VERIFICATION-2.1.
+
 GitHub Packages stores the extension's build snapshots as `@y5ez3g/facade-extension`, separately from IDE downloads in GitHub
 Releases. Each snapshot contains the original platform VSIX files and window component, their SHA-256 checksums and
 source/evidence metadata; it has no installer or runtime scripts. Tags use `extension/<version>`. Archiving and later

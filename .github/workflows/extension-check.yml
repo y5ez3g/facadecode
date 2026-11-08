@@ -13,13 +13,27 @@ permissions:
 
 jobs:
   verify:
-    name: Extension on ${{ matrix.os }}
+    name: Extension on ${{ matrix.target }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: windows-latest
+            target: win32-x64
+          - os: windows-11-arm
+            target: win32-arm64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: macos-15-intel
+            target: darwin-x64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
+    env:
+      FACADE_PACKAGE_TARGET: ${{ matrix.target }}
     defaults:
       run:
         shell: bash
@@ -34,6 +48,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Verify the native package target
+        run: |
+          node --input-type=module <<'JS'
+          import { packageTarget } from './scripts/native.mjs';
+          console.info(`Building and testing ${packageTarget(process.env.FACADE_PACKAGE_TARGET)}`);
+          JS
       - run: npm ci
       - run: npm run compile
       - run: npm test
@@ -42,7 +62,7 @@ jobs:
         run: node --test scripts/archive.test.mjs
       - run: node scripts/l10n.mjs check
       - run: python ../docs/extension/audit/check_spec.py
-      - run: npm run package
+      - run: npm run package -- --target "$FACADE_PACKAGE_TARGET"
       - run: npm run test:package
       - name: Download official VS Code for isolated tests
         run: |
@@ -62,12 +82,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: editor-tests-${{ runner.os }}-${{ runner.arch }}
+          name: editor-tests-${{ matrix.target }}
           path: extension/build/integration.log
           if-no-files-found: ignore
       - name: Keep tested packages
         uses: actions/upload-artifact@v4
         with:
-          name: extension-${{ runner.os }}-${{ runner.arch }}
+          name: extension-${{ matrix.target }}
           path: extension/build/vsix/*.vsix
           if-no-files-found: error
