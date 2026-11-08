@@ -31,14 +31,19 @@ Preserve editor folder order. In each folder's location picker, put the reposito
 opened location if different, then other worktrees by display name/path. Show each physical location once. Presentation
 order does not choose the launch default: LIFECYCLE-1.2 retains the remembered location or the actual opened folder.
 The catalog keeps the opened location first within each folder for that fallback; the picker orders a copy for display.
-An opened subfolder remains a valid launch location. A successful Resume remembers its exact cwd as a known location
-within the workspace or a related worktree; it becomes available in later launch choices, after the folder's worktrees.
-An unavailable cwd is never registered. Confirmed deletion of its directory removes that location (3.3); failed reads
-preserve its association. Discover worktrees made by any tool; no Facade-ownership gate applies. Related worktrees
+A workspace folder opened explicitly - a repository's subfolder among them - is a launch location of its own. A
+successful Resume whose conversation's exact cwd lies below an existing location, its anchor, runs in that exact cwd:
+the window keeps the cwd internally, as a record within its anchor, and makes it no other location - no picker, Show
+Agent Launch or MCP launch location offers it - its agents showing and counting as the anchor's (PANEL-1.5, 2.3). An
+agent there reports and filters by its anchor's `location_id`, its `cwd` exact (MCP-3.1), counts and targeted discovery
+using the anchor too; a `location_id` formerly issued for the cwd itself normalizes to its anchor for a new start, while
+Resume and removal keep the exact cwd and its internal record. New Agent's remembered default for such a cwd likewise
+normalizes to its anchor (LIFECYCLE-1.2). An unavailable cwd is never registered. Confirmed deletion of that cwd's
+directory ends the agents working in it (3.3), without removing its anchor or touching the anchor's other agents;
+failed reads preserve its record. Discover worktrees made by any tool; no Facade-ownership gate applies. Related worktrees
 outside the folder are normal. Deduplicate physical paths while preserving workspace associations. Paginate discovery
 if needed; no arbitrary catalog cutoff makes a valid known location permanently inaccessible. A checkout's root is
-labeled by its branch, else by its folder name; an opened subfolder and a remembered Resume cwd are labeled by their
-folder names. Detached HEAD has no invented branch. Use environment and canonical paths for identity, never branch text.
+labeled by its branch, else by its folder name; an opened subfolder is labeled by its folder name. Detached HEAD has no invented branch. Use environment and canonical paths for identity, never branch text.
 Revalidate a selected location when starting; plain folders remain usable during optional Git reads. New Agent and MCP
 discovery (MCP-3.1) read this same catalog.
 
@@ -60,8 +65,8 @@ only makes the metadata stale; neither it nor a disconnected remote host establi
 **New Agent and the view's New Worktree... menu create worktrees through native Git.**
 
 In New Agent's Change Working Location flow, the person enters a branch for a new worktree of the chosen folder. Its
-source is the current location where that is one of the folder's checkouts - a remembered Resume subfolder counting as
-the checkout it is in - else the location the folder opened; another worktree becomes the source by choosing it first.
+source is the current location where that is one of the folder's checkouts - a remembered Resume cwd normalizing to the
+checkout that is its anchor (1.2) - else the location the folder opened; another worktree becomes the source by choosing it first.
 The base is the source checkout's HEAD. A source inside a checkout uses that checkout's branch in every `from` label,
 rather than the subfolder's name; a detached checkout uses `HEAD`. The main checkout is not substituted for a selected
 linked worktree. Show proposed branch/base and destination before acceptance. Uncommitted edits are not automatically
@@ -114,7 +119,9 @@ creation. A shared presentation appends only confirmed effects: `Branch {branch}
 `Folder {folder} was created and kept.`, or `Branch {branch} and folder {folder} were created and kept.`
 No known creation adds no suffix; it does not assert rollback or absence of effects. A successful worktree creation
 followed by CLI planning or startup failure retains both facts. Failed agent records persist these facts as structured
-data so notifications and retained error cards use the same wording, including after reload.
+data, including after reload. The notification says them in the sentences above; the retained error card's second line
+says `Worktree failed · {reason}` for a worktree that could not be made, or `Start failed · {reason}` for a start that
+failed after it, the reason without its closing period (PANEL-1.4).
 
 ### 2.3 No repository initialization
 
@@ -175,9 +182,9 @@ On Windows with a Git older than 2.54, which deletes through an NTFS junction or
 alone, a worktree that contains such a link is refused the same way, before any agent closes and again after they end:
 `Cannot delete worktree "{0}": it contains a link to another folder ({1}), which this version of Git would delete through.
 Remove the link, or update Git to 2.54 or later, then try again.`
-Otherwise it takes the worktree and every location inside it out of the catalog, so that no launch or Resume goes there
-meanwhile, closes the agents whose launch location is that worktree or a location inside it, such as a resumed
-conversation's subfolder, by the normal close (LIFECYCLE-3.1) and waits for their processes to end. Where one cannot be
+Otherwise it takes the worktree, every location inside it and every Resume cwd recorded within them (1.2) out of the
+catalog, so that no launch or Resume goes there meanwhile, closes the agents whose launch location is that worktree or a
+location inside it, those working in such a Resume cwd among them, by the normal close (LIFECYCLE-3.1) and waits for their processes to end. Where one cannot be
 confirmed ended it deletes nothing:
 `Cannot delete worktree "{0}": could not confirm that an agent process in it has ended. Try again once it has.`
 It then checks for changes again - what the agents wrote as they ended - refusing as above, and runs
@@ -194,8 +201,9 @@ delete its directory or branch.
 **Actual removal of a folder/worktree closes its associated agents.**
 
 On workspace-folder removal, close agents associated with that removed location set. On confirmed external worktree
-deletion under 1.3, close the agents whose launch location belongs to that worktree. A location 1.2 remembered from a
-Resume whose directory a refresh finds missing - not merely unreadable - is removed the same way, closing its agents.
+deletion under 1.3, close the agents whose launch location belongs to that worktree. A Resume cwd recorded within an
+anchor (1.2) whose directory a refresh finds missing - not merely unreadable - ends the agents working there the same way;
+its anchor and the anchor's other agents stay.
 Associate agents with a removed location by their launch location, never by scanning process working directories.
 Remove their card/terminal immediately, Unpin them (RULES-4.2) and clean up owned processes in the background. Do not
 leave a live card whose working location is gone. Do not equate temporary remote loss, failed Git reads or stale
@@ -250,7 +258,7 @@ action are shared too. Each entry owns its surrounding steps and final creation 
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.3 | No Git, failed Git, mixed folders, main checkout first in the picker with the opened/default location preserved, external worktrees, remembered Resume locations |
+| 1.1–1.3 | No Git, failed Git, mixed folders, main checkout first in the picker with the opened/default location preserved, external worktrees, Resume cwds recorded within an anchor - shown, counted and reported as the anchor's, their exact cwd kept - |
 | 2.1–2.5 | Native creation, selected source, fixed destination, no Git initialization, launch without setup barrier, close during creation |
 | 3.1–3.3 | Qualified location labels, no other location commands, deletion only of a confirmed clean linked worktree without `--force`, external removal closes, disconnection is not deletion |
 | 4.1–4.3 | Native API evidence, local/remote paths, partial creation, view-menu registration with Command Palette exclusion, and structured argument validation |

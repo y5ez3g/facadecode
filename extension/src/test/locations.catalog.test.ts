@@ -83,6 +83,8 @@ suite('Locations: one catalog per window (WORKTREES-1.2; VERIFICATION J03)', () 
 
 		assert.deepStrictEqual(rows(listed).slice(0, 2), ['app /w/repo/packages/app (opened)', 'main /w/repo']);
 		assert.deepStrictEqual([listed[0].kind, listed[0].branch, listed[0].isMain], ['checkout', 'main', false]);
+		// It is no checkout root: a folder, as its icon says; the checkout's own root is none (PANEL-1.5)
+		assert.deepStrictEqual(listed.slice(0, 2).map(each => each.subfolder), [true, undefined]);
 	});
 
 	test('a physical path is listed once - an opened folder under its own folder - and keeps every folder association', () => {

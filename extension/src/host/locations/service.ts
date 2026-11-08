@@ -272,6 +272,10 @@ export class LocationService implements LocationPort, Disposable {
 		// Resume listing a hundred conversations paid for every one of them
 		let anchor: { readonly location: Location; readonly key: string } | undefined;
 		for (const each of catalog.locations) {
+			// A main checkout, worktree or folder: never a folder remembered inside one
+			if (each.within) {
+				continue;
+			}
 			const at = this.keyOfLocation(each);
 			if (isWithin(key, at) && (!anchor || at.length > anchor.key.length)) {
 				anchor = { location: each, key: at };
@@ -280,7 +284,7 @@ export class LocationService implements LocationPort, Disposable {
 		if (!anchor) { return undefined; }
 		if (anchor.key === key) { return anchor.location; }
 		return { id: locationIdOf(this.deps.environment, key), path: cwd, uri: this.deps.uriOf(anchor.location.uri, cwd),
-			environment: this.deps.environment, label: path.basename(cwd), folders: anchor.location.folders, kind: 'folder', opened: false, git: 'none' };
+			environment: this.deps.environment, label: path.basename(cwd), folders: anchor.location.folders, kind: 'folder', opened: false, git: 'none', within: anchor.location.id };
 	}
 
 	/**

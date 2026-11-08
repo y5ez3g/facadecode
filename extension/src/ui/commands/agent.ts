@@ -15,7 +15,7 @@ import { BACK, Flow } from '../pickers/stepping';
 export interface AgentCommandDeps {
 	readonly agents: Agents;
 	readonly model: PanelModel;
-	readonly execution: Pick<ExecutionPort, 'reveal'>;
+	readonly execution: Pick<ExecutionPort, 'reveal' | 'tabOpen'>;
 	readonly notifyError: HumanPort['error'];
 }
 
@@ -58,7 +58,8 @@ export class AgentActions {
 		if (!facts) { return; }
 		try {
 			if (pinned) { this.deps.agents.pin(run); } else { this.deps.agents.unpin(run); }
-			if (pinned || this.deps.agents.get(run)?.tab !== 'hidden') {
+			// Shown where it opens or is open now: a tab not open - hidden, or a pinned agent's before its turn - stays so on an Unpin
+			if (pinned || this.deps.execution.tabOpen(run)) {
 				this.deps.model.select(run);
 				void this.deps.execution.reveal(run, { preserveFocus: false });
 			}
@@ -80,7 +81,7 @@ export class AgentActions {
 	}
 
 	/**
-	 * Close Agent (LIFECYCLE-3.1): its card and terminal go at once and its process ends in the background. An actual failure to end it
+	 * End Agent (LIFECYCLE-3.1): its card and terminal go at once and its process ends in the background. An actual failure to end it
 	 * goes to the person who asked; an unreachable process is not said to have ended.
 	 */
 	async close(run: RunId): Promise<void> {
@@ -90,11 +91,11 @@ export class AgentActions {
 		}
 		try {
 			if (await this.deps.agents.close(run) === 'failed') {
-				this.deps.notifyError(vscode.l10n.t("{0} was closed, but its process could not be terminated.", labelOf(facts)), {});
+				this.deps.notifyError(vscode.l10n.t("{0}'s card and terminal were closed, but its process could not be terminated.", labelOf(facts)), {});
 			}
 		} catch (err) {
 			if (!(err instanceof FacadeError && err.code === 'NOT_FOUND')) {
-				this.deps.notifyError(vscode.l10n.t("Could not close {0}: {1}", labelOf(facts), reasonOf(err)), {});
+				this.deps.notifyError(vscode.l10n.t("Could not end {0}: {1}", labelOf(facts), reasonOf(err)), {});
 			}
 		}
 	}
@@ -127,7 +128,7 @@ export class AgentActions {
 }
 
 /**
- * The commands about one agent (UX-3.1, 3.2): Go to Agent, Pin and Unpin, Rename, Close Agent, and the card's menu - Move Up and
+ * The commands about one agent (UX-3.1, 3.2): Go to Agent, Pin and Unpin, Rename, End Agent, and the card's menu - Move Up and
  * Move Down among them (PANEL-2.2).
  */
 export function registerAgentCommands(deps: AgentCommandDeps, actions: AgentActions, flows: { readonly goToAgent: () => Promise<void> }): vscode.Disposable[] {

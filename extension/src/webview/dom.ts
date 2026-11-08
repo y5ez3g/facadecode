@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Act, Card, Strings } from './protocol';
+import { Act, AgoWords, Card, Strings } from './protocol';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void; getState(): unknown; setState(state: unknown): void };
 
@@ -141,7 +141,15 @@ function channelsOf(color: string): readonly [number, number, number] | undefine
 
 /** How far apart two computed colours are, as WCAG measures text on its background: 1 to 21; none where either cannot be read. */
 export function contrastOf(text: string, background: string): number | undefined {
-	const luminance = (channels: readonly [number, number, number]) => {
+	return contrastAt(text, background, 1);
+}
+
+/**
+ * How far apart text drawn at `alpha` over its background reads from that background, as WCAG measures it: 1 to 21; none where
+ * either colour cannot be read.
+ */
+export function contrastAt(text: string, background: string, alpha: number): number | undefined {
+	const luminance = (channels: readonly number[]) => {
 		const [r, g, b] = channels.map(value => value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4));
 		return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 	};
@@ -149,32 +157,50 @@ export function contrastOf(text: string, background: string): number | undefined
 	if (!a || !b) {
 		return undefined;
 	}
-	const [light, dark] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+	const drawn = a.map((value, i) => value * alpha + b[i] * (1 - alpha));
+	const [light, dark] = [luminance(drawn), luminance(b)].sort((x, y) => y - x);
 	return (light + 0.05) / (dark + 0.05);
 }
 
-/** A formatter for each language the page is in: each state makes every card's hover, and making one costs far more than using it. */
-const relativeTimeFormats = new Map<string, Intl.RelativeTimeFormat>();
-
-/** How long ago `time` was, as the browser says it in the window's language: now, 5 min. ago, yesterday, 3 days ago (UX-2.4). */
-export function relativeTime(time: number, now = Date.now()): string {
-	const language = document.documentElement.lang;
-	// An inconsistent source clock cannot supply an honest relative age; keep its absolute observation instead.
+/**
+ * How long ago `time` was, in Resume Agent's words and by its steps (LIFECYCLE-3.2, UX-2.4): now, 45 secs ago, 5 mins ago, 2 hrs ago, 3
+ * days ago, 2 wks ago, 4 mos ago, 1 yr ago - so that an agent's start reads as a conversation's last activity does. Where the source's
+ * clock is ahead of the host's, which can supply no honest age, its date and time.
+ */
+export function agoOf(time: number, now: number, words: AgoWords): string {
 	if (time > now) {
-		return new Intl.DateTimeFormat(language || undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(time);
+		return new Intl.DateTimeFormat(document.documentElement.lang || undefined, { dateStyle: 'medium', timeStyle: 'medium' }).format(time);
 	}
-	let format = relativeTimeFormats.get(language);
-	if (!format) {
-		format = new Intl.RelativeTimeFormat(language || undefined, { numeric: 'auto', style: 'short' });
-		relativeTimeFormats.set(language, format);
+	const seconds = Math.round((now - time) / 1_000);
+	const count = (one: string, many: string, unit: number) => {
+		const n = Math.round(seconds / unit);
+		return (n === 1 ? one : many).replace('{0}', String(n));
+	};
+	return seconds < 30 ? words.now : seconds < 60 ? words.secs.replace('{0}', String(seconds)) : seconds < 3_600 ? count(words.min, words.mins, 60)
+		: seconds < 86_400 ? count(words.hr, words.hrs, 3_600) : seconds < 604_800 ? count(words.day, words.days, 86_400)
+			: seconds < 2_592_000 ? count(words.wk, words.wks, 604_800) : seconds < 31_536_000 ? count(words.mo, words.mos, 2_592_000)
+				: count(words.yr, words.yrs, 31_536_000);
+}
+
+/**
+ * How long until {@link agoOf}'s words for `time` change, by its own rounding (PANEL-1.5, UX-2.4): `just now` until 30 rounded seconds;
+ * seconds at each rounded second; minutes at each half minute they round up, 89.5 s, 149.5 s and on; past the hour, a look each minute.
+ * A time ahead of the clock says its date and time until it no longer is ahead, looked at again within a minute as the clock may move.
+ */
+export function agoChangesIn(time: number, now: number): number {
+	const age = now - time;
+	if (age < 0) {
+		return Math.min(-age, 60_000);
 	}
-	const minutes = Math.floor((now - time) / 60_000);
-	if (minutes < 1) {
-		return format.format(0, 'second');
+	if (age < 29_500) {
+		return 29_500 - age;
 	}
-	if (minutes < 60) {
-		return format.format(-minutes, 'minute');
+	if (age < 59_500) {
+		return (Math.round(age / 1_000) + 0.5) * 1_000 - age;
 	}
-	const hours = Math.floor(minutes / 60);
-	return hours < 24 ? format.format(-hours, 'hour') : format.format(-Math.floor(hours / 24), 'day');
+	if (age < 3_599_500) {
+		const minutes = Math.round(Math.round(age / 1_000) / 60);
+		return Math.min(minutes * 60_000 + 29_500, 3_599_500) - age;
+	}
+	return 60_000;
 }

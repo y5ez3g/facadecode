@@ -55,12 +55,18 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let refreshing: Promise<void>;
 	let pickers: FakePick[];
 	let opened: number;
+	let unpinned: string[];
+	/** Pin and Unpin, in the order they were asked. */
+	let order: string[];
+	/** The panel's view provider, as the editor is given it, and what its page was posted. */
+	let provider: { resolveWebviewView(view: unknown): void } | undefined;
+	let posted: { readonly type: string;[key: string]: unknown }[];
 	const settle = () => new Promise(resolve => setImmediate(resolve));
 	const run = (id: string, arg?: unknown) => handlers.get(id)!(arg);
 
 	setup(async () => {
 		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; did = []; pinned = [];
-		refreshing = Promise.resolve(); pickers = []; opened = 0;
+		refreshing = Promise.resolve(); pickers = []; opened = 0; unpinned = []; order = []; provider = undefined; posted = [];
 		cleanup = 'terminated';
 		activate = new TestEmitter();
 		const none = { dispose: () => undefined };
@@ -73,7 +79,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 				executeCommand: async (...args: unknown[]) => void executed.push(args)
 			},
 			window: {
-				registerWebviewViewProvider: () => none, withProgress: async (_: unknown, task: () => Promise<unknown>) => task(),
+				registerWebviewViewProvider: (_id: string, given: typeof provider) => { provider = given; return none; }, withProgress: async (_: unknown, task: () => Promise<unknown>) => task(),
 				createQuickPick: () => { const pick = new FakePick(); pickers.push(pick); return pick; }
 			},
 			workspace: { onDidChangeConfiguration: () => none, getConfiguration: () => ({ get: () => undefined }) },
@@ -84,7 +90,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const runs = new Map([[RUN, FACTS]]);
 		disposables = registerUi({
 			agents: {
-				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: id => void pinned.push(id), unpin: () => {}, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
+				requested: () => undefined, started: async () => ({ state: 'running' }), warmedUp: async () => undefined, list: () => [...runs.values()], get: id => runs.get(id), onDidChange: changes.event, resume: () => '', holding: () => undefined, refreshConversations: async () => {}, pin: id => { pinned.push(id); order.push(`pin ${id}`); }, unpin: id => { unpinned.push(id); order.push(`unpin ${id}`); }, pins: () => [], reorderPins: () => {}, restorePins: async () => {},
 			launch: () => RUN,
 				close: async id => { closed.push(id); runs.delete(id); return cleanup; }, rename: () => undefined
 			},
@@ -97,7 +103,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 			},
 			clis: { list: async () => ({ clis: [], problems: [] }) },
 			history: { last: () => ({}), remember: () => undefined },
-			execution: { reveal: async id => { did.push(`reveal ${id}`); return true; }, onDidActivate: activate.event },
+			execution: { reveal: async id => { did.push(`reveal ${id}`); return true; }, tabOpen: () => true, onDidActivate: activate.event },
 			workspaceState: { get: () => undefined, update: async () => undefined, keys: () => [] } as never,
 			extensionUri: { path: '/extension' } as never,
 			log: { event: () => undefined },
@@ -140,16 +146,28 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const vscode = { l10n: { t: (text: string) => text } };
 		const { AgentActions } = withModules({ vscode })<typeof import('../ui/commands/agent')>(require.resolve('../ui/commands/agent'));
 		const actions = new AgentActions({ agents: agents as never, model: { select: () => undefined } as never,
-			execution: { reveal: async (run: string) => { shown.push(run); return true; } } as never, notifyError: () => undefined });
+			execution: { reveal: async (run: string) => { shown.push(run); return true; }, tabOpen: () => false } as never, notifyError: () => undefined });
 		// Its tab opens, as its Pin keeps it in the editor
 		actions.pin(RUN, true);
 		assert.deepStrictEqual([state.pinned, shown], [true, [RUN]]);
 		// Unpinned: nothing opens for it
 		actions.pin(RUN, false);
 		assert.deepStrictEqual([state.pinned, shown], [false, [RUN]]);
+		// An Unpin of one whose record names a group but whose tab is not open now - a pinned agent's before its turn, an uncertain
+		// run's card - opens nothing either; one whose tab is open is shown, as the card's click shows it
+		const placed: RunFacts = { ...FACTS, tab: { column: 1 } };
+		let open = false;
+		const waiting = new AgentActions({ agents: { get: () => placed, unpin: () => undefined } as never, model: { select: () => undefined } as never,
+			execution: { reveal: async (run: string) => { shown.push(run); return true; }, tabOpen: () => open } as never, notifyError: () => undefined });
+		waiting.pin(RUN, false);
+		assert.deepStrictEqual(shown, [RUN]);
+		open = true;
+		waiting.pin(RUN, false);
+		assert.deepStrictEqual(shown, [RUN, RUN]);
+		shown.length = 1;
 		// A Pin that cannot be saved opens nothing
 		const refusing = new AgentActions({ agents: { get: () => hidden, pin: () => { throw new Error('disk full'); } } as never, model: { select: () => undefined } as never,
-			execution: { reveal: async (run: string) => { shown.push(run); return true; } } as never, notifyError: () => undefined });
+			execution: { reveal: async (run: string) => { shown.push(run); return true; }, tabOpen: () => false } as never, notifyError: () => undefined });
 		refusing.pin(RUN, true);
 		assert.deepStrictEqual(shown, [RUN]);
 	});
@@ -164,10 +182,10 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.throws(() => run('facade.revealAgent'), /run_id/);
 	});
 
-	test('LIFECYCLE-3.1: Close Agent closes the exact run; a process that could not be ended is said to the person who asked, an unconfirmed one is not claimed ended', async () => {
+	test('LIFECYCLE-3.1: End Agent ends the exact run; a process that could not be ended is said to the person who asked, an unconfirmed one is not claimed ended', async () => {
 		cleanup = 'failed';
 		await run('facade.closeAgent', { run_id: RUN });
-		assert.deepStrictEqual([closed, errors], [[RUN], ['Ada Lovelace was closed, but its process could not be terminated.']]);
+		assert.deepStrictEqual([closed, errors], [[RUN], ["Ada Lovelace's card and terminal were closed, but its process could not be terminated."]]);
 	});
 
 	test('LIFECYCLE-2.1: Go to Agent\'s copy button copies `@name #aN`, and `#aN` alone for an agent with an empty name', async () => {
@@ -182,7 +200,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual(copied, ['@Ada Lovelace #a3', '#a4']);
 	});
 
-	test('UX-2.4: a Pin, Unpin or Close refused for Facade\'s own reason says it in the person\'s words; one whose agent went meanwhile says nothing, and no run\'s ID', async () => {
+	test('UX-2.4: a Pin, Unpin or End refused for Facade\'s own reason says it in the person\'s words; one whose agent went meanwhile says nothing, and no run\'s ID', async () => {
 		const notified: string[] = [];
 		const vscode = { l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) } };
 		const load = withModules({ vscode });
@@ -205,9 +223,40 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([reasonOf(new PlanError('No CLI "gone" is configured; the built-ins are claude.', 'not_found', { kind: 'cli_not_configured', values: ['"gone"'] })), reasonOf(new Error('EACCES: permission denied'))],
 			['No CLI "gone" is configured.', 'EACCES: permission denied'], 'a system error keeps its own words');
 		assert.deepStrictEqual(notified, [
-			`Could not pin Ada Lovelace: ${owned}`, `Could not unpin Ada Lovelace: ${owned}`, `Could not close Ada Lovelace: ${owned}`,
+			`Could not pin Ada Lovelace: ${owned}`, `Could not unpin Ada Lovelace: ${owned}`, `Could not end Ada Lovelace: ${owned}`,
 			'Could not pin Ada Lovelace: Its CLI cannot resume this exact conversation, so it cannot be pinned.'
 		]);
+	});
+
+	test('UX-3.1, PANEL-1.5: Show Agent Details from the Command Palette opens the selected card\'s details, the view focused first; with no card selected it does nothing', async () => {
+		const said = new TestEmitter<unknown>();
+		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
+			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		said.fire({ type: 'ready', page: '0'.repeat(31) + '1', reducedMotion: false });
+		await settle();
+		const focused = () => executed.filter(args => args[0] === 'facade.agents.focus').length;
+		const details = () => posted.filter(message => message.type === 'details').map(message => message.run);
+		await run('facade.showAgentDetails');
+		const none = [focused(), details()];
+		activate.fire(RUN);
+		await settle();
+		await run('facade.showAgentDetails');
+		assert.deepStrictEqual([none, focused(), details()], [[0, []], 1, [RUN]]);
+	});
+
+	test('PANEL-1.3, 3.1: the card\'s Pin button\'s pin and unpin reach Pin and Unpin of its own run; a run gone answers gone, with nothing done', async () => {
+		const said = new TestEmitter<unknown>();
+		provider!.resolveWebviewView({ visible: true, badge: undefined, description: undefined, onDidChangeVisibility: () => ({ dispose() { } }), onDidDispose: () => ({ dispose() { } }), show: () => undefined,
+			webview: { options: {}, html: '', cspSource: 'vscode-resource:', asWebviewUri: (uri: { path: string }) => ({ toString: () => `webview:${uri.path}` }), onDidReceiveMessage: said.event, postMessage: async (message: { readonly type: string }) => { posted.push(message); return true; } } });
+		const page = '0'.repeat(31) + '1';
+		said.fire({ type: 'ready', page, reducedMotion: false });
+		await settle();
+		for (const [what, target] of [['pin', RUN], ['unpin', RUN], ['pin', 'run-gone'], ['unpin', 'run-gone']]) {
+			said.fire({ type: 'act', page, action: `${what}-${target}`, what, target });
+			await settle();
+		}
+		const outcomes = posted.filter(message => message.type === 'outcome').map(message => [message.action, message.reason ?? 'ok']);
+		assert.deepStrictEqual([order, outcomes], [[`pin ${RUN}`, `unpin ${RUN}`], [[`pin-${RUN}`, 'ok'], [`unpin-${RUN}`, 'ok'], ['pin-run-gone', 'gone'], ['unpin-run-gone', 'gone']]]);
 	});
 
 	test('notification navigation reveals the exact run and selects its card (UX-3.2)', async () => {

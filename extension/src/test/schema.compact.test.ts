@@ -70,6 +70,13 @@ suite('MCP-01: compact public results', () => {
 		assert.deepStrictEqual(started.data, { agent_id: '#a8', name: '', process_state: 'running', tools_state: 'connecting', prompt: { ...promptFacts, message_id: '#m7' } });
 	});
 
+	test('MCP-3.1, CLIS-2.4: details:true says a conversation\'s complete native title, every line and code point of it, as the run holds it', () => {
+		const title = `${'Überprüfung '.repeat(12)}👨‍👩‍👧‍👦\nZweite Zeile`;
+		const agent = agentOf(runFacts(13, { title }), { id: 'w', label: 'Workspace', environment: 'local' }, 10);
+		const full = compactResult('list_agents', success({ agents: [agent] }), true).data as { agents: Record<string, unknown>[] };
+		assert.deepStrictEqual([agent.title, full.agents[0].title], [title, title]);
+	});
+
 	test('lists keep blockers, unknown-state diagnostics, completeness and cursors; full detail restores infrequent facts', () => {
 		const agent = agentOf(runFacts(12, { name: '', activity: 'unknown', activityReason: 'No activity report', blocker: { kind: 'permission', text: 'Allow this?' } }), { id: 'w', label: 'Workspace', environment: 'local' }, 10);
 		const source = success({ windows: [{ window_id: 'w', locations: [] }], agents: [agent], complete: false, unavailable_windows: [{ window_id: 'offline' }], next_cursor: 'opaque' });

@@ -4,7 +4,6 @@
 
 import * as vscode from 'vscode';
 import type { Agents, RunFacts, RunId } from '../../core/ports';
-import { CardWords, statusOf } from '../cardView';
 import { PanelModel, REPORT_COALESCE_MS } from '../model';
 import { cliIcon, plainText } from '../presentation';
 import { matchesCliSearch } from './search';
@@ -12,7 +11,6 @@ import { matchesCliSearch } from './search';
 export interface GoToAgentDeps {
 	readonly model: Pick<PanelModel, 'ordered' | 'placeOf' | 'placesShown'>;
 	readonly agents: Pick<Agents, 'onDidChange'>;
-	readonly words: CardWords;
 	readonly media: vscode.Uri;
 	readonly reveal: (run: RunId) => Promise<unknown>;
 	readonly copyReference: (run: RunId) => Promise<void>;
@@ -37,13 +35,13 @@ type Item = vscode.QuickPickItem & { readonly run: RunId };
 
 /**
  * Go to Agent (LIFECYCLE-2.3): this window's agents alone - starting, running and retained red ones - one line each, searched by name,
- * CLI, title, location, short ID and copied reference. Its name, then its short ID, state, location and CLI title in its
- * description, so that duplicate names are told apart. Choosing one shows its own terminal; each item copies its reference or closes
+ * CLI, title, location, short ID and copied reference. Its name, then its short ID, location and conversation's title in its
+ * description, so that duplicate names are told apart; never its state. Choosing one shows its own terminal; each item copies its reference or closes
  * it, the picker staying open.
  */
 export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	const copy: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('copy'), tooltip: vscode.l10n.t("Copy Agent Reference") };
-	const close: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("Close Agent") };
+	const close: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('close'), tooltip: vscode.l10n.t("End Agent") };
 	const picker = vscode.window.createQuickPick<Item>();
 	picker.title = vscode.l10n.t("Go to Agent");
 	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location, or ID");
@@ -51,8 +49,10 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	const itemOf = (facts: RunFacts, placesShown: boolean): Item => {
 		const item: Item = {
 			label: plainText(facts.name || facts.alias),
-			// Where it works, unless every agent works in the window's one place to work (PANEL-1.3)
-			description: plainText([facts.name ? facts.alias : undefined, statusOf(facts, deps.words).stateText, placesShown ? deps.model.placeOf(facts).qualified : undefined, facts.title].filter(Boolean).join(' · ')),
+			// Where it works, unless every agent works in the window's one place to work (PANEL-1.3); its conversation's title, where its
+			// CLI saved one (CLIS-2.4)
+			// Its title's lines joined with a space, as the row is one line: the stored and searchable title stays whole (LIFECYCLE-2.3)
+			description: plainText([facts.name ? facts.alias : undefined, placesShown ? deps.model.placeOf(facts).qualified : undefined, facts.title?.split(/\r?\n/).join(' ')].filter(Boolean).join(' · ')),
 			iconPath: cliIcon(deps.media, facts.cli),
 			buttons: [copy, close],
 			run: facts.id

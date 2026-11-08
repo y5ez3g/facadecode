@@ -138,7 +138,7 @@ suite('ptyd: what a program reports of itself (OSC 7501, CLIS-2.3)', () => {
 		assert.deepStrictEqual({ before, asked, seen: seen.map(each => each && [each.state, each.msg && [...each.msg].length]), at: seen.map(each => each?.at) }, {
 			before: undefined,
 			asked: 'pending',
-			// The bounded protocol text stays whole for hover; only display formatting is removed.
+			// The bounded protocol text stays whole for the accessible label; only display formatting is removed.
 			seen: [['pending', undefined], ['idle', undefined], ['working', 439], ['pending', undefined], ['done', undefined], ['pending', undefined]],
 			at: [0, 0, 10, 10, 10, 10].map(ms => ms + seen[0]!.at)
 		});

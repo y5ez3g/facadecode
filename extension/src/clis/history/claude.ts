@@ -10,7 +10,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { isJsonObject, type JsonObject } from '../../base/json';
 import { SESSION_ID } from '../identity';
-import { edgeLines, HEAD_BYTES, headLines, mtimeOf, namesIn, PROMPT_BYTES, Scope, titleOf } from './scope';
+import { edgeLines, HEAD_BYTES, headLines, mtimeOf, namesIn, PROMPT_BYTES, Scope, titlesOf } from './scope';
 import type { Environment } from '../environment';
 import { variableOf } from '../environment';
 import { homeOf } from '../executable';
@@ -21,18 +21,20 @@ export function claudeProjectFolderName(folder: string): string {
 	return folder.replace(/[^A-Za-z0-9]/g, '-');
 }
 
-/** The conversation files that may be of `scope` or folders below it: their project folders and those named below. */
-export function claudeCandidates(configDir: string, scope: Scope): Candidate[] {
+/** The project folders in the config folder `configDir` that may keep conversations of `scope` or folders below it: theirs and those named below. */
+function projectFolders(configDir: string, scope: Scope): string[] {
 	const projects = path.join(configDir, 'projects');
 	const prefixes = [...new Set(scope.forms.map(claudeProjectFolderName))];
+	return namesIn(projects).filter(name => prefixes.some(prefix => name === prefix || name.startsWith(`${prefix}-`))).map(name => path.join(projects, name));
+}
+
+/** The conversation files that may be of `scope` or folders below it: their project folders and those named below. */
+export function claudeCandidates(configDir: string, scope: Scope): Candidate[] {
 	const candidates: Candidate[] = [];
-	for (const name of namesIn(projects)) {
-		if (!prefixes.some(prefix => name === prefix || name.startsWith(`${prefix}-`))) {
-			continue;
-		}
-		for (const file of namesIn(path.join(projects, name), /\.jsonl$/)) {
+	for (const folder of projectFolders(configDir, scope)) {
+		for (const file of namesIn(folder, /\.jsonl$/)) {
 			const id = file.slice(0, -'.jsonl'.length);
-			const full = path.join(projects, name, file);
+			const full = path.join(folder, file);
 			const at = SESSION_ID.test(id) ? mtimeOf(full) : undefined;
 			if (at !== undefined) {
 				candidates.push({ cli: 'claude', file: full, at, sessionId: id });
@@ -40,6 +42,22 @@ export function claudeCandidates(configDir: string, scope: Scope): Candidate[] {
 		}
 	}
 	return candidates;
+}
+
+/** Conversation `sessionId`'s own file, `<ID>.jsonl`, in the project folders `scope` names: its most recently changed, where several have one. */
+export function claudeCandidateOf(configDir: string, scope: Scope, sessionId: string): Candidate | undefined {
+	if (!SESSION_ID.test(sessionId)) {
+		return undefined;
+	}
+	let found: Candidate | undefined;
+	for (const folder of projectFolders(configDir, scope)) {
+		const file = path.join(folder, `${sessionId}.jsonl`);
+		const at = mtimeOf(file);
+		if (at !== undefined && (!found || at > found.at)) {
+			found = { cli: 'claude', file, at, sessionId };
+		}
+	}
+	return found;
 }
 
 /** The first prompt among `lines`: a user message's text, or its first text part. */
@@ -129,11 +147,11 @@ export async function claudeConversation(candidate: Candidate, dependOn: (file: 
 	const ai = latest(tail, 'ai-title', 'aiTitle') ?? latest(head, 'ai-title', 'aiTitle');
 	const summary = latest(tail, 'summary', 'summary') ?? latest(head, 'summary', 'summary');
 	const prompt = latest(tail, 'last-prompt', 'lastPrompt') || firstPrompt(head) || firstPrompt(tail);
-	const title = titleOf(custom || ai || summary || prompt || '');
+	const titles = titlesOf(custom || ai || summary || undefined, prompt || undefined);
 	const lastMessage = tail.findLast(line => (line.type === 'user' || line.type === 'assistant')
 		&& typeof line.timestamp === 'string' && Number.isFinite(Date.parse(line.timestamp)));
 	const activityAt = lastMessage ? Math.min(Date.parse(lastMessage.timestamp as string), candidate.at) : candidate.at;
-	return { sessionId: candidate.sessionId!, cwd, activityAt, ...title ? { title } : {} };
+	return { sessionId: candidate.sessionId!, cwd, activityAt, ...titles };
 }
 
 /** Claude Code's store: its config folder - `CLAUDE_CONFIG_DIR`, else `.claude` in the home folder - and its projects there. */
@@ -141,5 +159,6 @@ export const CLAUDE_STORE: VendorStore = {
 	cli: 'claude',
 	dirOf: (env: Environment, cwd: string) => path.resolve(cwd, variableOf(env, 'CLAUDE_CONFIG_DIR') || path.join(homeOf(env), '.claude')),
 	candidates: claudeCandidates,
+	candidateOf: claudeCandidateOf,
 	read: claudeConversation
 };

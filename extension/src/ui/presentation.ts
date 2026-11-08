@@ -145,14 +145,14 @@ export function reasonText(said: FacadeReason | undefined, otherwise: string): s
 		case 'location_gone': return vscode.l10n.t("The working location is no longer available.");
 		// {0} is the working location's path
 		case 'location_not_here': return vscode.l10n.t("The working location {0} is not available in this window.", a);
-		case 'end_unconfirmed': return vscode.l10n.t("Could not confirm that it stopped");
+		case 'end_unconfirmed': return vscode.l10n.t("Stop unconfirmed · check process");
 		default: return otherwise;
 	}
 }
 
 /**
  * `text` as a picker's row or an input box's message shows it, word for word: the editor draws `$(name)` there as a theme icon, and a
- * name, path, branch or CLI title may hold it (PANEL-3.2). A title draws it as it is, and is given it as it is.
+ * name, path, branch or conversation title may hold it (PANEL-3.2). A title draws it as it is, and is given it as it is.
  */
 export function plainText(text: string): string {
 	return text.replace(/\$\(/g, '\\$(');
@@ -179,7 +179,7 @@ export function ago(time: number, now: number, language: string): string {
 	}
 	const seconds = Math.round((now - time) / 1_000);
 	if (seconds < 30) {
-		return vscode.l10n.t("now");
+		return vscode.l10n.t("just now");
 	}
 	if (seconds < 60) {
 		return vscode.l10n.t("{0} secs ago", seconds);

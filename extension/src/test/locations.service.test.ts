@@ -156,6 +156,26 @@ suite('Locations: the window\'s location service (WORKTREES-1, 3; RULES-2.4)', (
 		}
 	});
 
+	test('WORKTREES-1.2, MCP-3.1: a Resume cwd below a location is within that anchor, previewed and remembered alike; a second one inside the first anchors on the real location, never on a remembered record', async () => {
+		const world = new World();
+		world.setFolders(MAIN);
+		const { service } = serviceIn(world);
+		try {
+			await service.refresh();
+			const first = `${FEAT}/nested`, second = `${FEAT}/nested/deeper`;
+			world.present.add(first); world.present.add(second);
+			const anchor = service.snapshot().locations.find(each => each.path === FEAT)!;
+			const previewed = service.conversationLocation(first)?.within;
+			service.rememberLocation(first);
+			const remembered = service.snapshot().locations.find(each => each.path === first);
+			assert.deepStrictEqual([previewed, remembered?.within, service.conversationLocation(second)?.within], [anchor.id, anchor.id, anchor.id]);
+			service.rememberLocation(second);
+			assert.strictEqual(service.snapshot().locations.find(each => each.path === second)?.within, anchor.id);
+		} finally {
+			service.dispose();
+		}
+	});
+
 	test('a successful Resume remembers only an existing scoped cwd; uncertainty preserves it and confirmed deletion removes it', async () => {
 		const world = new World();
 		world.setFolders(MAIN);

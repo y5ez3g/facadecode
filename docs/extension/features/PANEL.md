@@ -32,8 +32,8 @@ not change the underlying card count.
 
 **The empty state explains the current condition and offers the next relevant action.**
 
-No folder: `Open a folder to launch agents.` with Open Folder. No agents:
-`Launch an agent in this workspace.` with New Agent (primary) and Resume Agent (secondary). No matching cards with a filter:
+No folder: `Open a folder to start agents.` with Open Folder. No agents:
+`Start an agent in this workspace.` with New Agent (primary) and Resume Agent (secondary). No matching cards with a filter:
 `No agents found in "{location}".`, then `{n} other agents are in this workspace.` (`1 other agent is in this
 workspace.`; omitted when no other card exists), Clear Filter (primary) and New Agent (secondary), which starts at the
 filtered location (LIFECYCLE-1.2). Empty-state buttons have no ellipsis, as VS Code's
@@ -57,23 +57,24 @@ automatically launch an agent. This prerequisite step does not ask the person to
 ### 1.3 Card geometry and identity
 
 **A card is two lines beside a CLI avatar and status dot; the first line identifies the agent and shows its Pin at the
-right.**
+right, and there, under the pointer, the card's details, menu and Pin buttons.**
 
 | Element | Value |
 | --- | --- |
 | Card | Minimum 44 px tall; padding 8 px top/bottom/left, 9 px right; 4 px corners |
 | Avatar | 28 px circle, 8 px before text, 1 px inner edge of the theme foreground at 14 % opacity - high contrast: its contrast border - never an opaque border over the icon |
 | First line | Name 13 px at the left; its short ID where its name repeats, 12 px in the quieter color, 4 px after it; the Pin at the right; no location |
-| Pin | Nonshrinking 14 px icon box at the first line's right content edge, inside the card's right padding, at least 4 px from the name and ID; adds no card height |
+| Pin | 14 px icon centered on the first line, 7 px from the card's top and as far from its right; at least 4 px from the name and ID; adds no card height |
+| Buttons | ⓘ details, gear menu and, where the card can be pinned or unpinned, Pin, in that order; 18 px each, 2 px apart, 5 px from the card's top and as far from its right; add no card height |
 | Second line | 12 px, quieter, single line with ellipsis |
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
 
 Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`,
 `avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Custom avatars are an uppercased first grapheme in a
-circle; deterministic theme colors from UX-2.1. No card shows its location, at any width, on hover or on focus: the
-first line is the agent's name, a shortened location being no help to read, and the location is the hover's and the
-accessible label's in full (1.5). A location's label there is alias/branch/folder, prefixed by workspace folder in a
+circle; deterministic theme colors from UX-2.1. No card shows its location, at any width, under the pointer or on
+focus: the first line is the agent's name, a shortened location being no help to read, and the location is the
+details' and the accessible label's in full (1.5). A location's label there is alias/branch/folder, prefixed by workspace folder in a
 multi-folder window unless it is named that folder's name already, as a plain folder is; a related worktree can be
 outside a folder and still show its actual location. Confirmed location removal closes its affected agents; a
 temporarily disconnected location is retained. Where two or more of this window's cards have exactly the same stored
@@ -82,77 +83,152 @@ and those the filter hides, other windows' never - each adds its own short ID af
 short ID alone, in the name's style. A duplicate appearing, going or being renamed updates every card affected, changing
 no stored name, order, selection or focus. Reserve the whole ID where present, and the Pin's width and gap, and give the
 name the rest: a long name ellipsizes at the end between whole graphemes, and a short name and its ID stay together at
-their natural widths, the spare space before the Pin. Unpinned cards reserve no Pin box. The Pin and its hover box stay
-clear of the overlay scrollbar at every width and zoom, and neither the scrollbar's showing nor pointer or keyboard
-focus moves them. Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font
+their natural widths, the spare space before the Pin. Unpinned cards reserve no Pin box. While the buttons show they
+take the Pin's place, and the name gives up their width and gap, taking it back as they go. The Pin's and the
+buttons' icons stay clear of the overlay scrollbar at every width and zoom, and neither the scrollbar's showing nor
+keyboard focus moves them. Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font
 changes and rename. Avatar/dot do not shrink. The panel header is unchanged.
 
-Pinned cards show the Pin at the first line's right; it is passive, with no click or Tab stop. Hovering the Pin shows
-its own tooltip with its restoration meaning: the conversation is restored when the workspace opens again. Its color
+The buttons show while the pointer is on the card, or its menu or details are open. Each is a 14 px icon, the size
+chosen for them, with 2 px round it, in the manner of the editor's list-row actions without matching their dimensions.
+The icons are the editor's own codicons `info` and `gear`, and for the Pin the outlined contour Facade bundles as
+`media/pinned.svg`, the filled Pin being that icon's outer contour alone. They are centered on the first line, the Pin
+button's where the Pin is, at least 4 px from the name and ID, and clear of the overlay scrollbar, which may cover the
+last button's hover background. At rest the icons are in the Pin's quieter color, with the Pin's selected and
+high-contrast exceptions below and UX-2.1's 75% foreground where a theme has no quieter color of its own; the one under
+the pointer or pressed is in the icon color on the toolbar's hover or pressed background.
+
+Pinned cards show the Pin, filled, at the first line's right; it is passive, with no click or Tab stop. Under the
+pointer the buttons take its place, the Pin button in the same place as the Pin: filled where the card is pinned,
+outlined where it is not, it pins or unpins the card as Pin Agent and Unpin Agent do (UX-3.1). The buttons are the
+pointer's alone: they have no Tab stop, no accessible name and no tooltip, and are hidden from screen readers. The
+keyboard and a screen reader reach what they do by these routes alone: Shift+F10 and the menu key open the gear's menu on
+the card (2.2, UX-2.3); Pin Agent, Unpin Agent and Show Agent Details in the Command Palette act on the selected card
+(UX-3.1); and a screen reader hears the details' facts in the card's accessible description (1.5). A press on a button
+never puts the focus on the button and never reaches the card's own click, which opens its terminal; its action then has
+its own effect: the Pin button's Pin or Unpin selects its card and shows its tab as LIFECYCLE-3.4 says - an Unpin of an
+agent with no tab open keeping it hidden, and a Pin that cannot be saved opening nothing. The Pin's color
 follows the quieter text, including the selected foreground at 80% opacity; high-contrast selections use full opacity.
 The icon's internal space keeps its visible shape smaller than the name's letters.
 
 ### 1.4 Second line and dot
 
-**The second line says what was last sent to the agent, unless its dot is red or its CLI waits for the person.**
+**The second line says one of three kinds of thing: the person's input, another agent's message, or Facade's own.**
 
-It says the last message sent to the agent: the person's text after a nonempty Enter, slash commands included, as the
-CLI's input reader read the draft that Enter submitted (CLIS-2.1); a message another agent sent that Facade typed into
-its input - the task an agent-started run was started with among them, its creation prompt's first line, whichever path
-it went in by - as `📨` and its own text, without the line that introduces it, a message the agent took through
-read_messages changing nothing; a Facade result as typed, its `🔔` line first. The `📨` comes from who sent the item as
-its record keeps it, never from a name, the destination or an emoji the text begins with; the person's input has none.
-It says where that item came from, not what the agent works on now or whether it read it. A CLI without an input reader
-has no typed text to show. Before any, it says its CLI title's words: the title CLIS-2.3 keeps, without the spinner
-frame or state symbol a CLI puts before its words, for every CLI. Once a message was sent, a title never replaces it;
-the hover's `Title:` shows the title as CLIS-2.3 keeps it. The last message is kept across a reload. Two cases say
-something else while they last: a red dot says why (RULES-3.2) - the error, an end Facade could not confirm among them
-(LIFECYCLE-3.5), the Facade tools it cannot use or the start not ready - and a native blocker says what it waits for. A
-CLI without its Facade tools says so in plain words, for example `Cannot work with other agents: move or rename {file}`,
-or `Cannot work with other agents: its Facade tools stopped` once its tools went away, and stays usable. Fallbacks,
-before any message or title: the startup stage, `Working`, `Idle`, `Activity unavailable`. Idle alone proves neither an
-empty composer nor usable input; there is no separate first-message readiness claim. Never `Done, waiting for you` from
-a turn end. Normal work/idle shows the message or title directly, without a repeated `Working`/`Idle` prefix. Native
-blockers lead with `Needs permission`, `Sign-in required` or `Waiting for an answer`, followed by the CLI's original
-words when present. A reported blocker with no recognized kind says `Needs attention`, preserving its original words.
-Errors lead with `Error: {reason}`; why activity is unavailable is the hover's. No popup solely for a native blocker.
+1. `🧑‍💻`: the person's text after a nonempty Enter, slash commands included, as the CLI's input reader read the draft
+   that Enter submitted (CLIS-2.1). A CLI without an input reader has no typed text to show.
+2. `📨`: a message another agent sent that Facade typed into its input - the task an agent-started run was started with
+   among them, its creation prompt's first line, whichever path it went in by - its own text, without the line that
+   introduces it. A message the agent took through read_messages changes nothing.
+3. Facade's own, with no mark: a Facade result, without the `🔔` it is typed to its agent with (COLLABORATION-2.2); or a
+   notable state while it lasts: its start - `Starting {CLI}…` or `Creating worktree…`; what its CLI waits for - `Permission needed`, `Sign-in needed` or `Answer needed`, then
+   ` · ` and the CLI's original words when present, such as `Permission needed · Run npm test?`, and `Attention
+   needed` with its original words for a blocker of no recognized kind; why its dot is red (RULES-3.2) - an error's
+   reason without `Error · `, which the red dot says, such as `Process exited · code 1`, `Process terminated ·
+   SIGKILL` or `Process lost · reason unknown`; a start that failed as `Start failed · {reason}` and a worktree that
+   could not be made as `Worktree failed · {reason}`, the reason without its closing `.` or `。`, such as `Start failed ·
+   claude was not found on PATH`, while their notifications keep their own sentences (UX-1.2, WORKTREES-2.2); an end
+   Facade could not confirm, `Stop unconfirmed · check process` (LIFECYCLE-3.5); the Facade tools it cannot use; its
+   tools not connected past CLIS-2.3's bound, `Collaboration not connected yet`; or a start that did not become ready,
+   with why its activity is unknown, such as `No initial status · check terminal`. Before any message, with no notable
+   state, it says how the run began: `New conversation started` for a new conversation, `Conversation resumed` for one
+   it resumed - by Resume Agent, or a restored Pin resuming its conversation, never a Pin that begins a new one
+   (LIFECYCLE-3.4).
+
+What the second line says is the first of these that holds, in this order of precedence:
+
+1. a retained error's or an ended run's reason (RULES-3.2, 3.3);
+2. a native blocker: what its CLI waits for (RULES-3.2);
+3. another red condition: Facade tools it cannot use, its tools not connected past CLIS-2.3's bound, or a start not
+   ready by it (RULES-3.2);
+4. its start's stage, while it starts (LIFECYCLE-1.5);
+5. the last item sent to it: the person's input, another agent's message or a Facade result;
+6. how its run began.
+
+The last item sent comes back as soon as none of 1-4 holds any longer; the words of each are those above.
+
+The `🧑‍💻` and the `📨` are the editor's color emoji, at the second line's size, one space before the text, so that what
+was sent to the agent, and by whom, shows at a glance; Facade's own words carry no emoji or other mark. The `📨` and the
+`🧑‍💻` come from who sent the item as its record keeps it, never from a name, the destination or an emoji the text
+begins with. It says where that item came from, not what the agent works on now or
+whether it read it. The last message, and whether the run resumed a conversation, are kept across a reload. A CLI
+without its Facade tools says so in plain words, for example `Collaboration off · move or rename {file}`, or
+`Collaboration stopped · end and resume` once its tools went away, and stays usable. The second line never says a
+title - its conversation's is the details' (1.5), and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
+or, without a red dot, `Status unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
+the dot's and the accessible label's, the label also saying why activity is unavailable. Idle alone proves neither an
+empty composer nor usable input; there is no separate first-message readiness claim. Never `Done, waiting for you`
+from a turn end. No popup solely for a native blocker.
 
 Dot semantics and precedence follow RULES-3.2; theme tokens follow UX-2.1. The text priority above does not change the
-dot or notification rules. Tools injected but not yet connected say `Not connected to other agents yet` in the hover;
-startup waits for them, and once CLIS-2.3's bound passed without them the dot is red and the second line says so. An
+dot or notification rules. Tools injected but not yet connected say `Collaboration not connected yet` in the accessible
+label; startup waits for them, and once CLIS-2.3's bound passed without them the dot is red and the second line says so. An
 actual tool connection removes the message; known injection failures or a lost existing connection keep their specific
-explanation. Ended cards do not claim a pending tool connection. Working breathes every 1.8 s using opacity only (0–65%
-overlay of row background); reduced motion is static. The hover's `Status:` says `Starting`, `Working`, `Idle`, the
-native blocker's kind, `Needs attention`, `Error: {reason}` or `Activity unavailable`, and for a red dot without an
-error why it is red: the tools explanation, `Not connected to other agents yet` or why its activity is unavailable.
-The accessible label preserves it. No unread dot, completed check, bold-name state or extra error badge.
+explanation. Ended cards do not claim a pending tool connection. The green dot, starting or working, breathes every 1.8 s using
+opacity only (0–65% overlay of row background); reduced motion is static. The accessible label says the state in words: `Starting`,
+`Working`, `Idle`, the native blocker's kind, `Attention needed`, `Error · {reason}` or `Status unavailable · check
+terminal`, and for a red dot without an error why it is red: the tools explanation, `Collaboration not connected yet` or why its
+activity is unavailable. No unread dot, completed check, bold-name state or extra error badge.
 
-### 1.5 Hover and accessible content
+### 1.5 Details and accessible content
 
-**Every fact cut from a card remains readable without relying on color.**
+**A card's details say what the agent works on, who it is, when it started and where it works, in five lines the person
+opens with a click.**
 
-Card tooltip lines use a localized `Label: value` format throughout: `Agent:` for name, short run ID and CLI; `Title:`
-for a full title or `Prompt:` for its creation prompt's first line; `Status:` and a distinct `Reason:` when present. Use
-`Tools:` for unavailable or connecting collaboration tools, retaining 1.4's conditions; an ended card leaves out the
-tools that went away with its process. Where a red card's reason is its tools, `Status:` and `Tools:` say the same
-words. Empty names create no empty identity separator. Keep title-over-prompt priority and suppress a reason identical
-to the description. For a working agent, `Reported working:` shows how long ago its CLI reported that work, for example
-`Reported working: 25 min. ago`. This is the CLI's last word; a long silence leaves the person to judge it rather than
-turning it into idle or done. This uses the source observation for the current working episode, preserved through title
-changes and reload, not the host's report-receipt or API-query time. Missing source time omits the line. Relative times
-use the source clock; an observation ahead of that clock shows its absolute time instead; `Started:` for started
-relative time and, for an agent started by an agent, `Started by:` for its creator; `Location:` for qualified location
-including non-local environment context, the window's one place to work included; `Path:` for its complete path, the
-home folder written `~` except on Windows; `Window:` for the window. Where the second line shows another agent's
-message, `From:` names its sender, name and `#aN` - `#aN` alone for an empty name - and `Source window:` the sender's
-window where that is another; both go with that message, kept with it across a reload and its sender's exit, and are
-gone with it, as they are for any other second line. Preserve case and every path component, allowing native wrapping.
-Do not repeat natural-language prefixes after labels. Missing facts omit their lines. Hovering the dot shows its state
-alone, and hovering the Pin its own tooltip (1.3). Accessible label: name, short run ID, `Pinned` for a pinned card,
-state, location, CLI, and the second line where it differs from the state, its source said in words - a message from an
-agent, the person's input or a Facade result - rather than by its mark. Use a listbox named `Agents`, options with
-`aria-selected`, decorative icons hidden, one roving Tab stop. Update labels in place. State-change announcements are
-polite, coalesced, and do not repeatedly announce spinner/progress ticks.
+A card's details open from its ⓘ, as Fluent's info button opens its popover, or from Show Agent Details for the
+keyboard (UX-2.3, 3.1), and close on Escape, a press elsewhere, the ⓘ again, the focus leaving them - Tab and Shift+Tab
+leave them - a scroll of the card list, the view losing the focus or the card going; a scroll within the details keeps
+them open. Nothing in the panel opens on hover and no element has a native tooltip:
+everything a card offers is one click (2.2). The details are as wide as the card, in the editor's hover colors, border
+and corners, with Fluent's popover shadow, 12 px in, their arrow at the ⓘ; they open below the card, or above it where
+they do not fit below and there is more room above, stay on the side they opened on while they fit there, and scroll within themselves where neither side has
+room. They enter as Fluent's popover does, fading in as they slide 10 px in from the ⓘ's side over 400 ms, slowing to
+a stop, and leave at once; with reduced motion they only appear (UX-2.2). Open, they follow the card's state with no new
+entrance: a fact's words are written again only where they changed, and those of a fact with selected text in it once
+the selection ends; how long ago is said again whenever its words would change - seconds each second, then each age
+where the minute words change, and each minute past the hour - with UX-2.4's steps and rounding. Their text can be
+selected.
+
+Each line is one fact after its 16 px codicon in the quieter color, 13/20 px, 4 px apart, a long one wrapping whole,
+never cut:
+
+1. `comment-discussion`, as VS Code's chat marks a conversation: its conversation's complete title as its CLI
+   stores it, the one Resume Agent lists (CLIS-2.4) - an actual stored title kept even where it equals its CLI's name or the agent's - else, after the same `Title: ` label, in the
+   quieter color, `No title yet` when Facade has no title from a CLI whose history it can read, or `Title unavailable` where Facade has no history
+   reader for its CLI - a custom CLI (CLIS-2.4) - so none can come. Never its terminal's title, nor its creation prompt.
+2. `tag`: who - its name, then in the quieter color its short run ID: `Hinge #a1`. An empty name is its `#aN` alone.
+3. `clockface`: when it started, in the text color, as Resume Agent says a time: `Started 5 mins ago`,
+   and for an agent another started `Started 5 mins ago by Ada #a3`. How long ago is in Resume Agent's words and steps
+   (LIFECYCLE-3.2, UX-2.4), `just now` below 30 seconds, its first letter in lower case within the sentence; a wrap
+   never parts the time's words, nor the starter's name from its `#aN`. A start the source clock puts ahead of the
+   host's says its date and time instead. The start is the run's own, else its creation's.
+4. Where it works, always, after the icon Facade's location pickers give it: `repo` for a main checkout, `worktree` for
+   a worktree, `folder` for a folder, a workspace folder opened inside a checkout among them (WORKTREES-1.2) - its branch, else its folder's name, after its workspace folder's
+   in a multi-folder window and before a non-local environment's. A folder inside one of them, which a resumed
+   conversation works in, says the location it is inside.
+5. `folder`: its complete path, the home folder written `~` except on Windows, every component kept.
+
+Its avatar, CLI, state, second line and window are not said again. The CLI is the avatar's to show and the state the
+dot's (1.4, RULES-3.2): a CLI that reports nothing within CLIS-2.3's start bound turns its dot red, and activity unknown
+later in a run shows no dot until the CLI's next report; the state in words is the accessible label's. The second line
+is the card's, and the window is the one the panel is in. The details have these five lines and no other: no state, no
+second line, no dot, no tooltip or hover for text a card cuts off. Where the theme's quieter color reads below 4.5:1 on the hover color, the quieter words and icons take its
+text color (UX-2.1). The page makes the details with a dialog's role, named by row 2, who the agent is. They are nonmodal, with no
+focus trap: Show Agent Details puts the keyboard's focus in their scroll area, Tab and Shift+Tab leave and close them,
+and Escape takes the focus back to the card (UX-2.3). A screen reader hears the title, the location and the path after their localized `Title: `,
+`Location: ` and `Path: ` labels, out of sight, each such `Label: {0}` text keeping its value last in every language.
+A card the filter hides (2.3) has no details to open: Show Agent Details is offered for the selected card only while
+it is shown (UX-3.1), and opens nothing for a card gone meanwhile.
+
+Accessible label: name, short run ID, `Pinned` for a pinned card, state, location, CLI, and the second line where it
+says what the state does not, its source said in words - a message from an agent, the person's input or a Facade
+result - rather than by its mark, and Facade's own words as the second line says them, unmarked. A red card's label says `Error · {reason}`
+once, as its state, and not its reason again. The card's accessible description says what the
+details add to it, in their order: the title where the label does not say it already, when it started, the location
+where its environment is more than the label says, and the path. The details are in the accessibility tree while they
+show, the buttons never. Use a listbox named `Agents`, options with `aria-selected`, decorative icons hidden, one roving
+Tab stop. Update labels in place. State-change announcements are polite, coalesced, and do not repeatedly announce
+spinner/progress ticks.
 
 ## 2 List and actions
 
@@ -169,15 +245,24 @@ restoration keeps it. Explicit close removes a card immediately; no stopping car
 automatic creation-tree grouping. Click selects immediately and opens or reveals its terminal (LIFECYCLE-2.2). Selection
 follows the last active owned agent terminal, survives focus on a file/unrelated terminal and its tab being hidden, and
 disappears when that record is removed. A failed launch remains selected; background starts do not change selection.
+While a reload, an extension-host restart or Pin restoration opens its pinned agents' tabs one after another the
+selection does not move; once they are open it is on the last one opened, in front of the active group, or where none
+opened as it was: LIFECYCLE-3.5's tab procedure owns that order, this list only its final selection.
 Keyboard focus and selection are independent.
 
 ### 2.2 Card menu
 
-**A card uses a flat native context menu with only actions meaningful to its current record.**
+**A card's flat native menu opens from its gear, with only actions meaningful to its current record; a right click
+opens nothing.**
 
-Groups: Rename / Pin or Unpin; Move Up/Down; Close Agent for starting, live and retained-ended records. It has no other
-entries: no worktree deletion or bulk selection action. Enable actions by actual availability; name editing need not
-wait for CLI readiness. LIFECYCLE-3.1 owns the shared close action. No menu outside a card, not even the webview's
+A left click on the gear opens the menu under it, and Shift+F10 and the menu key open it there too (UX-2.3): the page
+dispatches the context menu event on the card itself, so the editor shows its native webview menu with the card's
+context. The person's right click opens nothing, on a card or anywhere in the view: on macOS a right click leaves an
+inactive window inactive, and the editor then shows the menu in the active window, where a left click activates its
+own window first. While the menu shows, its card keeps its buttons, the gear pressed. Groups: Rename; Move Up/Down; End
+Agent for starting, live and retained-ended records. It has no other entries: no Pin or Unpin, which the card's Pin
+button and the palette do (1.3, UX-3.1), no worktree deletion or bulk selection action. Enable actions by actual
+availability; name editing need not wait for CLI readiness. LIFECYCLE-3.1 owns End Agent. No menu outside a card, not even the webview's
 default Cut/Copy/Paste. Context targets its stable run ID, revalidated against current host state under 3.1, never the
 selected row by fallback. Palette targeting follows UX-3.1.
 
@@ -223,9 +308,10 @@ required on every action. Test-only probes never ship.
 Update `src/webview/protocol.ts` (the wire types both sides use), `src/ui/model.ts`, `src/ui/panel.ts` and
 `src/webview/panel.ts` together. Webview sends `ready`, carrying whether the system asks for reduced motion, `motion`
 when that changes - which the host passes to busy tabs' spinners (UX-2.2) - validated `act` (`open`, `new`, `resume`,
-`clearFilter`, `openFolder`, `rename`), and diagnostic `error`; host sends `state`, `scrolling`, and matching action
-outcomes. `open` serves a card's click, Enter and Space, `rename` its F2 (UX-2.3), and the others the empty-state
-buttons of 1.2; `rename` asks the host to open the native Input Box, and the host validates the target. Context menu
+`clearFilter`, `openFolder`, `rename`, `pin`, `unpin`), and diagnostic `error`; host sends `state`, `scrolling`, `details` - Show
+Agent Details' run, whose card the page opens the details of for the keyboard once it has drawn the state (1.5) - and
+matching action outcomes. `open` serves a card's click, Enter and Space, `rename` its F2 (UX-2.3), `pin` and `unpin` its
+Pin button (1.3), and the others the empty-state buttons of 1.2; `rename` asks the host to open the native Input Box, and the host validates the target. Context menu
 commands run in the host through validated targets. Page-held state is navigation/typeahead/scroll, not business rules.
 Use the webview's saved page state to restore the still-valid scroll position and keyboard navigation target when the
 person hides and reopens the view; restoring a navigation target does not take actual input focus. Rebuild current cards
@@ -301,8 +387,8 @@ fully visible row count minus one (minimum one).
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Title and menu entries, the empty and filtered states, the failed-start and missing-component pages and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, the green and red dots and no dot otherwise, known blocker before generic unavailable text without losing that explanation, the Pin's own tooltip, all widths/themes/accessibility |
-| 2.1–2.3 | Insertion into the two queues and manual order, retained failure, exact context target, filter removal/read failure |
+| 1.1–1.5 | Title and menu entries, the empty and filtered states, the failed-start and missing-component pages and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, the green and red dots and no dot otherwise, error/ended first, then a native blocker before other red conditions or generic unavailable status, with its CLI's own words kept (1.4), the state in words in the accessible label alone, the card's buttons and five-line details with no state, hover popup or native tooltip, all widths/themes/accessibility |
+| 2.1–2.3 | Insertion into the two queues and manual order, retained failure, the selection unmoved while the pinned tabs of a reload, an extension-host restart or Pin restoration open and on the last one opened after, exact context target from the gear and the keys, no menu on a right click, filter removal/read failure |
 | 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
 
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.

@@ -47,7 +47,10 @@ const ACTS: { readonly [what in Act]: { readonly target: boolean } } = {
 	clearFilter: { target: false },
 	openFolder: { target: false },
 	// F2 on a card: the host opens the Input Box and validates the name (PANEL-3.1)
-	rename: { target: true }
+	rename: { target: true },
+	// A card's Pin button (PANEL-1.3), as Pin Agent and Unpin Agent in the palette (UX-3.1)
+	pin: { target: true },
+	unpin: { target: true }
 };
 
 /**
@@ -169,6 +172,15 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 		});
 	}
 
+	/**
+	 * Opens the details of run `run`'s card for the keyboard (PANEL-1.5, UX-2.3): the view shown and focused first, then its page
+	 * told, once it has said it is ready and been sent the state; a card it no longer draws opens nothing.
+	 */
+	async showDetails(run: string): Promise<void> {
+		await vscode.commands.executeCommand(`${PANEL_VIEW}.focus`);
+		this.whenReady(() => void this.view?.webview.postMessage({ type: 'details', page: this.page, run }));
+	}
+
 	dispose(): void {
 		this.viewDisposables.forEach(each => each.dispose());
 		this.disposables.forEach(each => each.dispose());
@@ -269,6 +281,8 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			[CONTEXT.agentSelectedEnded, selected?.ended === true],
 			[CONTEXT.agentSelectedPinned, selected?.pinned === true],
 			[CONTEXT.agentSelectedPinnable, selected?.pinnable === true],
+			// Its card drawn: Show Agent Details has nothing to open for a card the filter hides (PANEL-2.3)
+			[CONTEXT.agentSelectedVisible, selected !== undefined && state.cards.some(card => card.runId === selected.run)],
 			[CONTEXT.filtered, state.filter !== undefined],
 			[CONTEXT.onePlace, !this.model.placesShown()]
 		];
@@ -306,21 +320,37 @@ export class PanelView implements vscode.WebviewViewProvider, vscode.Disposable 
 			agents: vscode.l10n.t("Agents"),
 			newAgent: vscode.l10n.t("New Agent"),
 			resumeAgent: vscode.l10n.t("Resume Agent"),
-			pinnedHint: vscode.l10n.t("Restores this conversation when the workspace opens again"),
 			clearFilter: vscode.l10n.t("Clear Filter"),
 			// The empty panel, for why it is empty (PANEL-1.2)
-			noAgents: vscode.l10n.t("Launch an agent in this workspace."),
+			noAgents: vscode.l10n.t("Start an agent in this workspace."),
 			// {0} is the location or folder the filter shows
 			noAgentsIn: vscode.l10n.t("No agents found in \"{0}\"."),
 			// {0} is how many agents the filter hides, 2 or more
 			otherAgents: vscode.l10n.t("{0} other agents are in this workspace."),
 			otherAgent: vscode.l10n.t("1 other agent is in this workspace."),
-			noFolder: vscode.l10n.t("Open a folder to launch agents."),
+			noFolder: vscode.l10n.t("Open a folder to start agents."),
 			openFolder: vscode.l10n.t("Open Folder"),
-			// {0} is how long ago, as the browser says it in the window's language: now, 5 min. ago, yesterday
-			started: vscode.l10n.t("Started: {0}"),
-			// {0} is how long ago, as in "5 min. ago": a long time with no other report is for the person to judge (RULES-3.2)
-			workingSince: vscode.l10n.t("Reported working: {0}")
+			// When an agent started, in its details (PANEL-1.5). {0} is how long ago, as Resume Agent says it: just now, 5 mins ago, 2 hrs ago
+			started: vscode.l10n.t("Started {0}"),
+			// {0} is as in "Started {0}"; {1} is the agent that started it: its name and short ID, such as Ada #a3
+			startedBy: vscode.l10n.t("Started {0} by {1}"),
+			// How long ago, in the words Resume Agent's list says it in (LIFECYCLE-3.2): {0} is how many
+			ago: {
+				now: vscode.l10n.t("just now"),
+				secs: vscode.l10n.t("{0} secs ago"),
+				min: vscode.l10n.t("{0} min ago"),
+				mins: vscode.l10n.t("{0} mins ago"),
+				hr: vscode.l10n.t("{0} hr ago"),
+				hrs: vscode.l10n.t("{0} hrs ago"),
+				day: vscode.l10n.t("{0} day ago"),
+				days: vscode.l10n.t("{0} days ago"),
+				wk: vscode.l10n.t("{0} wk ago"),
+				wks: vscode.l10n.t("{0} wks ago"),
+				mo: vscode.l10n.t("{0} mo ago"),
+				mos: vscode.l10n.t("{0} mos ago"),
+				yr: vscode.l10n.t("{0} yr ago"),
+				yrs: vscode.l10n.t("{0} yrs ago")
+			}
 		};
 		return `<!DOCTYPE html>
 <html lang="${escapeAttribute(vscode.env.language)}" data-vscode-context='{"preventDefaultContextMenuItems":true}'>

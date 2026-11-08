@@ -19,7 +19,7 @@ export class WindowHuman implements HumanPort, vscode.Disposable {
 	dispose(): void { }
 
 	failed(failure: HumanFailure, options: { readonly show?: RunId; readonly configure?: boolean }): void {
-		const text = failure.kind === 'terminate' ? vscode.l10n.t("{0} was closed, but its process could not be terminated.", failure.name)
+		const text = failure.kind === 'terminate' ? vscode.l10n.t("{0}'s card and terminal were closed, but its process could not be terminated.", failure.name)
 			: failure.kind === 'pin' ? vscode.l10n.t("Could not pin {0}: {1}", failure.name, failure.reason)
 			: failure.kind === 'unpin' ? vscode.l10n.t("Could not unpin {0}: {1}", failure.name, failure.reason) : failure.kind === 'restore'
 			? (failure.count > 1 ? vscode.l10n.t("Could not restore {0} pinned agents. Their cards show why.", failure.count) : vscode.l10n.t("Could not restore {0}: {1}", failure.name, failure.reason))

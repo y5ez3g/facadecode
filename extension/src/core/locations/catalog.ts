@@ -72,6 +72,8 @@ interface Candidate {
 	readonly isMain: boolean;
 	readonly branch?: string;
 	readonly detached: boolean;
+	/** A workspace folder opened inside a checkout, not at its root: a folder, as its icon says (WORKTREES-1.2, PANEL-1.5). */
+	readonly subfolder?: true;
 	/** The opened folder's own URI; the others derive theirs from the folder they are listed under. */
 	readonly uri?: string;
 }
@@ -118,6 +120,7 @@ export function buildCatalog(input: CatalogInput): Catalog {
 				folders,
 				kind: candidate.kind,
 				...(candidate.kind === 'checkout' ? { isMain: candidate.isMain, detached: candidate.detached } : {}),
+				...(candidate.subfolder ? { subfolder: true as const } : {}),
 				...(candidate.branch !== undefined ? { branch: candidate.branch } : {}),
 				opened: candidate.tier === 0,
 				git: candidate.git
@@ -181,7 +184,7 @@ function worktreeCandidate(input: CatalogInput, worktree: WorktreeFacts, reposit
 function candidateOf(input: CatalogInput, facts: Omit<Candidate, 'id' | 'label'> & { readonly name: string; readonly root: boolean }): Candidate {
 	const id = locationIdOf(input.environment, facts.key);
 	const { name, root, ...candidate } = facts;
-	return { ...candidate, id, label: (root ? facts.branch : undefined) ?? name };
+	return { ...candidate, id, label: (root ? facts.branch : undefined) ?? name, ...facts.kind === 'checkout' && !root ? { subfolder: true as const } : {} };
 }
 
 /** The opened location's state: the folder's own read, then what is known of its repository's worktrees. */

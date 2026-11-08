@@ -368,17 +368,13 @@ verified the same way; a run held by an older ptyd keeps that ptyd's behavior (A
 
 Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes and titles up to 192 decoded bytes; reject controls
 and malformed reports. Sanitize invisible formatting and whitespace without stripping visible decorations. Keep the
-bounded terminal title (up to 4096 UTF-16 units) and the protocol text whole for the hover; display previews may be
-shortened, always between complete graphemes. A run's title is its CLI's nonempty terminal title from OSC 0/2; a status
-report's title is used only when no terminal title is available. A later activity report must not replace a terminal
-title or suppress its decoration-only updates. The title is kept as the CLI sets it - status symbols, decorations,
-CLI/folder/agent names and default session titles included, even where the card already gives the same information -
-with no adapter-specific filtering or rewriting, and the hover shows it so (PANEL-1.5). What the card's second line takes
-from it - the title's words without the state symbol or spinner frame before them, until a message is sent - is
-PANEL-1.4's. When both current title sources are empty, discard the previous title, including after reattachment;
-PANEL-1.4's fallback then applies. A lost connection alone does not clear the last known title. Native CLIs may omit
-decorations after status-protocol negotiation or shorten their own titles; Facade keeps what they actually send.
-Message delivery and notifications do not depend on the title. Terminal emoji width follows tested Unicode cell tables;
+protocol text whole for the card; display previews may be shortened, always between complete graphemes. Neither a
+CLI's terminal title (OSC 0/2) nor a status report's title is shown anywhere - not on the card, in its details, Go to
+Agent or list_agents: CLIs mostly title their terminals with their own name or their folder's - Codex with its folder's,
+Pi `π - {folder}`, OpenCode `OpenCode` - and Antigravity sets none, while the conversation's title each CLI keeps in its
+own history says what the run works on. A run's title is its conversation's (2.4). The supervisor may go on recording
+its run's bounded terminal title (up to 4096 UTF-16 units) and a report's; the window takes neither. Message delivery
+and notifications do not depend on any title. Terminal emoji width follows tested Unicode cell tables;
 wide-character/wrapped-line reading and bracketed paste modes are verified per terminal backend.
 
 ### 2.4 Exact conversations and vendor extensions
@@ -406,6 +402,33 @@ stale file-maintenance timestamps.
 Antigravity's sorted `workspace_uris` includes `--add-dir` folders and does not identify the launch cwd. Preserve that
 ambiguity through discovery for LIFECYCLE-3.2's explicit location choice; never treat the first matching URI as the
 original cwd.
+
+A run's title is its conversation's complete native stored title, the one Resume shares, by each store's reader and
+precedence: Claude Code's
+custom title, then its AI title, summary and prompt; Codex's name, else its title - a rollout's first prompt where the
+index has none of it; OpenCode's title; Pi's name, else its first prompt; Muse Code's name, else its prompt; and
+Antigravity's title, else its preview. Resume's one-line presentation of it, and a preview made from a first prompt
+where a store falls back to one, do not shorten the complete native stored title held by the details (PANEL-1.5) and
+the API (MCP-3.1).
+It is read by the run's exact conversation - its CLI, session ID and environment - alone, in the store its launch uses,
+found as discovery finds a directory's: an indexed store is queried by that exact ID; a file store may list its file
+names to find the one for that ID and parses only the matching candidates, never discovering the store's other
+conversations. It reads Claude Code's
+`<ID>.jsonl` in the project folders the run's folder names; Codex's thread by its ID in `state_5.sqlite`, else, not
+indexed, the rollout named for it; Pi's session file named for its ID in the folder Pi keeps the run's folder's sessions
+in, or its override's; and OpenCode's, Muse Code's and Antigravity's row by its ID - each by the rules its list has, each
+file version read once. It is read as soon as the run's conversation is known - its CLI names it, or the run starts to
+resume it by its ID - and whenever that changes; once for each run a reload reattaches; and as each turn ends, the run's
+activity going from working to not working. A run's title is read at most once in 30 seconds: a read asked sooner follows
+once they are up, one however many were asked, never dropped; a run's reads never overlap, and none is asked or waits for
+a run that ended or closed, or once the window's Facade stops. There is no polling and no file watcher. A title found
+replaces the run's, its card told only where it changed. Before its CLI saved the conversation it has none; a later read
+that finds none, or fails - said in the log, never shown - keeps the last, and another conversation of the run has none
+until it is read. The title is kept with the run across a reload, its reattachment and an ended run's restoration, as a conversation
+title only where it was proven to come from the native conversation reader: a title an earlier build kept without that
+proof, which may have come from a CLI's report, is discarded. A custom CLI keeps no history Facade reads, so its
+runs have no title. The extension runs where its window's CLIs do, a remote window's included, and reads the stores
+their launches use.
 
 A session already running in Facade is not duplicated; later Pin restorations skip it. Facade does not scan for or
 acquire external writer locks. An externally active session may be resumed; return the vendor's actual acceptance or
@@ -618,8 +641,8 @@ installed CLI is the runtime evidence.
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.4 | Each built-in's destination discovery, unknown-version launch, OpenCode below version 2 refused with how to update, a turned-off CLI refused as turned off, matching profile/PATH/env/quoting, Windows launcher recognition and cmd.exe refusals, native permission mapping, explicit per-call model/effort and native defaults |
-| 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, titles kept as set for each built-in, Muse Code's screen reader on its fixtures and its reports' precedence |
-| 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks |
+| 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, terminal and report titles rejected for each built-in (2.3), Muse Code's screen reader on its fixtures and its reports' precedence |
+| 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks; native-title refresh at 2.4's read times, its cache and its retention across reattachment, as VERIFICATION U14 checks |
 | 3.1–3.4 | `.enabled` affects new starts only, custom CLIs require Resume without capability declarations or other placeholders, minimal argument/env schema, owned and session options refused, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration, Antigravity asking nothing in a folder given through a link or in another case of its letters |
 | 4.1–4.2 | Show Agent Launch describes and redacts the configured launch and says where no trust entry is written; staged cwd validation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes; no claim inferred from a dated observation |

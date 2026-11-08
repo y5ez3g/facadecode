@@ -6,6 +6,7 @@ import * as assert from 'assert';
 import type { OwnerClaim } from '../base/ownership';
 import type { ExecutionSession } from '../host/execution/executionSession';
 import { PtydNotSent } from '../host/execution/ptydClient';
+import { COLOURS_PROTOCOL, EARLIER_PROTOCOLS, PTYD_PROTOCOL } from '../ptyd/protocol';
 import { FakeClock } from './clock';
 import { withModules } from './withModules';
 
@@ -131,5 +132,49 @@ suite('Execution session: ownership and recovery across asynchronous boundaries'
 		assert.strictEqual(peers[0].disposals, 1, 'a transferred activation lets go of its connection, which claims nothing any more');
 		await clock.tick(3_000);
 		assert.deepStrictEqual([reconnects, reconciles, peers.length], [0, 0, 1], 'a transferred activation owns no more scheduled work, and connects no more');
+	});
+	// A reload into an update leaves the window's agents in the earlier build's ptyd: its programs ask that ptyd their terminal's
+	// colours, and a theme changed after the reload must reach them as it reaches the window's own's (2026-11-05)
+	test('ARCHITECTURE-2.3: the window tells its colours to each ptyd that holds its runs - its own of protocol 16, and an earlier build\'s of 15 as it joins it, a protocol that takes them - and again to each as its theme changes', async () => {
+		const told: string[] = [];
+		const asked = (name: string) => ({
+			request: async (method: string) => { if (method === 'colours') { told.push(name); } },
+			onDidClose() { return undefined; }, onDidLoseOwner() { return undefined; }, dispose() { return undefined; }
+		});
+		const earlier: { joined?: (client: unknown, protocol: number) => void; clients: (readonly [string, unknown])[] } = { clients: [] };
+		const { ExecutionSession: Session } = withModules({ './ptydClient': {
+			PtydNotSent, ownPtydSocket: () => '/test/own', otherPtyds: () => [],
+			EarlierPtyds: class {
+				constructor(_home: string, _own: string, _claim: OwnerClaim, events: { joined?: (client: unknown, protocol: number) => void }) { earlier.joined = events.joined; }
+				get clients() { return earlier.clients; }
+				protocolOf(socket: string) { return socket === '/test/older' ? 14 : 15; }
+				find() { return Promise.resolve(); }
+				client() { return Promise.reject(new PtydNotSent('none')); }
+				dispose() { return undefined; }
+			},
+			PtydClient: { connect: async () => asked('own') }
+		} })<typeof import('../host/execution/executionSession')>(require.resolve('../host/execution/executionSession'));
+		const windowed = new Session({ owner: claim.owner, claim, home: '/test', ptydScript: '/test/ptyd.js', log: () => undefined,
+			connectionLost: () => undefined, transferred: () => undefined, reconnect: async () => undefined, reconcile: async () => undefined,
+			colours: () => ({ foreground: 'cccc/cccc/cccc', background: '1f1f/1f1f/1f1f' }) });
+		try {
+			await windowed.client();
+			assert.deepStrictEqual(told, ['own'], 'its own, as it claims there');
+			// An earlier build's ptyd joined: told at once; one of protocol 14, which takes no colours, is not
+			const previous = asked('previous'), older = asked('older');
+			earlier.clients = [['/test/previous', previous], ['/test/older', older]];
+			earlier.joined!(previous, 15);
+			earlier.joined!(older, 14);
+			assert.deepStrictEqual(told, ['own', 'previous']);
+			// The theme changed: each that takes them
+			windowed.coloursChanged();
+			await clock.tick(0);
+			assert.deepStrictEqual(told.slice(2).sort(), ['own', 'previous']);
+			// Its own ptyd is of protocol 16, which also reports colour schemes; the earlier one of 15 takes the colours all the same, its
+			// runs still shown and operated through it (ARCHITECTURE-2.3, 2.4)
+			assert.deepStrictEqual([PTYD_PROTOCOL, windowed.protocolOf('/test/own'), windowed.protocolOf('/test/previous'), COLOURS_PROTOCOL, EARLIER_PROTOCOLS.includes(15)], [16, 16, 15, 15, true]);
+		} finally {
+			windowed.dispose();
+		}
 	});
 });

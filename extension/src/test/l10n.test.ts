@@ -53,6 +53,48 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 		assert.strictEqual(status, 0, output);
 	});
 
+	test('PANEL-1.4: the card\'s renamed words are in every bundle under their new English texts, and no bundle keeps an old one', () => {
+		const renamed: readonly (readonly [old: string, now: string])[] = [
+			['Started', 'New conversation started'],
+			['Resumed', 'Conversation resumed'],
+			['Needs permission', 'Permission needed'],
+			['Needs sign-in', 'Sign-in needed'],
+			['Needs an answer', 'Answer needed'],
+			['Needs attention', 'Attention needed'],
+			['Exited with code {0}', 'Process exited · code {0}'],
+			['Terminated by signal {0}', 'Process terminated · {0}'],
+			['Disconnected: exit cause unknown', 'Process lost · reason unknown'],
+			['Could not confirm that it stopped', 'Stop unconfirmed · check process'],
+			['Can\'t collaborate: set the path to the CLI program in Configure Agents, not to a .cmd file', 'Collaboration off · replace .cmd with CLI in Configure Agents'],
+			['Can\'t collaborate: Facade tools stopped', 'Collaboration stopped · end and resume'],
+			['Can\'t collaborate: move or rename {0}', 'Collaboration off · move or rename {0}'],
+			['Can\'t collaborate: could not read {0}', 'Collaboration off · {0} unreadable'],
+			['Can\'t collaborate: could not create files', 'Collaboration off · file creation failed'],
+			['Not connected to other agents yet', 'Collaboration not connected yet'],
+			['Waiting for first CLI activity report', 'No initial status · check terminal'],
+			['CLI has not reported activity', 'No status from CLI · check terminal'],
+			['CLI cleared activity report', 'Status cleared · check terminal'],
+			['The CLI\'s current screen is not recognized', 'Status unrecognized · check terminal'],
+			['The terminal was reset; waiting for activity', 'Status reset · check terminal'],
+			['Activity unavailable', 'Status unavailable · check terminal'],
+			['Error: {0}', 'Error · {0}']
+		];
+		const wrong: string[] = [];
+		for (const locale of ['', ...LOCALES]) {
+			const name = locale ? `bundle.l10n.${locale}.json` : 'bundle.l10n.json';
+			const bundle = readJson(path.join(ROOT, 'l10n', name));
+			for (const [old, now] of renamed) {
+				if (!Object.hasOwn(bundle, now)) {
+					wrong.push(`${name}: missing ${JSON.stringify(now)}`);
+				}
+				if (Object.hasOwn(bundle, old)) {
+					wrong.push(`${name}: still has ${JSON.stringify(old)}`);
+				}
+			}
+		}
+		assert.deepStrictEqual(wrong, []);
+	});
+
 	suite('the checker finds each problem it owns', () => {
 		let root: string;
 		const write = (file: string, content: unknown): void => {
@@ -173,6 +215,22 @@ const TERMS: { readonly [locale in typeof LOCALES[number]]: { readonly worktree:
 };
 
 suite('Localization: the words each language has for Facade\'s things (UX-2.4)', () => {
+
+	test('PANEL-1.5: each label a screen reader says before a card\'s details\' facts, from a `Label: {0}` text, keeps its one value last, after its colon, in every language - so that taking the value away leaves the label', () => {
+		const labels = ['Title: {0}', 'Location: {0}', 'Path: {0}'];
+		const wrong: string[] = [];
+		for (const locale of ['', ...LOCALES]) {
+			const bundle = readJson(path.join(ROOT, 'l10n', locale ? `bundle.l10n.${locale}.json` : 'bundle.l10n.json'));
+			for (const label of labels) {
+				const text = textOf(bundle[label]);
+				// Its words, then a colon - full-width, or with spaces round it, a no-break one among them - then its value alone
+				if (text.split('{0}').length !== 2 || !/^[^{}]*[^\s:：{}][^{}]*?\s*[:：]\s*\{0\}$/u.test(text)) {
+					wrong.push(`${locale || 'en'}: ${JSON.stringify(label)} -> ${JSON.stringify(text)}`);
+				}
+			}
+		}
+		assert.deepStrictEqual(wrong, []);
+	});
 
 	test('Facade Code, Facade, CLI, YOLO and the CLIs\' names stay as they are in every language', () => {
 		const wrong = LOCALES.flatMap(locale => textsOf(locale).filter(text => NAMES.some(name => says(text.english, name) && !says(text.text, name)))).map(shown);

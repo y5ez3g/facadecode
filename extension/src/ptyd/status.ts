@@ -29,7 +29,7 @@ const MOST_APP = 32;
 const MOST_ID = 128;
 const MOST_ID_DEPTH = 8;
 
-/** The wire byte limits already bound these texts; keep them whole for hover (CLIS-2.3). */
+/** The wire byte limits already bound these texts; keep them whole for the accessible label (CLIS-2.3). */
 const KEPT_TEXT = 2048;
 
 const KEY = /^[a-z]+$/;

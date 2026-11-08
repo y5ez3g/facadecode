@@ -2,8 +2,7 @@
 	"name": "facadecode",
 	"displayName": "%displayName%",
 	"description": "%description%",
-	"version": "0.0.7",
-	"preview": true,
+	"version": "0.1.0",
 	"private": true,
 	"publisher": "facade",
 	"repository": {
@@ -14,13 +13,12 @@
 	"bugs": {
 		"url": "https://github.com/y5ez3g/facadecode/issues"
 	},
-	"homepage": "https://github.com/y5ez3g/facadecode/tree/main/extension#readme",
+	"homepage": "https://facadecode.com",
 	"engines": {
 		"vscode": "^1.105.0"
 	},
 	"categories": [
-		"AI",
-		"Other"
+		"AI"
 	],
 	"capabilities": {
 		"virtualWorkspaces": false,
@@ -105,6 +103,11 @@
 			{
 				"command": "facade.closeAgent",
 				"title": "%command.closeAgent%",
+				"category": "%command.category%"
+			},
+			{
+				"command": "facade.showAgentDetails",
+				"title": "%command.showAgentDetails%",
 				"category": "%command.category%"
 			},
 			{
@@ -200,16 +203,6 @@
 					"group": "1_agent@1"
 				},
 				{
-					"command": "facade.unpinAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewUnpin",
-					"group": "1_agent@2"
-				},
-				{
-					"command": "facade.pinAgent",
-					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewPin",
-					"group": "1_agent@2"
-				},
-				{
 					"command": "facade.moveUp",
 					"when": "webviewId == 'facade.agents' && webviewSection == 'agent' && webviewMoveUp",
 					"group": "2_move@1"
@@ -233,6 +226,10 @@
 				{
 					"command": "facade.closeAgent",
 					"when": "facade.agentSelected"
+				},
+				{
+					"command": "facade.showAgentDetails",
+					"when": "facade.agentSelected && facade.agentSelectedVisible"
 				},
 				{
 					"command": "facade.newWorktree",
@@ -753,6 +750,31 @@
 		"antigravity",
 		"muse code",
 		"opencode",
-		"pi"
-	]
+		"pi",
+		"claude",
+		"muse",
+		"ai agents",
+		"coding agent",
+		"multi-agent",
+		"agent orchestration",
+		"orchestrator",
+		"mcp",
+		"model context protocol",
+		"git worktree",
+		"worktree",
+		"remote ssh",
+		"ssh",
+		"terminal",
+		"agent mesh",
+		"agent panel",
+		"remote control",
+		"subagents",
+		"autonomous agents",
+		"ai pair programming",
+		"cli"
+	],
+	"galleryBanner": {
+		"color": "#f5f3ed",
+		"theme": "light"
+	}
 }

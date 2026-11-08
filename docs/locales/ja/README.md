@@ -1,134 +1,93 @@
 <div align="center">
 
-<img src="../../../ide/resources/linux/code.png" alt="Facade Code" width="128">
+<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
 
 # Facade Code
 
-**あなたと AI チームのための、ひとつの IDE。**
+**VS Code のためのマルチエージェント オーケストレーター。**
 
-VS Code がベース。Claude Code、Codex、Antigravity、Muse Code、Qwen Code など、各社のネイティブなエージェント CLI をそのまま動かします。
+ネイティブなエージェント CLI の実行、コード編集、変更内容のレビューを同じ IDE ウィンドウ内で行えます。自身のアカウントやサブスクリプションを使用し、ウィンドウやマシンを越えてエージェント同士を連携させましょう。
 
-[ダウンロード](https://github.com/y5ez3g/facadecode/releases) ·
-[仕様](../../ide/) ·
-[バグを報告](https://github.com/y5ez3g/facadecode/issues)
+[![ウェブサイト: facadecode.com](https://img.shields.io/badge/%E3%82%A6%E3%82%A7%E3%83%96%E3%82%B5%E3%82%A4%E3%83%88-facadecode.com-335e78?style=flat)](https://facadecode.com)
+[![VS Code Marketplace: インストール](https://img.shields.io/badge/VS%20Code%20Marketplace-%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%88%E3%83%BC%E3%83%AB-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
+[![Open VSX: インストール](https://img.shields.io/badge/Open%20VSX-%E3%82%A4%E3%83%B3%E3%82%B9%E3%83%88%E3%83%BC%E3%83%AB-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
+[![Releases: IDE をダウンロード](https://img.shields.io/badge/Releases-IDE%20%E3%82%92%E3%83%80%E3%82%A6%E3%83%B3%E3%83%AD%E3%83%BC%E3%83%89-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Issues: バグを報告](https://img.shields.io/badge/Issues-%E3%83%90%E3%82%B0%E3%82%92%E5%A0%B1%E5%91%8A-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · **日本語** · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
 
 </div>
 
-https://github.com/user-attachments/assets/35e2c317-8040-49c6-bb56-ab81196e8ebc
-
-Facade Code は VS Code のフォークです。あらゆるベンダーのネイティブなエージェントがあなたのプロジェクトと機能に協力して取り組み、あなたは同じウィンドウでコードをレビューし、どのエージェントにも指示を出せます。
-
-- 🧑‍💻 **プロジェクトと機能で整理された、完全な VS Code。** ひとつのウィンドウで複数のプロジェクトと機能を並行して開発できます。機能はそれぞれ git worktree で、専属のエージェント チームがつきます。
-- 🤖 **ベンダーを横断するネイティブ エージェント CLI のチーム。** エージェントは、あなたが契約しているプランで動きます。Facade Code の中では、エージェント同士が互いを起動し、メッセージを送り合い、行き詰まったときは助け合います。
-- 👥 **Super Engineer か Super Team か。** 複数のエージェントを自分で指揮することも、リード役のモデルを決めて専門家たちを並行して取りまとめさせることもできます。
+[![facadecode.com で 2 分間のデモを見る](../../assets/readme/demo-poster.jpg)](https://facadecode.com)
 
 ## インストール
 
-[Releases](https://github.com/y5ez3g/facadecode/releases) から最新版をダウンロードしてください。macOS（Apple シリコン）用の `.dmg`、Windows（x64）用のインストーラー、Ubuntu（x64）用の `.deb` があります。
+```sh
+code --install-extension facade.facadecode
+```
 
-**前提条件**: 使いたいエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、Qwen Code の任意の組み合わせ）をインストールし、ログインしておいてください。Facade Code はそれらを直接実行し、それぞれのネイティブな認証とサブスクリプションを使います。
+または、[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) や [Open VSX](https://open-vsx.org/extension/facade/facadecode) から **Facade Code** をインストールします。macOS (Apple silicon)、Linux (x64)、Windows (x64) で動作します。
 
-Facade Code は VS Code と並べてインストールでき、何も共有しません。設定、拡張機能、`facade` コマンドライン ツールはすべて別々です。
+次に、使用予定のサポートされているエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi）をインストールしてサインインします。Facade Code は各 CLI 独自のサインインとサブスクリプションを使用して起動します。
 
-## クイックスタート
+> **エージェントはデフォルトで確認なしで実行されます。** `facade.yolo` がデフォルトで有効になっているため、エージェントは確認を求めずにコマンドを実行しファイルを変更できます。これを無効にすると、各 CLI の標準の確認プロンプトに戻ります。[拡張機能の README](../../../extension/README.md#install) を参照してください。
 
-1. **プロジェクトを開く**:
-   ```sh
-   facade ~/code/space-shooter
-   ```
-   または **File > Open Folder**（ファイル > フォルダーを開く）を使うか、フォルダーをワークスペース バーにドロップします。フォルダーは git リポジトリである必要があります（worktree には git が必要です。新しく始める場合は先に `git init` を実行してください）。
+## Agent Panel
 
-2. **テックリードを起動する**:
-   タイトル バーのロボット アイコン（Agent メニュー）をクリックするか、コマンド パレットで **Agents: Start Agent...**（エージェントを起動）を実行し、Claude Code か Codex を選びます。Facade Code の中から起動したエージェントには、Facade の MCP ツールが備わります。
+**あなたとエージェント、そして IDE が同じウィンドウに。**
 
-3. **テックリード用のプロンプトを渡す**:
-   ```text
-   あなたはテックリードです。Facade を使って、デモ用にブラウザー（デスクトップ）向けの
-   ネオン調スペースシューティングを作ってください。見た目と手触りを担当する PD を
-   1 人、Codex 経由の GPT Sol 6（gpt-6-sol, max）で起動してください。並行して作業する
-   Muse 1.3 のエンジニア（muse-spark-1.3, max）も 3 人起動してください。規模は小さく、30 分ほどで
-   作れる程度に。1 ステージ、敵 3 種類、2 段階のボス、パワーアップ、スコアとコンボ。
-   機能の多さより、完成度と仕上がりを優先してください。エンジニアは自分の作業を自分で
-   マージし、あなたは後からレビューします。短い計画、スイムレーン図、PD のモックアップを
-   載せた HTML ページを 1 枚送ってください。私が承認するまで着手しないでください。
-   ```
+Facade Code は、ファイルと同じエディターのターミナルタブ内でネイティブなエージェント CLI（Claude Code、Codex、Antigravity、Muse Code、OpenCode、Pi）を直接実行し、各 CLI 自身のコマンド、ツール、アカウント、サブスクリプションを使用します。パネル内のカードで各エージェントのステータスをリアルタイムに追跡できます。
 
-4. **チームの協力ぶりを見る**:
-   起動された PD とエンジニアが、ワークスペース バーのそれぞれのプロジェクトと機能の下に現れます。HTML の計画を承認すると、作業が始まります。どのエージェントのターミナルにもいつでも入って、出力を確かめたり、直接話しかけたりできます。
+- **コードの隣で作業。** 各エージェントはエディター領域内の専用ターミナルタブで実行されます。タブを閉じると表示が非表示になるだけで、エージェントはバックグラウンドで動き続けます。カードをクリックすればいつでも再び開きます。
+- **複数のエージェントのステータスを追跡。** カードには、各エージェントに最後に送信された内容と、作業中か、許可が必要か、エラーが発生したかが表示され、詳細にはタイトル、フォルダー、誰が起動したかが表示されます。エージェントはウィンドウの再読み込みや拡張機能の再起動を越えて実行を継続します。
+- **フォルダーと worktree。** 任意のワークスペースフォルダーでエージェントを実行するか、Git worktree をその場で作成してコードの変更を分離します。会話をピン留めしておけばワークスペースを再度開いたときに復元でき、履歴から過去のセッションを再開することも可能です。
 
-*（注: このサンプル プロンプトは 5 つのエージェントを最大の推論レベルで起動します。お使いのプランに合わせて、CLI、モデル、推論レベル、エンジニアの人数を調整してください。）*
+## Agent Use
 
-## 機能
+**あなたと同じように、エージェントに他のエージェントを操作させましょう。**
 
-### セッションではなく、プロジェクトと機能
+MCP とターミナルプロトコルを介して、エージェントは他のエージェントの起動、停止、検出、メッセージのやり取り、ターミナル画面の読み取り、テキスト入力、キー送信を行うことができます。
 
-https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
+- **エージェントの起動と停止。** 任意のエージェントが、このコンピューター上の Facade ウィンドウ内にある任意のフォルダーや新しい worktree で 6 つの CLI のいずれかを使用して他のエージェントを起動し、最初のタスクを与えることができます。同一のリクエスト ID による再試行リクエストで重複したエージェントが作成されることはありません。
+- **メッセージの送信。** エージェント同士でメッセージをやり取りしたり、あなたにメッセージを送信したりできます。Facade はメッセージ全体を一度に貼り付けて送信します。未送信のテキストやプロンプトの質問が入力欄にある場合、入力欄が空くまで送信は待機します。
+- **ターミナルの制御。** エージェントは他のエージェントの画面を読み取り、コマンドを入力し、キーを送信してプロンプトに回答したり、ブロックされた仲間を助けたりできます。子エージェントが許可、回答、またはサインインを待って 20 秒が経過すると、それを起動したエージェントに通知されます。
 
-多くのエージェント ツールは、エージェントのセッションごとに worktree を作ります。Facade Code はその逆です。worktree ひとつがひとつの機能で、リポジトリの下に並び、そこにあなたがエージェントを割り当てます。
+## Agent Mesh
 
-ひとつの機能には、エージェントが 1 体では足りないことがよくあります。コードを書くエージェントが自分の仕事をうまく説明できるとは限らず、デザインのセンスがあるとも限りません。そこでほかのエージェントがドキュメント、デザイン、レビューを手伝い、全員が同じ worktree で作業します。エージェントは入れ替わっても、機能は残ります。
+**ウィンドウ、マシン、拠点を越えてエージェントをつなぎます。**
 
-- **ワークスペース バー**: すべてのリポジトリと機能を 1 列に並べます。クリックするとウィンドウ全体（エクスプローラー、エディター、ターミナル、ソース管理）が切り替わり、離れたときの状態に戻ります。プロジェクトが混ざることはありません。[`WORKSPACE.md`](../../ide/WORKSPACE.md) を参照してください。
-- **worktree のライフサイクル**: **New Worktree**（新しい worktree）はブランチを作り、`.worktreeinclude` に挙げたローカル ファイルを同期して、セットアップを実行します。**Delete Worktree**（worktree を削除）は、削除する前に失われるものを詳しく示します。[`WORKTREE.md`](../../ide/WORKTREE.md) を参照してください。
-- **並行するサブタスク**: 独立したタスクは、別々の worktree に分けられます。
+Facade Code は、このコンピューター上で開いている Facade ウィンドウのエージェントをひとつのネットワークに接続します。[VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) ウィンドウを開くことで、その連携を別のマシンへと拡張できます。
 
-### あらゆるベンダーから集めたチーム
+- **ウィンドウを越えて。** `facade.yolo` が有効な場合、エージェントはこのコンピューター上の各 Facade ウィンドウ（ローカルと Remote - SSH の両方）のすべてのエージェントに到達できます。無効な場合、エージェントは自身が属するグループ（あなたが起動したエージェントおよびそこから起動されたエージェント）にのみ到達できます。
+- **SSH 経由で拡張。** [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) ウィンドウでは、エージェントはリモートマシンのツール、ファイル、アカウントを使用して直接そのマシン上で実行されます。ローカルのエージェントから Remote - SSH ウィンドウ内のエージェントを直接起動したり指示を出したりできます。
+- **スマートフォンから調整。** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) を使用して、スマートフォンの Claude アプリをコンピューター上の Claude Code セッションに接続します。そのセッションが Facade を通じて他のエージェントを調整し、進行状況をスマートフォンに報告します。
 
-- **自分のプランで動くネイティブ CLI**: Claude Code、Codex、Muse Code、Antigravity、Qwen Code が、それぞれ自分の統合ターミナルで、既存のサブスクリプションを使って動きます。
-- **エージェントがエージェントを起動する**: エージェントは、現在の機能か新しい worktree で、ほかのエージェント（どのベンダーの CLI やモデルでも）を起動し、タスクを割り当てられます。[`AGENT-LAUNCHER.md`](../../ide/AGENT-LAUNCHER.md) と [`AGENT-ORCHESTRATION.md`](../../ide/AGENT-ORCHESTRATION.md) を参照してください。
-- **メッセージ**: エージェント同士がメッセージを送り合い、結果を依頼元に報告し、人の承認が必要な判断があればあなたに知らせます。[`AGENT-MESSAGES.md`](../../ide/AGENT-MESSAGES.md) を参照してください。
-- **互いに助け合う**: エージェントはほかのエージェントのターミナルを読み、プロンプトに答え、キー入力を送って、行き詰まった作業者をあなたの手を煩わせずに助けられます。[`AGENT-DEBUGGING.md`](../../ide/AGENT-DEBUGGING.md) を参照してください。
-- **どのエージェントにも介入できる**: エージェントにはそれぞれ、機能の下に自分のターミナル行があります。何をしているかが見え、いつでも直接入力できます。
-- **標準の MCP**: オーケストレーション ツールはすべて、標準の MCP サーバーで提供されます。
+<sub>Remote Control には、サポートされているバージョンの Claude Code、対象のサブスクリプション、およびフルスコープでのサインインが必要です。[セットアップ要件](https://code.claude.com/docs/en/remote-control#requirements) を参照してください。</sub>
 
-## 2 つの働き方
+## Facade Code IDE (Preview)
 
-ボトルネックは開発者の注意力です。2 つのモードは、任せる度合いの 2 つの段階を表します。
+**複数のプロジェクト。ひとつのウィンドウ。**
 
-| | **Super Engineer** | **Super Team** |
-|---|---|---|
-| **あなたの役割** | 手を動かすエンジニア | エンジニアリング マネージャー |
-| **やり取りする相手** | 複数のエージェントと直接 | テックリードのエージェントと 1 対 1 |
-| **エージェントを取りまとめるのは** | あなた | テックリード |
-| **向いているもの** | 細かく導く必要がある機能: 探索的な作業、自分で判断したい設計上の決定、変わりやすい要件 | きれいに分割できる、大きくて明確な機能 |
+専用のワークスペースバーでプロジェクト、機能 worktree、エージェントチームを整理します。エージェントをバックグラウンドで動かしたまま、関連するファイルやターミナルを備えたプロジェクト間を切り替えられます。
 
-同じウィンドウで両方を組み合わせられます。慎重さが要る機能は自分でしっかり見て、範囲のはっきりした作業はリードに任せましょう。
+IDE プレビュー版のダウンロード：[macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [すべてのリリース](https://github.com/y5ez3g/facadecode/releases)
 
-- **Super Engineer**: 自分で worktree を開き、リポジトリをまたいでエージェントにタスクを割り当て、終わったものから順にコードをレビューします。
-- **Super Team**: 機能をひとつ、テックリードとしてエージェントに任せます。リードはタスクを分解し、インターフェースの取り決めを定め、作業者を起動し、その成果をレビューします。
-  - 強いモデルがリードし、より速く安いモデルが既存のプランで並行して実装し、異なるベンダーのモデルが互いの仕事をレビューします。
-  - プロンプトひとつで組み立てられます（[クイックスタート](#クイックスタート) を参照）。繰り返し使うチームのワークフローは skill として書いておけます。
-
-*（この README も同じやり方で書かれました。あるエージェントが分析し、別のエージェントが下書きし、最後の判断は人が下しました。）*
-
-## なぜ作ったか
-
-AI コーディング ツールの多くは 2 つの陣営に分かれます。人が 1 行ずつ追いかける必要がある Copilot 型の IDE と、コード レビューやデバッグを外部のエディターに任せるエージェント型の IDE です。どちらも、ベンダーを横断するネイティブ エージェントのチームを、あなたのメインの IDE の中にまとめてはいません。
-
-私たちは、ひとりの開発者がエージェントのチームとともに複数のプロジェクトと機能を進める未来を信じています。モデルによって得意なことは違うので、チームはベンダーをまたぐべきです。そして、あなたがレビューするコードを書くのはエージェントなのだから、そのチームはあなたの IDE の中にいるべきです。
-
-## 中身は VS Code のまま
-
-Facade Code が変えるのは、複数プロジェクトとエージェントの管理に必要な部分だけです。
-
-- **ワークスペース バー**が最初の列を占め、**アクティビティ バー**はタイトル バーの右上に移ります（`workbench.activityBar.location` で元に戻せます）。
-- アップストリームの Copilot とチャットは既定で無効です（設定ひとつで再び有効にできます）。
-- それ以外はすべて標準の VS Code です。エディター、設定、キー バインド、`.vscode/`、`.code-workspace` ファイル。
-- 拡張機能は [Open VSX](https://open-vsx.org) からインストールします。Remote Development や C/C++ など、一部の Microsoft 独自の拡張機能は Microsoft の公式ビルドでしか使えないライセンスのため、フォークでは動きません。
+この IDE は VS Code のフォークであり、既存のエディターと共存してインストールされ、設定、拡張機能、`facade` コマンドなど何も共有しません。拡張機能は [Open VSX](https://open-vsx.org) から提供されます。Microsoft 独自のいくつかの拡張機能（Remote Development や C/C++ など）は公式の Microsoft ビルドでのみ動作します。アーキテクチャと仕様は [`docs/ide/`](../../ide/) にあります。
 
 ## ソースからのビルド
 
-[`docs/ide/RELEASE.md`](../../ide/RELEASE.md) をエージェントに渡して、ビルドを任せてください。
+- **拡張機能：**コーディングエージェントに [`extension/AGENTS.md`](../../../extension/AGENTS.md) を渡してパッケージをビルドします。
+- **IDE：**コーディングエージェントに [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) を渡してアプリケーションをビルドします。
 
-コントリビューションのガイドラインとブランチのルールは、[`CONTRIBUTING.md`](CONTRIBUTING.md) と [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) を参照してください。
+コントリビューションガイドラインとブランチのルールについては、[`CONTRIBUTING.md`](../../../CONTRIBUTING.md) および [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md) を参照してください。
 
 ## フィードバック
 
-- **バグやアイデア**: [GitHub Issues](https://github.com/y5ez3g/facadecode/issues)、またはエディターの **Help > Report Issue**（ヘルプ > 問題の報告）から。
-- **セキュリティの脆弱性**: [`SECURITY.md`](SECURITY.md) に従って、非公開で報告してください。
+- **バグ報告とアイデア：**[GitHub Issues](https://github.com/y5ez3g/facadecode/issues)、または IDE の **ヘルプ > 問題の報告**。
+- **セキュリティの脆弱性：**[`SECURITY.md`](../../../SECURITY.md) に従って非公開で報告してください。
 
 ## ライセンス
 
-MIT。アップストリームの VS Code と同じです。Microsoft の著作権表示と Facade Code のコントリビューターの表示は [`LICENSE.txt`](../../../LICENSE.txt) を参照してください。
+上流の VS Code と同じく MIT ライセンスです。Microsoft の著作権表記および Facade Code コントリビューターの表記については [`LICENSE.txt`](../../../LICENSE.txt) を参照してください。
+
+<sub>Facade Code は独立した製品であり、表示されているサードパーティツールの提供元と提携、推奨、または後援の関係にはありません。すべてのサードパーティの商標およびロゴは、それぞれの所有者に帰属します。</sub>

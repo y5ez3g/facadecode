@@ -1,134 +1,93 @@
 <div align="center">
 
-<img src="../../../ide/resources/linux/code.png" alt="Facade Code" width="128">
+<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
 
 # Facade Code
 
-**Một IDE cho bạn và đội AI của bạn.**
+**Bộ điều phối đa agent cho VS Code.**
 
-Xây dựng trên VS Code. Chạy trực tiếp các CLI agent chính hãng của bạn, như Claude Code, Codex, Antigravity, Muse Code và Qwen Code.
+Chạy các CLI agent chính hãng, chỉnh sửa code và xem lại các thay đổi trong cùng một cửa sổ IDE. Sử dụng các tài khoản và gói đăng ký của riêng bạn, đồng thời để các agent cộng tác giữa các cửa sổ và máy tính.
 
-[Tải về](https://github.com/y5ez3g/facadecode/releases) ·
-[Đặc tả](../../ide/) ·
-[Báo lỗi](https://github.com/y5ez3g/facadecode/issues)
+[![Trang web: facadecode.com](https://img.shields.io/badge/Trang%20web-facadecode.com-335e78?style=flat)](https://facadecode.com)
+[![VS Code Marketplace: cài đặt](https://img.shields.io/badge/VS%20Code%20Marketplace-c%C3%A0i%20%C4%91%E1%BA%B7t-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
+[![Open VSX: cài đặt](https://img.shields.io/badge/Open%20VSX-c%C3%A0i%20%C4%91%E1%BA%B7t-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
+[![Bản phát hành: tải về IDE](https://img.shields.io/badge/B%E1%BA%A3n%20ph%C3%A1t%20h%C3%A0nh-t%E1%BA%A3i%20v%E1%BB%81%20IDE-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Vấn đề: báo lỗi](https://img.shields.io/badge/V%E1%BA%A5n%20%C4%91%E1%BB%81-b%C3%A1o%20l%E1%BB%97i-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · **Tiếng Việt** · [Polski](../pl/README.md)
 
 </div>
 
-https://github.com/user-attachments/assets/35e2c317-8040-49c6-bb56-ab81196e8ebc
-
-Facade Code là một bản fork của VS Code, nơi các agent chính hãng của mọi nhà cung cấp cùng làm việc trên các dự án và tính năng của bạn, còn bạn review code và chỉ đạo bất kỳ agent nào ngay trong cùng một cửa sổ.
-
-- 🧑‍💻 **VS Code đầy đủ, tổ chức theo dự án và tính năng.** Phát triển nhiều dự án và tính năng trong một cửa sổ. Mỗi tính năng là một git worktree, có một đội agent riêng.
-- 🤖 **Một đội CLI agent chính hãng đến từ nhiều nhà cung cấp.** Các agent chạy bằng gói đăng ký bạn đang có. Trong Facade Code, các agent khởi chạy lẫn nhau, nhắn tin cho nhau và gỡ rối cho nhau.
-- 👥 **Super Engineer hoặc Super Team.** Tự mình chỉ huy nhiều agent, hoặc chỉ định một mô hình dẫn dắt để điều phối các chuyên gia làm việc song song.
+[![Xem bản demo 2 phút trên facadecode.com](../../assets/readme/demo-poster.jpg)](https://facadecode.com)
 
 ## Cài đặt
 
-Tải bản phát hành mới nhất từ [Releases](https://github.com/y5ez3g/facadecode/releases): tệp `.dmg` cho macOS (Apple silicon), trình cài đặt cho Windows (x64), hoặc tệp `.deb` cho Ubuntu (x64).
+```sh
+code --install-extension facade.facadecode
+```
 
-**Trước khi bắt đầu**: Cài đặt và đăng nhập vào các CLI agent bạn muốn dùng (kết hợp tùy ý Claude Code, Codex, Antigravity, Muse Code hoặc Qwen Code). Facade Code chạy trực tiếp chúng, dùng cơ chế xác thực và gói đăng ký riêng của từng CLI.
+Hoặc cài đặt **Facade Code** từ [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) hoặc [Open VSX](https://open-vsx.org/extension/facade/facadecode). Tiện ích chạy trên macOS (Apple silicon), Linux (x64) và Windows (x64).
 
-Facade Code được cài song song với VS Code và không dùng chung bất cứ thứ gì: cài đặt, tiện ích mở rộng và công cụ dòng lệnh `facade` đều hoàn toàn tách biệt.
+Tiếp theo, hãy cài đặt và đăng nhập vào bất kỳ CLI agent được hỗ trợ nào mà bạn định sử dụng: Claude Code, Codex, Antigravity, Muse Code, OpenCode hoặc Pi. Facade Code khởi chạy từng CLI bằng tài khoản và gói đăng ký riêng của chính CLI đó.
 
-## Bắt đầu nhanh
+> **Theo mặc định, các agent chạy mà không cần hỏi phê duyệt.** Với `facade.yolo` được bật mặc định, các agent có thể thực thi lệnh và thay đổi tệp mà không cần hỏi trước. Hãy tắt tùy chọn này để khôi phục các câu hỏi phê duyệt tiêu chuẩn của từng CLI. Xem [README tiện ích](../../../extension/README.md#install).
 
-1. **Mở một dự án**:
-   ```sh
-   facade ~/code/space-shooter
-   ```
-   Hoặc dùng **File > Open Folder** (Tệp > Mở thư mục), hoặc kéo thả một thư mục vào thanh workspace. Thư mục phải là một git repository (worktree cần có git; hãy chạy `git init` trước nếu bạn bắt đầu từ đầu).
+## Agent Panel
 
-2. **Khởi chạy một tech lead**:
-   Nhấp vào biểu tượng robot trên thanh tiêu đề (menu Agent), hoặc chạy **Agents: Start Agent...** (khởi chạy agent) trong Command Palette, rồi chọn Claude Code hoặc Codex. Agent được khởi chạy từ bên trong Facade Code sẽ có sẵn các công cụ MCP của Facade.
+**Các agent và IDE của bạn, trong cùng một cửa sổ.**
 
-3. **Đưa cho nó prompt dành cho tech lead**:
-   ```text
-   Bạn là tech lead. Hãy dùng Facade để làm một game bắn súng không gian phong cách neon
-   chạy trên trình duyệt (desktop) để demo, với một PD dùng GPT Sol 6 (gpt-6-sol, max)
-   qua Codex, phụ trách giao diện và cảm giác chơi, và ba kỹ sư Muse 1.3
-   (muse-spark-1.3, max) làm việc song song. Giữ quy mô nhỏ, khoảng nửa tiếng là xong:
-   một màn chơi, ba loại kẻ địch, một trùm hai giai đoạn, vật phẩm tăng sức mạnh, điểm số
-   và combo. Làm game hoàn chỉnh, chỉn chu quan trọng hơn thêm nhiều tính năng. Các kỹ sư tự merge
-   phần việc của mình, bạn review sau. Gửi tôi một trang HTML gồm kế hoạch ngắn, một sơ đồ
-   swimlane và bản mockup của PD, rồi chờ tôi duyệt trước khi bắt đầu.
-   ```
+Facade Code chạy các CLI agent chính hãng (Claude Code, Codex, Antigravity, Muse Code, OpenCode và Pi) trong các tab terminal biên tập bên cạnh các tệp của bạn, sử dụng các lệnh, công cụ, tài khoản và gói đăng ký riêng của từng CLI. Một thẻ trong bảng điều khiển sẽ theo dõi trạng thái của từng agent.
 
-4. **Xem cả đội cộng tác**:
-   PD và các kỹ sư vừa được khởi chạy sẽ xuất hiện trên thanh workspace, dưới dự án và tính năng của họ. Khi bạn duyệt kế hoạch HTML, họ bắt đầu xây dựng. Bất cứ lúc nào bạn cũng có thể nhấp vào terminal của bất kỳ agent nào để xem đầu ra hoặc trò chuyện trực tiếp với nó.
+- **Làm việc ngay cạnh mã nguồn.** Mỗi agent chạy trong tab terminal riêng ở khu vực soạn thảo. Việc đóng một tab chỉ ẩn nó đi trong khi agent vẫn tiếp tục chạy; bấm vào thẻ của nó để mở lại tab.
+- **Theo dõi trạng thái giữa các agent.** Các thẻ hiển thị nội dung gần nhất được gửi tới từng agent và liệu nó đang làm việc, cần cấp quyền hay gặp lỗi, cùng phần chi tiết cho biết tiêu đề, thư mục và ai đã khởi chạy nó. Các agent vẫn tiếp tục chạy xuyên suốt quá trình tải lại cửa sổ và khởi động lại tiện ích.
+- **Thư mục và worktree.** Chạy agent trong bất kỳ thư mục không gian làm việc nào hoặc tạo Git worktree nhanh chóng để tách biệt các thay đổi mã nguồn. Ghim một cuộc trò chuyện (Pin) để khôi phục khi bạn mở lại không gian làm việc, hoặc tiếp tục các phiên trước từ lịch sử.
 
-*(Lưu ý: Prompt mẫu này khởi chạy 5 agent ở mức suy luận tối đa. Hãy điều chỉnh CLI, mô hình, mức suy luận và số lượng kỹ sư cho phù hợp với các gói đăng ký bạn đang có.)*
+## Agent Use
 
-## Tính năng
+**Để các agent điều khiển các agent khác, giống hệt như bạn.**
 
-### Dự án và tính năng, không phải phiên làm việc
+Thông qua MCP và giao thức terminal, các agent có thể khởi chạy, dừng, tìm kiếm và nhắn tin cho các agent khác, đọc màn hình terminal của nhau, nhập văn bản và nhấn phím.
 
-https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
+- **Khởi chạy và dừng agent.** Một agent có thể khởi chạy các agent khác bằng bất kỳ CLI nào trong số sáu CLI, trong bất kỳ thư mục hoặc worktree mới nào thuộc các cửa sổ Facade trên máy tính này, và giao cho chúng nhiệm vụ đầu tiên. Một yêu cầu thử lại có cùng ID yêu cầu (request ID) sẽ không bao giờ khởi chạy agent thứ hai trùng lặp.
+- **Gửi tin nhắn.** Các agent trao đổi tin nhắn với nhau và có thể nhắn tin cho bạn. Facade dán toàn bộ tin nhắn một lần và gửi đi. Nếu văn bản chưa gửi hoặc câu hỏi prompt đang chắn dòng nhập, việc gửi sẽ chờ cho đến khi ô nhập sẵn sàng.
+- **Điều khiển terminal.** Một agent có thể đọc màn hình của agent khác, nhập lệnh và nhấn phím để trả lời prompt hoặc hỗ trợ đồng đội đang bị kẹt. Khi một agent con chờ cấp quyền, câu trả lời hoặc đăng nhập quá 20 giây, agent đã khởi chạy nó sẽ nhận được thông báo.
 
-Hầu hết công cụ agent tạo một worktree cho mỗi phiên agent. Facade Code làm ngược lại: mỗi worktree là một tính năng, được liệt kê dưới repository của nó, và bạn là người giao agent vào đó.
+## Agent Mesh
 
-Một tính năng thường cần nhiều hơn một agent. Agent viết code có thể không giải thích rõ công việc của mình hoặc không có con mắt thiết kế tốt, nên các agent khác giúp viết tài liệu, thiết kế và review, tất cả trong cùng một worktree. Agent đến rồi đi; tính năng vẫn ở lại.
+**Kết nối các agent giữa các cửa sổ, máy tính và địa điểm.**
 
-- **Thanh workspace**: Liệt kê mọi repository và tính năng trong một cột. Nhấp vào một mục để chuyển cả cửa sổ (explorer, trình soạn thảo, terminal và quản lý mã nguồn), khôi phục đúng như lúc bạn rời đi. Các dự án không bao giờ lẫn vào nhau. Xem [`WORKSPACE.md`](../../ide/WORKSPACE.md).
-- **Vòng đời worktree**: **New Worktree** (worktree mới) tạo nhánh, đồng bộ các tệp cục bộ được liệt kê trong `.worktreeinclude` và chạy bước thiết lập. **Delete Worktree** (xóa worktree) cho biết chi tiết những gì sẽ mất trước khi xóa. Xem [`WORKTREE.md`](../../ide/WORKTREE.md).
-- **Tác vụ con song song**: Các tác vụ độc lập có thể tách ra thành các worktree riêng.
+Facade Code kết nối các agent trong các cửa sổ Facade trên máy tính này thành một mạng lưới duy nhất. Mở một cửa sổ [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) để mở rộng sự cộng tác đó sang một máy khác.
 
-### Một đội đến từ mọi nhà cung cấp
+- **Giữa các cửa sổ.** Khi bật `facade.yolo`, một agent có thể liên lạc với mọi agent trên các cửa sổ Facade ở máy tính này, cả cục bộ lẫn Remote - SSH. Khi tắt, một agent chỉ tiếp cận nhóm của chính nó: agent do bạn khởi chạy và các agent được tạo từ đó.
+- **Mở rộng qua SSH.** Trong cửa sổ [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), các agent chạy trực tiếp trên máy từ xa với đầy đủ công cụ, tệp và tài khoản ở đó. Các agent cục bộ có thể trực tiếp khởi chạy và gửi tin nhắn tới các agent trong cửa sổ Remote - SSH.
+- **Điều phối từ điện thoại.** Kết nối ứng dụng di động Claude với một phiên Claude Code trên máy tính của bạn bằng [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Phiên đó có thể điều phối các agent khác qua Facade và báo cáo tiến độ trở lại điện thoại của bạn.
 
-- **CLI chính hãng trên gói đăng ký của bạn**: Claude Code, Codex, Muse Code, Antigravity và Qwen Code chạy trong terminal tích hợp riêng của chúng, dùng các gói đăng ký bạn đang có.
-- **Agent khởi chạy agent**: Một agent có thể khởi chạy các agent khác (dùng CLI hoặc mô hình của bất kỳ nhà cung cấp nào) trong tính năng hiện tại hoặc trong một worktree mới, và giao việc cho chúng. Xem [`AGENT-LAUNCHER.md`](../../ide/AGENT-LAUNCHER.md) và [`AGENT-ORCHESTRATION.md`](../../ide/AGENT-ORCHESTRATION.md).
-- **Nhắn tin**: Các agent nhắn tin cho nhau, báo cáo kết quả cho bên đã gọi chúng và thông báo cho bạn khi có quyết định cần con người phê duyệt. Xem [`AGENT-MESSAGES.md`](../../ide/AGENT-MESSAGES.md).
-- **Gỡ rối cho nhau**: Một agent có thể đọc terminal của agent khác, trả lời các câu hỏi của nó và gửi thao tác phím để giúp một agent đang bị kẹt mà không làm phiền bạn. Xem [`AGENT-DEBUGGING.md`](../../ide/AGENT-DEBUGGING.md).
-- **Bạn can thiệp được vào từng agent**: Mỗi agent có một dòng terminal riêng dưới tính năng của nó. Bạn thấy nó đang làm gì và có thể gõ trực tiếp vào đó bất cứ lúc nào.
-- **MCP tiêu chuẩn**: Mọi công cụ điều phối đều được cung cấp qua một máy chủ MCP tiêu chuẩn.
+<sub>Remote Control yêu cầu phiên bản Claude Code được hỗ trợ, gói đăng ký đủ điều kiện và đăng nhập với đầy đủ quyền hạn. Xem [các yêu cầu thiết lập](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
-## Hai cách làm việc
+## Facade Code IDE (Preview)
 
-Sự chú ý của lập trình viên là điểm nghẽn. Hai chế độ này tương ứng với hai mức độ giao việc:
+**Nhiều dự án. Một cửa sổ.**
 
-| | **Super Engineer** | **Super Team** |
-|---|---|---|
-| **Vai trò của bạn** | Kỹ sư trực tiếp bắt tay vào việc | Quản lý kỹ thuật |
-| **Bạn làm việc với ai** | Trực tiếp với nhiều agent | Một agent tech lead, 1:1 |
-| **Ai điều phối các agent** | Bạn | Tech lead |
-| **Phù hợp nhất cho** | Tính năng cần chỉ dẫn sát sao: công việc mang tính khám phá, quyết định thiết kế bạn muốn tự đánh giá, yêu cầu thay đổi liên tục | Tính năng lớn, được xác định rõ, chia nhỏ gọn gàng |
+Tổ chức các dự án, feature worktree và các đội agent trong một thanh không gian làm việc chuyên dụng. Chuyển đổi giữa các dự án cùng các tệp và terminal tương ứng, trong khi các agent vẫn tiếp tục làm việc ở chế độ nền.
 
-Bạn có thể kết hợp cả hai trong cùng một cửa sổ: giữ quyền kiểm soát chặt với các tính năng nhạy cảm, đồng thời giao công việc có phạm vi rõ ràng cho một tech lead.
+Tải về bản xem trước IDE: [macOS (Apple silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [Tất cả bản phát hành](https://github.com/y5ez3g/facadecode/releases)
 
-- **Super Engineer**: Bạn mở worktree, giao việc cho agent ở nhiều repository khác nhau và review code ngay khi từng agent hoàn thành.
-- **Super Team**: Bạn giao một tính năng cho một agent làm tech lead. Nó chia nhỏ công việc, định nghĩa các hợp đồng giao diện, khởi chạy các agent thực hiện và review kết quả của họ.
-  - Một mô hình mạnh dẫn dắt; các mô hình nhanh hơn, rẻ hơn, chạy trên các gói đăng ký bạn đang có, triển khai song song; và các mô hình từ những nhà cung cấp khác nhau review công việc của nhau.
-  - Chỉ cần một prompt là thiết lập được (xem [Bắt đầu nhanh](#bắt-đầu-nhanh)); các quy trình làm việc nhóm bạn dùng lại có thể viết thành skill.
+IDE là một bản fork của VS Code, cài đặt độc lập bên cạnh trình soạn thảo hiện tại của bạn và không dùng chung gì với nó: cài đặt, tiện ích mở rộng và lệnh `facade` hoàn toàn tách biệt. Các tiện ích mở rộng đến từ [Open VSX](https://open-vsx.org); một vài tiện ích độc quyền của Microsoft như Remote Development và C/C++ chỉ chạy trên các bản dựng chính thức của Microsoft. Kiến trúc và tài liệu đặc tả nằm trong [`docs/ide/`](../../ide/).
 
-*(README này cũng được viết theo cách đó: một agent phân tích, một agent soạn nháp, và một người đưa ra quyết định cuối cùng.)*
+## Xây dựng từ mã nguồn
 
-## Vì sao
+- **Tiện ích mở rộng:** Cung cấp [`extension/AGENTS.md`](../../../extension/AGENTS.md) cho agent lập trình của bạn để xây dựng gói tiện ích.
+- **IDE:** Cung cấp [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) cho agent lập trình của bạn để xây dựng ứng dụng.
 
-Hầu hết công cụ lập trình bằng AI rơi vào hai nhóm: IDE kiểu Copilot, nơi con người phải theo dõi từng dòng, và Agent IDE, nơi việc review code và gỡ lỗi bị đẩy sang một trình soạn thảo bên ngoài. Không nhóm nào đưa được một đội agent chính hãng từ nhiều nhà cung cấp vào bên trong IDE chính của bạn.
-
-Chúng tôi tin rằng tương lai là một lập trình viên dẫn dắt nhiều dự án và tính năng cùng một đội agent. Mỗi mô hình giỏi một kiểu việc khác nhau, nên đội cần gồm nhiều nhà cung cấp. Và vì agent viết code mà bạn review, đội ấy nên ở ngay trong IDE của bạn.
-
-## Vẫn là VS Code
-
-Facade Code chỉ thay đổi những gì cần thiết cho việc quản lý nhiều dự án và agent:
-
-- **Thanh workspace** chiếm cột đầu tiên; **thanh hoạt động** chuyển lên góc trên bên phải của thanh tiêu đề (có thể khôi phục bằng `workbench.activityBar.location`).
-- Copilot và chat của upstream bị tắt theo mặc định (chỉ cần một cài đặt để bật lại).
-- Mọi thứ khác là VS Code nguyên bản: trình soạn thảo, cài đặt, phím tắt, `.vscode/` và các tệp `.code-workspace`.
-- Tiện ích mở rộng được cài từ [Open VSX](https://open-vsx.org). Một số tiện ích độc quyền của Microsoft, như Remote Development và C/C++, chỉ được cấp phép cho các bản build chính thức của Microsoft và không thể chạy trên các bản fork.
-
-## Build từ mã nguồn
-
-Đưa [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) cho agent của bạn và để nó build.
-
-Về hướng dẫn đóng góp và quy tắc nhánh, xem [`CONTRIBUTING.md`](CONTRIBUTING.md) và [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).
+Để biết các nguyên tắc đóng góp và quy tắc phân nhánh, hãy xem [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) và [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).
 
 ## Phản hồi
 
-- **Lỗi và ý tưởng**: [GitHub Issues](https://github.com/y5ez3g/facadecode/issues) hoặc **Help > Report Issue** (Trợ giúp > Báo cáo sự cố) trong trình soạn thảo.
-- **Lỗ hổng bảo mật**: Vui lòng báo cáo riêng tư theo [`SECURITY.md`](SECURITY.md).
+- **Lỗi & ý tưởng:** [GitHub Issues](https://github.com/y5ez3g/facadecode/issues), hoặc **Help > Report Issue** trong IDE.
+- **Lỗ hổng bảo mật:** Vui lòng báo cáo riêng tư theo hướng dẫn trong [`SECURITY.md`](../../../SECURITY.md).
 
 ## Giấy phép
 
-MIT, giống VS Code upstream. Xem [`LICENSE.txt`](../../../LICENSE.txt) để biết thông báo bản quyền của Microsoft và thông báo của những người đóng góp cho Facade Code.
+MIT, tương tự VS Code gốc. Xem [`LICENSE.txt`](../../../LICENSE.txt) để biết thông báo bản quyền của Microsoft và các tác giả đóng góp cho Facade Code.
+
+<sub>Facade Code là một sản phẩm độc lập và không liên kết với, được xác nhận bởi, hoặc được tài trợ bởi các nhà cung cấp công cụ bên thứ ba được hiển thị. Tất cả các nhãn hiệu và logo của bên thứ ba đều thuộc về chủ sở hữu tương ứng.</sub>

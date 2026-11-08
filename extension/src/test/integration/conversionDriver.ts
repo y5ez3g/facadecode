@@ -127,7 +127,7 @@ export async function activate(): Promise<void> {
 				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 				return undefined;
 			});
-			const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
+			const alias = card.alias;
 			const pid = await until('the CLI to start', async () => pidOf(alias));
 			// Its terminal open, as a person sees it before adding a folder: one the restart beat to opening tells the editor no
 			// process, which leaves its tab beside the new one, as Facade retires no tab it cannot tell from another's (ARCHITECTURE-2.2)
@@ -169,7 +169,7 @@ export async function activate(): Promise<void> {
 			const card = await until('the reopened pinned agent', async () => (await state()).cards.find(each => each.pinned));
 			await pinState(card.runId, true);
 			if (NATIVE) { await nativeTurn(card.runId, card.name); }
-			const alias = card.tooltip.join(' ').match(/#a\d+/)![0];
+			const alias = card.alias;
 			const pid = await until('the restored CLI process', async () => pidOf(alias));
 			const sessionFile = path.join(process.env.FACADE_HOME!, 'extension', 'runs', `${card.runId}.session.json`);
 			const session = await until('the restored native session identity', async () => {

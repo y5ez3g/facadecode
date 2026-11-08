@@ -297,6 +297,8 @@ export interface EarlierEvents {
 	readonly busy?: (socket: string) => boolean;
 	/** Each joined, as it claims this window's runs there: the window hears and answers their tool calls on it (ARCHITECTURE-2.4, MCP-6.1). */
 	readonly connected?: (client: PtydClient) => void;
+	/** Each held once it claimed this window's runs there, with the protocol it speaks: the window tells it what it tells its own. */
+	readonly joined?: (client: PtydClient, protocol: number) => void;
 }
 
 /** A ptyd other than this window's own that may hold its runs, with the protocol it speaks. */
@@ -475,6 +477,7 @@ export class EarlierPtyds {
 			throw err;
 		}
 		this.held.set(socket, client);
+		this.events.joined?.(client, protocol);
 		client.onDidClose(() => {
 			if (this.held.get(socket) === client) {
 				this.held.delete(socket);

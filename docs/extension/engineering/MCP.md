@@ -281,7 +281,10 @@ folders. Its record has `window_id`, `label`, `environment`, `observed_at`, `fol
 `clis_queried: false`, and a location whose CLIs could not be read is in `unavailable_locations`. Count folders as
 workspace folders, worktrees as non-main checkouts, and agents within the caller's reach. Deduplicate locations and
 agents rather than nesting copies beneath every associated folder. Main checkout and plain-folder locations remain
-launchable locations.
+launchable locations. A resumed conversation's subfolder, a Resume cwd recorded within a location (WORKTREES-1.2), is not
+listed as a separate location: its agent belongs to that anchor, reported and filtered by the anchor's `location_id` with
+its exact `cwd` retained, in counts and a targeted lookup too, and a `location_id` formerly issued for the subfolder
+starts a new agent at its anchor.
 Window CLI rows have `cli`, `display_name`, `available`, `problem` where unavailable, and `overrides` for model and
 effort (true, false or `unknown`); details:true adds `version`, `message_input` and `initial_prompt` capability. Equal
 choices across all locations are represented once; a differing choice names the exact `location_ids` it applies to.
@@ -299,8 +302,9 @@ Agent rows have `agent_id`, `name`, `window_id`, `environment`, `location_id`, `
 `tools_state`, `message_input` (its capability state, with its reason unless supported), `error`, `exit` (its `kind`,
 `abnormal` or `failed`, with its code or signal), `observed_at`, `state_observed_at` and `stale`. Requested settings do
 not claim the native CLI's current effective model. details:true adds `creator`, `root`, `created_at`, `window` (its
-label), `title` and `activity_reason`; compact rows keep `activity_reason` where activity is unknown. A targeted lookup
-reads only that agent's window and avoids unrelated CLI discovery.
+label), `title` - its conversation's complete title as its CLI stores it, the one Resume Agent lists (CLIS-2.4), where it has one;
+never its terminal's - and `activity_reason`; compact rows keep `activity_reason` where activity is unknown. A targeted
+lookup reads only that agent's window and avoids unrelated CLI discovery.
 
 Agents and locations page with the same opaque cursor, bound to selection, limit and reach. Counts describe the whole
 matched scope, not the page. Pages observe changing state, not an atomic distributed snapshot. `complete` describes

@@ -2,7 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The first line's measured name (PANEL-1.3). The full name stays in the card's state and hover.
+// The first line's measured name (PANEL-1.3). The full name stays in the card's state, its details and its accessible label.
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
@@ -104,11 +104,13 @@ export function fitCardTop(top: HTMLElement, name: HTMLElement, fullName: string
 		return;
 	}
 	const measureName = measureIn(name);
-	const gap = parseFloat(getComputedStyle(top).columnGap) || 0;
-	let reserved = 0;
+	const line = getComputedStyle(top);
+	const gap = parseFloat(line.columnGap) || 0;
+	// The Pin and the buttons sit over the line's end at the card's corner, out of its flow: its padding keeps their room (PANEL-1.3)
+	let reserved = (parseFloat(line.paddingLeft) || 0) + (parseFloat(line.paddingRight) || 0);
 	for (const other of top.children) {
-		if (other !== name) {
-			const style = getComputedStyle(other);
+		const style = getComputedStyle(other);
+		if (other !== name && style.position !== 'absolute' && other.getClientRects().length) {
 			reserved += other.getBoundingClientRect().width + (parseFloat(style.marginRight) || 0) + gap;
 		}
 	}

@@ -13,14 +13,19 @@ import { AgentPty } from './agentPty';
 /** One run's terminal resource; process state and subscriptions belong to the execution coordinator. */
 export interface AgentTerminal {
 	readonly pty: AgentPty;
+	/** Opens its tab: in the active group, or in `column`'s where that is given - the last group where it is gone (LIFECYCLE-3.5). */
+	open(reveal: boolean, column?: number): void;
 	/**
-	 * Opens its tab: in the active group, or in `column`'s where that is given - the last group where it is gone (LIFECYCLE-3.5); `activeAt`,
-	 * when it was last active there, and `front`, whether it was its group's front, for its group's front tab after a reload.
+	 * Opens its tab in its turn, as a reload or a restart brings its pinned agent back (LIFECYCLE-3.5): as `open` does, in front of its
+	 * group as the newest tab there, what it covers not shown again and no activation moving the panel's selection until its turn is
+	 * over (PANEL-2.1). False where its tab is open or opening already.
 	 */
-	open(reveal: boolean, column?: number, activeAt?: number, front?: boolean): void;
-	/** A reload's pinned tab just opened gets its mark now, in front as it is (LIFECYCLE-3.4). */
-	markOpened(): Promise<void>;
+	openInTurn(column?: number): boolean;
+	/** Its turn over: where its tab `opened`, its mark goes on now, in front as it is, nothing given back (LIFECYCLE-3.4, 3.5). */
+	markOpened(opened: boolean): Promise<void>;
 	reveal(preserveFocus: boolean): boolean;
+	/** Whether its tab is open now: a terminal, not one Facade is hiding. A pinned agent's before its turn, or a hidden card's, has none. */
+	isOpen(): boolean;
 	/** Closes its tab, the run and its pseudoterminal going on: opened again, it draws the run's screen (LIFECYCLE-2.2). */
 	hide(): boolean;
 	rename(name: string): void;
@@ -49,17 +54,14 @@ interface TerminalEntry {
 	hiding?: boolean;
 	/** Facade's Pin of its agent, which a group's one unpinned agent tab counts - its mark following (LIFECYCLE-2.2, 3.4). */
 	pinned?: boolean;
-	/** When its tab was last active, by this host's clock: what a reload into one group goes by (LIFECYCLE-2.2, 3.5). */
-	activeAt?: number;
 	/** The group its tab is to open in; none, the active one. */
 	openIn?: number;
 	/** When Facade's Pin of its agent last changed, by this host's clock: a mark changed on its unknown tab after it wins (LIFECYCLE-3.4). */
 	pinnedAt?: number;
 	/** The group its tab was last told to be in (LIFECYCLE-3.5). */
 	placedColumn?: number;
-	/** Whether its tab was last told to be its group's front, and whether it was so before the reload that brought it back (LIFECYCLE-3.5). */
-	placedFront?: boolean;
-	wasFront?: boolean;
+	/** Its tab opens in its turn, a reload's or a restart's pinned agent's, until its mark is put on (openInTurn; LIFECYCLE-3.5). */
+	turn?: boolean;
 	/** What its opening behind the person's work is expected to bring to the front, withdrawn once its tab is known. */
 	opensExpected?: () => void;
 	/** When the person last showed its tab - a card's click, Go to Agent, its card's Pin or Unpin: a mark then goes on where it is in front. */
@@ -77,8 +79,8 @@ interface TerminalOptions {
 	readonly renamed: (run: RunId, name: string) => void;
 	/** The window's terminal colours, which each terminal reports as it opens and the theme changes (ARCHITECTURE-2.3). */
 	readonly colours?: WindowColours;
-	/** Where `run`'s tab is now: open in the group of `column`, its group's front or not, or hidden - what a reload brings back (LIFECYCLE-2.2, 3.5). */
-	readonly placed?: (run: RunId, column: number | undefined, activeAt: number | undefined, front: boolean | undefined) => void;
+	/** Where `run`'s tab is now: open in the group of `column`, or hidden - kept for a reload (LIFECYCLE-2.2, 3.5). */
+	readonly placed?: (run: RunId, column: number | undefined) => void;
 }
 
 /** A group's front as Facade brings it back: its tab, and the terminal it shows where that is a terminal no agent's (LIFECYCLE-3.4). */
@@ -95,15 +97,6 @@ interface Expected {
 	readonly column: number | undefined;
 	readonly matches: (tab: vscode.Tab | undefined) => boolean;
 	readonly until: number;
-}
-
-/** Each group's front as the editor restored it, by view column, and the active group, as a reload's first tab opened (LIFECYCLE-3.5). */
-interface Capture {
-	readonly at: number;
-	/** How often the person had brought something to the front by then: a later move of theirs is newer than the capture. */
-	readonly moves: number;
-	readonly active: number | undefined;
-	readonly fronts: ReadonlyMap<number, Front>;
 }
 
 /** Active-terminal and active-tab changes within this interval identify one change (LIFECYCLE-2.2). */
@@ -136,7 +129,7 @@ export class AgentTerminals implements vscode.Disposable {
 	/** Agents' tabs behind the person's work waiting for their mark to follow their Pin, and whether one is being marked. */
 	private marks: TerminalEntry[] = [];
 	private marking = false;
-	/** While a reload's tabs open, their marks wait: each would take the front tab a mark goes on (finishRestore). */
+	/** Until this window's runs are reattached, the marks of the queue wait: each would take the front tab a mark goes on (finishRestore). */
 	private restoring = true;
 	private restoringTimer: ReturnType<typeof setTimeout> | undefined;
 	/** A mark's command is under way: a mark changing meanwhile is Facade's, never taken for the person's. */
@@ -145,25 +138,17 @@ export class AgentTerminals implements vscode.Disposable {
 	private readonly wrongMarks = new WeakSet<vscode.Tab>();
 	/** Marks that failed one after another for an agent's tab: tried again once its tab is known anew, after two. */
 	private readonly markFailures = new Map<TerminalEntry, number>();
-	/** Each group's front as the editor restored it, taken as a reload's first tab began to open: in front again at its end (LIFECYCLE-3.5). */
-	private capture: Capture | undefined;
-	/** The groups a reload's coming agents were the fronts of: their tabs open last, and nothing else need be in front there meanwhile. */
-	private recordedFronts: ReadonlySet<number> = new Set();
+	/** The last pinned tab a reload or a restart opened in its turn: the panel's selection goes to it once their tabs are open (turnsOver). */
+	private lastTurn: TerminalEntry | undefined;
 	/** What Facade's own actions are to bring to the front, and how many marks hold a tab in front now (LIFECYCLE-3.4). */
 	private expected: Expected[] = [];
 	private borrowing = 0;
 	/** This window's terminals are gone: no mark goes on, and one under way does nothing more. */
 	private disposed = false;
-	/** Marks go on one at a time, whoever asks - the queue's and a reload's tab just opened alike (LIFECYCLE-3.4). */
+	/** Marks go on one at a time, whoever asks - the queue's and a tab opened in its turn alike (LIFECYCLE-3.4). */
 	private markLane: Promise<void> = Promise.resolve();
-	/**
-	 * How often the person has brought something to the front, the groups they did since a reload's capture and what they brought to the
-	 * front there last, the group they did so in last, and what was in front last.
-	 */
+	/** How often the person has brought something to the front, and what was in front last. */
 	private personMoves = 0;
-	private readonly personColumns = new Set<number>();
-	private readonly personFronts = new Map<number, vscode.Tab>();
-	private personLast: number | undefined;
 	private seenFront: { readonly column?: number; readonly tab?: vscode.Tab } = {};
 	/** Copies of agents' tabs the editor made, each becoming an ordinary terminal: their tabs told apart as they become active (LIFECYCLE-2.2). */
 	private copies: vscode.Terminal[] = [];
@@ -200,8 +185,9 @@ export class AgentTerminals implements vscode.Disposable {
 				this.correlate();
 				const pair = terminal && this.pairOf(terminal);
 				if (pair) { this.applyPin(pair); }
-				// A terminal made behind the person's work, becoming active as it opens, moves no selection (PANEL-2.1)
-				if (!pair || !this.opensBehind(pair)) {
+				// A terminal made behind the person's work, becoming active as it opens, moves no selection; nor does anything while a reload's
+				// or a restart's pinned tab opens in its turn, the selection going to the last of them once they are open (PANEL-2.1, LIFECYCLE-3.5)
+				if (!this.inTurn() && (!pair || !this.opensBehind(pair))) {
 					this.options.activated(pair?.run);
 				}
 				this.noteFront();
@@ -239,11 +225,20 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * The groups a reload's coming agents were the fronts of, as their records say: each where its tab opens - the last group where its
-	 * own is gone, as a floating window's is, which the editor opens again only after Facade's tabs (columnFor; LIFECYCLE-3.5).
+	 * The pinned tabs a reload or a restart opened in their turns are open: the panel's selection, which none of them moved, goes to the
+	 * last one opened - in front of its group - where one did; else it stays as it was (PANEL-2.1, LIFECYCLE-3.5).
 	 */
-	frontsRecorded(columns: readonly number[]): void {
-		this.recordedFronts = new Set(columns.map(column => this.openingColumn(column) ?? column));
+	turnsOver(): void {
+		const last = this.lastTurn;
+		this.lastTurn = undefined;
+		if (last && this.entries.get(last.run) === last && last.terminal) {
+			this.options.activated(last.run);
+		}
+	}
+
+	/** Whether a reload's or a restart's pinned tab is opening in its turn now: no activation moves the panel's selection meanwhile. */
+	private inTurn(): boolean {
+		return [...this.entries.values()].some(pair => pair.turn);
 	}
 
 	/** Facade's Pin of `run` changed: its tab's mark follows at once, in front or not (LIFECYCLE-3.4). */
@@ -280,108 +275,6 @@ export class AgentTerminals implements vscode.Disposable {
 			this.marking = false;
 			this.markQueue();
 		});
-	}
-
-	/**
-	 * After a reload, each group's front again as it was: the agent tab recorded as its front where that agent came back, else what the
-	 * editor restored in front before Facade opened a tab, else the agent tab last active there - the other groups without the focus,
-	 * then the active one with it. A group the person brought something to the front in since, and the active one where they did so
-	 * anywhere, keeps theirs (LIFECYCLE-3.5). The runs' fronts are told as they are then.
-	 */
-	private async restoreFronts(): Promise<void> {
-		const capture = this.capture;
-		this.capture = undefined;
-		const missed = new Set<number>();
-		try {
-			if (!capture) {
-				return;
-			}
-			const theirs = (column?: number) => this.personMoves > capture.moves && (column === undefined || this.personColumns.has(column));
-			for (const column of vscode.window.tabGroups.all.map(group => group.viewColumn).filter(each => each !== capture.active)) {
-				// One the person brought something to the front in since keeps theirs: what they last brought there, in front again though a
-				// later tab of the reload's opened over it
-				if (theirs(column)) {
-					await this.backToTheirs(column);
-					continue;
-				}
-				const front = this.frontAfterReload(column, capture);
-				// One an extension cannot show without its group's focus - a webview, Settings, a terminal of the person's it cannot tell -
-				// stays behind, its group's front not saved as the agent's over it
-				if (front && !await this.refront(front, false, false)) {
-					missed.add(column);
-				}
-			}
-			if (capture.active !== undefined && !theirs()) {
-				const front = this.frontAfterReload(capture.active, capture);
-				if (front && !(await this.focusColumn(capture.active) && await this.refront(front, true))) {
-					missed.add(capture.active);
-				} else if (front) {
-					// In front already, the tabs that opened over it may have left the focus nowhere: it is there again
-					await vscode.commands.executeCommand('workbench.action.focusActiveEditorGroup').then(undefined, () => undefined);
-				}
-			} else if (theirs()) {
-				// The active group's too, where the person brought something to the front in it
-				if (capture.active !== undefined && theirs(capture.active)) {
-					await this.backToTheirs(capture.active);
-				}
-				// The group the person last brought something to the front in is the active one again, its front theirs: a later tab of the
-				// reload's made its own group the active one as it opened there
-				if (this.personLast !== undefined && vscode.window.tabGroups.activeTabGroup.viewColumn !== this.personLast) {
-					await this.activateColumn(this.personLast);
-				}
-			}
-		} finally {
-			this.personColumns.clear();
-			this.personFronts.clear();
-			this.recordedFronts = new Set();
-			this.syncFronts(missed);
-		}
-	}
-
-	/**
-	 * `column`'s group the active one again, its front untouched and the keyboard's focus left where the person has it - the Explorer, the
-	 * panel - where the editor allows: a file in front by showing it again without the focus, which makes its group the active one, as the
-	 * probe saw; a front of another kind by its group's focus command, which takes the focus there.
-	 */
-	private async activateColumn(column: number): Promise<boolean> {
-		const front = vscode.window.tabGroups.all.find(group => group.viewColumn === column)?.activeTab;
-		if (front?.input instanceof vscode.TabInputText) {
-			const withdraw = this.expect(column, tab => sameTab(tab, front));
-			try {
-				await vscode.commands.executeCommand('vscode.open', front.input.uri, { viewColumn: column, preserveFocus: true, preview: front.isPreview }).then(undefined, () => undefined);
-				if (await this.settle(() => vscode.window.tabGroups.activeTabGroup.viewColumn === column, 500)) {
-					return true;
-				}
-			} finally {
-				withdraw();
-			}
-		}
-		return this.focusColumn(column);
-	}
-
-	/**
-	 * What the person last brought to the front of `column`'s group since a reload's capture, in front there again without the focus - a
-	 * later tab of the reload's may have opened over it, there or as they were in another group (LIFECYCLE-3.5).
-	 */
-	private async backToTheirs(column: number): Promise<void> {
-		const tab = this.personFronts.get(column);
-		const now = tab && this.currentTab(tab);
-		if (!now || now.isActive || now.group?.viewColumn !== column) {
-			return;
-		}
-		const pair = this.pairOfTab(now);
-		await this.refront({ tab: now, ...pair?.terminal ? { terminal: pair.terminal } : {} }, false, false);
-	}
-
-	/** What is to be in front of `column`'s group after a reload (restoreFronts). */
-	private frontAfterReload(column: number, capture: Capture): Front | undefined {
-		const agents = [...this.entries.values()].filter(pair => pair.terminal && pair.tab && !pair.hiding && pair.tab.group?.viewColumn === column)
-			.sort((a, b) => (b.activeAt ?? -Infinity) - (a.activeAt ?? -Infinity));
-		const recorded = agents.find(pair => pair.wasFront);
-		if (recorded?.tab) {
-			return { tab: recorded.tab };
-		}
-		return capture.fronts.get(column) ?? (agents[0]?.tab ? { tab: agents[0].tab } : undefined);
 	}
 
 	/** Once no tab of Facade's is opening, for ten seconds at most: one opening would take the front tab a mark goes on. */
@@ -424,11 +317,24 @@ export class AgentTerminals implements vscode.Disposable {
 		return !this.disposed && test();
 	}
 
-	/** A reload's pinned tab just opened, in front in its group: its mark goes on now, the reload's next tab waiting for it. */
-	private async markOpened(pair: TerminalEntry): Promise<void> {
-		// Its tab as this host knows it, which the editor tells as it opens
-		await this.settle(() => !!pair.tab || this.entries.get(pair.run) !== pair, 2_000);
-		await this.inLane(() => this.markOne(pair, true)).catch(err => this.options.log(`Could not mark ${pair.run}'s tab: ${messageOf(err)}`));
+	/**
+	 * A reload's or a restart's pinned tab, its turn over: where it `opened`, in front of its group as the newest tab there, its mark goes on
+	 * now - the next tab of theirs opening only after - and it is the last opened, for the panel's selection once they are open (turnsOver).
+	 */
+	private async markOpened(pair: TerminalEntry, opened: boolean): Promise<void> {
+		try {
+			if (!opened) {
+				return;
+			}
+			// Its tab as this host knows it, which the editor tells as it opens
+			await this.settle(() => !!pair.tab || this.entries.get(pair.run) !== pair, 2_000);
+			await this.inLane(() => this.markOne(pair, true)).catch(err => this.options.log(`Could not mark ${pair.run}'s tab: ${messageOf(err)}`));
+			if (this.entries.get(pair.run) === pair && pair.terminal) {
+				this.lastTurn = pair;
+			}
+		} finally {
+			pair.turn = false;
+		}
 	}
 
 	/**
@@ -436,13 +342,14 @@ export class AgentTerminals implements vscode.Disposable {
 	 * nothing of the person's taken. Else Facade brings it to the front - its group made the active one, step by step past the
 	 * eighth - the person's keys reaching its terminal meanwhile not its CLI's, marks it, and gives back its group's front, the person's
 	 * group with the focus and its front, and the focus to the panel where its card asked. The person bringing something else to the
-	 * front meanwhile keeps theirs: nothing is given back over it. A reload's pinned tab just `opened`, in front of its group as it is,
-	 * gives back a file or other editor the person had in front of the active group as the reload began, where no agent was that
-	 * group's front; its own group's front comes back with the reload's others at its end (3.5).
+	 * front meanwhile keeps theirs: nothing is given back over it. A reload's or a restart's pinned tab just `opened` in its turn, in front
+	 * of its group as the newest tab there, is marked there - its group made the active one where it is not - and nothing is given back:
+	 * it stays in front, its group the active one (3.5). The queue's mark of a tab in its turn does nothing: its turn puts it on.
 	 */
 	private async markOne(pair: TerminalEntry, opened: boolean): Promise<void> {
 		const wanted = pair.wantedPin;
-		if (this.disposed || this.entries.get(pair.run) !== pair || !pair.terminal || !pair.tab || wanted === undefined || pair.tab.isPinned === wanted || pair.applyingPin) {
+		if (this.disposed || this.entries.get(pair.run) !== pair || !pair.terminal || !pair.tab || wanted === undefined || pair.tab.isPinned === wanted || pair.applyingPin
+			|| (pair.turn && !opened)) {
 			return;
 		}
 		// A mark that did not go on is tried again only once its tab is known anew, its Pin or Unpin is asked again, or the person brings
@@ -451,20 +358,10 @@ export class AgentTerminals implements vscode.Disposable {
 			return;
 		}
 		const groups = vscode.window.tabGroups;
-		const capture = opened ? this.capture : undefined;
-		// At a reload, what goes back in front is a file or other editor of the person's in the active group - no agent being recorded as
-		// its front, which opens last and is in front then - and nothing once the person has gone elsewhere (LIFECYCLE-3.5)
-		const reloadFront = capture && capture.active !== undefined && this.personMoves === capture.moves && !this.recordedFronts.has(capture.active)
-			? capture.fronts.get(capture.active) : undefined;
-		const beforeColumn = capture ? (this.personMoves === capture.moves ? capture.active : undefined) : groups.activeTabGroup.viewColumn;
-		const before = capture ? reloadFront : this.frontOf(groups.activeTabGroup);
-		// A mark that borrows the focus gives back what it took: at a reload the person brought something to the front in since, their place
-		// as it is now - the group they did so in last and what they brought there - though one in place gives nothing back (3.4, 3.5)
-		const moved = !!capture && this.personMoves !== capture.moves;
-		const theirs = moved && this.personLast !== undefined ? this.personFronts.get(this.personLast) : undefined;
-		const borrowedColumn = moved ? this.personLast : beforeColumn;
-		const borrowedFront = moved ? (theirs ? { tab: theirs } : undefined) : before;
-		// A reload's tab just opened: in front of its group, which the editor makes the active one a moment after
+		// What a mark that borrows the focus gives back: the person's group with the focus and its front - none for a tab just opened
+		const beforeColumn = groups.activeTabGroup.viewColumn;
+		const before = opened ? undefined : this.frontOf(groups.activeTabGroup);
+		// A tab just opened: in front of its group, which the editor makes the active one a moment after, or not
 		if (opened) {
 			await this.settle(() => this.inFront(pair), 500);
 		}
@@ -477,16 +374,12 @@ export class AgentTerminals implements vscode.Disposable {
 		if (this.inFront(pair)) {
 			// Marked where it is: the focus stays where the person has it
 			await this.applyMark(pair, wanted);
-			// A reload's tab opened over what the person had in front: that is in front again (3.5)
-			if (capture && before && before.tab !== pair.tab) {
-				await this.giveBack(pair, undefined, before, beforeColumn);
-			}
 			return;
 		}
 		const terminal = pair.terminal;
 		const column = pair.tab.group?.viewColumn;
 		const elsewhere = column !== groups.activeTabGroup.viewColumn;
-		const ownFront = elsewhere && !capture && pair.tab.group ? this.frontOf(pair.tab.group) : undefined;
+		const ownFront = elsewhere && !opened && pair.tab.group ? this.frontOf(pair.tab.group) : undefined;
 		const moves = this.personMoves;
 		// The person's keys reaching any agent's terminal while Facade holds the focus are not its CLI's (LIFECYCLE-2.2, 3.4)
 		this.borrow(true);
@@ -507,9 +400,10 @@ export class AgentTerminals implements vscode.Disposable {
 			await this.applyMark(pair, wanted);
 		} finally {
 			try {
-				// The person brought another tab to the front meanwhile, the mark on or not: theirs stands, nothing given back over it
-				if (this.personMoves === moves) {
-					await this.giveBack(pair, ownFront, borrowedFront, borrowedColumn);
+				// A tab just opened stays in front, its group the active one: nothing is given back (LIFECYCLE-3.5). The person brought another
+				// tab to the front meanwhile, the mark on or not: theirs stands, nothing given back over it
+				if (!opened && this.personMoves === moves) {
+					await this.giveBack(pair, ownFront, before, beforeColumn);
 				}
 			} finally {
 				shown();
@@ -732,16 +626,14 @@ export class AgentTerminals implements vscode.Disposable {
 	}
 
 	/**
-	 * Brings `front` back in front of its group (LIFECYCLE-3.4, 3.5). In the active group with the focus, by its place among the group's
+	 * Brings `front` back in front of its group (LIFECYCLE-2.2, 3.4). In the active group with the focus, by its place among the group's
 	 * tabs, the editor's own commands, which bring any kind back and its focus with it; else as the editor shows its kind again - a
 	 * terminal by its terminal, a file by `vscode.open`, a text or notebook diff by `vscode.diff`, a notebook or custom editor by
 	 * `vscode.openWith` - and, where that fails in the active group, by its place. One the editor opened instead of it, of the same
 	 * resource but another kind, is closed again; a group made active by bringing a front back without the focus is the person's no
-	 * longer, theirs active again - but where `keepActive` is false, as at a reload's end, which makes the person's group the active one
-	 * itself and moves the keyboard's focus once at most, last: a focus command here would move it, and a later step that makes another
-	 * group active without the focus would leave it there, with an agent's CLI perhaps (restoreFronts). Whether it is in front after.
+	 * longer, theirs active again. Whether it is in front after.
 	 */
-	private async refront(front: Front, focus: boolean, keepActive = true): Promise<boolean> {
+	private async refront(front: Front, focus: boolean): Promise<boolean> {
 		if (this.disposed) {
 			return false;
 		}
@@ -837,7 +729,7 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 			// Shown without the focus, its group may have become the active one while the focus stayed where the person has it: theirs is
 			// the active one again, as the person's next command acts on the active group
-			if (keepActive && !focus && activeBefore !== undefined && activeBefore !== column && vscode.window.tabGroups.activeTabGroup.viewColumn === column) {
+			if (!focus && activeBefore !== undefined && activeBefore !== column && vscode.window.tabGroups.activeTabGroup.viewColumn === column) {
 				await this.focusColumn(activeBefore);
 			}
 			if (!back) {
@@ -875,7 +767,7 @@ export class AgentTerminals implements vscode.Disposable {
 
 	/**
 	 * What is in front changed: the person's doing where Facade did nothing a moment before - a newer choice of theirs, which no front
-	 * Facade would bring back overrides - and the runs' fronts are told as they are then; Facade's own changes tell none (LIFECYCLE-3.5).
+	 * Facade would bring back overrides (LIFECYCLE-3.4).
 	 */
 	private noteFront(): void {
 		const group = vscode.window.tabGroups.activeTabGroup;
@@ -886,15 +778,6 @@ export class AgentTerminals implements vscode.Disposable {
 			return;
 		}
 		this.personMoves++;
-		this.personLast = seen.column;
-		if (seen.column !== undefined) {
-			this.personColumns.add(seen.column);
-			if (seen.tab) {
-				this.personFronts.set(seen.column, seen.tab);
-			} else {
-				this.personFronts.delete(seen.column);
-			}
-		}
 		// What they showed before is not what a mark waits for to come to the front any longer, the person elsewhere now - but for the
 		// steps of their showing of one past the eighth, which pass other groups on its way
 		for (const pair of this.entries.values()) {
@@ -907,26 +790,6 @@ export class AgentTerminals implements vscode.Disposable {
 		const shown = seen.tab && this.pairOfTab(seen.tab);
 		if (this.borrowing === 0 && shown && this.markFailures.delete(shown)) {
 			this.applyPin(shown);
-		}
-		if (!this.restoring) {
-			this.syncFronts();
-		}
-	}
-
-	/**
-	 * Whether each run's tab is its group's front, told where that changed: what a reload brings back in front (LIFECYCLE-3.5) - but in the
-	 * groups of `missed`, whose fronts did not come back, the runs' as they were.
-	 */
-	private syncFronts(missed?: ReadonlySet<number>): void {
-		for (const pair of this.entries.values()) {
-			if (!pair.tab || pair.hiding || pair.placedColumn === undefined || missed?.has(pair.placedColumn)) {
-				continue;
-			}
-			const front = pair.tab.isActive === true;
-			if (front !== !!pair.placedFront) {
-				pair.placedFront = front;
-				this.place(pair, pair.placedColumn);
-			}
 		}
 	}
 
@@ -993,23 +856,29 @@ export class AgentTerminals implements vscode.Disposable {
 			...reveal ? {} : { background: { since: Date.now(), ...covered ? { covered } : {} } }
 		};
 		this.entries.set(facts.run, pair);
+		/** Where its tab is to open, as its record keeps it (LIFECYCLE-3.5). */
+		const place = (column: number | undefined) => {
+			if (column !== undefined) {
+				pair.openIn = column;
+			}
+		};
 		return {
 			pty,
-			open: (reveal, column, activeAt, front) => {
-				if (column !== undefined) {
-					pair.openIn = column;
-				}
-				if (activeAt !== undefined) {
-					pair.activeAt ??= activeAt;
-				}
-				// Its group's front before the reload, which it is again at its end (LIFECYCLE-3.5)
-				if (front) {
-					pair.wasFront = true;
-					pair.placedFront = true;
-				}
+			open: (reveal, column) => {
+				place(column);
 				this.openPair(pair, reveal);
 			},
-			markOpened: () => this.markOpened(pair),
+			openInTurn: column => {
+				if (this.entries.get(pair.run) !== pair || pair.terminal || pair.opening) {
+					return false;
+				}
+				place(column);
+				pair.turn = true;
+				this.openPair(pair, false);
+				return true;
+			},
+			markOpened: opened => this.markOpened(pair, opened),
+			isOpen: () => this.entries.get(pair.run) === pair && !!pair.terminal && !pair.hiding,
 			reveal: preserveFocus => {
 				if (this.entries.get(pair.run) !== pair) {
 					return false;
@@ -1170,20 +1039,33 @@ export class AgentTerminals implements vscode.Disposable {
 
 	async finishRestore(): Promise<void> {
 		try {
-			const owner = this.options.terminalOwner;
-			if (!owner) { return; }
-			const restored = [...this.entries.values()];
-			await this.creation;
-			const runs = restored.filter(pair => this.entries.get(pair.run) === pair && pair.terminal).map(pair => pair.run);
-			await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...owner, kind: 'retire', runs });
+			if (this.options.terminalOwner) {
+				await this.creation;
+			}
 		} finally {
-			// The reload's tabs are open, its pinned ones marked as they opened: each group's last active tab is in front again, and
-			// What the person had in front; marks that waited go on now, one after another
+			// This window's runs are reattached. Pinned tabs ahead of any Pin yet to be restored are open, each marked as it opened; those behind
+			// one open later, each in its turn, a queued mark leaving a tab in its turn alone. Nothing is given back (LIFECYCLE-3.5). Marks
+			// that waited go on now, one after another
 			clearTimeout(this.restoringTimer);
-			await this.restoreFronts().catch(err => this.options.log(`Could not bring back the tabs in front: ${messageOf(err)}`));
 			this.restoring = false;
 			this.markQueue();
 		}
+	}
+
+	/**
+	 * A pinned sequence's tabs are open: a recreated local registry may retire its predecessor's UI resources for the runs registered by now,
+	 * once, and releases each hidden run's old tab - at the activation's end and after each later restoration (ARCHITECTURE-2.2).
+	 */
+	async retirePredecessor(): Promise<void> {
+		const owner = this.options.terminalOwner;
+		if (!owner) { return; }
+		const restored = [...this.entries.values()];
+		await this.creation;
+		// Every reattached run, its tab open again or hidden: a hidden one's old tab would otherwise stay, dead (ARCHITECTURE-2.2)
+		const kept = restored.filter(pair => this.entries.get(pair.run) === pair);
+		const runs = kept.map(pair => pair.run);
+		const hidden = kept.filter(pair => !pair.terminal).map(pair => pair.run);
+		await vscode.commands.executeCommand(WINDOW_TERMINALS_COMMAND, { ...owner, kind: 'retire', runs, hidden });
 	}
 
 	/** Creates the native tab with the agent's name; later rename events apply once the terminal opens. */
@@ -1193,10 +1075,6 @@ export class AgentTerminals implements vscode.Disposable {
 		const coveredTerminal = covered && this.frontOf(vscode.window.tabGroups.activeTabGroup)?.terminal;
 		pair.background = reveal ? undefined : { since: Date.now(), ...covered ? { covered } : {}, ...coveredTerminal ? { coveredTerminal } : {} };
 		if (!reveal) {
-			// Each group's front and the active group as a reload's first tab opens behind the person's work, before Facade changes any
-			if (this.restoring && !this.capture) {
-				this.capture = this.captureFronts();
-			}
 			// Its tab, opening in front of its group, is Facade's doing there, the active group or not, until it is known
 			const column = this.columnFor(pair);
 			const withdraw = this.expect(column === vscode.ViewColumn.Active ? vscode.window.tabGroups.activeTabGroup.viewColumn : column,
@@ -1217,28 +1095,9 @@ export class AgentTerminals implements vscode.Disposable {
 		this.opening.push({ pair, at: Date.now() });
 	}
 
-	/** Each group's front as the editor has it, by view column, and the active group: a reload's capture (LIFECYCLE-3.5). */
-	private captureFronts(): Capture {
-		const fronts = new Map<number, Front>();
-		for (const group of vscode.window.tabGroups.all) {
-			const front = this.frontOf(group);
-			if (front && !this.pairOfTab(front.tab)) {
-				fronts.set(group.viewColumn, front);
-			}
-		}
-		// The groups the person brings something to the front in from now on, which keep theirs
-		this.personColumns.clear();
-		this.personFronts.clear();
-		return { at: Date.now(), moves: this.personMoves, active: vscode.window.tabGroups.activeTabGroup.viewColumn, fronts };
-	}
-
 	/** The group `pair`'s tab opens in: the one it was in, the last one where that is gone, else the active one (LIFECYCLE-3.5). */
 	private columnFor(pair: TerminalEntry): vscode.ViewColumn {
-		if (pair.openIn === undefined) {
-			// At a reload, the group that was the active one as it began: the others' openings make their groups active meanwhile
-			return pair.background && this.capture?.active !== undefined ? this.capture.active : vscode.ViewColumn.Active;
-		}
-		return this.openingColumn(pair.openIn) ?? vscode.ViewColumn.Active;
+		return pair.openIn === undefined ? vscode.ViewColumn.Active : this.openingColumn(pair.openIn) ?? vscode.ViewColumn.Active;
 	}
 
 	/** Where a tab whose group was `column` opens: that group, else the last one where it is gone; none where no group is open. */
@@ -1391,27 +1250,15 @@ export class AgentTerminals implements vscode.Disposable {
 			}
 			this.applyPin(pair);
 		}
-		// An agent's tab coming to its group's front or leaving it in a group Facade is doing nothing in: the person's, told as its front
-		// fact - in another group than the active one too, where its close or a file opened there changes it (LIFECYCLE-3.5)
-		const seenAt = Date.now();
-		const busy = (column: number | undefined) => this.borrowing > 0 || this.restoring
-			|| this.expected.some(each => each.until > seenAt && (each.column === undefined || each.column === column));
-		for (const pair of this.entries.values()) {
-			const front = pair.tab?.isActive === true;
-			if (pair.tab && !pair.hiding && pair.placedColumn !== undefined && front !== !!pair.placedFront && !busy(pair.tab.group?.viewColumn)) {
-				pair.placedFront = front;
-				this.place(pair, pair.placedColumn);
-			}
-		}
 		// A terminal's tab changes as its name does, which the editor has told its terminal by then
 		this.observeNames();
 		this.noteFront();
 	}
 
-	/** Where `pair`'s tab is, and whether it is its group's front, told for a reload to bring it back so (LIFECYCLE-3.5). */
+	/** Where `pair`'s tab is, told for its record: a reload opens a pinned agent's there (LIFECYCLE-3.5). */
 	private place(pair: TerminalEntry, column: number | undefined): void {
 		pair.placedColumn = column;
-		this.options.placed?.(pair.run, column, pair.activeAt, column !== undefined ? pair.placedFront === true : undefined);
+		this.options.placed?.(pair.run, column);
 	}
 
 	/**
@@ -1502,15 +1349,7 @@ export class AgentTerminals implements vscode.Disposable {
 		}
 		const holder = this.pairOfTab(tab);
 		if ((!holder || holder === pair) && (!pair.tab || pair.tab === tab)) {
-			const before = pair.activeAt;
-			// Facade's own showing of it, for its mark, is not the person's: when they last had it active stands (LIFECYCLE-3.5)
-			if (this.borrowing === 0 && !this.expectedFront(tab.group?.viewColumn, tab)) {
-				pair.activeAt = Date.now();
-			}
 			this.match(pair, tab);
-			if (before !== pair.activeAt && pair.tab === tab) {
-				this.place(pair, tab.group?.viewColumn);
-			}
 		}
 	}
 
@@ -1527,20 +1366,13 @@ export class AgentTerminals implements vscode.Disposable {
 	 * again, without focus - a file, notebook or custom editor by its resource, another agent's terminal by its pair (LIFECYCLE-2.2).
 	 */
 	private uncover(pair: TerminalEntry, tab: vscode.Tab): void {
-		// A reload's pinned tab is marked as it opens, in front: what it covered comes back after its mark (markOne)
-		if (this.restoring && pair.pinned) {
+		// A reload's or a restart's pinned tab opening in its turn stays in front, its mark put on there: nothing it covers is shown again
+		// (LIFECYCLE-3.5)
+		if (pair.turn) {
 			return;
 		}
 		const covered = pair.background?.covered;
 		if (this.entries.get(pair.run) !== pair || !covered || !tab.isActive || !this.opensBehind(pair) || covered === tab) {
-			return;
-		}
-		// A reload's tabs open one over another, each group's front last: another agent's tab is not shown again between them, nor a file
-		// where an agent is that group's front - but in a group the person brought something to the front in since, theirs is (LIFECYCLE-3.5)
-		const coveredColumn = covered.group?.viewColumn;
-		const persons = coveredColumn !== undefined && this.personColumns.has(coveredColumn);
-		if (this.restoring && !persons && (this.pairOfTab(covered) || this.recordedFronts.has(coveredColumn))) {
-			pair.background = { since: pair.background!.since };
 			return;
 		}
 		// Returning to the covered editor before xterm is ready can leave this terminal permanently unopened in VS Code: this opening's
@@ -1594,8 +1426,8 @@ export class AgentTerminals implements vscode.Disposable {
 			if (changed && pair.wantedPin === undefined && !pair.applyingPin && !this.markingCommand) { this.options.pinned?.(pair.run, tab.isPinned); }
 		}
 		this.applyPin(pair);
-		// A tab whose mark differs from its Pin - a reload's, opened behind the person's work - follows at once, not once it is next
-		// active (LIFECYCLE-3.4)
+		// A tab whose mark differs from its Pin - one opened behind the person's work - follows at once, not once it is next active; one
+		// opening in its turn takes it as its turn ends (LIFECYCLE-3.4)
 		if (pair.wantedPin !== undefined && tab.isPinned !== pair.wantedPin) {
 			this.markNow(pair);
 		}

@@ -31,6 +31,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	/** What the actions answer next: a promise the test settles, where it holds the answer back. */
 	let answer: () => Promise<'gone' | 'failed' | undefined>;
 	let panel: PanelView;
+	/** The commands the panel ran, other than its context keys. */
+	let ran: string[];
 
 	const page = (n: number) => n.toString(16).padStart(32, '0');
 	const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -52,7 +54,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: [base.path, ...parts].join('/') }) },
 			l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, n) => String(args[Number(n)])) },
 			env: { language: 'en' },
-			commands: { executeCommand: async (command: string, key: string, value: unknown) => { if (command === 'setContext') { contexts[key] = value; } } },
+			commands: { executeCommand: async (command: string, key: string, value: unknown) => { if (command === 'setContext') { contexts[key] = value; } else { ran.push(command); } } },
 			window: { withProgress: async () => void progress++ },
 			workspace: {
 				onDidChangeConfiguration: configChanged.event,
@@ -90,7 +92,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	};
 
 	setup(() => {
-		posted = []; acts = []; contexts = {}; progress = 0; logged = []; motions = [];
+		posted = []; acts = []; contexts = {}; progress = 0; logged = []; motions = []; ran = [];
 		settings = {};
 		configChanged = new TestEmitter();
 		state = stateOf(1);
@@ -106,6 +108,15 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 	teardown(() => {
 		panel.dispose();
 		delete (globalThis as { FACADE_TEST_MODE?: boolean }).FACADE_TEST_MODE;
+	});
+
+	test('PANEL-1.5, UX-2.3: Show Agent Details focuses the view, then tells the page that said it is ready which card\'s details to open; a page not ready yet is told once it is', async () => {
+		await panel.showDetails('run-2');
+		const before = posted.filter(message => message.type === 'details').length;
+		await say({ type: 'ready', page: page(1), reducedMotion: false });
+		await panel.showDetails('run-3');
+		assert.deepStrictEqual([ran, before, posted.filter(message => message.type === 'details').map(message => [message.page, message.run])],
+			[['facade.agents.focus', 'facade.agents.focus'], 0, [[page(1), 'run-2'], [page(1), 'run-3']]]);
 	});
 
 	test('LIFECYCLE-2.2: the page says the system\'s reduced-motion preference with ready and as it changes; an earlier page\'s is not heard, a malformed one refused', async () => {
@@ -167,6 +178,8 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 			{ type: 'navigate', page: page(1), url: 'command:workbench.action.reloadWindow' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'open' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'rename' },
+			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'pin' },
+			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'unpin' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'new', target: '1' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'unknown' },
 			{ type: 'act', page: page(1), action: `${page(1)}-1`, what: 'clearFilter', target: '1' },
@@ -187,15 +200,16 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.ok(logged.every(line => line.startsWith('The panel refused a message from its webview')), logged.join('\n'));
 	});
 
-	test('what the person did on the page goes to the panel\'s actions with its card\'s run, and its outcome back to that page under its action ID (PANEL-1.2, 3.1)', async () => {
+	test('what the person did on the page goes to the panel\'s actions with its card\'s run, and its outcome back to that page under its action ID (PANEL-1.2, 2.2, 3.1)', async () => {
 		await say({ type: 'ready', page: page(1) });
 		answer = async () => acts.length === 1 ? 'gone' : undefined;
-		for (const [what, target] of [['open', 'run-2'], ['new'], ['clearFilter'], ['openFolder'], ['rename', 'run-3']]) {
+		for (const [what, target] of [['open', 'run-2'], ['new'], ['clearFilter'], ['openFolder'], ['rename', 'run-3'], ['pin', 'run-4'], ['unpin', 'run-5']]) {
 			await say({ type: 'act', page: page(1), action: `${page(1)}-${what}`, what, ...target ? { target } : {} });
 		}
-		assert.deepStrictEqual(acts, [['open', 'run-2'], ['new', undefined], ['clearFilter', undefined], ['openFolder', undefined], ['rename', 'run-3']]);
+		assert.deepStrictEqual(acts, [['open', 'run-2'], ['new', undefined], ['clearFilter', undefined], ['openFolder', undefined], ['rename', 'run-3'], ['pin', 'run-4'], ['unpin', 'run-5']]);
 		assert.deepStrictEqual(posted.filter(message => message.type === 'outcome').map(({ action, ok, reason }) => [action, ok, reason]), [
-			[`${page(1)}-open`, false, 'gone'], [`${page(1)}-new`, true, undefined], [`${page(1)}-clearFilter`, true, undefined], [`${page(1)}-openFolder`, true, undefined], [`${page(1)}-rename`, true, undefined]
+			[`${page(1)}-open`, false, 'gone'], [`${page(1)}-new`, true, undefined], [`${page(1)}-clearFilter`, true, undefined], [`${page(1)}-openFolder`, true, undefined], [`${page(1)}-rename`, true, undefined],
+			[`${page(1)}-pin`, true, undefined], [`${page(1)}-unpin`, true, undefined]
 		]);
 	});
 
@@ -242,9 +256,9 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		badges.push(view.badge);
 		assert.deepStrictEqual([badges, selected, view.description, contexts], [
 			[{ value: 2, tooltip: '2 agents' }, { value: 1, tooltip: '1 agent' }, undefined],
-			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': true, 'facade.onePlace': false }],
+			['shop · main', { 'facade.hasAgents': true, 'facade.agentSelected': true, 'facade.agentSelectedEnded': true, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.agentSelectedVisible': false, 'facade.filtered': true, 'facade.onePlace': false }],
 			undefined,
-			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.filtered': false, 'facade.onePlace': true }
+			{ 'facade.hasAgents': false, 'facade.agentSelected': false, 'facade.agentSelectedEnded': false, 'facade.agentSelectedPinned': false, 'facade.agentSelectedPinnable': false, 'facade.agentSelectedVisible': false, 'facade.filtered': false, 'facade.onePlace': true }
 		]);
 	});
 
@@ -263,7 +277,7 @@ suite('The panel\'s view: what it takes from its webview, and which page it answ
 		assert.deepStrictEqual([html.includes('FACADE_PROBE'), (view.webview.options as { localResourceRoots: { path: string }[] }).localResourceRoots.map(root => root.path)], [false, ['/extension/media', '/extension/dist/webview']]);
 		assert.deepStrictEqual([...html.matchAll(/(?:src|href)="webview:([^"]+)"/g)].map(match => match[1]), ['/extension/media/panel.css', '/extension/dist/webview/webview.js']);
 		const words = html.slice(html.indexOf('window.FACADE_STRINGS'), html.indexOf('</script>', html.indexOf('window.FACADE_STRINGS')));
-		assert.ok(words.includes('Launch an agent in this workspace.') && !words.includes('<'), 'the embedded words, with no raw <');
+		assert.ok(words.includes('Start an agent in this workspace.') && !words.includes('<'), 'the embedded words, with no raw <');
 	});
 
 	test('the shipped build answers no probe; the integration build has the page shown answer one (UX-3.2)', async () => {

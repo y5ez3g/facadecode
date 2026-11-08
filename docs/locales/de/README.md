@@ -1,135 +1,93 @@
 <div align="center">
 
-<img src="../../../ide/resources/linux/code.png" alt="Facade Code" width="128">
+<img src="../../../extension/media/icon.png" alt="Facade Code" width="112">
 
 # Facade Code
 
-**Eine IDE für dich und dein KI-Team.**
+**Der Multi-Agent-Orchestrator für VS Code.**
 
-Basiert auf VS Code. Führt die nativen CLIs deiner Agenten aus, etwa Claude Code, Codex, Antigravity, Muse Code und Qwen Code.
+Führen Sie native Agenten-CLIs aus, bearbeiten Sie Code und überprüfen Sie Änderungen im selben IDE-Fenster. Nutzen Sie Ihre eigenen Konten und Abonnements, und lassen Sie Agenten über Fenster und Rechner hinweg zusammenarbeiten.
 
-[Download](https://github.com/y5ez3g/facadecode/releases) ·
-[Spezifikationen](../../ide/) ·
-[Fehler melden](https://github.com/y5ez3g/facadecode/issues)
+[![Website: facadecode.com](https://img.shields.io/badge/Website-facadecode.com-335e78?style=flat)](https://facadecode.com)
+[![VS Code Marketplace: installieren](https://img.shields.io/badge/VS%20Code%20Marketplace-installieren-335e78?style=flat)](https://marketplace.visualstudio.com/items?itemName=facade.facadecode)
+[![Open VSX: installieren](https://img.shields.io/badge/Open%20VSX-installieren-335e78?style=flat)](https://open-vsx.org/extension/facade/facadecode)
+[![Releases: IDE herunterladen](https://img.shields.io/badge/Releases-IDE%20herunterladen-335e78?style=flat)](https://github.com/y5ez3g/facadecode/releases)
+[![Issues: Fehler melden](https://img.shields.io/badge/Issues-Fehler%20melden-335e78?style=flat)](https://github.com/y5ez3g/facadecode/issues)
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · [Português (Brasil)](../pt-BR/README.md) · [Español](../es/README.md) · [Русский](../ru/README.md) · **Deutsch** · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
 
 </div>
 
-https://github.com/user-attachments/assets/35e2c317-8040-49c6-bb56-ab81196e8ebc
-
-Facade Code ist ein Fork von VS Code, in dem native Agenten aller Anbieter gemeinsam an deinen Projekten und Features arbeiten, während du im selben Fenster den Code reviewst und jeden einzelnen Agenten steuerst.
-
-- 🧑‍💻 **VS Code mit vollem Funktionsumfang, organisiert nach Projekten und Features.** Entwickle mehrere Projekte und Features in einem Fenster. Jedes Feature ist ein Git-Worktree mit einem eigenen Team von Agenten.
-- 🤖 **Ein anbieterübergreifendes Team nativer Agenten-CLIs.** Die Agenten laufen mit deinen eigenen Coding-Abos. In Facade Code starten Agenten einander, schreiben sich Nachrichten und helfen sich gegenseitig weiter, wenn einer feststeckt.
-- 👥 **Super Engineer oder Super Team.** Steuere mehrere Agenten selbst oder bestimme ein führendes Modell, das Spezialisten parallel koordiniert.
+[![Sehen Sie sich die 2-minütige Demo auf facadecode.com an](../../assets/readme/demo-poster.jpg)](https://facadecode.com)
 
 ## Installation
 
-Lade die neueste Version unter [Releases](https://github.com/y5ez3g/facadecode/releases) herunter: eine `.dmg` für macOS (Apple Silicon), ein Installer für Windows (x64) oder ein `.deb` für Ubuntu (x64).
+```sh
+code --install-extension facade.facadecode
+```
 
-**Voraussetzungen**: Installiere die Agenten-CLIs, die du nutzen möchtest, und melde dich bei ihnen an (beliebige Kombination aus Claude Code, Codex, Antigravity, Muse Code und Qwen Code). Facade Code führt sie direkt aus, mit ihrer eigenen Anmeldung und ihren eigenen Abos.
+Oder installieren Sie **Facade Code** über den [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) oder [Open VSX](https://open-vsx.org/extension/facade/facadecode). Es läuft unter macOS (Apple Silicon), Linux (x64) und Windows (x64).
 
-Facade Code wird neben VS Code installiert und teilt nichts damit: Einstellungen, Erweiterungen und das Kommandozeilenwerkzeug `facade` sind vollständig getrennt.
+Installieren Sie als Nächstes die unterstützten Agenten-CLIs, die Sie verwenden möchten, und melden Sie sich dort an: Claude Code, Codex, Antigravity, Muse Code, OpenCode oder Pi. Facade Code startet jede CLI mit deren eigener Anmeldung und eigenen Abonnements.
 
-## Schnellstart
+> **Agenten laufen standardmäßig ohne Bestätigungsabfragen.** Wenn `facade.yolo` standardmäßig aktiviert ist, können Agenten Befehle ausführen und Dateien ändern, ohne zuvor nachzufragen. Deaktivieren Sie diese Option, um die gewohnten Bestätigungsabfragen der jeweiligen CLI wiederherzustellen. Siehe [extension README](../../../extension/README.md#install).
 
-1. **Öffne ein Projekt**:
-   ```sh
-   facade ~/code/space-shooter
-   ```
-   Oder nutze **File > Open Folder** (Datei > Ordner öffnen) oder zieh einen Ordner auf die Workspace-Leiste. Der Ordner muss ein Git-Repository sein (Worktrees brauchen Git; führe bei einem neuen Projekt zuerst `git init` aus).
+## Agent Panel
 
-2. **Starte einen Tech Lead**:
-   Klick auf das Roboter-Symbol in der Titelleiste (Agent-Menü) oder führe in der Befehlspalette **Agents: Start Agent...** (Agent starten) aus und wähle Claude Code oder Codex. Ein Agent, der aus Facade Code heraus gestartet wird, bekommt die MCP-Tools von Facade mit.
+**Ihre Agenten und Ihre IDE im selben Fenster.**
 
-3. **Gib ihm den Tech-Lead-Prompt**:
-   ```text
-   Du bist der Tech Lead. Baue mit Facade für eine Demo einen Neon-Weltraum-Shooter
-   für den Browser (Desktop), mit einem PD auf GPT Sol 6 (gpt-6-sol, max) über Codex,
-   der für Look and Feel verantwortlich ist, und drei Muse-1.3-Engineers
-   (muse-spark-1.3, max), die parallel arbeiten. Halte es klein, etwa eine halbe Stunde
-   Bauzeit: ein Level, drei Gegnertypen, ein Boss mit zwei Phasen, Power-ups, Punkte
-   und Combos. Lieber fertig und ausgefeilt als mit mehr Features. Die Engineers mergen
-   ihre eigene Arbeit, und du reviewst danach. Schick mir eine HTML-Seite mit einem
-   kurzen Plan, einem Swimlane-Diagramm und dem Mockup des PD, und warte auf mein Okay,
-   bevor du anfängst.
-   ```
+Facade Code führt native Agenten-CLIs (Claude Code, Codex, Antigravity, Muse Code, OpenCode und Pi) in Editor-Terminal-Tabs neben Ihren Dateien aus – mit den eigenen Befehlen, Werkzeugen, Konten und Abonnements der jeweiligen CLI. Eine Karte im Panel zeigt den Status jedes Agenten an.
 
-4. **Sieh dem Team bei der Zusammenarbeit zu**:
-   Der gestartete PD und die Engineers erscheinen in der Workspace-Leiste unter ihrem Projekt und Feature. Sobald du den HTML-Plan freigibst, legen sie los. Du kannst jederzeit in das Terminal jedes Agenten klicken, um die Ausgabe anzusehen oder direkt mit ihm zu sprechen.
+- **Arbeiten Sie direkt neben Ihrem Code.** Jeder Agent läuft in einem eigenen Terminal-Tab im Editorbereich. Das Schließen eines Tabs blendet diesen lediglich aus, während der Agent weiterläuft; ein Klick auf die Karte öffnet ihn wieder.
+- **Status aller Agenten im Blick behalten.** Die Karten zeigen, was zuletzt an den jeweiligen Agenten gesendet wurde und ob er arbeitet, eine Berechtigung benötigt oder auf einen Fehler gestoßen ist, während die Details seinen Titel, seinen Ordner und wer ihn gestartet hat zeigen. Agenten laufen bei Fenster-Reloads und Neustarts der Erweiterung unterbrechungsfrei weiter.
+- **Ordner und Worktrees.** Führen Sie Agenten in beliebigen Ordnern des Arbeitsbereichs aus oder erstellen Sie spontan einen Git-Worktree, um Codeänderungen voneinander getrennt zu halten. Heften Sie eine Unterhaltung an, um sie beim erneuten Öffnen des Arbeitsbereichs wiederherzustellen, oder setzen Sie frühere Sitzungen aus dem Verlauf fort.
 
-*(Hinweis: Dieser Beispiel-Prompt startet 5 Agenten auf der höchsten Reasoning-Stufe. Passe CLIs, Modelle, Reasoning-Stufen und die Zahl der Engineers an deine Abos an.)*
+## Agent Use
 
-## Funktionen
+**Lassen Sie Agenten andere Agenten steuern – genau wie Sie.**
 
-### Projekte und Features statt Sessions
+Über MCP und ein Terminalprotokoll können Agenten andere Agenten starten, stoppen, finden und ihnen Nachrichten senden, deren Terminalbildschirme lesen, Text eingeben und Tasten drücken.
 
-https://github.com/user-attachments/assets/bf93be03-1c75-4d35-86ca-c2a62a62ea95
+- **Agenten starten und stoppen.** Ein Agent kann andere Agenten mit jeder der sechs CLIs in jedem beliebigen Ordner oder neuen Worktree Ihrer Facade-Fenster auf diesem Computer starten und ihnen die erste Aufgabe zuweisen. Eine wiederholte Anfrage mit derselben Anfrage-ID startet niemals einen zweiten Agenten.
+- **Nachrichten senden.** Agenten tauschen untereinander Nachrichten aus und können auch Ihnen Nachrichten schicken. Facade fügt die vollständige Nachricht auf einmal ein und sendet sie ab. Befindet sich noch ungesendeter Text oder eine Eingabeaufforderung im Eingabefeld, wartet die Zustellung, bis das Feld frei ist.
+- **Terminalsteuerung.** Ein Agent kann den Bildschirm eines anderen Agenten lesen, Befehle eingeben und Tasten drücken, um Eingabeaufforderungen zu beantworten oder einem feststeckenden Kollegen zu helfen. Wenn ein Kind-Agent 20 Sekunden lang auf eine Berechtigung, eine Antwort oder eine Anmeldung wartet, wird der Agent benachrichtigt, der ihn gestartet hat.
 
-Die meisten Agenten-Tools legen für jede Agenten-Session einen Worktree an. Facade Code macht es umgekehrt: Jeder Worktree ist ein Feature, aufgelistet unter seinem Repository, und du teilst ihm Agenten zu.
+## Agent Mesh
 
-Ein Feature braucht oft mehr als einen Agenten. Der Agent, der den Code schreibt, erklärt seine Arbeit vielleicht nicht gut oder hat kein Auge für Design. Deshalb helfen andere Agenten bei Dokumentation, Design und Review, alle im selben Worktree. Agenten kommen und gehen; das Feature bleibt.
+**Verbinden Sie Agenten über Fenster, Rechner und Standorte hinweg.**
 
-- **Workspace-Leiste**: Zeigt alle Repositories und Features in einer Spalte. Ein Klick schaltet das ganze Fenster um (Explorer, Editoren, Terminals und Quellcodeverwaltung) und stellt es so wieder her, wie du es verlassen hast. Projekte vermischen sich nie. Siehe [`WORKSPACE.md`](../../ide/WORKSPACE.md).
-- **Lebenszyklus eines Worktrees**: **New Worktree** (neuer Worktree) legt den Branch an, synchronisiert die lokalen Dateien aus `.worktreeinclude` und führt das Setup aus. **Delete Worktree** (Worktree löschen) zeigt vor dem Entfernen genau, was verloren ginge. Siehe [`WORKTREE.md`](../../ide/WORKTREE.md).
-- **Parallele Teilaufgaben**: Unabhängige Aufgaben können in eigene Worktrees abzweigen.
+Facade Code verbindet die Agenten aller Ihrer Facade-Fenster auf diesem Computer zu einem gemeinsamen Netzwerk. Öffnen Sie ein [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)-Fenster, um diese Zusammenarbeit auf einen weiteren Rechner auszuweiten.
 
-### Ein Team von allen Anbietern
+- **Über Fenster hinweg.** Wenn `facade.yolo` aktiviert ist, erreicht ein Agent jeden Agenten in allen Ihren Facade-Fenstern auf diesem Computer – gleichermaßen lokal wie über Remote - SSH. Ist es deaktiviert, erreicht ein Agent nur seine eigene Gruppe: den von Ihnen gestarteten Agenten und alle daraus hervorgegangenen.
+- **Über SSH erweitern.** In einem [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)-Fenster laufen Agenten direkt auf dem Remote-Rechner mit den dortigen Werkzeugen, Dateien und Konten. Lokale Agenten können Agenten in Remote - SSH-Fenstern direkt starten und ihnen Nachrichten senden.
+- **Vom Smartphone aus koordinieren.** Verbinden Sie die mobile Claude-App über [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) mit einer Claude Code-Sitzung auf Ihrem Computer. Diese Sitzung kann andere Agenten über Facade koordinieren und den Fortschritt direkt an Ihr Telefon melden.
 
-- **Native CLIs mit deinen eigenen Abos**: Claude Code, Codex, Muse Code, Antigravity und Qwen Code laufen in ihren eigenen integrierten Terminals und nutzen deine bestehenden Abos.
-- **Agenten starten Agenten**: Ein Agent kann im aktuellen Feature oder in einem neuen Worktree weitere Agenten starten (mit der CLI oder dem Modell eines beliebigen Anbieters) und ihnen Aufgaben zuweisen. Siehe [`AGENT-LAUNCHER.md`](../../ide/AGENT-LAUNCHER.md) und [`AGENT-ORCHESTRATION.md`](../../ide/AGENT-ORCHESTRATION.md).
-- **Nachrichten**: Agenten schreiben einander, melden Ergebnisse an ihren Auftraggeber zurück und benachrichtigen dich, wenn eine Entscheidung menschliche Freigabe braucht. Siehe [`AGENT-MESSAGES.md`](../../ide/AGENT-MESSAGES.md).
-- **Gegenseitig weiterhelfen**: Ein Agent kann das Terminal eines anderen Agenten lesen, auf Eingabeaufforderungen antworten und Tastendrücke senden, um einem feststeckenden Engineer zu helfen, ohne dich zu unterbrechen. Siehe [`AGENT-DEBUGGING.md`](../../ide/AGENT-DEBUGGING.md).
-- **Du kannst bei jedem eingreifen**: Jeder Agent hat unter seinem Feature eine eigene Terminalzeile. Du siehst, was er tut, und kannst jederzeit direkt hineintippen.
-- **Standard-MCP**: Alle Orchestrierungswerkzeuge werden über einen Standard-MCP-Server bereitgestellt.
+<sub>Remote Control erfordert eine unterstützte Version von Claude Code, ein geeignetes Abonnement und eine Anmeldung mit vollem Berechtigungsumfang. Siehe [Einrichtungsvoraussetzungen](https://code.claude.com/docs/en/remote-control#requirements).</sub>
 
-## Zwei Arbeitsweisen
+## Facade Code IDE (Preview)
 
-Die Aufmerksamkeit des Entwicklers ist der Engpass. Die beiden Modi stehen für zwei Stufen der Delegation:
+**Mehrere Projekte. Ein einziges Fenster.**
 
-| | **Super Engineer** | **Super Team** |
-|---|---|---|
-| **Deine Rolle** | Engineer, der selbst Hand anlegt | Engineering Manager |
-| **Mit wem du zu tun hast** | Direkt mit mehreren Agenten | Mit einem Tech-Lead-Agenten, 1:1 |
-| **Wer die Agenten koordiniert** | Du | Der Tech Lead |
-| **Am besten für** | Features, die enge Führung brauchen: explorative Arbeit, Designentscheidungen, die du selbst beurteilen willst, sich ändernde Anforderungen | Große, klar definierte Features, die sich sauber aufteilen lassen |
+Organisieren Sie Projekte, Feature-Worktrees und Agententeams in einer speziellen Workspace-Leiste. Wechseln Sie zwischen Projekten mit den jeweils zugehörigen Dateien und Terminals, während die Agenten im Hintergrund weiterarbeiten.
 
-Du kannst beides im selben Fenster kombinieren: heikle Features eng begleiten und klar umrissene Arbeit an einen Lead abgeben.
+Laden Sie die Vorschau-Version der IDE herunter: [macOS (Apple Silicon, .dmg)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-darwin-arm64.dmg) · [Windows (x64, .exe)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-win32-x64-user-setup.exe) · [Linux (Ubuntu x64, .deb)](https://github.com/y5ez3g/facadecode/releases/download/facade/0.1.2/facade-code-0.1.2-linux-x64.deb) · [Alle Versionen](https://github.com/y5ez3g/facadecode/releases)
 
-- **Super Engineer**: Du öffnest Worktrees, verteilst Aufgaben an Agenten in verschiedenen Repositories und reviewst den Code, sobald jeder fertig ist.
-- **Super Team**: Du übergibst ein Feature an einen Agenten als Tech Lead. Er zerlegt die Aufgaben, legt Schnittstellenverträge fest, startet Worker und reviewt ihre Ergebnisse.
-  - Ein starkes Modell führt; schnellere, günstigere Modelle auf deinen bestehenden Abos implementieren parallel; und Modelle verschiedener Anbieter reviewen gegenseitig ihre Arbeit.
-  - Ein Prompt reicht, um das aufzusetzen (siehe [Schnellstart](#schnellstart)); Team-Workflows, die du wiederverwendest, lassen sich als Skills festhalten.
+Die IDE ist ein Fork von VS Code, der neben Ihrem vorhandenen Editor installiert wird und nichts mit ihm teilt: Einstellungen, Erweiterungen und der Befehl `facade` sind vollständig voneinander getrennt. Die Erweiterungen stammen von [Open VSX](https://open-vsx.org); einige proprietäre Microsoft-Erweiterungen wie Remote Development und C/C++ laufen ausschließlich in offiziellen Microsoft-Builds. Architektur und Spezifikationen finden sich unter [`docs/ide/`](../../ide/).
 
-*(Diese README ist genauso entstanden: Ein Agent hat analysiert, einer hat entworfen, und ein Mensch hat die letzte Entscheidung getroffen.)*
+## Aus dem Quellcode kompilieren
 
-## Warum
+- **Erweiterung:** Übergeben Sie [`extension/AGENTS.md`](../../../extension/AGENTS.md) an Ihren Coding-Agenten, um das Paket zu kompilieren.
+- **IDE:** Übergeben Sie [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) an Ihren Coding-Agenten, um die Anwendung zu kompilieren.
 
-Die meisten KI-Coding-Tools fallen in zwei Lager: IDEs im Copilot-Stil, bei denen ein Mensch Zeile für Zeile mitlesen muss, und Agenten-IDEs, bei denen Code-Review und Debugging an einen externen Editor ausgelagert werden. Keines der beiden bringt ein anbieterübergreifendes Team nativer Agenten in deiner Haupt-IDE zusammen.
-
-Wir glauben, dass die Zukunft einem Entwickler gehört, der mit einem Team von Agenten mehrere Projekte und Features vorantreibt. Verschiedene Modelle sind in verschiedenen Aufgaben stark, also sollte das Team anbieterübergreifend sein. Und weil Agenten den Code schreiben, den du reviewst, gehört dieses Team in deine IDE.
-
-## Immer noch VS Code
-
-Facade Code ändert nur, was die Verwaltung mehrerer Projekte und Agenten erfordert:
-
-- Die **Workspace-Leiste** belegt die erste Spalte; die **Aktivitätsleiste** wandert nach rechts oben in die Titelleiste (wiederherstellbar mit `workbench.activityBar.location`).
-- Copilot und Chat aus dem Upstream sind standardmäßig deaktiviert (eine einzige Einstellung schaltet sie wieder ein).
-- Alles andere ist unverändertes VS Code: Editor, Einstellungen, Tastenkombinationen, `.vscode/` und `.code-workspace`-Dateien.
-- Erweiterungen werden aus [Open VSX](https://open-vsx.org) installiert. Einige proprietäre Microsoft-Erweiterungen wie Remote Development und C/C++ sind nur für offizielle Microsoft-Builds lizenziert und laufen nicht in Forks.
-
-## Aus dem Quellcode bauen
-
-Gib [`docs/ide/RELEASE.md`](../../ide/RELEASE.md) deinem Agenten und lass ihn bauen.
-
-Richtlinien für Beiträge und die Branch-Regeln findest du in [`CONTRIBUTING.md`](CONTRIBUTING.md) und [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).
+Informationen zu Beitragsrichtlinien und Branch-Disziplin finden Sie unter [`CONTRIBUTING.md`](../../../CONTRIBUTING.md) und [`docs/ide/ENGINEERING.md`](../../ide/ENGINEERING.md).
 
 ## Feedback
 
-- **Fehler und Ideen**: [GitHub Issues](https://github.com/y5ez3g/facadecode/issues) oder **Help > Report Issue** (Hilfe > Problem melden) im Editor.
-- **Sicherheitslücken**: Bitte melde sie vertraulich wie in [`SECURITY.md`](SECURITY.md) beschrieben.
+- **Fehler und Ideen**: [GitHub Issues](https://github.com/y5ez3g/facadecode/issues) oder **Hilfe > Problem melden** in der IDE.
+- **Sicherheitslücken**: Bitte vertraulich gemäß [`SECURITY.md`](../../../SECURITY.md) melden.
 
 ## Lizenz
 
-MIT, wie VS Code selbst. Den Copyright-Hinweis von Microsoft und die Hinweise der Facade-Code-Mitwirkenden findest du in [`LICENSE.txt`](../../../LICENSE.txt).
+MIT, entsprechend dem Upstream-VS Code. Siehe [`LICENSE.txt`](../../../LICENSE.txt) für den Urheberrechtshinweis von Microsoft sowie die Hinweise der Facade Code-Mitwirkenden.
+
+<sub>Facade Code ist ein unabhängiges Produkt und steht in keiner Verbindung zu den Anbietern der dargestellten Drittanbieter-Tools, wird von diesen nicht unterstützt oder gesponsert. Alle Marken und Logos Dritter gehören ihren jeweiligen Eigentümern.</sub>

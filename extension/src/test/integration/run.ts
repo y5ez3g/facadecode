@@ -315,7 +315,9 @@ async function main(): Promise<void> {
 	};
 	/**
 	 * Pins across reloads in a window of two groups, and each way a person changes one (LIFECYCLE-3.4, 3.5, VERIFICATION J12). A driver beside Facade
-	 * Code starts the agents, pins every other one and reloads the window three times; this judges what it saw after each.
+	 * Code starts the agents, pins every other one and reloads the window three times; this judges what it saw after each: the pinned
+	 * agents' tabs alone back, in the Pins' order, each marked before the next opened, the last in front of the active group with the
+	 * selection on it, every other tab hidden.
 	 */
 	const pins = async () => {
 		const cli = BUILT_INS[0];
@@ -329,7 +331,8 @@ async function main(): Promise<void> {
 		}
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
 			...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])) }));
-		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'pins-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
+		// Activated at once: after a reload it watches the tabs open from before Facade's restoration begins
+		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'pins-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['*'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'pinsDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
 			fs.rmSync(path.join(root, file));
@@ -360,13 +363,19 @@ async function main(): Promise<void> {
 			for (const line of said.filter(each => /^reload-\d$/.test(each.phase))) {
 				const later = line.later as Seen;
 				const logged = (line.logged as string[]).filter(each => /(Pinned|Unpinned) #a/.test(each));
-				console.log(`  ${line.phase}: marks agreed after ${line.took} ms; later ${shown(later)}; front ${later.active} in group ${later.activeGroup}`);
+				console.log(`  ${line.phase}: marks agreed after ${line.took} ms; later ${shown(later)}; front ${later.active} in group ${later.activeGroup}; tabs opened ${JSON.stringify(line.order)}`);
 				for (const each of line.logged as string[]) { console.log(`    log: ${each.slice(0, 160)}`); }
-				if (!line.back) { problems.push(`${line.phase}: not every tab came back`); }
+				if (!line.back) { problems.push(`${line.phase}: not every pinned agent's tab came back, or another agent's did`); }
 				if (Number(line.took) < 0) { problems.push(`${line.phase}: marks never agreed: ${JSON.stringify((line.settled as Seen).wrong)}`); }
 				if (later.wrong.length) { problems.push(`${line.phase}: marks disagree later: ${JSON.stringify(later.wrong)}`); }
-				if ((line.moved as string[]).length) { problems.push(`${line.phase}: tabs changed group: ${JSON.stringify(line.moved)}`); }
-				if (!line.front) { problems.push(`${line.phase}: the person's file is not in front: ${later.active} in group ${later.activeGroup}`); }
+				if ((line.moved as string[]).length) { problems.push(`${line.phase}: pinned tabs changed group: ${JSON.stringify(line.moved)}`); }
+				if ((line.shown as string[]).length) { problems.push(`${line.phase}: unpinned agents' tabs opened: ${JSON.stringify(line.shown)}`); }
+				// One at a time in the Pins' order, each once, each marked before the next opened (LIFECYCLE-3.5)
+				if (JSON.stringify(line.order) !== JSON.stringify(line.expectedOrder)) { problems.push(`${line.phase}: tabs opened ${JSON.stringify(line.order)}, not in the Pins' order ${JSON.stringify(line.expectedOrder)}`); }
+				if ((line.unmarkedBefore as string[]).length) { problems.push(`${line.phase}: tabs opened before the one before them was marked: ${JSON.stringify(line.unmarkedBefore)}`); }
+				// Nothing given back: the last pinned agent's tab in front of its group, that group the active one, the selection on it
+				if (!line.front) { problems.push(`${line.phase}: the last pinned agent ${String(line.last)} is not in front of the active group: ${later.active} in group ${later.activeGroup}`); }
+				if (!line.selected) { problems.push(`${line.phase}: the panel's selection is not on the last pinned agent ${String(line.last)}`); }
 				if ((line.pinChanged as string[]).length) { problems.push(`${line.phase}: Pins changed: ${JSON.stringify(line.pinChanged)}`); }
 				if (logged.length) { problems.push(`${line.phase}: the reload changed Pins: ${JSON.stringify(logged)}`); }
 			}
@@ -390,7 +399,7 @@ async function main(): Promise<void> {
 			if (problems.length) {
 				throw new Error(`Pins journey:\n    ${problems.join('\n    ')}`);
 			}
-			console.log('  ✔ Pins: marks follow reloads and every change of a Pin; no reload changes a Pin');
+			console.log('  ✔ Pins: a reload brings back the pinned agents\' tabs alone, in the Pins\' order, each marked before the next, the last in front with the selection on it; marks follow every change of a Pin; no reload changes a Pin');
 		} catch (error) {
 			console.error(`Editor output for pins (exit ${editor.exitCode}, signal ${editor.signalCode}):\n${editorOutput.slice(-4_000)}`);
 			throw error;

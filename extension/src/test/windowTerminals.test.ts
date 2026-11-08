@@ -3,6 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import * as fs from 'fs';
+import * as path from 'path';
 import type * as vscode from 'vscode';
 import { isTerminalRegistration, TERMINAL_REGISTRATION_MS, type TerminalOwner } from '../base/windowIdentity';
 import type { AgentTerminals } from '../host/execution/agentTerminals';
@@ -25,12 +27,14 @@ suite('Window terminal registration: actual objects across workspace host genera
 	let publishOpen: boolean;
 	let beforeCommand: ((request: { kind: string }) => Promise<void>) | undefined;
 	let storage: ReturnType<typeof tempDir>;
+	/** Where a test holds them back, the close events of terminals disposed of meanwhile: the editor tells them later, not at once. */
+	let closeLater: Native[] | undefined;
 	const commands: { kind: string; run?: string; actual?: unknown }[] = [];
 	const create = (name: string, announce = true, creationOptions: Native['creationOptions'] = { name }): Native => {
 		const terminal: Native = { name, creationOptions, processId: Promise.resolve(-1), disposed: 0, shown: [], show(preserveFocus) { this.shown.push(preserveFocus); }, dispose() {
 			this.disposed++;
 			terminals = terminals.filter(each => each !== this);
-			closed.fire(this);
+			if (closeLater) { closeLater.push(this); } else { closed.fire(this); }
 		} };
 		terminals.push(terminal);
 		if (announce) { opened.fire(terminal); }
@@ -74,6 +78,7 @@ suite('Window terminal registration: actual objects across workspace host genera
 	};
 
 	setup(() => {
+		closeLater = undefined;
 		clock = FakeClock.install();
 		storage = tempDir('fc-terminal-retirement-');
 		terminals = []; managers = []; commands.length = 0; publishOpen = true; beforeCommand = undefined;
@@ -180,7 +185,9 @@ suite('Window terminal registration: actual objects across workspace host genera
 	});
 
 	test('malformed requests, changed session and equal-generation different tokens cannot mutate registration', () => {
-		for (const value of [null, [], {}, { ...owner, kind: 'unknown' }, { ...owner, kind: 'begin', run: '' }]) {
+		// A retire's hidden runs, where it names any, are run IDs alone (ARCHITECTURE-2.2)
+		for (const value of [null, [], {}, { ...owner, kind: 'unknown' }, { ...owner, kind: 'begin', run: '' },
+			{ ...owner, kind: 'retire', runs: ['run-a'], hidden: 'run-a' }, { ...owner, kind: 'retire', runs: ['run-a'], hidden: [3] }, { ...owner, kind: 'retire', runs: ['run-a'], hidden: [''] }]) {
 			assert.strictEqual(isTerminalRegistration(value), false);
 			assert.strictEqual(registry.request(value), false);
 		}
@@ -286,6 +293,73 @@ suite('Window terminal registration: actual objects across workspace host genera
 			assert.deepStrictEqual(old.map(each => each.disposed), [1, 1]);
 		});
 	}
+
+	test('ARCHITECTURE-2.2, LIFECYCLE-3.5: reattachment alone sends no retire; once the activation\'s pinned tabs are open it goes once, naming every reattached run - its tab open again or hidden - and both old groups are disposed of, a hidden run\'s dead tab among them', async () => {
+		bind('run-a', 'Old'); bind('run-b', 'Old other');
+		const old = restartLocalHost();
+		const runtime = manager(false);
+		const pinned = runtime.create({ run: 'run-a', name: 'Pinned', cli: 'claude' }, false);
+		runtime.create({ run: 'run-b', name: 'Hidden', cli: 'claude' }, false);
+		const kinds = () => commands.map(each => each.kind).filter(kind => kind === 'retire');
+		await runtime.finishRestore();
+		assert.deepStrictEqual([kinds(), old.map(each => each.disposed)], [[], [0, 0]], 'its pinned tab has not opened yet');
+		pinned.open(false);
+		await clock.tick(0);
+		await runtime.retirePredecessor();
+		const sent = commands.filter(each => each.kind === 'retire') as unknown as { runs: readonly string[]; hidden: readonly string[] }[];
+		assert.deepStrictEqual(sent.map(each => [each.runs, each.hidden]), [[['run-a', 'run-b'], ['run-b']]]);
+		// Its own group goes, and so does the group of the run brought back with its tab hidden: its old tab would stay, dead
+		assert.deepStrictEqual(old.map(each => each.disposed), [1, 1]);
+	});
+
+	test('ARCHITECTURE-2.2: retire waits for a tab still being created, so that its run is named as registered, not as hidden', async () => {
+		bind('run-a', 'Old');
+		const old = restartLocalHost();
+		const runtime = manager(false);
+		const pinned = runtime.create({ run: 'run-a', name: 'Pinned', cli: 'claude' }, false);
+		await runtime.finishRestore();
+		pinned.open(false);
+		const retiring = runtime.retirePredecessor();
+		await clock.tick(0);
+		await retiring;
+		const kinds = commands.map(each => each.kind).filter(kind => kind !== 'activate');
+		const sent = commands.find(each => each.kind === 'retire') as unknown as { hidden: readonly string[] };
+		assert.deepStrictEqual([kinds.slice(-3), sent.hidden, old.map(each => each.disposed)], [['begin', 'finish', 'retire'], [], [1]]);
+	});
+
+	test('LIFECYCLE-3.5: where the local registry outlived the extension host, a run brought back with its tab hidden has its old registered terminal disposed of as the pinned sequence ends; one that opened again had it replaced already', async () => {
+		const oldA = bind('run-a', 'Shown'), oldB = bind('run-b', 'Hidden');
+		nextHost(true);
+		const runtime = manager();
+		const shown = runtime.create({ run: 'run-a', name: 'Shown', cli: 'claude' }, false);
+		runtime.create({ run: 'run-b', name: 'Hidden', cli: 'claude' }, false);
+		await runtime.finishRestore();
+		shown.open(false);
+		await clock.tick(0);
+		assert.deepStrictEqual([oldA.disposed, oldB.disposed], [1, 0], 'the reopened run\'s old terminal replaced as it registered');
+		// The editor tells of the old terminal's close later: the release forgets it itself
+		closeLater = [];
+		await runtime.retirePredecessor();
+		// The reopened run's own terminal stays: only the hidden run's old one goes
+		const current = terminals.find(each => each.name === 'Shown' && each !== oldA)!;
+		assert.deepStrictEqual([oldA.disposed, oldB.disposed, current.disposed], [1, 1, 0]);
+		// Released, and forgotten: the next graceful shutdown's record names the shown run alone
+		registry.dispose();
+		const record = JSON.parse(fs.readFileSync(path.join(storage.dir, 'terminals.json'), 'utf8')) as { retired: { runs: { run: string }[] }[] };
+		assert.deepStrictEqual(record.retired.map(each => each.runs.map(run => run.run)), [['run-a']]);
+	});
+
+	test('ARCHITECTURE-2.2: the group retire is once only - a later restoration\'s retire, its run now back, disposes of nothing', async () => {
+		bind('run-a', 'A'); bind('run-b', 'B');
+		const old = restartLocalHost();
+		bind('run-a', 'A new');
+		// The activation's end: run-b not brought back yet - B's group is left
+		const first = await registry.request({ ...owner, kind: 'retire', runs: ['run-a'] });
+		const afterFirst = old.map(each => each.disposed);
+		// A later restoration brings run-b back and says its sequence over: the group retire is used up
+		const second = await registry.request({ ...owner, kind: 'retire', runs: ['run-a', 'run-b'], hidden: ['run-b'] });
+		assert.deepStrictEqual([first, afterFirst, second, old.map(each => each.disposed)], [true, [1, 0], false, [1, 0]]);
+	});
 
 	test('an extra matching old third-party object prevents the entire group from being retired', async () => {
 		bind('run-a', 'same'); bind('run-b', 'same'); create('same', true, { name: 'third-party original name' });
