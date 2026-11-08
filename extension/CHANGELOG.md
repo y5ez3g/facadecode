@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- **Preparing native packages for more computers.** Adds release candidates for Intel Macs, Linux ARM64 and Windows ARM64 alongside Apple silicon Macs, Linux x64 and Windows x64. Each platform runs the unit, package and isolated editor checks on its own native runner before its VSIX is available as a CI artifact. Publishing these packages requires the corresponding native verification results; the Window Component remains universal.
+- **Six-platform snapshot archives.** Archive validation accepts all six native packages and the Window Component while preserving the original three-platform snapshots of earlier releases.
+
 ## 0.1.0
 
 - **A card's second line says one of three things.** 🧑‍💻 what you typed; 📨 another agent's message, including the task an agent was started with; or, with no mark, Facade's own line: a start such as `Starting Claude Code…` or `Creating worktree…`, what the CLI waits for (`Permission needed · Run npm test?`, `Sign-in needed`, `Answer needed` or `Attention needed`), why the dot is red (`Process exited · code 1` or `Start failed · claude was not found on PATH`), or, before any message, `New conversation started` or `Conversation resumed`. The line never says Working, Idle or a title. Facade's results typed into an agent still start with 🔔.

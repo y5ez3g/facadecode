@@ -140,12 +140,18 @@ both VSIX files under `build/vsix/`. Install the window component on the client 
 workspace runs; unpublished test installations supply both packages. Integration tests load both components and use a
 separate `build/extension-it/` for execution fixtures. A local build does not establish support on another platform.
 
+Extension CI prepares 0.1.1 candidates for macOS x64 and ARM64, Linux x64 and ARM64, and Windows x64 and ARM64 on
+native runners. Each target uploads its tested VSIX and the universal Window Component. Candidate artifacts do not
+establish released support until their native checks and release evidence are complete.
+
 ### Snapshot archives
 
-GitHub Packages stores the extension's snapshots as `@y5ez3g/facade-extension`. Each version contains the three original
+GitHub Packages stores the extension's snapshots as `@y5ez3g/facade-extension`. Each version contains its original
 platform VSIX files, the universal Window Component, `checksums.json` and `snapshot.json` with source and verification
 evidence. This npm package is an artifact archive: it has no install hook or executable. IDE downloads remain in GitHub
 Releases. Extension tags use `extension/<version>` and do not require an IDE build.
+Catalog validation requires the historical three-platform set before 0.1.1 and all six platforms from 0.1.1, with one
+Window Component.
 
 The archive catalog is `archive/catalog.json`. Prepare and verify its original published files with
 `node scripts/archive.mjs --through 0.0.7`; `--input-dir <directory>` uses the same named files from a tested local build

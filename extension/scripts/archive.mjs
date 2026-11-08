@@ -11,7 +11,8 @@ const root = path.resolve(import.meta.dirname, '..');
 const registry = 'https://npm.pkg.github.com';
 const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const versionPattern = /^\d+\.\d+\.\d+$/;
-const targets = ['darwin-arm64', 'linux-x64', 'win32-x64', 'universal'];
+const historicalTargets = ['darwin-arm64', 'linux-x64', 'win32-x64', 'universal'];
+const targets = ['darwin-x64', 'darwin-arm64', 'linux-x64', 'linux-arm64', 'win32-x64', 'win32-arm64', 'universal'];
 const compareVersions = (a, b) => {
 	const left = a.split('.').map(Number), right = b.split('.').map(Number);
 	for (let i = 0; i < 3; i++) { if (left[i] !== right[i]) return left[i] - right[i]; }
@@ -31,8 +32,9 @@ export function validateCatalog(catalog) {
 		assert.equal(release.tag, `extension/${release.version}`, 'Wrong source tag');
 		assert.ok(/^[a-f0-9]{40}$/.test(release.sourceRevision) || release.sourceRevision === release.tag, 'Invalid source revision');
 		assert.ok(release.evidence && typeof release.evidence === 'object', 'Missing source evidence');
-		assert.equal(release.artifacts.length, 4, 'A snapshot needs three execution VSIXs and one window component');
-		assert.deepEqual(release.artifacts.map(a => a.target).sort(), [...targets].sort(), 'Wrong or duplicate platforms');
+		const expectedTargets = compareVersions(release.version, '0.1.1') < 0 ? historicalTargets : targets;
+		assert.deepEqual(release.artifacts.map(a => a.target).sort(), [...expectedTargets].sort(),
+			`Wrong, missing or duplicate platforms for ${release.version}`);
 		for (const artifact of release.artifacts) {
 			const window = artifact.target === 'universal';
 			const expected = window ? `facadecode-window-${release.version}.vsix` : `facadecode-${artifact.target}-${release.version}.vsix`;
