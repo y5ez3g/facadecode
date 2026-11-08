@@ -1,6 +1,5 @@
 {
   "schemaVersion": 1,
-  "name": "@y5ez3g/facade-extension",
   "repository": "https://github.com/y5ez3g/facadecode.git",
   "releases": [
     {
@@ -332,6 +331,7 @@
     },
     {
       "version": "0.1.0",
+      "tag": "extension/0.1.0",
       "artifacts": [
         {
           "target": "win32-x64",
