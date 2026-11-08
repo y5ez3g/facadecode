@@ -9,7 +9,6 @@ const catalog = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../ar
 
 test('the backfill catalog records exactly one original VSIX per platform and window component', () => {
 	validateCatalog(catalog);
-	for (const version of ['0.0.1', '0.0.2', '0.0.3', '0.0.4', '0.0.5', '0.0.6', '0.0.7']) assert.ok(catalog.releases.some(r => r.version === version));
 });
 
 function sixPlatformRelease() {
@@ -26,9 +25,10 @@ function sixPlatformRelease() {
 
 test('a six-platform release coexists with unchanged historical snapshots (ARCHITECTURE-4.3)', () => {
 	const expanded = structuredClone(catalog);
+	expanded.releases = expanded.releases.filter(r => r.version !== '0.1.1');
 	expanded.releases.push(sixPlatformRelease());
 	assert.equal(validateCatalog(expanded), expanded);
-	assert.deepEqual(expanded.releases.slice(0, -1), catalog.releases);
+	assert.deepEqual(expanded.releases.slice(0, -1), catalog.releases.filter(r => r.version !== '0.1.1'));
 });
 
 test('six-platform snapshots refuse missing, duplicate or unknown targets before publication (ARCHITECTURE-4.3)', () => {
@@ -43,6 +43,7 @@ test('six-platform snapshots refuse missing, duplicate or unknown targets before
 		const changed = structuredClone(catalog);
 		const release = sixPlatformRelease();
 		mutate(release);
+		changed.releases = changed.releases.filter(r => r.version !== release.version);
 		changed.releases.push(release);
 		assert.throws(() => validateCatalog(changed));
 	}

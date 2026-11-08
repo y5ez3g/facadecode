@@ -13,7 +13,7 @@ const sha256 = bytes => createHash('sha256').update(bytes).digest('hex');
 const versionPattern = /^\d+\.\d+\.\d+$/;
 const historicalTargets = ['darwin-arm64', 'linux-x64', 'win32-x64', 'universal'];
 const targets = ['darwin-x64', 'darwin-arm64', 'linux-x64', 'linux-arm64', 'win32-x64', 'win32-arm64', 'universal'];
-const compareVersions = (a, b) => {
+export const compareVersions = (a, b) => {
 	const left = a.split('.').map(Number), right = b.split('.').map(Number);
 	for (let i = 0; i < 3; i++) { if (left[i] !== right[i]) return left[i] - right[i]; }
 	return 0;
@@ -29,8 +29,8 @@ export function validateCatalog(catalog) {
 		assert.match(release.version, versionPattern, 'Expected a release version');
 		assert.ok(!versions.has(release.version), 'Duplicate release');
 		versions.add(release.version);
-		assert.equal(release.tag, `extension/${release.version}`, 'Wrong source tag');
-		assert.ok(/^[a-f0-9]{40}$/.test(release.sourceRevision) || release.sourceRevision === release.tag, 'Invalid source revision');
+		if (release.tag !== undefined) assert.equal(release.tag, `extension/${release.version}`, 'Wrong source tag');
+		assert.ok(/^[a-f0-9]{40}$/.test(release.sourceRevision) || (release.tag && release.sourceRevision === release.tag), 'Invalid source revision');
 		assert.ok(release.evidence && typeof release.evidence === 'object', 'Missing source evidence');
 		const expectedTargets = compareVersions(release.version, '0.1.1') < 0 ? historicalTargets : targets;
 		assert.deepEqual(release.artifacts.map(a => a.target).sort(), [...expectedTargets].sort(),
@@ -91,7 +91,7 @@ function resolveRevision(ref) {
 export async function prepareRelease(catalog, release, { out, inputDir, resolveSource = resolveRevision } = {}) {
 	const sourceCommit = resolveSource(release.sourceRevision);
 	assert.match(sourceCommit, /^[a-f0-9]{40}$/);
-	assert.equal(resolveSource(release.tag), sourceCommit, `${release.tag} does not point to the recorded source`);
+	if (release.tag) assert.equal(resolveSource(release.tag), sourceCommit, `${release.tag} does not point to the recorded source`);
 	const stage = fs.mkdtempSync(path.join(out, `${release.version}-`));
 	fs.mkdirSync(path.join(stage, 'vsix'));
 	for (const artifact of release.artifacts) {
@@ -111,7 +111,7 @@ export async function prepareRelease(catalog, release, { out, inputDir, resolveS
 		verifyVsix(release, artifact, file);
 	}
 	const checksums = Object.fromEntries(release.artifacts.map(a => [a.file, a.sha256]));
-	const snapshot = { schemaVersion: 1, package: catalog.name, version: release.version, tag: release.tag, sourceCommit,
+	const snapshot = { schemaVersion: 1, package: catalog.name, version: release.version, tag: release.tag ?? null, sourceCommit,
 		repository: catalog.repository, evidence: release.evidence, artifacts: release.artifacts };
 	const manifest = { name: catalog.name, version: release.version,
 		description: 'Facade Code extension snapshots: original VSIX installers, source records and checksums.',
@@ -124,7 +124,7 @@ export async function prepareRelease(catalog, release, { out, inputDir, resolveS
 	fs.copyFileSync(path.join(root, 'LICENSE.txt'), path.join(stage, 'LICENSE.txt'));
 	fs.writeFileSync(path.join(stage, 'README.md'), `# Facade Code Extension ${release.version}\n\n` +
 		`This package archives the original VSIX files. Install them through VS Code or publish the same files to VS Code Marketplace and Open VSX.\n\n` +
-		`Source tag: ${release.tag}\n\nSource commit: ${sourceCommit}\n\n` +
+		`Source tag: ${release.tag ?? 'not recorded; verified source commit below'}\n\nSource commit: ${sourceCommit}\n\n` +
 		`See snapshot.json for provenance and checksums.json for each original VSIX SHA-256. ` +
 		`Historical evidence remains historical; archiving runs no product build or native CLI probe.\n\n` +
 		`This archive has no npm install hook or executable entry point.\n`);
@@ -179,13 +179,21 @@ async function publishRelease(catalog, prepared, out) {
 async function main() {
 	const args = process.argv.slice(2);
 	const option = (name, fallback) => { const at = args.indexOf(name); return at < 0 ? fallback : args[at + 1]; };
-	const allowed = new Set(['--catalog', '--out', '--input-dir', '--through', '--publish']);
+	const flags = new Set(['--publish', '--sync', '--sync-only']);
+	const allowed = new Set(['--catalog', '--out', '--input-dir', '--through', ...flags]);
 	for (let i = 0; i < args.length; i++) {
 		assert.ok(allowed.has(args[i]), `Unknown archive argument: ${args[i]}`);
-		if (args[i] !== '--publish') { assert.ok(args[i + 1] && !args[i + 1].startsWith('--'), `Missing value: ${args[i]}`); i++; }
+		if (!flags.has(args[i])) { assert.ok(args[i + 1] && !args[i + 1].startsWith('--'), `Missing value: ${args[i]}`); i++; }
 	}
-	const catalog = validateCatalog(JSON.parse(fs.readFileSync(option('--catalog', path.join(root, 'archive/catalog.json')), 'utf8')));
-	const through = option('--through', JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')).version);
+	const catalogFile = option('--catalog', path.join(root, 'archive/catalog.json'));
+	let catalog = validateCatalog(JSON.parse(fs.readFileSync(catalogFile, 'utf8')));
+	if (args.includes('--sync') || args.includes('--sync-only')) {
+		const { synchronizeCatalog } = await import('./archive-sync.mjs');
+		catalog = await synchronizeCatalog(catalog);
+		fs.writeFileSync(catalogFile, `${JSON.stringify(catalog, null, 2)}\n`);
+		if (args.includes('--sync-only')) return;
+	}
+	const through = option('--through', [...catalog.releases].sort((a, b) => compareVersions(a.version, b.version)).at(-1).version);
 	assert.ok(catalog.releases.some(r => r.version === through), 'The requested release is not in the catalog');
 	const out = path.resolve(option('--out', path.join(root, 'build/archive')));
 	const inputDir = option('--input-dir');

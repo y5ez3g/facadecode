@@ -23,7 +23,7 @@ Run native agent CLIs, edit code, and review changes in the same IDE window. Use
 
 Install **Facade Code** from the [Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) or [Open VSX](https://open-vsx.org/extension/facade/facadecode). VS Code automatically installs the companion **Window Component** alongside it. The Window Component always runs on your local computer—even for remote windows—allowing Facade to recognize windows across reloads and connect them together.
 
-Packages are available for macOS (Apple silicon), Linux (x64), and Windows (x64). Support for other platforms is under development.
+Packages are available for macOS (Intel x64 and Apple silicon), Linux (x64 and ARM64), and Windows (x64 and ARM64).
 
 **Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your local computer for local projects, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): Facade Code does not launch 1.x (`opencode-ai`) and explains how to upgrade. Git is required if you use worktrees.
 
@@ -140,9 +140,10 @@ both VSIX files under `build/vsix/`. Install the window component on the client 
 workspace runs; unpublished test installations supply both packages. Integration tests load both components and use a
 separate `build/extension-it/` for execution fixtures. A local build does not establish support on another platform.
 
-Extension CI prepares 0.1.1 candidates for macOS x64 and ARM64, Linux x64 and ARM64, and Windows x64 and ARM64 on
-native runners. Each target uploads its tested VSIX and the universal Window Component. Candidate artifacts do not
-establish released support until their native checks and release evidence are complete.
+Extension CI builds packages for macOS x64 and ARM64, Linux x64 and ARM64, and Windows x64 and ARM64 on native
+runners. All six targets passed the 0.1.1 checks, including package tests and isolated editor journeys with fake CLIs;
+the archive catalog records the source, CI run and original published bytes. Real-model and remote checks remain
+separate evidence. Each target uploads its tested VSIX and the universal Window Component.
 
 ### Snapshot archives
 
@@ -153,9 +154,12 @@ Releases. Extension tags use `extension/<version>` and do not require an IDE bui
 Catalog validation requires the historical three-platform set before 0.1.1 and all six platforms from 0.1.1, with one
 Window Component.
 
-The archive catalog is `archive/catalog.json`. Prepare and verify its original published files with
-`node scripts/archive.mjs --through 0.0.7`; `--input-dir <directory>` uses the same named files from a tested local build
-instead. Output is under `build/archive/`. The `Extension archive` tag workflow uses its repository token to publish
+The archive catalog is `archive/catalog.json`. `node scripts/archive.mjs --sync-only` discovers missing published
+versions, matches Marketplace and Open VSX downloads to retained successful native CI artifacts, and records their
+source and hashes without modifying existing entries. This also fills older gaps when a newer version is already
+archived. `node scripts/archive.mjs --sync` synchronizes and prepares every catalog version; `--through <version>`
+optionally limits the range. `--input-dir <directory>` uses the same named files from a tested local build instead.
+Output is under `build/archive/`. The `Extension archive` tag workflow synchronizes and uses its repository token to publish
 catalog versions through the tagged version and downloads each npm package again to verify its files and VSIX hashes.
 It checks existing versions before reuse. No marketplace publication is part of that workflow. Later publication to
 VS Code Marketplace or Open VSX uses the archived VSIX files directly, after checking their SHA-256 values.
