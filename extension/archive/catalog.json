@@ -331,6 +331,56 @@
       ]
     },
     {
+      "version": "0.1.0",
+      "artifacts": [
+        {
+          "target": "win32-x64",
+          "file": "facadecode-win32-x64-0.1.0.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.1.0/1793982915437/Microsoft.VisualStudio.Services.VSIXPackage",
+          "marketplaceLastUpdatedAt": "2026-11-06T16:42:41.633Z",
+          "sha256": "ff822cae76abc97003a8181a572f8e5ed589ccedd399fbc3f1e29f7eb97d808b"
+        },
+        {
+          "target": "linux-x64",
+          "file": "facadecode-linux-x64-0.1.0.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.1.0/1793982913465/Microsoft.VisualStudio.Services.VSIXPackage",
+          "marketplaceLastUpdatedAt": "2026-11-06T16:42:02.95Z",
+          "sha256": "31688dc3295b76e680e99f8ae1599a7bfd70909382f76511d678e38f8ee5104b"
+        },
+        {
+          "target": "darwin-arm64",
+          "file": "facadecode-darwin-arm64-0.1.0.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode/0.1.0/1793982911793/Microsoft.VisualStudio.Services.VSIXPackage",
+          "marketplaceLastUpdatedAt": "2026-11-06T16:41:27.533Z",
+          "sha256": "684b97ed630e7bfe850ad28e5877c558cd10c1a329b056781b804554671b1156"
+        },
+        {
+          "target": "universal",
+          "file": "facadecode-window-0.1.0.vsix",
+          "sourceUrl": "https://facade.gallerycdn.vsassets.io/extensions/facade/facadecode-window/0.1.0/1793982910013/Microsoft.VisualStudio.Services.VSIXPackage",
+          "marketplaceLastUpdatedAt": "2026-11-06T16:41:58.237Z",
+          "sha256": "8bbf39a46ee24e0eff1ef860c6de9884cda8018c26a58e652f07accfc4a2a5ba"
+        }
+      ],
+      "sourceRevision": "ef9f4ba6dbeb636256f37572b0b0dc0e3dde397f",
+      "evidence": {
+        "verification": "Every Marketplace and Open VSX download matches an original VSIX from the recorded successful CI run byte for byte.",
+        "ciRun": "https://github.com/y5ez3g/facadecode/actions/runs/42242000725",
+        "ciConclusion": "success",
+        "ciHeadRevision": "ef9f4ba6dbeb636256f37572b0b0dc0e3dde397f",
+        "ciEvent": "pull_request",
+        "sourceManifestVersion": "0.1.0",
+        "packaging": "Original native CI packages; the published universal component is matched against the retained runner artifacts. No rebuilding or repacking.",
+        "publishedDownloadChecks": {
+          "visualStudioMarketplace": 4,
+          "openVSX": 4,
+          "allMatchCI": true
+        },
+        "sourceMetadata": "The recorded source is the workflow head revision. Pull-request jobs may check out a merge ref; the CI run and original artifact hashes retain that provenance.",
+        "realModelAndRemoteChecks": "not rerun when synchronizing archive metadata"
+      }
+    },
+    {
       "version": "0.1.1",
       "tag": "extension/0.1.1",
       "sourceRevision": "extension/0.1.1",

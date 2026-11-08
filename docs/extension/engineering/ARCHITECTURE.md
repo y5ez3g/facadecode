@@ -594,14 +594,20 @@ Releases. Each snapshot contains the original platform VSIX files and window com
 source/evidence metadata; it has no installer or runtime scripts. Catalog validation requires the historical three-platform
 set before 0.1.1 and the complete six-platform set from 0.1.1, each with one universal window component; missing or
 duplicate targets fail.
-Tags use `extension/<version>`. Archiving and later
+Release tags use `extension/<version>`. Historical releases that have no source tag retain their verified CI commit
+without inventing a tag. Archiving and later
 marketplace publication reuse the verified VSIX bytes without rebuilding either product. Historical backfills retain
 the published files and explicitly record source or release-metadata differences. The catalog in `extension/archive/`
-pins the artifacts and evidence. `node scripts/archive.mjs --through <version>` prepares and checks them under
-`build/archive/`; `--input-dir <directory>` reads already tested local VSIX files instead of downloading the catalog's
-published originals. `--publish` additionally uploads to GitHub Packages and verifies the downloaded package contents.
-The dedicated tag workflow publishes catalog entries through the tagged version with its repository-scoped token;
-existing versions are checked before reuse. It runs no IDE or extension compilation and publishes to neither marketplace.
+pins the artifacts and evidence. `node scripts/archive.mjs --sync-only` discovers published Marketplace versions absent
+from the catalog, verifies their original files against Open VSX and a retained successful native CI run, and records
+the exact source and hashes. Existing records are preserved. Discovery includes missing older versions, not just the
+latest release, and writes no partial catalog when verification fails. Tests validate this generically rather than
+maintaining a version whitelist. `--sync` does the same before preparing snapshots under `build/archive/`; without
+`--through <version>`, archiving includes every catalog version. `--input-dir <directory>` reads already tested local
+VSIX files instead of downloading the published originals. `--publish` additionally uploads to GitHub Packages and
+verifies the downloaded package contents. The tag workflow synchronizes and publishes through the tagged version;
+manual runs default to all published catalog versions, with no per-release workflow or README version edit.
+Existing versions are checked before reuse. It runs no IDE or extension compilation and publishes to neither marketplace.
 
 Bundle runtime dependencies and third-party notices, test commands excluded; package both components from build output
 with vsce pinned at 4.1.0. The workspace manifest installs its local window component through `extensionPack`, not

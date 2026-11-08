@@ -7,12 +7,13 @@ on:
   workflow_dispatch:
     inputs:
       through:
-        description: Archive catalog versions through this version
-        required: true
-        default: '0.1.1'
+        description: Archive through this version (empty for all published versions)
+        required: false
+        default: ''
 
 permissions:
   contents: read
+  actions: read
   packages: write
 
 concurrency:
@@ -37,20 +38,19 @@ jobs:
           registry-url: https://npm.pkg.github.com
           scope: '@y5ez3g'
       - name: Check archive validation
-        run: node --test scripts/archive.test.mjs
+        run: node --test scripts/archive*.test.mjs
       - name: Archive and verify packages
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
           ARCHIVE_THROUGH: ${{ inputs.through }}
         run: |
-          if [ -z "$ARCHIVE_THROUGH" ]; then
-            if [ "$GITHUB_REF_TYPE" = tag ]; then
-              ARCHIVE_THROUGH="${GITHUB_REF_NAME#extension/}"
-            else
-              ARCHIVE_THROUGH="$(node -p 'require("./package.json").version')"
-            fi
+          if [ -z "$ARCHIVE_THROUGH" ] && [ "$GITHUB_REF_TYPE" = tag ]; then
+            ARCHIVE_THROUGH="${GITHUB_REF_NAME#extension/}"
           fi
-          node scripts/archive.mjs --through "$ARCHIVE_THROUGH" --publish
+          args=(--sync --publish)
+          if [ -n "$ARCHIVE_THROUGH" ]; then args+=(--through "$ARCHIVE_THROUGH"); fi
+          node scripts/archive.mjs "${args[@]}"
       - name: Record GitHub package details
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

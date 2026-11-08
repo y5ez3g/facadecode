@@ -154,9 +154,12 @@ Releases. Extension tags use `extension/<version>` and do not require an IDE bui
 Catalog validation requires the historical three-platform set before 0.1.1 and all six platforms from 0.1.1, with one
 Window Component.
 
-The archive catalog is `archive/catalog.json`. Prepare and verify its original published files with
-`node scripts/archive.mjs --through 0.1.1`; `--input-dir <directory>` uses the same named files from a tested local build
-instead. Output is under `build/archive/`. The `Extension archive` tag workflow uses its repository token to publish
+The archive catalog is `archive/catalog.json`. `node scripts/archive.mjs --sync-only` discovers missing published
+versions, matches Marketplace and Open VSX downloads to retained successful native CI artifacts, and records their
+source and hashes without modifying existing entries. This also fills older gaps when a newer version is already
+archived. `node scripts/archive.mjs --sync` synchronizes and prepares every catalog version; `--through <version>`
+optionally limits the range. `--input-dir <directory>` uses the same named files from a tested local build instead.
+Output is under `build/archive/`. The `Extension archive` tag workflow synchronizes and uses its repository token to publish
 catalog versions through the tagged version and downloads each npm package again to verify its files and VSIX hashes.
 It checks existing versions before reuse. No marketplace publication is part of that workflow. Later publication to
 VS Code Marketplace or Open VSX uses the archived VSIX files directly, after checking their SHA-256 values.

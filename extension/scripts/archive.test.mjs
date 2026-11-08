@@ -9,7 +9,6 @@ const catalog = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, '../ar
 
 test('the backfill catalog records exactly one original VSIX per platform and window component', () => {
 	validateCatalog(catalog);
-	for (const version of ['0.0.1', '0.0.2', '0.0.3', '0.0.4', '0.0.5', '0.0.6', '0.0.7', '0.1.1']) assert.ok(catalog.releases.some(r => r.version === version));
 });
 
 function sixPlatformRelease() {
