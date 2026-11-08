@@ -9,7 +9,7 @@ on:
       through:
         description: Archive catalog versions through this version
         required: true
-        default: '0.0.7'
+        default: '0.1.1'
 
 permissions:
   contents: read
