@@ -1043,6 +1043,200 @@ suite('The agent panel in Chromium', function () {
 		]);
 	});
 
+	/**
+	 * Two cards, the first's middle and gear, the second's middle and a place below them: the page as a card's menu tests take it. The
+	 * editor marks the page as it shows the menu the page's own context menu event asks for, unless a test holds that back.
+	 */
+	const menuCards = () => evaluate(`(async () => {
+		agents = [newCard(1), newCard(2)];
+		redraw({ revision: 2 });
+		await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+		window.marking = true;
+		window.addEventListener('contextmenu', event => {
+			if (!event.isTrusted && window.marking) {
+				setTimeout(() => document.body.classList.add('vscode-context-menu-visible'), 0);
+			}
+		});
+		const [card, last] = [...document.querySelectorAll('.agent')].map(each => each.getBoundingClientRect()), gear = document.querySelector('.agent .menu-button').getBoundingClientRect();
+		return { card: { x: card.left + 40, y: card.top + 10 }, gear: { x: gear.left + gear.width / 2, y: gear.top + gear.height / 2 }, second: { x: last.left + 40, y: last.top + 10 }, below: { x: card.left + 40, y: last.bottom + 60 } };
+	})()`);
+	/** The pointer's move out of the page: the leave a page hears as the pointer moves on the menu the editor draws over it. */
+	const away = async () => {
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: -1, y: -1 });
+		await wait(30);
+	};
+	/** Shift+F10 on the first card, which opens its menu. */
+	const keysOpen = `(() => { const card = document.querySelector('.agent'); card.focus(); card.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true })); })()`;
+
+	test('PANEL-2.2: the editor\'s menu over the page takes the pointer from it; the click on the card that closes the menu leaves the card as under the pointer - its buttons and hover colour - until the page sees the pointer again', async () => {
+		const seen = await menuCards();
+		await evaluate(`document.documentElement.style.setProperty('--vscode-list-hoverBackground', 'rgb(1, 2, 3)')`);
+		const read = `(() => { const card = document.querySelector('.agent'); return [getComputedStyle(card.querySelector('.actions')).visibility, getComputedStyle(card).backgroundColor, card.querySelector('.menu-button').classList.contains('active')]; })()`;
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.card });
+		await pressAt(seen.gear);
+		// The pointer moves on the menu, which the editor draws in its window over the page where its menus are not native
+		await away();
+		const shown = await evaluate(read);
+		// The press on the card closes the menu, the editor unmarking the page, before anything of the pointer reaches the page
+		const closed = await evaluate(`(async () => { document.body.classList.remove('vscode-context-menu-visible'); await new Promise(resolve => setTimeout(resolve, 0)); return ${read}; })()`);
+		// Its release does, on the card
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.card });
+		await wait(30);
+		const back = await evaluate(read);
+		assert.deepStrictEqual([shown, closed, back], [['visible', 'rgb(1, 2, 3)', true], ['visible', 'rgb(1, 2, 3)', false], ['visible', 'rgb(1, 2, 3)', false]]);
+	});
+
+	test('PANEL-2.2, UX-2.1: a menu the keys open on one card while the pointer rests on another leaves that one as under the pointer once the menu closes - in high contrast its dashed edge - and while a menu opened again before the page hears of the pointer shows', async () => {
+		const seen = await menuCards();
+		await evaluate(`document.body.classList.add('vscode-high-contrast'); document.documentElement.style.setProperty('--vscode-contrastActiveBorder', 'rgb(4, 5, 6)')`);
+		const read = `(() => { const card = document.querySelectorAll('.agent')[1]; return [getComputedStyle(card.querySelector('.actions')).visibility, getComputedStyle(card).outlineStyle]; })()`;
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.second });
+		await wait(30);
+		const over = await evaluate(read);
+		await evaluate(keysOpen);
+		await wait(30);
+		await away();
+		const shown = await evaluate(read);
+		const closed = await evaluate(`(async () => { document.body.classList.remove('vscode-context-menu-visible'); await new Promise(resolve => setTimeout(resolve, 0)); return ${read}; })()`);
+		// Opened again at once by the keys, the editor showing it only after the second the closed one left the card has passed
+		const again = await evaluate(`(async () => {
+			window.marking = false;
+			${keysOpen};
+			await new Promise(resolve => setTimeout(resolve, 1300));
+			const showing = ${read};
+			document.body.classList.add('vscode-context-menu-visible');
+			await new Promise(resolve => setTimeout(resolve, 0));
+			document.body.classList.remove('vscode-context-menu-visible');
+			await new Promise(resolve => setTimeout(resolve, 0));
+			return [showing, ${read}];
+		})()`);
+		// The menu not yet shown, nothing keeps the dashed edge from the card under the pointer
+		assert.deepStrictEqual([over, shown, closed, ...again], [['visible', 'dashed'], ['visible', 'none'], ['visible', 'dashed'], ['visible', 'dashed'], ['visible', 'dashed']]);
+	});
+
+	test('PANEL-2.2: a card going while its menu shows leaves the pointer the menu\'s: the card under the pointer stays as it was until the editor closes the menu, whether the pointer moved before the card went or after', async () => {
+		const seen = await menuCards();
+		const buttons = `getComputedStyle(document.querySelector('.agent .actions')).visibility`;
+		// The menu of the second card, the pointer resting on the first, which stays where it is as the second goes
+		const openSecond = `(() => { const card = document.querySelectorAll('.agent')[1]; card.focus(); card.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true, cancelable: true })); })()`;
+		const closeLater = `(async () => {
+			await new Promise(resolve => setTimeout(resolve, 1300));
+			const showing = ${buttons};
+			document.body.classList.remove('vscode-context-menu-visible');
+			await new Promise(resolve => setTimeout(resolve, 0));
+			return [document.querySelectorAll('.agent').length, showing, ${buttons}];
+		})()`;
+		const phases = [];
+		for (const movedFirst of [true, false]) {
+			await evaluate(`agents = [newCard(1), newCard(2)]; redraw({ revision: ${movedFirst ? 3 : 5} })`);
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.card });
+			await wait(30);
+			await evaluate(openSecond);
+			await wait(30);
+			if (movedFirst) {
+				await away();
+			}
+			await evaluate(`agents = [agents[0]]; redraw({ revision: ${movedFirst ? 4 : 6} })`);
+			if (!movedFirst) {
+				await away();
+			}
+			phases.push(await evaluate(closeLater));
+		}
+		assert.deepStrictEqual(phases, [[1, 'visible', 'visible'], [1, 'visible', 'visible']]);
+	});
+
+	test('PANEL-2.2: a menu the editor shows only after the page took it for one never shown has the pointer all the same: the card under the pointer stays as it was until that menu closes', async () => {
+		const seen = await menuCards();
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.second });
+		await wait(30);
+		await evaluate(`window.marking = false; ${keysOpen}`);
+		await wait(30);
+		await away();
+		const late = await evaluate(`(async () => {
+			const buttons = () => getComputedStyle(document.querySelectorAll('.agent')[1].querySelector('.actions')).visibility;
+			const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+			// Past the page's second for the editor to show the menu, which then shows at last
+			await sleep(1100);
+			document.body.classList.add('vscode-context-menu-visible');
+			// Past the second the page would have waited for the pointer had the menu not shown
+			await sleep(1200);
+			const showing = buttons();
+			document.body.classList.remove('vscode-context-menu-visible');
+			await sleep(0);
+			return [showing, buttons()];
+		})()`);
+		assert.deepStrictEqual(late, ['visible', 'visible']);
+	});
+
+	test('PANEL-2.2: a menu opened again, which the editor shows late, is no menu the editor never showed to the check of the one before it', async () => {
+		await menuCards();
+		const marks = await evaluate(`(async () => {
+			const card = document.querySelector('.agent');
+			const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+			${keysOpen};
+			await sleep(300);
+			// Esc closes it
+			document.body.classList.remove('vscode-context-menu-visible');
+			await sleep(300);
+			// Opened again, the editor showing this one only after the first's second has passed
+			window.marking = false;
+			${keysOpen};
+			await sleep(550);
+			const kept = card.classList.contains('menu-open');
+			document.body.classList.add('vscode-context-menu-visible');
+			await sleep(0);
+			const shown = card.classList.contains('menu-open');
+			document.body.classList.remove('vscode-context-menu-visible');
+			await sleep(0);
+			return [kept, shown, card.classList.contains('menu-open')];
+		})()`);
+		assert.deepStrictEqual(marks, [true, true, false]);
+	});
+
+	test('PANEL-2.2: once the editor\'s menu closes, the card it took the pointer from loses its buttons where the page sees the pointer off it, or a second on where it sees nothing of it; a card whose pointer the menu never took keeps them', async () => {
+		const seen = await menuCards();
+		const buttons = `getComputedStyle(document.querySelector('.agent .actions')).visibility`;
+		const open = async () => {
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.card });
+			await pressAt(seen.gear);
+		};
+		const close = () => evaluate(`(async () => { document.body.classList.remove('vscode-context-menu-visible'); await new Promise(resolve => setTimeout(resolve, 0)); return ${buttons}; })()`);
+		// Closed by a press below the cards, whose release the page sees there
+		await open();
+		await away();
+		const kept = await close();
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.below });
+		await wait(30);
+		const below = await evaluate(buttons);
+		// Closed by a press outside the view: the page sees nothing more. Kept as long as a click's release can take to reach a busy
+		// window's page, then gone
+		await open();
+		await away();
+		const timed = await evaluate(`(async () => {
+			document.body.classList.remove('vscode-context-menu-visible');
+			const closedAt = performance.now();
+			await new Promise(resolve => setTimeout(resolve, 300));
+			const later = ${buttons};
+			while (${buttons} === 'visible' && performance.now() - closedAt < 4000) {
+				await new Promise(resolve => setTimeout(resolve, 20));
+			}
+			return [later, ${buttons}, performance.now() - closedAt];
+		})()`);
+		// The pointer stays on the page while the menu shows - a native menu, as macOS's, takes nothing from the page: the card keeps its
+		// buttons as long as the pointer rests on it
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...seen.card });
+		await wait(30);
+		await evaluate(keysOpen);
+		await wait(30);
+		const stayed = await evaluate(`(async () => {
+			document.body.classList.remove('vscode-context-menu-visible');
+			await new Promise(resolve => setTimeout(resolve, 1500));
+			return ${buttons};
+		})()`);
+		assert.deepStrictEqual([kept, below, timed[0], timed[1], stayed], ['visible', 'hidden', 'visible', 'hidden', 'visible']);
+		assert.ok(timed[2] < 4000, `gone ${Math.round(timed[2])} ms after the menu closed`);
+	});
+
 	test('PANEL-1.5, UX-2.2: the ⓘ opens its card\'s details under it, as wide as it, their arrow at the ⓘ, fading in as they slide 10 px down over 400 ms; Esc, a press elsewhere, the ⓘ again and the card going close them at once; the same words again keep their rows and a selection in them', async () => {
 		const seen = await evaluate(`(async () => {
 			const frames = () => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
