@@ -12,7 +12,7 @@
 
 </div>
 
-> **You do not need to install this yourself.** Install [Facade Code](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) (also on [Open VSX](https://open-vsx.org/extension/facade/facadecode)), and VS Code automatically installs this component alongside it.
+> **Facade Code and this component always install together.** Install [Facade Code](https://marketplace.visualstudio.com/items?itemName=facade.facadecode) (also on [Open VSX](https://open-vsx.org/extension/facade/facadecode)) and VS Code installs this component alongside it; installing this component installs Facade Code too. On its own it shows nothing.
 
 ## What it does
 

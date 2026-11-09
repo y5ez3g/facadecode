@@ -14,6 +14,7 @@
 	"categories": ["Other"],
 	"keywords": ["facade code", "window component", "facade"],
 	"extensionKind": ["ui"],
+	"extensionPack": ["facade.facadecode"],
 	"api": "none",
 	"activationEvents": ["onStartupFinished"],
 	"main": "./dist/window.js",
