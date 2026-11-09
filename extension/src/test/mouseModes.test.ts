@@ -13,15 +13,25 @@ const CLAUDE_AGAIN = '\x1b(B\x0f\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b
 /** A headless xterm.js, the editor terminal's own parser, and its mouse. */
 function terminal(): { write(data: string): Promise<void>; mouse(): string; changes(): number } {
 	type Service = { activeProtocol: string; activeEncoding: string; onProtocolChange(listener: () => void): unknown };
-	const term = new Terminal({ allowProposedApi: true });
+	const term = new Terminal({ allowProposedApi: true, logLevel: 'off' });
 	// Its own service, named for the core in xterm.js 6.0 and for its state from 6.1
-	const core = (term as unknown as { _core: { coreMouseService?: Service; mouseStateService?: Service } })._core;
+	const core = (term as unknown as { _core: { coreMouseService?: Service; mouseStateService?: Service; writeSync?(data: string): void } })._core;
 	const service = (core.coreMouseService ?? core.mouseStateService)!;
 	let changes = 0;
 	service.onProtocolChange(() => { changes++; });
 	return {
-		// Nothing to write writes nothing: an empty write's callback may never come
-		write: data => data ? new Promise(resolve => term.write(data, resolve)) : Promise.resolve(),
+		// Parsed at once where xterm.js still offers it: a write's callback waits for a timer, which on Windows takes up to 16 ms.
+		// Nothing to write writes nothing: an empty write's callback may never come.
+		write: async data => {
+			if (!data) {
+				return;
+			}
+			if (core.writeSync) {
+				core.writeSync(data);
+				return;
+			}
+			await new Promise<void>(resolve => term.write(data, resolve));
+		},
 		mouse: () => `${service.activeProtocol}/${service.activeEncoding}`,
 		changes: () => changes
 	};
@@ -134,7 +144,9 @@ suite('Mouse settings that would change nothing never reach an editor terminal (
 		}
 	});
 
-	test('whatever is written and however it is cut, the terminal\'s mouse is at every write what it would be with all of it', async () => {
+	test('whatever is written and however it is cut, the terminal\'s mouse is at every write what it would be with all of it', async function () {
+		// Where xterm.js parses only on its timers, each of some 3000 writes waits for one
+		this.timeout(120_000);
 		// A seeded random generator: the same cases on every run
 		let seed = 20261108;
 		const random = (n: number) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
