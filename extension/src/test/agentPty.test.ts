@@ -144,6 +144,29 @@ suite('An agent\'s terminal draws its run as it stands, from its screen (ARCHITE
 		assert.ok(drawn.join('').endsWith('screen at 2'));
 	});
 
+	test('mouse settings its CLI writes again that change nothing never reach the terminal, which would stop a drag in progress; a terminal opened anew takes them with its screen (LIFECYCLE-2.2)', async () => {
+		const { pty, drawn, taken, binding } = load();
+		const mouse = '\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b[?1006h';
+		pty.open({ columns: 80, rows: 24 });
+		pty.bind(binding);
+		taken[0](`\x1b[?1049h\x1b[Hscreen\x1b[?1003h\x1b[?1006h`, 1);
+		await settled();
+		// Claude Code's first input after five seconds without any brings its settings again, with the other modes it keeps
+		pty.output(2, `\x1b(B\x0f\x1b[?2004h${mouse}`);
+		assert.strictEqual(drawn[drawn.length - 1], '\x1b(B\x0f\x1b[?2004h');
+		pty.output(3, mouse);
+		pty.output(4, 'next frame');
+		assert.strictEqual(drawn[drawn.length - 1], 'next frame', 'a write of nothing else is not made at all');
+		// Opened anew, it starts from the default mouse: the screen drawn sets it, and the same settings again go nowhere
+		pty.close();
+		pty.open({ columns: 80, rows: 24 });
+		taken[1]('\x1b[?1049h\x1b[Hscreen at 4\x1b[?1003h\x1b[?1006h', 4);
+		await settled();
+		assert.ok(drawn[drawn.length - 1].endsWith('screen at 4\x1b[?1003h\x1b[?1006h'), JSON.stringify(drawn[drawn.length - 1]));
+		pty.output(5, `${mouse}after`);
+		assert.strictEqual(drawn[drawn.length - 1], 'after');
+	});
+
 	test('a screen taken for an opening before the last is not drawn: the last opening\'s screen and what came after it are (ARCHITECTURE-2.3)', async () => {
 		const { pty, drawn, taken, binding } = load();
 		pty.bind(binding);
