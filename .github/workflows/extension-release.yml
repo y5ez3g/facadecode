@@ -1,0 +1,104 @@
+name: Extension release
+
+# Tag extension/<version>: build and test every platform, put all VSIX files on that tag's GitHub Release first,
+# then, once approved in the extension-stores environment, publish the Release's files to VS Code Marketplace and Open VSX.
+on:
+  push:
+    tags:
+      - 'extension/[0-9]*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: An existing extension/<version> tag to finish releasing
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: extension-release
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan the release
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      build: ${{ steps.plan.outputs.build }}
+    steps:
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          if [[ ! "$TAG" =~ ^extension/[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "::error::$TAG is not extension/<major.minor.patch>"; exit 1; fi
+          gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" > /dev/null
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # A Release that already has its SHA256SUMS holds every file; a rerun then only finishes the stores.
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' 2>/dev/null | grep -qx SHA256SUMS; then
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    name: Build and test
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    uses: ./.github/workflows/extension-check.yml
+    with:
+      ref: ${{ needs.plan.outputs.tag }}
+
+  release:
+    name: GitHub Release
+    needs: [plan, build]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.build.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: extension/.nvmrc
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: extension-*
+          path: extension/build/release-input
+      - name: Put every VSIX on the Release and check it again
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: node scripts/release.mjs github --tag "$TAG" --input-dir build/release-input
+
+  stores:
+    name: VS Code Marketplace and Open VSX
+    needs: [plan, release]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.release.result == 'success' || (needs.plan.outputs.build == 'false' && needs.release.result == 'skipped')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: extension-stores
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.plan.outputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: extension/.nvmrc
+      - name: Publish the Release's files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: node scripts/release.mjs stores --tag "$TAG"

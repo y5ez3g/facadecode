@@ -7,6 +7,12 @@ on:
       - 'docs/extension/**'
       - '.github/workflows/extension-check.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      ref:
+        description: The tag or commit to build and test
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -40,6 +46,8 @@ jobs:
         working-directory: extension
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.ref || '' }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: extension/.nvmrc
@@ -57,9 +65,9 @@ jobs:
       - run: npm ci
       - run: npm run compile
       - run: npm test
-      - name: Archive script tests
+      - name: Release script tests
         if: runner.os == 'Linux'
-        run: node --test scripts/archive*.test.mjs
+        run: node --test scripts/release.test.mjs
       - run: node scripts/l10n.mjs check
       - run: python ../docs/extension/audit/check_spec.py
       - run: npm run package -- --target "$FACADE_PACKAGE_TARGET"

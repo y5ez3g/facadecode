@@ -145,28 +145,25 @@ runners. All six targets passed the 0.1.1 checks, including package tests and is
 the archive catalog records the source, CI run and original published bytes. Real-model and remote checks remain
 separate evidence. Each target uploads its tested VSIX and the universal Window Component.
 
-### Snapshot archives
+### Releases
 
-GitHub Packages stores the extension's snapshots as `@y5ez3g/facade-extension`. Each version contains its original
-platform VSIX files, the universal Window Component, `checksums.json` and `snapshot.json` with source and verification
-evidence. This npm package is an artifact archive: it has no install hook or executable. IDE downloads remain in GitHub
-Releases. Extension tags use `extension/<version>` and do not require an IDE build.
-Catalog validation requires the historical three-platform set before 0.1.1 and all six platforms from 0.1.1, with one
-Window Component.
+A release starts from a pushed tag `extension/<version>` that names `package.json`'s version. The `Extension release`
+workflow builds and tests that tag on all six native runners, then puts every platform VSIX, the universal Window Component
+and `SHA256SUMS` on the tag's GitHub Release, with the changelog's section as its notes; the newest extension version is
+marked Latest. It downloads the Release again and checks every file. Only then, after approval in the `extension-stores`
+environment, it publishes the Release's own files to VS Code Marketplace and Open VSX, the Window Component first, skipping
+files a store already has, and waits until both stores serve the same bytes. Rerunning it for a tag whose Release is
+complete finishes the stores without rebuilding. The environment holds the `VSCE_PAT` and `OVSX_PAT` secrets.
 
-The archive catalog is `archive/catalog.json`. `node scripts/archive.mjs --sync-only` discovers missing published
-versions, matches Marketplace and Open VSX downloads to retained successful native CI artifacts, and records their
-source and hashes without modifying existing entries. This also fills older gaps when a newer version is already
-archived. `node scripts/archive.mjs --sync` synchronizes and prepares every catalog version; `--through <version>`
-optionally limits the range. `--input-dir <directory>` uses the same named files from a tested local build instead.
-Output is under `build/archive/`. The `Extension archive` tag workflow synchronizes and uses its repository token to publish
-catalog versions through the tagged version and downloads each npm package again to verify its files and VSIX hashes.
-It checks existing versions before reuse. No marketplace publication is part of that workflow. Later publication to
-VS Code Marketplace or Open VSX uses the archived VSIX files directly, after checking their SHA-256 values.
+An existing Release keeps its files: a file of the same name with other bytes stops the run, and only missing files are
+added. `node scripts/release.mjs` does the work: `github --tag <tag> --input-dir <dir>`, `stores --tag <tag>`, and
+`github --backfill`, which puts the versions first published to the stores (listed in `archive/catalog.json` with their
+original Marketplace files and SHA-256) on Releases of their own, byte for byte. Catalog validation requires the
+historical three-platform set before 0.1.1 and all six platforms from 0.1.1, with one Window Component.
 
 Historical backfills preserve the published bytes. In particular, `0.0.2`'s original CI source used version `0.2.0`;
-the shipped VSIX files say `0.0.2`, with matching runtime bundles and platform native files. Its snapshot records that
-version override and the original CI commit rather than claiming a newly rebuilt historical release.
+the shipped VSIX files say `0.0.2`, with matching runtime bundles and platform native files. Its catalog entry records
+that version override and the original CI commit rather than claiming a newly rebuilt historical release.
 
 <!-- repository-only:end -->
 

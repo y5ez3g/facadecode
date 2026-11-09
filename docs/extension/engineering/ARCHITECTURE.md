@@ -578,7 +578,7 @@ feature-detected or raises the declared minimum, never called unguarded. Facade 
 Open VSX only when the owner asks. Both components carry one release version, 0.1.1, which the changelog's heading
 names; the build refuses a window component of another version. Release candidates target darwin-x64, darwin-arm64,
 linux-x64, linux-arm64, win32-x64 and win32-arm64, together with the window component. Publication requires each
-platform's build and verification evidence recorded in the archive catalog. The version advances when preparing a
+platform's build and verification evidence from the release run. The version advances when preparing a
 release; already published versions retain their original artifacts. [Official manifest
 reference](https://code.visualstudio.com/api/references/extension-manifest).
 
@@ -589,25 +589,23 @@ installation, passes that target to packaging, and runs the same unit, package-c
 Artifacts and editor logs name the target. A configured CI target does not establish verified or published support;
 that requires the corresponding results and release evidence under VERIFICATION-2.1.
 
-GitHub Packages stores the extension's build snapshots as `@y5ez3g/facade-extension`, separately from IDE downloads in GitHub
-Releases. Each snapshot contains the original platform VSIX files and window component, their SHA-256 checksums and
-source/evidence metadata; it has no installer or runtime scripts. Catalog validation requires the historical three-platform
+Releases go to GitHub first and to the stores second. A pushed tag `extension/<version>`, which must name the manifest's
+version, starts the release workflow: the extension checks workflow builds and tests that tag on every native runner, and
+the release job puts all platform VSIX files, the window component and `SHA256SUMS` on the tag's GitHub Release, with
+the changelog's section as notes, marking the newest extension version Latest. It then downloads the Release again and
+checks each file's hash and its own manifests (publisher, component, version, target). The stores job waits for approval
+in the `extension-stores` environment, downloads the Release's files, checks them against `SHA256SUMS`, publishes the
+window component before the platform packages to VS Code Marketplace and Open VSX, skips files a store already lists,
+and passes only once both stores serve every file byte for byte. Nothing is rebuilt or repacked between the CI run, the
+Release and the stores. An existing Release is never overwritten: a same-named file with other bytes stops the release,
+and only missing files are added; a rerun for a complete Release finishes the stores without building again.
+
+Versions first published to the stores, before this order, are listed in `extension/archive/`'s catalog with their
+source, evidence and original Marketplace files and hashes. Catalog validation requires the historical three-platform
 set before 0.1.1 and the complete six-platform set from 0.1.1, each with one universal window component; missing or
-duplicate targets fail.
-Release tags use `extension/<version>`. Historical releases that have no source tag retain their verified CI commit
-without inventing a tag. Archiving and later
-marketplace publication reuse the verified VSIX bytes without rebuilding either product. Historical backfills retain
-the published files and explicitly record source or release-metadata differences. The catalog in `extension/archive/`
-pins the artifacts and evidence. `node scripts/archive.mjs --sync-only` discovers published Marketplace versions absent
-from the catalog, verifies their original files against Open VSX and a retained successful native CI run, and records
-the exact source and hashes. Existing records are preserved. Discovery includes missing older versions, not just the
-latest release, and writes no partial catalog when verification fails. Tests validate this generically rather than
-maintaining a version whitelist. `--sync` does the same before preparing snapshots under `build/archive/`; without
-`--through <version>`, archiving includes every catalog version. `--input-dir <directory>` reads already tested local
-VSIX files instead of downloading the published originals. `--publish` additionally uploads to GitHub Packages and
-verifies the downloaded package contents. The tag workflow synchronizes and publishes through the tagged version;
-manual runs default to all published catalog versions, with no per-release workflow or README version edit.
-Existing versions are checked before reuse. It runs no IDE or extension compilation and publishes to neither marketplace.
+duplicate targets fail. `node scripts/release.mjs github --backfill` puts each of them on its own Release from those
+original files, hash-checked, and creates a missing tag at the recorded source commit. Historical backfills retain the
+published files and explicitly record source or release-metadata differences.
 
 Bundle runtime dependencies and third-party notices, test commands excluded; package both components from build output
 with vsce pinned at 4.1.0. The workspace manifest installs its local window component through `extensionPack`, not
@@ -652,7 +650,7 @@ that check. Do not depend on a developer's temporary language-pack files for rel
 **Implementation acceptance requires type checks, relevant unit tests, build, integration and affected runtime scenarios.**
 
 Required commands: `npx tsc -p ./`, `npx tsc -p ./src/webview` (both run by `npm run compile`), `npm test`, `node
-scripts/l10n.mjs check`, `node --test scripts/archive.test.mjs` where the archive tooling changed, the specification
+scripts/l10n.mjs check`, `node --test scripts/release.test.mjs` where the release tooling changed, the specification
 audit (`python3 -I -B ../docs/extension/audit/check_spec.py`), `npm run bundle`, `npm run package`, `npm run
 test:package`, and integration against the editor version actually used. Record version and result. Add meaningful
 regression tests for behavioral fixes and check sibling CLIs/platforms/entrypoints for the same defect. For UI-only
