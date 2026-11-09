@@ -219,11 +219,12 @@ over an editor terminal takes the terminal out of the page first: the release th
 the SGR encoding), which a CLI shows as typed text. Such a report, in any mouse encoding, takes the position of the
 report before it - for a release, its press; one with none before it is left out. The terminal shows what its CLI
 writes as written, except mouse tracking and encoding settings (modes 9, 1000, 1002, 1003, 1005, 1006, 1015 and 1016)
-that, taken with those written right beside them, leave the terminal's mouse as it was: the editor's terminal stops
-reporting a drag in progress at each of them, even one it has already, and Claude Code sets its own again with its first
-input after five seconds without any - often the press that starts a selection, which then never follows the pointer.
-Facade follows the terminal's mouse from what it wrote there since the terminal opened, resets included, and leaves
-nothing out of what it cannot place. An Enter the person types waits
+that, taken with those written right beside them, leave the terminal's mouse as it was: set to a protocol that reports
+no drag, 1000's among them, the editor's terminal stops reporting the drag in progress, and 1002 or 1003 set right after
+does not take it up again. Claude Code sets 1000, 1002, 1003 and 1006 again with its first input after five seconds
+without any - often the press that starts a selection, which then never follows the pointer. Facade follows the
+terminal's mouse, as the editor's terminal reads them, from what it wrote there since the terminal opened, resets
+included; once it cannot, it leaves nothing out until the terminal is reset. An Enter the person types waits
 briefly for the CLI's input reader to read what it submits (CLIS-2.1, PANEL-1.4); a CLI without an input reader takes it
 at once. A file dropped onto an agent's terminal gives it its path only with Shift held, as the editor requires of every
 terminal in the editor area; an extension cannot change that.
