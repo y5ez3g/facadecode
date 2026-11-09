@@ -562,7 +562,7 @@ function make(card: Card): Drawn {
 	const entry: Drawn = { element, avatar, dot, name, top, line, actions, info, gear, pinButton, look: lookOf(card.avatar), place: '', card };
 	// The pointer on the card shows its buttons: the name gives the line's end up to them, and takes it back as the pointer goes
 	element.addEventListener('pointerenter', () => setHovered(entry, true));
-	element.addEventListener('pointerleave', () => setHovered(entry, false));
+	element.addEventListener('pointerleave', () => pointerLeft(entry));
 	info.addEventListener('click', event => {
 		event.stopPropagation();
 		toggleDetails(entry);
@@ -630,11 +630,70 @@ function setHovered(entry: Drawn, on: boolean): void {
 // The pointer leaving the view leaves every card
 document.addEventListener('pointerout', event => {
 	if (!event.relatedTarget) {
-		for (const entry of drawn?.values() ?? []) {
-			setHovered(entry, false);
-		}
+		pointerLeft();
 	}
 });
+
+/**
+ * Where the page last knew the pointer to be (PANEL-2.2). `seen`: as its events say. `taken`: the page heard that the pointer left
+ * while a card's menu was open - as it does at the pointer's first move once the editor shows the menu in its window over the page,
+ * unless its menus are native - and the pointer may be on the card still. `awaited`: the menu closed, and the page waits for the
+ * pointer's next event to say where it is.
+ */
+let pointer: 'seen' | 'taken' | 'awaited' = 'seen';
+let pointerClock = 0;
+/** How long the card the pointer was on stays as under it once the editor's menu closed with nothing heard of the pointer since. */
+const POINTER_AWAITED_MS = 1000;
+
+/** The pointer left `entry`'s card, or the view where `entry` is none. */
+function pointerLeft(entry?: Drawn): void {
+	// While a card's menu is open, or the editor still shows one, a leave is the menu's taking the pointer: the card under it stays
+	if (menuOn || document.body.classList.contains('vscode-context-menu-visible')) {
+		pointer = 'taken';
+		return;
+	}
+	for (const each of entry ? [entry] : drawn?.values() ?? []) {
+		setHovered(each, false);
+	}
+}
+
+/**
+ * A menu that took the pointer is gone - the editor closed it, or never showed it: the card the pointer was on stays as under it until
+ * the pointer's next event, or a second.
+ */
+function menuGone(): void {
+	if (pointer !== 'taken') {
+		return;
+	}
+	pointer = 'awaited';
+	window.clearTimeout(pointerClock);
+	pointerClock = window.setTimeout(() => {
+		if (pointer === 'awaited') {
+			pointer = 'seen';
+			for (const entry of drawn?.values() ?? []) {
+				setHovered(entry, false);
+			}
+		}
+	}, POINTER_AWAITED_MS);
+}
+
+// The pointer's first event after the editor's menu took it says where it is: a card it is not on is no longer under it, and the one it
+// is on takes it as the pointer enters
+for (const type of ['pointerover', 'pointermove', 'pointerdown'] as const) {
+	document.addEventListener(type, event => {
+		if (pointer === 'seen') {
+			return;
+		}
+		pointer = 'seen';
+		window.clearTimeout(pointerClock);
+		const under = event.target instanceof Element ? event.target.closest('.item.agent') : null;
+		for (const entry of drawn?.values() ?? []) {
+			if (entry.element !== under) {
+				setHovered(entry, false);
+			}
+		}
+	}, true);
+}
 
 /** Fits `entry`'s name again: its buttons showing or gone change what the line leaves it. */
 function refit(entry: Drawn): void {
@@ -1096,22 +1155,35 @@ details.addEventListener('wheel', event => {
 let menuOn: Drawn | undefined;
 /** Whether the editor marked the page as showing a menu since {@link menuOn}'s opened. */
 let menuShown = false;
+/**
+ * How many menus the page has opened, and the last of them the editor marked the page for: a check for a menu the editor never
+ * showed is for the one it was set for alone.
+ */
+let menusOpened = 0;
+let menuMarked = 0;
 
 /** Opens `entry`'s menu under its gear: the webview reads the menu's context from the card, as for a right click on it (PANEL-2.2). */
 function openMenu(entry: Drawn): void {
 	closeDetails('menu');
 	clearMenu();
+	// Opened by the keys with the pointer unheard of since a menu took it: it is the new menu's to give back
+	if (pointer === 'awaited') {
+		pointer = 'taken';
+		window.clearTimeout(pointerClock);
+	}
 	menuOn = entry;
 	menuShown = false;
+	const opened = ++menusOpened;
 	entry.element.classList.add('menu-open');
 	entry.gear.classList.add('active');
 	refit(entry);
 	const at = entry.gear.getBoundingClientRect();
 	entry.element.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2, clientX: at.left, clientY: at.bottom }));
-	// Where the editor showed none, the card does not stay as if it had one
+	// Where the editor showed none, the card does not stay as if it had one - a menu opened again since being another's to clear
 	window.setTimeout(() => {
-		if (menuOn === entry && !menuShown) {
+		if (menusOpened === opened && menuMarked !== opened) {
 			clearMenu();
+			menuGone();
 		}
 	}, 1000);
 }
@@ -1127,13 +1199,21 @@ function clearMenu(): void {
 	refit(entry);
 }
 
-// The editor marks the page while its menu shows; the card the menu is of keeps its buttons until it closes
+// The editor marks the page while its menu shows; the card the menu is of keeps its buttons until it closes, and the card the pointer
+// was on stays as under it until the page hears of the pointer again: the press that closed the menu reached the menu (PANEL-2.2)
 new MutationObserver(() => {
 	if (document.body.classList.contains('vscode-context-menu-visible')) {
 		menuShown = true;
+		menuMarked = menusOpened;
+		// A menu showing - late, maybe, after the page took it for one never shown - has the pointer the page has not heard of since
+		if (pointer === 'awaited') {
+			pointer = 'taken';
+			window.clearTimeout(pointerClock);
+		}
 	} else if (menuShown) {
 		menuShown = false;
 		clearMenu();
+		menuGone();
 	}
 }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 

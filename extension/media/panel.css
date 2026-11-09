@@ -227,7 +227,8 @@ body.facade-modern {
 	cursor: pointer;
 }
 
-.item:hover:not(.selected),
+/* Under the pointer as the page knows it: the editor's menu over the page hides the pointer from it until after the menu closes (PANEL-2.2) */
+.item:is(:hover, .hovered):not(.selected),
 .item.menu-open:not(.selected),
 .item.details-open:not(.selected) {
 	background: var(--vscode-list-hoverBackground);
@@ -796,8 +797,8 @@ body.vscode-high-contrast-light .item.selected {
 }
 
 /* Not while a menu is open: the card it was opened on stays unframed (UX-2.1) */
-body.vscode-high-contrast:not(.vscode-context-menu-visible) .item:hover:not(.selected),
-body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:hover:not(.selected) {
+body.vscode-high-contrast:not(.vscode-context-menu-visible) .item:is(:hover, .hovered):not(.selected),
+body.vscode-high-contrast-light:not(.vscode-context-menu-visible) .item:is(:hover, .hovered):not(.selected) {
 	outline: 1px dashed var(--vscode-contrastActiveBorder);
 	outline-offset: -1px;
 }
