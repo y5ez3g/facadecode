@@ -4,6 +4,7 @@
 
 import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
+import { MouseModes } from '../../base/mouseModes';
 import { MouseReports } from '../../base/mouseReports';
 import { TerminalReplies } from '../../base/terminalReplies';
 import { SPINNER_FRAMES as FRAMES, spunName } from '../../base/tabSpinner';
@@ -105,6 +106,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private seen: string;
 	/** The mouse reports the person's clicks type, a release the editor could not measure given its press's position (LIFECYCLE-2.2). */
 	private readonly mouse = new MouseReports();
+	/** The terminal's mouse as what was written to it set it: settings that would change nothing are not written (LIFECYCLE-2.2). */
+	private readonly mouseModes = new MouseModes();
 	/** The program's questions written to the editor's terminal, by which its answers reach the program or not (ARCHITECTURE-2.3). */
 	private readonly replies: TerminalReplies;
 	/** Whether Facade holds its tab in front for a mark: the person's keys meanwhile are left out (LIFECYCLE-3.4). */
@@ -384,12 +387,14 @@ export class AgentPty implements vscode.Pseudoterminal {
 		// The editor names the tab by the name it was created with once its process is ready, after each open - a relaunch's too
 		this.resetDue = true;
 		this.size = dimensions;
+		// A terminal opened, or opened anew, has the default mouse until it is written (LIFECYCLE-2.2)
+		this.mouseModes.reset();
 		const waiting = this.unopened;
 		this.unopened = [];
 		this.unopenedLength = 0;
 		for (const data of waiting) {
 			this.replies.wrote(data, Date.now());
-			this.writeEmitter.fire(data);
+			this.show(data);
 		}
 		if (!reopened) {
 			this.askColours();
@@ -416,6 +421,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.early = undefined;
 		this.applied = undefined;
 		this.stale = true;
+		this.mouseModes.reset();
 		// A screen still being taken was for the terminal that went
 		this.ticket++;
 		// The questions written to the terminal that went are answered by none that opens later (ARCHITECTURE-2.3)
@@ -577,6 +583,8 @@ export class AgentPty implements vscode.Pseudoterminal {
 		this.applied = seq;
 		this.noted = false;
 		this.drawn = true;
+		// The screen holds the mouse its program set: what was cut off before it belongs to output it stands for (LIFECYCLE-2.2)
+		this.mouseModes.reset();
 		this.write(before + screen);
 		for (const each of later) {
 			this.output(each.seq, each.data);
@@ -589,7 +597,7 @@ export class AgentPty implements vscode.Pseudoterminal {
 	private write(data: string): void {
 		if (this.opened) {
 			this.replies.wrote(data, Date.now());
-			this.writeEmitter.fire(data);
+			this.show(data);
 			return;
 		}
 		this.unopenedLength += data.length;
@@ -603,5 +611,13 @@ export class AgentPty implements vscode.Pseudoterminal {
 			return;
 		}
 		this.unopened.push(data);
+	}
+
+	/** Writes `data` to the open terminal, but for mouse settings that would change nothing in it (LIFECYCLE-2.2). */
+	private show(data: string): void {
+		const shown = this.mouseModes.shown(data);
+		if (shown) {
+			this.writeEmitter.fire(shown);
+		}
 	}
 }
