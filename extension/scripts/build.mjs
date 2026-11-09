@@ -37,6 +37,10 @@ const windowManifest = JSON.parse(fs.readFileSync(path.join(root, 'window', 'pac
 if (windowManifest.version !== manifest.version || !manifest.extensionPack?.includes(`${windowManifest.publisher}.${windowManifest.name}`) || manifest.extensionDependencies?.length) {
 	throw new Error('The workspace extension must install its matching window component through its extension pack.');
 }
+// Each component's page installs both: the window component alone shows nothing
+if (!windowManifest.extensionPack?.includes(`${manifest.publisher}.${manifest.name}`) || windowManifest.extensionDependencies?.length) {
+	throw new Error('The window component must install its workspace extension through its extension pack.');
+}
 fs.writeFileSync(path.join(windowStage, 'package.json'), `${JSON.stringify(windowManifest, undefined, '\t')}\n`);
 for (const file of fs.readdirSync(path.join(root, 'l10n'))) {
 	fs.copyFileSync(path.join(root, 'l10n', file), file.startsWith('package.nls') ? path.join(stage, file) : path.join(stage, 'l10n', file));

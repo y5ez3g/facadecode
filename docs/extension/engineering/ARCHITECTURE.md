@@ -610,7 +610,9 @@ published files and explicitly record source or release-metadata differences.
 Bundle runtime dependencies and third-party notices, test commands excluded; package both components from build output
 with vsce pinned at 4.1.0. The workspace manifest installs its local window component through `extensionPack`, not
 `extensionDependencies`: in a remote window the editor installs the remote extension and activates it before it installs
-a local dependency, and an unmet dependency then blocks activation with no reload offered. At activation the workspace
+a local dependency, and an unmet dependency then blocks activation with no reload offered. The window component's
+manifest names the workspace extension in its own `extensionPack`, so installing either one installs both; alone, the
+window component shows nothing. At activation the workspace
 component waits up to 60 seconds for `facade.window.identity` and continues as soon as it appears, including when the
 editor reports the component installed later. If it does not appear, the window cannot read its own identity (2.2),
 which the component reads, so it cannot tell which agents are its own and shows and starts none (RULES-4.1): the panel
