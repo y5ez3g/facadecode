@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- **Drag selection works in Claude Code's fullscreen layout.** A drag in an agent's terminal no longer selects nothing after a few seconds without typing. Claude Code writes its mouse settings again with the first input after five seconds, and VS Code's terminal then dropped the drag that input started; Facade no longer passes on mouse settings that leave the terminal's mouse as it was. This applies to every CLI on every platform.
+- **A card keeps its buttons through the click that closes its gear menu.** On Windows and Linux, where the editor draws its own menus, the card's three buttons no longer vanish for a moment when that click lands on the card. A click on another card moves them there.
+- **Releases go to GitHub first.** Each version's VSIX files for all six platforms, with the Window Component and their SHA-256 values, are on its GitHub Release before the same files go to VS Code Marketplace and Open VSX. The original files of earlier versions are on Releases too.
+
 ## 0.1.1
 
 - **Preparing native packages for more computers.** Adds release candidates for Intel Macs, Linux ARM64 and Windows ARM64 alongside Apple silicon Macs, Linux x64 and Windows x64. Each platform runs the unit, package and isolated editor checks on its own native runner before its VSIX is available as a CI artifact. Publishing these packages requires the corresponding native verification results; the Window Component remains universal.
