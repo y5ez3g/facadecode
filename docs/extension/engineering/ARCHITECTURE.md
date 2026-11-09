@@ -595,10 +595,12 @@ the release job puts all platform VSIX files, the window component and `SHA256SU
 the changelog's section as notes, marking the newest extension version Latest. It then downloads the Release again and
 checks each file's hash and its own manifests (publisher, component, version, target). The stores job waits for approval
 in the `extension-stores` environment, downloads the Release's files, checks them against `SHA256SUMS`, publishes the
-window component before the platform packages to VS Code Marketplace and Open VSX, skips files a store already lists,
+window component before the platform packages to VS Code Marketplace and Open VSX, skips files a store already lists or
+answers it already has (its listing can lag behind its publication),
 and passes only once both stores serve every file byte for byte. Nothing is rebuilt or repacked between the CI run, the
 Release and the stores. An existing Release is never overwritten: a same-named file with other bytes stops the release,
-and only missing files are added; a rerun for a complete Release finishes the stores without building again.
+and only missing files are added; a manual run for a complete Release finishes the stores without building again, the
+stores job using the release script of the ref it runs from.
 
 Versions first published to the stores, before this order, are listed in `extension/archive/`'s catalog with their
 source, evidence and original Marketplace files and hashes. Catalog validation requires the historical three-platform

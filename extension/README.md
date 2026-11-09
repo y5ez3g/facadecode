@@ -152,8 +152,8 @@ workflow builds and tests that tag on all six native runners, then puts every pl
 and `SHA256SUMS` on the tag's GitHub Release, with the changelog's section as its notes; the newest extension version is
 marked Latest. It downloads the Release again and checks every file. Only then, after approval in the `extension-stores`
 environment, it publishes the Release's own files to VS Code Marketplace and Open VSX, the Window Component first, skipping
-files a store already has, and waits until both stores serve the same bytes. Rerunning it for a tag whose Release is
-complete finishes the stores without rebuilding. The environment holds the `VSCE_PAT` and `OVSX_PAT` secrets.
+files a store already has or says it has, and waits until both stores serve the same bytes. Running it manually from
+`main` for a tag whose Release is complete finishes the stores without rebuilding, with `main`'s release script. The environment holds the `VSCE_PAT` and `OVSX_PAT` secrets.
 
 An existing Release keeps its files: a file of the same name with other bytes stops the run, and only missing files are
 added. `node scripts/release.mjs` does the work: `github --tag <tag> --input-dir <dir>`, `stores --tag <tag>`, and

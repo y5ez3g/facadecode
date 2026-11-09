@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { test } from 'node:test';
 import {
-	checksumsText, collectFromRun, fileFor, marketplaceFile, parseChecksums, releaseNotes, sha256, storeOrder, targetsFor,
+	alreadyPublished, checksumsText, collectFromRun, fileFor, marketplaceFile, parseChecksums, releaseNotes, sha256, storeOrder, targetsFor,
 	validateCatalog, versionOfTag
 } from './release.mjs';
 
@@ -132,4 +132,10 @@ test('a Marketplace version counts only for the same component, version and plat
 	assert.equal(marketplaceFile(listed, '0.1.2', { target: 'universal' }), 'https://x/window');
 	assert.equal(marketplaceFile(listed, '0.1.2', { target: 'darwin-x64' }), undefined);
 	assert.equal(marketplaceFile(listed, '0.1.2', { target: 'win32-x64' }), undefined);
+});
+
+test('a store saying it already has a version counts as published, any other refusal does not', () => {
+	assert.ok(alreadyPublished('ERROR  facade.facadecode-window v0.1.2 already exists.'));
+	assert.ok(alreadyPublished('❌  Extension facade.facadecode 0.1.2 is already published.'));
+	for (const refusal of ['ERROR  Access Denied: needs Marketplace (publish) scope', 'The Personal Access Token is invalid', '']) assert.ok(!alreadyPublished(refusal));
 });
