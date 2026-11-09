@@ -89,7 +89,8 @@ buttons' icons stay clear of the overlay scrollbar at every width and zoom, and 
 keyboard focus moves them. Measure in the displayed font and available pixels, not a fixed character count; refit on resize, font
 changes and rename. Avatar/dot do not shrink. The panel header is unchanged.
 
-The buttons show while the pointer is on the card, or its menu or details are open. Each is a 14 px icon, the size
+The buttons show while the pointer is on the card - as far as the page can know where it is under the editor's menu
+(2.2) - or its menu or details are open. Each is a 14 px icon, the size
 chosen for them, with 2 px round it, in the manner of the editor's list-row actions without matching their dimensions.
 The icons are the editor's own codicons `info` and `gear`, and for the Pin the outlined contour Facade bundles as
 `media/pinned.svg`, the filled Pin being that icon's outer contour alone. They are centered on the first line, the Pin
@@ -259,8 +260,15 @@ A left click on the gear opens the menu under it, and Shift+F10 and the menu key
 dispatches the context menu event on the card itself, so the editor shows its native webview menu with the card's
 context. The person's right click opens nothing, on a card or anywhere in the view: on macOS a right click leaves an
 inactive window inactive, and the editor then shows the menu in the active window, where a left click activates its
-own window first. While the menu shows, its card keeps its buttons, the gear pressed. Groups: Rename; Move Up/Down; End
-Agent for starting, live and retained-ended records. It has no other entries: no Pin or Unpin, which the card's Pin
+own window first. While the menu shows, its card keeps its buttons, the gear pressed. Where the editor's menus are its own
+rather than the system's - `window.menuStyle` `custom`, or `inherit` with the custom title bar, as by default on Windows
+and Linux - it draws the menu in its window over the page, and from the pointer's next move the page hears only that the
+pointer left. A leave the page hears while a card's menu is open, or while the editor shows one, is therefore the menu's:
+the card the pointer was on stays as under it - its buttons and, unless selected, its hover color, and once the menu
+closes high contrast's dashed edge (UX-2.1) - until the page hears of the pointer again, on that card or elsewhere, or
+until 1000 ms after the menu is gone, closed or never shown, with nothing heard. A click on the card that closes its menu,
+its press reaching the editor's menu and only its release the page, so leaves the card as it was. Groups: Rename; Move
+Up/Down; End Agent for starting, live and retained-ended records. It has no other entries: no Pin or Unpin, which the card's Pin
 button and the palette do (1.3, UX-3.1), no worktree deletion or bulk selection action. Enable actions by actual
 availability; name editing need not wait for CLI readiness. LIFECYCLE-3.1 owns End Agent. No menu outside a card, not even the webview's
 default Cut/Copy/Paste. Context targets its stable run ID, revalidated against current host state under 3.1, never the
@@ -388,7 +396,7 @@ fully visible row count minus one (minimum one).
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.5 | Title and menu entries, the empty and filtered states, the failed-start and missing-component pages and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, the green and red dots and no dot otherwise, error/ended first, then a native blocker before other red conditions or generic unavailable status, with its CLI's own words kept (1.4), the state in words in the accessible label alone, the card's buttons and five-line details with no state, hover popup or native tooltip, all widths/themes/accessibility |
-| 2.1–2.3 | Insertion into the two queues and manual order, retained failure, the selection unmoved while the pinned tabs of a reload, an extension-host restart or Pin restoration open and on the last one opened after, exact context target from the gear and the keys, no menu on a right click, filter removal/read failure |
+| 2.1–2.3 | Insertion into the two queues and manual order, retained failure, the selection unmoved while the pinned tabs of a reload, an extension-host restart or Pin restoration open and on the last one opened after, exact context target from the gear and the keys, no menu on a right click, the card under the pointer kept through the editor's menu and the click that closes it, filter removal/read failure |
 | 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
 
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.
