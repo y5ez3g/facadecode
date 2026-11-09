@@ -12,12 +12,16 @@ const CLAUDE_AGAIN = '\x1b(B\x0f\x1b[?2004h\x1b[?1000h\x1b[?1002h\x1b[?1003h\x1b
 
 /** A headless xterm.js, the editor terminal's own parser, and its mouse. */
 function terminal(): { write(data: string): Promise<void>; mouse(): string; changes(): number } {
+	type Service = { activeProtocol: string; activeEncoding: string; onProtocolChange(listener: () => void): unknown };
 	const term = new Terminal({ allowProposedApi: true });
-	const service = (term as unknown as { _core: { coreMouseService: { activeProtocol: string; activeEncoding: string; onProtocolChange(listener: () => void): unknown } } })._core.coreMouseService;
+	// Its own service, named for the core in xterm.js 6.0 and for its state from 6.1
+	const core = (term as unknown as { _core: { coreMouseService?: Service; mouseStateService?: Service } })._core;
+	const service = (core.coreMouseService ?? core.mouseStateService)!;
 	let changes = 0;
 	service.onProtocolChange(() => { changes++; });
 	return {
-		write: data => new Promise(resolve => term.write(data, resolve)),
+		// Nothing to write writes nothing: an empty write's callback may never come
+		write: data => data ? new Promise(resolve => term.write(data, resolve)) : Promise.resolve(),
 		mouse: () => `${service.activeProtocol}/${service.activeEncoding}`,
 		changes: () => changes
 	};
@@ -99,6 +103,30 @@ suite('Mouse settings that would change nothing never reach an editor terminal (
 		assert.strictEqual(modes.shown('1003h'), '1003h', 'nothing held once the terminal went');
 	});
 
+	test('a setting is read as xterm.js reads it: past its sub-parameters, and as far as its 32nd parameter', async () => {
+		const modes = new MouseModes();
+		assert.strictEqual(modes.shown('\x1b[?1003:1;1006h'), '\x1b[?1003:1;1006h');
+		assert.strictEqual(modes.shown('\x1b[?1003h\x1b[?1006h'), '', 'the mouse it set is known');
+		// A reset after 32 other parameters is no reset: the terminal keeps its mouse, and so a reset after it is one
+		const ignored = `\x1b[?${'2004;'.repeat(32)}1000l`;
+		assert.strictEqual(modes.shown(ignored), ignored);
+		assert.strictEqual(modes.shown('\x1b[?1000l'), '\x1b[?1000l');
+		const editor = terminal();
+		await editor.write(`\x1b[?1003:1;1006h${ignored}`);
+		assert.strictEqual(editor.mouse(), 'ANY/SGR', 'as the editor\'s terminal has it');
+	});
+
+	test('a cut-off end too long for any setting is written as it comes, and then nothing is left out until the terminal is reset', () => {
+		const modes = new MouseModes();
+		modes.shown(CLAUDE_START);
+		const long = `\x1b[?${'1'.repeat(300)}`;
+		assert.strictEqual(modes.shown(long), long);
+		assert.strictEqual(modes.shown(`;1000h${CLAUDE_AGAIN}`), `;1000h${CLAUDE_AGAIN}`, 'what that setting did is not known');
+		modes.reset();
+		assert.strictEqual(modes.shown(CLAUDE_START), CLAUDE_START);
+		assert.strictEqual(modes.shown(CLAUDE_AGAIN), '\x1b(B\x0f\x1b[?2004h');
+	});
+
 	test('what is no mouse setting passes unchanged', () => {
 		const modes = new MouseModes();
 		for (const data of ['plain ? text', '\x1b[?2004h', '\x1b[?25l', '\x1b[?u', '\x1b]0;title?\x07', '\x1b[6n', '\x1b[?2026h\x1b[?2026l', '\x1b[>4;2m', 'a\x1b[2Jb']) {
@@ -113,7 +141,8 @@ suite('Mouse settings that would change nothing never reach an editor terminal (
 		const pieces = [
 			'\x1b[?9h', '\x1b[?9l', '\x1b[?1000h', '\x1b[?1000l', '\x1b[?1002h', '\x1b[?1002l', '\x1b[?1003h', '\x1b[?1003l', '\x1b[?1005h',
 			'\x1b[?1006h', '\x1b[?1006l', '\x1b[?1015h', '\x1b[?1016h', '\x1b[?1016l', '\x1b[?1000;1006h', '\x1b[?1049;1003h', '\x1b[?25;1006l',
-			'\x1bc', '\x1b[!p', '\x1b[?2004h', '\x1b[31m', 'text', '?', '\r\n', '\x9b?1002h', CLAUDE_AGAIN
+			'\x1bc', '\x1b[!p', '\x1b[?2004h', '\x1b[31m', 'text', '?', '\r\n', '\x9b?1002h', CLAUDE_AGAIN,
+			'\x1b[?1000:1h', '\x1b[?1003:2;1006h', `\x1b[?${'1'.repeat(20)};1003l`, `\x1b[?${'2004;'.repeat(32)}1002h`
 		];
 		for (let round = 0; round < 150; round++) {
 			let stream = '';
