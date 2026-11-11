@@ -24,7 +24,7 @@ import { MessageService, STAGE_MS } from '../core/messages';
 import { PlanError, type LogPort, type RetainedRun, type RunId } from '../core/ports';
 import { COMMANDS, PANEL_VIEW } from '../ui/catalog';
 import { worktreeProblemText } from '../ui/pickers/location';
-import { reasonText } from '../ui/presentation';
+import { openSettingsLabel, reasonText } from '../ui/presentation';
 import { registerUi } from '../ui/commands/index';
 import { registerWorktreeCommands } from '../ui/commands/worktree';
 import { AgentExecution } from './execution/agentExecution';
@@ -49,9 +49,12 @@ import { WindowHuman } from './human';
 import { OrdinaryInput } from './input';
 import { createLocationService, createWorktreeService } from './locations/index';
 import { editorEnvironment } from './editorEnvironment';
-import { WAIT_SECONDS, yolo } from './settings';
+import { namesOf, WAIT_SECONDS, yoloOf } from './settings';
+import { FacadeSettings } from './facadeSettings';
+import { homeReloadText, UnusableHome, unusableHomeText, useFacadeHome } from './home';
+import { migratedText, notMadeText } from './settingsNotice';
 import { showComponentMissing, waitForWindowIdentity } from './windowComponent';
-import { registerShowLaunch } from './showLaunch';
+import { registerShowLaunch, watchSettingsFile } from './showLaunch';
 import { WindowLifetime } from './windowLifetime';
 import { KeptWorkspaceState } from './workspaceState';
 
@@ -62,9 +65,12 @@ const WORKSPACE_KEY = 'facade.workspaceKey';
 /** The longest wait between attempts to list this window's runs: well within the five minutes they are kept for it (RULES-4.1). */
 const MOST_RESTORE_WAIT_MS = 30_000;
 
-/** Why this window's Facade could not start, in the person's words: shown as it is; `reloadHelps` where reloading tries again. */
+/**
+ * Why this window's Facade could not start, in the person's words: shown as it is; `reloadHelps` where reloading tries again, and
+ * `opensSetting` where a setting is what to fix, offered as Open Settings at that setting.
+ */
 export class ActivationError extends Error {
-	constructor(message: string, readonly reloadHelps = true) {
+	constructor(message: string, readonly reloadHelps = true, readonly opensSetting?: string) {
 		super(message);
 	}
 }
@@ -88,6 +94,16 @@ export function sayActivationFailed(context: vscode.ExtensionContext, err: unkno
 		// The panel of the part that did start shows itself
 	}
 	const say = () => {
+		if (err instanceof ActivationError && err.opensSetting !== undefined) {
+			const setting = err.opensSetting;
+			const open = openSettingsLabel();
+			void vscode.window.showErrorMessage(text, open).then(choice => {
+				if (choice === open) {
+					void openFacadeSettings(`@id:${setting}`);
+				}
+			});
+			return;
+		}
 		if (err instanceof ActivationError && !err.reloadHelps) {
 			void vscode.window.showErrorMessage(text);
 			return;
@@ -119,6 +135,12 @@ function workspaceUri(): string {
  * directory. Returns what deactivation runs: the window detaches, and its agents' processes go on in ptyd (RULES-4.1).
  */
 export async function activateFacade(context: vscode.ExtensionContext): Promise<() => Promise<void>> {
+	// The Facade home first, before anything reads it (ARCHITECTURE-3.1): one that is no path starts nothing, never another home
+	try {
+		useFacadeHome(context, { terminals: true, offerReload: true, reloadText: homeReloadText });
+	} catch (err) {
+		throw err instanceof UnusableHome ? new ActivationError(unusableHomeText(err.value), false, 'facade.home') : err;
+	}
 	const home = facadeHome();
 	const session = vscode.env.sessionId;
 	// The window component comes with Facade Code's extension pack, maybe after it: waited for a bounded time (ARCHITECTURE-4.3)
@@ -178,12 +200,32 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		version: String(context.extension.packageJSON.version),
 		home,
 		media: vscode.Uri.joinPath(context.extensionUri, 'media'),
+		// Read when a tab opens, from the settings file as it is then (CONFIGURATION-2.4)
+		icon: (cli: string): string => clis.icons()(cli),
 		log: line => agentLog.event(line),
 		terminalOwner: { ...terminalOwner, remote: vscode.env.remoteName !== undefined },
 		shimScript: vscode.Uri.joinPath(context.extensionUri, 'dist', 'shim.js').fsPath
 	});
 	const worktrees = createWorktreeService(locations, log);
-	const clis = new HostClis({ log: line => log.event(line), fact: (event, fields) => log.fact?.(event, fields), home, version: String(context.extension.packageJSON.version),
+	// Facade's settings file (CONFIGURATION-1.1, 1.3): made now where it does not exist - from the editor's old Facade settings, said once
+	// by the window that made it (CONFIGURATION-6.3) - and read on every use
+	const settings = new FacadeSettings({
+		legacy: name => vscode.workspace.getConfiguration().inspect(name)?.globalValue,
+		log: line => log.event(line),
+		migrated: (file, notes) => {
+			const open = vscode.l10n.t("Open");
+			void Promise.resolve(vscode.window.showInformationMessage(migratedText(settings.shown, notes), open)).then(choice => {
+				if (choice === open) {
+					return vscode.window.showTextDocument(vscode.Uri.file(file));
+				}
+				return undefined;
+			}).catch(err => log.event(`Could not open ${settings.shown}: ${messageOf(err)}`));
+		}
+	});
+	settings.snapshot();
+	const yolo = yoloOf(settings);
+	const names = namesOf(settings);
+	const clis = new HostClis({ settings, log: line => log.event(line), fact: (event, fields) => log.fact?.(event, fields), home, version: String(context.extension.packageJSON.version),
 		// The server a start would be given, as Show Agent Launch shows it: what only a start has named, never valued (CLIS-4.1)
 		server: run => ({ ...execution.shimLaunch(run, '#aN', PLACEHOLDERS.context), instructions: PLACEHOLDERS.instructions }) });
 	// This window on the client network, through its local component (COLLABORATION-1.1). One too old for it reaches no other window
@@ -208,12 +250,15 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	const human = new WindowHuman(run => Promise.resolve(vscode.commands.executeCommand('facade.revealAgent', { run_id: run })));
 	const conversations = new ConversationFile(home);
 	// The CLIs' own conversation stores where they run - this extension runs where its window's CLIs do: Resume lists them, and each
-	// run's card says its conversation's title from them (LIFECYCLE-3.2, CLIS-2.4). A custom CLI has none
+	// run's card says its conversation's title from them (LIFECYCLE-3.2, CLIS-2.4). An added entry of a built-in's type keeps its
+	// conversations in its built-in's store, those it started listed under it (CONFIGURATION-2.3, 3.4); a program has none
 	const vendorHistory = new VendorHistory({
 		knownCwd: key => conversations.get(key)?.cwd,
 		arguments: () => clis.storeArguments(),
+		builtIns: () => clis.storeBuiltIns(),
 		environment: cwd => { const location = locations.conversationLocation(cwd); return location ? clis.storeEnvironments(location) : {}; },
-		unavailable: (cli, cwd) => { const location = locations.conversationLocation(cwd); return location ? clis.resumeProblem(cli, location) : 'The original working directory is unavailable.'; }
+		associated: (environment, store, sessionId) => conversations.associated(environment, store, sessionId),
+		unavailable: (cli, cwd, store) => { const location = locations.conversationLocation(cwd); return location ? clis.resumeProblem(cli, location, store) : 'The original working directory is unavailable.'; }
 	});
 	const agents = new AgentService({
 		execution,
@@ -232,11 +277,11 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		log,
 		lifetime: new WindowLifetime(),
 		yolo,
+		names,
 		// Facade's own reasons in the person's language: a worktree's problem, a CLI's configuration, a working location (UX-2.4)
 		describe: (err, english) => worktreeProblemText(err, err instanceof PlanError || err instanceof FacadeError ? reasonText(err.said, english) : english),
 		// The run's own shim, where orchestration is on for this start (RULES-4.4, MCP-6.1)
 		tools: (run, facts, location) => {
-			if (!clis.collaborationEnabled()) { return undefined; }
 			const context = launchContextText({
 				creator: { id: facts.creator ? /#a\d+$/.exec(facts.creatorLabel ?? '')?.[0] ?? facts.creator : '#human', label: facts.creatorLabel },
 				window: window.label, windowId: window.id, locationId: location.id, logFile: agentLog.eventsFile, location,
@@ -334,6 +379,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		historyLog: agentLog.eventsFile,
 		timeout: () => WAIT_SECONDS,
 		yolo,
+		settingsFile: settings.shown,
 		input,
 		clock: { now: Date.now },
 		log: text => log.event(text),
@@ -352,6 +398,8 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 	} catch (err) {
 		log.event(`Could not remove expired result files: ${messageOf(err)}`);
 	}
+	// The settings file saved, made or removed, for the cards to show their icons as it says them now (CONFIGURATION-2.4)
+	const settingsChanged = new vscode.EventEmitter<void>();
 	// Reuse location/configuration events; unchanged scans are not repeated in history. No polling or CLI processes.
 	let lastLocations = '';
 	const scanLocations = () => {
@@ -381,10 +429,21 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		human,
 		locations.onDidChange(scanLocations),
 		vscode.workspace.onDidChangeConfiguration(event => {
-			if (event.affectsConfiguration('facade') || event.affectsConfiguration('terminal.integrated')) { scanLocations(); }
+			if (event.affectsConfiguration('terminal.integrated')) { scanLocations(); }
 		}),
+		// The settings file saved, made or removed: the CLIs found again, and the cards' icons read again (CONFIGURATION-1.1, 2.4)
+		settingsChanged,
+		...watchSettingsFile(settings.file, () => { scanLocations(); settingsChanged.fire(); }),
 		...registerUi({
 			agents,
+			// Open Settings and New Agent's gear: the editor's Settings at Facade Code's section, whose Edit in facade.json link opens the
+			// file (CONFIGURATION-1.2)
+			openSettings: async () => {
+				await openSettingsOf(context.extension.id);
+			},
+			names,
+			icons: () => clis.icons(),
+			settingsChanged: settingsChanged.event,
 			savedName: key => conversations.get(key)?.name,
 			conversations: vendorHistory,
 			readsTitles: cli => vendorHistory.readsTitles(cli),
@@ -402,7 +461,28 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			...(identity.remote ? { remote: identity.remote } : {})
 		}),
 		...registerWorktreeCommands({ locations, worktrees, agents, notifyError: (text, options) => human.error(text, options), log }),
-		registerShowLaunch(clis, locations, log, identity.remote),
+		// The link of Facade's item in the editor's Settings: the settings file, made first where there is none (CONFIGURATION-1.2, 1.3)
+		vscode.commands.registerCommand(COMMANDS.openSettingsFile, async () => {
+			const generated = settings.ensure();
+			if (generated.kind === 'failed') {
+				void vscode.window.showErrorMessage(reasonText(generated.problem.said, generated.problem.text));
+				return;
+			}
+			if (generated.kind === 'conflict') {
+				void vscode.window.showErrorMessage(notMadeText(settings.shown, generated.problems));
+				// The old values to fix are the editor's own settings: on this computer, or the remote machine's (CONFIGURATION-6.2)
+				await vscode.commands.executeCommand(vscode.env.remoteName ? 'workbench.action.openRemoteSettingsFile' : 'workbench.action.openSettingsJson');
+				return;
+			}
+			try {
+				await vscode.window.showTextDocument(vscode.Uri.file(settings.file), { preview: false });
+			} catch (err) {
+				// A file the editor cannot open - a folder of its name, one it may not read - is said with why (CONFIGURATION-1.2)
+				// {0} is the settings file; {1} the editor's reason
+				void vscode.window.showErrorMessage(vscode.l10n.t("{0} could not be opened: {1}", settings.shown, messageOf(err)));
+			}
+		}),
+		registerShowLaunch(clis, locations, log, settings, identity.remote),
 		registerAgentsLog(agentLog.file),
 		contact,
 		// The integration suite's own: what an agent's terminal shows, for a journey's diagnostics, and the diagnostics report,
@@ -436,4 +516,26 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		locations.dispose();
 		execution.dispose();
 	};
+}
+
+/**
+ * Open Settings (CONFIGURATION-1.2): the editor's Settings at Facade Code's section. A person whose Settings open as JSON gets, in a
+ * remote window, facade.json itself: the editor opens them the Remote tab as the remote settings.json, without the section or its
+ * Edit in facade.json link. Locally the editor shows the section to them too.
+ */
+export function openSettingsOf(extensionId: string): Thenable<unknown> {
+	if (vscode.env.remoteName !== undefined && vscode.workspace.getConfiguration('workbench.settings').get('editor') === 'json') {
+		return vscode.commands.executeCommand(COMMANDS.openSettingsFile);
+	}
+	return openFacadeSettings(`@ext:${extensionId}`);
+}
+
+/**
+ * The editor's Settings at `query`, on the tab of the machine whose settings Facade's are (CONFIGURATION-1.2): in a remote window the
+ * remote's, as Facade's settings are machine settings, which the User tab of a remote window does not show.
+ */
+function openFacadeSettings(query: string): Thenable<unknown> {
+	return vscode.env.remoteName !== undefined
+		? vscode.commands.executeCommand('workbench.action.openRemoteSettings', { query })
+		: vscode.commands.executeCommand('workbench.action.openSettings', query);
 }

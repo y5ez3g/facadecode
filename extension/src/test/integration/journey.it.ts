@@ -9,7 +9,7 @@ import { pathToFileURL } from 'url';
 import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
 import { piSessionFolderName } from '../../clis/history/pi';
-import { SUGGESTED_NAMES } from '../../core/names';
+import { BUILT_IN_NAMES } from '../../base/names';
 import type { PanelState } from '../../webview/protocol';
 import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
@@ -22,18 +22,17 @@ const AGENTS_HOME = process.env.FACADE_IT_AGENTS_HOME;
 
 /**
  * The arguments each built-in is started with in a folder with YOLO on, the default (CLIS-1.3, 3.3), after its Facade tools' own,
- * which the tools' journey checks (CLIS-3.2); Codex's trust is checked apart.
- * The configured custom CLI starts with its exact start arguments (CLIS-3.4).
+ * which the tools' journey checks (CLIS-3.2); Claude Code's and Codex's are checked apart.
+ * The suite's program starts with exactly its args (CONFIGURATION-2.3).
  */
 const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
-	claude: ['--settings', '{"env":{"CLAUDE_CODE_DISABLE_TERMINAL_TITLE":""},"disabledMcpjsonServers":["facade"]}', '--dangerously-skip-permissions'],
 	agy: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 	muse: ['--disable-approval', '--disable-sandbox', '--trust-workspace'],
 	opencode: ['--auto'],
 	pi: ['--approve'],
 	'my-cli': ['--from-custom', 'two words']
 };
-/** Whether this run's CLI is the suite's custom one rather than a built-in. */
+/** Whether this run's CLI is the suite's program rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
 
 /** Native store fixtures: actual vendor interoperability is verified separately with isolated native CLIs. */
@@ -147,11 +146,10 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const pidFile = `${RECORD}.${alias}`;
 		const pid = await until('the fake CLI to start', async () => fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, 'utf8').trim()) : undefined);
 		assert.ok(alive(pid));
-		// A built-in's maker avatar; the custom CLI's initial on a theme colour, and the terminal icon on its tab (PANEL-1.3, LIFECYCLE-2.2)
+		// A built-in's maker avatar; a program's white robot, on its card and its tab (PANEL-1.3, LIFECYCLE-2.2, CONFIGURATION-2.4)
 		if (CUSTOM) {
-			const avatar = card.avatar as { initial: string; color: string };
-			assert.deepStrictEqual([avatar.initial, ['blue', 'orange', 'purple'].includes(avatar.color)], ['M', true]);
-			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, 'terminal');
+			assert.deepStrictEqual(card.avatar, { file: 'robot-pearl-face.svg', eyes: 'robot-eyes.svg' });
+			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, 'facade-robot-pearl');
 		} else {
 			assert.deepStrictEqual(card.avatar, { file: AVATAR });
 			assert.strictEqual(((terminal.creationOptions as vscode.TerminalOptions).iconPath as vscode.ThemeIcon).id, `facade-cli-${CLI}`);
@@ -160,7 +158,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		assert.ok(sameFolder(launch.cwd, vscode.workspace.workspaceFolders![0].uri.fsPath), `${launch.cwd} is the workspace folder`);
 		if (CUSTOM) {
 			assert.deepStrictEqual(launch.args, ARGUMENTS[CLI], 'no injected MCP or built-in arguments');
-			assert.strictEqual(fs.existsSync(`${RECORD}.mcp.${alias}`), false, 'no MCP server is started for an unintegrated custom CLI');
+			assert.strictEqual(fs.existsSync(`${RECORD}.mcp.${alias}`), false, 'no MCP server is started for a program');
 		} else if (CLI === 'codex') {
 			assert.ok(launch.args.includes('--dangerously-bypass-approvals-and-sandbox'), launch.args.join(' '));
 			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
@@ -169,7 +167,10 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			assert.ok(settingsAt >= 0, 'the native session hooks accompany the MCP configuration');
 			assert.strictEqual(launch.args.filter(arg => arg === '--settings').length, 1);
 			assert.ok(launch.args.includes('--mcp-config'));
-			const settings = JSON.parse(launch.args[settingsAt + 1]);
+			// Its run settings are a file of the run, given by its path, never inline (CONFIGURATION-4.2)
+			const file = launch.args[settingsAt + 1];
+			assert.ok(path.isAbsolute(file) && path.basename(file) === 'claude-settings.json', file);
+			const settings = JSON.parse(fs.readFileSync(file, 'utf8'));
 			assert.deepStrictEqual(settings.env, { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' });
 			assert.ok(settings.hooks.SessionStart[0].hooks[0].command.includes('hook.cjs'));
 			assert.match(launch.args[launch.args.indexOf('--session-id') + 1], /^[0-9a-f-]{36}$/);
@@ -311,7 +312,7 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 			return undefined;
 		});
-		assert.ok(SUGGESTED_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
+		assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
 		const alias = linesOf(card).join(' ').match(/#a\d+/)![0];
 		const launch = await until('the resumed process', async () => fs.existsSync(`${RECORD}.args.${alias}`) ? JSON.parse(fs.readFileSync(`${RECORD}.args.${alias}`, 'utf8')) as { cwd: string; args: string[] } : undefined);
 		assert.ok(sameFolder(launch.cwd, cwd));
@@ -381,8 +382,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		await showing;
 		const text = launch.getText();
 		assert.match(text, /^Agent launch in /);
-		assert.match(text, /^YOLO: on, from facade\.yolo; applies to newly started agents$/m);
-		for (const name of ['Claude Code (claude, facade.claude)', 'Codex (codex, facade.codex)', 'Pi (pi, facade.pi)']) {
+		assert.match(text, /^YOLO: on, from yolo in .*facade\.json; applies to newly started agents$/m);
+		for (const name of ['Claude Code (claude, clis.claude)', 'Codex (codex, clis.codex)', 'Pi (pi, clis.pi)']) {
 			assert.ok(text.includes(`\n${name}\n  Status: available\n`), `${name} available in:\n${text}`);
 		}
 		assert.ok(text.includes('\n    --dangerously-skip-permissions\n'), text);

@@ -19,7 +19,10 @@ export const COMMANDS = {
 	/** The selected card's details, for the keyboard (PANEL-1.5, UX-2.3). */
 	showAgentDetails: 'facade.showAgentDetails',
 	filter: 'facade.filter',
-	configureAgents: 'facade.configureAgents',
+	/** The editor's Settings at Facade Code's section, whose Edit in facade.json link opens the settings file (CONFIGURATION-1.2). */
+	openSettings: 'facade.openSettings',
+	/** Registered by the host: the settings file opened, made first where there is none (CONFIGURATION-1.2, 1.3). */
+	openSettingsFile: 'facade.openSettingsFile',
 	/** Registered by the host, which has the CLIs' launch and the agents log (CLIS-4.1, ARCHITECTURE-3.3). */
 	showAgentLaunch: 'facade.showAgentLaunch',
 	showAgentsLog: 'facade.showAgentsLog',
@@ -51,6 +54,3 @@ export const CONTEXT = {
 	/** The window's one place to work holds every agent: there is no location to filter by (PANEL-2.3). */
 	onePlace: 'facade.onePlace'
 } as const;
-
-/** Where Configure Agents goes: the Settings editor showing this extension's settings alone, in the execution environment (CLIS-1.1). */
-export const AGENT_SETTINGS = '@ext:facade.facadecode';

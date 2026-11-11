@@ -5,7 +5,8 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { BUILT_IN_ADAPTERS } from '../clis/catalog';
+import { ROBOTS } from '../base/robot';
+import { LEGACY_SETTINGS } from '../clis/migration';
 import { TestEmitter, withModules } from './withModules';
 
 const ROOT = path.join(__dirname, '..', '..', '..');
@@ -28,29 +29,37 @@ const PUBLIC: readonly [string, string, string?][] = [
 	['facade.closeAgent', 'End Agent'],
 	['facade.showAgentDetails', 'Show Agent Details'],
 	['facade.filter', 'Filter by Working Location...', '$(filter)'],
-	['facade.configureAgents', 'Configure Agents...'],
+	['facade.openSettings', 'Open Settings'],
 	['facade.showAgentLaunch', 'Show Agent Launch...'],
 	['facade.showAgentsLog', 'Show Agents Log']
 ];
+/** The moved notice where VS Code cannot show a link (CONFIGURATION-6.3). */
+const MOVED_PLAIN = 'Moved to facade.json. Run Facade Code: Open Settings to reach it.';
 const HIDDEN: readonly [string, string, string?][] = [
 	['facade.newWorktree', 'New Worktree...'],
 	['facade.moveUp', 'Move Up'],
 	['facade.moveDown', 'Move Down'],
 	// Filter by Working Location as its title button shows it while a filter is on (UX-3.2)
 	['facade.filterOn', 'Filter by Working Location...', '$(filter-filled)'],
-	['facade.revealAgent', 'Show Agent']
+	['facade.revealAgent', 'Show Agent'],
+	// The link of Facade: Home's description in the editor's Settings, which Open Settings shows (CONFIGURATION-1.2)
+	['facade.openSettingsFile', 'Open facade.json']
 ];
-/** Registered by the host itself rather than the panel: New Worktree, and Show Agent Launch and Show Agents Log beside the CLIs and the log. */
-const HOST_COMMANDS = ['facade.newWorktree', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
+/**
+ * Registered by the host itself rather than the panel: New Worktree, Show Agent Launch and Show Agents Log beside the CLIs and the log,
+ * and Open Settings File beside the settings file.
+ */
+const HOST_COMMANDS = ['facade.newWorktree', 'facade.showAgentLaunch', 'facade.showAgentsLog', 'facade.openSettingsFile'];
 const TEST_COMMANDS = ['facade.state', 'facade.selectRow', 'facade.probe'];
 
 suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)', () => {
 
 	test('one view container and webview, startup activation, native New Agent and CLI icons; no keybindings or languages (PANEL-1.1, LIFECYCLE-2.2, UX-2.1, 2.3)', () => {
-		assert.deepStrictEqual([Object.keys(contributes), manifest.activationEvents], [['viewsContainers', 'views', 'commands', 'menus', 'icons', 'configuration'], ['onStartupFinished']]);
+		assert.deepStrictEqual([Object.keys(contributes), manifest.activationEvents], [['viewsContainers', 'views', 'commands', 'menus', 'icons', 'configuration', 'jsonValidation'], ['onStartupFinished']]);
 		// Facade's own copy of codicons' `new-session`, at its codicon's code point in the font beside the manifest
 		assert.deepStrictEqual(contributes.icons['facade-new-agent'], { description: '%icon.newAgent%', default: { fontPath: './media/new-agent.woff', fontCharacter: '\\EC84' } });
-		assert.deepStrictEqual(Object.keys(contributes.icons).sort(), ['facade-new-agent', ...['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'].map(cli => `facade-cli-${cli}`)].sort());
+		// Besides New Agent's, each built-in's logo and each of Facade's robots, for terminal tabs (CONFIGURATION-2.4)
+		assert.deepStrictEqual(Object.keys(contributes.icons).sort(), ['facade-new-agent', ...['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'].map(cli => `facade-cli-${cli}`), ...ROBOTS.map(robot => `facade-robot-${robot}`)].sort());
 		assert.ok(fs.statSync(path.join(ROOT, 'media', 'new-agent.woff')).isFile());
 		assert.strictEqual(english('%icon.newAgent%'), 'New Agent icon');
 		assert.deepStrictEqual(contributes.viewsContainers, { activitybar: [{ id: 'facade', title: '%view.container%', icon: 'media/facade.svg' }] });
@@ -82,7 +91,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 				// The More Actions menu (PANEL-1.1): the editor's own Add Folder to Workspace..., not declared here, keeps its own title
 				{ command: 'workbench.action.addRootFolder', when: 'view == facade.agents', group: '1_locations@1' },
 				{ command: 'facade.newWorktree', when: 'view == facade.agents && workspaceFolderCount != 0', group: '1_locations@2' },
-				{ command: 'facade.configureAgents', when: 'view == facade.agents', group: '9_configure@1' }
+				{ command: 'facade.openSettings', when: 'view == facade.agents', group: '9_configure@1' }
 			],
 			'webview/context': [
 				{ command: 'facade.renameAgent', when: card, group: '1_agent@1' },
@@ -102,71 +111,54 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 		});
 	});
 
-	test('PANEL-1.1: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Configure Agents... - in that order, as the editor sorts groups and their order', () => {
+	test('PANEL-1.1: the view\'s native menu is Add Folder to Workspace..., New Worktree..., a line, Open Settings - in that order, as the editor sorts groups and their order', () => {
 		type Entry = { command: string; group: string };
 		const more = (contributes.menus['view/title'] as Entry[]).filter(each => !each.group.startsWith('navigation'));
 		const placed = more.map(each => ({ command: each.command, group: each.group.split('@')[0], order: Number(each.group.split('@')[1]) }))
 			.sort((a, b) => a.group.localeCompare(b.group) || a.order - b.order);
 		const shown = placed.flatMap((each, at) => at > 0 && placed[at - 1].group !== each.group ? ['──', each.command] : [each.command]);
-		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.configureAgents']);
-		// These commands are in the Command Palette alone (PANEL-1.1); Configure Agents is in it too.
+		assert.deepStrictEqual(shown, ['workbench.action.addRootFolder', 'facade.newWorktree', '──', 'facade.openSettings']);
+		// These commands are in the Command Palette alone (PANEL-1.1); Open Settings is in it too.
 		const palette = ['facade.showActiveAgents', 'facade.showAgentLaunch', 'facade.showAgentsLog'];
 		assert.ok(!more.some(each => palette.includes(each.command)));
-		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.configureAgents'].includes(each.command)));
+		assert.ok(!contributes.menus.commandPalette.some((each: { command: string }) => [...palette, 'facade.openSettings'].includes(each.command)));
 	});
 
-	test('settings: Agents, then each built-in CLI in its catalog order with whether it is offered, its path and its launch, then Custom Agents; machine scope (UX-4.1, CLIS-1.1, 1.2, 3.1, 3.4)', () => {
-		const sections = contributes.configuration.map((section: { id: string; title: string; order: number; properties: Record<string, unknown> }) => [section.id, english(section.title), section.order, Object.keys(section.properties)]);
-		const cli = (setting: string) => [`${setting}.enabled`, `${setting}.path`, `${setting}.launch`];
-		assert.deepStrictEqual(sections, [
-			['facade.agents', 'Agents', 2, ['facade.yolo', 'facade.collaboration.enabled']],
-			['facade.claude', 'Claude Code', 3, cli('facade.claude')],
-			['facade.codex', 'Codex', 4, cli('facade.codex')],
-			['facade.antigravity', 'Antigravity', 5, cli('facade.antigravity')],
-			['facade.muse', 'Muse Code', 6, cli('facade.muse')],
-			['facade.opencode', 'OpenCode', 7, cli('facade.opencode')],
-			['facade.pi', 'Pi', 8, cli('facade.pi')],
-			['facade.custom', 'Custom Agents', 9, ['facade.custom']]
-		]);
-		// The sections are the catalog's, by its adapters' settings and display names
-		assert.deepStrictEqual(sections.slice(1, -1).map((section: unknown[]) => [section[0], section[1]]), BUILT_IN_ADAPTERS.map(adapter => [adapter.setting, adapter.displayName]));
-		const settings: Record<string, { type: string; default: unknown; scope: string; markdownDescription: string }> = Object.assign({}, ...contributes.configuration.map((section: { properties: object }) => section.properties));
-		assert.deepStrictEqual(Object.entries(settings).map(([key, value]) => [key, value.type, value.default, value.scope]), [
+	test('settings: one Facade Code section, its first item Facade: Home, the folder Facade keeps its data in, whose description links to facade.json; every setting an earlier build read stays as it was, marked moved; the file has its schema (CONFIGURATION-1.2, 6.3, UX-4.1, ARCHITECTURE-3.1)', () => {
+		assert.deepStrictEqual(contributes.configuration.map((section: { id: string; title: string; order: number }) => [section.id, english(section.title), section.order]), [['facade.agents', 'Facade Code', 2]]);
+		const settings: Record<string, { type: string; default: unknown; scope: string; order?: number; pattern?: string; patternErrorMessage?: string; markdownDescription: string; markdownDeprecationMessage?: string; deprecationMessage?: string }> = contributes.configuration[0].properties;
+		// A real setting, a path: the box VS Code draws for it has no Edit in settings.json button; a workspace cannot set it
+		assert.deepStrictEqual(settings['facade.home'], { type: 'string', default: '~/.facade', scope: 'machine', order: 0, pattern: '^$|^(~[\\\\/]|/|[A-Za-z]:[\\\\/]|\\\\\\\\)', patternErrorMessage: '%config.home.pattern%', markdownDescription: '%config.home%' });
+		const usable = new RegExp(settings['facade.home'].pattern!);
+		assert.deepStrictEqual(['', '~/.facade', '/Volumes/Data/facade', 'D:\\Facade', 'D:/Facade', '\\\\server\\share', 'facade', './facade', '~', 'D:Facade'].map(value => usable.test(value)),
+			[true, true, true, true, true, true, false, false, false, false]);
+		assert.strictEqual(english(settings['facade.home'].markdownDescription), 'The Facade home is the folder for Facade\'s settings, agent history, and messages. '
+			+ 'Only agents in windows with the same Facade home can communicate with each other. The `FACADE_HOME` environment variable overrides the '
+			+ '`~/.facade` default; a path here overrides both.\n\n[Edit in facade.json](command:facade.openSettingsFile) to add your own CLIs or '
+			+ 'terminal programs. You also choose how each starts, what New Agent offers, the names it suggests, and whether YOLO is on.');
+		assert.strictEqual(english('%config.home.pattern%'), 'The path must start with ~/ or be absolute.');
+		// The earlier settings keep their types and defaults, so the editor still checks a value set and a migration reads it; the
+		// editor shows a deprecated setting only where it is set, with where it went
+		const earlier = Object.keys(settings).filter(key => key !== 'facade.home');
+		assert.deepStrictEqual(earlier, [...LEGACY_SETTINGS]);
+		assert.deepStrictEqual(earlier.map(key => [key, settings[key].type, settings[key].default, settings[key].scope]), [
 			['facade.yolo', 'boolean', true, 'machine'],
 			['facade.collaboration.enabled', 'boolean', true, 'machine'],
-			...BUILT_IN_ADAPTERS.flatMap(adapter => [
-				[`${adapter.setting}.enabled`, 'boolean', true, 'machine'],
-				[`${adapter.setting}.path`, 'string', '', 'machine'],
-				[`${adapter.setting}.launch`, 'object', {}, 'machine']
+			...['claude', 'codex', 'antigravity', 'muse', 'opencode', 'pi'].flatMap(segment => [
+				[`facade.${segment}.enabled`, 'boolean', true, 'machine'],
+				[`facade.${segment}.path`, 'string', '', 'machine'],
+				[`facade.${segment}.launch`, 'object', {}, 'machine']
 			]),
 			['facade.custom', 'object', {}, 'machine']
 		]);
-		// Each description names its CLI - the path the command PATH is searched for, the launch Show Agent Launch
-		for (const adapter of BUILT_IN_ADAPTERS) {
-			assert.strictEqual(english(settings[`${adapter.setting}.enabled`].markdownDescription), `Controls whether ${adapter.displayName} is offered for new agents. Turning it off does not stop running agents.`);
-			assert.strictEqual(english(settings[`${adapter.setting}.path`].markdownDescription), `Path to ${adapter.displayName}. Leave empty to use "${adapter.command}" from the terminal environment's PATH.`);
-			assert.strictEqual(english(settings[`${adapter.setting}.launch`].markdownDescription), `Advanced: additional command-line arguments and environment variables for ${adapter.displayName}. **Show Agent Launch** shows what each agent starts with.`);
-		}
-		// A launch takes literal arguments and an environment map alone, as CLIS-3.1 reads it
-		const launch = settings['facade.claude.launch'] as unknown as { properties: Record<string, unknown>; additionalProperties: boolean };
-		assert.deepStrictEqual([Object.keys(launch.properties), launch.additionalProperties, launch.properties.arguments, (launch.properties.environment as { additionalProperties: unknown }).additionalProperties], [
-			['arguments', 'environment'], false, { type: 'array', items: { type: 'string' }, default: [], markdownDescription: '%config.launch.arguments%' }, { type: ['string', 'null'] }
+		assert.deepStrictEqual(earlier.filter(key => settings[key].markdownDeprecationMessage !== '%config.moved%' || settings[key].deprecationMessage !== '%config.movedPlain%'), []);
+		assert.deepStrictEqual([english('%config.moved%'), english('%config.movedPlain%')], [
+			'Moved to `facade.json`. [Edit in facade.json](command:facade.openSettingsFile)',
+			MOVED_PLAIN
 		]);
-		// A custom CLI is a path and a launch of start, the required exact-session resume and environment, under an ID no built-in has (CLIS-3.4)
-		const custom = settings['facade.custom'] as unknown as {
-			propertyNames: { pattern: string; not: { enum: string[] } };
-			additionalProperties: { required: string[]; additionalProperties: boolean; properties: { path: unknown; launch: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } } };
-		};
-		const definition = custom.additionalProperties;
-		assert.deepStrictEqual([
-			custom.propertyNames.pattern, custom.propertyNames.not.enum, definition.required, definition.additionalProperties, definition.properties.path,
-			definition.properties.launch.required, definition.properties.launch.additionalProperties, Object.keys(definition.properties.launch.properties), definition.properties.launch.properties.resume
-		], [
-			'\\S', BUILT_IN_ADAPTERS.map(adapter => adapter.id), ['path', 'launch'], false, { type: 'string', pattern: '\\S', markdownDescription: '%config.custom.path%' },
-			['resume'], false, ['start', 'resume', 'environment'],
-			{ type: 'array', items: { type: 'string' }, minItems: 1, contains: { type: 'string', pattern: '\\$\\{sessionId\\}' }, markdownDescription: '%config.custom.launch.resume%' }
-		]);
-		assert.ok(english(settings['facade.custom'].markdownDescription).endsWith(`An ID cannot be a built-in one: ${BUILT_IN_ADAPTERS.map(adapter => `\`${adapter.id}\``).slice(0, -1).join(', ')}, or \`pi\`.`));
+		// facade.json is checked against its schema wherever the Facade home is: the file's name is Facade's own
+		assert.deepStrictEqual(contributes.jsonValidation, [{ fileMatch: ['**/facade.json'], url: './media/settings.schema.json' }]);
+		assert.ok(fs.existsSync(path.join(ROOT, 'media', 'settings.schema.json')));
 		// Every description resolves; no retired setting survives
 		const keys = [...JSON.stringify(contributes).matchAll(/"%([\w.]+)%"/g)].map(match => match[1]);
 		assert.deepStrictEqual(keys.filter(key => nls[key] === undefined), []);
@@ -207,6 +199,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 					extensionUri: { path: '/extension' } as never,
 					log: { event: () => undefined },
 					notifyError: () => undefined,
+					openSettings: async () => undefined,
 					ready: Promise.resolve()
 				});
 				disposables.forEach(each => each.dispose());
@@ -216,7 +209,7 @@ suite('The manifest equals the command and settings catalog (UX-3, UX-4.1, U06)'
 			return ids;
 		};
 
-		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Show Agent Launch and Show Agents Log (UX-3.2, E03)', () => {
+		test('the panel registers the manifest\'s UI commands; the host separately registers New Worktree, Show Agent Launch, Show Agents Log and Open Settings File (UX-3.2, E03)', () => {
 			const manifested = contributes.commands.map((each: { command: string }) => each.command).filter((id: string) => !HOST_COMMANDS.includes(id));
 			assert.deepStrictEqual(registered(false).sort(), [...manifested].sort());
 		});

@@ -4,7 +4,8 @@
 
 import * as path from 'path';
 import { canonicalFolder } from '../base/files';
-import { CliAdapter, configOverrides, sigintExit } from './adapter';
+import { CliAdapter, sigintExit } from './adapter';
+import { configOverrides } from './args';
 import { createHash } from 'crypto';
 import { parse as parseToml } from 'smol-toml';
 import { isJsonObject } from '../base/json';
@@ -16,7 +17,8 @@ import type { SessionIntegration, SessionIntegrationInput } from './identity';
  */
 export function codexSession({ hook, platform, extra }: SessionIntegrationInput): SessionIntegration {
 	let configured: Record<string, unknown> = {};
-	for (const { key, value: text } of configOverrides(extra)) {
+	// Read as Codex reads its arguments: `-c hooks=...`, `--config=hooks=...` and `-chooks=...` alike (CLIS-3.1)
+	for (const { key, value: text } of configOverrides(extra, codexAdapter.grammar!)) {
 		if (text === undefined || (key !== 'hooks' && !key.startsWith('hooks.'))) { continue; }
 		let value: unknown;
 		try { value = parseToml(`value=${text}`).value; }
@@ -116,12 +118,24 @@ export const codexAdapter: CliAdapter = {
 	screenStatus: version => version === '0.166.0' ? 'codex-0.166' : undefined,
 	sessionIdentity: true,
 	sessionIntegration: codexSession,
-	identityOptions: ['--last'],
 	displayName: 'Codex',
-	setting: 'facade.codex',
+	setting: 'clis.codex',
 	command: 'codex',
 	// Its short options and its `--yolo`, the same options as these: one configured so would undo the run's YOLO mapping (CLIS-3.1)
 	aliases: { '--model': ['-m'], '--sandbox': ['-s'], '--dangerously-bypass-approvals-and-sandbox': ['--yolo'] },
+	// What its entry's args cannot hold (CONFIGURATION-3.1): approvals and sandbox (yolo), model and effort (their fields), the folder,
+	// the session and where it runs, and the configuration keys Facade sets itself. Its `-c hooks` is merged into the run's own.
+	grammar: {
+		reserved: ['--dangerously-bypass-approvals-and-sandbox', '--yolo', '--sandbox', '-s', '--ask-for-approval', '-a', '--approve-for-me', '--not-so-yolo',
+			'--cd', '-C', '--worktree', '--remote', '--remote-auth-token-env', '--no-daemon', '--model', '-m', '--last'],
+		attached: ['-s', '-a', '-C', '-m'],
+		variadic: ['--image', '-i'],
+		clusters: { values: ['-C', '-a', '-c', '-i', '-m', '-p', '-s'] },
+		config: {
+			options: ['-c', '--config'],
+			reserved: ['check_for_update_on_startup', 'projects', 'mcp_servers.facade', 'mcp_optional_startup_grace_ms', 'approval_policy', 'sandbox_mode', 'model', 'model_reasoning_effort']
+		}
+	},
 	groups: {
 		resume: ['resume', '${sessionId}'],
 		connect: [

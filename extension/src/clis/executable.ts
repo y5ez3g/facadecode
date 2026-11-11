@@ -107,25 +107,26 @@ export function which(name: string, env: Environment = process.env, platform: No
 export type FoundExecutable = { readonly executable: string; readonly problem?: undefined } | { readonly executable?: undefined; readonly problem: string; readonly said: CliSaid };
 
 /**
- * The program a CLI's `path` setting names, for a launch in `cwd` with the environment `env` (CLIS-1.2): empty, its `command` on
- * PATH; a simple name, that name on PATH; a leading `~`, from the environment's home folder; a relative path, from `cwd`; an
- * absolute one, exactly. A path that names no program is a problem naming `setting`, never another CLI in its place.
+ * The program an entry's `command` names, for a launch in `cwd` with the environment `env` (CLIS-1.2, CONFIGURATION-2.2): empty,
+ * its type's `command` on PATH; a name without a slash, that name on PATH; a leading `~`, from the environment's home folder; a
+ * relative path, from `cwd`; an absolute one, exactly. A command that names no program is a problem naming `setting`, never another
+ * CLI in its place.
  */
 export function resolveExecutable(configured: string, command: string, setting: string, env: Environment, cwd: string, platform: NodeJS.Platform = process.platform): FoundExecutable {
 	const separators = platform === 'win32' ? /[\\/]/ : /\//;
 	if (!configured) {
 		const found = which(command, env, platform, cwd);
-		return found ? { executable: found } : { problem: `${command} was not found on the PATH of a terminal in ${cwd}, and ${setting}.path does not name its location`, said: { kind: 'not_on_path', values: [command, cwd, setting] } };
+		return found ? { executable: found } : { problem: `${command} was not found on the PATH of a terminal in ${cwd}, and ${setting}.command does not name its location`, said: { kind: 'not_on_path', values: [command, cwd, setting] } };
 	}
 	if (!separators.test(configured) && configured !== '~') {
 		const found = which(configured, env, platform, cwd);
-		return found ? { executable: found } : { problem: `${setting}.path is ${JSON.stringify(configured)}, which was not found on the PATH of a terminal in ${cwd}`, said: { kind: 'path_not_on_path', values: [setting, JSON.stringify(configured), cwd] } };
+		return found ? { executable: found } : { problem: `${setting}.command is ${JSON.stringify(configured)}, which was not found on the PATH of a terminal in ${cwd}`, said: { kind: 'path_not_on_path', values: [setting, JSON.stringify(configured), cwd] } };
 	}
 	const file = configured === '~' || /^~[\\/]/.test(configured)
 		? path.join(homeOf(env, platform), configured.slice(1))
 		: path.resolve(cwd, configured);
 	const found = executableAt(file, env, platform);
-	return found ? { executable: found } : { problem: `${setting}.path is ${JSON.stringify(configured)}, and ${file} is not a program that can be run`, said: { kind: 'not_runnable', values: [setting, JSON.stringify(configured), file] } };
+	return found ? { executable: found } : { problem: `${setting}.command is ${JSON.stringify(configured)}, and ${file} is not a program that can be run`, said: { kind: 'not_runnable', values: [setting, JSON.stringify(configured), file] } };
 }
 
 /** How to start a program so that its arguments reach it as they are. */

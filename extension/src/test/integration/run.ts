@@ -12,11 +12,20 @@ import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { parse as parseJsonc, ParseError } from 'jsonc-parser';
+import { isDeepStrictEqual } from 'util';
 import { EDITOR_FLAGS, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
 
-/** The built-ins in their catalog order (CLIS-1.1), each with the avatar file its card shows (PANEL-1.3). */
+/** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
+type Entry = { readonly [field: string]: unknown };
+
+/**
+ * The built-ins in their catalog order (CLIS-1.1), each with its earlier editor settings' segment, which a released build reads
+ * (CONFIGURATION-6.1), and the avatar file its card shows (PANEL-1.3).
+ */
 const BUILT_INS: readonly { readonly id: string; readonly segment: string; readonly avatar: string }[] = [
 	{ id: 'claude', segment: 'claude', avatar: 'avatar-claude.png' },
 	{ id: 'codex', segment: 'codex', avatar: 'avatar-codex.png' },
@@ -33,7 +42,7 @@ function editorCli(executable: string): string {
 		: path.join(dir, 'bin', process.platform === 'win32' ? 'code.cmd' : 'code');
 }
 
-/** The custom CLI's ID: a key of `facade.custom`, never a built-in's (CLIS-3.4). */
+/** The suite's program: an entry of type `custom` in Facade's settings file, by its name (CONFIGURATION-2.1, 2.3). */
 const CUSTOM_CLI = 'my-cli';
 
 /**
@@ -74,6 +83,9 @@ async function main(): Promise<void> {
 	// for Claude Code - and Claude Code's temporary configuration folder FACADE_IT_CLAUDE_CONFIG, signed in for testing. Its terminals
 	// get FACADE_IT_REAL_ENV, a JSON object - such as a configuration folder of its own - and the variables FACADE_IT_REAL_PASS names,
 	// taken from this environment and never written to a file. State paths must be temporary; a personal home is never inherited.
+	// FACADE_IT_REAL_ENTRY instead starts it as an entry added beside the built-ins (CONFIGURATION-2.1): a JSON object of its `name`
+	// and its fields but `type` and `command`, which are FACADE_IT_REAL's and its path - a credential in its `env` only as
+	// `${env:NAME}` of a variable FACADE_IT_REAL_PASS passes, never written to the settings file.
 	const realCli = process.env.FACADE_IT_REAL ?? 'claude';
 	const realPath = process.env.FACADE_IT_REAL_PATH ?? (realCli === 'claude' ? process.env.FACADE_IT_CLAUDE : undefined);
 	const realConfig = process.env.FACADE_IT_CLAUDE_CONFIG;
@@ -81,6 +93,13 @@ async function main(): Promise<void> {
 	const realArgs: unknown = JSON.parse(process.env.FACADE_IT_REAL_ARGS ?? '[]');
 	if (!Array.isArray(realArgs) || realArgs.some(arg => typeof arg !== 'string')) {
 		throw new Error('FACADE_IT_REAL_ARGS must be a JSON array of CLI arguments.');
+	}
+	const realEntry: unknown = JSON.parse(process.env.FACADE_IT_REAL_ENTRY ?? 'null');
+	const credential = /key|token|secret|password|auth|credential/i;
+	if (realEntry !== null && (typeof realEntry !== 'object' || Array.isArray(realEntry) || typeof (realEntry as { name?: unknown }).name !== 'string'
+		|| 'type' in realEntry || 'command' in realEntry
+		|| Object.entries((realEntry as { env?: { [name: string]: unknown } }).env ?? {}).some(([name, value]) => credential.test(name) && value !== null && !/^\$\{env:[^}]+\}$/.test(String(value))))) {
+		throw new Error('FACADE_IT_REAL_ENTRY must be a JSON object of a name and entry fields but type and command, a credential in its env only as ${env:NAME} of a passed variable.');
 	}
 	const nativeLifecycle = only === 'real-lifecycle';
 	const realState = process.env.FACADE_IT_REAL_STATE;
@@ -139,21 +158,36 @@ async function main(): Promise<void> {
 		'terminal.integrated.env.osx': { HOME: agentsHome, ...isolatedStorage, ...more },
 		'terminal.integrated.env.linux': { HOME: agentsHome, ...isolatedStorage, ...more }
 	});
-	// Every built-in points to a fake: the suite never starts a person's real CLI.
+	// The editor's settings: the agents' terminals isolated, and nothing that would stop a test. The CLIs are Facade's settings file's.
 	const settings = {
-		...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
 		...terminalEnv(),
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
 		'window.restoreWindows': 'none'
 	};
+	/**
+	 * Facade's settings file in the Facade root `facade` (CONFIGURATION-1.1): every built-in's command a fake - the suite never starts
+	 * a person's real CLI - each entry of `clis` over its built-in's, an added one as it is, and `yolo` where given.
+	 */
+	const facadeSettings = (facade: string, clis: { readonly [name: string]: Entry } = {}, yolo?: boolean) => {
+		const entries: { [name: string]: Entry } = Object.fromEntries(BUILT_INS.map(cli => [cli.id, { command: launchers[cli.id] ?? fake }]));
+		for (const [name, entry] of Object.entries(clis)) {
+			entries[name] = { ...entries[name], ...entry };
+		}
+		fs.mkdirSync(facade, { recursive: true });
+		fs.writeFileSync(path.join(facade, 'facade.json'), `${JSON.stringify({ ...yolo !== undefined ? { yolo } : {}, clis: entries }, undefined, '\t')}\n`, { mode: 0o600 });
+	};
+	/** The entries of the built-ins but `cli`, turned off: `cli` is the one New Agent offers. */
+	const alone = (cli: string) => Object.fromEntries(BUILT_INS.filter(each => each.id !== cli).map(each => [each.id, { enabled: false }]));
 	const extension = path.resolve(__dirname, '..', '..', '..', 'extension-it');
 	const windowComponent = path.resolve(__dirname, '..', '..', '..', 'window');
 	/**
 	 * One editor of the suite on `folder`, with user data, extensions and a Facade directory of its own - and shared data: without it
-	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2).
+	 * VS Code opens the shared storage of the person's own `~/.vscode-shared` (ARCHITECTURE-5.2) - its CLIs `clis` of Facade's
+	 * settings file, `yolo` there where given, and the editor's settings `more` beside the suite's.
 	 */
-	const run = async (name: string, folder: string, env: { readonly [name: string]: string } = {}, more: { readonly [setting: string]: unknown } = {}, claude = claudeConfig) => {
+	const run = async (name: string, folder: string, env: { readonly [name: string]: string } = {}, clis: { readonly [name: string]: Entry } = {},
+		more: { readonly [setting: string]: unknown } = {}, claude = claudeConfig, yolo?: boolean) => {
 		const user = path.join(root, `u-${name}`);
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...more }));
@@ -163,7 +197,7 @@ async function main(): Promise<void> {
 		}
 		// FACADE_HOME, the root whose `extension` folder is the extension's data (ARCHITECTURE-3.1); a cross-window run shares it
 		const facade = path.join(home, name);
-		fs.mkdirSync(facade, { recursive: true });
+		facadeSettings(facade, clis, yolo);
 		try {
 			await runTests({
 				vscodeExecutablePath: executable,
@@ -204,9 +238,8 @@ async function main(): Promise<void> {
 		for (const dir of [solo, second, path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
-			...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])),
-			...(nativeLifecycle ? { [`facade.${cli.segment}.path`]: realPath, [`facade.${cli.segment}.launch`]: { arguments: realArgs }, 'facade.yolo': false, ...terminalEnv(realEnv) } : {}) }));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings, ...(nativeLifecycle ? terminalEnv(realEnv) : {}) }));
+		facadeSettings(facade, { ...alone(cli.id), ...nativeLifecycle ? { [cli.id]: { command: realPath, args: realArgs } } : {} }, nativeLifecycle ? false : undefined);
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'conversion-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'conversionDriver.js'), path.join(driver, 'extension.js'));
 		for (const file of fs.readdirSync(root).filter(each => each.startsWith(`${path.basename(record)}.`))) {
@@ -329,8 +362,8 @@ async function main(): Promise<void> {
 		for (const dir of [folder, path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
-		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
-			...Object.fromEntries(BUILT_INS.filter(each => each.id !== cli.id).map(each => [`facade.${each.segment}.enabled`, false])) }));
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
+		facadeSettings(facade, alone(cli.id));
 		// Activated at once: after a reload it watches the tabs open from before Facade's restoration begins
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'pins-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['*'], main: './extension.js' }));
 		fs.copyFileSync(path.join(__dirname, 'pinsDriver.js'), path.join(driver, 'extension.js'));
@@ -423,7 +456,7 @@ async function main(): Promise<void> {
 		const user = path.join(root, 'u-peer');
 		const facade = path.join(home, 'cross');
 		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
-		fs.mkdirSync(facade, { recursive: true });
+		facadeSettings(facade);
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
 		const editor = spawn(executable, [peer, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', path.join(root, 'x-peer'), '--shared-data-dir', path.join(root, 's-peer'),
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, ...EDITOR_FLAGS], {
@@ -470,7 +503,10 @@ async function main(): Promise<void> {
 		for (const dir of [path.join(user, 'User'), facade, driver]) {
 			fs.mkdirSync(dir, { recursive: true });
 		}
+		// The released build reads its CLIs from the editor's settings, as released builds did: the update moves them into Facade's
+		// settings file, which the updated build's agents then start by (CONFIGURATION-6)
 		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...settings,
+			...Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.path`, launchers[cli.id] ?? fake])),
 			...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])),
 			'extensions.autoUpdate': false, 'extensions.autoCheckUpdates': false, 'update.mode': 'none' }));
 		fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'update-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['onStartupFinished'], main: './extension.js' }));
@@ -538,6 +574,22 @@ async function main(): Promise<void> {
 			install(to);
 			fs.writeFileSync(`${out}.reload`, '');
 			const updated = await phase('updated') as { phase: string; version: string; tabs: string[][] };
+			// The updated build made Facade's settings file from the editor's settings the released build read (CONFIGURATION-6.1): every
+			// built-in with its defaults under what those settings gave it, in a file with comments
+			// A file that does not parse is no migration, whatever value a lenient parser makes of it
+			const migrated = (() => {
+				try {
+					const errors: ParseError[] = [];
+					const value = parseJsonc(fs.readFileSync(path.join(facade, 'facade.json'), 'utf8'), errors, { allowTrailingComma: true }) as unknown;
+					return errors.length ? { unparsed: errors.map(error => error.error) } : value;
+				} catch {
+					return undefined;
+				}
+			})();
+			// Each built-in shows its eight fields - its type and icon, the moved command, args and env - and the file the built-in names
+			const moved = { yolo: true, names: [...BUILT_IN_NAMES], clis: Object.fromEntries(BUILT_INS.map(cli => [cli.id, {
+				type: cli.id, icon: cli.id, enabled: cli.id === 'claude', args: [], env: {}, command: launchers[cli.id] ?? fake
+			}])) };
 			const hidden = await ask(started.alias);
 			fs.writeFileSync(`${out}.open`, '');
 			const opened = await phase('opened') as { phase: string; tabs: string[][] };
@@ -546,6 +598,7 @@ async function main(): Promise<void> {
 			console.log(`  Journey: update from ${started.version} to ${updated.version} with a running agent, then a reload (E05, J17)\n    ${JSON.stringify({ started, before, updated, hidden, opened, shown })}`);
 			const problems = [
 				...updated.version === started.version ? ['the window did not reload into the update'] : [],
+				...isDeepStrictEqual(migrated, moved) ? [] : [`the settings file was not made from the editor's settings: ${JSON.stringify(migrated)}`],
 				...JSON.stringify(before) !== JSON.stringify(once) ? [`with its tab open in the released build its questions were answered ${JSON.stringify(before)}`] : [],
 				...updated.tabs.flat().length ? [`its tab came back open after the update: ${JSON.stringify(updated.tabs)}`] : [],
 				...JSON.stringify(hidden) !== JSON.stringify(once) ? [`with its tab hidden its questions were answered ${JSON.stringify(hidden)}`] : [],
@@ -576,17 +629,23 @@ async function main(): Promise<void> {
 	 * its terminals have: the run takes that back, Antigravity's file restored as it was.
 	 */
 	const real = async () => {
+		const added = realEntry as { readonly name: string; readonly [field: string]: unknown } | null;
 		const cli = BUILT_INS.find(each => each.id === realCli);
 		if (!cli || !realPath) {
 			throw new Error('FACADE_IT_ONLY=real starts a real CLI: set FACADE_IT_REAL to a built-in and FACADE_IT_REAL_PATH to its executable (FACADE_IT_CLAUDE for Claude Code), and give it a configuration signed in for testing.');
 		}
-		const terminals = terminalEnv(realEnv);
+		// A real CLI updates nothing of its own while it is tested: Claude Code would download its next version at every start
+		const terminals = terminalEnv({ DISABLE_AUTOUPDATER: '1', ...realEnv });
 		const agySettings = path.join(agentsHome, '.gemini', 'antigravity-cli', 'settings.json');
 		const agyBefore = cli.id === 'agy' ? (fs.existsSync(agySettings) ? fs.readFileSync(agySettings) : null) : undefined;
 		try {
-			// The other built-ins not installed: the real one is the one New Agent preselects
-			const others = Object.fromEntries(BUILT_INS.filter(each => each !== cli).map(each => [`facade.${each.segment}.path`, path.join(root, `unavailable-${each.id}`)]));
-			await run('real', repo, { FACADE_IT_REAL: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...modelDecisions ? { FACADE_IT_REAL_DECISIONS: '1' } : {}, ...passed }, { ...others, [`facade.${cli.segment}.path`]: realPath, [`facade.${cli.segment}.launch`]: { arguments: realArgs }, 'facade.yolo': realYolo, ...terminals }, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig);
+			// The other built-ins not installed: the real one is the one New Agent preselects - for an added entry, every built-in, the
+			// entry its program
+			const others = Object.fromEntries(BUILT_INS.filter(each => added || each !== cli).map(each => [each.id, { command: path.join(root, `unavailable-${each.id}`) }]));
+			const { name, ...fields } = added ?? { name: cli.id };
+			const started = { [name]: { ...added ? { type: cli.id } : {}, command: realPath, args: realArgs, ...fields } };
+			await run('real', repo, { FACADE_IT_REAL: name, FACADE_IT_REAL_BUILTIN: cli.id, FACADE_IT_GREP: 'Journey: real', ...realYolo ? { FACADE_IT_REAL_YOLO: 'on' } : {}, ...modelDecisions ? { FACADE_IT_REAL_DECISIONS: '1' } : {}, ...passed },
+				{ ...others, ...started }, terminals, cli.id === 'claude' ? realConfig ?? claudeConfig : claudeConfig, realYolo);
 		} finally {
 			if (cli.id === 'claude') {
 				untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root);
@@ -606,19 +665,19 @@ async function main(): Promise<void> {
 				if (builtIn && builtIn !== cli.id) {
 					continue;
 				}
-				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [`facade.${earlier.segment}.path`, path.join(root, `unavailable-${earlier.id}`)]));
+				const missing = Object.fromEntries(BUILT_INS.slice(0, at).map(earlier => [earlier.id, { command: path.join(root, `unavailable-${earlier.id}`) }]));
 				// Each agent's fake draws its input as this built-in does (CLIS-2.1); Muse Code's as it runs on Windows, reporting nothing:
 				// its dot follows its screen (CLIS-2.3)
 				const screen = terminalEnv({ FACADE_IT_AS: cli.id, ...cli.id === 'muse' ? { FACADE_IT_SCREEN: 'muse' } : {} });
-				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, { ...missing, ...screen });
+				await run(at ? cli.id : 'journeys', repo, { FACADE_IT_CLI: cli.id, FACADE_IT_AVATAR: cli.avatar }, missing, screen);
 			}
-			// A custom CLI with every built-in turned off, so that it is the one New Agent offers: started exactly as configured (CLIS-1.1, 3.4)
+			// A program with every built-in turned off, so that it is the one New Agent offers: started exactly as configured (CLIS-1.1,
+			// CONFIGURATION-2.3)
 			if (builtIn) {
 				return;
 			}
-			const off = Object.fromEntries(BUILT_INS.map(cli => [`facade.${cli.segment}.enabled`, false]));
-			const custom = { [CUSTOM_CLI]: { path: fake, launch: { start: ['--from-custom', 'two words'], resume: ['resume', '${sessionId}'] } } };
-			await run('custom', repo, { FACADE_IT_CLI: CUSTOM_CLI, FACADE_IT_AGENTS_HOME: agentsHome }, { ...off, 'facade.custom': custom });
+			const off = Object.fromEntries(BUILT_INS.map(cli => [cli.id, { enabled: false }]));
+			await run('custom', repo, { FACADE_IT_CLI: CUSTOM_CLI, FACADE_IT_AGENTS_HOME: agentsHome }, { ...off, [CUSTOM_CLI]: { type: 'custom', command: fake, args: ['--from-custom', 'two words'] } });
 		}
 		if (!only || only === 'cross') {
 			await crossWindow();
@@ -641,8 +700,8 @@ async function main(): Promise<void> {
 		}
 		// Asked for alone: evidence of keys typed while a mark borrows the focus, and of covered fronts (LIFECYCLE-3.4)
 		if (only === 'probe') {
-			await focusProbe({ executable, root, home, extension, windowComponent, record, claudeConfig, fake, env: probeEnv,
-				settings: { ...settings, ...Object.fromEntries(BUILT_INS.filter(each => each.id !== 'claude').map(each => [`facade.${each.segment}.enabled`, false])) } });
+			await focusProbe({ executable, root, home, extension, windowComponent, record, claudeConfig, fake, env: probeEnv, settings,
+				facadeSettings: facade => facadeSettings(facade, alone('claude')) });
 		}
 		// Never unasked: it installs a released build's packages
 		if (only === 'update') {

@@ -117,8 +117,8 @@
 				"icon": "$(filter)"
 			},
 			{
-				"command": "facade.configureAgents",
-				"title": "%command.configureAgents%",
+				"command": "facade.openSettings",
+				"title": "%command.openSettings%",
 				"category": "%command.category%"
 			},
 			{
@@ -156,6 +156,11 @@
 				"command": "facade.revealAgent",
 				"title": "%command.revealAgent%",
 				"category": "%command.category%"
+			},
+			{
+				"command": "facade.openSettingsFile",
+				"title": "%command.openSettingsFile%",
+				"category": "%command.category%"
 			}
 		],
 		"menus": {
@@ -191,7 +196,7 @@
 					"group": "1_locations@2"
 				},
 				{
-					"command": "facade.configureAgents",
+					"command": "facade.openSettings",
 					"when": "view == facade.agents",
 					"group": "9_configure@1"
 				}
@@ -249,6 +254,10 @@
 				},
 				{
 					"command": "facade.revealAgent",
+					"when": "false"
+				},
+				{
+					"command": "facade.openSettingsFile",
 					"when": "false"
 				},
 				{
@@ -314,6 +323,118 @@
 					"fontPath": "./media/agent-icons.woff",
 					"fontCharacter": "\\E006"
 				}
+			},
+			"facade-robot-red": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E200"
+				}
+			},
+			"facade-robot-orange": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E201"
+				}
+			},
+			"facade-robot-amber": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E202"
+				}
+			},
+			"facade-robot-lime": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E203"
+				}
+			},
+			"facade-robot-green": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E204"
+				}
+			},
+			"facade-robot-teal": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E205"
+				}
+			},
+			"facade-robot-sky": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E206"
+				}
+			},
+			"facade-robot-blue": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E207"
+				}
+			},
+			"facade-robot-violet": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E208"
+				}
+			},
+			"facade-robot-pink": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E209"
+				}
+			},
+			"facade-robot-aurora": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E20A"
+				}
+			},
+			"facade-robot-sunset": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E20B"
+				}
+			},
+			"facade-robot-ocean": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E20C"
+				}
+			},
+			"facade-robot-orchid": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E20D"
+				}
+			},
+			"facade-robot-pearl": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E20E"
+				}
+			},
+			"facade-robot-graphite": {
+				"description": "%icon.robot%",
+				"default": {
+					"fontPath": "./media/robots.woff",
+					"fontCharacter": "\\E20F"
+				}
 			}
 		},
 		"configuration": [
@@ -322,40 +443,46 @@
 				"title": "%config.title%",
 				"order": 2,
 				"properties": {
+					"facade.home": {
+						"type": "string",
+						"default": "~/.facade",
+						"scope": "machine",
+						"order": 0,
+						"pattern": "^$|^(~[\\\\/]|/|[A-Za-z]:[\\\\/]|\\\\\\\\)",
+						"patternErrorMessage": "%config.home.pattern%",
+						"markdownDescription": "%config.home%"
+					},
 					"facade.yolo": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.yolo%"
+						"markdownDescription": "%config.yolo%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.collaboration.enabled": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 2,
-						"markdownDescription": "%config.collaboration.enabled%"
-					}
-				}
-			},
-			{
-				"id": "facade.claude",
-				"title": "%config.claude.title%",
-				"order": 3,
-				"properties": {
+						"markdownDescription": "%config.collaboration.enabled%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
+					},
 					"facade.claude.enabled": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.claude.enabled%"
+						"markdownDescription": "%config.claude.enabled%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.claude.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 2,
-						"markdownDescription": "%config.claude.path%"
+						"markdownDescription": "%config.claude.path%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.claude.launch": {
 						"type": "object",
@@ -383,29 +510,25 @@
 						},
 						"additionalProperties": false,
 						"scope": "machine",
-						"order": 3,
-						"markdownDescription": "%config.claude.launch%"
-					}
-				}
-			},
-			{
-				"id": "facade.codex",
-				"title": "%config.codex.title%",
-				"order": 4,
-				"properties": {
+						"markdownDescription": "%config.claude.launch%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
+					},
 					"facade.codex.enabled": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.codex.enabled%"
+						"markdownDescription": "%config.codex.enabled%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.codex.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 2,
-						"markdownDescription": "%config.codex.path%"
+						"markdownDescription": "%config.codex.path%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.codex.launch": {
 						"type": "object",
@@ -433,29 +556,25 @@
 						},
 						"additionalProperties": false,
 						"scope": "machine",
-						"order": 3,
-						"markdownDescription": "%config.codex.launch%"
-					}
-				}
-			},
-			{
-				"id": "facade.antigravity",
-				"title": "%config.antigravity.title%",
-				"order": 5,
-				"properties": {
+						"markdownDescription": "%config.codex.launch%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
+					},
 					"facade.antigravity.enabled": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.antigravity.enabled%"
+						"markdownDescription": "%config.antigravity.enabled%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.antigravity.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 2,
-						"markdownDescription": "%config.antigravity.path%"
+						"markdownDescription": "%config.antigravity.path%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.antigravity.launch": {
 						"type": "object",
@@ -483,29 +602,25 @@
 						},
 						"additionalProperties": false,
 						"scope": "machine",
-						"order": 3,
-						"markdownDescription": "%config.antigravity.launch%"
-					}
-				}
-			},
-			{
-				"id": "facade.muse",
-				"title": "%config.muse.title%",
-				"order": 6,
-				"properties": {
+						"markdownDescription": "%config.antigravity.launch%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
+					},
 					"facade.muse.enabled": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.muse.enabled%"
+						"markdownDescription": "%config.muse.enabled%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.muse.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 2,
-						"markdownDescription": "%config.muse.path%"
+						"markdownDescription": "%config.muse.path%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.muse.launch": {
 						"type": "object",
@@ -533,29 +648,25 @@
 						},
 						"additionalProperties": false,
 						"scope": "machine",
-						"order": 3,
-						"markdownDescription": "%config.muse.launch%"
-					}
-				}
-			},
-			{
-				"id": "facade.opencode",
-				"title": "%config.opencode.title%",
-				"order": 7,
-				"properties": {
+						"markdownDescription": "%config.muse.launch%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
+					},
 					"facade.opencode.enabled": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.opencode.enabled%"
+						"markdownDescription": "%config.opencode.enabled%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.opencode.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 2,
-						"markdownDescription": "%config.opencode.path%"
+						"markdownDescription": "%config.opencode.path%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.opencode.launch": {
 						"type": "object",
@@ -583,29 +694,25 @@
 						},
 						"additionalProperties": false,
 						"scope": "machine",
-						"order": 3,
-						"markdownDescription": "%config.opencode.launch%"
-					}
-				}
-			},
-			{
-				"id": "facade.pi",
-				"title": "%config.pi.title%",
-				"order": 8,
-				"properties": {
+						"markdownDescription": "%config.opencode.launch%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
+					},
 					"facade.pi.enabled": {
 						"type": "boolean",
 						"default": true,
 						"scope": "machine",
-						"order": 1,
-						"markdownDescription": "%config.pi.enabled%"
+						"markdownDescription": "%config.pi.enabled%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.pi.path": {
 						"type": "string",
 						"default": "",
 						"scope": "machine",
-						"order": 2,
-						"markdownDescription": "%config.pi.path%"
+						"markdownDescription": "%config.pi.path%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					},
 					"facade.pi.launch": {
 						"type": "object",
@@ -633,16 +740,10 @@
 						},
 						"additionalProperties": false,
 						"scope": "machine",
-						"order": 3,
-						"markdownDescription": "%config.pi.launch%"
-					}
-				}
-			},
-			{
-				"id": "facade.custom",
-				"title": "%config.custom.title%",
-				"order": 9,
-				"properties": {
+						"markdownDescription": "%config.pi.launch%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
+					},
 					"facade.custom": {
 						"type": "object",
 						"default": {},
@@ -716,9 +817,19 @@
 							"additionalProperties": false
 						},
 						"scope": "machine",
-						"markdownDescription": "%config.custom%"
+						"markdownDescription": "%config.custom%",
+						"markdownDeprecationMessage": "%config.moved%",
+						"deprecationMessage": "%config.movedPlain%"
 					}
 				}
+			}
+		],
+		"jsonValidation": [
+			{
+				"fileMatch": [
+					"**/facade.json"
+				],
+				"url": "./media/settings.schema.json"
 			}
 		]
 	},
@@ -726,6 +837,7 @@
 		"@xterm/addon-serialize": "^0.14.0",
 		"@xterm/addon-unicode11": "^0.9.0",
 		"@xterm/headless": "^6.0.0",
+		"jsonc-parser": "3.3.1",
 		"node-pty": "1.2.0-beta.15",
 		"smol-toml": "1.9.1"
 	},

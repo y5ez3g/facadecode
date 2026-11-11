@@ -7,9 +7,10 @@ import * as vscode from 'vscode';
 import { messageOf } from '../../base/errors';
 import { isEqualPath, isInsideFolder, realFolderOf } from '../../base/files';
 import { conversationId } from '../../core/ports';
-import type { Catalog, ConversationDiscoveryPort, ConversationEntry, ConversationKey, ConversationPager, HumanPort, Location, LocationPort, RunId } from '../../core/ports';
+import type { Catalog, CliChoices, ConversationDiscoveryPort, ConversationEntry, ConversationKey, ConversationPager, HumanPort, Location, LocationPort, RunId } from '../../core/ports';
+import { COMMANDS } from '../catalog';
 import { locationLabel, onePlaceOf } from '../cardView';
-import { ago, cliDisplayName, cliIcon, plainText, reasonOf } from '../presentation';
+import { ago, cliDisplayName, cliIcon, openSettingsLabel, plainText, reasonOf, reasonText } from '../presentation';
 import { BACK, Flow } from './stepping';
 import { matchesCliSearch } from './search';
 
@@ -30,6 +31,10 @@ export interface ResumeDeps {
 	/** Shows a run's own terminal and selects its card. */
 	readonly reveal: (run: RunId) => Promise<unknown>;
 	readonly select: (run: RunId) => void;
+	/** The icon each CLI shows, by its API ID (CONFIGURATION-2.4); none: each name's own. */
+	readonly icons?: () => (cli: string) => string;
+	/** What is wrong with the settings file as a whole, which stops every resume (CONFIGURATION-4.1); none: nothing. */
+	readonly settingsProblems?: () => CliChoices['problems'];
 	readonly notifyError: HumanPort['error'];
 	readonly media: vscode.Uri;
 	readonly language: string;
@@ -60,7 +65,7 @@ function placeOf(cwd: string, reals: readonly { readonly location: Location; rea
 	return rest ? `${locationLabel(inside.location, catalog)}/${rest}` : locationLabel(inside.location, catalog);
 }
 
-type Item = vscode.QuickPickItem & { readonly entry?: ConversationEntry; readonly openFolder?: true };
+type Item = vscode.QuickPickItem & { readonly entry?: ConversationEntry; readonly openFolder?: true; readonly settings?: true };
 
 /**
  * Resume Agent (LIFECYCLE-3.2): this window's folders' saved conversations, from the CLIs' own histories, most recent first - title,
@@ -90,12 +95,13 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 	let reading: Promise<void> | undefined;
 	const places = new Map<string, string>();
 	const placeIn = (cwd: string) => places.get(cwd) ?? places.set(cwd, placeOf(cwd, reals, catalog)).get(cwd)!;
+	const icon = deps.icons?.() ?? ((cli: string) => cli);
 	// One line (LIFECYCLE-2.3): title first, then when, where and its saved name. Equal name/title fields remain independent.
 	const itemOf = (entry: ConversationEntry): Item => {
 		const item: Item = {
 			label: plainText(entry.title?.trim() || vscode.l10n.t("Untitled conversation")),
 			description: [entry.activityAt !== undefined ? ago(entry.activityAt, now(), deps.language) : undefined, (entry.cwdChoices ?? [entry.cwd]).map(placeIn).filter(Boolean).join(', '), names.get(conversationId(entry.key))].filter(Boolean).map(text => plainText(text!)).join(' · '),
-			iconPath: cliIcon(deps.media, entry.key.cli),
+			iconPath: cliIcon(deps.media, icon(entry.key.cli)),
 			entry
 		};
 		// The window's one place to work, left unsaid, still matches a search (LIFECYCLE-3.2)
@@ -175,6 +181,15 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 			picker.busy = false;
 			return;
 		}
+		// The settings file wrong as a whole stops every resume: it is said by the file, as New Agent says it, with the way to it - not
+		// conversations none of which could be chosen (CONFIGURATION-4.1)
+		const problems = deps.settingsProblems?.() ?? [];
+		if (problems.length) {
+			const settingsButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: openSettingsLabel() };
+			picker.items = problems.map((each): Item => ({ label: each.setting, detail: reasonText(each.said, each.problem), iconPath: new vscode.ThemeIcon('gear'), buttons: [settingsButton], settings: true }));
+			picker.busy = false;
+			return;
+		}
 		// Where a conversation was is the main checkout, worktree or folder it was in: no folder inside one names it (WORKTREES-1.2)
 		reals = catalog.locations.filter(location => !location.within).map(location => ({ location, real: realFolderOf(location.path) }));
 		pager = deps.conversations.open({ environment: catalog.locations[0].environment, directories: [...new Set(catalog.locations.map(location => location.path))] });
@@ -182,9 +197,19 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 		await readNext();
 		await readAll();
 	};
+	/** The same page as Open Settings everywhere (UX-1.3). */
+	const openSettings = () => {
+		picker.hide();
+		void vscode.commands.executeCommand(COMMANDS.openSettings);
+	};
 	return new Promise(resolve => {
 		let accepting = false;
 		const subscriptions: vscode.Disposable[] = [
+			picker.onDidTriggerItemButton(({ item }) => {
+				if (item.settings) {
+					openSettings();
+				}
+			}),
 			picker.onDidChangeValue(() => { if (pager) { show(); } void readAll(); }),
 			picker.onDidChangeActive(([active]) => {
 				if (!done && active && picker.items.indexOf(active) >= picker.items.length - READ_AHEAD) {
@@ -196,6 +221,10 @@ export function resumeAgent(deps: ResumeDeps): Promise<void> {
 				if (active?.openFolder) {
 					picker.hide();
 					void vscode.commands.executeCommand('vscode.openFolder');
+					return;
+				}
+				if (active?.settings) {
+					openSettings();
 					return;
 				}
 				let entry = active?.entry;

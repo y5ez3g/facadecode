@@ -8,7 +8,7 @@ import { isJsonObject } from '../base/json';
 import { displayLine } from '../base/text';
 import { FacadeError, invalid, OWNERSHIP_LOST } from './errors';
 import { worktreeCreationEffects } from './locations/problems';
-import { labelOf, normalizeName, repeatedNames, suggestName } from './names';
+import { keptName, labelOf, normalizeName, repeatedNames, suggestName } from './names';
 import { REQUEST_MS } from './requests';
 import { dotOf } from './status';
 import {
@@ -33,9 +33,11 @@ export interface AgentServiceDeps {
 	readonly clock: Clock;
 	readonly log: LogPort;
 	readonly lifetime: WindowLifetimePort;
-	/** The destination's current `facade.yolo`, read when each launch is accepted (RULES-4.3). */
+	/** `yolo` of the destination's settings file now, read when each launch is accepted (RULES-4.3, CONFIGURATION-1.4). */
 	readonly yolo: () => boolean;
-	/** The run's MCP shim where `facade.collaboration.enabled` is on when its launch is planned; none injects nothing (RULES-4.4). */
+	/** `names` of the settings file now, where it has them: what a blank name is filled in from (LIFECYCLE-2.1); none, the built-in list. */
+	readonly names?: () => readonly string[] | undefined;
+	/** The run's MCP shim, which every launch of a built-in type is given (RULES-4.4, CONFIGURATION-2.3); none injects nothing. */
 	readonly tools?: (run: RunId, facts: RunFacts, location: Location) => McpServerLaunch | undefined;
 	/** A failure in the person's language (UX-2.4): Facade's own reasons translated, any other its `english` as it is. */
 	readonly describe?: (err: unknown, english: string) => string;
@@ -94,6 +96,8 @@ interface Run {
 interface StartOptions {
 	readonly reveal?: boolean;
 	readonly resume?: { readonly key: ConversationKey };
+	/** The built-in that ran what it continues - the conversation it resumes, its Pin's agent - which its entry must run still (CONFIGURATION-3.4). */
+	readonly builtIn?: string;
 	readonly remember?: boolean;
 	readonly pin?: string;
 	readonly restoring?: boolean;
@@ -105,8 +109,8 @@ function keyOf(facts: RunFacts): ConversationKey | undefined {
 function sameConversation(a: ConversationKey, b: ConversationKey): boolean { return conversationId(a) === conversationId(b); }
 /** The conversation a Pin restores, where its CLI named one (LIFECYCLE-3.4). */
 function pinKey(pin: Pin): ConversationKey | undefined {
-	const { sessionId } = pin.conversation;
-	return sessionId ? { ...pin.conversation, sessionId } : undefined;
+	const { environment, cli, sessionId } = pin.conversation;
+	return sessionId ? { environment, cli, sessionId } : undefined;
 }
 function pinsConversation(pin: Pin, key: ConversationKey): boolean {
 	const pinned = pinKey(pin);
@@ -649,7 +653,11 @@ export class AgentService implements Agents, Disposable {
 	private remember(run: Run): void {
 		const key = keyOf(run.facts);
 		if (key) {
-			try { this.deps.conversations?.put(key, { location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name }); }
+			try {
+				this.deps.conversations?.put(key, { location: run.facts.location, cwd: run.facts.cwd, name: keptName(run.facts) });
+				// The entry it started with, found by its store's conversation alone (CONFIGURATION-3.4)
+				if (run.facts.builtIn) { this.deps.conversations?.associate?.(key.environment, run.facts.builtIn, key.sessionId, key.cli); }
+			}
 			catch (err) { this.deps.log.event(`Could not keep conversation metadata: ${messageOf(err)}`); }
 		}
 	}
@@ -739,10 +747,11 @@ export class AgentService implements Agents, Disposable {
 		const now = this.deps.clock.now();
 		const byAgent = request.origin === 'agent' && request.creator ? request.creator : undefined;
 		const promptLine = request.promptLine ?? firstLine(request.prompt);
+		const alias = this.deps.aliases.next();
 		const facts: RunFacts = {
 			id,
-			alias: this.deps.aliases.next(),
-			name: normalizeName(request.name),
+			alias,
+			name: this.nameFor(request.name, alias),
 			cli: request.cli,
 			displayName: request.cli,
 			command: request.cli,
@@ -836,6 +845,7 @@ export class AgentService implements Agents, Disposable {
 				...(run.facts.effort !== undefined ? { effort: run.facts.effort } : {}),
 				...(request.prompt !== undefined ? { prompt: request.prompt } : {}),
 				...(options.resume ? { resume: { sessionId: options.resume.key.sessionId } } : {}),
+				...(options.builtIn !== undefined ? { builtIn: options.builtIn } : {}),
 				...(tools ? { tools } : {})
 			});
 		} catch (err) {
@@ -862,6 +872,7 @@ export class AgentService implements Agents, Disposable {
 		const titleStore = this.deps.titles?.storeOf?.(run.facts.cli, plan.cwd);
 		this.update(run, {
 			displayName: plan.displayName, command: plan.command, cwd: plan.cwd, sessionId, resumable: resumed,
+			...plan.builtIn !== undefined ? { builtIn: plan.builtIn } : {},
 			...titleStore !== undefined ? { titleStore } : {},
 			...resuming ? { resumed: true as const } : {},
 			...(plan.version !== undefined ? { version: plan.version } : {}),
@@ -961,7 +972,7 @@ export class AgentService implements Agents, Disposable {
 		this.recordFact('agent_start_failed', run.facts, { source, reason: english });
 		if (run.facts.origin === 'human' && !this.restoring.has(run.facts.id)) {
 			// An agent's start reports its failure to that agent, never as the person's popup (RULES-1.8)
-			this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, configure: source === 'launch' });
+			this.deps.human.failed({ kind: 'start', name: labelOf(run.facts), reason, ...effects }, { show: run.facts.id, settingsFile: source === 'launch' });
 		}
 		this.retain(run);
 	}
@@ -1022,19 +1033,28 @@ export class AgentService implements Agents, Disposable {
 		return result;
 	}
 
+	/**
+	 * An agent's name (LIFECYCLE-2.1): the one given, trimmed; a blank one is filled in from `names` with one no agent of this window has,
+	 * else the agent is named by its ID, `alias`.
+	 */
+	private nameFor(given: string | undefined, alias: string): string {
+		return normalizeName(given ?? '') || suggestName(this.list().map(run => run.name), this.deps.names?.()) || alias;
+	}
+
 	rename(id: RunId, raw: string): void {
 		const run = this.runs.get(id);
 		if (!run) {
 			throw new FacadeError('NOT_FOUND', 'not_found', `No agent ${id} in this window.`);
 		}
-		const name = normalizeName(raw);
+		// A blank name is filled in like a new agent's; the agent's own name is taken, so it gets another (LIFECYCLE-2.1)
+		const name = this.nameFor(raw, run.facts.alias);
 		if (name === run.facts.name) {
 			return;
 		}
 		this.update(run, { name }, 'renamed');
 		this.deps.execution.rename(id, name);
 		const pin = this.pins().find(each => each.id === run.facts.pin);
-		if (pin) { this.pinStore.save({ ...pin, name }); }
+		if (pin) { this.pinStore.save({ ...pin, name: keptName(run.facts) }); }
 		this.remember(run);
 		if (run.facts.pid !== undefined) {
 			// ptyd keeps an exited run's record too: a renamed red card keeps its name across a reload
@@ -1111,12 +1131,13 @@ export class AgentService implements Agents, Disposable {
 			const cwd = meta?.cwd ?? entry.cwd;
 			throw new FacadeError('INVALID', 'not_found', `The conversation's working location ${cwd} is not available in this window.`, locationNotHere(cwd));
 		}
-		// Manual Resume names an unnamed conversation only now, without turning its title into an agent name (LIFECYCLE-2.3).
-		const name = meta?.name.trim() || suggestName(this.list().map(run => run.name));
+		// Manual Resume names an unnamed conversation only now, as a blank name is filled in, without turning its title into an agent
+		// name (LIFECYCLE-2.1, 2.3)
+		const name = meta?.name.trim() ?? '';
 		return this.accept(
 			{ name, location: location.id, cli: entry.key.cli, origin: 'human' },
 			location,
-			{ reveal: options.reveal, resume: { key: entry.key }, remember: true, ...this.pinOf(entry.key) ? { pin: this.pinOf(entry.key)!.id } : {} }
+			{ reveal: options.reveal, resume: { key: entry.key }, ...entry.builtIn !== undefined ? { builtIn: entry.builtIn } : {}, remember: true, ...this.pinOf(entry.key) ? { pin: this.pinOf(entry.key)!.id } : {} }
 		);
 	}
 
@@ -1154,8 +1175,8 @@ export class AgentService implements Agents, Disposable {
 		// One Pin a conversation (RULES-4.2): one its CLI resumed by itself may be pinned already - that Pin is this card's now, rather
 		// than a second one an Unpin would leave behind to restore
 		const earlier = key && this.pinOf(key);
-		const conversation = key ?? { environment: run.facts.environment, cli: run.facts.cli };
-		const pin: Pin = { id: earlier ? earlier.id : this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`, conversation, location: run.facts.location, cwd: run.facts.cwd, name: run.facts.name };
+		const conversation = { ...key ?? { environment: run.facts.environment, cli: run.facts.cli }, ...run.facts.builtIn ? { builtIn: run.facts.builtIn } : {} };
+		const pin: Pin = { id: earlier ? earlier.id : this.deps.newPinId?.() ?? `pin-${this.deps.newRunId()}`, conversation, location: run.facts.location, cwd: run.facts.cwd, name: keptName(run.facts) };
 		this.pinStore.save(pin);
 		if (earlier) {
 			// Pin moves it last among the Pins (PANEL-2.1), as a new Pin goes; where that order cannot be saved, the Pin still is
@@ -1221,7 +1242,7 @@ export class AgentService implements Agents, Disposable {
 		const held = new Set([...this.runs.values()].map(run => run.facts.pin).filter(pin => pin !== undefined));
 		const queue = this.pins().filter(pin => !held.has(pin.id) && !this.holdingPin(pin) && (!only || only.has(pin.id)));
 		// Kept as they failed: a card closed before the others finish still counts, without being looked up again
-		const failed: { readonly id?: RunId; readonly name: string; readonly reason: string }[] = [];
+		const failed: { readonly id?: RunId; readonly name: string; readonly reason: string; readonly settingsFile?: boolean }[] = [];
 		// One sequence of this activation's pinned tabs, in the Pins' saved order (LIFECYCLE-3.5): after those already open, the runs
 		// reattachment brought back, ready now, and the Pins restored here, each once its process started - their processes two at a time,
 		// whatever their tabs wait for
@@ -1251,7 +1272,7 @@ export class AgentService implements Agents, Disposable {
 				}
 			});
 		})];
-		// A Pin refused before any card - a facade.yolo neither true nor false, no number to give (UX-4.1, RULES-2.2) - fails as
+		// A Pin refused before any card - a settings file that stops every start, no number to give (UX-4.1, RULES-2.2) - fails as
 		// itself, kept for the next opening, and the others are restored all the same (LIFECYCLE-3.4)
 		const restoreOne = async (pin: Pin): Promise<void> => {
 			let id: RunId | undefined;
@@ -1259,7 +1280,9 @@ export class AgentService implements Agents, Disposable {
 				id = await restoring(pin, accepted => turns.get(pin.id)?.settle(accepted));
 			} catch (err) {
 				this.deps.log.event(`Could not restore the Pin of ${pin.name || pin.conversation.cli}: ${messageOf(err)}`);
-				failed.push({ name: pin.name || pin.conversation.cli, reason: this.wording(err) });
+				// Refused by the settings file: its notification leads to the file, as a start's does (CONFIGURATION-1.2, UX-1.2)
+				const settingsFile = (err instanceof FacadeError || err instanceof PlanError) && err.reason === 'configuration_invalid';
+				failed.push({ name: pin.name || pin.conversation.cli, reason: this.wording(err), ...settingsFile ? { settingsFile } : {} });
 			} finally {
 				turns.get(pin.id)?.settle(id);
 			}
@@ -1275,12 +1298,13 @@ export class AgentService implements Agents, Disposable {
 				failed.push({ id, name: labelOf(this.runs.get(id)?.facts ?? { name: pin.name, alias: '' }), reason });
 				return id;
 			}
-			// One pinned before its CLI named a conversation starts a new one, which its Pin takes once named (LIFECYCLE-3.4)
+			// One pinned before its CLI named a conversation starts a new one, which its Pin takes once named (LIFECYCLE-3.4); either way with
+			// the built-in it ran, which its entry must run still (CONFIGURATION-3.4)
 			const key = pinKey(pin);
 			const id = this.accept(
 				{ name: pin.name, location: location.id, cli: pin.conversation.cli, origin: 'human' },
 				location,
-				{ ...key ? { resume: { key } } : {}, reveal: false, remember: false, pin: pin.id, restoring: true }
+				{ ...key ? { resume: { key } } : {}, ...pin.conversation.builtIn ? { builtIn: pin.conversation.builtIn } : {}, reveal: false, remember: false, pin: pin.id, restoring: true }
 			);
 			const run = this.runs.get(id);
 			// Its tab's turn, kept in the Pins' order, waits for its process to start
@@ -1289,7 +1313,8 @@ export class AgentService implements Agents, Disposable {
 			this.restoring.delete(id);
 			const facts = this.runs.get(id)?.facts;
 			if (facts?.end?.kind === 'failed') {
-				failed.push({ id, name: labelOf(facts), reason: facts.error?.reason ?? '' });
+				// Its launch refused, by its CLI's entry too: told with the settings file, as its own start would be (CONFIGURATION-1.2)
+				failed.push({ id, name: labelOf(facts), reason: facts.error?.reason ?? '', ...facts.error?.source === 'launch' ? { settingsFile: true } : {} });
 			}
 			return id;
 		};
@@ -1313,10 +1338,11 @@ export class AgentService implements Agents, Disposable {
 		}
 		if (failed.length && !this.ownershipLost && !this.disposed) {
 			// A known failure no agent is responsible for: one notification for this opening (RULES-1.8). A Pin refused before any card
-			// has no card to show why, and its reason - the window's numbers, its facade.yolo - holds for the others: it is the one told
+			// has no card to show why, and its reason - the window's numbers, its settings file - holds for the others: it is the one told
 			const cardless = failed.find(each => !each.id);
 			const told = cardless ?? failed[0];
-			this.deps.human.failed({ kind: 'restore', name: told.name, reason: told.reason, count: cardless ? 1 : failed.length }, told.id && this.runs.has(told.id) ? { show: told.id } : {});
+			this.deps.human.failed({ kind: 'restore', name: told.name, reason: told.reason, count: cardless ? 1 : failed.length },
+				{ ...told.id && this.runs.has(told.id) ? { show: told.id } : {}, ...told.settingsFile ? { settingsFile: true } : {} });
 		}
 	}
 
@@ -1328,8 +1354,9 @@ export class AgentService implements Agents, Disposable {
 		const yolo = this.deps.yolo();
 		const id = this.deps.newRunId();
 		const at = this.deps.clock.now();
+		const alias = this.deps.aliases.next();
 		const facts: RunFacts = {
-			id, root: id, origin: 'human', tools: 'not_injected', alias: this.deps.aliases.next(), name: pin.name, cli: pin.conversation.cli, displayName: pin.conversation.cli, command: pin.conversation.cli,
+			id, root: id, origin: 'human', tools: 'not_injected', alias, name: this.nameFor(pin.name, alias), cli: pin.conversation.cli, displayName: pin.conversation.cli, command: pin.conversation.cli,
 			location: pin.location, cwd: pin.cwd, environment: pin.conversation.environment, yolo,
 			createdAt: at, lifecycle: 'ended', phase: 'launching_cli', activity: 'unknown', reporting: false,
 			...pin.conversation.sessionId ? { sessionId: pin.conversation.sessionId, resumable: true, pinnable: true } : {},
@@ -1431,7 +1458,7 @@ export class AgentService implements Agents, Disposable {
 		if (pin && sessionId) {
 			try {
 				const key = keyOf(run.facts)!;
-				this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: key });
+				this.pinStore.save({ ...pin, cwd: run.facts.cwd, conversation: { ...key, ...run.facts.builtIn ? { builtIn: run.facts.builtIn } : {} } });
 				// One Pin a conversation (RULES-4.2): another Pin of the one it switched to goes, as this card's names it now
 				for (const other of this.pins().filter(each => each.id !== pin.id && pinsConversation(each, key))) {
 					this.pinStore.remove(other.id);
@@ -1616,7 +1643,8 @@ export class AgentService implements Agents, Disposable {
 		}
 		let title: string | undefined;
 		try {
-			title = await this.deps.titles.title(key, run.facts.cwd, run.facts.titleStore);
+			// Read in its built-in's store, whose reader an added entry of its type shares (CONFIGURATION-2.3)
+			title = await this.deps.titles.title({ ...key, cli: run.facts.builtIn ?? key.cli }, run.facts.cwd, run.facts.titleStore);
 			reads.failed = undefined;
 		} catch (err) {
 			if (messageOf(err) !== reads.failed) {
@@ -1679,7 +1707,7 @@ function isRunRecord(value: unknown): value is RunFacts {
 		typeof value.lifecycle === 'string' && ['starting', 'running', 'ended'].includes(value.lifecycle) &&
 		typeof value.phase === 'string' && ['creating_worktree', 'launching_cli', 'running'].includes(value.phase) &&
 		typeof value.activity === 'string' && ['working', 'not_working', 'unknown'].includes(value.activity) && typeof value.reporting === 'boolean' &&
-		['title', 'activityReason', 'said'].every(key => value[key] === undefined || typeof value[key] === 'string') &&
+		['title', 'activityReason', 'said', 'builtIn'].every(key => value[key] === undefined || typeof value[key] === 'string') &&
 		['pid', 'startedAt'].every(key => value[key] === undefined || typeof value[key] === 'number' && Number.isFinite(value[key])) &&
 		(value.blocker === undefined || isJsonObject(value.blocker) && typeof value.blocker.kind === 'string' &&
 			['permission', 'question', 'auth', 'unknown'].includes(value.blocker.kind) && (value.blocker.text === undefined || typeof value.blocker.text === 'string')) &&
@@ -1743,6 +1771,7 @@ function factsOf(id: RunId, meta: RunMeta): RunFacts {
 		...(meta.sessionId ? { sessionId: meta.sessionId, resumable: !!meta.resumable && !!meta.exactResume } : {}),
 		name: meta.name,
 		cli: meta.cli,
+		...typeof meta.builtIn === 'string' && meta.builtIn ? { builtIn: meta.builtIn } : {},
 		displayName: meta.displayName,
 		command: meta.command,
 		location: meta.location,
@@ -1792,6 +1821,7 @@ export function metaOf(facts: RunFacts, exactResume = facts.resumable): RunMeta 
 		...(facts.sessionId ? { sessionId: facts.sessionId } : {}),
 		name: facts.name,
 		cli: facts.cli,
+		...facts.builtIn ? { builtIn: facts.builtIn } : {},
 		displayName: facts.displayName,
 		command: facts.command,
 		location: facts.location,

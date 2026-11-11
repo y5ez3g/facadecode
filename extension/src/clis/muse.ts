@@ -3,7 +3,8 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as path from 'path';
-import { CliAdapter, configOverrides, sigintExit } from './adapter';
+import { CliAdapter, sigintExit } from './adapter';
+import { configOverrides } from './args';
 import * as fs from 'fs';
 import { codeOf, messageOf } from '../base/errors';
 import { isEqualPath, readJsonFile } from '../base/files';
@@ -49,7 +50,8 @@ export function museSession({ file, hook, env, extra, throughCmd, platform, inst
 	const settings = readJsonFile(museSettingsFile(env, platform));
 	if (settings.kind === 'other') { return { unavailable: true }; }
 	let hooks = settings.kind === 'object' ? settings.value.hooks : undefined;
-	const overrides = configOverrides(extra).filter(each => each.key === 'hooks' && each.value !== undefined);
+	// Read as Muse Code reads its arguments: `-c hooks=...`, `--config=hooks=...` and `-chooks=...` alike (CLIS-3.1)
+	const overrides = configOverrides(extra, museAdapter.grammar!).filter(each => each.key === 'hooks' && each.value !== undefined);
 	if (overrides.length > 1) { return { unavailable: true }; }
 	for (const { value } of overrides) {
 		try { hooks = JSON.parse(value!) as unknown; }
@@ -215,9 +217,17 @@ export const museAdapter: CliAdapter = {
 	id: 'muse',
 	sessionIdentity: true,
 	sessionIntegration: museSession,
-	identityOptions: ['--no-session-log', '--continue', '--last'],
 	displayName: 'Muse Code',
-	setting: 'facade.muse',
+	setting: 'clis.muse',
+	// What its entry's args cannot hold (CONFIGURATION-3.1): approvals and sandbox (yolo), model and effort (their fields), trust, the
+	// folder, the session, and the configuration keys Facade sets itself. Its `-c hooks` is merged into the run's own.
+	grammar: {
+		reserved: ['--disable-approval', '--disable-sandbox', '--yolo', '--approval-mode', '--trust-workspace', '--worktree', '-w', '--worktree-existing', '--worktree-base',
+			'--no-session-log', '--continue', '--last', '--model', '--reasoning-effort', '--effort', '--permission-profile', '--approval-judge'],
+		attached: ['-w'],
+		clusters: { values: ['-c', '-w'] },
+		config: { options: ['-c', '--config'], reserved: ['mcpServers.facade', 'model', 'reasoning_effort', 'model_reasoning_efforts'] }
+	},
 	command: 'muse',
 	launchTarget: museTarget,
 	groups: {

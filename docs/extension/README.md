@@ -16,6 +16,7 @@ Where the code disagrees with it, the code is fixed, or the owning rule is amend
 | 3 Features | [WORKTREES](features/WORKTREES.md) | Folder/worktree discovery, native creation, deletion and observing external removal |
 | 3 Features | [PANEL](features/PANEL.md) | Cards, count, order, local filters and webview |
 | 3 Features | [COLLABORATION](features/COLLABORATION.md) | Cross-window agent operations, messages, human contact and message records |
+| 3 Features | [CONFIGURATION](features/CONFIGURATION.md) | `facade.json`, agent names, named CLI entries and icons, errors, native API setup and migration |
 | 4 Engineering | [ARCHITECTURE](engineering/ARCHITECTURE.md) | Runtime, window components, processes, data, packaging and working safeguards |
 | 4 Engineering | [CLIS](engineering/CLIS.md) | Native configuration, input readers, Facade tool files, conversations and trust |
 | 4 Engineering | [MCP](engineering/MCP.md) | The eight agent tools, results, waits, injection and protocol |
@@ -41,7 +42,7 @@ specification no longer has changes its expectation; it is not a reason to resto
 
 ## 3 Coverage and evidence limits
 
-The set contains **12 normative documents and 185 numbered rules**. `python3 -I -B docs/extension/audit/check_spec.py`,
+The set contains **13 normative documents and 205 numbered rules**. `python3 -I -B docs/extension/audit/check_spec.py`,
 run from the repository root, checks their structure and references ([audit report](audit/REPORT.md)). It runs no code.
 
 Specification, code and product verification are separate claims. Required product evidence includes

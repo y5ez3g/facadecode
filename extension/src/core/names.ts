@@ -2,43 +2,35 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-/**
- * Short machine words the editable suggestion a person's New Agent offers is taken from (LIFECYCLE-2.1): plain ASCII, easy
- * to type after `@`, no two sharing their first three letters, none a key name, a Facade word, a CLI or a brand.
- */
-export const SUGGESTED_NAMES: readonly string[] = [
-	'Abacus', 'Alloy', 'Amp', 'Anvil', 'Arc', 'Atom', 'Axle', 'Baud', 'Beacon', 'Bit', 'Blip', 'Bolt', 'Boson', 'Brace', 'Buzz',
-	'Byte', 'Cable', 'Caliper', 'Cam', 'Capstan', 'Chassis', 'Chip', 'Circuit', 'Clamp', 'Clutch', 'Cobalt', 'Cog', 'Coil',
-	'Compass', 'Copper', 'Crank', 'Crystal', 'Dial', 'Diode', 'Dipole', 'Drill', 'Drone', 'Dynamo', 'Ember', 'Engine', 'Fiber',
-	'Filament', 'Flange', 'Flux', 'Forge', 'Fuse', 'Gadget', 'Gauge', 'Gear', 'Gimbal', 'Gizmo', 'Glide', 'Grommet', 'Gyro',
-	'Hammer', 'Helix', 'Hertz', 'Hinge', 'Hover', 'Ion', 'Jack', 'Jet', 'Jolt', 'Joule', 'Kelvin', 'Kilo', 'Kite', 'Knob',
-	'Laser', 'Latch', 'Lens', 'Lever', 'Lumen', 'Lux', 'Magneto', 'Mech', 'Meter', 'Modem', 'Motor', 'Nano', 'Neon', 'Nibble',
-	'Nickel', 'Nova', 'Nozzle', 'Ohm', 'Optic', 'Orbit', 'Photon', 'Pilot', 'Piston', 'Pivot', 'Pixel', 'Plasma', 'Plug', 'Prism',
-	'Probe', 'Pulse', 'Pump', 'Pylon', 'Quark', 'Radar', 'Ratchet', 'Rebar', 'Relay', 'Rivet', 'Rocket', 'Rotor', 'Rover',
-	'Rudder', 'Scout', 'Sensor', 'Servo', 'Shaft', 'Shuttle', 'Solder', 'Sonar', 'Spark', 'Spindle', 'Spoke', 'Spring', 'Stator',
-	'Strut', 'Stylus', 'Throttle', 'Torque', 'Tractor', 'Turbo', 'Valve', 'Vapor', 'Visor', 'Volt', 'Vortex', 'Warp', 'Watt',
-	'Wedge', 'Weld', 'Widget', 'Winch', 'Wrench', 'Yoke', 'Zap', 'Zener', 'Zinc'
-];
+import { BUILT_IN_NAMES } from '../base/names';
 
 /**
- * A random suggestion, one no agent of `taken` has where one is left (ignoring case). Names may still repeat: the person can
- * keep or type any name (LIFECYCLE-2.1).
+ * A name for an agent whose name is left blank (LIFECYCLE-2.1): at random, one of `names` - facade.json's `names`, else the
+ * built-in list - that no agent of `taken` has, ignoring case and surrounding spaces. None where every one is taken or the list is
+ * empty: the agent is then named by its ID.
  */
-export function suggestName(taken: Iterable<string> = [], random: () => number = Math.random): string {
+export function suggestName(taken: Iterable<string> = [], names: readonly string[] = BUILT_IN_NAMES, random: () => number = Math.random): string | undefined {
 	const used = new Set([...taken].map(name => name.trim().toLowerCase()));
-	const free = SUGGESTED_NAMES.filter(name => !used.has(name.toLowerCase()));
-	const from = free.length ? free : SUGGESTED_NAMES;
-	return from[Math.floor(random() * from.length) % from.length];
+	const free = names.map(name => name.trim()).filter(name => name && !used.has(name.toLowerCase()));
+	return free.length ? free[Math.floor(random() * free.length) % free.length] : undefined;
 }
 
-/** How a message names an agent (LIFECYCLE-2.1): its name, or its `#aN` where the name is empty. */
+/** How a message names an agent (LIFECYCLE-2.1): its name, or its `#aN` where a record from an earlier version kept none. */
 export function labelOf(agent: { readonly name: string; readonly alias: string }): string {
 	return agent.name || agent.alias;
 }
 
-/** A trimmed display label (LIFECYCLE-2.1). Empty strings, spaces and duplicates are allowed; IDs identify agents. */
+/** A trimmed display label (LIFECYCLE-2.1). Spaces and duplicates are allowed; a blank one is filled in, and IDs identify agents. */
 export function normalizeName(raw: string): string {
 	return raw.trim();
+}
+
+/**
+ * The name a record that outlasts the run keeps - its conversation's, its Pin's (LIFECYCLE-2.1): none where the agent is named by its
+ * ID, so that the conversation's next agent is named again rather than by an ID it does not have.
+ */
+export function keptName(agent: { readonly name: string; readonly alias: string }): string {
+	return agent.name === agent.alias ? '' : agent.name;
 }
 
 /**

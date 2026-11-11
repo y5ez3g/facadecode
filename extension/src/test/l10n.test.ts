@@ -53,6 +53,16 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 		assert.strictEqual(status, 0, output);
 	});
 
+	test('no runtime text holds a placeholder inside other braces, which VS Code leaves unfilled: `${env:{1}}` shows as written', () => {
+		// VS Code fills `{name}` with /{([^}]+)}/g, so `{env:{1}` is read as one placeholder and the `{1}` inside it never filled
+		const nested = /\{[^{}]*\{\d+\}/;
+		for (const file of ['bundle.l10n.json', ...LOCALES.map(locale => `bundle.l10n.${locale}.json`)]) {
+			const bundle = readJson(path.join(ROOT, 'l10n', file)) as { readonly [key: string]: unknown };
+			const texts = Object.entries(bundle).flatMap(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]);
+			assert.deepStrictEqual(texts.filter(text => nested.test(text)), [], file);
+		}
+	});
+
 	test('PANEL-1.4: the card\'s renamed words are in every bundle under their new English texts, and no bundle keeps an old one', () => {
 		const renamed: readonly (readonly [old: string, now: string])[] = [
 			['Started', 'New conversation started'],
@@ -65,7 +75,7 @@ suite('Localization: every text in every language (ARCHITECTURE-4.4, UX-5.1)', (
 			['Terminated by signal {0}', 'Process terminated · {0}'],
 			['Disconnected: exit cause unknown', 'Process lost · reason unknown'],
 			['Could not confirm that it stopped', 'Stop unconfirmed · check process'],
-			['Can\'t collaborate: set the path to the CLI program in Configure Agents, not to a .cmd file', 'Collaboration off · replace .cmd with CLI in Configure Agents'],
+			['Can\'t collaborate: set the path to the CLI program in Configure Agents, not to a .cmd file', 'Collaboration off · replace .cmd with CLI in facade.json'],
 			['Can\'t collaborate: Facade tools stopped', 'Collaboration stopped · end and resume'],
 			['Can\'t collaborate: move or rename {0}', 'Collaboration off · move or rename {0}'],
 			['Can\'t collaborate: could not read {0}', 'Collaboration off · {0} unreadable'],

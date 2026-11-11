@@ -30,7 +30,7 @@ code --install-extension facade.facadecode
 
 接下來，安裝並登入你打算使用的任何受支援 Agent CLI：Claude Code、Codex、Antigravity、Muse Code、OpenCode 或 Pi。Facade Code 會使用各 CLI 本身的登入狀態與訂閱啟動它們。
 
-> **Agent 預設不經確認即可執行命令。** 在預設啟用 `facade.yolo` 的情況下，Agent 無需事先詢問即可執行命令與修改檔案。將其關閉即可還原各 CLI 標準的確認提示。詳見[擴充套件 README](../../../extension/README.md#install)。
+> **Agent 預設不經確認即可執行命令。** 在預設啟用 `yolo` 的情況下，Agent 無需事先詢問即可執行命令與修改檔案。將其關閉即可還原各 CLI 標準的確認提示。詳見[擴充套件 README](../../../extension/README.md#install)。
 
 ## Agent Panel
 
@@ -58,7 +58,7 @@ Facade Code 在你的檔案旁邊的編輯器終端機分頁中直接執行原�
 
 Facade Code 將你在這台電腦上開啟的各 Facade 視窗中的 Agent 連接成一個網路。開啟 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 視窗即可將協作擴展到另一台機器。
 
-- **跨視窗。** 啟用 `facade.yolo` 時，Agent 可以觸及你在這台電腦上各 Facade 視窗中的每一個 Agent，無論是本機還是 Remote - SSH 視窗。將其關閉時，Agent 只能觸及它自己的群組：即由你啟動的 Agent 及其衍生啟動的 Agent。
+- **跨視窗。** 啟用 `yolo` 時，Agent 可以觸及你在這台電腦上各 Facade 視窗中的每一個 Agent，無論是本機還是 Remote - SSH 視窗。將其關閉時，Agent 只能觸及它自己的群組：即由你啟動的 Agent 及其衍生啟動的 Agent。
 - **透過 SSH 擴展。** 在 [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 視窗中，Agent 直接在遠端機器上執行，使用該機器上的工具、檔案與帳戶。本機 Agent 可以直接啟動並控制 Remote - SSH 視窗中的 Agent。
 - **透過手機協調。** 使用 [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) 將 Claude 行動端 App 連接到電腦上的 Claude Code 工作階段。該工作階段可以透過 Facade 協調其他 Agent，並將進度回報到你的手機。
 

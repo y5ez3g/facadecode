@@ -26,10 +26,13 @@ explanation; there is no separate tutorial, team wizard or product-mode choice.
 
 The last successfully used CLI is first and preselected; choosing it still starts only after the person's action. Change
 Working Location and Change Name remain at the bottom of the same picker - Change Name alone where there is no location
-to change (1.5). A name has an editable recommendation and may be empty, contain spaces or duplicate another name. CLI
-login and permissions remain in the terminal. The current name and actual location remain visible while searching for a
+to change (1.5). A name has an editable recommendation from `names` and may contain spaces or repeat. A blank name
+is filled in; an empty or exhausted list uses the agent ID (LIFECYCLE-2.1). CLI login and permissions remain in the terminal. The current name and actual location remain visible while searching for a
 CLI - the window's one place to work going without saying - as specified in LIFECYCLE-1.1. No account or CLI setup is
-silently performed by Facade.
+silently performed by Facade. Open Settings shows Facade's section in the editor's Settings. Its Edit in facade.json
+link opens the file in the execution environment; remote windows whose Settings open as JSON open the file directly. The person can add `Codex · work` with `type: codex`, or a
+Claude setup for another API, and choose that entry in the picker
+(CONFIGURATION-2, CONFIGURATION-5). Saving affects later starts; existing agents keep running as they were.
 
 ### 1.3 Default working location
 
@@ -44,7 +47,12 @@ missing-location fallback belong to
 
 **A missing prerequisite is explained where the person can correct it without changing what they selected.**
 
-No folder: the picker offers Open Folder. No CLI: the picker explains discovery in this environment. Missing Git does
+No folder: the picker offers Open Folder. No CLI: the picker explains discovery in this environment and offers
+Open Settings. Choose Edit in facade.json there, or edit the file opened directly in a remote window whose Settings
+open as JSON (CONFIGURATION-1.2).
+A bad file blocks new starts with its error; a bad entry leaves other entries usable (CONFIGURATION-4.1).
+If old settings cannot be migrated together, the file link explains the conflict and opens the old editor settings
+JSON so the person can fix them (CONFIGURATION-6.2). Missing Git does
 not block either step. A removed location is reselected; no silent CLI substitution.
 
 ### 1.5 Changing the working location
@@ -116,7 +124,7 @@ build's execution supervisor still holds - unless the workspace is opened again 
 reload does within that time (RULES-4.1), and Pins restore once their agents ended. A reload - an update's included -
 brings every agent's process and card back but opens only the pinned agents' tabs again: every other agent's tab stays
 hidden until the person opens it from its card, and the last pinned tab opened is in front with its card selected
-(LIFECYCLE-3.5). An agent that cannot be pinned - a custom CLI without exact-session integration, or a run whose
+(LIFECYCLE-3.5). An agent that cannot be pinned - a custom program (CONFIGURATION-2.3), or a run whose
 session integration failed - always comes back with its tab hidden. Other windows continue their work.
 Pending messages to ended runs fail to their agent senders where reachable and are never replayed on reopening. If only
 the sender closes, delivery already executing elsewhere may finish; work left at the closing side may end. No extra

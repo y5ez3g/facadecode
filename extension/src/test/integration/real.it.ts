@@ -19,6 +19,8 @@ import { linesOf } from '../detailLines';
 import { unspun } from '../../base/tabSpinner';
 
 const REAL = process.env.FACADE_IT_REAL;
+/** The built-in that runs it: itself, or an added entry's type (CONFIGURATION-2.3). */
+const BUILT_IN = process.env.FACADE_IT_REAL_BUILTIN ?? REAL;
 const YOLO = process.env.FACADE_IT_REAL_YOLO === 'on' ? 'on' : 'off';
 
 async function state(): Promise<PanelState> {
@@ -121,7 +123,7 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 			return card;
 		}, 60_000);
 		const terminal = await until('its terminal', () => vscode.window.terminals.find(each => unspun(each.name).startsWith(first.name)), 30_000);
-		if (REAL === 'pi') {
+		if (BUILT_IN === 'pi') {
 			// Pi mounts its editor before downloading managed fd/rg, but refuses Enter until startup finishes.
 			// Its session MCP connection follows that setup. Do not mistake an editable composer for readiness.
 			await until('Pi startup and its session tools', async () => {
@@ -134,15 +136,16 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 		await until('the CLI input to be usable', async () => await vscode.commands.executeCommand('facade.messageInput', first.runId) === 'usable' ? true : undefined, 60_000);
 		// Claude folds a long one-line paste into an attachment without a size. A visible lead and counted multi-line body
 		// let the same production reader verify this test's own draft before the test presses Enter.
-		const lead = REAL === 'claude' ? TASK_LEAD : undefined;
+		const lead = BUILT_IN === 'claude' ? TASK_LEAD : undefined;
 		if (lead) {
 			terminal.sendText(lead, false);
 			await until('the test task lead', async () => await vscode.commands.executeCommand('facade.messageInput', first.runId, lead) === 'own' ? true : undefined, 30_000);
 		}
-		// sendText is raw terminal input: newlines would submit separate turns in Pi. Only Claude needs the counted
-		// multi-line attachment; the other clients receive this test's single-line task, as before.
+		// sendText is raw terminal input, each newline an Enter press that would submit a turn of its own. A person's paste reaches
+		// the CLI in bracketed-paste markers where it turned that mode on, as Claude Code does: its counted multi-line body goes so.
+		// The other clients receive this test's single-line task, as before.
 		const taskText = lead ? TASK : TASK.replaceAll('\n', ' ');
-		terminal.sendText(lead ? taskText.slice(lead.length) : taskText, false);
+		terminal.sendText(lead ? `\x1b[200~${taskText.slice(lead.length)}\x1b[201~` : taskText, false);
 		await until('the first task to show as its own draft', async () => await vscode.commands.executeCommand('facade.messageInput', first.runId, taskText, lead) === 'own' ? true : undefined, 30_000);
 		terminal.sendText('\r', false);
 
@@ -156,8 +159,8 @@ const TASK = TASK_LEAD + 'Use only your facade MCP tools, and do exactly this:\n
 			&& ['success', 'unknown', 'failure'].includes(each.delivery.status)), 90_000);
 		assert.ok(task.delivery.status === 'success' || task.delivery.status === 'unknown', JSON.stringify(task));
 		// Natively where its CLI takes a first prompt it can use; Antigravity's after its tools are ready (COLLABORATION-2.2)
-		assert.strictEqual(task.initialPrompt?.path, REAL === 'agy' ? 'post_start' : 'native', JSON.stringify(task));
-		assert.ok(task.delivery.via === (REAL === 'agy' ? 'terminal' : 'launch') || task.delivery.via === 'read', JSON.stringify(task));
+		assert.strictEqual(task.initialPrompt?.path, BUILT_IN === 'agy' ? 'post_start' : 'native', JSON.stringify(task));
+		assert.ok(task.delivery.via === (BUILT_IN === 'agy' ? 'terminal' : 'launch') || task.delivery.via === 'read', JSON.stringify(task));
 		const firstAlias = linesOf(first).join(' ').match(/#a\d+/)![0];
 		const secondAlias = linesOf(second).join(' ').match(/#a\d+/)![0];
 		const expectedContext = `CONTEXT ${firstAlias} ${secondAlias} ${task.alias}`;
@@ -201,7 +204,7 @@ async function decisionProbe(parent: Card, terminal: vscode.Terminal): Promise<v
 	for (let trial = 1; trial <= 3; trial++) {
 		await until('the parent input before the decision probe', async () => await vscode.commands.executeCommand('facade.messageInput', parent.runId) === 'usable' ? true : undefined, 30_000);
 		const prefix = `FACADE_DECISIONS_${trial} `;
-		const lead = REAL === 'claude' ? 'Facade decision check. ' : undefined;
+		const lead = BUILT_IN === 'claude' ? 'Facade decision check. ' : undefined;
 		const task = (lead ?? '') + 'This is a synthetic Facade interpretation test. Do not perform any of the hypothetical actions. '
 			+ 'Send exactly one send_message to #human: text begins with ' + JSON.stringify(prefix) + ' followed by a JSON object. '
 			+ 'Choose each value from repeat_original_request, inspect_effects, await_result, delivery_only, task_complete, retry_new_request, unknown, absent. '

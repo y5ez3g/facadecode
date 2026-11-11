@@ -104,24 +104,21 @@ export function button(text: string, run: () => void, secondary = false): HTMLBu
 
 /** What a card's face is drawn of: a card drawn again with the same keeps its face node, whose image would flash loading again. */
 export function lookOf(avatar: Card['avatar']): string {
-	return !avatar ? '' : 'file' in avatar ? `file:${avatar.file}` : `initial:${avatar.color}:${avatar.initial}`;
+	return avatar ? `file:${avatar.file}${avatar.eyes ? `+${avatar.eyes}` : ''}` : '';
 }
 
 /**
- * A card's face (PANEL-1.3): its CLI maker's avatar, cut round; for a custom CLI, the initial and theme colour the extension chose
- * (UX-2.1); an empty circle for a CLI with neither. Decorative: the card's label says everything it shows.
+ * A card's face (PANEL-1.3): its CLI's icon, cut round - a built-in's maker avatar, or a robot's face with its eyes over it, which look
+ * toward the pointer (CONFIGURATION-2.4). Decorative: the card's label says everything it shows.
  */
 export function face(avatar: Card['avatar']): HTMLElement {
 	const element = el('span', 'face');
 	element.setAttribute('aria-hidden', 'true');
-	if (avatar && 'file' in avatar) {
-		const img = el('img');
-		img.src = `${logos}/${avatar.file}`;
+	for (const [file, className] of avatar ? [[avatar.file, ''], ...avatar.eyes ? [[avatar.eyes, 'eyes']] : []] : []) {
+		const img = el('img', className);
+		img.src = `${logos}/${file}`;
 		img.alt = '';
 		element.append(img);
-	} else if (avatar) {
-		element.classList.add('initial', `on-${avatar.color}`);
-		element.textContent = avatar.initial;
 	}
 	return element;
 }

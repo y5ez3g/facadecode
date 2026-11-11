@@ -163,9 +163,15 @@ export const openCodeAdapter: CliAdapter = {
 	sessionIdentity: true,
 	sessionIntegration: openCodeSession,
 	displayName: 'OpenCode',
-	setting: 'facade.opencode',
+	setting: 'clis.opencode',
+	// What its entry's args cannot hold (CONFIGURATION-3.1): approvals (yolo), the session, its server and its first task. A positional
+	// argument would be the folder it starts in.
+	grammar: {
+		reserved: ['--auto', '--yolo', '--dangerously-skip-permissions', '--session', '-s', '--continue', '-c', '--fork', '--standalone', '--server', '--prompt'],
+		attached: ['-s'],
+		clusters: { values: ['-s'] }
+	},
 	command: 'opencode',
-	identityOptions: ['--session', '-s', '--continue', '-c', '--fork'],
 	// The same switch as its --auto: one configured so would answer every permission question with YOLO off (CLIS-3.1)
 	aliases: { '--auto': ['--yolo', '--dangerously-skip-permissions'] },
 	groups: {

@@ -53,8 +53,8 @@ export const TOOLS: readonly ToolDefinition[] = [
 		inputSchema: {
 			type: 'object',
 			properties: {
-				// A label (LIFECYCLE-2.1): empty, repeated and `human` are names; its ID tells it apart
-				name: { type: 'string', description: 'Its display name: names may repeat or be empty; its ID tells it apart.' },
+				// A label (LIFECYCLE-2.1): repeated and `human` are names, a blank one is filled in; its ID tells it apart
+				name: { type: 'string', description: 'Its display name: names may repeat; if blank, Facade picks an unused name from facade.json or uses its ID. Its ID tells agents apart.' },
 				window_id: ID,
 				location_id: ID,
 				cli: { ...ID, description: 'A CLI ID listed under the destination window by list_agents.' },

@@ -5,11 +5,11 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
-import { catalogOf } from '../clis/catalog';
 import { tomlString } from '../clis/codex';
 import { describeLaunches, PLACEHOLDERS } from '../clis/describe';
 import { DestinationEnvironment, planLaunch } from '../clis/plan';
 import { redacted } from '../clis/redact';
+import { catalogFrom } from './settingsFixtures';
 import { tempDir } from './util';
 
 suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
@@ -32,18 +32,21 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 	teardown(() => temp.remove());
 
 	test('what a start adds is shown in its place - the Facade tools\' and session tracking\'s arguments and variables - what only a start has named by placeholders, and no launch file written (CLIS-4.1, 2.2, 2.4)', () => {
-		const catalog = catalogOf(() => undefined);
+		const catalog = catalogFrom();
 		const home = path.join(temp.dir, 'facade');
 		const runDir = path.join(home, 'runs', PLACEHOLDERS.run, 'tools');
 		const sessionFile = path.join(home, 'runs', `${PLACEHOLDERS.run}.session.json`);
 		const server = { command: '/runtime', args: ['/ext/dist/shim.js'], env: { ELECTRON_RUN_AS_NODE: '1', FACADE_RUN: PLACEHOLDERS.run, FACADE_AGENT: '#aN', FACADE_LAUNCH_CONTEXT: PLACEHOLDERS.context }, instructions: PLACEHOLDERS.instructions };
-		const described = describeLaunches(catalog, destination, cwd, false, { sessionFile, sessionHook: cli => `node hook.cjs ${cli}`, tools: { server, skill: 'SKILL', runDir } });
+		const described = describeLaunches(catalog, destination, cwd, false, { sessionFile, sessionHook: cli => `node hook.cjs ${cli}`, tools: { server, skill: 'SKILL', runDir }, runDir });
 		const claude = described.find(each => each.cli === 'claude')!;
 		const codex = described.find(each => each.cli === 'codex')!;
 		const after = (args: readonly string[] | undefined, option: string) => args?.[args.indexOf(option) + 1];
 		assert.deepStrictEqual([after(claude.args, '--mcp-config'), after(claude.args, '--plugin-dir'), after(claude.args, '--allowedTools'), after(claude.args, '--session-id')],
 			[path.join(runDir, 'mcp.json'), path.join(runDir, 'plugin'), 'mcp__facade', PLACEHOLDERS.session]);
-		assert.match(after(claude.args, '--settings') ?? '', /"command":"node hook\.cjs claude"/);
+		// Its run settings are a file of the run, named by its path and shown, as a start would write them
+		const settings = claude.runSettings?.settings as { hooks: { SessionStart: { hooks: { command: string }[] }[] }; env: unknown };
+		assert.deepStrictEqual([after(claude.args, '--settings'), claude.runSettings?.file, settings.hooks.SessionStart[0].hooks[0].command, settings.env],
+			[path.join(runDir, 'claude-settings.json'), path.join(runDir, 'claude-settings.json'), 'node hook.cjs claude', { CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' }]);
 		assert.deepStrictEqual(codex.args!.slice(0, 2), ['-c', 'mcp_servers.facade.command="/runtime"']);
 		assert.ok(codex.args!.some(arg => arg.startsWith('hooks=')), 'Codex\'s session hooks');
 		assert.deepStrictEqual([claude.environment.sources.at(-1), claude.environment.variables.filter(each => each.source === 'facade')],
@@ -55,11 +58,10 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 	});
 
 	test('each CLI as a new start would have it now: program and source, working directory, the literal arguments a launch gets, YOLO, sandbox, approvals and trust - one configuration', () => {
-		const settings: { readonly [name: string]: unknown } = {
-			'facade.codex.launch': { arguments: ['--search', '--api-key', 'sk-123'], environment: { OPENAI_API_KEY: 'sk-live', MODE: 'fast', GONE: null } },
-			'facade.muse.enabled': false
-		};
-		const catalog = catalogOf(name => settings[name]);
+		const catalog = catalogFrom({ clis: {
+			codex: { args: ['--search', '--api-key', 'sk-123'], env: { OPENAI_API_KEY: 'sk-live', MODE: 'fast', GONE: null } },
+			muse: { enabled: false }
+		} });
 		const described = describeLaunches(catalog, destination, cwd, false);
 		const codex = described.find(each => each.cli === 'codex')!;
 		const planned = planLaunch(catalog, { cli: 'codex', alias: '#a1', cwd, yolo: false }, destination);
@@ -72,9 +74,9 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 			sources: ['host', 'terminal', 'launch', 'run'],
 			variables: [
 				{ source: 'terminal', name: 'API_TOKEN', value: '<redacted>' },
-				{ source: 'terminal', name: 'PLAIN', value: 'p' },
+				{ source: 'terminal', name: 'PLAIN', value: '<redacted>' },
 				{ source: 'launch', name: 'OPENAI_API_KEY', value: '<redacted>' },
-				{ source: 'launch', name: 'MODE', value: 'fast' },
+				{ source: 'launch', name: 'MODE', value: '<redacted>' },
 				{ source: 'launch', name: 'GONE', value: null },
 				{ source: 'run', name: 'ELECTRON_RUN_AS_NODE', value: null },
 				{ source: 'run', name: 'TERM_PROGRAM', value: 'vscode' },
@@ -103,25 +105,27 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 	});
 
 	test('a configuration with errors shows them, naming their settings, and no invented plan; a CLI not found says why', () => {
-		const settings: { readonly [name: string]: unknown } = { 'facade.claude.launch': { arguments: { yoloOn: [] } } };
-		const described = describeLaunches(catalogOf(name => settings[name]), destination, cwd, true);
+		const described = describeLaunches(catalogFrom({ clis: { claude: { args: { yoloOn: [] } } } }), destination, cwd, true);
 		const claude = described.find(each => each.cli === 'claude')!;
 		assert.deepStrictEqual([claude.problems.map(problem => problem.said.kind), claude.args, claude.trust], [['arguments_type'], undefined, undefined]);
-		assert.match(claude.problems[0].text, /^facade\.claude\.launch\.arguments must be an array/);
-		// With a configuration error no program is looked for: a wrong .path is never PATH's command (CLIS-1.2, 4.1)
-		const wrong = describeLaunches(catalogOf(name => ({ 'facade.codex.path': 7 })[name]), destination, cwd, true).find(each => each.cli === 'codex')!;
+		assert.match(claude.problems[0].text, /^clis\.claude\.args must be an array/);
+		// With a configuration error no program is looked for: a wrong command is never PATH's command (CLIS-1.2, CONFIGURATION-4.1)
+		const wrong = describeLaunches(catalogFrom({ clis: { codex: { command: 7 } } }), destination, cwd, true).find(each => each.cli === 'codex')!;
 		assert.deepStrictEqual([wrong.program, wrong.args], [{ unresolved: true }, undefined]);
-		// Texts that quote a configured value - a .path not found - have the secrets in them redacted
-		const secret = describeLaunches(catalogOf(name => ({ 'facade.codex.path': 'OPENAI_API_KEY=sk-live codex' })[name]), destination, cwd, true).find(each => each.cli === 'codex')!;
+		// Texts that quote a configured value - a command not found - have the secrets in them redacted
+		const secret = describeLaunches(catalogFrom({ clis: { codex: { command: 'OPENAI_API_KEY=sk-live codex' } } }), destination, cwd, true).find(each => each.cli === 'codex')!;
 		assert.ok('missing' in secret.program && !JSON.stringify(secret.program).includes('sk-live') && secret.program.missing.includes('OPENAI_API_KEY=<redacted>'), JSON.stringify(secret.program));
 		const pi = described.find(each => each.cli === 'pi')!;
 		assert.ok('missing' in pi.program && /^pi was not found on the PATH/.test(pi.program.missing) && pi.program.said.kind === 'not_on_path');
 		assert.deepStrictEqual([pi.args, pi.sandbox, pi.approvals], [undefined, { state: 'none' }, { state: 'none' }]);
 	});
 
-	test('secrets are redacted wherever they appear: a value under a secret\'s name, an option\'s value, a NAME=value; a count of tokens and a later-filled value are kept', () => {
+	test('CONFIGURATION-4.2: secrets are redacted wherever they appear - the value of any name containing key, token, secret, password, auth or credential, as an option\'s value apart, after =, in a configuration assignment, one starting with a dash too; a later-filled value is kept', () => {
+		assert.deepStrictEqual(redacted(['--key-material', 'SENTINEL_A', '--api-key', '-SENTINEL_B', '-c', 'service_key_id="SENTINEL_C"', '--auth-token', '--verbose']), [
+			'--key-material', '<redacted>', '--api-key', '<redacted>', '-c', 'service_key_id=<redacted>', '--auth-token', '--verbose'
+		]);
 		assert.deepStrictEqual(redacted(['--token', 'abc', '--max-tokens', '5', 'API_KEY=xyz', '--password=hunter2', '--auth', '${prompt}', '--name', 'n']), [
-			'--token', '<redacted>', '--max-tokens', '5', 'API_KEY=<redacted>', '--password=<redacted>', '--auth', '${prompt}', '--name', 'n'
+			'--token', '<redacted>', '--max-tokens', '<redacted>', 'API_KEY=<redacted>', '--password=<redacted>', '--auth', '${prompt}', '--name', 'n'
 		]);
 		assert.deepStrictEqual(redacted({ env: { GITHUB_TOKEN: 'ghp', SESSION_KEY: 'k', USER: 'me' }, nested: [{ secret: 's' }] }), {
 			env: { GITHUB_TOKEN: '<redacted>', SESSION_KEY: '<redacted>', USER: 'me' }, nested: [{ secret: '<redacted>' }]
@@ -150,22 +154,44 @@ suite('CLIs: Show Agent Launch (CLIS-4.1)', () => {
 		]);
 		assert.deepStrictEqual(redacted({ OPENAI_KEY: 'a', GH_PAT: 'b', DB_PASS: 'c', KEY: 'd', HEADERS: '{"Authorization":"Bearer e"}', EXTRA: 'Authorization: token f', PATH: '/bin', KEYBOARD: 'us', MONKEY: 'x', BYPASS: 'y', HTTPS_PROXY: 'http://me:pw@proxy:8080' }), {
 			OPENAI_KEY: '<redacted>', GH_PAT: '<redacted>', DB_PASS: '<redacted>', KEY: '<redacted>', HEADERS: '{"Authorization":"<redacted>"}', EXTRA: 'Authorization: <redacted>',
-			PATH: '/bin', KEYBOARD: 'us', MONKEY: 'x', BYPASS: 'y', HTTPS_PROXY: 'http://me:<redacted>@proxy:8080'
+			PATH: '/bin', KEYBOARD: '<redacted>', MONKEY: '<redacted>', BYPASS: 'y', HTTPS_PROXY: 'http://me:<redacted>@proxy:8080'
 		});
 		// A whole value under a secret's name, however deep it goes
-		assert.deepStrictEqual(redacted({ credentials: { user: 'u', pw: 'p' }, tokens: 3 }), { credentials: '<redacted>', tokens: 3 });
+		assert.deepStrictEqual(redacted({ credentials: { user: 'u', pw: 'p' }, tokens: 3 }), { credentials: '<redacted>', tokens: '<redacted>' });
 		// A number under a secret's name is one too
 		assert.deepStrictEqual(redacted({ DB_PASSWORD: 12345678, PORT: 5432, API_KEY: 7 }), { DB_PASSWORD: '<redacted>', PORT: 5432, API_KEY: '<redacted>' });
 	});
 
+	test('CONFIGURATION-4.2: the run settings a start would give Claude Code show its entry\'s variables by name alone, a removed key variable empty, and the person\'s own settings with any secret redacted', () => {
+		const claude = describeLaunches(catalogFrom({ clis: { claude: {
+			env: { ANTHROPIC_BASE_URL: 'https://example.com', ANTHROPIC_AUTH_TOKEN: 'sk-entry', ANTHROPIC_API_KEY: null },
+			args: ['--settings', '{"env":{"MODE":"fast"},"apiKeyHelper":"~/bin/key","includeCoAuthoredBy":false}']
+		} } }), destination, cwd, true).find(each => each.cli === 'claude')!;
+		assert.deepStrictEqual(claude.runSettings?.settings, {
+			env: { MODE: '<redacted>', ANTHROPIC_BASE_URL: '<redacted>', ANTHROPIC_AUTH_TOKEN: '<redacted>', ANTHROPIC_API_KEY: '', CLAUDE_CODE_DISABLE_TERMINAL_TITLE: '' },
+			apiKeyHelper: '<redacted>', includeCoAuthoredBy: false, disabledMcpjsonServers: ['facade']
+		});
+		assert.ok(!JSON.stringify(claude).includes('sk-entry'));
+	});
+
+	test('CONFIGURATION-4.2: a variable Facade merges its tools into - OpenCode\'s configuration - holds the person\'s value, so it is hidden as theirs is: nothing of the person\'s layers is in the description', () => {
+		fs.writeFileSync(path.join(temp.dir, 'bin', 'opencode'), '#!/bin/sh\n');
+		fs.chmodSync(path.join(temp.dir, 'bin', 'opencode'), 0o755);
+		const home = path.join(temp.dir, 'facade');
+		const runDir = path.join(home, 'runs', PLACEHOLDERS.run, 'tools');
+		const server = { command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: PLACEHOLDERS.run }, instructions: PLACEHOLDERS.instructions };
+		const catalog = catalogFrom({ clis: { opencode: { env: { OPENCODE_CONFIG_CONTENT: '{"instructions":["SENTINEL_INSTRUCTION"]}' } } } });
+		const opencode = describeLaunches({ ...catalog }, { ...destination, terminal: { PLAIN: 'SENTINEL_TERMINAL' } }, cwd, false,
+			{ sessionFile: path.join(home, 'runs', `${PLACEHOLDERS.run}.session.json`), sessionHook: () => 'hook', tools: { server, skill: 'SKILL', runDir }, runDir }).find(each => each.cli === 'opencode')!;
+		assert.deepStrictEqual([opencode.environment.variables.filter(each => each.name === 'OPENCODE_CONFIG_CONTENT').map(each => [each.source, each.value]), JSON.stringify(opencode).includes('SENTINEL')],
+			[[['launch', '<redacted>'], ['facade', '<redacted>']], false]);
+	});
+
 	test('Show Agent Launch redacts a secret the configured arguments or environment carry in any of these forms', () => {
-		const settings: { readonly [name: string]: unknown } = {
-			'facade.claude.launch': {
-				arguments: ['--mcp-config', '{"env":{"ANTHROPIC_API_KEY":"sk-live"}}'],
-				environment: { ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer sk-head', GH_PAT: 'ghp_x' }
-			}
-		};
-		const claude = describeLaunches(catalogOf(name => settings[name]), destination, cwd, true).find(each => each.cli === 'claude')!;
+		const claude = describeLaunches(catalogFrom({ clis: { claude: {
+			args: ['--mcp-config', '{"env":{"ANTHROPIC_API_KEY":"sk-live"}}'],
+			env: { ANTHROPIC_CUSTOM_HEADERS: 'Authorization: Bearer sk-head', GH_PAT: 'ghp_x' }
+		} } }), destination, cwd, true).find(each => each.cli === 'claude')!;
 		const shown = JSON.stringify([claude.args, claude.environment.variables]);
 		assert.ok(!/sk-live|sk-head|ghp_x/.test(shown), shown);
 		assert.ok(claude.args!.includes('{"env":{"ANTHROPIC_API_KEY":"<redacted>"}}'));

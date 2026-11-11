@@ -392,6 +392,7 @@ export function setUp(): Setup {
 		historyLog: `${temp.dir}/events.jsonl`,
 		timeout: () => setup.timeout,
 		yolo: () => true,
+		settingsFile: '~/.facade/facade.json',
 		clock: { now: () => Date.UTC(2026, 9, 28, 22, 0, 0) },
 		// The window's own time is none unless a test moves it
 		monotonic: () => 0,

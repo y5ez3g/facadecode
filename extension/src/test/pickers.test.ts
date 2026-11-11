@@ -321,7 +321,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			assert.deepStrictEqual([
 				ids(orderedClis(choices, 'other')),
 				ids(orderedClis(choices, 'gone')),
-				ids(orderedClis([cli('claude', 'Claude Code', { available: false, problem: 'facade.claude.path is "/nope"' })], 'claude')),
+				ids(orderedClis([cli('claude', 'Claude Code', { available: false, problem: 'clis.claude.command is "/nope"' })], 'claude')),
 				ids(orderedClis([cli('claude', 'Claude Code', { available: false, problem: 'claude was not found on the PATH', notInstalled: true })], undefined))
 			], [[['other', 'claude'], []], [['claude', 'other'], []], [[], ['claude']], [[], []]]);
 		});
@@ -439,8 +439,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			await settle();
 			ui.current!.accept();
 			await owned;
-			// A wrong facade.yolo is refused in the same words (UX-4.1)
-			refusal = new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"', { kind: 'yolo_type', values: ['"yes"'] });
+			// A settings file that stops every start is refused in the same words, by where it is wrong (UX-4.1, CONFIGURATION-4.1)
+			refusal = new FacadeError('UNAVAILABLE', 'configuration_invalid', '~/.facade/facade.json:1:10: yolo must be true or false; received string', { kind: 'settings_yolo', values: ['~/.facade/facade.json', '1', '10', 'string'] });
 			const done = start();
 			await settle();
 			ui.current!.accept();
@@ -449,7 +449,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				'Could not start Ada: Facade Code requires a newer Window Component. Update "Facade Code Window Component" on this computer, then reload the window.',
 				'Could not start Ada: This computer\'s counter could not give the agent a number. Try again.',
 				'Could not start Ada: This workspace is owned by another window. Reload this window to take ownership.',
-				'Could not start Ada: facade.yolo must be true or false; received "yes".'
+				'Could not start Ada: ~/.facade/facade.json:1:10: yolo must be true or false; received string.'
 			], []]);
 		});
 
@@ -620,7 +620,7 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			]);
 		});
 
-		test('LIFECYCLE-1.1, UX-1.3: no folder offers Open Folder; no usable CLI offers its settings with why, and one that cannot start says its reason - Configure Agents..., the CLI and its gear each running Configure Agents', async () => {
+		test('LIFECYCLE-1.1, UX-1.3: no folder offers Open Folder; no usable CLI offers its settings with why, and one that cannot start says its reason - Open Settings, the CLI and its gear each running Open Settings', async () => {
 			catalog = { locations: [], folders: [], pending: false };
 			let done = start();
 			await settle();
@@ -628,40 +628,40 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 			ui.current!.accept();
 			await done;
 			catalog = { locations: [MAIN], folders: [SHOP], pending: false };
-			choices = [cli('claude', 'Claude Code', { available: false, problem: 'facade.claude.path is "/opt/claude", which is not a program that can be run' })];
+			choices = [cli('claude', 'Claude Code', { available: false, problem: 'clis.claude.command is "/opt/claude", and /opt/claude is not a program that can be run' })];
 			done = start();
 			await settle();
 			const picker = ui.current!;
-			const noCli = [picker.labels(), picker.activeItems.map(item => item.label), picker.item('Configure Agents...').detail, picker.item('Claude Code').detail, buttonsOf(picker)];
+			const noCli = [picker.labels(), picker.activeItems.map(item => item.label), picker.item('Open Settings').detail, picker.item('Claude Code').detail, buttonsOf(picker)];
 			picker.accept('Claude Code');
 			await done;
-			for (const configure of [(step: Input) => step.accept('Configure Agents...'), (step: Input) => step.press(step.labels().indexOf('Claude Code'), step.item('Claude Code').buttons![0])]) {
+			for (const configure of [(step: Input) => step.accept('Open Settings'), (step: Input) => step.press(step.labels().indexOf('Claude Code'), step.item('Claude Code').buttons![0])]) {
 				done = start();
 				await settle();
 				configure(ui.current!);
 				await done;
 			}
-			// Nothing installed at all: Configure Agents with why, and no list of what is not installed
+			// Nothing installed at all: Open Settings with why, and no list of what is not installed
 			choices = [cli('claude', 'Claude Code', { available: false, problem: 'claude was not found on the PATH', notInstalled: true })];
 			done = start();
 			await settle();
 			const nothing = ui.current!.labels();
 			ui.current!.hide();
 			await done;
-			// A wrong facade.custom defines no CLI, so it is said by its setting, with the way to the settings (CLIS-3.4)
-			problems = [{ setting: 'facade.custom', problem: 'facade.custom must be an object of custom CLIs by ID; received array', said: { kind: 'custom_type', values: ['facade.custom', 'array'] } }];
+			// A settings file wrong as a whole leaves no CLI, so it is said by the file, with the way to it (CONFIGURATION-4.1)
+			problems = [{ setting: '~/.facade/facade.json', problem: '~/.facade/facade.json:3:12: clis must be an object of CLIs by name; received array', said: { kind: 'settings_clis', values: ['~/.facade/facade.json', '3', '12', 'array'] } }];
 			done = start();
 			await settle();
-			const broken = [ui.current!.labels(), ui.current!.item('facade.custom').detail];
-			ui.current!.accept('facade.custom');
+			const broken = [ui.current!.labels(), ui.current!.item('~/.facade/facade.json').detail];
+			ui.current!.accept('~/.facade/facade.json');
 			await done;
 			problems = [];
 			assert.deepStrictEqual([noFolder, noCli, nothing, broken, ui.commands, launched], [
 				['Open Folder...'],
-				[['Configure Agents...', 'Unavailable', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Configure Agents...'], 'Install a supported CLI in this environment, or configure its path.', 'facade.claude.path is "/opt/claude", which is not a program that can be run', [['Claude Code', 'gear: Configure Agents']]],
-				['Configure Agents...', 'Options', 'Change Working Location...', 'Change Name...'],
-				[['Configure Agents...', 'Unavailable', 'facade.custom', 'Options', 'Change Working Location...', 'Change Name...'], 'facade.custom must be an object of custom CLIs by ID; received array'],
-				[['vscode.openFolder'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents'], ['facade.configureAgents']],
+				[['Open Settings', 'Unavailable', 'Claude Code', 'Options', 'Change Working Location...', 'Change Name...'], ['Open Settings'], 'Install a supported CLI in this environment, or configure its path.', 'clis.claude.command is "/opt/claude", and /opt/claude is not a program that can be run', [['Claude Code', 'gear: Open Settings']]],
+				['Open Settings', 'Options', 'Change Working Location...', 'Change Name...'],
+				[['Open Settings', 'Unavailable', '~/.facade/facade.json', 'Options', 'Change Working Location...', 'Change Name...'], '~/.facade/facade.json:3:12: clis must be an object of CLIs by name; received array'],
+				[['vscode.openFolder'], ['facade.openSettings'], ['facade.openSettings'], ['facade.openSettings'], ['facade.openSettings']],
 				[]
 			]);
 		});
@@ -1090,7 +1090,8 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 		let errors: string[];
 		let savedNames: Map<string, string>;
 		let nameReads: string[];
-		const open = (batches: readonly ConversationEntry[][], result: string | { running: string } | Error = 'run-new', locations: readonly Location[] = [MAIN, LOGIN], running: readonly string[] = []) => {
+		const open = (batches: readonly ConversationEntry[][], result: string | { running: string } | Error = 'run-new', locations: readonly Location[] = [MAIN, LOGIN], running: readonly string[] = [],
+			problems: CliChoices['problems'] = []) => {
 			const { resumeAgent } = load<typeof import('../ui/pickers/resume')>(require.resolve('../ui/pickers/resume'));
 			reads = 0;
 			return resumeAgent({
@@ -1104,12 +1105,33 @@ suite('Pickers: New Agent, Change Working Location, Change Name, Filter, Go to A
 				notifyError: text => errors.push(text),
 				media: { path: '/extension/media' } as never,
 				language: 'en',
-				now: () => NOW
+				now: () => NOW,
+				settingsProblems: () => problems
 			});
 		};
 
 		setup(() => {
 			scopes = []; reads = 0; disposed = false; did = []; resumedCwds = []; errors = []; savedNames = new Map(); nameReads = [];
+		});
+
+		test('CONFIGURATION-4.1, UX-1.3: a settings file wrong as a whole, which stops every resume, is said by the file as New Agent says it, choosing it running Open Settings; no conversation is read, none said to be missing', async () => {
+			const problem = { setting: '~/.facade/facade.json', problem: '~/.facade/facade.json:3:12: clis must be an object of CLIs by name; received array', said: { kind: 'settings_clis', values: ['~/.facade/facade.json', '3', '12', 'array'] } };
+			const done = open([[entry(1)]], 'run-new', [MAIN, LOGIN], [], [problem]);
+			await settle();
+			const picker = ui.current!;
+			const shown = [picker.labels(), picker.item('~/.facade/facade.json').detail, (picker.item('~/.facade/facade.json').iconPath as { id: string }).id, buttonsOf(picker), picker.placeholder, picker.busy, scopes.length];
+			picker.accept('~/.facade/facade.json');
+			await done;
+			// Its gear does the same
+			const again = open([[entry(1)]], 'run-new', [MAIN, LOGIN], [], [problem]);
+			await settle();
+			ui.current!.press(0, ui.current!.item('~/.facade/facade.json').buttons![0]);
+			await again;
+			assert.deepStrictEqual([shown, ui.commands, did], [
+				[['~/.facade/facade.json'], '~/.facade/facade.json:3:12: clis must be an object of CLIs by name; received array', 'gear', [['~/.facade/facade.json', 'gear: Open Settings']], 'Search by title, name, CLI, or location', false, 0],
+				[['facade.openSettings'], ['facade.openSettings']],
+				[]
+			]);
 		});
 
 		test('LIFECYCLE-3.2: this window\'s locations\' histories, recent first, 100 at a time as the person scrolls on, every batch as they search, nothing read twice', async () => {

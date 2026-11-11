@@ -89,8 +89,10 @@ export interface ToolServiceDeps {
 	readonly historyLog?: string;
 	/** How long a start or stop is waited for before it is answered `accepted`, in seconds (MCP-1.3). */
 	readonly timeout: () => number;
-	/** The destination's `facade.yolo`, which a start would launch with (RULES-4.3). */
+	/** `yolo` of the destination's settings file, which a start would launch with (RULES-4.3, CONFIGURATION-1.4). */
 	readonly yolo: () => boolean;
+	/** The settings file, as configuration problems name it (CONFIGURATION-1.1). */
+	readonly settingsFile: string;
 	/** A run's ordinary message input, where the message service has it. */
 	readonly input?: Pick<InputPort, 'capability'>;
 	/**
@@ -554,14 +556,16 @@ class ToolService {
 		const anchor = locationId !== undefined ? this.location(locationId).id : undefined;
 		const agents = this.agentsFor(caller, selected !== undefined)
 			.filter(agent => (selected === undefined || agent.agent_id === selected) && (anchor === undefined || agent.location_id === anchor));
-		// A facade.yolo neither true nor false is one of this window's configuration problems: the snapshot is still given (UX-4.1)
+		// A settings file that stops every start is one of this window's configuration problems, named by the file and said once - by
+		// its locations' CLIs where they are listed - and the snapshot is still given (UX-4.1, CONFIGURATION-4.1)
 		let yolo = true;
 		let yoloProblem: string | undefined;
 		try { yolo = this.deps.yolo(); } catch (err) { yoloProblem = errorText(err); }
 		const window = await windowSnapshot({ window: this.deps.window, catalog: this.deps.locations.snapshot(), clis: this.deps.clis,
 			yolo, now: () => this.now(), agentCount: agents.length, location: anchor ?? (selected !== undefined ? String(agents[0]?.location_id ?? '') : undefined), targeted: selected !== undefined, details,
 			logFile: this.deps.historyLog });
-		return { agents, window: yoloProblem === undefined ? window : { ...window, problems: [{ setting: 'facade.yolo', problem: yoloProblem }, ...window.problems as readonly Data[]] } };
+		const said = (window.problems as readonly Data[]).some(each => each.setting === this.deps.settingsFile);
+		return { agents, window: yoloProblem === undefined || said ? window : { ...window, problems: [{ setting: this.deps.settingsFile, problem: yoloProblem }, ...window.problems as readonly Data[]] } };
 	}
 
 	/** This window's agents that `caller` reaches, as list_agents describes them (MCP-3.1). */
@@ -687,17 +691,21 @@ class ToolService {
 		// Everything that can be checked before acceptance is: a failure here creates no card or terminal (MCP-2.3, RULES-5.1)
 		this.checkWindow(args.window_id);
 		const location = this.location(args.location_id);
-		const { clis: choices } = await this.deps.clis.list(location);
+		const { clis: choices, problems } = await this.deps.clis.list(location);
 		// CLI discovery can yield while another call accepts this request. The check immediately before acceptance closes that race.
 		const acceptedMeanwhile = args.request_id !== undefined ? this.deps.agents.requested(caller.id, args.request_id) : undefined;
 		if (acceptedMeanwhile) {
 			return this.startedBefore(acceptedMeanwhile, args);
 		}
+		// A settings file that stops every start is said as it is, every problem of it, before any CLI is looked for (CONFIGURATION-4.1)
+		if (problems.length) {
+			throw new FacadeError('UNAVAILABLE', 'configuration_invalid', problems.map(each => each.problem).join('; '), problems[0].said);
+		}
 		const choice = cliChoiceOf(choices, args.cli, location, () => this.deps.clis.turnedOff?.(args.cli));
 		if (!choice.available) {
 			throw new FacadeError('UNAVAILABLE', 'unavailable', `${choice.displayName} cannot start at ${location.path}: ${choice.problem ?? 'it is not available.'}`);
 		}
-		// The YOLO it would start with, before anything is numbered: a facade.yolo neither true nor false refuses it (RULES-4.3, UX-4.1)
+		// The YOLO it would start with, before anything is numbered: a settings file that stops every start refuses it (RULES-4.3, UX-4.1)
 		this.deps.yolo();
 		if (args.model !== undefined || args.effort !== undefined) {
 			const { facts } = this.cliFacts(location, choice.id);

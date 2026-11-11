@@ -26,19 +26,28 @@ location identities do not change. This summary remains visible while CLI choice
 when 1.2 has fallen back to another location. Put the last successfully used CLI first and preselect it; never execute
 it without selection. The CLI step lists nothing until the CLIs are found, so an Enter while they load starts nothing:
 the editor keeps the focused position as items change. Other installed/enabled CLIs follow CLIS-1.1 order, then
-configured custom CLIs. CLIs that cannot start here - a configuration error, a configured program that is not found, a
-version Facade does not start - follow under a separator labeled `Unavailable`, each with its reason as detail and a
-`Configure Agents` button; choosing one opens Configure Agents too. Errors of `facade.custom` that belong to no CLI are
-listed there under their setting. A built-in that is not installed, or is turned off, is not listed. The bottom items,
+added entries (CONFIGURATION-2.1). All CLI icons follow CONFIGURATION-2.4. CLIs that cannot start here - a configuration
+error, a configured program that is not found, a version Facade does not start - follow under a separator labeled
+`Unavailable`, each with its reason as detail and a
+gear button labeled `Open Settings`; choosing the row also runs Open Settings. It follows CONFIGURATION-1.2:
+show Facade Code's Settings section on the Remote tab in a remote window, or User tab locally; its
+Edit in facade.json link opens or creates the file. Remote windows whose Settings open as JSON open facade.json
+directly. On a migration conflict, that link shows the error and opens the old editor settings JSON (CONFIGURATION-6.2).
+There is no gear at the picker's upper right. File-level errors
+show the file path and available line/column information, with Open Settings. Check configuration errors before
+`enabled`: a valid disabled entry is not listed; an invalid disabled entry still appears under Unavailable with its
+error. An uninstalled built-in with no configuration error is not listed.
+The bottom items,
 under a separator labeled `Options`, are `Change Working Location...` and `Change Name...`; where nothing can be chosen
 (1.3) `Change Name...` is alone there. The location item's description shows the full current working location,
 including `New worktree {branch} from {source}` for a proposed worktree, and its environment when that is not this
 machine. The name item's description shows the full current name. These items edit the values; they are not the only
 place the current choices appear. A person can accept the suggested name or leave it empty; an empty name keeps its
-title segment (`New Agent ·  · main`). Change Name uses the title `New Agent · Change Name` and the placeholder `Agent
-name`, and prefills the current name with no prompt of its own; the editor supplies the Enter/Escape instructions. With
-no usable CLI, `Configure Agents...` has the detail `Install a supported CLI in this environment, or configure its
-path.`; where the CLIs cannot be listed at all, it carries that failure as its detail. With no folder, use PANEL-1.2's
+title segment (`New Agent ·  · main`). Change Name uses the title `New Agent · Change Name` and the placeholder
+`Leave blank for an unused name, or its ID`. It prefills the current name with no prompt of its own; the editor
+supplies the Enter/Escape instructions. With no usable CLI, `Open Settings` has the detail `Install a supported CLI in this environment, or configure its
+path.`; where the CLIs cannot be listed at all, it carries that failure as its detail. A configuration error also
+offers this item. It follows the same Open Settings flow. With no folder, use PANEL-1.2's
 Open Folder prerequisite picker and its wording instead of the CLI step. Missing optional Git does not block creation or
 trigger a Git initialization suggestion. Cancel closes without effects or changing successful-launch history.
 
@@ -136,20 +145,25 @@ actual tool-connection failure is distinct from process launch failure and does 
 
 ### 2.1 Names and references
 
-**Names are display-label strings, may be empty, may contain spaces and may repeat; IDs identify runs.**
+**Names are trimmed display labels; blank names are filled in, and IDs identify runs.**
 
-Trim leading/trailing whitespace and preserve an empty result as `name: ""`, not as an absent field. Do not impose a
-uniqueness requirement or add arbitrary length/character restrictions. `human` is an allowed agent name, including
-during rename. The person has the distinct identity `#human`; an agent uses its own run ID, including when named
-`human`. A display name never overrides an ID. Human creation suggests an editable random name from at least 100 short
-machine words such as `Bolt`, `Pixel` or `Servo`, preferring one no agent of the window has (ignoring case) without
-requiring uniqueness; agent creation supplies its own `name` under MCP-2.2. A name is not a filesystem path, branch or
-shell argument template. CLI titles, activity and task progress never rename the agent; the creation name stays until
-the person explicitly renames it. Rename uses a native Input Box prefilled with the current name and changes no
-run/session/location identity. An agent's reference is `@name #aN`, or `#aN` alone for an agent with an empty name,
-wherever Facade shows it to a person or an agent; Go to Agent's copy button copies it without a toast. APIs accept an
-exact ID or an unambiguous name under RULES-2.3, which also decides `#human` and `@human`. The name plus ID is
-descriptive; stale display text must not redirect the run.
+Names may contain spaces and repeat. Do not impose uniqueness or arbitrary length/character restrictions. `human`
+is allowed, including during rename; the person has the distinct identity `#human`, and an agent keeps its own ID.
+A display name never overrides an ID.
+
+New Agent and Resume without a saved name suggest an editable random name from `facade.json`'s `names`, or the 140
+built-in names when that field is absent (CONFIGURATION-1.4). Choose only names no agent in this window uses, ignoring
+case and surrounding spaces. A blank name at start or rename is filled the same way. When the list is empty or every
+name is taken, use the new agent's ID, such as `#a1`. Invalid `names` blocks every start with its file position.
+Agent creation supplies `name` under MCP-2.2 and applies the same blank-name rule.
+
+A name equal to the agent's ID is not saved for Resume or Pin: the next agent gets a new name. A name is not a
+filesystem path, branch or shell argument template. CLI titles, activity and task progress never rename an agent.
+Rename uses a native Input Box prefilled with the current name, with the placeholder
+`Leave blank for an unused name, or its ID`, and changes no run/session/location identity.
+An agent's reference is `@name #aN`, or `#aN` alone when an older record has no name.
+Go to Agent's copy button copies it without a toast. APIs accept an exact ID or unambiguous name under RULES-2.3,
+which also decides `#human` and `@human`. Stale display text never redirects a run.
 
 ### 2.2 Terminal placement and focus
 
@@ -194,7 +208,8 @@ tab stays hidden until the person opens it from its card, and once the pinned ta
 successfully is in front, its group the active one, and its card selected. Every open agent tab draws its agent's screen, while ptyd keeps every agent's process and screen
 (ARCHITECTURE-2.3).
 
-The tab shows only the agent name beside the CLI's theme-appropriate logo - custom CLIs use a terminal icon - with
+The tab shows only the agent name beside the entry's icon from CONFIGURATION-2.4: a built-in logo glyph
+(`facade-cli-<id>`) or a robot glyph (`facade-robot-<color>`). It shows
 ` #aN` after the name where PANEL-1.3's cards show it, `#aN` alone for an empty name. An open tab follows as a duplicate
 appears or goes, in any group; a hidden one is not opened for it, and its next opening has the current title. A native
 tab keeps its own font and width, which may clip it. While its card's dot is green (RULES-3.2), a spinner frame turns
@@ -255,7 +270,7 @@ person switches editor windows to manage another window; agents can use MCP acro
 It is named for what the person sees happen: its card and terminal go at once and its Pin with them, and Facade then
 ends its process in the background where one still runs; a retained-ended card is removed, with no second process to
 end. Its CLI's native history is kept as it is, and Resume Agent (3.2) can continue the conversation only where the CLI
-saved it and Facade can read and resume it - not for a custom CLI without a history reader (CLIS-2.4), nor for a run
+saved it and Facade can read and resume it - not for a custom program (CONFIGURATION-2.3), nor for a run
 that ended before its CLI saved anything. It is not `Close`, which closing its terminal tab is and which only hides it
 (2.2), nor `Archive`, which would promise an archived place and a way back that Facade has not got. Card menus, Go to Agent's End
 Agent button and the Command Palette use the lifecycle effect in RULES-4.1: immediate pair removal and Unpin, with
@@ -280,15 +295,20 @@ person's ways to end an agent by hand; its own exit, a removed location and a cl
 
 Open from panel, empty state or Command Palette; the picker shows at once, busy while the window's locations and running
 conversations are read. With no folder open, its one item `Open Folder...`, detail `Open a folder to resume its
-conversations.`, runs the editor's Open Folder as PANEL-1.2's does. Read only list metadata, recent activity first,
-paginated in batches of 100: the next batch is read when the person comes within 10 rows of the end, and on to the last
+conversations.`, runs the editor's Open Folder as PANEL-1.2's does. With a folder open, check facade.json before
+reading histories. A file-level problem shows one row per problem: the file as label, its reason as detail and a
+gear icon and an Open Settings gear button, as in New Agent. Choosing the row or its button runs Open Settings.
+No conversations are read, and the picker does not claim there are no saved conversations. An entry's own error omits that entry's conversations (CONFIGURATION-4.1).
+
+Read only list metadata, recent activity first, paginated in batches of 100: the next batch is read when the person comes within 10 rows of the end, and on to the last
 while a search is typed. A batch that has taken 1,000 conversation records ends early and the next goes on, so no scan
 limit makes older matching history unreachable. Reuse already read metadata during the picker session rather than
 rescanning every log on each page or keystroke. Reading the histories keeps the window's agents responsive: the stores
 are read together, each folder's real path is resolved once per reading rather than per conversation, and no long
 synchronous read holds the extension host that draws their terminals. Prefer vendor discovery; do not build a new
 conversation store. There is no 30-day age cutoff. Deduplicate by environment/CLI/session ID. Each conversation uses the
-same single-line native presentation as Go to Agent: its CLI icon and prominent conversation title, then quieter
+same single-line native presentation as Go to Agent: its entry's icon (CONFIGURATION-2.4) and prominent
+conversation title, then quieter
 activity time, original location - none for the window's one place to work itself (1.3), which search still matches, a
 subfolder of it still named - and saved Facade name, in that order. A conversation without a title is `Untitled
 conversation`. Omit a missing or empty name without generating one while browsing. Keep the saved name even when it
@@ -302,8 +322,9 @@ cannot be resumed now - its working directory gone, or its CLI turned off or not
 listed, nor is one an agent already holds, in this window or another (CLIS-2.4). Do not list unrelated projects, or
 provide delete, hide or show-hidden controls. The panel's display filter does not change this history scope. When a
 vendor records a set of workspace folders without identifying the original cwd, use Facade's recorded cwd if known.
-Otherwise, choosing that conversation opens a native working-location picker for its folders in this window, each with
-its full path. Do not infer the original cwd from directory order. Cancellation starts nothing. If that exact
+Otherwise, choosing that conversation opens a native working-location picker for its folders in this window, each
+with its full path. Each choice must find the conversation's store with that folder's launch settings
+(CONFIGURATION-3.4). Do not infer the original cwd from directory order. Cancellation starts nothing. If that exact
 conversation already runs in Facade, do not start it again; reveal it only when it belongs to this window, otherwise say
 `{0} is already running in another window.` Do not build cross-window navigation. External activity is not a gate: call
 vendor resume and return its result. No external-writer scan, lease or concurrency guarantee is required.
@@ -312,13 +333,14 @@ vendor resume and return its result. No external-writer scan, lease or concurren
 
 **Resume starts an exact saved conversation in its original CLI and location using current CLI startup settings.**
 
-Restore RULES-4.2's conversation context, use RULES-4.3's launch-time YOLO and leave model/effort to the native session
-and current launch arguments.
-Manual Resume keeps a nonempty saved Facade name. A missing or empty saved name receives a random short name from
-New Agent's suggestions (2.1) only when the launch is accepted, avoiding current-window names where possible; it is
-saved with the conversation once the process starts, for subsequent Resume. Never derive the name from the conversation
-title or CLI ID. Existing saved names, including long ones, remain unchanged. Ordinary reload and automatic Pin
-restoration preserve their recorded names, including empty ones.
+Restore RULES-4.2's conversation context and CONFIGURATION-3.4's original entry name and type. Use current entry
+settings and RULES-4.3's current destination YOLO; model and effort follow CONFIGURATION-3.3. A removed, disabled or
+changed-type entry refuses restoration with the reason, without selecting a built-in instead.
+Manual Resume keeps a nonempty saved Facade name. A missing or empty saved name uses New Agent's suggestions (2.1),
+or the new agent's ID when no name is free. Save the chosen name with the conversation, except when it equals the
+agent's ID. Never derive it from the conversation title or CLI ID. Existing saved names, including long ones, remain
+unchanged. An ordinary reload preserves the running agent's name. Automatic Pin restoration keeps a recorded
+nonempty name; a blank one follows 2.1.
 Missing original session/location/configuration fails honestly without selecting another session or folder; a Resume
 refused before acceptance says `Could not resume {0}: {1}` with the conversation's title.
 For a vendor's ambiguous workspace-folder set under 3.2, the person's explicit location choice supplies the missing cwd.
@@ -404,9 +426,11 @@ running in Facade is skipped by later windows. A failure keeps its own red card,
 End Agent on it Unpins. One notification for the restoration says
 what failed, with Show: `Could not restore {0}: {1}` for one Pin,
 `Could not restore {0} pinned agents. Their cards show why.` for several. A Pin refused before any card - its window
-cannot number agents (RULES-2.2), or `facade.yolo` holds neither true nor false (UX-4.1) - has no card and is kept for
-the next opening; the notification then names it with its reason, which holds for the others too. End Agent and
-a normal exit remove the Pin; whole-window close preserves it.
+cannot number agents (RULES-2.2), or the settings file has a global error (CONFIGURATION-4.1) - has no card and is kept for
+the next opening; the notification then names it with its reason, which holds for the others too. Edit in facade.json
+is offered for a file error before any card, and for a restored card whose launch fails because its CLI entry
+refuses it or its program cannot start. A failure elsewhere, such as a missing working location, has no file action.
+End Agent and a normal exit remove the Pin; whole-window close preserves it.
 
 ### 3.5 Reload and remote loss
 
@@ -421,7 +445,7 @@ restoration is not retried on reload.
 A reload, an extension-host restart and Pin restoration (3.4) bring back the tabs of pinned agents alone (2.2): every
 other agent's process runs on and its card stays, its tab hidden - though it was open, even in front, before - until the
 person opens it from its card as usual. A retained failure without a Pin comes back with its tab hidden too, and so,
-always, does an agent that cannot be pinned, such as a custom CLI without exact-session integration or a run whose
+always, does an agent that cannot be pinned, such as a custom program (CONFIGURATION-2.3) or a run whose
 session integration failed. The pinned tabs open by one procedure, in one sequence for the whole activation, whichever
 of these brought each run back:
 
@@ -481,9 +505,9 @@ once. No UI waits for it.
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Plain/no-Git/multi-folder flow, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
-| 2.1–2.3 | Empty/duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
-| 3.1–3.5 | One human End Agent action shared with `stop_agent`, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, no restoration beside an uncertain end, an uncertain end's red card, proven folder/worktree removal |
+| 1.1–1.5 | Plain/no-Git/multi-folder flow, current Settings tab and Change Name placeholder, name and actual location visible while searching - the window's one place to work left unsaid -, editable name, last CLI/location, filter unchanged, agent starts in the background, immediate pair, usable CLI after a tool failure and initiator-owned errors |
+| 2.1–2.3 | Configured/default names, trimming and case-insensitive exclusions, empty/exhausted lists, blank starts/renames, invalid names blocking starts, ID names omitted from Resume/Pin, duplicate/spaced names and `human`, icon plus name-only tabs through CLI title updates and reloads, a busy tab's spinner, literal native renames, editor-only terminals, agent tabs that stay open where opened, hidden tabs and agent-started agents without one, tabs known by the editor's reports and unknown ones acting on none, a copied tab becoming an ordinary terminal in its agent's folder, a reload's pinned tabs alone back in their groups as 3.5 says, every other tab hidden, ID/copied-reference search, distinguishable picker details |
+| 3.1–3.5 | One human End Agent action shared with `stop_agent`, a closed tab hiding its agent, children kept, reload/disconnect reuse, exact Resume, linked Pins and the person's close of a marked tab Unpinning, bounded restoration, the pinned tabs of a reload, an extension-host restart and Pin restoration opening one at a time in one sequence in the Pins' order, each marked as it opens before the next, the last in front of the active group with nothing given back and the selection on it, the other agents' tabs hidden, Resume file-problem rows and gear buttons before history reads, Edit in facade.json on Pin file errors and restored-card launch failures but not missing locations, a restored Pin whose start fails dropping out, the person's Pin or Unpin - card, Command Palette or key - showing its tab as a click on the card does and marking it there, a hidden agent's Pin opening its tab, marks that borrow the focus put on at once one tab at a time and the person's front given back, a mark changed on a tab Facade could not tell winning once it is known only where no Pin or Unpin came after it, no restoration beside an uncertain end, an uncertain end's red card, proven folder/worktree removal |
 | 4.1–4.2 | One service, truthful effects, current startup configuration, bounded cleanup without UI wait |
 
 Evidence: [Verification](../engineering/VERIFICATION.md).

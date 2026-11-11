@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import type { Agents, ConversationDiscoveryPort, ConversationKey, CliCatalogPort, ExecutionPort, HumanPort, LaunchHistoryPort, LocationId, LocationPort, LogPort, WorktreePort } from '../../core/ports';
 import type { Act, Outcome } from '../../webview/protocol';
 import { CardWords } from '../cardView';
-import { AGENT_SETTINGS, COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
+import { COMMANDS, PANEL_VIEW, TEST_COMMANDS } from '../catalog';
 import { locationOfFilter, PanelModel } from '../model';
 import { PanelView } from '../panel';
 import { pickFilter } from '../pickers/filter';
@@ -24,6 +24,14 @@ declare const FACADE_TEST_MODE: boolean;
 /** What the panel, its commands and its pickers are given by the composition root. */
 export interface UiDeps {
 	readonly agents: Agents;
+	/** Opens the editor's Settings at Facade Code's section (CONFIGURATION-1.2). */
+	readonly openSettings: () => Promise<void>;
+	/** `names` of the settings file, where it has them: what New Agent's suggested name is picked from (LIFECYCLE-2.1). */
+	readonly names?: () => readonly string[] | undefined;
+	/** The icon each CLI shows, by its API ID, from one reading of the settings file: what cards and pickers show (CONFIGURATION-2.4). */
+	readonly icons?: () => (cli: string) => string;
+	/** The settings file was saved, made or removed: the cards show their icons as it says them now (CONFIGURATION-2.4). */
+	readonly settingsChanged?: vscode.Event<void>;
 	readonly conversations?: ConversationDiscoveryPort;
 	/** Whether Facade has a history reader for a CLI's conversations, so its runs' titles can come (PANEL-1.5, CLIS-2.4). */
 	readonly readsTitles?: (cli: string) => boolean;
@@ -37,7 +45,7 @@ export interface UiDeps {
 	readonly workspaceState: vscode.Memento;
 	readonly extensionUri: vscode.Uri;
 	readonly log: LogPort;
-	/** A human-operation error, one neutralized line with only Show or Configure Agents (UX-1.2, RULES-1.8). */
+	/** A human-operation error, one neutralized line with only Show or Edit in facade.json (UX-1.2, RULES-1.8). */
 	readonly notifyError: HumanPort['error'];
 	/** Settles once this window's runs are reconciled; until then the view shows its own progress (PANEL-1.1). */
 	readonly ready: Promise<unknown>;
@@ -91,7 +99,7 @@ function cardWords(): CardWords {
 		// {0} is why its new worktree could not be created, without its closing period
 		worktreeFailed: reason => vscode.l10n.t("Worktree failed · {0}", reason),
 		toolsUnavailable: (problem, file) => problem === 'cmd'
-			? vscode.l10n.t("Collaboration off · replace .cmd with CLI in Configure Agents")
+			? vscode.l10n.t("Collaboration off · replace .cmd with CLI in facade.json")
 			: problem === 'conflict' && file
 				// {0} is a file in the agent's folder that Facade will not overwrite, such as .agents/skills/facade/SKILL.md
 				? vscode.l10n.t("Collaboration off · move or rename {0}", file)
@@ -105,8 +113,7 @@ function cardWords(): CardWords {
 		// {0} the agent that sent it, with its window where that is another; {1} its text
 		saidByAgent: (sender, line) => vscode.l10n.t("Last message from agent {0}: {1}", sender, line),
 		saidByPerson: line => vscode.l10n.t("Your last input: {0}", line),
-		saidByFacade: line => vscode.l10n.t("Facade result: {0}", line),
-		locale: vscode.env.language
+		saidByFacade: line => vscode.l10n.t("Facade result: {0}", line)
 	};
 }
 
@@ -125,7 +132,8 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 		remote: vscode.env.remoteName !== undefined,
 		ready: deps.ready,
 		environmentLabel: environment => environmentLabel(environment, deps.remote),
-		...deps.readsTitles ? { readsTitles: deps.readsTitles } : {}
+		...deps.readsTitles ? { readsTitles: deps.readsTitles } : {},
+		...deps.icons ? { icons: deps.icons } : {}
 	});
 	const agent = new AgentActions({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError });
 	const flows = {
@@ -142,11 +150,12 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			try {
 				await resumeAgent({ conversations: deps.conversations, savedName: deps.savedName, locations: deps.locations, prepared, running: key => !!deps.agents.holding(key),
 					resume: entry => deps.agents.resume(entry, { reveal: true }), reveal: run => agent.reveal(run), select: run => model.select(run),
-					notifyError: deps.notifyError, media, language: vscode.env.language });
+					notifyError: deps.notifyError, media, language: vscode.env.language, ...deps.icons ? { icons: deps.icons } : {},
+					...deps.clis.problems ? { settingsProblems: () => deps.clis.problems?.() ?? [] } : {} });
 			} catch (err) { deps.notifyError(vscode.l10n.t("Could not read the saved conversations: {0}", messageOf(err)), {}); }
 		},
-		newAgent: (startAt?: LocationId) => newAgent({ agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history, select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media, ...(deps.remote ? { remote: deps.remote } : {}) }, startAt),
-		goToAgent: () => goToAgent({ model, agents: deps.agents, media, reveal: run => agent.reveal(run), copyReference: run => agent.copyReference(run), close: run => agent.close(run) })
+		newAgent: (startAt?: LocationId) => newAgent({ agents: deps.agents, locations: deps.locations, clis: deps.clis, worktrees: deps.worktrees, history: deps.history, select: run => model.select(run), notifyError: deps.notifyError, log: deps.log, media, ...(deps.names ? { names: deps.names } : {}), ...(deps.remote ? { remote: deps.remote } : {}) }, startAt),
+		goToAgent: () => goToAgent({ model, agents: deps.agents, media, reveal: run => agent.reveal(run), copyReference: run => agent.copyReference(run), close: run => agent.close(run), ...deps.icons ? { icons: deps.icons } : {} })
 	};
 	/** What the page's actions do, their targets revalidated by run ID (PANEL-3.1). */
 	const act = async (what: Act, target: string | undefined): Promise<Outcome['reason'] | undefined> => {
@@ -187,6 +196,7 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 	const view = new PanelView(deps.extensionUri, model, act, deps.log, deps.motion);
 	return [
 		model,
+		...deps.settingsChanged ? [deps.settingsChanged(() => model.refresh())] : [],
 		view,
 		vscode.window.registerWebviewViewProvider(PANEL_VIEW, view),
 		deps.execution.onDidActivate(run => model.activated(run)),
@@ -201,8 +211,8 @@ export function registerUi(deps: UiDeps): vscode.Disposable[] {
 			return run === undefined ? undefined : view.showDetails(run);
 		}),
 		...registerAgentCommands({ agents: deps.agents, model, execution: deps.execution, notifyError: deps.notifyError }, agent, flows),
-		// Configure Agents...: the editor's Settings showing this extension's settings alone (CLIS-1.1)
-		vscode.commands.registerCommand(COMMANDS.configureAgents, () => vscode.commands.executeCommand('workbench.action.openSettings', AGENT_SETTINGS)),
+		// Open Settings: the editor's Settings at Facade Code's section, whose Edit in facade.json link opens the file (CONFIGURATION-1.2)
+		vscode.commands.registerCommand(COMMANDS.openSettings, () => deps.openSettings()),
 		...(typeof FACADE_TEST_MODE !== 'undefined' && FACADE_TEST_MODE ? [
 			vscode.commands.registerCommand(TEST_COMMANDS.state, () => model.state()),
 			vscode.commands.registerCommand(TEST_COMMANDS.selectRow, (arg?: unknown) => {

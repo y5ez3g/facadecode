@@ -53,7 +53,7 @@ Known choices need no probe. Remote paths belong to that environment.
 
 ## Reach and identity
 
-A child joins your creation tree. Each launch keeps its destination's \`facade.yolo\` setting, not its creator's.
+A child joins your creation tree. Each launch keeps the \`yolo\` of its destination's facade.json, not its creator's.
 YOLO off reaches your creation tree; on reaches all agents. Address by ID, \`#aN\`, unique \`@name\` or name with ID.
 \`#human\` is your window's person; \`@human\` is ambiguous with a same-named agent. IDs do not retarget.
 

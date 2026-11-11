@@ -70,6 +70,8 @@ interface TerminalEntry {
 
 interface TerminalOptions {
 	readonly media: vscode.Uri;
+	/** The icon a CLI's tab shows, by its API ID, as the settings file says it now (CONFIGURATION-2.4); none: each name's own. */
+	readonly icon?: (cli: string) => string;
 	readonly log: (line: string) => void;
 	readonly terminalOwner?: TerminalOwner & { readonly remote: boolean };
 	readonly activated: (run: RunId | undefined) => void;
@@ -1087,7 +1089,7 @@ export class AgentTerminals implements vscode.Disposable {
 		pair.terminal = vscode.window.createTerminal({
 			name: pty.creationName(),
 			pty,
-			iconPath: cliTerminalIcon(cli),
+			iconPath: cliTerminalIcon(this.options.icon?.(cli) ?? cli),
 			// The editor area alone (LIFECYCLE-2.2); never restored by the editor itself after a reload, which reattaches instead
 			location: { viewColumn: this.columnFor(pair), preserveFocus: !reveal },
 			isTransient: true

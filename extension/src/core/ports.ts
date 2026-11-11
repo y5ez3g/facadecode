@@ -100,6 +100,8 @@ export interface CliChoice {
 	/** API ID: `claude`. */
 	readonly id: string;
 	readonly displayName: string;
+	/** What it shows in New Agent, its card and its terminal tab (CONFIGURATION-2.4); none: the icon its ID shows by default. */
+	readonly icon?: string;
 	/** Whether a new run can start: installed, enabled and validly configured in the destination environment. */
 	readonly available: boolean;
 	/** Why it cannot start, in English for agents and logs; the UI shows it with a way to the CLI's settings. */
@@ -111,8 +113,8 @@ export interface CliChoice {
 }
 
 /**
- * What New Agent offers for a location (CLIS-1.1, 3.4): its CLIs, and the configuration errors no CLI stands for - `facade.custom`
- * wrong as a whole, or a key that cannot be a custom CLI's ID - said apart, with the way to the settings.
+ * What New Agent offers for a location (CLIS-1.1, CONFIGURATION-4.1): its CLIs, and the configuration errors no CLI stands for - the
+ * settings file wrong as a whole - said apart, with the way to the settings.
  */
 export interface CliChoices {
 	readonly clis: readonly CliChoice[];
@@ -121,8 +123,10 @@ export interface CliChoices {
 }
 
 export interface CliCatalogPort {
-	/** Built-ins in CLIS-1.1 order, then custom CLIs, for `location`'s environment; and what no CLI stands for. */
+	/** Built-ins in CLIS-1.1 order, then the added CLIs, for `location`'s environment; and what no CLI stands for. */
 	list(location: Location): Promise<CliChoices>;
+	/** What no CLI stands for - the settings file wrong as a whole - alone, no CLI looked for (CONFIGURATION-4.1). */
+	problems?(): CliChoices['problems'];
 }
 
 /** What the core asks the planner to start. */
@@ -133,8 +137,14 @@ export interface PlanRequest {
 	readonly cli: string;
 	readonly location: Location;
 	readonly yolo: boolean;
+	/** The exact conversation it resumes. */
 	readonly resume?: { readonly sessionId: string };
-	/** This start's own model and effort, over the configured launch arguments (CLIS-1.4). */
+	/**
+	 * The built-in that ran what this start continues - the conversation it resumes, or the agent its Pin restores - where known: an
+	 * entry that runs another now is refused, never started as it is (CONFIGURATION-3.4).
+	 */
+	readonly builtIn?: string;
+	/** This start's own model and effort, over its entry's (CLIS-1.4, CONFIGURATION-3.3). */
 	readonly model?: string;
 	readonly effort?: string;
 	/** The creation prompt, given natively where the CLI's adapter maps one (COLLABORATION-2.2). */
@@ -171,6 +181,8 @@ export interface CapabilityState {
 /** A fully computed launch, made before any file or process exists (CLIS-4.2). */
 export interface LaunchPlan {
 	readonly cli: string;
+	/** The built-in whose adapter runs it (CONFIGURATION-2.3): its own ID for a built-in, none for a program. */
+	readonly builtIn?: string;
 	readonly displayName: string;
 	/** The command name, which chooses the terminal's logo. */
 	readonly command: string;
@@ -411,6 +423,8 @@ export interface RunMeta {
 	readonly alias: string;
 	readonly name: string;
 	readonly cli: string;
+	/** The built-in whose adapter runs it, kept as its launch planned it: an added entry's built-in (CONFIGURATION-2.3). */
+	readonly builtIn?: string;
 	readonly displayName: string;
 	readonly command: string;
 	readonly location: LocationId;
@@ -473,7 +487,11 @@ export interface ConversationKey {
  * The conversation a Pin restores: without a session where its agent was pinned before its CLI named one. That Pin starts a new
  * conversation of the CLI and takes the one the CLI names (LIFECYCLE-3.4).
  */
-export type PinnedConversation = Omit<ConversationKey, 'sessionId'> & { readonly sessionId?: string };
+export type PinnedConversation = Omit<ConversationKey, 'sessionId'> & {
+	readonly sessionId?: string;
+	/** The built-in its CLI ran, where known: a restoration under an entry of another type is refused (CONFIGURATION-3.4). */
+	readonly builtIn?: string;
+};
 
 export function conversationId(key: ConversationKey): string {
 	return `${key.environment}\u0000${key.cli}\u0000${key.sessionId}`;
@@ -482,6 +500,8 @@ export function conversationId(key: ConversationKey): string {
 /** One vendor conversation the Resume picker lists: list metadata only (LIFECYCLE-3.2). */
 export interface ConversationEntry {
 	readonly key: ConversationKey;
+	/** The built-in whose store keeps it, where known: an entry that runs another now cannot resume it (CONFIGURATION-3.4). */
+	readonly builtIn?: string;
 	readonly title?: string;
 	/** The conversation's original working directory in its environment. */
 	readonly cwd: string;
@@ -514,6 +534,11 @@ export interface ConversationMeta {
 export interface ConversationStore {
 	get(key: ConversationKey): ConversationMeta | undefined;
 	put(key: ConversationKey, meta: ConversationMeta): void;
+	/**
+	 * Records that the conversation `sessionId` of the built-in store `store` in `environment` was started with the entry `cli`
+	 * (CONFIGURATION-3.4): Resume lists it under that entry and resumes it with it, whatever the settings say later.
+	 */
+	associate?(environment: string, store: string, sessionId: string, cli: string): void;
 }
 
 /**
@@ -625,6 +650,11 @@ export interface RunFacts {
 	readonly alias: string;
 	readonly name: string;
 	readonly cli: string;
+	/**
+	 * The built-in whose adapter runs it, as its launch planned it (CONFIGURATION-2.3): its store, exits and session hooks go by it whatever
+	 * the settings say later. None for a program, and for a run an earlier build started, whose `cli` is its built-in where it ran one.
+	 */
+	readonly builtIn?: string;
 	readonly displayName: string;
 	readonly command: string;
 	readonly location: LocationId;
@@ -746,9 +776,9 @@ export type HumanFailure = { readonly kind: 'restore'; readonly name: string; re
 
 export interface HumanPort {
 	/** A human-operation error or a known failure with no responsible agent, in the related window only (RULES-1.8). */
-	failed(failure: HumanFailure, options: { readonly show?: RunId; readonly configure?: boolean }): void;
+	failed(failure: HumanFailure, options: { readonly show?: RunId; readonly settingsFile?: boolean }): void;
 	/** The same, for a human operation's error the UI has already worded. */
-	error(text: string, options: { readonly show?: RunId; readonly configure?: boolean }): void;
+	error(text: string, options: { readonly show?: RunId; readonly settingsFile?: boolean }): void;
 }
 
 /** The person's last successful launch in this workspace (LIFECYCLE-1.2): written only once a human launch's CLI process starts. */

@@ -30,7 +30,7 @@ Or install **Facade Code** from the [VS Code Marketplace](https://marketplace.vi
 
 Next, install and sign in to any supported agent CLIs you plan to use: Claude Code, Codex, Antigravity, Muse Code, OpenCode, or Pi. Facade Code starts each CLI using its own sign-in and account plans.
 
-> **Agents run without approval prompts by default.** With `facade.yolo` enabled by default, agents can run commands and change files without asking first. Turn it off to restore each CLI's standard approval prompts. See the [extension README](extension/README.md#install).
+> **Agents run without approval prompts by default.** With `yolo` enabled by default, agents can run commands and change files without asking first. Turn it off to restore each CLI's standard approval prompts. See the [extension README](extension/README.md#install).
 
 ## Agent Panel
 
@@ -58,7 +58,7 @@ Through MCP and a terminal protocol, agents can start, stop, find, and message o
 
 Facade Code connects agents across your Facade windows on this computer into one network. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
 
-- **Across windows.** With `facade.yolo` on, an agent reaches every agent across your Facade windows on this computer, local and Remote - SSH alike. With it off, an agent reaches only its own group: the agent you started and those started from it.
+- **Across windows.** With `yolo` on, an agent reaches every agent across your Facade windows on this computer, local and Remote - SSH alike. With it off, an agent reaches only its own group: the agent you started and those started from it.
 - **Extend over SSH.** In a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window, agents run directly on the remote machine with the tools, files, and accounts there. Local agents can start and message agents in Remote - SSH windows directly.
 - **Coordinate from your phone.** Connect the Claude mobile app to a Claude Code session on your computer using [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). That session can coordinate other agents through Facade and report progress back to your phone.
 

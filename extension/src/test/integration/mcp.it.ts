@@ -154,7 +154,8 @@ function assertTools(alias: string): void {
 			assert.ok(fs.existsSync(path.join(cwd, '.agents', 'skills', 'facade', 'SKILL.md')), 'the skill in its folder');
 			break;
 		case 'agy': {
-			assert.ok(JSON.parse(after(args, '--settings')).permissions.allow.includes('mcp(facade_facade/*)'), args.join(' '));
+			// Its session's settings are a file of the run, given by its path, never inline (CONFIGURATION-4.2)
+			assert.ok(JSON.parse(fs.readFileSync(after(args, '--settings'), 'utf8')).permissions.allow.includes('mcp(facade_facade/*)'), args.join(' '));
 			const plugin = path.join(cwd, '.agents', 'plugins', 'facade');
 			assert.deepStrictEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(plugin, 'mcp_config.json'), 'utf8')).mcpServers.facade.env), ['ELECTRON_RUN_AS_NODE']);
 			assert.ok(fs.existsSync(path.join(plugin, 'skills', 'facade', 'SKILL.md')) && routes(env), 'the plugin, and the run\'s variables in its environment');

@@ -1,7 +1,7 @@
 # Specification audit
 
 `docs/extension/` is the maintained specification of the Facade Code extension. Its audit checks structure and
-references only.
+references only. The normative set includes CONFIGURATION as the owner of file settings and CLI entries.
 
 ## Reproducible checks
 
@@ -10,9 +10,16 @@ rules and local links checked, and every error; the extension's pull-request che
 
 | Check | Scope |
 | --- | --- |
-| Structure | Twelve normative documents; numbered groups with each rule inside its group; a bold decision opening every rule; Checks in every document except Product |
+| Structure | Thirteen normative documents; numbered groups with each rule inside its group; a bold decision opening every rule; Checks in every document except Product |
 | Current state only | No change log, decision log or decision reference: git history records how the specification changed |
 | References | Numbered `DOCUMENT-n.m` cross-references, and local Markdown links and anchors in the specification and the repository documents that point into it |
+
+## Current result
+
+The command above returned **PASS** on 2026-11-10: **13 normative documents, 205 numbered rules and 101 local links**,
+with no errors. `git diff --check -- docs/extension` also passed. The link count includes repository and extension
+README links and can change as those documents change. These results establish structure and references, not
+implementation behavior.
 
 ## Evidence limits
 

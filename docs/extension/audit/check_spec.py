@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SPEC = ROOT / 'docs/extension'
 NORM = [SPEC / x for x in [
     'PRODUCT.md', 'EXPERIENCE.md', 'RULES.md', 'UX.md',
-    'features/LIFECYCLE.md', 'features/WORKTREES.md', 'features/PANEL.md', 'features/COLLABORATION.md',
+    'features/LIFECYCLE.md', 'features/WORKTREES.md', 'features/PANEL.md', 'features/COLLABORATION.md', 'features/CONFIGURATION.md',
     'engineering/ARCHITECTURE.md', 'engineering/CLIS.md', 'engineering/MCP.md', 'engineering/VERIFICATION.md',
 ]]
 errors = []

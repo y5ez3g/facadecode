@@ -737,16 +737,16 @@ suite('The agent panel in Chromium', function () {
 	test('filtering preserves keyboard navigation and F2 targets the visible custom agent', async () => {
 		const result = await evaluate(`(() => {
 			document.querySelector('[data-run="run-1"]').focus();
-			agents = [newCard(2, { avatar: { initial: 'C', color: 'blue' } }), newCard(3)];
+			agents = [newCard(2, { avatar: { file: 'robot-teal-face.svg', eyes: 'robot-eyes.svg' } }), newCard(3)];
 			redraw({ revision: 2, filter: { kind: 'location', id: 'filtered', label: 'main' } });
 			const stops = [...document.querySelectorAll('.agent')].filter(card => card.tabIndex === 0);
 			stops[0].focus();
 			window.posted = [];
 			stops[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true, cancelable: true }));
-			return [stops.map(card => card.dataset.run), stops[0].querySelector('.initial').textContent,
+			return [stops.map(card => card.dataset.run), stops[0].querySelector('.face img').getAttribute('src').split('/').pop(),
 				window.posted.filter(message => message.type === 'act').map(({ what, target }) => [what, target])];
 		})()`);
-		assert.deepStrictEqual(result, [['run-2'], 'C', [['rename', 'run-2']]]);
+		assert.deepStrictEqual(result, [['run-2'], 'robot-teal-face.svg', [['rename', 'run-2']]]);
 	});
 
 	test('PANEL-1.5, LIFECYCLE-3.1: an agent with an empty name is said by its #aN when its state changes', async () => {
@@ -827,7 +827,7 @@ suite('The agent panel in Chromium', function () {
 			details: { summary: { id: 'title', label: 'Title: ', value: 'Check the build' }, titleLabel: 'Title: ', untitled: 'No title yet', startedBy: 'Maker #a7', location: { id: 'location', label: 'Location: ', value: 'main', kind: 'repo' }, path: { id: 'path', label: 'Path: ', value: '/project' }, description: { title: 'Title: Check the build', place: 'Path: /project' } },
 			label: 'Ada, #a1, Working', startedAt: Date.now(), menu: { pin: false, unpin: true, moveUp: false, moveDown: true }
 		};
-		const twin: Card = { ...every, pinned: undefined, selected: false, runId: 'run-2', alias: '#a2', avatar: { initial: 'A', color: 'blue' }, menu: { pin: true, moveUp: true, moveDown: false } };
+		const twin: Card = { ...every, pinned: undefined, selected: false, runId: 'run-2', alias: '#a2', avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' }, menu: { pin: true, moveUp: true, moveDown: false } };
 		const other: Card = { ...twin, repeated: undefined, runId: 'run-3', name: 'Cy', alias: '#a3' };
 		await deliver({ type: 'state', state: { revision: 7, loading: false, cards: [every, twin, other], cardCount: 3, capabilities: { remote: false }, clockAt: Date.now() } });
 		await evaluate('new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))');
@@ -2076,44 +2076,139 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(seen, [[['/avatar-claude.png', '', 'true'], ['', '', 'true']], true, false, '/avatar-claude.png']);
 	});
 
-	test('a custom CLI\'s face is its initial on its theme colour, kept while it stays, on a fainter tint or the side bar\'s own colour where its letter would not read (PANEL-1.3, UX-2.1)', async () => {
-		/** The theme's colours, as VS Code sets them on the page's root: null removes one. */
-		const theme = (colors: { readonly [name: string]: string | null }) => evaluate(`(() => {
-			for (const [name, value] of Object.entries(${JSON.stringify(colors)})) {
-				value === null ? document.documentElement.style.removeProperty(name) : document.documentElement.style.setProperty(name, value);
-			}
-		})()`);
-		const grounds = () => evaluate(`[...document.querySelectorAll('.agent .face')].map(face => [face.classList.contains('faint') ? 'faint' : face.classList.contains('unreadable') ? 'plain' : 'tint', getComputedStyle(face).backgroundColor])`);
-		// Dark Modern, whose orange is VS Code's own, see-through: taken opaque, so that every circle is measured as it is drawn
-		await theme({ '--vscode-foreground': '#cccccc', '--vscode-sideBar-background': '#181818', '--vscode-charts-blue': '#3794ff', '--vscode-charts-orange': '#d186167e', '--vscode-charts-purple': '#b180d7' });
+	test('a robot\'s face is its face with its eyes over it, both images of media/agents, kept while it stays; any other avatar is refused (PANEL-1.3, CONFIGURATION-2.4)', async () => {
 		const seen = await evaluate(`(() => {
-			agents = [newCard(1, { avatar: { initial: 'M', color: 'blue' } }), newCard(2, { avatar: { initial: 'Q', color: 'purple' } }), newCard(3, { avatar: { initial: 'Z', color: 'purple' } })]; redraw({ revision: 2 });
+			const robot = color => ({ file: 'robot-' + color + '-face.svg', eyes: 'robot-eyes.svg' });
+			agents = [newCard(1, { avatar: robot('sky') }), newCard(2, { avatar: robot('pearl') })]; redraw({ revision: 2 });
 			const faces = [...document.querySelectorAll('.agent .face')];
-			const drawn = faces.map(face => [face.classList.contains('initial'), face.className.match(/on-\\w+/)[0], face.textContent, face.querySelector('img') === null, face.getAttribute('aria-hidden')]);
-			agents = [newCard(1, { avatar: { initial: 'M', color: 'blue' }, line: 'Another line' }), newCard(2, { avatar: { initial: 'Q', color: 'orange' } }), agents[2]]; redraw({ revision: 3 });
+			const drawn = faces.map(face => [[...face.querySelectorAll('img')].map(img => [img.getAttribute('src').split('/').pop(), img.className]), face.getAttribute('aria-hidden')]);
+			agents = [newCard(1, { avatar: robot('sky'), line: 'Another line' }), newCard(2, { avatar: robot('ocean') })]; redraw({ revision: 3 });
 			const after = [...document.querySelectorAll('.agent .face')];
-			return [drawn, after[0] === faces[0], after[1] === faces[1], after[1].className.match(/on-\\w+/)[0]];
+			return [drawn, after[0] === faces[0], after[1] === faces[1], after[1].querySelector('img').getAttribute('src').split('/').pop()];
 		})()`);
-		assert.deepStrictEqual(seen, [[[true, 'on-blue', 'M', true, 'true'], [true, 'on-purple', 'Q', true, 'true'], [true, 'on-purple', 'Z', true, 'true']], true, false, 'on-orange']);
-		const dark = await grounds();
-		assert.deepStrictEqual(dark.map((each: string[]) => each[0]), ['tint', 'tint', 'tint']);
-		assert.ok(dark.every((each: string[]) => !/rgba\(|\/ 0?\.\d/.test(each[1])), JSON.stringify(dark));
-		// Light+: no letter reads on the tint, each does on the fainter one
-		await theme({ '--vscode-foreground': '#616161', '--vscode-sideBar-background': '#f3f3f3', '--vscode-charts-blue': '#1a85ff', '--vscode-charts-orange': '#d18616', '--vscode-charts-purple': '#652d90' });
-		await wait(30);
-		const light = (await grounds()).map((each: string[]) => each[0]);
-		// A theme whose text reads best on the side bar itself; and one without a colour, which leaves that circle clear and untested
-		await theme({ '--vscode-foreground': '#5a7fb0', '--vscode-sideBar-background': '#ffffff', '--vscode-charts-purple': null });
-		await wait(30);
-		const poor = (await grounds()).map((each: string[]) => each[0]);
-		await theme({ '--vscode-foreground': '#cccccc', '--vscode-sideBar-background': '#181818', '--vscode-charts-purple': '#b180d7' });
-		await wait(30);
-		assert.deepStrictEqual([light, poor, (await grounds()).map((each: string[]) => each[0])], [['faint', 'faint', 'faint'], ['plain', 'plain', 'tint'], ['tint', 'tint', 'tint']]);
-		// An initial must be a letter and its colour one of the three: anything else is refused, as any malformed state is
-		for (const avatar of [{ initial: '', color: 'blue' }, { initial: 'M', color: 'red' }, { initial: 'M' }]) {
+		assert.deepStrictEqual(seen, [[
+			[[['robot-sky-face.svg', ''], ['robot-eyes.svg', 'eyes']], 'true'],
+			[[['robot-pearl-face.svg', ''], ['robot-eyes.svg', 'eyes']], 'true']
+		], true, false, 'robot-ocean-face.svg']);
+		// A file of media/agents by its plain name, and nothing else - an earlier build's letter avatar either - as any malformed state is refused
+		for (const avatar of [{ file: '../x.svg' }, { file: 'robot-sky-face.svg', eyes: '../eyes.svg' }, { initial: 'M', color: 'blue' }, { robot: 'data:image/svg+xml;base64,' }]) {
 			await evaluate('window.errors = []');
 			await deliver({ type: 'state', state: { revision: 9, loading: false, cards: [{ ...(await evaluate('newCard(1)')), avatar }], cardCount: 1, capabilities: { remote: false } } });
 			assert.strictEqual((await evaluate('window.errors')).length, 1, JSON.stringify(avatar));
 		}
+	});
+
+	test('a robot\'s eyes go a quarter of the way each frame, reach less within a face and a half of the pointer, look ahead again when the window loses focus, keep still with the system\'s reduced motion, and ask for no frame at rest (PANEL-1.3)', async function () {
+		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
+		this.timeout(60_000);
+		const seen = await evaluate(`(async () => {
+			agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 });
+			const frames = count => new Promise(resolve => { const step = left => left ? requestAnimationFrame(() => step(left - 1)) : resolve(); step(count); });
+			const eyes = document.querySelector('.agent .face .eyes');
+			const box = eyes.parentElement.getBoundingClientRect();
+			const at = () => { const shift = /translate\\((-?[\\d.]+)px, (-?[\\d.]+)px\\)/.exec(eyes.style.transform); return shift ? [Number(shift[1]), Number(shift[2])] : [0, 0]; };
+			const reach = box.width * 4 / 32;
+			const cx = box.left + box.width / 2, cy = box.top + box.height / 2;
+			const move = x => document.dispatchEvent(new PointerEvent('pointermove', { clientX: x, clientY: cy, bubbles: true }));
+			// Until the eyes stand still: three frames alike
+			const settled = async () => { let last; for (let same = 0, left = 240; same < 3 && left; left--) { await frames(1); const now = eyes.style.transform; same = now === last ? same + 1 : 0; last = now; } };
+			// From rest, one frame goes a quarter of the way
+			move(cx + 500); await frames(1);
+			const first = at()[0] / reach;
+			await settled();
+			// Three quarters of a face from its middle: half the reach
+			move(cx + box.width * 0.75); await settled();
+			const near = at()[0] / reach;
+			// The window loses focus: ahead again
+			window.dispatchEvent(new Event('blur')); await settled();
+			const blurred = at();
+			// The system's reduced motion, while the eyes look aside: in the middle at once
+			move(cx + 500); await settled();
+			const real = window.matchMedia;
+			window.matchMedia = query => query.includes('reduced-motion') ? { matches: true, addEventListener() {}, removeEventListener() {} } : real.call(window, query);
+			move(cx + 500); await frames(2);
+			const still = at();
+			window.matchMedia = real;
+			// At rest, nothing asks for a frame
+			move(cx + 500); await settled();
+			let asked = 0;
+			const ask = window.requestAnimationFrame;
+			window.requestAnimationFrame = callback => { asked++; return ask.call(window, callback); };
+			await new Promise(resolve => setTimeout(resolve, 300));
+			window.requestAnimationFrame = ask;
+			return [first, near, blurred, still, asked];
+		})()`);
+		const [first, near, blurred, still, asked] = seen as [number, number, number[], number[], number];
+		assert.ok(Math.abs(first - 0.25) < 0.01 && Math.abs(near - 0.5) < 0.02, JSON.stringify(seen));
+		assert.deepStrictEqual([blurred, still, asked], [[0, 0], [0, 0], 0]);
+	});
+
+	test('a robot\'s eyes look toward the pointer over the panel, up to 4/32 of its face, and ahead again once it leaves; not with reduced motion (CONFIGURATION-2.4)', async function () {
+		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
+		this.timeout(60_000);
+		const seen = await evaluate(`(async () => {
+			agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 });
+			const frames = count => new Promise(resolve => { const step = left => left ? requestAnimationFrame(() => step(left - 1)) : resolve(); step(count); });
+			const eyes = document.querySelector('.agent .face .eyes');
+			const box = eyes.parentElement.getBoundingClientRect();
+			// Until the eyes stand still: three frames alike
+			const settled = async () => { let last; for (let same = 0, left = 240; same < 3 && left; left--) { await frames(1); const now = eyes.style.transform; same = now === last ? same + 1 : 0; last = now; } };
+			const at = () => { const shift = /translate\\((-?[\\d.]+)px, (-?[\\d.]+)px\\)/.exec(eyes.style.transform); return shift ? [Number(shift[1]), Number(shift[2])] : [0, 0]; };
+			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 200, clientY: box.top + box.height / 2, bubbles: true }));
+			await frames(4);
+			const moving = at();
+			await settled();
+			const right = at();
+			// Reduced motion turned on while the eyes look aside: they stand in the middle at once, without easing there
+			document.body.classList.add('vscode-reduce-motion');
+			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 200, clientY: box.top + box.height / 2, bubbles: true }));
+			await frames(2);
+			const snapped = at();
+			document.body.classList.remove('vscode-reduce-motion');
+			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 200, clientY: box.top + box.height / 2, bubbles: true }));
+			await settled();
+			document.dispatchEvent(new MouseEvent('mouseout', { relatedTarget: null, bubbles: true }));
+			await settled();
+			const left = at();
+			document.body.classList.add('vscode-reduce-motion');
+			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.left - 200, clientY: box.top, bubbles: true }));
+			await settled();
+			const reduced = at();
+			document.body.classList.remove('vscode-reduce-motion');
+			return [box.width, moving, right, snapped, left, reduced];
+		})()`);
+		const [width, moving, right, snapped, left, reduced] = seen as [number, number[], number[], number[], number[], number[]];
+		// Partway there after a few frames, then the full reach toward the pointer on its right
+		assert.ok(moving[0] > 0 && moving[0] < width * 4 / 32, JSON.stringify(seen));
+		assert.ok(Math.abs(right[0] - width * 4 / 32) < 0.06 && Math.abs(right[1]) < 0.06, JSON.stringify(seen));
+		assert.deepStrictEqual([snapped, left, reduced], [[0, 0], [0, 0], [0, 0]]);
+	});
+
+	test('a robot\'s eyes looking aside stand in the middle at once when reduced motion turns on - the editor\'s or the system\'s - with the pointer still and nothing else moving, and look again when it turns off (PANEL-1.3)', async function () {
+		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
+		this.timeout(60_000);
+		const aside = await evaluate(`(async () => {
+			agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 });
+			window.framesOf = count => new Promise(resolve => { const step = left => left ? requestAnimationFrame(() => step(left - 1)) : resolve(); step(count); });
+			// Until the eyes stand still: three frames alike
+			window.settledOf = async () => { let last; for (let same = 0, left = 240; same < 3 && left; left--) { await framesOf(1); const now = document.querySelector('.agent .face .eyes').style.transform; same = now === last ? same + 1 : 0; last = now; } };
+			window.eyesAt = () => { const shift = /translate\\((-?[\\d.]+)px, (-?[\\d.]+)px\\)/.exec(document.querySelector('.agent .face .eyes').style.transform); return shift ? [Number(shift[1]), Number(shift[2])] : [0, 0]; };
+			const box = document.querySelector('.agent .face').getBoundingClientRect();
+			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 300, clientY: box.top + box.height / 2, bubbles: true }));
+			await settledOf();
+			return eyesAt();
+		})()`) as number[];
+		// The editor's: VS Code's class on the page's body, and no other event
+		const editor = await evaluate(`(async () => { document.body.classList.add('vscode-reduce-motion'); await framesOf(2); return eyesAt(); })()`);
+		const editorOff = await evaluate(`(async () => { document.body.classList.remove('vscode-reduce-motion'); await settledOf(); return eyesAt(); })()`) as number[];
+		// The system's: the media query the page listens to changes, and no other event; the page is told it in a later frame, and
+		// the eyes stand in the middle in the frame after - easing there would take some twenty
+		await evaluate(`(() => { window.motionQuery = matchMedia('(prefers-reduced-motion: reduce)'); window.motionChanged = new Promise(resolve => motionQuery.addEventListener('change', resolve, { once: true })); })()`);
+		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
+		const system = await evaluate(`(async () => { await motionChanged; await framesOf(2); return eyesAt(); })()`);
+		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
+		const systemOff = await evaluate(`(async () => { await settledOf(); return eyesAt(); })()`) as number[];
+		assert.ok(aside[0] > 0 && editorOff[0] > 0 && systemOff[0] > 0, JSON.stringify([aside, editorOff, systemOff]));
+		assert.deepStrictEqual([editor, system], [[0, 0], [0, 0]]);
 	});
 });

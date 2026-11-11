@@ -168,9 +168,20 @@ export const piAdapter: CliAdapter = {
 	sessionIdentity: true,
 	sessionIntegration: piSession,
 	displayName: 'Pi',
-	setting: 'facade.pi',
+	setting: 'clis.pi',
+	// What its entry's args cannot hold (CONFIGURATION-3.1): trust, the session, a print or output mode, and model and effort (their
+	// fields) - its provider among them, which `model` names as provider/model. Its --session-dir stays: Resume reads it.
+	grammar: {
+		reserved: ['--session', '--session-id', '--continue', '-c', '--resume', '-r', '--fork', '--no-session', '--approve', '-a', '--no-approve', '-na', '--print', '-p',
+			'--mode', '--export', '--model', '--provider', '--thinking',
+			// What would leave the run without Facade's tools: its MCP servers, or every tool
+			'--no-mcp', '--no-tools', '-nt'],
+		// The options its parser (1.5.1) gives the argument after them whatever it looks like; it reads no `--name=value` of its own options
+		required: ['--provider', '--model', '--api-key', '--system-prompt', '--append-system-prompt', '--name', '-n', '--session', '--session-id', '--fork',
+			'--session-dir', '--models', '--tools', '-t', '--exclude-tools', '-xt', '--thinking', '--export', '--extension', '-e', '--skill', '--prompt-template', '--theme'],
+		equalsValue: false
+	},
 	command: 'pi',
-	identityOptions: ['--session', '--session-id', '--continue', '-c', '--resume', '-r', '--fork', '--no-session'],
 	groups: {
 		resume: ['--session', '${sessionId}'],
 		session: ['--session-id', '${sessionId}'],

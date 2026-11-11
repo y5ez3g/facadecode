@@ -61,6 +61,130 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		}
 	});
 
+	test('CONFIGURATION-2.3, 3.4: a conversation Facade started with an added entry is listed under it, the others under the built-in whose store keeps them - unavailable where its launches here keep theirs elsewhere, never another entry chosen - and the built-in\'s once it is removed', async () => {
+		const agent = path.join(temp.dir, 'pi');
+		const dir = path.join(agent, 'sessions', piSessionFolderName(repo));
+		fs.mkdirSync(dir, { recursive: true });
+		for (const n of [1, 2]) {
+			fs.writeFileSync(path.join(dir, `2026-10-31T00-00-0${n}-000Z_${id(n)}.jsonl`), [
+				{ type: 'session', version: 3, id: id(n), timestamp: `2026-10-31T00:00:0${n}Z`, cwd: repo },
+				{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `Task ${n}` }] } }
+			].map(line => JSON.stringify(line)).join('\n'));
+		}
+		const env = { PI_CODING_AGENT_DIR: agent };
+		// Facade started the first with the custom CLI: its record names that CLI
+		const knownCwd = (key: { readonly cli: string; readonly sessionId: string }) => key.cli === 'Pi two' && key.sessionId === id(1) ? repo : undefined;
+		const listed = async (history: VendorHistory) => (await history.open({ environment: 'local', directories: [repo] }).next()).entries.map(each => [each.key.sessionId, each.key.cli]).sort();
+		const both = new VendorHistory({ environment: () => ({ pi: env, 'Pi two': env }), builtIns: () => ({ 'Pi two': 'pi' }), knownCwd });
+		const alone = new VendorHistory({ environment: () => ({ 'Pi two': env }), builtIns: () => ({ 'Pi two': 'pi' }) });
+		const removed = new VendorHistory({ environment: () => ({ pi: env }), knownCwd });
+		assert.deepStrictEqual([await listed(both), await listed(alone), await listed(removed), both.readsTitles('Pi two'), removed.readsTitles('Pi two')], [
+			[[id(1), 'Pi two'], [id(2), 'pi']],
+			[[id(1), 'pi'], [id(2), 'pi']],
+			[[id(1), 'pi'], [id(2), 'pi']],
+			true,
+			false
+		]);
+		// Each keeps the built-in of its store; where only an added entry's launches find that store, the built-in cannot resume it there
+		const entries = async (history: VendorHistory) => (await history.open({ environment: 'local', directories: [repo] }).next()).entries;
+		assert.deepStrictEqual([...await entries(both), ...await entries(alone)].map(each => [each.builtIn, each.unavailable !== undefined]),
+			[['pi', false], ['pi', false], ['pi', true], ['pi', true]]);
+		assert.match((await entries(alone))[0].unavailable!, /"pi"'s launches here keep their conversations in another folder/);
+		// A run of the custom CLI reads its title in its built-in's store, as its own environment finds it
+		assert.deepStrictEqual([both.storeOf('Pi two', repo), await both.title({ cli: 'Pi two', sessionId: id(2) }, repo)], [both.storeOf('pi', repo), 'Task 2']);
+	});
+
+	test('CONFIGURATION-3.4: in a window of several folders, a store a CLI finds from another folder is no answer for a conversation of this one: its launch here, which would resume it, keeps its conversations elsewhere', async () => {
+		// Two folders: pi finds store S1 from A and S2 from B; the added entry Pi work finds S2 from A
+		const a = path.join(temp.dir, 'a'), b = path.join(temp.dir, 'b');
+		const s1 = path.join(temp.dir, 's1'), s2 = path.join(temp.dir, 's2');
+		for (const folder of [a, b]) {
+			fs.mkdirSync(folder, { recursive: true });
+		}
+		const dir = path.join(s2, 'sessions', piSessionFolderName(a));
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, `2026-10-31T00-00-01-000Z_${id(1)}.jsonl`), [
+			{ type: 'session', version: 3, id: id(1), timestamp: '2026-10-31T00:00:01Z', cwd: a },
+			{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Task in A' }] } }
+		].map(line => JSON.stringify(line)).join('\n'));
+		const environment = (directory: string) => directory === a
+			? { pi: { PI_CODING_AGENT_DIR: s1 }, 'Pi work': { PI_CODING_AGENT_DIR: s2 } }
+			: { pi: { PI_CODING_AGENT_DIR: s2 }, 'Pi work': { PI_CODING_AGENT_DIR: s2 } };
+		const history = new VendorHistory({ environment, builtIns: () => ({ 'Pi work': 'pi' }) });
+		const [entry] = (await history.open({ environment: 'local', directories: [a, b] }).next()).entries;
+		// Listed under pi, whose store it is; pi's launch in A finds S1, so pi cannot resume it there - whatever pi finds from B
+		assert.deepStrictEqual([entry.key.sessionId, entry.key.cli, entry.cwd], [id(1), 'pi', a]);
+		assert.match(entry.unavailable ?? '', /"pi"'s launches here keep their conversations in another folder/);
+	});
+
+	test('CONFIGURATION-3.4: of nested folders, the innermost holding a conversation\'s folder decides: a launch there uses its settings, so a store its CLI finds only from the enclosing folder is no answer', async () => {
+		// B holds A: pi finds store S1 from A and S2 from B; the added entry Pi work finds S2 from A
+		const b = path.join(temp.dir, 'repo'), a = path.join(b, 'pkg'), other = path.join(b, 'other');
+		const s1 = path.join(temp.dir, 's1'), s2 = path.join(temp.dir, 's2');
+		for (const folder of [a, other]) {
+			fs.mkdirSync(folder, { recursive: true });
+		}
+		for (const [n, cwd] of [[1, a], [2, other]] as const) {
+			const dir = path.join(s2, 'sessions', piSessionFolderName(cwd));
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, `2026-10-31T00-00-0${n}-000Z_${id(n)}.jsonl`), [
+				{ type: 'session', version: 3, id: id(n), timestamp: `2026-10-31T00:00:0${n}Z`, cwd },
+				{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `Task ${n}` }] } }
+			].map(line => JSON.stringify(line)).join('\n'));
+		}
+		const environment = (directory: string) => directory === a
+			? { pi: { PI_CODING_AGENT_DIR: s1 }, 'Pi work': { PI_CODING_AGENT_DIR: s2 } }
+			: { pi: { PI_CODING_AGENT_DIR: s2 }, 'Pi work': { PI_CODING_AGENT_DIR: s2 } };
+		const history = new VendorHistory({ environment, builtIns: () => ({ 'Pi work': 'pi' }) });
+		// Either order of the window's folders
+		for (const directories of [[a, b], [b, a]]) {
+			const entries = (await history.open({ environment: 'local', directories }).next()).entries;
+			// In A, pi's launch finds S1, whatever it finds from B; in B outside A, pi's launch finds S2
+			assert.deepStrictEqual(entries.map(each => [each.key.sessionId, each.key.cli, each.cwd, each.unavailable !== undefined]).sort(), [
+				[id(1), 'pi', a, true],
+				[id(2), 'pi', other, false]
+			]);
+			assert.match(entries.find(each => each.cwd === a)?.unavailable ?? '', /"pi"'s launches here keep their conversations in another folder/);
+		}
+	});
+
+	test('CONFIGURATION-3.4: a conversation\'s own folder decides by its own settings: where Pi\'s settings there name another store, Pi\'s launch there would not find it, whatever the window\'s folder finds', async () => {
+		// The window's one folder, /repo; Pi keeps its conversations in S1 from there, but /repo/pkg's own settings name S2
+		const repo = path.join(temp.dir, 'repo'), pkg = path.join(repo, 'pkg'), other = path.join(repo, 'other');
+		const agent = path.join(temp.dir, 'agent'), s1 = path.join(agent, 'sessions'), s2 = path.join(temp.dir, 's2');
+		fs.mkdirSync(path.join(pkg, '.pi'), { recursive: true });
+		fs.mkdirSync(other, { recursive: true });
+		fs.writeFileSync(path.join(pkg, '.pi', 'settings.json'), JSON.stringify({ sessionDir: s2 }));
+		for (const [n, cwd] of [[1, pkg], [2, other]] as const) {
+			const dir = path.join(s1, piSessionFolderName(cwd));
+			fs.mkdirSync(dir, { recursive: true });
+			fs.writeFileSync(path.join(dir, `2026-10-31T00-00-0${n}-000Z_${id(n)}.jsonl`), [
+				{ type: 'session', version: 3, id: id(n), timestamp: `2026-10-31T00:00:0${n}Z`, cwd },
+				{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: `Task ${n}` }] } }
+			].map(line => JSON.stringify(line)).join('\n'));
+		}
+		const history = new VendorHistory({ environment: () => ({ pi: { PI_CODING_AGENT_DIR: agent } }) });
+		const entries = (await history.open({ environment: 'local', directories: [repo] }).next()).entries;
+		assert.deepStrictEqual(entries.map(each => [each.key.sessionId, each.cwd, each.unavailable !== undefined]).sort(), [[id(1), pkg, true], [id(2), other, false]]);
+		assert.match(entries.find(each => each.cwd === pkg)?.unavailable ?? '', /"pi"'s launches here keep their conversations in another folder/);
+	});
+
+	test('CONFIGURATION-3.4: one store however its folder is written: a window folder opened through a link, a store set relative to the folder and a conversation recording the real folder can be resumed', async () => {
+		const real = path.join(temp.dir, 'data-repo'), link = path.join(temp.dir, 'repo-link');
+		fs.mkdirSync(real, { recursive: true });
+		fs.symlinkSync(real, link, 'junction');
+		const realCwd = fs.realpathSync.native(real);
+		const dir = path.join(real, '.pi-agent', 'sessions', piSessionFolderName(realCwd));
+		fs.mkdirSync(dir, { recursive: true });
+		fs.writeFileSync(path.join(dir, `2026-10-31T00-00-01-000Z_${id(1)}.jsonl`), [
+			{ type: 'session', version: 3, id: id(1), timestamp: '2026-10-31T00:00:01Z', cwd: realCwd },
+			{ type: 'message', message: { role: 'user', content: [{ type: 'text', text: 'Task' }] } }
+		].map(line => JSON.stringify(line)).join('\n'));
+		const history = new VendorHistory({ environment: () => ({ pi: { PI_CODING_AGENT_DIR: '.pi-agent' } }) });
+		const entries = (await history.open({ environment: 'local', directories: [link] }).next()).entries;
+		assert.deepStrictEqual(entries.map(each => [each.key.sessionId, each.cwd, each.unavailable]), [[id(1), realCwd, undefined]]);
+	});
+
 	test('Pi\'s sessions of folders outside the scope are not read at all: its folders are named for their cwd, as Pi 1.4 names them (LIFECYCLE-3.2)', () => {
 		const sessions = path.join(temp.dir, 'pi', 'sessions');
 		assert.strictEqual(piSessionFolderName(process.platform === 'win32' ? 'C:\\Users\\me\\repo' : '/home/me/repo'), process.platform === 'win32' ? '--C--Users-me-repo--' : '--home-me-repo--');
@@ -364,6 +488,17 @@ suite('CLIs: vendor conversation discovery for Resume (LIFECYCLE-3.2, CLIS-2.4)'
 		assert.deepStrictEqual(found.cwdChoices, [a, z]);
 		const known = (await new VendorHistory({ ...options, knownCwd: () => z }).open(scope).next()).entries[0];
 		assert.strictEqual(known.cwd, z); assert.strictEqual(known.cwdChoices, undefined);
+	});
+
+	test('CONFIGURATION-3.4: of the folders an Antigravity conversation may have been in, one whose launch keeps its conversations elsewhere is not offered; with none left, it cannot be resumed', async () => {
+		const home = path.join(temp.dir, 'agy-roots'), other = path.join(temp.dir, 'agy-other'), a = path.join(repo, 'a'), z = path.join(repo, 'z');
+		fs.mkdirSync(a); fs.mkdirSync(z);
+		const { db } = agy(home, [{ id: id(1), folders: [z, a], at: Date.now() }]); db.close();
+		const scope = { environment: 'local', directories: [repo] };
+		const listed = async (elsewhere: readonly string[]) => (await new VendorHistory({ environment: directory => ({ agy: homeEnv(elsewhere.includes(directory) ? other : home) }) })
+			.open(scope).next()).entries[0];
+		const one = await listed([z]), none = await listed([a, z]);
+		assert.deepStrictEqual([one.cwdChoices, one.cwd, one.unavailable, none.cwdChoices, none.unavailable !== undefined], [[a], a, undefined, undefined, true]);
 	});
 
 	/** Muse Code 1.4.14's index of conversations, as its data folder has it. */

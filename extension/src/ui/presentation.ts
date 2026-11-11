@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { clauseOf, messageOf } from '../base/errors';
 import { FacadeError } from '../core/errors';
 import { PlanError, type FacadeReason, type WorktreeCreationEffects } from '../core/ports';
+import { PROGRAM_ICON, robotOf } from '../base/robot';
 
 /** Native agent presentation shared by pickers, terminal tabs and notifications (ARCHITECTURE-1.3). */
 const LOGOS: { readonly [cli: string]: { readonly name: string; readonly light: string; readonly dark: string } } = {
@@ -22,17 +23,37 @@ export function cliDisplayName(cli: string): string {
 	return Object.hasOwn(LOGOS, cli) ? LOGOS[cli].name : cli;
 }
 
-/** Image logos for native pickers; terminal tabs use cliTerminalIcon (LIFECYCLE-2.2). */
-export function cliIcon(media: vscode.Uri, cli: string): vscode.IconPath {
-	const logo = Object.hasOwn(LOGOS, cli) ? LOGOS[cli] : undefined;
-	return logo ? { light: vscode.Uri.joinPath(media, 'agents', logo.light), dark: vscode.Uri.joinPath(media, 'agents', logo.dark) } : new vscode.ThemeIcon('terminal');
+/**
+ * The icon `icon` as one there is (CONFIGURATION-2.4): itself, a built-in's logo or a robot; anything else - a CLI's name where no icon
+ * is known for it - as a program's.
+ */
+function knownIcon(icon: string): string {
+	return Object.hasOwn(LOGOS, icon) || robotOf(icon) ? icon : PROGRAM_ICON;
 }
 
-/** Contributed glyphs survive native file-icon theme rules that can hide terminal URI icons (LIFECYCLE-2.2). */
-export function cliTerminalIcon(cli: string): vscode.ThemeIcon {
-	return Object.hasOwn(LOGOS, cli)
-		? new vscode.ThemeIcon(`facade-cli-${cli}`, new vscode.ThemeColor('foreground'))
-		: new vscode.ThemeIcon('terminal');
+/**
+ * An entry's icon in native pickers (LIFECYCLE-2.2, CONFIGURATION-2.4): a built-in's logo, in each theme's variant where it has two, or
+ * a robot's image - the same files as its card's. Terminal tabs use cliTerminalIcon.
+ */
+export function cliIcon(media: vscode.Uri, icon: string): vscode.IconPath {
+	const known = knownIcon(icon);
+	const logo = Object.hasOwn(LOGOS, known) ? LOGOS[known] : undefined;
+	if (logo) {
+		return { light: vscode.Uri.joinPath(media, 'agents', logo.light), dark: vscode.Uri.joinPath(media, 'agents', logo.dark) };
+	}
+	const robot = vscode.Uri.joinPath(media, 'agents', `robot-${robotOf(known)}.svg`);
+	return { light: robot, dark: robot };
+}
+
+/**
+ * An entry's icon on its terminal tab (LIFECYCLE-2.2, CONFIGURATION-2.4): a glyph Facade contributes, which survives the native file-icon
+ * theme rules that can hide a tab's image icon - a built-in's logo in the theme's text color, or a robot in its own colors.
+ */
+export function cliTerminalIcon(icon: string): vscode.ThemeIcon {
+	const known = knownIcon(icon);
+	return Object.hasOwn(LOGOS, known)
+		? new vscode.ThemeIcon(`facade-cli-${known}`, new vscode.ThemeColor('foreground'))
+		: new vscode.ThemeIcon(`facade-robot-${robotOf(known)}`);
 }
 
 /** The same launch failure whether it is caught by the picker or reported later by the host (UX-1.2). */
@@ -67,80 +88,119 @@ export function reasonOf(err: unknown): string {
 export function reasonText(said: FacadeReason | undefined, otherwise: string): string {
 	const [a = '', b = '', c = '', d = '', e = ''] = said?.values ?? [];
 	switch (said?.kind) {
-		// {0} is the setting, such as facade.claude; {1} the type of value it holds, such as number
-		case 'path_type': return vscode.l10n.t("{0}.path must be a string; received {1}", a, b);
-		case 'path_blank': return vscode.l10n.t("{0}.path contains only whitespace. Set the program path, or leave it empty to find the CLI on PATH", a);
-		case 'path_nul': return vscode.l10n.t("{0}.path contains a NUL character, which is not permitted in paths", a);
-		// {0} is the setting, such as facade.claude; {1} the type of value it holds, such as string
-		case 'enabled_type': return vscode.l10n.t("{0}.enabled must be true or false; received {1}", a, b);
-		case 'launch_type': return vscode.l10n.t("{0}.launch must be an object with arguments and environment; received {1}", a, b);
-		// {0} is the setting, such as facade.claude; {1} a field of its launch that is no setting
-		case 'launch_field': return vscode.l10n.t("{0}.launch.{1} is not a launch setting; launch accepts only arguments and environment", a, b);
-		// {0} is the setting, such as facade.claude.launch.arguments; {1} the argument's place in it, from 0; {2} the option, such as --settings
-		case 'launch_owned': return vscode.l10n.t("{0}[{1}] is {2}, which is reserved by Facade; remove it", a, b, c);
-		// {0} is the setting, such as facade.claude.launch.arguments; {1} the type of value it holds, such as object
+		// {0} is the settings file, such as ~/.facade/facade.json; {1} a line; {2} a column
+		case 'settings_syntax': return vscode.l10n.t("{0}:{1}:{2}: this is not valid JSON with comments", a, b, c);
+		// {0} is the settings file; {1} a line; {2} a column; {3} the key, quoted
+		case 'settings_duplicate': return vscode.l10n.t("{0}:{1}:{2}: {3} appears twice in the same object", a, b, c, d);
+		// {0} is the settings file; {1} the type of value it holds, such as array
+		case 'settings_root': return vscode.l10n.t("{0} must hold one object, such as {}; it holds {1}", a, b);
+		// {0} is the settings file; {1} a line; {2} a column; {3} the type of value, such as string
+		case 'settings_yolo': return vscode.l10n.t("{0}:{1}:{2}: yolo must be true or false; received {3}", a, b, c, d);
+		case 'settings_clis': return vscode.l10n.t("{0}:{1}:{2}: clis must be an object of CLIs by name; received {3}", a, b, c, d);
+		case 'settings_schema': return vscode.l10n.t("{0}:{1}:{2}: $schema must be a string; received {3}", a, b, c, d);
+		case 'settings_names': return vscode.l10n.t("{0}:{1}:{2}: names must be a list of strings; received {3}", a, b, c, d);
+		// {0} is the settings file; {1} a line; {2} a column; {3} the name's place in the list, counting from 1
+		case 'settings_name_blank': return vscode.l10n.t("{0}:{1}:{2}: the name at position {3} must not be empty or only spaces", a, b, c, d);
+		// {0} is the settings file; {1} a line; {2} a column; {3} the key, quoted
+		case 'settings_key': return vscode.l10n.t("{0}:{1}:{2}: {3} is not a Facade setting; the settings are yolo, names and clis", a, b, c, d);
+		// {0} is the settings file; {1} why, as the system says it
+		case 'settings_read': return vscode.l10n.t("{0} could not be read: {1}", a, b);
+		case 'settings_create': return vscode.l10n.t("{0} could not be created: {1}", a, b);
+		case 'settings_migration_read': return vscode.l10n.t("The editor's Facade settings that {0} would be made from could not be read: {1}", a, b);
+		// {0} is an earlier editor setting, such as facade.custom.aider.launch
+		case 'migration_shape': return vscode.l10n.t("{0} has no place in facade.json; fix it or remove it, or write facade.json yourself", a);
+		// {0} and {1} are earlier editor settings, such as facade.custom.codex and facade.codex; {2} the entry both would be, such as clis.codex
+		case 'migration_collision': return vscode.l10n.t("{0} and {1} would both be {2}; rename or remove one of them, or write facade.json yourself", a, b, c);
+		// {0} is an entry, such as clis["My CLI"]
+		case 'entry_name_empty': return vscode.l10n.t("{0}: a CLI's name needs a visible character", a);
+		case 'entry_name_space': return vscode.l10n.t("{0}: a CLI's name cannot start or end with a space", a);
+		case 'entry_name_control': return vscode.l10n.t("{0}: a CLI's name cannot hold a control character", a);
+		// {0} is an entry, such as clis.Codex; {1} the built-in CLI whose name it is, such as Codex
+		case 'entry_name_builtin': return vscode.l10n.t("{0}: this is {1}'s name; choose another name for this CLI", a, b);
+		// {0} is an entry, such as clis.codex; {1} the type of value it holds, such as string
+		case 'entry_type_object': return vscode.l10n.t("{0} must be an object of type, icon, command, args, env, model, effort and enabled; received {1}", a, b);
+		// {0} is an entry, such as clis.codex; {1} a field of it that is no field; {2} the fields an entry takes
+		case 'entry_field': return vscode.l10n.t("{0}.{1} is not a field of an entry, which takes {2}", a, b, c);
+		// {0} is the field, such as clis.claude.type; {1} the built-in's entry, such as claude; {2} its CLI, such as Claude Code
+		case 'entry_type_builtin': return vscode.l10n.t("{0} cannot change the {1} entry's type: it is {2}'s; set it back to \"{1}\" or remove the line", a, b, c);
+		// {0} is the field, such as clis["My CLI"].type; {1} the types, such as claude, codex, custom
+		case 'entry_type_missing': return vscode.l10n.t("{0} is missing; set it to the CLI it runs: {1}", a, b);
+		// {0} is the field, such as clis["My CLI"].type or clis.codex.icon; {1} the values it takes, such as claude, codex, custom; {2} the
+		// kind of value it holds, such as string or number
+		case 'entry_type_unknown':
+		case 'entry_icon': return vscode.l10n.t("{0} must be one of {1}; received {2}", a, b, c);
+		// {0} is the field, such as clis.codex.command; {1} the type of value it holds, such as number
+		case 'entry_text_type': return vscode.l10n.t("{0} must be a string; received {1}", a, b);
+		// {0} is the field, such as clis.codex.model
+		case 'entry_text_empty': return vscode.l10n.t("{0} is empty; set it, or leave it out", a);
+		case 'entry_text_nul': return vscode.l10n.t("{0} contains a NUL character, which it cannot hold", a);
+		case 'entry_command_missing': return vscode.l10n.t("{0} is missing; set it to the program to run", a);
+		// {0} is the field, such as clis.aider.model
+		case 'entry_choice_program': return vscode.l10n.t("{0} is not taken by a program: give its own options in args", a);
+		// {0} is the field, such as clis.opencode.model; {1} the CLI, such as OpenCode
+		case 'entry_choice_unsupported': return vscode.l10n.t("{0} is not taken by {1}, which sets it in its own configuration", a, b);
+		// {0} is the field, such as clis.codex.enabled; {1} the type of value it holds, such as string
+		case 'entry_enabled_type': return vscode.l10n.t("{0} must be true or false; received {1}", a, b);
+		// {0} is the setting, such as clis.codex.args; {1} the argument's place in it, from 0; {2} the option, such as --sandbox
+		case 'args_reserved': return vscode.l10n.t("{0}[{1}] is {2}, which Facade sets or decides itself; remove it", a, b, c);
+		// {0} is the setting, such as clis.codex.args; {1} the argument's place in it, from 0; {2} the configuration key, such as model
+		case 'args_reserved_key': return vscode.l10n.t("{0}[{1}] sets {2}, which Facade sets itself; remove it", a, b, c);
+		// {0} is the setting, such as clis.codex.args; {1} the argument's place in it, from 0
+		case 'args_positional': return vscode.l10n.t("{0}[{1}] is not an option: Facade gives the CLI its task and folder itself, so args holds only options and their values", a, b);
+		// {0} is the variable's field, such as clis.claude.env.ANTHROPIC_AUTH_TOKEN; {1} the variable it reads
+		// {2} is the reference as written, such as ${env:WORK_API_KEY}: a value of its own, as VS Code fills no placeholder inside braces
+		case 'env_reference_missing': return vscode.l10n.t("{0} reads {2}, but {1} is not in the editor's environment; set it there, or write the value", a, b, `\${env:${b}}`);
+		// {0} is the setting, such as clis.codex.env; {1} and {2} two variable names
+		case 'env_case_duplicate': return vscode.l10n.t("{0} names {1} and {2}, which are one variable on Windows; keep one of them", a, b, c);
+		// {0} is the argument, such as clis.claude.args[2]; {1} the option, such as --settings
+		case 'run_settings_text': return vscode.l10n.t("{0} gives {1} text that is not a JSON object", a, b);
+		case 'run_settings_missing': return vscode.l10n.t("{0} is {1} with no value after it", a, b);
+		// {0} is the argument; {1} the option, such as --settings; {2} the file it names, quoted
+		case 'run_settings_file': return vscode.l10n.t("{0} gives {1} {2}, which cannot be read as a JSON object", a, b, c);
+		// {0} is the field, such as clis.muse.effort; {1} the CLI, such as Muse Code
+		case 'choice_through_cmd': return vscode.l10n.t("{0} cannot be passed to {1} where it runs through cmd.exe; leave it out here", a, b);
+		// {0} is the variable's field, such as clis["Claude · work"].env.MY_FLAG; {1} the variable; {2} the Claude Code settings that set it again
+		case 'claude_env_readded': return vscode.l10n.t("{0} removes {1}, but {2} sets it again for Claude Code; remove it there, or set it in env instead", a, b, c);
+		// {0} is the setting, such as clis.claude.args; {1} the type of value it holds, such as object
 		case 'arguments_type': return vscode.l10n.t("{0} must be an array of strings; received {1}", a, b);
-		// {0} is the setting, such as facade.claude.launch.arguments; {1} the argument's place in it, from 0; {2} the type of value there, such as number
+		// {0} is the setting, such as clis.claude.args; {1} the argument's place in it, from 0; {2} the type of value there, such as number
 		case 'argument_type': return vscode.l10n.t("{0}[{1}] must be a string; received {2}", a, b, c);
 		case 'argument_nul': return vscode.l10n.t("{0}[{1}] contains a NUL character, which is not permitted in arguments", a, b);
-		// {0} is the setting, such as facade.claude.launch.environment; {1} the type of value it holds, such as array, or a variable's name, quoted
+		// {0} is the setting, such as clis.claude.env; {1} the type of value it holds, such as array, or a variable's name, quoted
 		case 'environment_type': return vscode.l10n.t("{0} must be an object of variable names to strings or null; received {1}", a, b);
 		case 'environment_name': return vscode.l10n.t("{0} contains invalid environment variable name {1}", a, b);
-		// {0} is the setting, such as facade.claude.launch.environment; {1} a variable's name; {2} the type of value it is given, such as number
+		// {0} is the setting, such as clis.claude.env; {1} a variable's name; {2} the type of value it is given, such as number
 		case 'environment_value': return vscode.l10n.t("{0}.{1} must be a string or null; received {2}", a, b, c);
 		case 'environment_nul': return vscode.l10n.t("{0}.{1} contains a NUL character, which is not permitted in environment variables", a, b);
-		// {0} is the CLI's name, such as Claude Code; {1} its setting, such as facade.claude
-		case 'cli_disabled': return vscode.l10n.t("{0} is disabled by {1}.enabled", a, b);
-		// {0} is the CLI's command, {1} the folder, {2} the setting
-		case 'not_on_path': return vscode.l10n.t("{0} was not found on PATH in {1}, and {2}.path is not configured", a, b, c);
-		case 'path_not_on_path': return vscode.l10n.t("{0}.path is {1}, which was not found on PATH in {2}", a, b, c);
-		case 'not_runnable': return vscode.l10n.t("{0}.path is {1}, and {2} is not an executable program", a, b, c);
-		// {0} is the program, {1} the argument, {2} the setting
-		case 'cmd_unsafe': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept argument {1}; set {2}.path to the CLI executable or Node entry point", a, b, c);
-		// {0} is the program; {1} the setting, such as facade.claude.launch.arguments; {2} the argument's place in it; {3} the character; {4} the CLI's setting
-		case 'cmd_unsafe_setting': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept {1}[{2}] containing {3}; set {4}.path to the CLI executable or Node entry point", a, b, c, d, e);
-		// {0} is the program, {1} the setting
-		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept its path; set {1}.path to the CLI executable or Node entry point", a, b);
-		// {0} is the program, {1} the folder - a network share's or a WSL distribution's, starting with \\ - {2} the setting
-		case 'cmd_unc_folder': return vscode.l10n.t("{0} runs via cmd.exe, which cannot run in UNC path {1}; set {2}.path to the CLI executable or Node entry point", a, b, c);
+		// {0} is the CLI's name, such as Claude Code; {1} its entry, such as clis.claude
+		case 'cli_disabled': return vscode.l10n.t("{0} is turned off by {1}.enabled", a, b);
+		// {0} is the CLI's command, {1} the folder, {2} its entry, such as clis.claude
+		case 'not_on_path': return vscode.l10n.t("{0} was not found on PATH in {1}, and {2}.command does not name its location", a, b, c);
+		case 'path_not_on_path': return vscode.l10n.t("{0}.command is {1}, which was not found on PATH in {2}", a, b, c);
+		case 'not_runnable': return vscode.l10n.t("{0}.command is {1}, and {2} is not an executable program", a, b, c);
+		// {0} is the program, {1} the argument, {2} the CLI's entry, such as clis.claude
+		case 'cmd_unsafe': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept argument {1}; set {2}.command to the CLI executable or Node entry point", a, b, c);
+		// {0} is the program; {1} the setting, such as clis.claude.args; {2} the argument's place in it; {3} the character; {4} the CLI's entry
+		case 'cmd_unsafe_setting': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept {1}[{2}] containing {3}; set {4}.command to the CLI executable or Node entry point", a, b, c, d, e);
+		// {0} is the program, {1} the CLI's entry, such as clis.claude
+		case 'cmd_unsafe_path': return vscode.l10n.t("{0} runs via cmd.exe, which cannot safely accept its path; set {1}.command to the CLI executable or Node entry point", a, b);
+		// {0} is the program, {1} the folder - a network share's or a WSL distribution's, starting with \\ - {2} the CLI's entry
+		case 'cmd_unc_folder': return vscode.l10n.t("{0} runs via cmd.exe, which cannot run in UNC path {1}; set {2}.command to the CLI executable or Node entry point", a, b, c);
 		// {0} is the installed version of OpenCode, such as 1.19.5; the commands are npm's, to be kept as they are
 		case 'opencode_1x': return vscode.l10n.t("OpenCode {0} is not supported: Facade Code needs OpenCode 2 or later. Replace npm's opencode-ai with @opencode/cli: npm uninstall -g opencode-ai, then npm install -g @opencode/cli", a);
 		// {0} is the script, such as a package's cli.js
 		case 'node_missing': return vscode.l10n.t("{0} is a Node script, and Node is not on PATH to run it", a);
-		case 'yolo_type': return vscode.l10n.t("facade.yolo must be true or false; received {0}", a);
-		// {0} is the setting, facade.custom; {1} the type of value it holds, such as array
-		case 'custom_type': return vscode.l10n.t("{0} must be an object of custom CLIs by ID; received {1}", a, b);
-		// {0} is the setting, facade.custom; {1} the ID, quoted, such as ""
-		case 'custom_key': return vscode.l10n.t("{0}: {1} is not a valid CLI ID; must contain visible characters without control characters", a, b);
-		// {0} is a custom CLI's setting, such as facade.custom.claude; {1} its ID, quoted
-		case 'custom_builtin': return vscode.l10n.t("{0}: {1} matches a built-in CLI ID; choose a different ID for the custom CLI", a, b);
-		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} the type of value it holds, such as string; {2} an example definition
-		case 'custom_entry_type': return vscode.l10n.t("{0} must be an object such as {2}; received {1}", a, b, c);
-		// {0} is a custom CLI's setting, such as facade.custom.my-cli
-		case 'custom_capabilities': return vscode.l10n.t("{0}.capabilities is not a supported setting; remove it", a);
-		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} a field of it that is no setting
-		case 'custom_field': return vscode.l10n.t("{0}.{1} is not a custom CLI setting; a custom CLI accepts only path and launch", a, b);
-		// {0} is a custom CLI's setting, such as facade.custom.my-cli
-		case 'custom_path_missing': return vscode.l10n.t("{0}.path is missing; set it to the program to run", a);
-		case 'custom_path_empty': return vscode.l10n.t("{0}.path is empty or contains only whitespace; set it to the program to run", a);
-		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} the type of value it holds, such as array
-		case 'custom_launch_type': return vscode.l10n.t("{0}.launch must be an object with start, resume, and environment; received {1}", a, b);
-		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} a field of its launch that is no setting
-		case 'custom_launch_field': return vscode.l10n.t("{0}.launch.{1} is not a custom launch setting; a custom launch accepts only start, resume, and environment", a, b);
-		// {0} is a custom CLI's setting, such as facade.custom.my-cli; {1} the placeholder, ${sessionId}
-		case 'custom_resume_missing': return vscode.l10n.t("{0}.launch.resume is required: the arguments that resume an exact conversation, containing {1}", a, b);
-		case 'custom_resume_placeholder': return vscode.l10n.t("{0}.launch.resume must contain {1}, the exact session ID it resumes", a, b);
-		// {0} is the setting, such as facade.custom.my-cli.launch.start; {1} the argument's place in it, from 0; {2} the placeholder, ${sessionId}
-		case 'custom_placeholder': return vscode.l10n.t("{0}[{1}] uses an unsupported placeholder; {2} in resume is the only placeholder a custom CLI's arguments can contain", a, b, c);
-		// {0} is the setting, such as facade.custom.my-cli.launch.start; {1} the argument's place in it, from 0; {2} the placeholder, ${sessionId}
-		case 'custom_start_session': return vscode.l10n.t("{0}[{1}] uses {2}, which only resume can contain: a new conversation has no session ID yet", a, b, c);
 		case 'component_outdated': return vscode.l10n.t("Facade Code requires a newer Window Component. Update \"Facade Code Window Component\" on this computer, then reload the window.");
 		case 'numbers_unavailable': return vscode.l10n.t("This computer's counter could not give the agent a number. Try again.");
 		case 'ownership_lost': return vscode.l10n.t("This workspace is owned by another window. Reload this window to take ownership.");
 		// {0} is the file of Facade Code's installation that an update or uninstall removed, such as its dist/ptyd.js
 		case 'installation_removed': return vscode.l10n.t("The Facade Code installation that runs this window's agents was removed by an update or uninstall ({0} is gone), so no agent can start. Reload the window to start agents with the installed version.", a);
-		// {0} is the CLI's ID, quoted
-		case 'cli_not_configured': return vscode.l10n.t("No CLI {0} is configured.", a);
+		// {0} is the CLI's ID, quoted; {1} the settings file
+		case 'cli_not_configured': return vscode.l10n.t("No CLI {0} is configured; add it to clis in {1}.", a, b);
+		// {0} is the entry, such as clis["Codex · work"]; {1} the CLI the conversation is of, such as Codex
+		case 'resume_type_changed': return vscode.l10n.t("{0} runs another CLI now, but this conversation is {1}'s; it cannot be resumed with it", a, b);
+		// {0} is the entry, such as clis["Codex · work"]; {1} the CLI the pinned agent ran, such as Codex
+		case 'pin_type_changed': return vscode.l10n.t("{0} runs another CLI now, but this agent ran {1}; it cannot be restored with it", a, b);
 		case 'pin_unsupported': return vscode.l10n.t("Its CLI cannot resume this exact conversation, so it cannot be pinned.");
 		case 'location_gone': return vscode.l10n.t("The working location is no longer available.");
 		// {0} is the working location's path
@@ -163,10 +223,16 @@ export function agentCountText(count: number): string {
 	return count === 1 ? vscode.l10n.t("1 agent") : vscode.l10n.t("{0} agents", count);
 }
 
-/** The configuration action's native-button label, without the command's menu ellipsis (UX-1.3). */
-export function configureAgentsLabel(): string {
-	return vscode.l10n.t("Configure Agents");
+/** The command that opens the editor's Settings at Facade Code's section, as its gear and its items in New Agent say it (UX-1.3). */
+export function openSettingsLabel(): string {
+	return vscode.l10n.t("Open Settings");
 }
+
+/** The link that opens facade.json, as Facade Code's Settings section says it, and so the button of an error it holds (UX-1.3). */
+export function editSettingsFileLabel(): string {
+	return vscode.l10n.t("Edit in facade.json");
+}
+
 
 /**
  * History-list age in the window's language (UX-2.4). Unit thresholds, rounding and short phrases follow VS Code's

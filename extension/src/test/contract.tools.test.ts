@@ -124,12 +124,15 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			assert.deepStrictEqual(result.effects, { outcome: 'none' });
 		});
 
-		test('a facade.yolo neither true nor false leaves the snapshot whole, the setting\'s problem said among the window\'s (UX-4.1)', async () => {
+		test('a settings file that stops every start leaves the snapshot whole, said once among the window\'s problems by the file - by its locations\' CLIs where they say it (UX-4.1, CONFIGURATION-4.1)', async () => {
 			const { lead } = team(s);
-			s.deps.yolo = () => { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"'); };
+			const problem = '~/.facade/facade.json:1:10: yolo must be true or false; received string';
+			s.deps.yolo = () => { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', problem); };
 			const result = resultOf(await s.call(lead, 'list_agents'));
-			assert.deepStrictEqual([result.status, result.data.complete, result.data.windows[0].problems[0], result.data.agents.length > 0],
-				['success', true, { setting: 'facade.yolo', problem: 'facade.yolo must be true or false; received "yes"' }, true]);
+			assert.deepStrictEqual([result.status, result.data.complete, result.data.windows[0].problems, result.data.agents.length > 0],
+				['success', true, [{ setting: '~/.facade/facade.json', problem }], true]);
+			s.deps.clis.list = async () => ({ clis: [], problems: [{ setting: '~/.facade/facade.json', problem }] });
+			assert.deepStrictEqual(resultOf(await s.call(lead, 'list_agents')).data.windows[0].problems, [{ setting: '~/.facade/facade.json', problem }]);
 		});
 
 		test('a folderless window remains visible, with zero launch locations', async () => {
@@ -256,23 +259,36 @@ suite('Contract: current tools of one window (MCP-2 to 5)', () => {
 			// Turned off, it is listed for no new start, as the catalog lists it
 			const list = s.deps.clis.list;
 			s.deps.clis.list = async location => { const listed = await list(location); return { ...listed, clis: listed.clis.filter(each => each.id !== 'codex') }; };
-			s.deps.clis.turnedOff = cli => cli === 'codex' ? 'Codex is turned off by facade.codex.enabled' : undefined;
+			s.deps.clis.turnedOff = cli => cli === 'codex' ? 'Codex is turned off by clis.codex.enabled' : undefined;
 			const off = resultOf(await s.call(worker, 'start_agent', { ...START, cli: 'codex' }));
 			const unknown = resultOf(await s.call(worker, 'start_agent', { ...START, cli: 'nope' }));
-			assert.deepStrictEqual([off.status, off.error?.code, off.error?.reason, off.error?.message, off.effects, s.agents.launched], ['failure', 'UNAVAILABLE', 'unavailable', 'Codex is turned off by facade.codex.enabled.', { outcome: 'none' }, []]);
+			assert.deepStrictEqual([off.status, off.error?.code, off.error?.reason, off.error?.message, off.effects, s.agents.launched], ['failure', 'UNAVAILABLE', 'unavailable', 'Codex is turned off by clis.codex.enabled.', { outcome: 'none' }, []]);
 			assert.deepStrictEqual([unknown.error?.code, unknown.error?.reason], ['NOT_FOUND', 'not_found']);
 		});
 
-		test('a facade.yolo neither true nor false refuses a start before any effect - configuration_invalid, naming the setting - taking no number (UX-4.1, RULES-4.3)', async () => {
+		test('a settings file that stops every start refuses a start before any effect - configuration_invalid, saying where - taking no number (UX-4.1, RULES-4.3, CONFIGURATION-4.1)', async () => {
 			const { worker } = team(s);
-			s.deps.yolo = () => { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"'); };
+			s.deps.yolo = () => { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', '~/.facade/facade.json:1:10: yolo must be true or false; received string'); };
 			let reserved = 0;
 			const reserve = s.messages.reserveResult.bind(s.messages);
 			s.messages.reserveResult = () => { reserved++; return reserve(); };
 			const refused = resultOf(await s.call(worker, 'start_agent', { ...START, prompt: 'Review it' }));
 			assert.deepStrictEqual([refused.status, refused.error?.code, refused.error?.reason, refused.error?.message, refused.effects, refused.recovery?.action],
-				['failure', 'UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"', { outcome: 'none' }, 'check_capability']);
+				['failure', 'UNAVAILABLE', 'configuration_invalid', '~/.facade/facade.json:1:10: yolo must be true or false; received string', { outcome: 'none' }, 'check_capability']);
 			assert.deepStrictEqual([s.agents.launched, s.messages.allocated, reserved], [[], [], 0]);
+		});
+
+		test('a settings file wrong as a whole - no CLI listed, its problems said - refuses a start with them, never as a CLI not configured (CONFIGURATION-4.1, 6.2)', async () => {
+			const { worker } = team(s);
+			const problems = [
+				{ setting: '~/.facade/facade.json', problem: '~/.facade/facade.json:3:4: "clis" appears twice in the same object', said: { kind: 'settings_duplicate', values: ['~/.facade/facade.json', '3', '4', '"clis"'] } },
+				{ setting: '~/.facade/facade.json', problem: 'facade.custom.codex and facade.codex would both be clis.codex', said: { kind: 'migration_collision', values: ['facade.custom.codex', 'facade.codex', 'clis.codex'] } }
+			];
+			s.deps.clis.list = async () => ({ clis: [], problems });
+			const refused = resultOf(await s.call(worker, 'start_agent', START));
+			assert.deepStrictEqual([refused.status, refused.error?.code, refused.error?.reason, refused.error?.message, refused.effects, s.agents.launched], [
+				'failure', 'UNAVAILABLE', 'configuration_invalid', `${problems[0].problem}; ${problems[1].problem}`, { outcome: 'none' }, []
+			]);
 		});
 
 		test('a start or send this window can take no number for is refused before any effect, with the reason (RULES-2.2)', async () => {

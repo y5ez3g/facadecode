@@ -22,7 +22,7 @@ const WORDS: CardWords = {
 	activityUnavailable: 'Status unavailable · check terminal', activityUnknown: why => `Status ${why} · check terminal`, needsAttention: 'Attention needed', toolsConnecting: 'Collaboration not connected yet', needsPermission: 'Permission needed', needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed',
 	exitedWithCode: code => `Process exited · code ${code}`, endedBySignal: signal => `Process terminated · ${signal}`,
 	toolsUnavailable: problem => `Collaboration off · ${problem}`, saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
-	exitUnknown: 'Process lost · reason unknown', startFailed: reason => `Start failed · ${reason}`, worktreeFailed: reason => `Worktree failed · ${reason}`, locale: 'en'
+	exitUnknown: 'Process lost · reason unknown', startFailed: reason => `Start failed · ${reason}`, worktreeFailed: reason => `Worktree failed · ${reason}`
 };
 
 const SHOP: WorkspaceFolderInfo = { index: 0, name: 'shop', uri: 'file:///shop', path: '/shop' };
@@ -139,6 +139,26 @@ suite('The panel model: one coherent state (PANEL-1, 2, 3.1)', () => {
 		await tick();
 		const noFolder = model.state();
 		assert.deepStrictEqual([loading.loading, loading.empty, noAgents.loading, noAgents.empty, noFolder.empty], [true, undefined, false, 'noAgents', 'noFolder']);
+	});
+
+	test('CONFIGURATION-2.4: a card shows the icon its CLI\'s entry names; refreshed - the settings file saved - it shows the icon the file names now, with nothing else changed', async () => {
+		let icon = 'facade-blue';
+		const model = new PanelModel({ agents, locations, prefs: new PanelPrefs(storage), words: WORDS, remote: false, ready: Promise.resolve(), timers: clock, icons: () => () => icon });
+		model.onDidChange(state => states.push(state));
+		models.push(model);
+		agents.add(run(1));
+		await tick();
+		const before = model.state().cards[0].avatar;
+		icon = 'facade-red';
+		await tick();
+		const unchanged = model.state().cards[0].avatar;
+		model.refresh();
+		await tick();
+		assert.deepStrictEqual([before, unchanged, model.state().cards[0].avatar], [
+			{ file: 'robot-blue-face.svg', eyes: 'robot-eyes.svg' },
+			{ file: 'robot-blue-face.svg', eyes: 'robot-eyes.svg' },
+			{ file: 'robot-red-face.svg', eyes: 'robot-eyes.svg' }
+		]);
 	});
 
 	test('U02: whatever changes in one moment goes out as one state, each a new revision', async () => {

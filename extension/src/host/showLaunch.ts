@@ -7,6 +7,7 @@
 // configuration errors - computed without running any CLI or writing any file, secrets redacted, in the person's language.
 
 import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import type { ApprovalFact, SandboxFact } from '../clis/adapter';
 import type { CatalogEntry } from '../clis/catalog';
@@ -23,7 +24,8 @@ import { chooseLaunchLocation } from '../ui/pickers/launchLocation';
 import { environmentLabel } from '../ui/pickers/location';
 import { reasonText } from '../ui/presentation';
 import type { HostClis } from './clis';
-import { readYolo, YOLO_SETTING } from './settings';
+import type { FacadeSettings } from './facadeSettings';
+import { YOLO_SETTING } from './settings';
 import { terminalEnvSetting } from './terminals';
 
 /** Where the document lives: read-only, as a content provider's documents are. */
@@ -62,6 +64,12 @@ function approvalsText(approvals: ApprovalFact, launch: LaunchDescription): stri
 	}
 }
 
+/** A watch of the settings file `file`, which calls `changed` as it is saved, made or removed (CONFIGURATION-1.1). */
+export function watchSettingsFile(file: string, changed: () => void): vscode.Disposable[] {
+	const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(vscode.Uri.file(path.dirname(file)), path.basename(file)));
+	return [watcher, watcher.onDidChange(changed), watcher.onDidCreate(changed), watcher.onDidDelete(changed)];
+}
+
 /** Where an environment layer comes from, as the document names it (CLIS-1.2). */
 function sourceText(source: EnvironmentSource, launch: LaunchDescription): string {
 	switch (source) {
@@ -69,7 +77,7 @@ function sourceText(source: EnvironmentSource, launch: LaunchDescription): strin
 		case 'terminal': return terminalEnvSetting();
 		// {0} is the profile's name, quoted
 		case 'profile': return vscode.l10n.t("the env of the default terminal profile {0}", JSON.stringify(launch.environment.profile ?? ''));
-		case 'launch': return `${launch.setting}.launch.environment`;
+		case 'launch': return `${launch.setting}.env`;
 		// {0} is the CLI's name
 		case 'adapter': return vscode.l10n.t("the {0} integration", launch.displayName);
 		case 'run': return vscode.l10n.t("all agents");
@@ -102,11 +110,11 @@ function trustText(trust: LaunchTrust): string {
 }
 
 /** One CLI's section of the document. */
-function launchSection(launch: LaunchDescription, yoloProblem: string | undefined): string[] {
+function launchSection(launch: LaunchDescription): string[] {
 	const lines = [`${launch.displayName} (${launch.cli}, ${launch.setting})`];
 	const add = (text: string) => lines.push(`  ${text}`);
 	if (!launch.enabled) {
-		// {0} is the CLI's setting, such as facade.claude
+		// {0} is the CLI's entry, such as clis.claude
 		add(vscode.l10n.t("Status: off; {0}.enabled is false, so New Agent does not offer it", launch.setting));
 	} else if (launch.problems.length) {
 		add(vscode.l10n.t("Status: cannot start until configuration errors are fixed"));
@@ -124,8 +132,8 @@ function launchSection(launch: LaunchDescription, yoloProblem: string | undefine
 	}
 	if ('file' in launch.program) {
 		add(launch.program.configured
-			// {0} is the program; {1} its setting; {2} the path configured there
-			? vscode.l10n.t("Executable: {0} (from {1}.path {2})", launch.program.file, launch.setting, JSON.stringify(launch.program.configured))
+			// {0} is the program; {1} its entry, such as clis.codex; {2} the command configured there
+			? vscode.l10n.t("Executable: {0} (from {1}.command {2})", launch.program.file, launch.setting, JSON.stringify(launch.program.configured))
 			: vscode.l10n.t("Executable: {0} (found on PATH)", launch.program.file));
 		if (launch.program.script !== undefined) {
 			add(vscode.l10n.t("Node script: {0}", launch.program.script));
@@ -143,44 +151,50 @@ function launchSection(launch: LaunchDescription, yoloProblem: string | undefine
 	add(vscode.l10n.t("Environment layers, lowest precedence first: {0}", launch.environment.sources.map(source => sourceText(source, launch)).join(' → ')));
 	for (const variable of launch.environment.variables) {
 		const from = sourceText(variable.source, launch);
-		// {0} is a variable's name; {1} the layer that removes it
-		add(`  ${variable.value === null ? vscode.l10n.t("{0} removed ({1})", variable.name, from) : `${variable.name}=${variable.value} (${from})`}`);
+		// The person's own variables by name alone: a value may be a secret whatever its name (CONFIGURATION-4.2); Facade's own with theirs
+		const own = variable.source === 'adapter' || variable.source === 'run' || variable.source === 'facade';
+		// {0} is a variable's name; {1} the layer that removes it, or sets it
+		add(`  ${variable.value === null ? vscode.l10n.t("{0} removed ({1})", variable.name, from) : own ? `${variable.name}=${variable.value} (${from})` : vscode.l10n.t("{0} set ({1})", variable.name, from)}`);
 	}
-	if (yoloProblem !== undefined) {
-		add(vscode.l10n.t("Arguments: not shown until {0} is fixed", YOLO_SETTING));
-	} else if (launch.args) {
+	if (launch.args) {
 		add(vscode.l10n.t("Arguments, in order:"));
 		launch.args.forEach(arg => add(`  ${shownArg(arg)}`));
 		if (!launch.args.length) {
 			add(`  ${vscode.l10n.t("(none)")}`);
 		}
+		if (launch.runSettings) {
+			// {0} is the file of the run that holds them
+			add(vscode.l10n.t("Run settings, in {0}:", launch.runSettings.file));
+			JSON.stringify(launch.runSettings.settings, undefined, 2).split('\n').forEach(line => add(`  ${line}`));
+		}
 	} else {
 		add(vscode.l10n.t("Arguments: none; CLI cannot start with current configuration"));
 	}
-	if (yoloProblem === undefined) {
-		add(launch.yolo === undefined
-			? vscode.l10n.t("YOLO: not applied; a custom CLI starts exactly as configured")
-			: launch.yolo ? vscode.l10n.t("YOLO: on") : vscode.l10n.t("YOLO: off"));
-		add(sandboxText(launch.sandbox, launch));
-		add(approvalsText(launch.approvals, launch));
-	}
+	add(launch.yolo === undefined
+		? vscode.l10n.t("YOLO: not applied; a custom CLI starts exactly as configured")
+		: launch.yolo ? vscode.l10n.t("YOLO: on") : vscode.l10n.t("YOLO: off"));
+	add(sandboxText(launch.sandbox, launch));
+	add(approvalsText(launch.approvals, launch));
 	if (launch.trust) {
 		add(trustText(launch.trust));
 	}
 	return lines;
 }
 
-/** What the document is computed from: its location as the window names it, `facade.yolo` as read, and what HostClis describes. */
+/** What the document is computed from: its location as the window names it, and what HostClis describes from one reading of the file. */
 export interface LaunchDocumentInput {
 	/** The location shown; none in a window without one. */
 	readonly location?: { readonly label: string; readonly path: string; readonly environment?: string };
 	/** A location shown before that this window no longer has, by the name it had. */
 	readonly gone?: string;
-	readonly yolo: { readonly value: boolean; readonly problem?: undefined } | { readonly value?: undefined; readonly problem: string; readonly received: string };
+	/** `yolo` as the settings file sets it; not shown where the file has errors. */
+	readonly yolo: boolean;
 	readonly launches: readonly LaunchDescription[];
 	readonly entries: readonly Pick<CatalogEntry, 'adapter' | 'enabled' | 'problems'>[];
-	/** What is wrong with `facade.custom` as a whole, which then defines no custom CLI (CLIS-3.4). */
+	/** What is wrong with the settings file as a whole, which stops every start and leaves no CLI to show (CONFIGURATION-4.1). */
 	readonly problems: readonly CliProblem[];
+	/** The settings file, as the person reads its path. */
+	readonly file: string;
 	readonly now: Date;
 }
 
@@ -191,7 +205,6 @@ export function launchDocument(input: LaunchDocumentInput): string {
 		// {0} is the working location's name
 		return `${vscode.l10n.t("Working location {0} is no longer available. Run Show Agent Launch again to choose another.", input.gone)}\n`;
 	}
-	const yoloProblem = yolo.problem !== undefined ? reasonText({ kind: 'yolo_type', values: [yolo.received] }, yolo.problem) : undefined;
 	const lines: string[] = [];
 	if (!location) {
 		lines.push(vscode.l10n.t("No folder is open. Open a folder to view agent launch details."));
@@ -206,20 +219,19 @@ export function launchDocument(input: LaunchDocumentInput): string {
 	}
 	// {0} is the date and time, such as 2026-10-30 21:15:00
 	lines.push(vscode.l10n.t("Computed at {0} UTC without starting any CLI. This shows the configuration a new agent would use now, not an observation of a running process. Secret values are <redacted>.", input.now.toISOString().replace('T', ' ').slice(0, 19)));
-	lines.push(yoloProblem !== undefined
-		// {0} is what is wrong with the setting
-		? vscode.l10n.t("YOLO: {0}. No agent can start until resolved.", yoloProblem)
-		// {0} is the setting, facade.yolo
-		: yolo.value
-			? vscode.l10n.t("YOLO: on, from {0}; applies to newly started agents", YOLO_SETTING)
-			: vscode.l10n.t("YOLO: off, from {0}; applies to newly started agents", YOLO_SETTING));
 	if (input.problems.length) {
-		lines.push(vscode.l10n.t("Configuration errors:"));
+		// {0} is the settings file
+		lines.push(vscode.l10n.t("{0} has errors; no agent can start until they are fixed:", input.file));
 		input.problems.forEach(problem => lines.push(`  - ${reasonText(problem.said, redactedText(problem.text))}`));
+	} else {
+		lines.push(yolo
+			// {0} is the setting, yolo; {1} the settings file
+			? vscode.l10n.t("YOLO: on, from {0} in {1}; applies to newly started agents", YOLO_SETTING, input.file)
+			: vscode.l10n.t("YOLO: off, from {0} in {1}; applies to newly started agents", YOLO_SETTING, input.file));
 	}
 	if (location) {
 		for (const launch of input.launches) {
-			lines.push('', ...launchSection(launch, yoloProblem));
+			lines.push('', ...launchSection(launch));
 		}
 	} else {
 		for (const entry of input.entries) {
@@ -269,17 +281,16 @@ export async function chosen(locations: Pick<LocationPort, 'snapshot' | 'resolve
 }
 
 /**
- * Registers Show Agent Launch (CLIS-4.1): the command, and its read-only document, read again as Facade's settings or the terminal
- * environment settings change while it is open. `remote` is the window's remote authority, as its environment is named.
+ * Registers Show Agent Launch (CLIS-4.1): the command, and its read-only document, read again as Facade's settings file or the
+ * terminal environment settings change while it is open. `remote` is the window's remote authority, as its environment is named.
  */
-export function registerShowLaunch(clis: HostClis, locations: LocationPort, log: LogPort, remote?: string): vscode.Disposable {
+export function registerShowLaunch(clis: HostClis, locations: LocationPort, log: LogPort, settings: Pick<FacadeSettings, 'file'>, remote?: string): vscode.Disposable {
 	const changed = new vscode.EventEmitter<vscode.Uri>();
 	/** The location shown, as it was named: a later document says so where it is gone. */
 	let shown: { readonly id: string; readonly label: string } | undefined;
 	const document = (): string => {
 		const location = shown && locations.resolve(shown.id);
-		const yolo = readYolo();
-		const described = clis.describeLaunch(location, yolo.value ?? true);
+		const described = clis.describeLaunch(location);
 		return launchDocument({
 			...shown && !location ? { gone: shown.label } : {},
 			...location ? {
@@ -289,10 +300,11 @@ export function registerShowLaunch(clis: HostClis, locations: LocationPort, log:
 					...location.environment !== 'local' ? { environment: environmentLabel(location.environment, remote) } : {}
 				}
 			} : {},
-			yolo,
+			yolo: described.yolo,
 			launches: described.launches,
 			entries: described.entries,
 			problems: described.problems,
+			file: described.file,
 			now: new Date()
 		});
 	};
@@ -300,10 +312,12 @@ export function registerShowLaunch(clis: HostClis, locations: LocationPort, log:
 		changed,
 		vscode.workspace.registerTextDocumentContentProvider(DOCUMENT.scheme, { onDidChange: changed.event, provideTextDocumentContent: document }),
 		vscode.workspace.onDidChangeConfiguration(event => {
-			if (event.affectsConfiguration('facade') || event.affectsConfiguration('terminal.integrated')) {
+			if (event.affectsConfiguration('terminal.integrated')) {
 				changed.fire(DOCUMENT);
 			}
 		}),
+		// The settings file saved, made or removed: the document read again (CONFIGURATION-1.1)
+		...watchSettingsFile(settings.file, () => changed.fire(DOCUMENT)),
 		vscode.commands.registerCommand(COMMANDS.showAgentLaunch, async (argument?: unknown) => {
 			const location = await chosen(locations, argument, log);
 			if (location === null) {

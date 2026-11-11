@@ -5,6 +5,7 @@
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ROBOT_ICONS, ROBOTS } from '../base/robot';
 import { BUILT_IN_ADAPTERS } from '../clis/catalog';
 import { activityOf } from '../clis/activity';
 import { parseStatus } from '../ptyd/status';
@@ -42,8 +43,7 @@ const WORDS: CardWords = {
 	saidByAgent: (sender: string, line: string) => `Last message from agent ${sender}: ${line}`, saidByPerson: (line: string) => `Your last input: ${line}`, saidByFacade: (line: string) => `Facade result: ${line}`,
 	exitUnknown: 'Getrennt: Exit-Ursache unbekannt',
 	startFailed: reason => `Start failed · ${reason}`,
-	worktreeFailed: reason => `Worktree failed · ${reason}`,
-	locale: 'en'
+	worktreeFailed: reason => `Worktree failed · ${reason}`
 };
 
 function run(more: Partial<RunFacts> = {}): RunFacts {
@@ -474,41 +474,52 @@ suite('Cards: dot, second line, details and label (RULES-3.2, PANEL-1.3-1.5)', (
 		assert.deepStrictEqual([linesOf(prompt), prompt.line, prompt.details.description.title], [['Agent: #a1', 'Started by: Maker #a7'], '📨 Initial task', 'Title: No title yet']);
 	});
 
-	test('avatars: each built-in\'s maker avatar, a file of media/agents; a custom CLI\'s initial on the colour its name picks (PANEL-1.3, UX-2.1)', () => {
+	test('avatars: each built-in\'s maker avatar and each robot, files of media/agents; a name with no icon known shows a program\'s (PANEL-1.3, CONFIGURATION-2.4)', () => {
 		const builtIns = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'];
-		assert.deepStrictEqual(builtIns.map(cli => avatarOf(cli, 'Any', 'en')), [
+		assert.deepStrictEqual(builtIns.map(icon => avatarOf(icon)), [
 			{ file: 'avatar-claude.png' }, { file: 'avatar-codex.png' }, { file: 'avatar-antigravity.png' }, { file: 'avatar-muse.png' }, { file: 'avatar-opencode.png' }, { file: 'avatar-pi.png' }
 		]);
 		assert.deepStrictEqual(BUILT_IN_ADAPTERS.map(adapter => adapter.id), builtIns);
+		// A robot: its face, and its eyes over it, which look toward the pointer
+		assert.deepStrictEqual(ROBOT_ICONS.map(icon => avatarOf(icon)), ROBOTS.map(robot => ({ file: `robot-${robot}-face.svg`, eyes: 'robot-eyes.svg' })));
 		const media = path.join(__dirname, '..', '..', '..', 'media');
-		assert.deepStrictEqual(builtIns.filter(cli => !fs.existsSync(path.join(media, 'agents', (avatarOf(cli, cli, 'en') as { file: string }).file))), []);
-		// The first grapheme - a whole emoji or accented letter - uppercased in the person's language; the colour the same for the same
-		// name however it is cased or spaced, and one of the three
-		const custom = (name: string, locale = 'en') => avatarOf(name, name, locale) as { initial: string; color: string };
-		assert.deepStrictEqual([custom('my-cli').initial, custom('île').initial, custom('👩‍💻 bot').initial, custom('istanbul', 'tr').initial, custom('istanbul').initial], ['M', 'Î', '👩‍💻', 'İ', 'I']);
-		assert.deepStrictEqual([custom(' My-CLI ').color === custom('my-cli').color, ['blue', 'orange', 'purple'].includes(custom('my-cli').color)], [true, true]);
-		assert.deepStrictEqual(new Set(['a', 'b', 'c', 'd', 'e', 'f'].map(name => custom(name).color)).size, 3);
-		// A name with nothing to show has no avatar: the card leaves it out
-		assert.deepStrictEqual([avatarOf('', '', 'en'), avatarOf(' ', ' ', 'en')], [undefined, undefined]);
-		// Image logos for pickers, and registered native glyphs for terminal tabs in every theme
+		assert.deepStrictEqual([...builtIns, ...ROBOT_ICONS].flatMap(icon => { const { file, eyes } = avatarOf(icon); return [file, ...eyes ? [eyes] : []]; })
+			.filter(file => !fs.existsSync(path.join(media, 'agents', file))), []);
+		// A name where no icon is known: a built-in's own, else a program's, the whitest robot
+		assert.deepStrictEqual([avatarOf('codex'), avatarOf('my-cli')], [{ file: 'avatar-codex.png' }, { file: 'robot-pearl-face.svg', eyes: 'robot-eyes.svg' }]);
+		// Pickers: the same images, a built-in's in each theme's variant
 		const vscode = {
 			ThemeIcon: class { constructor(readonly id: string) { } },
 			ThemeColor: class { constructor(readonly id: string) { } },
-			Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: path.join(base.fsPath, ...parts) }) }
+			Uri: { joinPath: (base: { fsPath: string }, ...parts: string[]) => ({ fsPath: path.join(base.fsPath, ...parts) }) },
+			env: { language: 'en' }
 		};
 		const { cliIcon, cliTerminalIcon } = withModules({ vscode })<typeof PresentationModule>(require.resolve('../ui/presentation'));
-		const logos = builtIns.map(cli => cliIcon({ fsPath: media } as never, cli) as unknown as { readonly light: { readonly fsPath: string }; readonly dark: { readonly fsPath: string } });
-		assert.deepStrictEqual(logos.flatMap(logo => [logo.light?.fsPath, logo.dark?.fsPath]).filter(file => !file || !fs.existsSync(file)), []);
-		assert.deepStrictEqual((cliIcon({ fsPath: media } as never, 'other') as unknown as { readonly id: string }).id, 'terminal');
+		type Images = { readonly light: { readonly fsPath: string }; readonly dark: { readonly fsPath: string } };
+		const images = [...builtIns, ...ROBOT_ICONS].map(icon => cliIcon({ fsPath: media } as never, icon) as unknown as Images);
+		assert.deepStrictEqual(images.flatMap(image => [image.light?.fsPath, image.dark?.fsPath]).filter(file => !file || !fs.existsSync(file)), []);
+		assert.deepStrictEqual((cliIcon({ fsPath: media } as never, 'facade-sky') as unknown as Images).dark.fsPath, path.join(media, 'agents', 'robot-sky.svg'));
+		assert.deepStrictEqual(cliIcon({ fsPath: media } as never, 'qwen codex'), cliIcon({ fsPath: media } as never, 'facade-pearl'));
+		// Tabs: a registered glyph for each - a built-in's logo, or a robot at its code point in Facade's robot font, which
+		// scripts/robot-icons.py draws in ROBOTS' order - and no letter font left
 		const manifest = JSON.parse(fs.readFileSync(path.join(media, '..', 'package.json'), 'utf8'));
 		for (const cli of builtIns) {
 			const icon = cliTerminalIcon(cli);
 			assert.strictEqual(icon.id, `facade-cli-${cli}`);
 			assert.ok(manifest.contributes.icons[icon.id], `${cli}'s terminal icon is registered`);
 		}
-		assert.strictEqual(cliTerminalIcon('other').id, 'terminal');
-		const cardFor = (more: Partial<RunFacts>) => cardOf(run(more), { place, selected: false, menu, words: WORDS });
-		assert.deepStrictEqual([cardFor({}).avatar, cardFor({ cli: 'my-cli', displayName: 'my-cli' }).avatar, 'avatar' in cardFor({ cli: 'my-cli', displayName: ' ' })],
-			[{ file: 'avatar-claude.png' }, avatarOf('my-cli', 'my-cli', 'en'), false]);
+		const robots = ROBOTS.map((robot, index) => [`facade-robot-${robot}`,
+			{ description: '%icon.robot%', default: { fontPath: './media/robots.woff', fontCharacter: `\\${(0xE200 + index).toString(16).toUpperCase()}` } }]);
+		assert.deepStrictEqual(Object.entries(manifest.contributes.icons).filter(([id]) => id.startsWith('facade-robot-')), robots);
+		assert.deepStrictEqual(Object.keys(manifest.contributes.icons).filter(id => id.startsWith('facade-letter-')), []);
+		assert.deepStrictEqual(ROBOT_ICONS.map(icon => cliTerminalIcon(icon).id), ROBOTS.map(robot => `facade-robot-${robot}`));
+		assert.strictEqual(cliTerminalIcon('qwen codex').id, 'facade-robot-pearl');
+		const script = fs.readFileSync(path.join(media, '..', 'scripts', 'robot-icons.py'), 'utf8');
+		assert.deepStrictEqual([...script.matchAll(/\("(\w+)", "#[0-9A-F]{6}", "#[0-9A-F]{6}"\)/g)].map(match => match[1]), ROBOTS);
+		assert.ok(fs.statSync(path.join(media, 'robots.woff')).isFile());
+		// A card: its entry's icon where the panel is told it, else its name's default
+		const cardFor = (more: Partial<RunFacts>, icon?: string) => cardOf(run(more), { place, selected: false, menu, words: WORDS, ...icon ? { icon } : {} });
+		assert.deepStrictEqual([cardFor({}).avatar, cardFor({ cli: 'my-cli', displayName: 'my-cli' }).avatar, cardFor({ cli: 'my-cli', displayName: 'my-cli' }, 'facade-pearl').avatar, cardFor({}, 'facade-red').avatar],
+			[{ file: 'avatar-claude.png' }, ...['pearl', 'pearl', 'red'].map(robot => ({ file: `robot-${robot}-face.svg`, eyes: 'robot-eyes.svg' }))]);
 	});
 });

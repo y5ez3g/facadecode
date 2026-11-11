@@ -25,6 +25,7 @@ class FakePick {
 	readonly onDidAccept = new TestEmitter<void>().event;
 	readonly onDidChangeValue = new TestEmitter<string>().event;
 	readonly onDidChangeActive = new TestEmitter<readonly unknown[]>().event;
+	readonly onDidTriggerItemButton = new TestEmitter<unknown>().event;
 	show(): void { this.shown = true; }
 	hide(): void {
 		if (this.shown) {
@@ -50,6 +51,9 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	let did: string[];
 	let pinned: string[];
 	let activate: TestEmitter<string | undefined>;
+	/** The settings file saved, and how often the cards read their icons from it. */
+	let settingsSaved: TestEmitter<void>;
+	let iconReads: number;
 	let disposables: { dispose(): void }[];
 	/** What the locations' next read is; Quick Picks made; how many times the window's histories were opened. */
 	let refreshing: Promise<void>;
@@ -61,6 +65,8 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 	/** The panel's view provider, as the editor is given it, and what its page was posted. */
 	let provider: { resolveWebviewView(view: unknown): void } | undefined;
 	let posted: { readonly type: string;[key: string]: unknown }[];
+	/** What is wrong with the settings file as a whole, as the CLIs read it. */
+	let fileProblems: { readonly setting: string; readonly problem: string }[];
 	const settle = () => new Promise(resolve => setImmediate(resolve));
 	const run = (id: string, arg?: unknown) => handlers.get(id)!(arg);
 
@@ -68,6 +74,7 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		handlers = new Map(); executed = []; clipboard = []; errors = []; closed = []; did = []; pinned = [];
 		refreshing = Promise.resolve(); pickers = []; opened = 0; unpinned = []; order = []; provider = undefined; posted = [];
 		cleanup = 'terminated';
+		fileProblems = [];
 		activate = new TestEmitter();
 		const none = { dispose: () => undefined };
 		const api = {
@@ -87,6 +94,8 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		};
 		const { registerUi } = withModules({ vscode: api })<typeof import('../ui/commands/index')>(require.resolve('../ui/commands/index'));
 		const changes = new TestEmitter<never>();
+		settingsSaved = new TestEmitter<void>();
+		iconReads = 0;
 		const runs = new Map([[RUN, FACTS]]);
 		disposables = registerUi({
 			agents: {
@@ -101,19 +110,31 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 				snapshot: () => ({ locations: [LOCATION], folders: LOCATION.folders, pending: false }), resolve: id => id === LOCATION.id ? LOCATION : undefined,
 				refresh: () => refreshing, onDidChange: changes.event, onDidRemove: changes.event, removalOf: () => undefined
 			},
-			clis: { list: async () => ({ clis: [], problems: [] }) },
+			clis: { list: async () => ({ clis: [], problems: [] }), problems: () => fileProblems },
 			history: { last: () => ({}), remember: () => undefined },
 			execution: { reveal: async id => { did.push(`reveal ${id}`); return true; }, tabOpen: () => true, onDidActivate: activate.event },
 			workspaceState: { get: () => undefined, update: async () => undefined, keys: () => [] } as never,
 			extensionUri: { path: '/extension' } as never,
 			log: { event: () => undefined },
 			notifyError: text => errors.push(text),
+			openSettings: async () => { did.push('open settings'); },
+			icons: () => { iconReads++; return () => 'claude'; },
+			settingsChanged: settingsSaved.event,
 			ready: Promise.resolve()
 		});
 		await settle();
 	});
 
 	teardown(() => disposables.forEach(each => each.dispose()));
+
+	test('CONFIGURATION-2.4: the settings file saved, the cards are drawn again and read their icons from it; nothing else draws them meanwhile', async () => {
+		const before = iconReads;
+		await settle();
+		assert.strictEqual(iconReads, before, 'nothing draws the cards while nothing changes');
+		settingsSaved.fire();
+		await settle();
+		assert.ok(iconReads > before, 'the save draws the cards again');
+	});
 
 	test('UX-3.1: from the Command Palette a command is about the selected run, kept as a file comes in front; a context-only command is about the card it was opened on alone', async () => {
 		await run('facade.pinAgent');
@@ -220,8 +241,8 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		const owned = 'This workspace is owned by another window. Reload this window to take ownership.';
 		const { reasonOf } = load<typeof import('../ui/presentation')>(require.resolve('../ui/presentation'));
 		const { PlanError } = load<typeof import('../core/ports')>(require.resolve('../core/ports'));
-		assert.deepStrictEqual([reasonOf(new PlanError('No CLI "gone" is configured; the built-ins are claude.', 'not_found', { kind: 'cli_not_configured', values: ['"gone"'] })), reasonOf(new Error('EACCES: permission denied'))],
-			['No CLI "gone" is configured.', 'EACCES: permission denied'], 'a system error keeps its own words');
+		assert.deepStrictEqual([reasonOf(new PlanError('No CLI "gone" is configured; the built-ins are claude.', 'not_found', { kind: 'cli_not_configured', values: ['"gone"', '~/.facade/facade.json'] })), reasonOf(new Error('EACCES: permission denied'))],
+			['No CLI "gone" is configured; add it to clis in ~/.facade/facade.json.', 'EACCES: permission denied'], 'a system error keeps its own words');
 		assert.deepStrictEqual(notified, [
 			`Could not pin Ada Lovelace: ${owned}`, `Could not unpin Ada Lovelace: ${owned}`, `Could not end Ada Lovelace: ${owned}`,
 			'Could not pin Ada Lovelace: Its CLI cannot resume this exact conversation, so it cannot be pinned.'
@@ -278,9 +299,20 @@ suite('Commands: their targets and arguments (UX-3.1, 3.2, LIFECYCLE-2.1, 3.1)',
 		assert.deepStrictEqual([reading, read, errors], [[1, true, true, 0], [1, false, 'No saved conversations in this window\'s folders'], []]);
 	});
 
-	test('CLIS-1.1, UX-1.3: Configure Agents... opens the editor\'s Settings showing this extension\'s settings alone', async () => {
-		await run('facade.configureAgents');
-		assert.deepStrictEqual(executed.filter(([command]) => command !== 'setContext'), [['workbench.action.openSettings', '@ext:facade.facadecode']]);
+	test('CONFIGURATION-4.1: Resume Agent says a settings file wrong as a whole, as the CLIs read it, and opens no history', async () => {
+		fileProblems = [{ setting: '~/.facade/facade.json', problem: '~/.facade/facade.json:1:1: Expected a JSON object' }];
+		const done = run('facade.history') as Promise<void>;
+		await settle();
+		await settle();
+		const shown = [(pickers[0].items as { readonly label: string; readonly detail?: string }[]).map(item => [item.label, item.detail]), opened];
+		pickers[0].hide();
+		await done;
+		assert.deepStrictEqual(shown, [[['~/.facade/facade.json', '~/.facade/facade.json:1:1: Expected a JSON object']], 0]);
+	});
+
+	test('CONFIGURATION-1.2, UX-1.3: Open Settings opens the editor\'s Settings at Facade Code\'s section, the host\'s to show, and runs no editor command of its own', async () => {
+		await run('facade.openSettings');
+		assert.deepStrictEqual([did.filter(each => each === 'open settings'), executed.filter(([command]) => command !== 'setContext')], [['open settings'], []]);
 	});
 
 	test('the working-location commands, Refresh and New Agent Here are gone in this step: none is registered', () => {

@@ -87,9 +87,12 @@ No proposed APIs, internal workbench commands, guessed terminal `$mid`, patched 
 vendor editor commands for core functionality. Where no extension API exists, documented user-bindable workbench
 commands are used, such as pinning or unpinning the active editor for a terminal tab's Pin and focusing an editor group
 by its number to make a tab's group the active one (LIFECYCLE-2.2, 3.4); the editor's
-internal or underscore-prefixed commands and guessed `$mid` contexts are prohibited. Terminal logos are the extension's
-contributed icons shown as theme icons, because image-backed terminal icons are lost when the color theme changes
-(LIFECYCLE-2.2). A workspace extension runs where its workspace is; extensionKind is placement preference, not two
+internal or underscore-prefixed commands and guessed `$mid` contexts are prohibited. Terminal icons follow CONFIGURATION-2.4: built-in logos use contributed `facade-cli-<id>` glyphs in the theme's
+text color; robots use `facade-robot-<color>` from `media/robots.woff`, a COLR v1 font at U+E200–U+E20F.
+`scripts/robot-icons.py` uses fontTools 4.60.1 for asset maintenance only, producing the font, picker images and
+card faces and eyes. Packaging and runtime do not need Python. Use the public terminal icon API and keep icons
+correct after theme changes and restoration (LIFECYCLE-2.2).
+A workspace extension runs where its workspace is; extensionKind is placement preference, not two
 simultaneous instances.
 [Official remote extension guidance](https://code.visualstudio.com/api/advanced-topics/remote-extensions).
 
@@ -431,18 +434,55 @@ Windows node-pty's console worker - starts no program and says that its installa
 
 | Store | Contents |
 | --- | --- |
-| Client Facade directory, `<FACADE_HOME or ~/.facade>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
+| Execution settings file, `<Facade home>/facade.json` | User configuration, owned by CONFIGURATION; shared by windows in that execution environment |
+| Window Component global storage on the client computer, `home.json` | The resolved local Facade: Home, written by local windows and read by remote windows' local components; absent when no local setting is set |
+| Client Facade directory, `<Facade home>/extension` on the client computer | Window registry in `network/` - one entry for each open window (1.1) - and the client-wide counters `client-agent-numbers.json` and `client-message-numbers.json` |
 | Execution supervisor's memory | Processes, screens, output sequences and input effects, and the details each window keeps with its runs - among them whether a run's tab is open and in which editor group, which LIFECYCLE-3.5's restoration needs - for as long as ptyd runs (2.3) |
-| Execution Facade directory, `<FACADE_HOME or ~/.facade>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
+| Execution Facade directory, `<Facade home>/extension` in that execution environment | Per-run launch files, the injection record (CLIS-2.2), message records, long results in `results/` (at most 30 days), location metadata, Facade conversation names/locations, the workspace URI ledger `workspace-uris.json` and window records in `windows/` (30 days, 2.2), owner claims in `claims/`, the environment's own counters `agent-aliases.json` and `message-aliases.json` (1.1), ptyd's log `ptyd/ptyd.log` (3.3), each listening ptyd's record in `ptyd/sockets/` (2.4), and in `workspaces/<key>/` each workspace's agents log and structured history (3.3), the copy of its workspace state, its retained failed launches - with whether each one's tab is open and in which group (LIFECYCLE-3.5) - and request records (2.4) and its closes ptyd has not confirmed (`closing.json`, 2.3) |
 | Editor workspace storage | Human CLI/location choices, filter, order, exact-conversation Pins and the workspace key (2.2); a copy is kept in the execution Facade directory beside the runs, its changes written together within 100 ms and flushed as the window deactivates, a Pin's at once; a write a successor's ownership refuses is reported, never acknowledged |
-| Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing the original cwd and Facade name; no transcript copy |
+| Execution Facade directory: `conversations/` | One atomic metadata record per environment/CLI/session key, containing original cwd, Facade name and the associated CLI entry name/type; no transcript or environment-value copy (CONFIGURATION-3.4) |
 | Vendor CLI store | Its own conversations, credentials and settings |
 | Beside the main checkout | New worktrees under WORKTREES-2.2 |
 
-An environment variable can override the Facade directory, and tests always use temporary overrides. `FACADE_HOME`
-(default `~/.facade`) is a root shared with the Facade Code IDE, and the extension uses only its `extension/` subfolder.
-`FACADE_HOME` names an absolute folder; a relative one is refused, never taken for unset. A counter of agent or message
-numbers that cannot be read is an error, never a count that starts again at `#a1` or `#m1`. Directories are interpreted
+The Facade home is chosen as the window starts: an explicitly set **Facade: Home** (`facade.home`, machine scope)
+wins, then `FACADE_HOME`, then `~/.facade`. Blank strings and `null` count as unset. The setting's box shows
+`~/.facade`; that default does not override the environment variable. A setting value must be absolute or start with `~/` (`~\` on Windows). An unusable setting
+stops every start with an error and an Open Settings button at `facade.home`, on the Remote tab in a remote window
+or the User tab locally (`workbench.action.openRemoteSettings` or `workbench.action.openSettings`, with the same query).
+`FACADE_HOME` itself must be absolute. On Windows, an absolute home must name a drive (`C:\`) or a share
+(`\\server\share`). This applies to the setting, `FACADE_HOME` and the home saved in `home.json`. A path such as
+`\folder` names no drive and is refused like a relative path: the setting gets the usual unusable-value error,
+`FACADE_HOME` gets its existing absolute-folder error, and a saved home supplies no home, like an unreadable record.
+A number, list, object or boolean is set but unusable: it stops every start
+and leaves `home.json` unchanged. The error shows its JSON, for example
+`Facade: Home "42" must start with ~/ or be absolute. No agent can start until it is fixed.` Tests use temporary homes.
+
+A change to the setting offers **The new Facade home applies only after the window reloads.** with **Reload Window**.
+Another spelling of the folder already in use offers nothing. This includes paths through links; comparisons
+ignore case on Windows and macOS. The same comparison applies to a local setting and a remote component's recorded
+home. When no setting was set, setting it to the folder already supplied by `FACADE_HOME` or `~/.facade` also offers
+nothing.
+This reload offer also applies after an unusable value stopped the window: the listener is registered before
+validation, so correcting the value offers the reload. A running window keeps its chosen home until then. When set,
+the resolved setting goes into the extension host's `FACADE_HOME`, inherited by ptyd and agents, and into the window's terminals. Only windows with the same Facade home
+reach each other's agents. Choosing Reload Window after the component has been disposed does nothing.
+
+A local window's Window Component writes its Facade: Home to `home.json` in its own global storage on this computer,
+at start and whenever the setting changes. A set, usable value is written as the resolved absolute folder. With no
+setting, the file is removed. An unusable value leaves the record unchanged; a write failure is logged.
+
+In a remote window, VS Code exposes only the remote machine's machine-scoped value. The local Window Component
+therefore reads this computer's `home.json` instead: its recorded home wins, otherwise `FACADE_HOME`, then `~/.facade`.
+An unreadable or invalid record supplies no home. The component watches the record and reads it again once the
+watch starts. A different home written between the first reading and the watch's start is therefore seen and offers
+the same reload notice. Later changes to a different folder do the same; the current home stays in use until reload.
+A record naming the folder already in use offers nothing; removing it also offers nothing when its `FACADE_HOME` or `~/.facade` fallback is that
+folder. A watch that fails later, such as when its folder is deleted, stops. With no watch, whether it failed to
+start or stopped later, the new home applies at the next reload. The remote execution component continues to use the remote machine's Facade: Home.
+
+The home is shared with the Facade Code IDE. Extension runtime data uses its `extension/` subfolder;
+configuration uses `facade.json` at the home level (CONFIGURATION-1.1). This does not integrate the IDE's old extension.
+A counter of agent or message numbers that cannot be read is an error, never a count that starts again at `#a1` or `#m1`. Directories are interpreted
 in their own environment, never an assumed shared remote home. Sockets are outside the Facade directory: on POSIX in
 `/tmp/facade-ptyd-<uid>/` and `/tmp/facade-window-<uid>/`, which must be private folders this user owns or Facade does
 not use them, and named pipes on Windows. Use normal application storage; no ACL security protocol is required.
@@ -467,12 +507,14 @@ product or prompts.
 **Show Agents Log presents operation and lifecycle facts without secrets or task-policy judgments.**
 
 Use a read-only editor log with UTC time, safe name/reference, operation ID, phase, effects, route status and actual
-failure. Redact CLI credentials and sensitive environment values. Full message text belongs to deliberate message
+failure. Apply CONFIGURATION-4.2: hide the person's environment values, including values nested in generated
+configuration, and redact sensitive arguments before rendering them. Facade's constants are shown; generated per-run
+values keep their placeholders. Full message text belongs to deliberate message
 history, not routine transport logs. Correlation IDs connect UI/MCP/supervisor observations. The agents log,
 `workspaces/<key>/agents.log`, keeps 30 days, pruned as the window activates, with no size cap; ptyd's own log stays
 within 2 MiB, keeping its newest 512 KiB of whole lines. Each tool call is logged with its tool, its caller's alias,
 its status and error code and how long it took, never complete argument objects. Explicit requested CLI, model, effort
-and destination are launch facts; prompts, terminal bodies, full argv and environment values are excluded. Existing
+and destination are launch facts; prompts, terminal bodies, full argv and the person's environment values are excluded. Existing
 call/request IDs and short agent/message references connect dispatch, route, answer, accepted work and final receipt.
 Start/stop receipts preserve their operation and execution window across routing and persistence. Message log entries
 record identity and meaningful delivery/effect transitions, not repeated unchanged attempts or message bodies. The
@@ -495,9 +537,9 @@ An empty agents log opens with `No agent events yet`, with no information toast.
 
 The diagnostics report, which only the integration suite's test-mode `facade.diagnostics` command produces (UX-3.2),
 holds in English, as the log is, what a report of a problem needs, and sends nothing anywhere: the extension's, its
-window component's and the editor's versions, the platform and the remote kind; whether collaboration is on; each CLI of
+window component's and the editor's versions, the platform and the remote kind; each CLI of
 the window's first location, custom ones included - its version as its installation says it and its input reader, or
-why it cannot start - and `facade.custom`'s configuration errors; this window's agents - CLI and version, lifecycle,
+why it cannot start - and settings-file or entry errors under CONFIGURATION-4.1; this window's agents - CLI and version, lifecycle,
 activity and since when, tools, and what their input reader reads now - with each live one's last twelve screen rows;
 and the agents log's last two hundred lines. The home folder is written `~`, whatever the case or separators a path
 spells it with, as VS Code lowercases a Windows drive letter.
@@ -555,19 +597,20 @@ The root README includes repository development instructions when useful. A sing
 is preserved. No markers means no omission; unmatched, nested or repeated markers fail the build. The source README is
 never rewritten by staging. This keeps repository setup instructions out of the installer-facing product description.
 
-### 4.2 No compatibility migration
+### 4.2 Released settings and development state
 
-**Development builds' settings, command IDs and stored state are not migrated; released runtime protocols remain supported under 2.4.**
+**Released extension settings move through CONFIGURATION-6; development-build state is not migrated.**
 
 Settings, command IDs and stored workspace state of development builds are not read into the current catalog and get
 no aliases; the `facadeDots.*` and `facade.agents.*` settings and the `~/.facade-dots` directory are among them. Their
 MCP tools and arguments fail explicitly; they do not widen tree reach or replay old mail. Records such builds stored,
 such as filters, card order and known locations, are ignored with one line in the agents log. They are never translated
 or replayed. Discoverable worktrees remain available because Git discovers them. Never delete vendor history, user work
-or another Facade data directory. No migration-news popup is required. The settings and command IDs of released builds
-keep their meaning; a command the product does not have (UX-3.1) gets no alias. A launch-group, trust or
-settings-template field in a CLI's launch settings reports a configuration error under CLIS-3.1; there is no parallel
-compatibility engine.
+or another Facade data directory. Explicit settings from released standalone-extension versions move only when the
+new file is missing, with CONFIGURATION-6's conversions, conflict handling and one notice. They stop controlling
+launches after the move; old IDE settings are outside this migration. Released runtime protocols remain supported
+under 2.4. Released commands in UX-3.1 and UX-3.2 keep their IDs; other commands gain no aliases. Unknown
+launch-group, trust or settings-template fields are configuration errors, not a second compatibility engine.
 
 ### 4.3 Packaging and version support
 
@@ -704,7 +747,7 @@ what was tested and what remains. Task assignments, pauses and discussion author
 | --- | --- |
 | 1.1–1.3 | Local/remote installation, window components and registry, public API audit, layer rules, native backend package |
 | 2.1–2.4 | G1 routes between local and remote windows; G2 actual close/reload traces; folder-to-workspace handover; shim routing and input deadlines; colour scheme reports with current and earlier supervisors (VERIFICATION E07); pressure/upgrades from every released build with agents running |
-| 3.1–3.3 | Storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
+| 3.1–3.3 | Home precedence, User/Remote Settings tabs, reload after invalid-home correction, local home record writes/removal and remote use, reload on record changes, invalid paths and wrong JSON types preserving the record, Windows homes naming a drive or share, null/blank unset, same-folder reload suppression locally/remotely including links and fallback, a record written before the watch starts, disposal and failed watches, storage ownership/retention, preserved user files, correct paths and safe text rendering without an authentication subsystem |
 | 4.1–4.4 | Build/package checks and native platform matrix, extension-pack installation in local and remote windows, development-build state ignored without migration, locale completeness |
 | 5.1–5.4 | Evidence and command logs, isolated profile/config paths, dirty-tree preservation, no unrequested Git publication |
 

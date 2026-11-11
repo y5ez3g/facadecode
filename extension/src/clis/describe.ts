@@ -7,17 +7,18 @@
 // one configuration every start uses - computed as a launch would compute it, without running any CLI or writing any file.
 // Account secrets and sensitive environment values are redacted; an invalid configuration shows its errors and no invented plan.
 
+import { isJsonObject } from '../base/json';
 import type { ApprovalFact, SandboxFact } from './adapter';
-import type { Catalog, CatalogEntry } from './catalog';
+import { Catalog, CatalogEntry, isProgram } from './catalog';
 import type { CliProblem, CliSaid } from './config';
 import { AGENT_TERMINAL_VARIABLES, EnvironmentMap, RUN_VARIABLE } from './environment';
-import { adjustedEnvironment, CliPlanError, DestinationEnvironment, executableOf, layeredEnvironmentOf, LaunchTrust, PlanInput, planLaunch, targetOf } from './plan';
+import { adjustedEnvironment, CliPlanError, configurationProblems, DestinationEnvironment, executableOf, layeredEnvironmentOf, LaunchTrust, PlanInput, planLaunch, targetOf } from './plan';
 import { redacted, redactedText } from './redact';
 import type { ToolsInput } from './tools';
 
 /**
  * A layer of the environment (CLIS-1.2), lowest first: the extension host's, the folder's terminal settings, the default
- * profile's map, the CLI's launch environment, its adapter's own quirk, what every run is given, and what Facade's tools and
+ * profile's map, the entry's `env`, its adapter's own quirk, what every run is given, and what Facade's tools and
  * session tracking give a start.
  */
 export type EnvironmentSource = 'host' | 'terminal' | 'profile' | 'launch' | 'adapter' | 'run' | 'facade';
@@ -33,6 +34,8 @@ export interface EffectiveInputs {
 	readonly sessionFile: string;
 	readonly sessionHook: (cli: string, platform: NodeJS.Platform) => string;
 	readonly tools?: ToolsInput;
+	/** The run's own folder, named, where a CLI's run settings file goes (CONFIGURATION-4.2). */
+	readonly runDir?: string;
 }
 
 /** One CLI as the document describes it. */
@@ -56,7 +59,12 @@ export interface LaunchDescription {
 	};
 	/** The literal invocation in order, secrets redacted; none where the configuration or the program is missing. */
 	readonly args?: readonly string[];
-	/** The YOLO a start is given; none for a custom CLI, which has no YOLO mapping (CLIS-3.4). */
+	/**
+	 * The settings a start gives its CLI in a file of the run - Claude Code's and Antigravity's `--settings` - which `args` names by its
+	 * path: shown as CONFIGURATION-4.2 has it, the values of their variables hidden and any other secret redacted (CLIS-4.1).
+	 */
+	readonly runSettings?: { readonly file: string; readonly settings: unknown };
+	/** The YOLO a start is given; none for a program, which has no YOLO mapping (CONFIGURATION-2.3). */
 	readonly yolo?: boolean;
 	readonly sandbox: SandboxFact;
 	readonly approvals: ApprovalFact;
@@ -78,13 +86,28 @@ function safeSaid(said: CliSaid): CliSaid {
 	return { kind: said.kind, values: said.values.map(redactedText) };
 }
 
-/** The variables an environment map sets or removes, as the document lists them: values of secret names redacted. */
-function variablesOf(source: EnvironmentSource, map: EnvironmentMap | undefined): { source: EnvironmentSource; name: string; value: string | null }[] {
-	return Object.entries(map ?? {}).map(([name, value]) => ({ source, name, value: value === null ? null : redacted(value, name) as string }));
+/**
+ * Run settings as the document shows them (CLIS-4.1, CONFIGURATION-4.2): each variable of their `env` by its name, its value hidden
+ * unless empty - an empty one removes a key variable or is Facade's own switch - and any other secret redacted.
+ */
+function shownSettings(settings: unknown): unknown {
+	if (!isJsonObject(settings) || !isJsonObject(settings.env)) {
+		return redacted(settings);
+	}
+	const env = Object.fromEntries(Object.entries(settings.env).map(([name, value]) => [name, value === '' ? '' : '<redacted>']));
+	return redacted({ ...settings, env });
 }
 
 /**
- * Each CLI of `catalog` as a start in `cwd` would have it now (CLIS-4.1): with `yolo` - the destination's `facade.yolo`, the one
+ * The variables one of the person's environment maps sets or removes, as the document lists them (CONFIGURATION-4.2): each by its
+ * name, a value it sets never kept - whatever its name, it may be a secret.
+ */
+function variablesOf(source: EnvironmentSource, map: EnvironmentMap | undefined): { source: EnvironmentSource; name: string; value: string | null }[] {
+	return Object.entries(map ?? {}).map(([name, value]) => ({ source, name, value: value === null ? null : '<redacted>' }));
+}
+
+/**
+ * Each CLI of `catalog` as a start in `cwd` would have it now (CLIS-4.1): with `yolo` - the destination's settings file's `yolo`, the one
  * YOLO source (RULES-4.3) - the destination environment's own layers and, given `effective`, what a start adds: the Facade tools'
  * and session tracking's arguments and variables, in their places. Nothing is written: a trust kept in a file of the CLI's is only
  * named, and the tools' and session's files are named, never made.
@@ -103,8 +126,9 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 		...Object.keys(unadjusted).filter(name => !Object.hasOwn(env, name)).map(name => ({ source: 'adapter' as const, name, value: null })),
 		...Object.entries(env).filter(([name, value]) => unadjusted[name] !== value).map(([name, value]) => ({ source: 'adapter' as const, name, value: redacted(value, name) as string }))
 	];
-	// While its configuration has errors no program is looked for: a wrong `.path` is never PATH's command (CLIS-1.2)
-	const executable = entry.problems.length ? undefined : executableOf(entry, env, cwd, platform);
+	// While its configuration has errors no program is looked for: a wrong `command` is never PATH's command (CLIS-1.2)
+	const problems = configurationProblems(entry, destination);
+	const executable = problems.length ? undefined : executableOf(entry, env, cwd, platform);
 	let program: LaunchDescription['program'];
 	if (executable === undefined) {
 		program = { unresolved: true };
@@ -115,6 +139,7 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 		program = { file: target.executable, configured: entry.path, ...target.args.length ? { script: target.args.join(' ') } : {}, throughCmd: target.throughCmd };
 	}
 	let args: readonly string[] | undefined;
+	let runSettings: LaunchDescription['runSettings'];
 	let trust: LaunchTrust | undefined;
 	let planProblem: LaunchDescription['planProblem'];
 	const added: { source: EnvironmentSource; name: string; value: string | null }[] = [];
@@ -123,16 +148,24 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 			const base: PlanInput = { cli: adapter.id, alias: '#aN', cwd, yolo };
 			const configured = planLaunch(catalog, base, destination);
 			const planned = effective ? planLaunch(catalog, {
-				...base, sessionFile: effective.sessionFile, sessionHook: effective.sessionHook(adapter.id, platform), ...effective.tools ? { tools: effective.tools } : {}
+				...base, sessionFile: effective.sessionFile, sessionHook: effective.sessionHook(adapter.id, platform), ...effective.tools ? { tools: effective.tools } : {},
+				...effective.runDir ? { runDir: effective.runDir } : {}
 			}, destination) : configured;
 			// A new conversation's ID is made at its start: named in its place, never one a start would get
 			const shown = (text: string) => planned.sessionId ? text.split(planned.sessionId).join(PLACEHOLDERS.session) : text;
 			args = redacted(planned.args.map(shown)) as string[];
+			// The settings it is given in a file of the run, which a start writes and this names alone
+			const named = planned.args.indexOf('--settings');
+			const given = named < 0 ? undefined : planned.files?.find(each => each.file === planned.args[named + 1]);
+			if (given) {
+				runSettings = { file: given.file, settings: shownSettings(JSON.parse(shown(given.content))) };
+			}
 			trust = planned.trust.kind === 'arguments' ? { kind: 'arguments', args: redacted(planned.trust.args) as string[] } : planned.trust;
-			// What the tools and session tracking add to its environment, set by Facade itself after every layer
+			// What the tools and session tracking add to its environment, set by Facade itself after every layer: a value Facade merged
+			// into one the person's layers had - OpenCode's configuration - holds theirs, so it is hidden as theirs is (CONFIGURATION-4.2)
 			for (const [name, value] of Object.entries(planned.env)) {
 				if (configured.env[name] !== value) {
-					added.push({ source: 'facade', name, value: redacted(shown(value), name) as string });
+					added.push({ source: 'facade', name, value: configured.env[name] === undefined ? redacted(shown(value), name) as string : '<redacted>' });
 				}
 			}
 		} catch (err) {
@@ -154,7 +187,7 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 		displayName: adapter.displayName,
 		setting: adapter.setting,
 		enabled: entry.enabled,
-		problems: entry.problems.map(safeProblem),
+		problems: problems.map(safeProblem),
 		program,
 		cwd,
 		environment: {
@@ -170,7 +203,8 @@ function describeOne(entry: CatalogEntry, catalog: Catalog, destination: Destina
 			...destination.profileName && destination.profile && Object.keys(destination.profile).length ? { profile: destination.profileName } : {}
 		},
 		...args ? { args } : {},
-		...entry.custom ? {} : { yolo },
+		...runSettings ? { runSettings } : {},
+		...isProgram(entry) ? {} : { yolo },
 		sandbox: adapter.sandbox(yolo, platform),
 		approvals: adapter.approvals(yolo),
 		...trust ? { trust } : {},

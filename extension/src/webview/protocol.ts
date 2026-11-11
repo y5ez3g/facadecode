@@ -13,9 +13,6 @@ export interface CardMenu {
 	readonly moveDown: boolean;
 }
 
-/** The `charts` colours a custom CLI's avatar can take: none that a status dot uses (UX-2.1). */
-export type AvatarColor = 'blue' | 'orange' | 'purple';
-
 /** Which fact a field of a card's details is (PANEL-1.5): stable whatever its words say, in every language. */
 export type DetailId = 'title' | 'location' | 'path';
 
@@ -66,8 +63,11 @@ export interface Card {
 	readonly name: string;
 	/** Its `#aN`: how a message names an agent whose name is empty (LIFECYCLE-3.1). */
 	readonly alias: string;
-	/** A built-in CLI's maker avatar in `media/agents`, or a custom CLI's initial on a theme colour; none for a name that shows nothing. */
-	readonly avatar?: { readonly file: string } | { readonly initial: string; readonly color: AvatarColor };
+	/**
+	 * Its CLI's icon as an image in `media/agents`: a built-in's maker avatar, or a robot's face with its eyes, a second image over it
+	 * that looks toward the pointer (CONFIGURATION-2.4).
+	 */
+	readonly avatar?: { readonly file: string; readonly eyes?: string };
 	/** Its short ID shows beside its name: another card of this window has that name too (PANEL-1.3). */
 	readonly repeated?: true;
 	/** Green for work, red for an error, none for anything else (RULES-3.2). */

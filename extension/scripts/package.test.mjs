@@ -29,6 +29,24 @@ test('malformed README markers fail instead of silently discarding product conte
 	}
 });
 
+test('the bundled extension loads with every module it needs inside it: nothing it requires at run time is left out of the package (UX-3.2)', () => {
+	// Its top level runs with a stand-in for the editor's API - each name @types/vscode declares, taking any use - so that a module
+	// the bundle left to a run-time require fails here, as a dependency's UMD wrapper would, and not in a person's editor
+	const local = createRequire(import.meta.url);
+	const declared = fs.readFileSync(local.resolve('@types/vscode/index.d.ts'), 'utf8');
+	const any = new Proxy(function stand() {}, { get: (_, key) => key === Symbol.toPrimitive ? () => '' : key === 'then' ? undefined : any, apply: () => any, construct: () => any });
+	const editor = Object.fromEntries([...declared.matchAll(/^\texport (?:namespace|class|enum|const|function|let) ([A-Za-z_$][\w$]*)/gm)].map(([, name]) => [name, any]));
+	const Module = local('node:module');
+	const load = Module._load;
+	Module._load = function (request, ...rest) { return request === 'vscode' ? editor : load.call(this, request, ...rest); };
+	try {
+		const extension = createRequire(path.join(stage, 'dist', 'extension.js'))('./extension.js');
+		assert.equal(typeof extension.activate, 'function');
+	} finally {
+		Module._load = load;
+	}
+});
+
 test('the staged product has usable README links and preserves both product and upstream notices', () => {
 	const readme = fs.readFileSync(path.join(stage, 'README.md'), 'utf8');
 	assert.equal(readme, packageReadme(fs.readFileSync(path.join(root, 'README.md'), 'utf8')));
@@ -76,21 +94,8 @@ test('the staged product carries the font of New Agent\'s own icon and the Codic
 	assert.match(notices, /Creative Commons Attribution 4\.0 International Public License/);
 });
 
-test('all built-in terminal logos are packaged native icons with color layers and monochrome outlines (LIFECYCLE-2.2)', () => {
-	const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
-	const characters = new Set();
-	for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
-		const { fontPath, fontCharacter } = manifest.contributes.icons[`facade-cli-${cli}`].default;
-		assert.ok(!characters.has(fontCharacter), `${cli} must have its own glyph`);
-		characters.add(fontCharacter);
-		const font = fs.readFileSync(path.join(stage, fontPath));
-		assert.strictEqual(font.subarray(0, 4).toString('ascii'), 'wOFF');
-		const tables = Array.from({ length: font.readUInt16BE(12) }, (_, i) => font.subarray(44 + i * 20, 48 + i * 20).toString('ascii'));
-		for (const required of ['cmap', 'glyf', 'COLR', 'CPAL']) { assert.ok(tables.includes(required), `${cli}: missing ${required}`); }
-	}
-	// Each COLR layer needs its own true bearing. A zero bearing shifts nonzero-x layers left,
-	// breaking multicolor logos even though the font and every code point load successfully.
-	const bytes = fs.readFileSync(path.join(stage, manifest.contributes.icons['facade-cli-pi'].default.fontPath));
+/** The tables of the WOFF `bytes`, each inflated where it was compressed. */
+function wOFFTables(bytes) {
 	const tables = new Map();
 	for (let i = 0; i < bytes.readUInt16BE(12); i++) {
 		const at = 44 + i * 20, name = bytes.subarray(at, at + 4).toString('ascii');
@@ -98,15 +103,111 @@ test('all built-in terminal logos are packaged native icons with color layers an
 		const data = bytes.subarray(offset, offset + compressed);
 		tables.set(name, compressed < length ? inflateSync(data) : data);
 	}
-	const count = tables.get('maxp').readUInt16BE(4), metrics = tables.get('hhea').readUInt16BE(34);
-	const long = tables.get('head').readInt16BE(50) === 1;
-	const offset = i => long ? tables.get('loca').readUInt32BE(i * 4) : tables.get('loca').readUInt16BE(i * 2) * 2;
-	for (let i = 0; i < count; i++) {
-		if (offset(i) === offset(i + 1)) { continue; }
-		const xMin = tables.get('glyf').readInt16BE(offset(i) + 2);
-		const bearing = tables.get('hmtx').readInt16BE(i < metrics ? i * 4 + 2 : metrics * 4 + (i - metrics) * 2);
-		assert.strictEqual(bearing, xMin, `glyph ${i}: keep the layer's position`);
+	return tables;
+}
+
+/** The glyph the `cmap` table maps each code point to, by its Unicode subtable of format 12, else 4; 0 for none. */
+function glyphsOf(cmap) {
+	const subtables = Array.from({ length: cmap.readUInt16BE(2) }, (_, i) => ({ platform: cmap.readUInt16BE(4 + i * 8), encoding: cmap.readUInt16BE(6 + i * 8), at: cmap.readUInt32BE(8 + i * 8) }))
+		.filter(each => each.platform === 0 || (each.platform === 3 && (each.encoding === 1 || each.encoding === 10)));
+	const of = format => subtables.find(each => cmap.readUInt16BE(each.at) === format)?.at;
+	const long = of(12);
+	if (long !== undefined) {
+		const groups = Array.from({ length: cmap.readUInt32BE(long + 12) }, (_, i) => [0, 4, 8].map(field => cmap.readUInt32BE(long + 16 + i * 12 + field)));
+		return codePoint => { const group = groups.find(([start, end]) => start <= codePoint && codePoint <= end); return group ? group[2] + codePoint - group[0] : 0; };
 	}
+	const at = of(4);
+	assert.ok(at !== undefined, 'the font maps no Unicode code point');
+	const segments = cmap.readUInt16BE(at + 6) / 2;
+	const ends = at + 14, starts = ends + segments * 2 + 2, deltas = starts + segments * 2, ranges = deltas + segments * 2;
+	return codePoint => {
+		for (let i = 0; i < segments; i++) {
+			if (cmap.readUInt16BE(ends + i * 2) < codePoint || cmap.readUInt16BE(starts + i * 2) > codePoint) { continue; }
+			const delta = cmap.readUInt16BE(deltas + i * 2), range = cmap.readUInt16BE(ranges + i * 2);
+			if (!range) { return (codePoint + delta) & 0xFFFF; }
+			const glyph = cmap.readUInt16BE(ranges + i * 2 + range + (codePoint - cmap.readUInt16BE(starts + i * 2)) * 2);
+			return glyph ? (glyph + delta) & 0xFFFF : 0;
+		}
+		return 0;
+	};
+}
+
+/** Each glyph the `COLR` table colors, with which drawing: a COLRv1 paint, else the COLRv0 layers. */
+function colorDrawingsOf(colr) {
+	const drawings = new Map();
+	const records = colr.readUInt32BE(4);
+	for (let i = 0; i < colr.readUInt16BE(2); i++) {
+		drawings.set(colr.readUInt16BE(records + i * 6), `layers ${colr.readUInt16BE(records + i * 6 + 2)} ${colr.readUInt16BE(records + i * 6 + 4)}`);
+	}
+	const list = colr.readUInt16BE(0) >= 1 ? colr.readUInt32BE(14) : 0;
+	for (let i = 0; list && i < colr.readUInt32BE(list); i++) {
+		drawings.set(colr.readUInt16BE(list + 4 + i * 6), `paint ${list + colr.readUInt32BE(list + 4 + i * 6 + 2)}`);
+	}
+	return drawings;
+}
+
+/**
+ * Each terminal icon `ids` of the manifest is a glyph of its own in a packaged WOFF with color layers and monochrome outlines, and
+ * each layer of its font keeps its true bearing: a zero one shifts nonzero-x layers left, breaking a multicolor glyph even though the
+ * font and every code point load. The font maps each icon's code point to a glyph of its own, colored by a drawing of its own: one
+ * mapped to another icon's glyph would show that icon.
+ */
+function assertColorIcons(manifest, ids) {
+	const characters = new Set();
+	const fonts = new Map();
+	for (const id of ids) {
+		const { fontPath, fontCharacter } = manifest.contributes.icons[id].default;
+		assert.ok(!characters.has(`${fontPath} ${fontCharacter}`), `${id} must have its own glyph`);
+		characters.add(`${fontPath} ${fontCharacter}`);
+		fonts.set(fontPath, [...fonts.get(fontPath) ?? [], { id, codePoint: parseInt(fontCharacter.slice(1), 16) }]);
+	}
+	for (const [fontPath, icons] of fonts) {
+		const bytes = fs.readFileSync(path.join(stage, fontPath));
+		assert.strictEqual(bytes.subarray(0, 4).toString('ascii'), 'wOFF');
+		const tables = wOFFTables(bytes);
+		for (const required of ['cmap', 'glyf', 'COLR', 'CPAL']) { assert.ok(tables.has(required), `${fontPath}: missing ${required}`); }
+		const glyphOf = glyphsOf(tables.get('cmap')), drawings = colorDrawingsOf(tables.get('COLR'));
+		const shown = new Map(), drawn = new Map();
+		for (const { id, codePoint } of icons) {
+			const glyph = glyphOf(codePoint);
+			assert.ok(glyph, `${id}: ${fontPath} maps no glyph to U+${codePoint.toString(16).toUpperCase()}`);
+			assert.ok(!shown.has(glyph), `${id} shows the glyph of ${shown.get(glyph)}`);
+			shown.set(glyph, id);
+			assert.ok(drawings.has(glyph), `${id}: glyph ${glyph} of ${fontPath} has no color`);
+			assert.ok(!drawn.has(drawings.get(glyph)), `${id} is colored as ${drawn.get(drawings.get(glyph))}`);
+			drawn.set(drawings.get(glyph), id);
+		}
+		const count = tables.get('maxp').readUInt16BE(4), metrics = tables.get('hhea').readUInt16BE(34);
+		const long = tables.get('head').readInt16BE(50) === 1;
+		const offset = i => long ? tables.get('loca').readUInt32BE(i * 4) : tables.get('loca').readUInt16BE(i * 2) * 2;
+		for (let i = 0; i < count; i++) {
+			if (offset(i) === offset(i + 1)) { continue; }
+			const xMin = tables.get('glyf').readInt16BE(offset(i) + 2);
+			const bearing = tables.get('hmtx').readInt16BE(i < metrics ? i * 4 + 2 : metrics * 4 + (i - metrics) * 2);
+			assert.strictEqual(bearing, xMin, `${fontPath} glyph ${i}: keep the layer's position`);
+		}
+	}
+}
+
+test('all built-in terminal logos are packaged native icons with color layers and monochrome outlines (LIFECYCLE-2.2)', () => {
+	const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
+	assertColorIcons(manifest, ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'].map(cli => `facade-cli-${cli}`));
+});
+
+test('the 16 robots an entry\'s icon can name are packaged: tab glyphs in a font of their own from U+E200 in their order, with color layers and monochrome outlines, and the images of pickers and cards (CONFIGURATION-2.4)', () => {
+	const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
+	const robots = ['red', 'orange', 'amber', 'lime', 'green', 'teal', 'sky', 'blue', 'violet', 'pink', 'aurora', 'sunset', 'ocean', 'orchid', 'pearl', 'graphite'];
+	const ids = robots.map(robot => `facade-robot-${robot}`);
+	assert.deepStrictEqual(Object.keys(manifest.contributes.icons).filter(id => id.startsWith('facade-robot-')), ids);
+	assert.deepStrictEqual(ids.map(id => manifest.contributes.icons[id].default),
+		robots.map((_, index) => ({ fontPath: './media/robots.woff', fontCharacter: `\\${(0xE200 + index).toString(16).toUpperCase()}` })));
+	assertColorIcons(manifest, ids);
+	const images = ['robot-eyes.svg', ...robots.flatMap(robot => [`robot-${robot}.svg`, `robot-${robot}-face.svg`])];
+	assert.deepStrictEqual(images.filter(image => !fs.existsSync(path.join(stage, 'media', 'agents', image))), []);
+	// The letter avatars they replaced are gone, their font's notice with them
+	assert.deepStrictEqual(Object.keys(manifest.contributes.icons).filter(id => id.startsWith('facade-letter-')), []);
+	assert.ok(!fs.existsSync(path.join(stage, 'media', 'letters.woff')));
+	assert.doesNotMatch(fs.readFileSync(path.join(stage, 'ThirdPartyNotices.txt'), 'utf8'), /IBM Plex/);
 });
 
 test('the native backend starts a PTY after the extension is moved outside the repository', { timeout: 15000 }, async t => {

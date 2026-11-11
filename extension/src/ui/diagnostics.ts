@@ -28,7 +28,6 @@ export interface Diagnostics {
 	readonly at: number;
 	/** The extension's, its window component's and the editor's versions, the platform and the remote kind, each as one part. */
 	readonly about: readonly string[];
-	readonly collaboration: boolean;
 	/** The CLI catalog for the window's first location, with its configuration problems; none where no folder is open. */
 	readonly clis?: { readonly where: string; readonly each: readonly DiagnosedCli[]; readonly problems?: readonly { readonly setting: string; readonly problem: string }[] };
 	readonly agents: readonly DiagnosedAgent[];
@@ -94,7 +93,6 @@ export function diagnosticsText(diagnostics: Diagnostics, platform: NodeJS.Platf
 		`Facade Code diagnostics, ${iso(diagnostics.at)}`,
 		'Scope: this window and execution environment only; other windows\' logs are not collected.',
 		diagnostics.about.join('; '),
-		`Collaboration through Facade's tools: ${diagnostics.collaboration ? 'on' : 'off'}`,
 		'',
 		...diagnostics.clis ? [`CLIs for ${diagnostics.clis.where}`, ...diagnostics.clis.each.map(cliLine), ...diagnostics.clis.problems?.map(({ setting, problem }) => `- Configuration error (${setting}): ${problem}`) ?? []] : ['CLIs: no folder is open, and CLIs are found for one'],
 		'',

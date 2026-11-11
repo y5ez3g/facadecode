@@ -2,7 +2,6 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import * as fs from 'fs';
 import * as path from 'path';
 import { readJsonFile } from '../base/files';
 import { isJsonObject, JsonObject } from '../base/json';
@@ -53,14 +52,15 @@ const antigravityTools: ToolsIntegration = {
 };
 
 /**
- * The permission rules of the person's Antigravity settings in the environment `env`, with Facade's tools allowed: `--settings`
- * replaces a key of the settings whole for its session, so the rules the person keeps there go with it unchanged (CLIS-1.3).
- * Settings it cannot read give the rule alone, as Antigravity itself would have none of theirs.
+ * The permission rules a run of Antigravity is given with the Facade tools, Facade's tools allowed among the person's own: those of the
+ * run's settings `run`, else of their Antigravity settings in the environment `env`. `--settings` replaces a key of the settings whole
+ * for its session, so the rules the person keeps there go with it unchanged (CLIS-1.3). Settings it cannot read give the rule alone,
+ * as Antigravity itself would have none of theirs.
  */
-export function antigravityPermissions(env: Environment | undefined, platform: NodeJS.Platform): JsonObject {
-	const settings = env && readJsonFile(antigravitySettingsFile(env, platform));
-	const theirs = settings?.kind === 'object' ? settings.value : undefined;
-	const permissions = theirs && isJsonObject(theirs.permissions) ? theirs.permissions : {};
+export function antigravityPermissions(run: { readonly [key: string]: unknown }, env: Environment, platform: NodeJS.Platform): JsonObject {
+	const settings = isJsonObject(run.permissions) ? undefined : readJsonFile(antigravitySettingsFile(env, platform));
+	const permissions = isJsonObject(run.permissions) ? run.permissions
+		: settings?.kind === 'object' && isJsonObject(settings.value.permissions) ? settings.value.permissions : {};
 	const allow = Array.isArray(permissions.allow) ? permissions.allow : [];
 	return { ...permissions, allow: allow.includes(ALLOW_TOOLS) ? allow : [...allow, ALLOW_TOOLS] };
 }
@@ -83,48 +83,50 @@ function workingDirectoryOf(cwd: string, platform: NodeJS.Platform): string {
 export const antigravityAdapter: CliAdapter = {
 	id: 'agy',
 	sessionIdentity: true,
-	// Settings or per-launch settings it cannot read stay as they are, for Antigravity to say what is wrong with them, and the launch
-	// claims no identity tracking (CLIS-2.4)
-	sessionIntegration: ({ hook, env, platform, cwd, extra, tools }) => {
+	// Its title command reports the run's conversation: the title the person's settings keep - the run's over their own - goes on through
+	// it. Settings of theirs it cannot read stay as they are, for Antigravity to say what is wrong with them, and the launch claims no
+	// identity tracking (CLIS-2.4); the run's settings go as they are
+	sessionIntegration: ({ hook, env, platform, runSettings }) => {
 		const settings = readJsonFile(antigravitySettingsFile(env, platform));
-		if (settings.kind === 'other') { return { unavailable: true }; }
+		if (settings.kind === 'other' || !runSettings) { return { unavailable: true }; }
 		const native: JsonObject = settings.kind === 'object' ? settings.value : {};
-		let overlay: Record<string, unknown> = {};
-		const remaining: string[] = [];
-		for (let i = 0; i < extra.length; i++) {
-			const arg = extra[i] === '--settings' ? extra[++i] : extra[i].startsWith('--settings=') ? extra[i].slice(11) : undefined;
-			if (arg !== undefined) {
-				let value: unknown;
-				try { value = JSON.parse(arg.trim().startsWith('{') ? arg : fs.readFileSync(path.resolve(cwd, arg), 'utf8')); }
-				catch { return { unavailable: true }; }
-				if (!isJsonObject(value)) { return { unavailable: true }; }
-				overlay = { ...overlay, ...value };
-			} else if (extra[i] !== undefined) { remaining.push(extra[i]); }
-		}
-		if (tools) {
-			const permissions = isJsonObject(overlay.permissions) ? overlay.permissions : antigravityPermissions(env, platform);
-			const allow = Array.isArray(permissions.allow) ? permissions.allow : [];
-			overlay.permissions = { ...permissions, allow: allow.includes(ALLOW_TOOLS) ? allow : [...allow, ALLOW_TOOLS] };
-		}
-		const title = { ...isJsonObject(native.title) ? native.title : {}, ...isJsonObject(overlay.title) ? overlay.title : {} };
-		return { extra: remaining, args: ['--settings', JSON.stringify({ ...overlay, title: { ...title, type: 'command', enabled: true, command: hook } })],
-			env: { FACADE_CODE_TITLE_COMMAND: title.enabled !== false && typeof title.command === 'string' ? title.command : '' } };
+		const title = { ...isJsonObject(native.title) ? native.title : {}, ...isJsonObject(runSettings.title) ? runSettings.title : {} };
+		return {
+			runSettings: { ...runSettings, title: { ...title, type: 'command', enabled: true, command: hook } },
+			env: { FACADE_CODE_TITLE_COMMAND: title.enabled !== false && typeof title.command === 'string' ? title.command : '' }
+		};
 	},
-	identityOptions: ['--continue', '-c'],
 	displayName: 'Antigravity',
-	setting: 'facade.antigravity',
+	setting: 'clis.agy',
+	// What its entry's args cannot hold (CONFIGURATION-3.1): approvals and sandbox (yolo), model and effort (their fields), the session,
+	// where it runs, a print mode and a task. Its `--settings` is merged into the run's own.
+	grammar: {
+		reserved: ['--dangerously-skip-permissions', '--mode', '--sandbox', '--conversation', '--continue', '-c', '--remote-agent', '--print', '-p', '--prompt',
+			'--prompt-interactive', '-i', '--model', '--effort'],
+		// A Go program: `-mode` is `--mode`, and a flag that is no switch takes the argument after it whatever it looks like
+		singleDash: true,
+		required: ['--add-dir', '--agent', '--conversation', '--effort', '--input-format', '--json-schema', '--log-file', '--mode', '--model', '--output-format',
+			'--print-timeout', '--project', '--settings']
+	},
 	command: 'agy',
+	// Its settings for the session alone, never saved: the person's --settings, each replacing what it names whole, as Antigravity reads
+	// several, with Facade's over them - its tools allowed beside the person's own rules, its title command - in a file of the run, never
+	// inline, where a process list shows what they hold (CLIS-3.4)
+	runSettings: {
+		option: '--settings',
+		name: 'agy-settings.json',
+		build: (_input, theirs) => ({ settings: theirs.reduce<{ [key: string]: unknown }>((merged, each) => ({ ...merged, ...each.settings }), {}) }),
+		finish: (settings, { tools, env, platform }) => tools ? { ...settings, permissions: antigravityPermissions(settings, env, platform) } : settings
+	},
 	groups: {
 		resume: ['--conversation', '${sessionId}'],
-		// Its own settings for the session alone, never saved: Facade's tools allowed beside the person's own rules
-		connect: ['--settings', '${settings}'],
+		quiet: ['--settings', '${runSettings}'],
 		yoloOn: ['--mode', 'accept-edits', '--dangerously-skip-permissions'],
 		model: ['--model', '${model}'],
 		effort: ['--effort', '${effort}']
 	},
 	takes: { model: true, effort: true },
 	values: input => ({
-		settings: JSON.stringify({ permissions: antigravityPermissions(input.env, input.platform) }),
 		...input.model !== undefined ? { model: input.model } : {},
 		...input.effort !== undefined ? { effort: input.effort } : {}
 	}),
