@@ -7,7 +7,6 @@ import { AgentService, TITLE_READS_MS } from '../core/agents';
 import { cardOf, statusOf, type CardWords } from '../ui/cardView';
 import { agentOf } from '../contract/facts';
 import { FacadeError, OWNERSHIP_LOST } from '../core/errors';
-import { SUGGESTED_NAMES } from '../core/names';
 import {
 	ActivityReport, CleanupResult, Disposable, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, Location, LocationPort,
 	ConversationEntry, ConversationMeta, ConversationKey, ConversationTitlePort, Pin, PinStore,
@@ -132,6 +131,8 @@ function setUp(options: {
 	titles?: ConversationTitlePort;
 	/** The service's timer: the test's own, fired as it says. */
 	after?: (ms: number, fn: () => void) => Disposable;
+	/** facade.json's `names`; none here, so that a blank name is the agent's ID wherever a test does not choose names. */
+	names?: readonly string[];
 } = {}) {
 	const execution = new FakeExecution();
 	execution.failSpawnFor = options.failSpawnFor;
@@ -153,6 +154,8 @@ function setUp(options: {
 	const plans: PlanRequest[] = [];
 	const errors: { text: string; show?: RunId }[] = [];
 	const failures: HumanFailure[] = [];
+	/** Each failure's options, as the person's notification has them: whether it leads to the settings file. */
+	const failureOptions: { readonly show?: RunId; readonly settingsFile?: boolean }[] = [];
 	const remembered: { location: string; cli: string }[] = [];
 	const retained = new Map<RunId, RetainedRun>();
 	const released: RunId[] = [];
@@ -202,7 +205,7 @@ function setUp(options: {
 		},
 		history: { last: () => ({}), remember: (location, cli) => remembered.push({ location, cli }) },
 		human: {
-			failed: (failure, opts) => { failures.push(failure); errors.push({
+			failed: (failure, opts) => { failures.push(failure); failureOptions.push(opts); errors.push({
 				text: `Could not ${failure.kind} ${failure.name}: ${failure.reason}`,
 				...(opts.show ? { show: opts.show } : {})
 			}); },
@@ -214,6 +217,7 @@ function setUp(options: {
 		log: { event: text => log.push(text), fact: (event, fields) => events.push({ event, fields }) },
 		lifetime: { onDidClose: closes.event },
 		yolo: () => true,
+		names: () => options.names ?? [],
 		...(options.tools ? { tools: (run: RunId, facts: RunFacts, location: Location) => {
 			shims.push(run);
 			shimInputs.push({ run, facts: { ...facts }, location });
@@ -228,7 +232,7 @@ function setUp(options: {
 	});
 	const changes: RunChange[] = [];
 	agents.onDidChange(change => changes.push(change));
-	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, remembered, retained, released, shims, shimInputs, log, events, changes, created, plans, advance: (ms: number) => { now += ms; } };
+	return { pins: () => pins, conversations, agents, execution, removals, closes, errors, failures, failureOptions, remembered, retained, released, shims, shimInputs, log, events, changes, created, plans, advance: (ms: number) => { now += ms; } };
 }
 
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -478,7 +482,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.execution.hidden.has(id), false);
 	});
 
-	test('a name repeating among the window\'s cards shows each one\'s short ID on its tab, an empty name its ID alone; a duplicate going takes it away (LIFECYCLE-2.2)', async () => {
+	test('a name repeating among the window\'s cards shows each one\'s short ID on its tab; a blank one is named by its ID, shown once; a duplicate going takes it away (LIFECYCLE-2.1, 2.2)', async () => {
 		const world = setUp();
 		const labels = new Map<RunId, [string, boolean]>();
 		(world.execution as unknown as { tabLabel: (run: RunId, alias: string, shown: boolean) => void }).tabLabel = (run, alias, shown) => labels.set(run, [alias, shown]);
@@ -487,7 +491,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		const second = world.agents.launch({ name: 'reviewer', location: 'loc-1', cli: 'claude', origin: 'human' });
 		const empty = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
-		assert.deepStrictEqual([labels.get(first), labels.get(second), labels.get(empty)?.[1]], [['#a1', true], ['#a2', true], true]);
+		assert.deepStrictEqual([labels.get(first), labels.get(second), world.agents.get(empty)?.name, labels.get(empty)?.[1]], [['#a1', true], ['#a2', true], '#a3', false]);
 		world.agents.rename(second, 'auditor');
 		assert.deepStrictEqual([labels.get(first)?.[1], labels.get(second)?.[1]], [false, false]);
 	});
@@ -829,13 +833,23 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.deepStrictEqual([world.execution.pairs.has(id), world.execution.hidden.has(id), world.execution.reveals.get(id), world.agents.get(id)?.lifecycle, world.execution.spawned[0]?.meta?.tab], [true, true, false, 'running', 'hidden']);
 	});
 
-	test('names are labels: empty strings, spaces, duplicates and human are accepted with distinct run IDs (LIFECYCLE-2.1)', () => {
+	test('names are labels: spaces, duplicates and human are accepted with distinct run IDs; a blank one is never kept blank (LIFECYCLE-2.1)', () => {
 		const world = setUp();
 		const names = ['Ada Lovelace', 'Ada Lovelace', 'human', '@Human', '', '   '];
 		const ids = names.map(name => world.agents.launch({ name, location: 'loc-1', cli: 'claude', origin: 'human' }));
 		assert.strictEqual(new Set(ids).size, names.length);
-		assert.deepStrictEqual(ids.map(id => world.agents.get(id)?.name), names.map(name => name.trim()));
+		assert.deepStrictEqual(ids.map(id => world.agents.get(id)?.name), ['Ada Lovelace', 'Ada Lovelace', 'human', '@Human', '#a5', '#a6']);
 		assert.strictEqual(world.execution.pairs.size, names.length);
+	});
+
+	test('a blank name is filled in from facade.json\'s names with one no agent in this window has, whatever its case; with none left the agent is named by its ID, and a rename to blank picks again (LIFECYCLE-2.1)', () => {
+		const world = setUp({ names: ['Ada', 'Grace'] });
+		const launch = (name: string) => world.agents.launch({ name, location: 'loc-1', cli: 'claude', origin: 'human' });
+		const ids = [launch('ada'), launch(''), launch('  ')];
+		assert.deepStrictEqual(ids.map(id => world.agents.get(id)?.name), ['ada', 'Grace', '#a3']);
+		world.agents.rename(ids[0], 'Lin');
+		world.agents.rename(ids[2], '');
+		assert.deepStrictEqual(ids.map(id => world.agents.get(id)?.name), ['Lin', 'Grace', 'Ada']);
 	});
 
 	test('missing fields are reported together before any effect (RULES-5.1, M02)', () => {
@@ -1137,7 +1151,7 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 			[true, [id], { run: id, pinned: true }, [['unpin', 'disk full']]]);
 	});
 
-	test('a failure says Facade\'s own reason in the person\'s words and an empty name by its #aN, while the log keeps the English (UX-2.4, LIFECYCLE-2.1)', async () => {
+	test('a failure says Facade\'s own reason in the person\'s words and a blank name by its #aN, while the log keeps the English (UX-2.4, LIFECYCLE-2.1)', async () => {
 		const world = setUp({ planError: new PlanError('facade.claude.path is "x", which was not found', 'not_found', { kind: 'path_not_on_path', values: ['facade.claude', '"x"', '/work/app'] }),
 			describe: (err, english) => err instanceof PlanError && err.said ? `translated ${err.said.kind}` : english });
 		const id = world.agents.launch({ name: '', location: 'loc-1', cli: 'claude', origin: 'human' });
@@ -1146,9 +1160,9 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 			{ reason: 'translated path_not_on_path', failure: [['#a1', 'translated path_not_on_path']], log: ['Could not start #a1: facade.claude.path is "x", which was not found'] });
 	});
 
-	test('a facade.yolo neither true nor false refuses a launch before it takes a number: nothing is numbered, shown or recorded (UX-4.1, RULES-4.3)', () => {
+	test('a settings file that stops every start refuses a launch before it takes a number: nothing is numbered, shown or recorded (UX-4.1, RULES-4.3, CONFIGURATION-4.1)', () => {
 		const world = setUp();
-		const wrong = new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"', { kind: 'yolo_type', values: ['"yes"'] });
+		const wrong = new FacadeError('UNAVAILABLE', 'configuration_invalid', '~/.facade/facade.json:1:10: yolo must be true or false; received string', { kind: 'settings_yolo', values: ['~/.facade/facade.json', '1', '10', 'string'] });
 		const deps = (world.agents as unknown as { deps: { yolo(): boolean; aliases: { next(): string } } }).deps;
 		let numbered = 0;
 		const next = deps.aliases.next;
@@ -1242,15 +1256,15 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.execution.endedWindow, true);
 	});
 
-	test('rename keeps the run identity with human or an empty label (LIFECYCLE-2.1)', async () => {
+	test('rename keeps the run identity with human, and a blank name names it by its ID where no name is left (LIFECYCLE-2.1)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'A', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.agents.rename(id, '  Grace Hopper ');
 		assert.strictEqual(world.agents.get(id)?.name, 'Grace Hopper');
 		assert.strictEqual(world.execution.pairs.get(id)?.name, 'Grace Hopper');
-		for (const name of ['human', '']) {
-			world.agents.rename(id, name);
+		for (const [given, name] of [['human', 'human'], ['', '#a1']]) {
+			world.agents.rename(id, given);
 			assert.deepStrictEqual([world.agents.get(id)?.id, world.agents.get(id)?.name, world.execution.pairs.get(id)?.name], [id, name, name]);
 		}
 	});
@@ -1271,14 +1285,14 @@ suite('Agent lifecycle: one launch service (LIFECYCLE-1.5, 3.1; RULES-3.3)', () 
 		assert.strictEqual(world.retained.get(failed)?.name, 'Cy');
 	});
 
-	test('a tab can be renamed to human or an empty string; a run no longer here is left alone (LIFECYCLE-2.1, 2.2, RULES-1.8)', async () => {
+	test('a tab can be renamed to human, and a blank tab name names the agent as a blank name does; a run no longer here is left alone (LIFECYCLE-2.1, 2.2, RULES-1.8)', async () => {
 		const world = setUp();
 		const id = world.agents.launch({ name: 'Ada', location: 'loc-1', cli: 'claude', origin: 'human' });
 		await settle();
 		world.execution.tabRenames.fire({ run: id, name: '@Human' });
 		world.execution.tabRenames.fire({ run: id, name: '   ' });
 		world.execution.tabRenames.fire({ run: 'run-gone', name: 'Bea' });
-		assert.deepStrictEqual([world.agents.get(id)?.name, world.execution.pairs.get(id)?.name, world.execution.metas.get(id)?.name], ['', '', '']);
+		assert.deepStrictEqual([world.agents.get(id)?.name, world.execution.pairs.get(id)?.name, world.execution.metas.get(id)?.name], ['#a1', '#a1', '#a1']);
 		assert.deepStrictEqual(world.changes.filter(change => change.kind === 'renamed').map(change => change.run), [id, id]);
 		assert.deepStrictEqual(world.errors, []);
 	});
@@ -1382,26 +1396,32 @@ const continuitySetup = (options: Parameters<typeof setUp>[0] = {}) => setUp({ .
 const ENTRY: ConversationEntry = { key: { environment: 'local', cli: 'claude', sessionId: 'sess-1' }, cwd: '/work/app', title: 'Saved work' };
 suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RULES-4.2, WORKTREES-2)', () => {
 	const setUp = (options: Parameters<typeof continuitySetup>[0] = {}) => continuitySetup(options);
-	test('LIFECYCLE-2.3: manual Resume generates and saves only missing/empty names; existing names, even a title, stay literal', async () => {
+	test('LIFECYCLE-2.3: manual Resume names only a conversation with no name, as a blank name is filled in, and keeps that name; existing names, even a title, stay literal; one named by its ID keeps no name, so the next Resume names it again', async () => {
 		for (const saved of [undefined, '', '   ', 'Saved work', 'Reviewer']) {
-			const world = setUp();
+			const world = setUp({ names: ['Bolt', 'Coil'] });
 			world.agents.launch({ name: 'Bolt', location: 'loc-1', cli: 'claude', origin: 'human' });
 			if (saved !== undefined) { world.conversations.set('sess-1', { cwd: ENTRY.cwd, location: 'loc-1', name: saved }); }
 			const id = world.agents.resume(ENTRY, { reveal: true }) as RunId;
 			await world.agents.started(id);
 			const name = world.agents.get(id)!.name;
-			if (saved?.trim()) {
-				assert.strictEqual(name, saved);
-			} else {
-				assert.ok(SUGGESTED_NAMES.includes(name), name);
-				assert.notStrictEqual(name, 'Bolt', 'use an available suggestion');
-			}
+			assert.strictEqual(name, saved?.trim() ? saved : 'Coil', 'the name not in use');
 			assert.strictEqual(world.conversations.get('sess-1')?.name, name);
 			await world.agents.close(id);
 			const again = world.agents.resume(ENTRY, { reveal: true }) as RunId;
 			await world.agents.started(again);
 			assert.strictEqual(world.agents.get(again)?.name, name, 'subsequent Resume keeps the saved name');
 		}
+		// No name left: the agent is named by its ID, which its conversation does not keep - the next agent of it has another
+		const world = setUp({ names: [] });
+		const id = world.agents.resume(ENTRY, { reveal: true }) as RunId;
+		await world.agents.started(id);
+		const first = world.agents.get(id)!;
+		assert.deepStrictEqual([first.name, world.conversations.get('sess-1')?.name], [first.alias, '']);
+		await world.agents.close(id);
+		const again = world.agents.resume(ENTRY, { reveal: true }) as RunId;
+		await world.agents.started(again);
+		const second = world.agents.get(again)!;
+		assert.deepStrictEqual([second.name, second.alias === first.alias], [second.alias, false]);
 	});
 
 	test('Resume starts the exact conversation in a new run, keeps its name, and never runs it twice (J11, LIFECYCLE-3.3)', async () => {
@@ -1415,6 +1435,23 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.deepStrictEqual(world.agents.resume(ENTRY, { reveal: true }), { running: id }, 'an exact conversation already running is not started again');
 		assert.ok(world.remembered.some(each => each.location === 'loc-1' && each.cli === 'claude'), 'a human Resume updates the launch history on process start');
 		assert.ok(world.remembered.some(each => each.cli === '(location)'), 'its cwd is registered as a known location (WORKTREES-1.2)');
+	});
+
+	test('CONFIGURATION-3.4: what a start continues is planned with the built-in that ran it - a listed conversation its store\'s, a Pin its own, one taken before its CLI named a conversation too - for the launch to refuse an entry that runs another by then', async () => {
+		const world = setUp();
+		world.conversations.set('sess-1', { location: 'loc-1', cwd: '/work/app', name: 'Reviewer' });
+		// Listed while "work" ran Codex: the picker's entry keeps the store's built-in, whatever the entry runs once it is chosen
+		const id = world.agents.resume({ ...ENTRY, key: { ...ENTRY.key, cli: 'work' }, builtIn: 'codex' }, { reveal: false }) as RunId;
+		await settle();
+		assert.deepStrictEqual([world.plans.at(-1)?.resume, world.plans.at(-1)?.builtIn], [{ sessionId: 'sess-1' }, 'codex']);
+		await world.agents.close(id);
+		const pinStore = (world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore;
+		pinStore.save({ id: 'pin-named', conversation: { environment: 'local', cli: 'work', sessionId: 's-named', builtIn: 'codex' }, location: 'loc-1', cwd: '/work/app', name: 'Named' });
+		pinStore.save({ id: 'pin-new', conversation: { environment: 'local', cli: 'work', builtIn: 'codex' }, location: 'loc-1', cwd: '/work/app', name: 'New' });
+		await world.agents.restore();
+		await world.agents.restorePins();
+		assert.deepStrictEqual(world.plans.filter(plan => plan.name === 'Named' || plan.name === 'New').map(plan => [plan.name, plan.resume, plan.builtIn]),
+			[['Named', { sessionId: 's-named' }, 'codex'], ['New', undefined, 'codex']]);
 	});
 
 	test('LIFECYCLE-3.2: a resumed conversation is held by its run - one whose CLI cannot pin a run as its own too - until the run is closed', async () => {
@@ -1678,22 +1715,39 @@ suite('Agent continuity: Resume, Pin and new worktrees (LIFECYCLE-3.2–3.4, RUL
 		assert.deepStrictEqual([world.agents.get(next)?.pin, world.pins()], [undefined, []]);
 	});
 
-	test('LIFECYCLE-3.4: a Pin refused before any card is told with the others and kept, the next Pins restored all the same; an empty-named one is told by its #aN', async () => {
+	test('LIFECYCLE-3.4, CONFIGURATION-1.2: a Pin whose card is made, then whose launch its CLI\'s entry refuses, is told with Edit in facade.json, as its own start would be; one failing elsewhere is not', async () => {
+		const pinOf = (world: ReturnType<typeof setUp>) => (world.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.save({ id: 'pin-args', conversation: { environment: 'local', cli: 'claude', sessionId: 's-args' }, location: 'loc-1', cwd: '/work/app', name: 'Args' });
+		const world = setUp({ planError: new PlanError('~/.facade/facade.json:3:15: args must be a list of strings; received number', 'configuration_invalid') });
+		pinOf(world);
+		await world.agents.restorePins();
+		const [card] = world.agents.list().filter(run => run.pin === 'pin-args');
+		assert.deepStrictEqual([card?.lifecycle, card?.error?.source, world.failures.map(failure => [failure.kind, failure.name])], ['ended', 'launch', [['restore', 'Args']]]);
+		assert.deepStrictEqual(world.failureOptions, [{ show: card.id, settingsFile: true }]);
+		// Its working location gone: its red card says why, and the settings file is no answer
+		const gone = setUp();
+		(gone.agents as unknown as { deps: { pinStore: PinStore } }).deps.pinStore.save({ id: 'pin-gone', conversation: { environment: 'local', cli: 'claude', sessionId: 's-gone' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: 'Gone' });
+		await gone.agents.restorePins();
+		assert.deepStrictEqual(gone.failureOptions.map(options => options.settingsFile), [undefined]);
+	});
+
+	test('LIFECYCLE-3.4: a Pin refused before any card is told with the others and kept, the next Pins restored all the same; one kept without a name is named by its #aN', async () => {
 		const world = setUp();
 		const deps = (world.agents as unknown as { deps: { pinStore: { save(p: Pin): void }; yolo: () => boolean } }).deps;
 		deps.pinStore.save({ id: 'pin-refused', conversation: { environment: 'local', cli: 'claude', sessionId: 'refused' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: 'Refused' });
 		deps.pinStore.save({ id: 'pin-empty', conversation: { environment: 'local', cli: 'claude', sessionId: 'empty' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: '' });
-		// The first Pin's start is refused before it takes a number, as with a facade.yolo neither true nor false
+		// The first Pin's start is refused before it takes a number, as with a settings file that stops every start
 		let reads = 0;
 		const yolo = deps.yolo;
-		deps.yolo = () => { if (++reads === 1) { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received 1'); } return yolo(); };
+		deps.yolo = () => { if (++reads === 1) { throw new FacadeError('UNAVAILABLE', 'configuration_invalid', '~/.facade/facade.json:1:10: yolo must be true or false; received string'); } return yolo(); };
 		await world.agents.restorePins();
 		const added = world.agents.list().filter(run => run.pin !== undefined);
-		assert.deepStrictEqual(added.map(run => [run.name, run.pin, run.error?.source]), [['', 'pin-empty', 'location']], 'the next Pin keeps its red card');
+		assert.deepStrictEqual(added.map(run => [run.name === run.alias, run.pin, run.error?.source]), [[true, 'pin-empty', 'location']], 'the next Pin keeps its red card');
 		assert.deepStrictEqual(world.failures.map(failure => [failure.kind, failure.name, (failure as { count?: number }).count]), [['restore', 'Refused', 1]], 'one notification for the opening: the refused Pin, which has no card to show why, with its reason');
-		assert.match(world.failures[0].reason ?? '', /facade\.yolo must be true or false/);
+		assert.match(world.failures[0].reason ?? '', /yolo must be true or false/);
+		// Refused by the settings file, its notification leads to the file (CONFIGURATION-1.2)
+		assert.deepStrictEqual(world.failureOptions, [{ settingsFile: true }]);
 		assert.ok(world.pins().some(pin => pin.id === 'pin-refused'), 'the refused Pin is kept for the next opening');
-		assert.ok(world.log.some(line => line.startsWith('Could not restore the Pin of Refused: facade.yolo must be true or false')), world.log.join('\n'));
+		assert.ok(world.log.some(line => line.startsWith('Could not restore the Pin of Refused: ~/.facade/facade.json:1:10: yolo must be true or false')), world.log.join('\n'));
 		// Told alone, the empty-named one is named by its #aN
 		const again = setUp();
 		(again.agents as unknown as { deps: { pinStore: { save(p: Pin): void } } }).deps.pinStore.save({ id: 'pin-empty', conversation: { environment: 'local', cli: 'claude', sessionId: 'empty' }, location: 'loc-gone', cwd: '/elsewhere/gone', name: '' });
@@ -2158,7 +2212,7 @@ const WORDS = {
 	needsSignIn: 'Sign-in needed', hasQuestion: 'Answer needed', exitedWithCode: (code: string) => `Process exited · code ${code}`, endedBySignal: (signal: string) => `Process terminated · ${signal}`,
 	exitUnknown: 'Process lost · reason unknown', toolsUnavailable: (problem?: string) => `Collaboration off · ${problem}`,
 	startFailed: (reason: string) => `Start failed · ${reason}`, worktreeFailed: (reason: string) => `Worktree failed · ${reason}`,
-	saidByAgent: (sender: string, line: string) => `${sender}: ${line}`, saidByPerson: (line: string) => line, saidByFacade: (line: string) => line, locale: 'en'
+	saidByAgent: (sender: string, line: string) => `${sender}: ${line}`, saidByPerson: (line: string) => line, saidByFacade: (line: string) => line
 } satisfies CardWords;
 
 suite('A run\'s title: its conversation\'s, as its CLI keeps it (CLIS-2.4, PANEL-1.4)', () => {

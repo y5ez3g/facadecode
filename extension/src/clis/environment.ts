@@ -6,6 +6,8 @@
 // execution extension host's environment, the folder's `terminal.integrated.env.<platform>`, the `env` map of the default
 // terminal profile, then the run's own variables. No shell is started to find more.
 
+import { setOwn } from '../base/json';
+
 /** Environment variables as a process holds them. */
 export type Environment = { readonly [name: string]: string | undefined };
 
@@ -20,7 +22,7 @@ export interface EnvironmentLayers {
 	readonly terminal?: EnvironmentMap;
 	/** The `env` map of the profile `terminal.integrated.defaultProfile.<platform>` names; none adds nothing. */
 	readonly profile?: EnvironmentMap;
-	/** The CLI's `.launch.environment` (CLIS-3.1). */
+	/** The entry's `env` (CONFIGURATION-3.2). */
 	readonly launch?: EnvironmentMap;
 }
 
@@ -119,7 +121,7 @@ export function setVariable(env: { [name: string]: string }, name: string, value
 		}
 		return;
 	}
-	env[kept ?? name] = value;
+	setOwn(env, kept ?? name, value);
 }
 
 /** `value` with each `${env:NAME}` read from the host's environment, an unset one empty (CLIS-1.2). */
@@ -156,7 +158,7 @@ export function runEnvironment(base: Environment, alias: string, platform: NodeJ
 	const env: { [name: string]: string } = {};
 	for (const [name, value] of Object.entries(base)) {
 		if (typeof value === 'string') {
-			env[name] = value;
+			setOwn(env, name, value);
 		}
 	}
 	setVariable(env, RUN_VARIABLE, alias, platform);

@@ -2,12 +2,13 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { catalogFrom, runSettingsOf, settingsOf, sourceOf, TEST_SETTINGS_FILE } from './settingsFixtures';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import * as path from 'path';
 import { pathToFileURL } from 'url';
 import type { CliAdapter } from '../clis/adapter';
-import { Catalog, catalogOf, entryOf } from '../clis/catalog';
+import { Catalog, entryOf } from '../clis/catalog';
 import { claudeAdapter } from '../clis/claude';
 import { codexAdapter } from '../clis/codex';
 import { antigravityAdapter } from '../clis/antigravity';
@@ -81,7 +82,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 	teardown(() => temp.remove());
 
 	const plan = (input: Partial<PlanInput> & { readonly cli: string }, where = destination) =>
-		planLaunch(catalogOf(() => undefined), { alias: '#a1', cwd, yolo: true, ...input }, where);
+		planLaunch(catalogFrom(), { alias: '#a1', cwd, yolo: true, ...input }, where);
 
 	test('two runs in one directory keep personalized context out of every shared skill and server file', () => {
 		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
@@ -102,40 +103,39 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		}
 	});
 
-	test('an explicit MCP model and effort replace configured defaults while other options stay before the initial prompt', () => {
-		const catalog = catalogOf(name => name === 'facade.claude.launch' ? { arguments: ['--model', 'configured', '--effort=low', '--verbose'] } : undefined);
+	test('an explicit MCP model and effort replace the entry\'s, each said once, while its other options stay before the initial prompt (CONFIGURATION-3.3)', () => {
+		const catalog = catalogFrom({ clis: { claude: { model: 'configured', effort: 'low', args: ['--verbose'] } } });
 		const planned = planLaunch(catalog, { cli: 'claude', alias: '#a1', cwd, yolo: true, tools, model: 'requested', effort: 'high', prompt: 'Fix it' }, destination);
-		assert.strictEqual(planned.args.filter(arg => arg === '--model').length, 1);
-		assert.strictEqual(planned.args[planned.args.indexOf('--model') + 1], 'requested');
-		assert.strictEqual(planned.args[planned.args.indexOf('--effort') + 1], 'high');
-		assert.ok(!planned.args.includes('configured') && !planned.args.includes('--effort=low'));
+		assert.deepStrictEqual([planned.args.filter(arg => arg === '--model' || arg === '--effort').length, planned.args[planned.args.indexOf('--model') + 1], planned.args[planned.args.indexOf('--effort') + 1]], [2, 'requested', 'high']);
+		assert.ok(!planned.args.includes('configured') && !planned.args.includes('low'));
 		assert.deepStrictEqual(planned.args.slice(-3), ['--verbose', '--', 'Fix it']);
 		const defaults = planLaunch(catalog, { cli: 'claude', alias: '#a1', cwd, yolo: true }, destination);
-		assert.deepStrictEqual(defaults.args.slice(-4), ['--model', 'configured', '--effort=low', '--verbose']);
+		assert.deepStrictEqual([defaults.args[defaults.args.indexOf('--model') + 1], defaults.args[defaults.args.indexOf('--effort') + 1], defaults.args.at(-1)], ['configured', 'low', '--verbose']);
 	});
 
-	test('a requested Codex effort replaces only its configured key, preserving unrelated -c settings and MCP injection', () => {
-		const catalog = catalogOf(name => name === 'facade.codex.launch' ? { arguments: ['-c', 'model_reasoning_effort="low"', '-c', 'unrelated=true'] } : undefined);
+	test('a Codex effort, the start\'s over the entry\'s, is one -c key beside the person\'s other -c settings and the tools (CONFIGURATION-3.3)', () => {
+		const catalog = catalogFrom({ clis: { codex: { effort: 'low', args: ['-c', 'unrelated=true'] } } });
 		const planned = planLaunch(catalog, { cli: 'codex', alias: '#a1', cwd, yolo: true, tools, effort: 'high' }, destination);
 		assert.deepStrictEqual(planned.args.filter(arg => arg.startsWith('model_reasoning_effort=')), ['model_reasoning_effort="high"']);
 		assert.deepStrictEqual(planned.args.slice(-2), ['-c', 'unrelated=true']);
 		assert.strictEqual(planned.tools.state, 'injected');
-	});
-
-	test('an explicit model and effort replace their configured options in every spelling the CLI takes: Codex\'s -m and its --config, given apart or with = (CLIS-1.4)', () => {
-		const configured = (cli: string, args: readonly string[]) => catalogOf(name => name === `facade.${cli}.launch` ? { arguments: args } : undefined);
-		const codex = planLaunch(configured('codex', ['--config', 'model_reasoning_effort="low"', '-m', 'gpt-4.1', '-c=model_reasoning_effort="medium"', '--config=unrelated=true']),
-			{ cli: 'codex', alias: '#a1', cwd, yolo: true, model: 'gpt-5', effort: 'high' }, destination);
-		assert.deepStrictEqual(codex.args.filter(arg => /model_reasoning_effort|^-m$|^--model$|gpt-/.test(arg)), ['--model', 'gpt-5', 'model_reasoning_effort="high"']);
-		assert.strictEqual(codex.args.at(-1), '--config=unrelated=true');
-		const muse = planLaunch(configured('muse', ['--config', 'reasoning_effort="low"', '--verbose']), { cli: 'muse', alias: '#a1', cwd, yolo: true, effort: 'high' }, destination);
+		const muse = planLaunch(catalogFrom({ clis: { muse: { args: ['--verbose'] } } }), { cli: 'muse', alias: '#a1', cwd, yolo: true, effort: 'high' }, destination);
 		assert.deepStrictEqual(muse.args.filter(arg => /reasoning_effort/.test(arg)), ['reasoning_effort="high"', 'model_reasoning_efforts={}']);
 		assert.ok(muse.args.includes('--verbose'));
 	});
 
-	test('a custom CLI keeps its configured start without invented MCP injection or message input support', () => {
-		const catalog = catalogOf(name => name === 'facade.custom' ? { custom: { path: path.join(temp.dir, 'bin', 'claude'), launch: { start: ['literal'], resume: ['resume', '${sessionId}'] } } } : undefined);
-		const planned = planLaunch(catalog, { cli: 'custom', alias: '#a1', cwd, yolo: true, tools }, destination);
+	test('a model or effort in args is refused in every spelling the CLI takes - Codex\'s -m and its --config, given apart or with = - so that a start\'s choice is never doubled (CONFIGURATION-3.1)', () => {
+		const refused = (cli: string, args: readonly string[]) => catalogFrom({ clis: { [cli]: { args } } }).entries.find(entry => entry.adapter.id === cli)!.problems.map(problem => problem.said.values.slice(1).join(' '));
+		assert.deepStrictEqual([
+			refused('codex', ['--config', 'model_reasoning_effort="low"', '-m', 'gpt-4.1', '-c=model_reasoning_effort="medium"', '--config=unrelated=true']),
+			refused('muse', ['--config', 'reasoning_effort="low"', '--verbose']),
+			refused('claude', ['--model=opus', '--effort', 'max'])
+		], [['0 model_reasoning_effort', '2 -m', '4 model_reasoning_effort'], ['0 reasoning_effort'], ['0 --model', '1 --effort']]);
+	});
+
+	test('a program keeps its configured args without invented MCP injection or message input support', () => {
+		const catalog = catalogFrom({ clis: { mine: { type: 'custom', command: path.join(temp.dir, 'bin', 'claude'), args: ['literal'] } } });
+		const planned = planLaunch(catalog, { cli: 'mine', alias: '#a1', cwd, yolo: true, tools }, destination);
 		assert.deepStrictEqual(planned.args, ['literal']);
 		assert.deepStrictEqual([planned.tools.state, planned.injection, planned.input.capability.state, planned.trust.kind], ['not_injected', undefined, 'unavailable', 'unknown']);
 		assert.strictEqual(fs.existsSync(tools.runDir), false);
@@ -161,7 +161,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		const claude = plan({ cli: 'claude', yolo: false, tools });
 		assert.ok(claude.args.includes('--allowedTools') && claude.args[claude.args.indexOf('--allowedTools') + 1] === 'mcp__facade', claude.args.join(' '));
 		assert.ok(!claude.args.includes('--dangerously-skip-permissions'));
-		assert.deepStrictEqual(JSON.parse(claude.args[claude.args.indexOf('--settings') + 1]).sandbox, { enabled: true });
+		assert.deepStrictEqual(runSettingsOf(claude).sandbox, { enabled: true });
 		const codex = plan({ cli: 'codex', yolo: false, tools });
 		assert.ok(codex.args.includes('mcp_servers.facade.default_tools_approval_mode="approve"'));
 		assert.ok(codex.args.includes('workspace-write') && !codex.args.includes('--dangerously-bypass-approvals-and-sandbox'));
@@ -271,8 +271,8 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		const before = fs.readFileSync(settings, 'utf8');
 		const planned = plan({ cli: 'agy', yolo: false, tools });
 		assert.strictEqual(planned.args[0], '--settings');
-		// --settings replaces a key whole for the session: the person's rules go with Facade's (CLIS-1.3)
-		assert.deepStrictEqual(JSON.parse(planned.args[1]), { permissions: { allow: ['command(ls)', 'mcp(facade_facade/*)'], deny: ['mcp(other_other/*)'] } });
+		// --settings replaces a key whole for the session: the person's rules go with Facade's (CLIS-1.3), in a file of the run
+		assert.deepStrictEqual(runSettingsOf(planned), { permissions: { allow: ['command(ls)', 'mcp(facade_facade/*)'], deny: ['mcp(other_other/*)'] } });
 		assert.ok(!planned.args.includes('--dangerously-skip-permissions'), 'YOLO off keeps its own approvals');
 		assert.strictEqual(fs.readFileSync(settings, 'utf8'), before, 'planning writes nothing');
 		const plugin = path.join('.agents', 'plugins', 'facade');
@@ -288,11 +288,11 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		assert.deepStrictEqual(prompted.prompt?.path, 'post_start');
 		assert.match(prompted.prompt!.capability.reason, /starts the Facade tools of a folder only with its first turn/);
 		assert.ok(!prompted.args.includes('Review the diff'));
-		// Settings it cannot read give the rule alone; without the tools, no --settings and nothing typed before the first turn
+		// Settings it cannot read give the rule alone; without the tools, no rule and nothing typed before the first turn
 		fs.writeFileSync(settings, '{ not json');
-		assert.deepStrictEqual(JSON.parse(plan({ cli: 'agy', tools }).args[1]), { permissions: { allow: ['mcp(facade_facade/*)'] } });
+		assert.deepStrictEqual(runSettingsOf(plan({ cli: 'agy', tools })), { permissions: { allow: ['mcp(facade_facade/*)'] } });
 		const without = plan({ cli: 'agy' });
-		assert.deepStrictEqual([without.args.includes('--settings'), without.warmUp], [false, undefined]);
+		assert.deepStrictEqual([runSettingsOf(without), without.warmUp], [{}, undefined]);
 	});
 
 	test('Muse Code: the server for the run alone by -c, its variables references to the CLI\'s environment, the skill in .agents/skills/facade; on Windows too, but through cmd.exe the project\'s .mcp.json entry instead, its references empty where unset and with no mode (CLIS-2.2)', () => {
@@ -363,7 +363,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		const sub = path.join(cwd, 'packages', 'app');
 		fs.mkdirSync(sub, { recursive: true });
 		fs.writeFileSync(path.join(cwd, '.mcp.json'), JSON.stringify({ mcpServers: { facade: IDE_ENTRY } }));
-		const inSub = () => planLaunch(catalogOf(() => undefined), { cli: 'muse', alias: '#a1', cwd: sub, yolo: true, tools }, destination);
+		const inSub = () => planLaunch(catalogFrom(), { cli: 'muse', alias: '#a1', cwd: sub, yolo: true, tools }, destination);
 		assert.deepStrictEqual(museProjectMcpFiles(sub), [path.join(sub, '.mcp.json')]);
 		assert.ok(museArgument(inSub()), 'a file above, outside a repository, is not read');
 		fs.mkdirSync(path.join(cwd, '.git'));
@@ -420,7 +420,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name, version }));
 			return path.join(pkg, 'bin', 'opencode');
 		};
-		const catalogAt = (file: string) => catalogOf(name => name === 'facade.opencode.path' ? file : undefined);
+		const catalogAt = (file: string) => catalogFrom({ clis: { opencode: { command: file } } });
 		const at = (file: string) => (input: Partial<PlanInput>) => planLaunch(catalogAt(file), { alias: '#a1', cwd, yolo: false, cli: 'opencode', ...input }, destination);
 		const first = installed('one', 'opencode-ai', '1.18.34');
 		const refusal = { kind: 'opencode_1x', values: ['1.18.34'] };
@@ -454,7 +454,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			fs.writeFileSync(shim, `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n"%dp0%\\node_modules\\${name.replace('/', '\\')}\\bin\\opencode.exe"   %*\r\n`);
 			return { shim, program: path.join(pkg, 'bin', 'opencode.exe') };
 		};
-		const start = (shim: string) => planLaunch(catalogOf(name => name === 'facade.opencode.path' ? shim : undefined), { alias: '#a1', cwd, yolo: false, cli: 'opencode', tools }, { host: { ...destination.host, PATH: prefix }, platform: 'win32' });
+		const start = (shim: string) => planLaunch(catalogFrom({ clis: { opencode: { command: shim } } }), { alias: '#a1', cwd, yolo: false, cli: 'opencode', tools }, { host: { ...destination.host, PATH: prefix }, platform: 'win32' });
 		const first = shimOf('opencode-ai', '1.18.34');
 		assert.throws(() => start(first.shim), (err: unknown) => err instanceof CliPlanError && JSON.stringify(err.said) === JSON.stringify({ kind: 'opencode_1x', values: ['1.18.34'] }));
 		const second = shimOf('@opencode/cli', '2.2.4');
@@ -486,7 +486,7 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 			if (planned.prompt?.path === 'native') { assert.strictEqual(planned.args.at(-1), 'Do the selected task'); }
 			if (cli === 'agy') {
 				assert.strictEqual(planned.args.filter(value => value === '--settings').length, 1);
-				const settings = JSON.parse(planned.args[planned.args.indexOf('--settings') + 1]);
+				const settings = runSettingsOf(planned);
 				assert.deepStrictEqual(settings.permissions.allow, ['mcp(facade_facade/*)']);
 				assert.strictEqual(settings.title.command, 'our-hook');
 			}
@@ -511,13 +511,55 @@ suite('CLIs: the Facade tools in each launch (CLIS-2.2, MCP-6.1)', () => {
 		}
 	});
 
-	test('without tools - orchestration off - nothing is injected and no file is named; planning writes nothing', () => {
+	test('Antigravity\'s run settings are a file of the run whether or not its session tracking works: with its own settings unreadable, the person\'s --settings and the tools\' rule go in that file, never inline, and no identity is claimed (CLIS-2.4, 3.4)', () => {
+		const native = path.join(temp.dir, '.gemini', 'antigravity-cli', 'settings.json');
+		fs.mkdirSync(path.dirname(native), { recursive: true });
+		fs.writeFileSync(native, '{ "title": ');
+		const catalog = catalogFrom({ clis: { agy: { args: ['--settings', '{"env":{"TOKEN":"SENTINEL_ARGV_SECRET"},"theme":"dark"}'] } } });
+		const planned = planLaunch(catalog, { cli: 'agy', alias: '#a1', cwd, yolo: true, tools, sessionFile: path.join(temp.dir, 'our.session.json'), sessionHook: 'our-hook', runDir: tools.runDir }, destination);
+		const file = path.join(tools.runDir, 'agy-settings.json');
+		assert.deepStrictEqual([planned.exactResume, planned.tools.state, planned.args.filter(arg => /^--?settings/.test(arg)).length, planned.args[planned.args.indexOf('--settings') + 1]],
+			[false, 'injected', 1, file]);
+		assert.ok(!planned.args.some(arg => arg.includes('SENTINEL')), planned.args.join(' '));
+		assert.deepStrictEqual(runSettingsOf(planned), { env: { TOKEN: 'SENTINEL_ARGV_SECRET' }, theme: 'dark', permissions: { allow: ['mcp(facade_facade/*)'] } });
+		// Readable again, its title command goes in that same file, and the identity is claimed
+		fs.writeFileSync(native, '{}');
+		const tracked = planLaunch(catalog, { cli: 'agy', alias: '#a1', cwd, yolo: true, tools, sessionFile: path.join(temp.dir, 'our.session.json'), sessionHook: 'our-hook', runDir: tools.runDir }, destination);
+		assert.deepStrictEqual([tracked.exactResume, runSettingsOf(tracked).title, runSettingsOf(tracked).theme], [true, { type: 'command', enabled: true, command: 'our-hook' }, 'dark']);
+	});
+
+	test('Antigravity\'s --settings is the person\'s in each spelling it reads, a Go program\'s - one dash or two, the value apart or after = - merged in their order, each replacing what it names whole; one that cannot be read refuses the start by its place, never quoting it (CONFIGURATION-3.1, 4.1)', () => {
+		fs.writeFileSync(path.join(cwd, 'mine.json'), '{ "colorScheme": "light", "theme": "file" }');
+		const withArgs = (args: string[]) => catalogFrom({ clis: { agy: { args } } });
+		const planned = planLaunch(withArgs(['-settings', '{"theme":"dark","permissions":{"allow":["read(*)"]}}', '-settings=mine.json', '--settings={"permissions":{"deny":["shell(rm *)"]}}', '--verbose']),
+			{ cli: 'agy', alias: '#a1', cwd, yolo: true, tools }, destination);
+		assert.deepStrictEqual(runSettingsOf(planned), { theme: 'file', colorScheme: 'light', permissions: { deny: ['shell(rm *)'], allow: ['mcp(facade_facade/*)'] } });
+		assert.deepStrictEqual([planned.args.filter(arg => /^--?settings/.test(arg)).length, planned.args.includes('--verbose')], [1, true]);
+		// A reserved short alias in another Go spelling is refused before anything starts
+		assert.throws(() => planLaunch(withArgs(['-p=true']), { cli: 'agy', alias: '#a1', cwd, yolo: true }, destination),
+			(err: unknown) => err instanceof CliPlanError && err.said?.kind === 'args_reserved' && err.said.values.join(' ') === 'clis.agy.args 0 -p');
+		const failure = (args: string[]) => {
+			try {
+				planLaunch(withArgs(args), { cli: 'agy', alias: '#a1', cwd, yolo: true }, destination);
+			} catch (err) {
+				return err instanceof CliPlanError ? [err.reason, err.said?.kind, ...err.said?.values ?? [], err.message.includes('SENTINEL')] : String(err);
+			}
+			return 'planned';
+		};
+		assert.deepStrictEqual([failure(['-settings', 'gone.json']), failure(['--settings={"SENTINEL": ']), failure(['--verbose', '-settings'])], [
+			['configuration_invalid', 'run_settings_file', 'clis.agy.args[0]', '-settings', '"gone.json"', false],
+			['configuration_invalid', 'run_settings_text', 'clis.agy.args[0]', '--settings', false],
+			['configuration_invalid', 'run_settings_missing', 'clis.agy.args[1]', '-settings', false]
+		]);
+	});
+
+	test('a launch without the tools - where they cannot be given, it starts without them - injects nothing and names none of their files; planning writes nothing', () => {
 		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
 			const planned = plan({ cli });
 			assert.deepStrictEqual([planned.tools, planned.injection], [{ state: 'not_injected' }, undefined], cli);
 			assert.ok(!planned.args.some(arg => /mcp|plugin-dir|allowedTools|^-e$|--skill|--standalone/.test(arg)), `${cli}: ${planned.args.join(' ')}`);
-			// Claude Code's own run settings go with every launch; Antigravity's only with the tools
-			assert.ok(cli !== 'agy' || !planned.args.includes('--settings'), planned.args.join(' '));
+			// Claude Code's and Antigravity's run settings go with every launch: without the tools, no rule of theirs
+			assert.ok(cli !== 'agy' || runSettingsOf(planned).permissions === undefined, planned.args.join(' '));
 			assert.ok(!('FACADE_RUN' in planned.env) && !('OPENCODE_CONFIG_CONTENT' in planned.env), cli);
 		}
 		plan({ cli: 'claude', tools });
@@ -591,10 +633,11 @@ suite('CLIs: through cmd.exe, the tools never stop a CLI that can start (MCP-6.1
 			...claudeAdapter, id: 'toy', displayName: 'Toy', setting: 'facade.toy', command: 'toy', trustTarget: undefined,
 			groups: { connect: ['--mcp', '${mcpConfig}', '--config', '{"x": 1}'], yoloOn: ['--yolo'] }, values: () => ({})
 		};
-		const catalog: Catalog = { entries: [{ adapter: toy, path: '', problems: [], enabled: true, extra: [], extraSetting: 'facade.toy.launch.arguments', environment: {} }], problems: [] };
+		const entry = { name: 'toy', setting: 'facade.toy', builtIn: true, type: 'claude', command: '', args: [], env: {}, enabled: true, icon: 'claude', problems: [] };
+		const catalog: Catalog = { entries: [{ adapter: toy, path: '', problems: [], enabled: true, extra: [], extraSetting: 'facade.toy.args', environment: {}, entry }], problems: [], file: 'settings.json' };
 		const planned = planLaunch(catalog, { cli: 'toy', alias: '#a1', cwd, yolo: true, tools: tools() }, windows);
 		assert.deepStrictEqual([planned.args, planned.injection, planned.tools.state], [['--yolo'], undefined, 'unavailable']);
-		assert.match(planned.tools.reason!, /runs through cmd\.exe, which cannot be given the Facade tools' arguments safely; set facade\.toy\.path/);
+		assert.match(planned.tools.reason!, /runs through cmd\.exe, which cannot be given the Facade tools' arguments safely; set facade\.toy\.command/);
 		// With no tools asked there is nothing to fall back from
 		assert.deepStrictEqual(planLaunch(catalog, { cli: 'toy', alias: '#a1', cwd, yolo: true }, windows).tools, { state: 'not_injected' });
 	});
@@ -602,7 +645,7 @@ suite('CLIs: through cmd.exe, the tools never stop a CLI that can start (MCP-6.1
 	test('a built-in whose own quoted arguments cannot pass through cmd.exe fails to plan with why, tools or not - never a launch with a mangled argument', () => {
 		for (const cli of ['claude', 'codex']) {
 			for (const withTools of [true, false]) {
-				assert.throws(() => planLaunch(catalogOf(() => undefined), { cli, alias: '#a1', cwd, yolo: true, ...withTools ? { tools: tools() } : {} }, windows),
+				assert.throws(() => planLaunch(catalogFrom(), { cli, alias: '#a1', cwd, yolo: true, ...withTools ? { tools: tools() } : {} }, windows),
 					(err: Error & { reason?: string }) => err.reason === 'unsupported' && /runs through cmd\.exe, which cannot be given the argument/.test(err.message), `${cli} ${withTools}`);
 			}
 		}
@@ -626,7 +669,7 @@ suite('CLIs: the native initial prompt (CLIS-3.2, COLLABORATION-2.2)', () => {
 	});
 	teardown(() => temp.remove());
 
-	const plan = (input: Partial<PlanInput> & { readonly cli: string }) => planLaunch(catalogOf(() => undefined), { alias: '#a1', cwd, yolo: false, ...input }, destination);
+	const plan = (input: Partial<PlanInput> & { readonly cli: string }) => planLaunch(catalogFrom(), { alias: '#a1', cwd, yolo: false, ...input }, destination);
 
 	test('Claude Code and Codex take the prompt as their positional argument after --, used while unverified, last of all', () => {
 		const prompt = '- Review the changes\n- Report "back"';
@@ -908,17 +951,17 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 	let temp: ReturnType<typeof tempDir>;
 	let home: string;
 	let location: Location;
-	let settings: { [name: string]: unknown };
+	/** The settings file, as each read finds it: a test saves it by changing this. */
+	let settings: { yolo?: unknown; clis: { [name: string]: { [field: string]: unknown } } };
 	let destination: DestinationEnvironment;
 
 	const vscode = {
 		l10n: { t: (text: string, ...args: unknown[]) => text.replace(/\{(\d+)\}/g, (_, i: string) => String(args[Number(i)])) },
-		Uri: { parse: (uri: string) => ({ toString: () => uri }) },
-		workspace: { getConfiguration: () => ({ get: (name: string) => settings[name] }) }
+		Uri: { parse: (uri: string) => ({ toString: () => uri }) }
 	};
 	const load = withModules({ vscode });
 	const { HostClis } = load<typeof HostClisModule>(require.resolve('../host/clis'));
-	const { WAIT_SECONDS, yolo } = load<typeof SettingsModule>(require.resolve('../host/settings'));
+	const { WAIT_SECONDS, yoloOf } = load<typeof SettingsModule>(require.resolve('../host/settings'));
 
 	setup(() => {
 		temp = tempDir('fc-host-');
@@ -930,25 +973,34 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		const cwd = path.join(temp.dir, 'repo');
 		fs.mkdirSync(cwd);
 		location = { id: 'loc-1', uri: `file://${cwd}`, path: cwd, label: 'repo', environment: 'local', folders: [] } as unknown as Location;
-		settings = {};
+		settings = { clis: {} };
 		destination = { host: { PATH: bin, HOME: temp.dir }, platform: 'darwin' };
 	});
 	teardown(() => temp.remove());
 
-	const clis = (log: string[] = []) => new HostClis({ read: name => settings[name], destination: () => destination, home, log: line => log.push(line) });
+	const clis = (log: string[] = []) => new HostClis({ settings: sourceOf(() => settingsOf(settings)), destination: () => destination, home, log: line => log.push(line) });
+
+	test('New Agent\'s list is of one reading of the settings file: what is wrong with the file as a whole is of the version its CLIs are, though a save lands between (CONFIGURATION-4.1)', async () => {
+		// Each reading a newer version: wrong as a whole, then right
+		const versions = [settingsOf('{ "yolo": tru }'), settingsOf({ clis: {} })];
+		let reads = 0;
+		const catalog = new HostClis({ settings: sourceOf(() => versions[Math.min(reads++, versions.length - 1)]), destination: () => destination, home });
+		const listed = await catalog.list(location);
+		assert.deepStrictEqual([listed.problems.map(each => each.said?.kind), listed.clis.filter(each => each.available).length], [['settings_syntax'], 0]);
+	});
 
 	test('one current scan provides availability and override facts, logging only changes without launch arguments', async () => {
 		let composed = 0;
 		const host = new Proxy(destination.host as { [name: string]: string }, { ownKeys: target => { composed++; return Reflect.ownKeys(target); } });
 		const events: { event: string; fields: Readonly<Record<string, unknown>> }[] = [];
-		const catalog = new HostClis({ read: name => settings[name], destination: () => ({ ...destination, host }), home,
+		const catalog = new HostClis({ settings: sourceOf(() => settingsOf(settings)), destination: () => ({ ...destination, host }), home,
 			fact: (event, fields) => events.push({ event, fields }) });
 		const first = await catalog.list(location);
 		assert.strictEqual(composed, first.clis.length, 'availability and capabilities reuse the same discovery');
 		assert.ok(first.launches.find(each => each.cli === 'claude')?.takes?.model);
 		await catalog.list(location);
 		assert.strictEqual(events.length, 1, 'unchanged observations do not flood history');
-		settings['facade.codex.enabled'] = false;
+		settings.clis.codex = { enabled: false };
 		const changed = await catalog.list(location);
 		assert.ok(!changed.clis.some(each => each.id === 'codex'));
 		assert.strictEqual(events.length, 2);
@@ -957,14 +1009,34 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 	});
 	const request = (cli: string, run: string, extra: Partial<PlanRequest> = {}): PlanRequest => ({ run, alias: '#a1', name: 'n', cli, location, yolo: true, tools: SERVER, ...extra });
 
-	test('orchestration is on by default, off where the setting is false, and off for a value that is no boolean, said; a start or stop waits two minutes, no setting changing it (MCP-1.3)', () => {
-		assert.strictEqual(clis().collaborationEnabled(), true);
-		settings['facade.collaboration.enabled'] = false;
-		assert.strictEqual(clis().collaborationEnabled(), false);
-		settings['facade.collaboration.enabled'] = 'yes';
-		const said: string[] = [];
-		assert.strictEqual(clis(said).collaborationEnabled(), false);
-		assert.deepStrictEqual(said, ['facade.collaboration.enabled must be true or false; received "yes". Agents start without the Facade tools until it is fixed']);
+	test('CONFIGURATION-3.4: the window\'s planner is given the built-in a Resume or Pin continues and refuses an entry that runs another by the time it starts, before any file of the run is written', async () => {
+		settings.clis.work = { type: 'codex' };
+		const planner = clis();
+		const refused = async (extra: Partial<PlanRequest>) => {
+			try {
+				await planner.plan(request('work', 'run-9', extra));
+			} catch (err) {
+				return (err as { said?: { kind: string } }).said?.kind;
+			}
+			return 'planned';
+		};
+		assert.deepStrictEqual(await refused({ resume: { sessionId: '019a-session' }, builtIn: 'codex' }), 'planned');
+		// Changed to Claude Code while the picker was open, or since its Pin was taken
+		settings.clis.work = { type: 'claude' };
+		assert.deepStrictEqual([await refused({ resume: { sessionId: '019a-session' }, builtIn: 'codex' }), await refused({ builtIn: 'codex' })], ['resume_type_changed', 'pin_type_changed']);
+		assert.ok(!fs.existsSync(runDirOf(home, 'run-9')) || fs.readdirSync(runDirOf(home, 'run-9')).length === 0, 'nothing of a refused start is written');
+	});
+
+	test('CONFIGURATION-4.1: Resume says what is wrong with a turned-off entry\'s configuration before that it is off, as New Agent and a start do', () => {
+		settings.clis.codex = { enabled: false, env: { ACCOUNT: '${env:NO_SUCH_HINGE_VAR}' } };
+		const planner = clis();
+		const wrong = planner.resumeProblem('codex', location, 'codex');
+		settings.clis.codex = { enabled: false };
+		assert.deepStrictEqual([/clis\.codex\.env\.ACCOUNT reads \$\{env:NO_SUCH_HINGE_VAR\}/.test(wrong ?? ''), planner.resumeProblem('codex', location, 'codex')],
+			[true, 'Codex is turned off by clis.codex.enabled']);
+	});
+
+	test('a start or stop waits two minutes, no setting changing it (MCP-1.3)', () => {
 		assert.strictEqual(WAIT_SECONDS, 120);
 	});
 
@@ -980,8 +1052,9 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		await planner.release('run-1');
 		await planner.release('run-2');
 		assert.deepStrictEqual([fs.existsSync(path.join(home, 'runs', 'run-1')), fs.existsSync(path.join(location.path, '.agents'))], [false, false]);
+		// Without the tools, nothing of theirs: the run's folder holds Claude Code's run settings alone (CONFIGURATION-4.2)
 		const without = await planner.plan(request('claude', 'run-3', { tools: undefined }));
-		assert.deepStrictEqual([without.tools, without.args.includes('--mcp-config'), fs.existsSync(runDirOf(home, 'run-3'))], [{ state: 'not_injected' }, false, false]);
+		assert.deepStrictEqual([without.tools, without.args.includes('--mcp-config'), fs.readdirSync(runDirOf(home, 'run-3'))], [{ state: 'not_injected' }, false, ['claude-settings.json']]);
 	});
 
 	test('a conflict leaves the CLI to start without the tools, their state unavailable with why, and nothing of the run written', async () => {
@@ -1048,40 +1121,39 @@ suite('CLIs: the planner of the window (CLIS-2.2, RULES-4.4, MCP-1.3)', () => {
 		destination = { ...destination, host };
 		assert.strictEqual(clis().resumeProblem('codex', location), undefined);
 		assert.strictEqual(composed, 1, 'one CLI\'s environment, not the catalog\'s');
-		settings['facade.pi.path'] = './nowhere/pi';
-		assert.match(clis().resumeProblem('pi', location)!, /^facade\.pi\.path is "\.\/nowhere\/pi", and .* is not a program that can be run$/);
-		settings['facade.codex.enabled'] = false;
-		assert.strictEqual(clis().resumeProblem('codex', location), 'This CLI cannot resume conversations here.');
+		settings.clis.pi = { command: './nowhere/pi' };
+		assert.match(clis().resumeProblem('pi', location)!, /^clis\.pi\.command is "\.\/nowhere\/pi", and .* is not a program that can be run$/);
+		// An entry turned off restores nothing either, said by it (CONFIGURATION-2.2)
+		settings.clis.codex = { enabled: false };
+		assert.strictEqual(clis().resumeProblem('codex', location), 'Codex is turned off by clis.codex.enabled');
 	});
 
-	test('CLIS-4.1: Show Agent Launch\'s CLIs carry their session tracking always and the Facade tools while collaboration is on, as a start of that moment is given them', () => {
-		const planner = new HostClis({ read: name => settings[name], destination: () => destination, home,
+	test('CLIS-4.1: Show Agent Launch\'s CLIs carry their session tracking and the Facade tools, as a start of that moment is given them, with yolo as the same reading of the file has it', () => {
+		const planner = new HostClis({ settings: sourceOf(settingsOf({ yolo: false })), destination: () => destination, home,
 			server: run => ({ command: '/runtime', args: ['/ext/dist/shim.js'], env: { FACADE_RUN: run } }) });
-		const claudeOf = () => planner.describeLaunch(location, false).launches.find(each => each.cli === 'claude')!;
-		const on = claudeOf();
-		settings['facade.collaboration.enabled'] = false;
-		const off = claudeOf();
-		assert.deepStrictEqual([on.args!.includes('--mcp-config'), on.args!.includes('--session-id'), off.args!.includes('--mcp-config'), off.args!.includes('--session-id')], [true, true, false, true]);
+		const described = planner.describeLaunch(location);
+		const claude = described.launches.find(each => each.cli === 'claude')!;
+		assert.deepStrictEqual([described.yolo, claude.yolo, claude.args!.includes('--mcp-config'), claude.args!.includes('--session-id'), claude.args!.includes('--dangerously-skip-permissions')], [false, false, true, true, false]);
 		assert.ok(!fs.existsSync(path.join(home, 'runs')), 'nothing is written for it');
 	});
 
 	test('UX-2.4: a start of a CLI no longer configured fails with Facade\'s reason in the person\'s words', async () => {
-		await assert.rejects(clis().plan(request('gone-cli', 'run-1')), (err: Error & { said?: unknown }) => JSON.stringify(err.said) === JSON.stringify({ kind: 'cli_not_configured', values: ['"gone-cli"'] }));
+		await assert.rejects(clis().plan(request('gone-cli', 'run-1')), (err: Error & { said?: unknown }) => JSON.stringify(err.said) === JSON.stringify({ kind: 'cli_not_configured', values: ['"gone-cli"', TEST_SETTINGS_FILE] }));
 	});
 
-	test('UX-4.1: facade.yolo is true by default; one neither true nor false refuses the launch before any effect, configuration_invalid, naming the setting in the person\'s words too', () => {
-		assert.strictEqual(yolo(), true);
-		settings['facade.yolo'] = false;
-		assert.strictEqual(yolo(), false);
-		settings['facade.yolo'] = 'yes';
-		const refused = (() => { try { yolo(); } catch (err) { return err as { code?: string; reason?: string; message?: string; said?: unknown }; } return assert.fail('a value was given'); })();
-		assert.deepStrictEqual([refused.code, refused.reason, refused.message, refused.said], ['UNAVAILABLE', 'configuration_invalid', 'facade.yolo must be true or false; received "yes"', { kind: 'yolo_type', values: ['"yes"'] }]);
+	test('CONFIGURATION-1.4: yolo is true by default; one neither true nor false refuses the launch before any effect, configuration_invalid, saying where in the file', () => {
+		const yolo = (text: string) => yoloOf(sourceOf(settingsOf(text)))();
+		assert.strictEqual(yolo('{}'), true);
+		assert.strictEqual(yolo('{ "yolo": false }'), false);
+		const refused = (() => { try { yolo('{\n  "yolo": "yes"\n}'); } catch (err) { return err as { code?: string; reason?: string; message?: string; said?: unknown }; } return assert.fail('a value was given'); })();
+		assert.deepStrictEqual([refused.code, refused.reason, refused.message, refused.said], ['UNAVAILABLE', 'configuration_invalid', `${TEST_SETTINGS_FILE}:2:3: yolo must be true or false; received string`,
+			{ kind: 'settings_yolo', values: [TEST_SETTINGS_FILE, '2', '3', 'string'] }]);
 	});
 
-	test('a built-in its setting turns off is said to be turned off by it, as its planned start says; an enabled, custom or unknown CLI is not (CLIS-1.1)', async () => {
-		settings['facade.codex.enabled'] = false;
+	test('a CLI its entry turns off is said to be turned off by it, as its planned start says; an enabled or unknown CLI is not (CLIS-1.1, CONFIGURATION-2.2)', async () => {
+		settings.clis.codex = { enabled: false };
 		const planner = clis();
-		assert.deepStrictEqual([planner.turnedOff('codex'), planner.turnedOff('claude'), planner.turnedOff('nope')], ['Codex is turned off by facade.codex.enabled', undefined, undefined]);
+		assert.deepStrictEqual([planner.turnedOff('codex'), planner.turnedOff('claude'), planner.turnedOff('nope')], ['Codex is turned off by clis.codex.enabled', undefined, undefined]);
 		await assert.rejects(planner.plan(request('codex', 'run-1')), (err: Error) => err.message === planner.turnedOff('codex'));
 	});
 
@@ -1133,7 +1205,7 @@ suite('Schema: the bundled skill and the server instructions (MCP-6.2)', () => {
 		assert.ok(FACADE_SKILL.includes(verbatim));
 		assert.match(FACADE_SKILL, /^---\nname: facade\ndescription: .+\n---\n/);
 		assert.deepStrictEqual(TOOLS.map(tool => tool.name).filter(name => !FACADE_SKILL.includes(name)), []);
-		for (const fact of ['`model`', '`effort`', '`prompt`', '`facade.yolo`', 'creation tree', 'Delivery is finite', '`request_id`']) {
+		for (const fact of ['`model`', '`effort`', '`prompt`', '`yolo` of its destination\'s facade.json', 'creation tree', 'Delivery is finite', '`request_id`']) {
 			assert.ok(FACADE_SKILL.includes(fact), fact);
 		}
 		assert.ok(!/facade\.agents\.|Facade Dots/.test(FACADE_SKILL));

@@ -1,0 +1,255 @@
+{
+	"$schema": "http://json-schema.org/draft-07/schema#",
+	"$comment": "Facade Code's settings file, facade.json in the Facade home: by default ~/.facade/facade.json (docs/extension/features/CONFIGURATION.md).",
+	"title": "Facade Code settings",
+	"type": "object",
+	"allowComments": true,
+	"allowTrailingCommas": true,
+	"additionalProperties": false,
+	"properties": {
+		"$schema": {
+			"type": "string",
+			"description": "For the editor only. Facade checks that it is a string and does not use its value."
+		},
+		"yolo": {
+			"type": "boolean",
+			"default": true,
+			"markdownDescription": "`true`: agents start with each CLI's own no-approval mode, and their Facade tools reach every agent in your Facade windows on this computer. `false`: each CLI's own approvals and sandbox, and the tools reach only an agent's creation tree: the agent you started and those started from it. Applies to agents started afterwards."
+		},
+		"names": {
+			"type": "array",
+			"items": { "type": "string", "pattern": "\\S" },
+			"markdownDescription": "Names suggested for New Agent and Resume. Facade randomly picks an unused name in this window, and fills blank names the same way. If none remain or the list is empty, the agent uses its ID, such as #a1."
+		},
+		"clis": {
+			"type": "object",
+			"default": {},
+			"markdownDescription": "The CLIs New Agent offers, by name. A built-in's name (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`) changes that built-in; any other name adds a CLI, which needs a `type`. Each entry stands alone.",
+			"properties": {
+				"claude": { "$ref": "#/definitions/claude", "markdownDescription": "Claude Code." },
+				"codex": { "$ref": "#/definitions/codex", "markdownDescription": "Codex." },
+				"agy": { "$ref": "#/definitions/agy", "markdownDescription": "Antigravity." },
+				"muse": { "$ref": "#/definitions/muse", "markdownDescription": "Muse Code." },
+				"opencode": { "$ref": "#/definitions/opencode", "markdownDescription": "OpenCode." },
+				"pi": { "$ref": "#/definitions/pi", "markdownDescription": "Pi." }
+			},
+			"propertyNames": {
+				"pattern": "^(?:(?:claude|codex|agy|muse|opencode|pi)|(?!(?:[cC][lL][aA][uU][dD][eE]|[cC][lL][aA][uU][dD][eE] [cC][oO][dD][eE]|[cC][oO][dD][eE][xX]|[aA][gG][yY]|[aA][nN][tT][iI][gG][rR][aA][vV][iI][tT][yY]|[mM][uU][sS][eE]|[mM][uU][sS][eE] [cC][oO][dD][eE]|[oO][pP][eE][nN][cC][oO][dD][eE]|[pP][iI])$)(?=[\\s\\S]*[^\\s\\p{Cf}])(?!\\s)(?![\\s\\S]*\\s$)[^\\p{Cc}]*)$",
+				"patternErrorMessage": "A CLI's name needs a visible character, no space at either end and no control character, and it cannot be a built-in CLI's ID or name in any letter case."
+			},
+			"additionalProperties": { "$ref": "#/definitions/added" },
+			"defaultSnippets": [
+				{
+					"label": "Claude Code on another API",
+					"body": {
+						"${1:Claude Code · my-model}": {
+							"type": "claude",
+							"model": "${2:my-model}",
+							"env": {
+								"ANTHROPIC_BASE_URL": "${3:https://api.example.com/anthropic}",
+								"ANTHROPIC_AUTH_TOKEN": "${4:\\${env:MY_API_KEY\\}}",
+								"ANTHROPIC_API_KEY": null,
+								"ANTHROPIC_DEFAULT_OPUS_MODEL": "${2:my-model}",
+								"ANTHROPIC_DEFAULT_SONNET_MODEL": "${2:my-model}",
+								"ANTHROPIC_DEFAULT_HAIKU_MODEL": "${5:my-small-model}"
+							}
+						}
+					}
+				},
+				{
+					"label": "Codex with a profile",
+					"body": { "${1:Codex · work}": { "type": "codex", "args": ["--profile", "${2:work}"] } }
+				},
+				{
+					"label": "Another program",
+					"body": { "${1:my-cli}": { "type": "custom", "command": "${2:my-cli}", "args": [] } }
+				}
+			]
+		}
+	},
+	"definitions": {
+		"command": {
+			"type": "string",
+			"pattern": "\\S",
+			"markdownDescription": "One program, not a shell command line: a name without a slash is found on PATH; otherwise an absolute path, `~/...`, or a path from the agent's folder. Left out, the type's own command on PATH."
+		},
+		"args": {
+			"type": "array",
+			"items": { "type": "string" },
+			"default": [],
+			"markdownDescription": "Arguments, passed exactly as written and in order: no shell, nothing expanded. Options Facade sets or decides itself - approvals and sandbox (`yolo`), model and effort (their fields), the folder, the session and the first task - are refused."
+		},
+		"env": {
+			"type": "object",
+			"default": {},
+			"additionalProperties": { "type": ["string", "null"] },
+			"markdownDescription": "Environment variables: a string sets one, `null` removes it. `${env:NAME}` in a value reads NAME from the editor's environment; a variable it names must exist. Facade never shows these values."
+		},
+		"model": {
+			"type": "string",
+			"pattern": "\\S",
+			"markdownDescription": "The model new agents use where a start names none. Left out, the CLI's own configuration decides."
+		},
+		"enabled": {
+			"type": "boolean",
+			"default": true,
+			"markdownDescription": "`false`: not offered in New Agent, and starts and restorations of it are refused. Running agents keep running."
+		},
+		"icon": {
+			"enum": ["claude", "codex", "agy", "muse", "opencode", "pi", "facade-red", "facade-orange", "facade-amber", "facade-lime", "facade-green", "facade-teal", "facade-sky", "facade-blue", "facade-violet", "facade-pink", "facade-aurora", "facade-sunset", "facade-ocean", "facade-orchid", "facade-pearl", "facade-graphite"],
+			"markdownEnumDescriptions": [
+				"Claude Code's own icon.",
+				"Codex's own icon.",
+				"Antigravity's own icon.",
+				"Muse Code's own icon.",
+				"OpenCode's own icon.",
+				"Pi's own icon.",
+				"Robot: light red to red.",
+				"Robot: light orange to deep orange.",
+				"Robot: pale yellow to amber.",
+				"Robot: light lime to deep lime green.",
+				"Robot: light green to green.",
+				"Robot: light teal to deep teal.",
+				"Robot: light sky blue to deep sky blue.",
+				"Robot: light blue to blue.",
+				"Robot: lavender to violet.",
+				"Robot: light pink to deep pink.",
+				"Robot: violet to cyan.",
+				"Robot: coral red to warm yellow.",
+				"Robot: emerald green to sky blue.",
+				"Robot: pink to violet.",
+				"Robot: white to silver gray.",
+				"Robot: gray to near black."
+			],
+			"markdownDescription": "The entry's icon in the panel, New Agent and terminal tab. Defaults to its type's own icon, or facade-pearl for custom."
+		},
+		"claude": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "claude", "markdownDescription": "This entry is Claude Code's. Its type can only be \"claude\"; omitting it changes nothing." },
+				"command": { "$ref": "#/definitions/command" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["low", "medium", "high", "xhigh", "max", "ultracode"], "markdownDescription": "The reasoning effort new agents use where a start names none: Claude Code's `--effort`. `ultracode` asks for `xhigh` with ultracode on." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"codex": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "codex", "markdownDescription": "This entry is Codex's. Its type can only be \"codex\"; omitting it changes nothing." },
+				"command": { "$ref": "#/definitions/command" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["low", "medium", "high", "xhigh", "max", "ultra"], "markdownDescription": "The reasoning effort new agents use where a start names none: Codex's `model_reasoning_effort`. Which levels work depends on the model." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"agy": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "agy", "markdownDescription": "This entry is Antigravity's. Its type can only be \"agy\"; omitting it changes nothing." },
+				"command": { "$ref": "#/definitions/command" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["low", "medium", "high", "xhigh", "max"], "markdownDescription": "The reasoning effort new agents use where a start names none: Antigravity's `--effort`." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"muse": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "muse", "markdownDescription": "This entry is Muse Code's. Its type can only be \"muse\"; omitting it changes nothing." },
+				"command": { "$ref": "#/definitions/command" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "$ref": "#/definitions/model" },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"], "markdownDescription": "The reasoning effort new agents use where a start names none: Muse Code's `reasoning_effort` for the run." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"opencode": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "opencode", "markdownDescription": "This entry is OpenCode's. Its type can only be \"opencode\"; omitting it changes nothing." },
+				"command": { "$ref": "#/definitions/command" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"pi": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"type": { "const": "pi", "markdownDescription": "This entry is Pi's. Its type can only be \"pi\"; omitting it changes nothing." },
+				"command": { "$ref": "#/definitions/command" },
+				"args": { "$ref": "#/definitions/args" },
+				"env": { "$ref": "#/definitions/env" },
+				"model": { "type": "string", "pattern": "\\S", "markdownDescription": "The model new agents use where a start names none; `provider/model` names its provider too." },
+				"effort": { "type": "string", "pattern": "\\S", "examples": ["off", "minimal", "low", "medium", "high", "xhigh", "max"], "markdownDescription": "The thinking level new agents use where a start names none: Pi's `--thinking`." },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			}
+		},
+		"added": {
+			"type": "object",
+			"required": ["type"],
+			"properties": {
+				"type": {
+					"enum": ["claude", "codex", "agy", "muse", "opencode", "pi", "custom"],
+					"markdownEnumDescriptions": [
+						"Claude Code, with everything Facade gives it, under this name.",
+						"Codex, with everything Facade gives it, under this name.",
+						"Antigravity, with everything Facade gives it, under this name.",
+						"Muse Code, with everything Facade gives it, under this name.",
+						"OpenCode, with everything Facade gives it, under this name.",
+						"Pi, with everything Facade gives it, under this name.",
+						"Any other program, started in a terminal with nothing of Facade's: no tools, messages, status, model, effort, Resume or Pin."
+					],
+					"markdownDescription": "The CLI this entry runs."
+				}
+			},
+			"allOf": [
+				{ "if": { "properties": { "type": { "const": "claude" } } }, "then": { "$ref": "#/definitions/addedClaude" } },
+				{ "if": { "properties": { "type": { "const": "codex" } } }, "then": { "$ref": "#/definitions/addedCodex" } },
+				{ "if": { "properties": { "type": { "const": "agy" } } }, "then": { "$ref": "#/definitions/addedAgy" } },
+				{ "if": { "properties": { "type": { "const": "muse" } } }, "then": { "$ref": "#/definitions/addedMuse" } },
+				{ "if": { "properties": { "type": { "const": "opencode" } } }, "then": { "$ref": "#/definitions/addedOpencode" } },
+				{ "if": { "properties": { "type": { "const": "pi" } } }, "then": { "$ref": "#/definitions/addedPi" } },
+				{ "if": { "properties": { "type": { "const": "custom" } } }, "then": { "$ref": "#/definitions/addedCustom" } }
+			]
+		},
+		"addedClaude": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/claude/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedCodex": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/codex/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedAgy": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/agy/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedMuse": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/model" }, "effort": { "$ref": "#/definitions/muse/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedOpencode": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedPi": { "properties": { "type": {}, "command": { "$ref": "#/definitions/command" }, "args": { "$ref": "#/definitions/args" }, "env": { "$ref": "#/definitions/env" }, "model": { "$ref": "#/definitions/pi/properties/model" }, "effort": { "$ref": "#/definitions/pi/properties/effort" }, "enabled": { "$ref": "#/definitions/enabled" }, "icon": { "$ref": "#/definitions/icon" } }, "additionalProperties": false },
+		"addedCustom": {
+			"required": ["command"],
+			"properties": {
+				"type": {},
+				"command": { "$ref": "#/definitions/command" },
+				"args": { "type": "array", "items": { "type": "string" }, "default": [], "markdownDescription": "The program's arguments, passed exactly as written and in order: no shell, nothing expanded." },
+				"env": { "$ref": "#/definitions/env" },
+				"enabled": { "$ref": "#/definitions/enabled" },
+				"icon": { "$ref": "#/definitions/icon" }
+			},
+			"additionalProperties": false
+		}
+	}
+}

@@ -25,6 +25,11 @@ export function isEqualPath(a: string, b: string): boolean {
 	return normalized(a) === normalized(b);
 }
 
+/** Whether `a` and `b` are one folder: as written, in the platform's letter case, or as they really are, links resolved. */
+export function isSameFolder(a: string, b: string): boolean {
+	return isEqualPath(a, b) || isEqualPath(realFolderOf(a), realFolderOf(b));
+}
+
 /**
  * `file` as a person reads it, the home folder written `~` - as VS Code says a path, which it does not on Windows: `~/Desktop`.
  */

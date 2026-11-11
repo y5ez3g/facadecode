@@ -166,6 +166,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			ThemeIcon: class { constructor(readonly id: string) { } },
 			ThemeColor: class { constructor(readonly id: string) { } },
 			Uri: { joinPath: (base: { path: string }, ...parts: string[]) => ({ path: path.posix.join(base.path, ...parts) }) },
+			env: { language: 'en' },
 			ViewColumn: { Active: -1 },
 			TerminalExitReason: EXIT_REASON,
 			l10n: { t: (text: string, ...args: unknown[]) => (translations[text] ?? text).replace(/\{(\d+)\}/g, (_, i: string) => String(args[Number(i)])) },
@@ -1034,7 +1035,16 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 		assert.deepStrictEqual([changes, commands, shellAgain.isPinned, agentAgain.isPinned], [[], [], false, true]);
 	});
 
-	test('a pair is one editor terminal from acceptance on, with the agent\'s name and its CLI\'s logo; Facade\'s lines show before any process, and the process starts in that same terminal', async () => {
+	test('a tab shows the icon its CLI\'s entry names now - a robot for a built-in too - read as the tab opens (CONFIGURATION-2.4)', () => {
+		const port = new Execution({ owner: 'workspace-1', ptydScript: '/nonexistent/ptyd.js', home, media: { path: '/ext/media' } as unknown as vscode.Uri, log: () => undefined,
+			icon: cli => cli === 'other' ? 'facade-ocean' : 'facade-pearl' });
+		ports.push(port);
+		port.openPair(facts('run-1'), { reveal: false });
+		port.openPair(facts('run-2', { cli: 'other', displayName: 'Other' }), { reveal: false });
+		assert.deepStrictEqual(terminals.map(each => (each.options.iconPath as { id: string }).id), ['facade-robot-pearl', 'facade-robot-ocean']);
+	});
+
+	test('a pair is one editor terminal from acceptance on, with the agent\'s name and its CLI\'s logo - an added CLI\'s robot; Facade\'s lines show before any process, and the process starts in that same terminal (CONFIGURATION-2.4)', async () => {
 		const port = portOf();
 		port.openPair(facts('run-1'), { reveal: true });
 		port.openPair(facts('run-2', { cli: 'other', displayName: 'Other' }), { reveal: false });
@@ -1043,7 +1053,7 @@ suite('The execution port: an agent\'s terminal and its process held by ptyd (AR
 			['Ada', { viewColumn: -1, preserveFocus: true }, true]
 		]);
 		assert.strictEqual((terminals[0].options.iconPath as { id: string }).id, 'facade-cli-claude');
-		assert.strictEqual((terminals[1].options.iconPath as { id: string }).id, 'terminal');
+		assert.strictEqual((terminals[1].options.iconPath as { id: string }).id, 'facade-robot-pearl');
 		port.note('run-1', 'Starting Claude Code…');
 		open(terminals[0]);
 		assert.ok(screenOf(terminals[0]).includes('\x1b[2mStarting Claude Code…\x1b[0m'));

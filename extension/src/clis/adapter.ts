@@ -6,6 +6,8 @@
 // groups, vendor flags and quirks, which no setting exposes - and states its capabilities as supported, unavailable or
 // unverified with the reason, never more than the evidence holds.
 
+import { setOwn } from '../base/json';
+import type { ArgsGrammar } from './args';
 import type { CliSaid } from './config';
 import type { Environment } from './environment';
 import type { Capability, ToolsIntegration } from './tools';
@@ -96,37 +98,6 @@ export function invocation(groups: Groups, extra: readonly string[], uses: Launc
 	return args;
 }
 
-/** A `key=value` override of a CLI's configuration among a launch's arguments, as Codex and Muse Code take one (CLIS-1.4, 2.4). */
-export interface ConfigOverride {
-	/** Where its option is among the arguments, and how many arguments it spans: `-c key=value` two, `-c=key=value` one. */
-	readonly index: number;
-	readonly span: 1 | 2;
-	/** Its key, the text before the first `=`, trimmed. */
-	readonly key: string;
-	/** The text after that `=`; none where it has none. */
-	readonly value?: string;
-}
-
-/** The configuration overrides of `args` in their order: `-c` and `--config`, the value apart or after `=` alike. */
-export function configOverrides(args: readonly string[]): ConfigOverride[] {
-	const overrides: ConfigOverride[] = [];
-	for (let index = 0; index < args.length; index++) {
-		const arg = args[index];
-		const apart = arg === '-c' || arg === '--config';
-		const joined = /^(?:-c|--config)=/.exec(arg)?.[0];
-		const text = apart ? args[index + 1] : joined ? arg.slice(joined.length) : undefined;
-		if (text === undefined) {
-			continue;
-		}
-		const at = text.indexOf('=');
-		overrides.push({ index, span: apart ? 2 : 1, key: (at < 0 ? text : text.slice(0, at)).trim(), ...at < 0 ? {} : { value: text.slice(at + 1) } });
-		if (apart) {
-			index++;
-		}
-	}
-	return overrides;
-}
-
 /** What a launch is asked for and where, as an adapter's values are computed from it. */
 export interface LaunchInput {
 	readonly sessionId?: string;
@@ -134,10 +105,108 @@ export interface LaunchInput {
 	readonly yolo: boolean;
 	readonly cwd: string;
 	readonly platform: NodeJS.Platform;
+	/** The model and effort the launch passes: this start's own, else its entry's (CONFIGURATION-3.3, CLIS-1.4). */
 	readonly model?: string;
 	readonly effort?: string;
 	/** The environment the launch starts with, where an adapter reads the person's own CLI settings by it. */
 	readonly env?: Environment;
+	/** The run's own folder of files, removed when it ends (CLIS-2.2): where a run settings file goes. */
+	readonly runDir?: string;
+	/** What the launch's entry sets in `env` and what it removes (CONFIGURATION-3.2, 5.1), as a CLI's run settings must carry them. */
+	readonly entryEnv?: EntryEnvironment;
+	/** The launch's entry, by its setting path, as a problem names it: `clis.claude`, or `clis["Claude · work"]`. */
+	readonly setting?: string;
+}
+
+/** The variables a launch's entry sets - their values as the launch has them - and those it removes (CONFIGURATION-3.2). */
+export interface EntryEnvironment {
+	readonly set: { readonly [name: string]: string };
+	readonly removed: readonly string[];
+}
+
+/** A JSON object, as a CLI's settings are one. */
+type JsonSettings = { readonly [key: string]: unknown };
+
+function isSettingsObject(value: unknown): value is JsonSettings {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The settings `ours` over the person's own `theirs` (CONFIGURATION-3.1): objects merged key by key; a list of `hooks` by event, theirs
+ * first; another list theirs with ours added; any other value ours. Neither is changed.
+ */
+export function mergeSettings(theirs: JsonSettings, ours: JsonSettings): { [key: string]: unknown } {
+	const merged: { [key: string]: unknown } = { ...theirs };
+	for (const [key, value] of Object.entries(ours)) {
+		// Its own value alone: never one an object inherits, as `__proto__` would read
+		const before = Object.hasOwn(merged, key) ? merged[key] : undefined;
+		if (key === 'hooks' && isSettingsObject(before) && isSettingsObject(value)) {
+			const hooks: { [event: string]: unknown } = { ...before };
+			for (const [event, groups] of Object.entries(value)) {
+				const earlier = Object.hasOwn(hooks, event) ? hooks[event] : undefined;
+				setOwn(hooks, event, [...Array.isArray(earlier) ? earlier : [], ...Array.isArray(groups) ? groups : [groups]]);
+			}
+			setOwn(merged, key, hooks);
+		} else if (isSettingsObject(before) && isSettingsObject(value)) {
+			setOwn(merged, key, mergeSettings(before, value));
+		} else if (Array.isArray(before) && Array.isArray(value)) {
+			setOwn(merged, key, [...before, ...value.filter(each => !before.some(earlier => JSON.stringify(earlier) === JSON.stringify(each)))]);
+		} else {
+			setOwn(merged, key, value);
+		}
+	}
+	return merged;
+}
+
+/** Run settings the person gives in an entry's `args`, by the setting path of the argument that gives them: `clis.claude.args[1]`. */
+export interface RunSettingsGiven {
+	readonly place: string;
+	readonly settings: { readonly [key: string]: unknown };
+}
+
+/**
+ * A variable Facade gives a run last (CONFIGURATION-3.2, CLIS-1.2) - every agent terminal's, the run's alias and session file, what its
+ * tools and session tracking add - with the value the run starts with, or none where the run removes it.
+ */
+export interface FinalVariable {
+	readonly name: string;
+	readonly value: string | undefined;
+}
+
+/** A run as its run settings are finished for it, once the rest of its launch is planned. */
+export interface FinishedRun {
+	/** The variables Facade gives the run last, as the run starts with them. */
+	readonly last: readonly FinalVariable[];
+	/** Whether the run is given the Facade tools. */
+	readonly tools: boolean;
+	/** The environment the launch starts with, where an adapter reads the person's own CLI settings by it. */
+	readonly env: Environment;
+	readonly platform: NodeJS.Platform;
+}
+
+/**
+ * A CLI that takes its settings for one run from a file (CLIS-3.2): Claude Code's `--settings`. Facade's settings go over the person's
+ * own given with the same option in its entry's `args`, which are merged into them, never refused (CONFIGURATION-3.1); the merged
+ * settings are a file of the run, readable by its user alone, named by its path - never inline, where any user's process list would
+ * show what they hold (CONFIGURATION-4.2).
+ */
+export interface RunSettingsFile {
+	/** The option that names the file. */
+	readonly option: string;
+	/** The file's name in the run's folder. */
+	readonly name: string;
+	/**
+	 * The run's settings: Facade's, over the person's own `theirs` - each given at its place in the entry's `args`, merged in their
+	 * order; or why the launch cannot start with them, said by its setting - never a value.
+	 */
+	build(input: LaunchInput, theirs: readonly RunSettingsGiven[]): { readonly settings: { readonly [key: string]: unknown } } | { readonly problem: string; readonly said: CliSaid };
+	/**
+	 * `settings` as `run` is given them, with what Facade gives it after the entry and the person's own settings (CLIS-3.4,
+	 * CONFIGURATION-3.2): the Facade tools' permission where the run has them; and where the CLI sets the variables of its settings over
+	 * the environment it starts with, each variable Facade gives the run last that they name, holding its value in the run - or left out
+	 * where the run removes it.
+	 */
+	finish?(settings: { readonly [key: string]: unknown }, run: FinishedRun): { readonly [key: string]: unknown };
 }
 
 /**
@@ -160,30 +229,30 @@ export interface WarmUp {
 /**
  * A CLI's sandbox as a launch leaves it (CLIS-1.3, 4.1): turned on by arguments of the launch (`by`), else by Facade's run settings
  * for it; turned off by arguments; left to the CLI's own configuration; none, where the CLI has no sandbox on this platform; or
- * unknown, for a custom CLI whose configuration Facade does not read (CLIS-3.3, 3.4).
+ * unknown, for a program whose configuration Facade does not read (CONFIGURATION-2.3).
  */
 export type SandboxFact = { readonly state: 'on'; readonly by?: readonly string[] } | { readonly state: 'off'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' | 'unknown' };
 
 /**
  * A CLI's approvals as a launch leaves them (CLIS-1.3, 4.1): bypassed by arguments of the launch, its own, none it has, or unknown
- * for a custom CLI (CLIS-3.4).
+ * for a program (CONFIGURATION-2.3).
  */
 export type ApprovalFact = { readonly state: 'bypassed'; readonly by: readonly string[] } | { readonly state: 'native' | 'none' | 'unknown' };
 
-/** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition, or a custom CLI's validated configuration (CLIS-3.4). */
+/** A CLI adapter (CLIS-2.1, 4.2): a built-in's maintained definition, or a program's validated entry (CONFIGURATION-2.3). */
 export interface CliAdapter {
-	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, or a custom CLI's key (CLIS-1.1, 3.4). */
+	/** The API ID: `claude`, `codex`, `agy`, `muse`, `opencode`, `pi`, or the name of an entry added in `clis` (CONFIGURATION-2.1). */
 	readonly id: string;
+	/** For an added entry of a built-in's type, that built-in (CONFIGURATION-2.3): what Facade keys by CLI is that built-in's. */
+	readonly builtIn?: string;
 	/** A maintained exact identity across native session changes, required for Pin. */
 	readonly sessionIdentity?: boolean;
 	/** Vendor integration for exact identity, scoped to this process and preserving native user settings. */
 	sessionIntegration?(input: SessionIntegrationInput): SessionIntegration;
-	/** Native shortcuts that can replace/fork the exact conversation selected by Facade. */
-	readonly identityOptions?: readonly string[];
 	readonly displayName: string;
-	/** Its settings: `facade.<segment>`, or `facade.custom.<key>`. */
+	/** Its entry in the settings file, as a problem names it: `clis.codex`, or `clis["Codex · work"]` (CONFIGURATION-4.1). */
 	readonly setting: string;
-	/** The command PATH is searched for where its `path` setting is empty; a custom CLI's configured path. */
+	/** The command PATH is searched for where its entry sets no `command`; a program's `command`. */
 	readonly command: string;
 	readonly groups: Groups;
 	/**
@@ -202,6 +271,18 @@ export interface CliAdapter {
 	values(input: LaunchInput): { readonly [name: string]: string };
 	/** How it is given the Facade tools (CLIS-2.2). */
 	readonly tools?: ToolsIntegration;
+	/**
+	 * What its entry's `args` cannot hold (CONFIGURATION-3.1): the options and configuration keys Facade sets or decides itself. A
+	 * program has none; every built-in has its own.
+	 */
+	readonly grammar?: ArgsGrammar;
+	/** How it takes its settings for one run from a file, where it does (CLIS-3.2). */
+	readonly runSettings?: RunSettingsFile;
+	/**
+	 * Options that take a list, given by Facade and by the person alike (CONFIGURATION-3.1), each by all its spellings: the person's
+	 * values go into Facade's occurrence, so that the CLI takes both whichever of two occurrences it would keep.
+	 */
+	readonly additive?: readonly (readonly string[])[];
 	/** The reader of its ordinary-message input (CLIS-2.1); none, and no message is typed into it. */
 	readonly input?: InputReader;
 	/** How far its native initial prompt argument is verified (COLLABORATION-2.2), where its `prompt` group maps one. */

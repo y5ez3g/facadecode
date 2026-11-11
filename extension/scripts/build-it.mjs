@@ -13,7 +13,9 @@ if (!['extension.js', 'ptyd.js'].every(file => fs.existsSync(path.join(shipped, 
 }
 fs.rmSync(stage, { recursive: true, force: true });
 fs.cpSync(shipped, stage, { recursive: true });
-const common = { outdir: path.join(stage, 'dist'), bundle: true, sourcemap: true, platform: 'node', format: 'cjs', target: 'node20', logLevel: 'info', define: { FACADE_TEST_MODE: 'true' } };
+// jsonc-parser's ES modules, as the shipped bundle has them (scripts/build.mjs)
+const common = { outdir: path.join(stage, 'dist'), bundle: true, sourcemap: true, platform: 'node', format: 'cjs', target: 'node20', logLevel: 'info', define: { FACADE_TEST_MODE: 'true' },
+	alias: { 'jsonc-parser': 'jsonc-parser/lib/esm/main.js' } };
 await Promise.all([
 	esbuild.build({ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, external: ['vscode'] }),
 	esbuild.build({ ...common, entryPoints: { ptyd: path.join(root, 'src', 'test', 'integration', 'ptydFixture.ts') }, external: ['node-pty'] }),

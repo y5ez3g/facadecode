@@ -26,8 +26,10 @@ export interface FocusProbeContext {
 	/** The run's temporary folder, and the parent of each session's Facade root. */
 	readonly root: string;
 	readonly home: string;
-	/** The suite's settings, the built-ins but Claude Code's turned off. */
+	/** The suite's editor settings. */
 	readonly settings: { readonly [setting: string]: unknown };
+	/** Writes Facade's settings file in a session's Facade root: the built-ins but Claude Code's turned off (CONFIGURATION-1.1). */
+	readonly facadeSettings: (facade: string) => void;
 	readonly extension: string;
 	readonly windowComponent: string;
 	readonly record: string;
@@ -94,6 +96,7 @@ async function session(ctx: FocusProbeContext, name: string, short: string, with
 		fs.mkdirSync(dir, { recursive: true });
 	}
 	fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify({ ...ctx.settings, ...PROBE_SETTINGS }));
+	ctx.facadeSettings(facade);
 	// Activated at once: after a reload it types before Facade's restoration begins
 	fs.writeFileSync(path.join(driver, 'package.json'), JSON.stringify({ name: 'focus-probe-driver', publisher: 'facade-it', version: '0.0.0', engines: { vscode: '^1.105.0' }, activationEvents: ['*'], main: './extension.js' }));
 	fs.copyFileSync(path.join(__dirname, 'focusProbeDriver.js'), path.join(driver, 'extension.js'));

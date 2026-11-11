@@ -23,6 +23,10 @@ export interface SessionIntegrationInput {
 	/** Initialization context for clients that omit MCP server instructions from the model request. */
 	readonly instructions?: string;
 	readonly throughCmd?: boolean;
+	/** The run's own folder of files (CLIS-2.2), where a settings file the integration merges goes: never inline (CONFIGURATION-4.2). */
+	readonly runDir?: string;
+	/** The run's settings, where its CLI takes them in a file of the run (CLIS-3.4): the person's own, before Facade's go into them. */
+	readonly runSettings?: { readonly [key: string]: unknown };
 }
 
 /** Per-process integration only. The host materializes owned files after validating the complete launch. */
@@ -37,6 +41,8 @@ export interface SessionIntegration {
 	readonly extra?: readonly string[];
 	readonly env?: Readonly<Record<string, string>>;
 	readonly files?: readonly { readonly file: string; readonly content: string }[];
+	/** The run's settings `runSettings` with the integration's own in them. */
+	readonly runSettings?: { readonly [key: string]: unknown };
 }
 
 /** A conversation ID as the CLIs that take one write it: a UUID. */

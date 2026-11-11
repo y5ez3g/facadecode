@@ -21,7 +21,7 @@ suite('Native session integration preserves configuration and exact identity (CL
 	let input: SessionIntegrationInput;
 	setup(() => {
 		temp = tempDir('fd-native-session-');
-		input = { file: path.join(temp.dir, 'our.session.json'), hook: 'capture-session', env: { HOME: temp.dir, XDG_CONFIG_HOME: path.join(temp.dir, 'config') }, cwd: temp.dir, platform: 'linux', extra: [] };
+		input = { file: path.join(temp.dir, 'our.session.json'), hook: 'capture-session', env: { HOME: temp.dir, XDG_CONFIG_HOME: path.join(temp.dir, 'config') }, cwd: temp.dir, platform: 'linux', extra: [], runDir: path.join(temp.dir, 'run') };
 	});
 	teardown(() => temp.remove());
 
@@ -35,6 +35,19 @@ suite('Native session integration preserves configuration and exact identity (CL
 		assert.ok(config.hooks.state['/<session-flags>/config.toml:session_start:1:0'].trusted_hash.startsWith('sha256:'));
 		assert.strictEqual(config.hooks.SessionEnd[0].hooks[0].timeout, 3, 'native timeout normalization is part of the trust fingerprint');
 		assert.ok(!session.args!.join(' ').includes('bypass-hook-trust'));
+	});
+
+	test('Codex and Muse Code merge the person\'s hooks given in each spelling of -c they read - apart, after =, --config= and attached - as validation reads them (CLIS-3.1, 3.4)', () => {
+		const toml = 'hooks={SessionStart=[{hooks=[{type="command",command="USER_HOOK"}]}]}';
+		for (const extra of [['-c', toml], [`-c=${toml}`], [`--config=${toml}`], [`-c${toml}`]]) {
+			const config = parseToml(codexSession({ ...input, extra }).args![1]) as any;
+			assert.strictEqual(config.hooks.SessionStart[0].hooks[0].command, 'USER_HOOK', extra.join(' '));
+		}
+		const json = `hooks=${JSON.stringify({ Stop: [{ hooks: [{ type: 'command', command: 'USER_STOP' }] }] })}`;
+		for (const extra of [['-c', json], [`-c=${json}`], [`--config=${json}`], [`-c${json}`]]) {
+			const result = museSession({ ...input, extra: [...extra, '--model', 'own'] });
+			assert.deepStrictEqual([JSON.parse(result.args![1].slice(6)).Stop[0].hooks[0].command, result.extra], ['USER_STOP', ['--model', 'own']], extra.join(' '));
+		}
 	});
 
 	test('Muse replaces a consumed override once and preserves every user hook, without editing the native settings', () => {
@@ -100,7 +113,7 @@ suite('Native session integration preserves configuration and exact identity (CL
 			assert.strictEqual(invoke('UserPromptSubmit', 'prompt'), '', 'ordinary prompts do not append the same initialization repeatedly');
 			assert.strictEqual(invoke('SessionStart', 'startup', '96da4482-2bae-4a45-b193-a5664c19826a'), '', 'a native subagent does not inherit the parent\'s Facade identity');
 		}
-		assert.ok(!museSession(input).files!.some(owned => owned.file.endsWith('context.json')), 'orchestration off adds no Facade context');
+		assert.ok(!museSession(input).files!.some(owned => owned.file.endsWith('context.json')), 'a launch without the tools adds no Facade context');
 	});
 
 	test('settings or per-launch configuration an integration cannot read leave the launch as configured, without identity tracking, for the CLI to say what is wrong: never a start refused (CLIS-2.4)', () => {
@@ -128,36 +141,22 @@ suite('Native session integration preserves configuration and exact identity (CL
 		for (const extra of [['-c', 'hooks=[[['], ['--config', 'hooks=1'], ['--config=hooks.SessionStart="x"'], ['-c=hooks.Stop=[{ hooks = [{ type = "command", command = "x", at = 1979-05-27T07:32:00Z }] }]']]) {
 			assert.deepStrictEqual(codexSession({ ...input, extra }), unavailable, extra.join(' '));
 		}
-		// Antigravity's settings and its per-launch settings
+		// Antigravity's own settings: its run's settings go as they are, without its title command
 		const agy = path.join(temp.dir, '.gemini', 'antigravity-cli', 'settings.json');
-		assert.deepStrictEqual(antigravityAdapter.sessionIntegration!({ ...input, extra: ['--settings', 'missing.json'] }), unavailable);
-		assert.deepStrictEqual(antigravityAdapter.sessionIntegration!({ ...input, extra: ['--settings', '{"theme": '] }), unavailable);
 		write(agy, '{ "title": ');
-		assert.deepStrictEqual(antigravityAdapter.sessionIntegration!(input), unavailable);
+		assert.deepStrictEqual(antigravityAdapter.sessionIntegration!({ ...input, runSettings: { theme: 'dark' } }), unavailable);
 		write(agy, '{\n  // mine\n  "title": { "command": "native-title" },\n}');
-		assert.strictEqual(antigravityAdapter.sessionIntegration!(input).env?.FACADE_CODE_TITLE_COMMAND, 'native-title');
+		assert.strictEqual(antigravityAdapter.sessionIntegration!({ ...input, runSettings: {} }).env?.FACADE_CODE_TITLE_COMMAND, 'native-title');
 	});
 
-	test('Antigravity preserves native title passthrough and all other per-run settings without writing the user file', () => {
+	test('Antigravity\'s title command goes into the run\'s settings, which keep the rest of theirs: the title the run\'s settings name over their own goes on through it, their file never written', () => {
 		const directory = path.join(temp.dir, '.gemini', 'antigravity-cli'); fs.mkdirSync(directory, { recursive: true });
 		const file = path.join(directory, 'settings.json'), original = JSON.stringify({ title: { enabled: true, command: 'native-title' } }); fs.writeFileSync(file, original);
-		const result = antigravityAdapter.sessionIntegration!({ ...input, extra: ['--model', 'native-model', '--settings', '{"theme":"custom","title":{"command":"run-title"}}'] });
-		assert.deepStrictEqual(result.extra, ['--model', 'native-model']);
-		assert.strictEqual(result.env?.FACADE_CODE_TITLE_COMMAND, 'run-title');
-		assert.strictEqual(JSON.parse(result.args![1]).theme, 'custom');
+		const result = antigravityAdapter.sessionIntegration!({ ...input, runSettings: { theme: 'custom', title: { command: 'run-title' } } });
+		assert.deepStrictEqual([result.env?.FACADE_CODE_TITLE_COMMAND, result.runSettings], ['run-title', { theme: 'custom', title: { enabled: true, command: input.hook, type: 'command' } }]);
+		const off = antigravityAdapter.sessionIntegration!({ ...input, runSettings: { title: { enabled: false } } });
+		assert.deepStrictEqual([off.env?.FACADE_CODE_TITLE_COMMAND, (off.runSettings!.title as { enabled: boolean }).enabled], ['', true], 'a title the person turned off reports, and passes nothing on');
 		assert.strictEqual(fs.readFileSync(file, 'utf8'), original);
-	});
-
-
-	test('Antigravity composes tool permissions, per-launch settings and native identity into one overlay', () => {
-		const result = antigravityAdapter.sessionIntegration!({ ...input, tools: true, extra: [
-			'--conversation', 'exact', '--settings', '{"permissions":{"allow":["mcp(facade_facade/*)"]}}',
-			'--settings', '{"permissions":{"allow":["read(*)"],"deny":["shell(rm *)"]},"theme":"dark"}'
-		] });
-		assert.deepStrictEqual(result.extra, ['--conversation', 'exact']);
-		const settings = JSON.parse(result.args![1]);
-		assert.deepStrictEqual(settings.permissions, { allow: ['read(*)', 'mcp(facade_facade/*)'], deny: ['shell(rm *)'] });
-		assert.deepStrictEqual([settings.theme, settings.title.command], ['dark', input.hook]);
 	});
 
 	test('the Windows Muse installer resolves its selected native version, never another channel or an arbitrary batch wrapper', () => {

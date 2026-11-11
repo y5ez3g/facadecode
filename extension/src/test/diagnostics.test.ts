@@ -24,7 +24,6 @@ function diagnostics(more: Partial<Diagnostics> = {}): Diagnostics {
 	return {
 		at: Date.UTC(2026, 9, 31, 12),
 		about: ['Facade Code 0.0.2', 'window component 0.0.2', 'Visual Studio Code 1.143.0', 'darwin arm64', 'local'],
-		collaboration: true,
 		agents: [],
 		log: ['2026-10-31T11:00:00.000Z Agent @Ada #a1 started in /Users/ada/shop'],
 		home: '/Users/ada',
@@ -33,9 +32,9 @@ function diagnostics(more: Partial<Diagnostics> = {}): Diagnostics {
 }
 
 suite('The diagnostics report: what it holds (ARCHITECTURE-3.3)', () => {
-	test('catalog configuration errors remain visible even if a malformed catalog yields no custom entries', () => {
-		const text = diagnosticsText(diagnostics({ clis: { where: '/repo', each: [], problems: [{ setting: 'facade.custom', problem: 'facade.custom must be an object; received array' }] } }));
-		assert.match(text, /Configuration error \(facade.custom\): facade.custom must be an object; received array/);
+	test('a settings file that cannot be read stays visible, naming the file, though it leaves no CLI to list (CONFIGURATION-4.1)', () => {
+		const text = diagnosticsText(diagnostics({ clis: { where: '/repo', each: [], problems: [{ setting: '~/.facade/facade.json', problem: '~/.facade/facade.json:1:10: clis must be an object; received array' }] } }));
+		assert.match(text, /Configuration error \(~\/\.facade\/facade\.json\): ~\/\.facade\/facade\.json:1:10: clis must be an object; received array/);
 	});
 
 	test('versions, CLIs, agents with what their input reads and their last rows, and the log\'s end, the home folder written ~', () => {
@@ -44,7 +43,7 @@ suite('The diagnostics report: what it holds (ARCHITECTURE-3.3)', () => {
 				where: '/Users/ada/shop',
 				each: [
 					{ choice: { id: 'claude', displayName: 'Claude Code', available: true }, version: '2.1.316', input: 'claude-frame' },
-					{ choice: { id: 'codex', displayName: 'Codex', available: false, problem: 'facade.codex.command names no program' } },
+					{ choice: { id: 'codex', displayName: 'Codex', available: false, problem: 'clis.codex.command names no program' } },
 					{ choice: { id: 'pi', displayName: 'Pi', available: false, notInstalled: true } }
 				]
 			},
@@ -63,11 +62,10 @@ suite('The diagnostics report: what it holds (ARCHITECTURE-3.3)', () => {
 			'Facade Code diagnostics, 2026-10-31T12:00:00.000Z',
 			"Scope: this window and execution environment only; other windows' logs are not collected.",
 			'Facade Code 0.0.2; window component 0.0.2; Visual Studio Code 1.143.0; darwin arm64; local',
-			'Collaboration through Facade\'s tools: on',
 			'',
 			'CLIs for ~/shop',
 			'- Claude Code (claude): 2.1.316; input reader claude-frame',
-			'- Codex (codex): cannot start: facade.codex.command names no program',
+			'- Codex (codex): cannot start: clis.codex.command names no program',
 			'- Pi (pi): not installed',
 			'',
 			'Agents in this window: 2',
@@ -140,8 +138,7 @@ suite('The diagnostics report the integration suite reads (ARCHITECTURE-3.3)', (
 				locations: { snapshot: () => ({ locations: [location], folders: [], pending: false }) },
 				clis: {
 					list: async () => ({ clis: [{ id: 'claude', displayName: 'Claude Code', available: true }], problems: [] }),
-					describe: () => ({ launches: [{ cli: 'claude', takes: { model: true, effort: true }, input: { adapter: 'claude-frame', capability: { state: 'supported', reason: '' } }, version: { version: '2.1.316', source: '' } }] }),
-					collaborationEnabled: () => true
+					describe: () => ({ launches: [{ cli: 'claude', takes: { model: true, effort: true }, input: { adapter: 'claude-frame', capability: { state: 'supported', reason: '' } }, version: { version: '2.1.316', source: '' } }] })
 				} as unknown as Parameters<typeof diagnosticsOf>[0]['clis'],
 				readScreen: async id => {
 					if (id === bo.id) {
@@ -174,7 +171,7 @@ suite('The diagnostics report the integration suite reads (ARCHITECTURE-3.3)', (
 		};
 		const deps = {
 			agents: { list: () => [] }, locations: { snapshot: () => ({ locations: [], folders: [], pending: false }) },
-			clis: { list: async () => [], describe: () => ({ launches: [] }), collaborationEnabled: () => false } as never,
+			clis: { list: async () => [], describe: () => ({ launches: [] }) } as never,
 			readScreen: async () => ({ lines: [], text: [], buffer: 'normal', older: false }) as unknown as ScreenRead,
 			inspect: async () => 'usable', logFile: path.join(os.tmpdir(), 'facade-no-such-agents.log'), version: '0.0.2', home: '/home/ada'
 		};

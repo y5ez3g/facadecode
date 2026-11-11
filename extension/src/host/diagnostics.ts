@@ -19,7 +19,7 @@ const LOG_TAIL_BYTES = 256 * 1024;
 export interface DiagnosticsDeps {
 	readonly agents: Pick<Agents, 'list'>;
 	readonly locations: Pick<LocationPort, 'snapshot'>;
-	readonly clis: Pick<HostClis, 'list' | 'describe' | 'collaborationEnabled'>;
+	readonly clis: Pick<HostClis, 'list' | 'describe'>;
 	readonly readScreen: (run: RunId, lines: number) => Promise<ScreenRead>;
 	readonly inspect: (run: RunId) => Promise<string>;
 	readonly logFile: string;
@@ -99,7 +99,6 @@ export async function diagnosticsOf(deps: DiagnosticsDeps): Promise<string> {
 			`${process.platform} ${process.arch}`,
 			vscode.env.remoteName ? `remote ${vscode.env.remoteName}` : 'local'
 		],
-		collaboration: deps.clis.collaborationEnabled(),
 		...clis ? { clis } : {},
 		agents: await Promise.all(deps.agents.list().map(facts => agentOf(deps, facts))),
 		log: logTail(deps.logFile),

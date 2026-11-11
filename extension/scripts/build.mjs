@@ -112,7 +112,9 @@ if (problems.length) {
 }
 console.info(`Native PTY: ${nativeManifest.version}, ${hostTarget()}, build runtime ${process.version} (Node-API ${process.versions.napi})`);
 
-const common = { bundle: true, sourcemap: !production, minify: production, minifySyntax: true, logLevel: 'info', define: { FACADE_TEST_MODE: 'false' } };
+// jsonc-parser's ES modules: its `main`, a UMD wrapper, requires its parts at run time, which a bundle leaves out
+const common = { bundle: true, sourcemap: !production, minify: production, minifySyntax: true, logLevel: 'info', define: { FACADE_TEST_MODE: 'false' },
+	alias: { 'jsonc-parser': 'jsonc-parser/lib/esm/main.js' } };
 const builds = [
 	{ ...common, entryPoints: { extension: path.join(root, 'src', 'extension.ts') }, outdir: dist, platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'] },
 	{ ...common, entryPoints: { window: path.join(root, 'src', 'host', 'window.ts') }, outdir: path.join(windowStage, 'dist'), platform: 'node', format: 'cjs', target: 'node20', external: ['vscode'] },

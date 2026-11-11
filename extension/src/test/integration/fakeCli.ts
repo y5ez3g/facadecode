@@ -362,8 +362,11 @@ function start(): void {
 	});
 }
 
-/** Whether it stands in for Antigravity, whose launch with the tools gives it its session's settings (CLIS-2.2). */
-const antigravity = args.includes('--settings') && /"permissions"/.test(args[args.indexOf('--settings') + 1] ?? '');
+/**
+ * Whether it stands in for Antigravity: Facade gives Antigravity alone its run's settings in `agy-settings.json` (CLIS-3.4). What the
+ * settings hold tells nothing, as a Claude Code entry's own may hold the same keys.
+ */
+const antigravity = args.includes('--settings') && path.basename(args[args.indexOf('--settings') + 1] ?? '') === 'agy-settings.json';
 /** Starts the server Antigravity was given, at its first turn or once its MCP panel opens; nothing until then. */
 let startsServer: (() => void) | undefined;
 

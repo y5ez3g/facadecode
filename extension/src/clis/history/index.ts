@@ -10,6 +10,7 @@
 // own conversation is read by its ID alone, for its title (CLIS-2.4), through the same reading of each file.
 
 import * as fs from 'fs';
+import { isSameFolder } from '../../base/files';
 import type { Environment } from '../environment';
 import { CLAUDE_STORE } from './claude';
 import { ANTIGRAVITY_STORE } from './antigravity';
@@ -32,6 +33,8 @@ const READ_TOGETHER = 8;
 /** A conversation as the picker lists it: the same facts as the core's ConversationEntry. */
 export interface DiscoveredConversation {
 	readonly key: { readonly environment: string; readonly cli: string; readonly sessionId: string };
+	/** The built-in whose store keeps it: its entry must run that built-in still to resume it (CONFIGURATION-3.4). */
+	readonly builtIn: string;
 	readonly title?: string;
 	readonly cwd: string;
 	readonly cwdChoices?: readonly string[];
@@ -60,12 +63,19 @@ export interface VendorHistoryOptions {
 	/** The stores read: every one Facade has a reader for by default. */
 	readonly stores?: readonly VendorStore[];
 	/** Why a CLI cannot resume a conversation of a folder in this window now - not installed, turned off - or undefined where it can. */
-	readonly unavailable?: (cli: string, cwd: string) => string | undefined;
+	/** Why a conversation of the CLI `cli`, found in the built-in store `store`, cannot be resumed in `cwd` now, where it cannot. */
+	readonly unavailable?: (cli: string, cwd: string, store: string) => string | undefined;
+	/** The entry Facade recorded as starting the conversation `sessionId` of the store `store` (CONFIGURATION-3.4); none where none. */
+	readonly associated?: (environment: string, store: string, sessionId: string) => string | undefined;
+	/** The built-in each added entry of a built-in's type runs, by its name: its conversations are in that built-in's store (CONFIGURATION-2.3). */
+	readonly builtIns?: () => Readonly<Record<string, string>>;
 }
 
-/** A file of a store, with the directories of the scope whose launches find that store. */
+/** A file of a store, with the directories of the scope whose launches find that store, and the store's folder. */
 interface ScopedCandidate extends Candidate {
 	readonly scope: Scope;
+	/** The folder of the store it is in: a launch that finds another keeps its conversations elsewhere (CONFIGURATION-3.4). */
+	readonly storeDir: string;
 }
 
 interface ResolvedCandidate {
@@ -89,14 +99,18 @@ class VendorPager {
 	 * the many conversations of one folder would otherwise each repeat, synchronously (LIFECYCLE-3.2).
 	 */
 	private readonly unavailable = new Map<string, string | undefined>();
+	/** Whether each CLI's launch in each folder finds each store, as asked once in this picker session: Pi reads a file for it. */
+	private readonly finds = new Map<string, boolean>();
+	/** Each folder's launch environments, asked once in this picker session (CLIS-1.2). */
+	private readonly environments = new Map<string, StoreEnvironments>();
 	private disposed = false;
 
 	constructor(private readonly history: VendorHistory, private readonly scope: { readonly environment: string; readonly directories: readonly string[] }) { }
 
-	private unavailableOf(cli: string, cwd: string): string | undefined {
-		const key = `${cli}\u0000${cwd}`;
+	private unavailableOf(cli: string, cwd: string, store: string): string | undefined {
+		const key = `${cli}\u0000${cwd}\u0000${store}`;
 		if (!this.unavailable.has(key)) {
-			this.unavailable.set(key, this.history.unavailableOf(cli, cwd));
+			this.unavailable.set(key, this.history.unavailableOf(cli, cwd, store));
 		}
 		return this.unavailable.get(key);
 	}
@@ -106,7 +120,7 @@ class VendorPager {
 			return { entries: [], done: true };
 		}
 		// Listed once: every file a store may keep a conversation of the scope in, most recently active first
-		this.candidates ??= (await this.history.candidatesOf(this.scope.directories)).sort((a, b) => b.at - a.at || (a.file < b.file ? -1 : 1));
+		this.candidates ??= (await this.history.candidatesOf(this.scope.directories, directory => this.environmentOf(directory))).sort((a, b) => b.at - a.at || (a.file < b.file ? -1 : 1));
 		if (this.disposed) {
 			return { entries: [], done: true };
 		}
@@ -141,19 +155,20 @@ class VendorPager {
 			if (!recent) { break; }
 			this.pending.pop();
 			const { candidate, found, at } = recent;
-			// One entry per environment, CLI and session: its most recently active file
+			// One entry per environment, store and session: its most recently active file
 			const key = `${candidate.cli}\u0000${found.sessionId}`;
 			if (this.seen.has(key)) {
 				continue;
 			}
 			this.seen.add(key);
-			const conversation = { environment: this.scope.environment, cli: candidate.cli, sessionId: found.sessionId };
+			const conversation = { environment: this.scope.environment, cli: this.cliOf(candidate, found.sessionId), sessionId: found.sessionId };
 			const known = found.cwdChoices && this.history.knownCwd(conversation);
-			const choices = known ? undefined : found.cwdChoices?.filter(folder => !this.unavailableOf(candidate.cli, folder));
+			const choices = known ? undefined : found.cwdChoices?.filter(folder => !(this.unavailableOf(conversation.cli, folder, candidate.cli) ?? this.storeElsewhere(conversation.cli, candidate, folder)));
 			const cwd = known || choices?.[0] || found.cwd;
-			const unavailable = this.unavailableOf(candidate.cli, cwd);
+			const unavailable = this.unavailableOf(conversation.cli, cwd, candidate.cli) ?? this.storeElsewhere(conversation.cli, candidate, cwd);
 			entries.push({
 				key: conversation,
+				builtIn: candidate.cli,
 				...found.title ? { title: found.title } : {},
 				cwd,
 				...choices?.length ? { cwdChoices: choices } : {},
@@ -162,6 +177,47 @@ class VendorPager {
 			});
 		}
 		return { entries, done: this.next$ >= this.candidates.length && !this.pending.length };
+	}
+
+	/**
+	 * The CLI a conversation `sessionId` of `candidate`'s store is listed under and resumed with (CONFIGURATION-3.4): the entry Facade
+	 * recorded as starting it, configured as it is now or not; else a built-in's added entry that Facade's own record of its working
+	 * folder names; else the built-in whose store it is. Another entry is never chosen for the person.
+	 */
+	private cliOf(candidate: ScopedCandidate, sessionId: string): string {
+		const recorded = this.history.associated(this.scope.environment, candidate.cli, sessionId);
+		if (recorded !== undefined) {
+			return recorded;
+		}
+		const started = this.history.customClisOf(candidate.cli).find(cli => this.history.knownCwd({ environment: this.scope.environment, cli, sessionId }) !== undefined);
+		return started ?? candidate.cli;
+	}
+
+	/**
+	 * Why `cli` cannot resume, in `cwd`, a conversation of `candidate`'s store: its launch there - the one that resumes - keeps its
+	 * conversations in another folder, where its resume would not find this one; none where it finds this store. That launch goes by
+	 * `cwd`'s own settings: the innermost of the window's folders holding it, and those the CLI reads in `cwd` itself, such as Pi's -
+	 * never by another folder whose launches find this store, an enclosing one too.
+	 */
+	private environmentOf(directory: string): StoreEnvironments {
+		let environments = this.environments.get(directory);
+		if (!environments) {
+			environments = this.history.environmentOf(directory);
+			this.environments.set(directory, environments);
+		}
+		return environments;
+	}
+
+	private storeElsewhere(cli: string, candidate: ScopedCandidate, cwd: string): string | undefined {
+		const key = `${cli}\u0000${cwd}\u0000${candidate.storeDir}`;
+		let finds = this.finds.get(key);
+		if (finds === undefined) {
+			// The same folder however it is written: in another letter case, or through a link
+			const found = this.history.storeOf(cli, cwd, this.environmentOf(cwd));
+			finds = found !== undefined && isSameFolder(found, candidate.storeDir);
+			this.finds.set(key, finds);
+		}
+		return finds ? undefined : `${JSON.stringify(cli)}'s launches here keep their conversations in another folder, so they would not find this one.`;
 	}
 
 	/** `candidate`'s head, read together with the next ones' (LIFECYCLE-3.2): each is still taken in its turn. */
@@ -192,8 +248,10 @@ export class VendorHistory {
 
 	private readonly environment: (directory: string) => StoreEnvironments;
 	private readonly stores: ReadonlyMap<string, VendorStore>;
-	private readonly unavailable: (cli: string, cwd: string) => string | undefined;
+	private readonly unavailable: (cli: string, cwd: string, store: string) => string | undefined;
+	readonly associated: (environment: string, store: string, sessionId: string) => string | undefined;
 	private readonly arguments: () => Readonly<Record<string, readonly string[]>>;
+	private readonly builtIns: () => Readonly<Record<string, string>>;
 	readonly knownCwd: (key: DiscoveredConversation['key']) => string | undefined;
 	/** Each file's head as read, by file and when it last changed: reused within and across picker sessions. */
 	private readonly heads = new Map<string, { readonly at: number; readonly found: Found | undefined; readonly files: ReadonlyMap<string, string> }>();
@@ -204,10 +262,27 @@ export class VendorHistory {
 		this.environment = options.environment ?? (() => Object.fromEntries(stores.map(store => [store.cli, process.env])));
 		this.unavailable = options.unavailable ?? (() => undefined);
 		this.arguments = options.arguments ?? (() => ({}));
+		this.builtIns = options.builtIns ?? (() => ({}));
 		this.knownCwd = options.knownCwd ?? (() => undefined);
+		this.associated = options.associated ?? (() => undefined);
+	}
+
+	/** The CLI whose store `cli`'s conversations are in: an added entry's built-in, else `cli` itself (CONFIGURATION-2.3). */
+	private storeCliOf(cli: string): string {
+		return Object.hasOwn(this.builtIns(), cli) ? this.builtIns()[cli] : cli;
+	}
+
+	/** The added entries configured now that run the built-in `cli`, in the file's order (CONFIGURATION-2.3). */
+	customClisOf(cli: string): readonly string[] {
+		return Object.entries(this.builtIns()).filter(([, builtIn]) => builtIn === cli).map(([custom]) => custom);
 	}
 
 	/** Vendor histories for `scope`'s directories and the folders below them. */
+	/** The launch environments of each CLI in `directory` (CLIS-1.2). */
+	environmentOf(directory: string): StoreEnvironments {
+		return this.environment(directory);
+	}
+
 	open(scope: { readonly environment: string; readonly directories: readonly string[] }): VendorPager {
 		return new VendorPager(this, scope);
 	}
@@ -217,28 +292,28 @@ export class VendorHistory {
 	 * directories whose launches use it (CLIS-1.2): a store is listed once, however many directories find it. Each store is listed in
 	 * a turn of its own, so that no long synchronous listing holds the extension host that draws the agents' terminals (LIFECYCLE-3.2).
 	 */
-	async candidatesOf(directories: readonly string[]): Promise<ScopedCandidate[]> {
-		const found = new Map<string, { readonly store: VendorStore; readonly dir: string; readonly directories: string[] }>();
+	async candidatesOf(directories: readonly string[], environmentOf = (directory: string) => this.environment(directory)): Promise<ScopedCandidate[]> {
+		const found = new Map<string, { readonly store: VendorStore; readonly dir: string; readonly directories: Set<string> }>();
 		const args = this.arguments();
 		for (const directory of directories) {
-			const environments = this.environment(directory);
-			for (const store of this.stores.values()) {
-				const env = environments[store.cli];
-				if (!env) {
+			// Each CLI's launches - an added entry's too, by its own environment - find its built-in's store (CONFIGURATION-2.3)
+			for (const [cli, env] of Object.entries(environmentOf(directory))) {
+				const store = this.stores.get(this.storeCliOf(cli));
+				if (!store || !env) {
 					continue;
 				}
-				const dir = store.dirOf(env, directory, args[store.cli]);
+				const dir = store.dirOf(env, directory, args[cli]);
 				const key = `${store.cli}\u0000${dir}`;
-				const each = found.get(key) ?? { store, dir, directories: [] };
-				each.directories.push(directory);
+				const each = found.get(key) ?? { store, dir, directories: new Set<string>() };
+				each.directories.add(directory);
 				found.set(key, each);
 			}
 		}
 		const listed: ScopedCandidate[] = [];
-		for (const { store, dir, directories: within } of found.values()) {
+		for (const { store, dir, directories } of found.values()) {
 			await new Promise(resolve => setImmediate(resolve));
-			const scope = new Scope(within);
-			listed.push(...store.candidates(dir, scope).map(candidate => ({ ...candidate, scope })));
+			const scope = new Scope([...directories]);
+			listed.push(...store.candidates(dir, scope).map(candidate => ({ ...candidate, scope, storeDir: dir })));
 		}
 		return listed;
 	}
@@ -250,7 +325,7 @@ export class VendorHistory {
 	 * not saved it, or saved it without a title.
 	 */
 	async title(conversation: { readonly cli: string; readonly sessionId: string }, directory: string, storeDir?: string): Promise<string | undefined> {
-		const store = this.stores.get(conversation.cli);
+		const store = this.stores.get(this.storeCliOf(conversation.cli));
 		// The store its launch used, where the run kept it: a setting changed since, or the CLI turned off, does not move it (CLIS-2.4)
 		const dir = store && (storeDir ?? this.storeOf(conversation.cli, directory));
 		if (!store || dir === undefined) {
@@ -268,15 +343,15 @@ export class VendorHistory {
 	 * The folder of `cli`'s store its launches in `directory` find now, by the current environment and arguments (CLIS-1.2): what a
 	 * launch keeps, so that its conversation's title is read there for as long as it runs. None where its CLI has no store here.
 	 */
-	storeOf(cli: string, directory: string): string | undefined {
-		const store = this.stores.get(cli);
-		const env = store && this.environment(directory)[cli];
+	storeOf(cli: string, directory: string, environments: StoreEnvironments = this.environment(directory)): string | undefined {
+		const store = this.stores.get(this.storeCliOf(cli));
+		const env = store && environments[cli];
 		return store && env ? store.dirOf(env, directory, this.arguments()[cli]) : undefined;
 	}
 
-	/** Whether a reader of `cli`'s store is here: a custom CLI has none, so its runs never have a title (CLIS-2.4). */
+	/** Whether a reader of `cli`'s store is here: a program has none, so its runs never have a title (CONFIGURATION-2.3, CLIS-2.4). */
 	readsTitles(cli: string): boolean {
-		return this.stores.has(cli);
+		return this.stores.has(this.storeCliOf(cli));
 	}
 
 	/** A candidate's metadata: read once per version of its file. */
@@ -296,12 +371,12 @@ export class VendorHistory {
 		return found;
 	}
 
-	/** Why a conversation of `cli` in `cwd` cannot be resumed now, where it cannot. */
-	unavailableOf(cli: string, cwd: string): string | undefined {
+	/** Why a conversation of `cli`, found in the store `store`, cannot be resumed in `cwd` now, where it cannot. */
+	unavailableOf(cli: string, cwd: string, store: string = cli): string | undefined {
 		if (!fs.existsSync(cwd)) {
 			return `Its working directory no longer exists: ${cwd}`;
 		}
-		return this.unavailable(cli, cwd);
+		return this.unavailable(cli, cwd, store);
 	}
 }
 

@@ -15,6 +15,8 @@ export interface GoToAgentDeps {
 	readonly reveal: (run: RunId) => Promise<unknown>;
 	readonly copyReference: (run: RunId) => Promise<void>;
 	readonly close: (run: RunId) => Promise<void>;
+	/** The icon each CLI shows, by its API ID (CONFIGURATION-2.4); none: each name's own. */
+	readonly icons?: () => (cli: string) => string;
 }
 
 /**
@@ -46,6 +48,7 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 	picker.title = vscode.l10n.t("Go to Agent");
 	picker.placeholder = vscode.l10n.t("Search by name, CLI, title, location, or ID");
 	picker.matchOnDescription = true;
+	const icon = deps.icons?.() ?? ((cli: string) => cli);
 	const itemOf = (facts: RunFacts, placesShown: boolean): Item => {
 		const item: Item = {
 			label: plainText(facts.name || facts.alias),
@@ -53,7 +56,7 @@ export function goToAgent(deps: GoToAgentDeps): Promise<void> {
 			// CLI saved one (CLIS-2.4)
 			// Its title's lines joined with a space, as the row is one line: the stored and searchable title stays whole (LIFECYCLE-2.3)
 			description: plainText([facts.name ? facts.alias : undefined, placesShown ? deps.model.placeOf(facts).qualified : undefined, facts.title?.split(/\r?\n/).join(' ')].filter(Boolean).join(' · ')),
-			iconPath: cliIcon(deps.media, facts.cli),
+			iconPath: cliIcon(deps.media, icon(facts.cli)),
 			buttons: [copy, close],
 			run: facts.id
 		};

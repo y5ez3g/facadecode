@@ -8,7 +8,7 @@ import { normalizeName, suggestName } from '../../core/names';
 import type { Agents, Catalog, CliCatalogPort, CliChoice, CliChoices, HumanPort, LaunchHistoryPort, Location, LocationId, LocationPort, LogPort, RunId, WorktreePort } from '../../core/ports';
 import { locationLabel, onePlaceOf } from '../cardView';
 import { COMMANDS } from '../catalog';
-import { cliIcon, configureAgentsLabel, launchFailureText, plainText, reasonOf, reasonText } from '../presentation';
+import { cliIcon, launchFailureText, openSettingsLabel, plainText, reasonOf, reasonText } from '../presentation';
 import { chooseLocation, Destination, environmentLabel, worktreeSourceLabel } from './location';
 import { BACK, Flow } from './stepping';
 
@@ -25,6 +25,8 @@ export interface NewAgentDeps {
 	readonly log: LogPort;
 	readonly media: vscode.Uri;
 	readonly suggest?: () => string;
+	/** `names` of the settings file, where it has them: what the suggested name is picked from (LIFECYCLE-2.1). */
+	readonly names?: () => readonly string[] | undefined;
 	/** The window's remote authority, as the local window component sees it: how its environment is named (LIFECYCLE-1.1). */
 	readonly remote?: string;
 }
@@ -57,7 +59,7 @@ export function orderedClis(choices: readonly CliChoice[], last: string | undefi
 	return { available, unavailable: choices.filter(choice => !choice.available && !choice.notInstalled) };
 }
 
-type Does = 'start' | 'configure' | 'location' | 'name' | 'openFolder';
+type Does = 'start' | 'settings' | 'location' | 'name' | 'openFolder';
 type Item = vscode.QuickPickItem & { readonly does?: Does; readonly cli?: CliChoice };
 
 /**
@@ -82,7 +84,8 @@ export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promis
 		return openFolder(flow, title);
 	}
 	let destination: Destination = { location: found };
-	let name = deps.suggest?.() ?? suggestName(deps.agents.list().map(run => run.name));
+	// None left, or an empty `names`: the box starts blank, and the agent is named by its ID (LIFECYCLE-2.1)
+	let name = deps.suggest?.() ?? suggestName(deps.agents.list().map(run => run.name), deps.names?.()) ?? '';
 	for (; ;) {
 		const picked = await chooseCli(flow, deps, { title, destination, name });
 		if (!picked) {
@@ -93,14 +96,14 @@ export async function newAgent(deps: NewAgentDeps, startAt?: LocationId): Promis
 			start(deps, name, destination, picked.cli);
 			return;
 		}
-		if (picked.does === 'configure') {
-			// The same page as Configure Agents... everywhere (UX-1.3)
+		if (picked.does === 'settings') {
+			// The same page as Open Settings everywhere (UX-1.3)
 			flow.close();
-			await vscode.commands.executeCommand(COMMANDS.configureAgents);
+			await vscode.commands.executeCommand(COMMANDS.openSettings);
 			return;
 		}
 		if (picked.does === 'name') {
-			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: name, placeholder: vscode.l10n.t("Agent name"), back: true });
+			const typed = await flow.text({ title: vscode.l10n.t("New Agent · Change Name"), value: name, placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"), back: true });
 			if (typed === undefined) {
 				return;
 			}
@@ -162,7 +165,7 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	// (LIFECYCLE-1.1), which Git read later may find to be no such place
 	const summaryOf = (now: Catalog) => !worktree && onePlaceOf(now)?.id === location.id
 		? vscode.l10n.t("{0} · {1}", at.title, at.name) : vscode.l10n.t("{0} · {1} · {2}", at.title, at.name, titleWhere);
-	const configure: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: configureAgentsLabel() };
+	const settingsButton: vscode.QuickInputButton = { iconPath: new vscode.ThemeIcon('gear'), tooltip: openSettingsLabel() };
 	/**
 	 * The step's bottom as the catalog is now (LIFECYCLE-1.3): nothing to change the location to - one folder whose only location is a
 	 * plain folder - is said as a label, never an action that does nothing; a folder Git then finds in a repository offers its change.
@@ -187,22 +190,22 @@ async function chooseCli(flow: Flow, deps: NewAgentDeps, at: { readonly title: s
 	const itemsOf = (choices: CliChoices | Error, now: Catalog): { readonly items: Item[]; readonly active?: Item } => {
 		const bottom = bottomOf(now);
 		if (choices instanceof Error) {
-			const item: Item = { label: vscode.l10n.t("Configure Agents..."), detail: reasonOf(choices), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' };
+			const item: Item = { label: openSettingsLabel(), detail: reasonOf(choices), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'settings' };
 			return { items: [item, ...bottom], active: item };
 		}
 		const { available, unavailable } = orderedClis(choices.clis, deps.history.last().cli);
-		// An error no CLI stands for - `facade.custom` wrong, or a key that cannot be an ID - is said by its setting (CLIS-3.4)
-		const settings = choices.problems.map((each): Item => ({ label: each.setting, detail: reasonText(each.said, each.problem), iconPath: new vscode.ThemeIcon('gear'), buttons: [configure], does: 'configure' }));
+		// An error no CLI stands for - the settings file wrong as a whole - is said by the file (CONFIGURATION-4.1)
+		const settings = choices.problems.map((each): Item => ({ label: each.setting, detail: reasonText(each.said, each.problem), iconPath: new vscode.ThemeIcon('gear'), buttons: [settingsButton], does: 'settings' }));
 		const items: Item[] = [
-			...available.map((cli): Item => ({ label: cli.displayName, iconPath: cliIcon(deps.media, cli.id), does: 'start', cli })),
+			...available.map((cli): Item => ({ label: cli.displayName, iconPath: cliIcon(deps.media, cli.icon ?? cli.id), does: 'start', cli })),
 			// No CLI can start here: why, and the way to the settings (LIFECYCLE-1.1, EXPERIENCE-1.4)
-			...available.length ? [] : [{ label: vscode.l10n.t("Configure Agents..."), detail: vscode.l10n.t("Install a supported CLI in this environment, or configure its path."), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'configure' as const }],
+			...available.length ? [] : [{ label: openSettingsLabel(), detail: vscode.l10n.t("Install a supported CLI in this environment, or configure its path."), iconPath: new vscode.ThemeIcon('gear'), alwaysShow: true, does: 'settings' as const }],
 			...unavailable.length || settings.length ? [{ label: vscode.l10n.t("Unavailable"), kind: vscode.QuickPickItemKind.Separator }] : [],
-			...unavailable.map((cli): Item => ({ label: cli.displayName, ...(cli.problem ? { detail: reasonText(cli.said, cli.problem) } : {}), iconPath: cliIcon(deps.media, cli.id), buttons: [configure], does: 'configure', cli })),
+			...unavailable.map((cli): Item => ({ label: cli.displayName, ...(cli.problem ? { detail: reasonText(cli.said, cli.problem) } : {}), iconPath: cliIcon(deps.media, cli.icon ?? cli.id), buttons: [settingsButton], does: 'settings', cli })),
 			...settings,
 			...bottom
 		];
-		return { items, active: items.find(item => item.does === 'start' || item.does === 'configure') };
+		return { items, active: items.find(item => item.does === 'start' || item.does === 'settings') };
 	};
 	const picked = await flow.pick<Item>({
 		title: summaryOf(catalog),

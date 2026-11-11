@@ -107,7 +107,7 @@ export class AgentActions {
 			return;
 		}
 		const flow = new Flow();
-		const typed = await flow.text({ title: vscode.l10n.t("Rename Agent"), value: facts.name, placeholder: vscode.l10n.t("Agent name"), prompt: vscode.l10n.t("Rename {0}", referenceOf(facts)) });
+		const typed = await flow.text({ title: vscode.l10n.t("Rename Agent"), value: facts.name, placeholder: vscode.l10n.t("Leave blank for an unused name, or its ID"), prompt: vscode.l10n.t("Rename {0}", referenceOf(facts)) });
 		flow.close();
 		if (typed === undefined || typed === BACK) {
 			return;

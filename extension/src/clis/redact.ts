@@ -8,10 +8,11 @@
 import { isJsonObject } from '../base/json';
 
 /**
- * The names of variables, settings, options and keys whose values are secrets, which the document never shows (CLIS-4.1): a token -
- * not a count of tokens - a secret, a password, a key, a personal access token, credentials, authorization, a cookie.
+ * The names of variables, settings, options and keys whose values are secrets, which the document never shows (CLIS-4.1,
+ * CONFIGURATION-4.2): any containing key, token, secret, password, auth or credential, whatever its case - and a passphrase, a
+ * cookie, a bearer credential, a personal access token, a pass.
  */
-const SECRET_NAME = /token(?!s)|secret|passw(?:or)?d|passphrase|api[-_]?key|access[-_]?key|private[-_]?key|credential|auth|cookie|bearer|session[-_]?key|(?:^|[-_.])(?:key|pat|pass)$/i;
+const SECRET_NAME = /key|token|secret|passw(?:or)?d|passphrase|auth|credential|cookie|bearer|(?:^|[-_.])(?:pat|pass)$/i;
 const REDACTED = '<redacted>';
 
 /** Whether `value` holds a value of its own, not only `${name}`s filled in later - which name no secret. */
@@ -76,7 +77,8 @@ export function redacted(value: unknown, name?: string): unknown {
 				return redacted(each);
 			}
 			const option: unknown = value[i - 1];
-			if (typeof option === 'string' && /^-{1,2}[\w.-]+$/.test(option) && SECRET_NAME.test(option) && !each.startsWith('-') && holdsValue(each)) {
+			// A secret's option hides the argument after it, one starting with a dash too: only another long option is no value of it
+			if (typeof option === 'string' && /^-{1,2}[\w.-]+$/.test(option) && SECRET_NAME.test(option) && !each.startsWith('--') && holdsValue(each)) {
 				return REDACTED;
 			}
 			const assigned = /^(?<key>-{0,2}[\w.-]+)=(?<rest>[\s\S]*)$/.exec(each)?.groups;

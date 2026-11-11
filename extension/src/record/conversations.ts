@@ -45,8 +45,28 @@ export class ConversationFile {
 		replaceFile(this.fileOf(key), `${JSON.stringify(meta)}\n`);
 	}
 
+	/**
+	 * Records the entry `cli` that started the conversation `sessionId` of the built-in store `store` (CONFIGURATION-3.4), so that it
+	 * is found by the store's conversation alone, as Resume reads stores.
+	 */
+	associate(environment: string, store: string, sessionId: string, cli: string): void {
+		replaceFile(this.associationOf(environment, store, sessionId), `${JSON.stringify({ cli })}\n`);
+	}
+
+	/** The entry that started the conversation `sessionId` of the store `store`, where Facade recorded one (CONFIGURATION-3.4). */
+	associated(environment: string, store: string, sessionId: string): string | undefined {
+		try {
+			const value: unknown = JSON.parse(fs.readFileSync(this.associationOf(environment, store, sessionId), 'utf8'));
+			return isJsonObject(value) && typeof value.cli === 'string' && value.cli ? value.cli : undefined;
+		} catch { return undefined; }
+	}
+
 	private fileOf(key: Key): string {
 		return path.join(this.dir, `${createHash('sha256').update(idOf(key)).digest('hex')}.json`);
+	}
+
+	private associationOf(environment: string, store: string, sessionId: string): string {
+		return path.join(this.dir, `${createHash('sha256').update(`store\u0000${environment}\u0000${store}\u0000${sessionId}`).digest('hex')}.store.json`);
 	}
 }
 

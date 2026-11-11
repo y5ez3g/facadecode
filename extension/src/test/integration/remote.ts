@@ -49,8 +49,6 @@ interface Host {
 	readonly build: string;
 	/** The fake CLI there. */
 	readonly fake: string;
-	/** The folder of the editor's server's machine settings there. */
-	readonly machine: string;
 	/** A path of the run's root, as that host writes it. */
 	at(file: string): string;
 	/** The editor's address of a path there: one of the run's root, or one with a drive of its own on Windows. */
@@ -141,8 +139,7 @@ async function main(): Promise<void> {
 			const at = (file: string) => `${drive}${file.replace(/\//g, '\\')}`;
 			// The run's root on the system drive, as Node there resolves `/tmp/…`; a path with a drive of its own keeps it
 			const uri = (file: string) => `vscode-remote://ssh-remote+${alias}/${/^[A-Za-z]:/.test(file) ? `${file[0].toLowerCase()}${file.slice(1)}` : `${drive.toLowerCase()}${file}`}`;
-			const machine = `${at(`${root}/server`)}\\.vscode-server\\data\\Machine`;
-			return { kind: 'ssh', alias, title: `${alias}, windows`, platform: 'windows', build, fake: at(`${root}/fake-cli.cmd`), machine, at, uri, run };
+			return { kind: 'ssh', alias, title: `${alias}, windows`, platform: 'windows', build, fake: at(`${root}/fake-cli.cmd`), at, uri, run };
 		}
 		const run = (script: string) => ssh(['sh -s'], script);
 		let platform: string;
@@ -155,7 +152,7 @@ async function main(): Promise<void> {
 			throw new Error(`${alias} runs neither Linux, macOS nor Windows.`);
 		}
 		return {
-			kind: 'ssh', alias, title: `${alias}, ${platform}`, platform, build, fake: `${root}/fake-cli`, machine: `${root}/server/.vscode-server/data/Machine`,
+			kind: 'ssh', alias, title: `${alias}, ${platform}`, platform, build, fake: `${root}/fake-cli`,
 			at: file => file, uri: file => `vscode-remote://ssh-remote+${alias}${file}`, run
 		};
 	});
@@ -173,7 +170,7 @@ async function main(): Promise<void> {
 		const authority = `attached-container+${Buffer.from(JSON.stringify({ containerName: `/${alias}` })).toString('hex')}`;
 		hosts.push({
 			kind: 'container', alias, title: `${image} container`, platform: 'linux', build: `${folder}/build`, fake: `${root}/fake-cli`,
-			machine: '/home/node/.vscode-server/data/Machine', at: file => file, uri: file => `vscode-remote://${authority}${file}`, run
+			at: file => file, uri: file => `vscode-remote://${authority}${file}`, run
 		});
 	}
 
@@ -184,12 +181,13 @@ async function main(): Promise<void> {
 	const editors: ChildProcess[] = [];
 	const server = (host: Host) => host.at(`${root}/server`);
 
-	// Every built-in points to a fake on every computer: the run never starts a person's real CLI
-	const BUILT_INS = ['claude', 'codex', 'antigravity', 'muse', 'opencode', 'pi'];
-	const fakes = (fake: string) => Object.fromEntries(BUILT_INS.map(segment => [`facade.${segment}.path`, fake]));
+	// Every built-in points to a fake on every computer, in the Facade settings file of each, written again with each new Facade root:
+	// the run never starts a person's real CLI (CONFIGURATION-1.1)
+	const BUILT_INS = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'];
+	const facadeSettings = (fake: string) => JSON.stringify({ clis: Object.fromEntries(BUILT_INS.map(id => [id, { command: fake }])) });
 	const localFake = path.join(root, 'fake-cli');
+	const localSettings = () => fs.writeFileSync(path.join(facade, 'facade.json'), facadeSettings(localFake), { mode: 0o600 });
 	const settings = {
-		...fakes(localFake),
 		'security.workspace.trust.enabled': false,
 		'terminal.integrated.enablePersistentSessions': false,
 		'window.restoreWindows': 'none',
@@ -237,8 +235,9 @@ async function main(): Promise<void> {
 Start-Sleep -Milliseconds 500
 Remove-Item -Force -ErrorAction SilentlyContinue -Path ${literal(`${host.at(record)}.*`)}
 ${removeRoot ? `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath ${literal(host.at(root))}` : `Remove-Item -Recurse -Force -ErrorAction SilentlyContinue -LiteralPath ${literal(host.at(facade))}, ${literal(host.at(claude))}
-New-Item -ItemType Directory -Force -Path ${literal(host.at(facade))}, ${literal(host.at(claude))} | Out-Null`}`
-		: `pkill -TERM -f ${quoted(name)}; sleep 0.5; rm -f ${quoted(record)}.*; ${removeRoot ? `rm -rf ${quoted(root)};` : `rm -rf ${quoted(facade)} ${quoted(claude)}; mkdir -m 700 ${quoted(facade)} ${quoted(claude)};`} true`);
+New-Item -ItemType Directory -Force -Path ${literal(host.at(facade))}, ${literal(host.at(claude))} | Out-Null
+[IO.File]::WriteAllText(${literal(host.at(`${facade}/facade.json`))}, ${literal(facadeSettings(host.fake))})`}`
+		: `pkill -TERM -f ${quoted(name)}; sleep 0.5; rm -f ${quoted(record)}.*; ${removeRoot ? `rm -rf ${quoted(root)};` : `rm -rf ${quoted(facade)} ${quoted(claude)}; mkdir -m 700 ${quoted(facade)} ${quoted(claude)}; (umask 077; printf '%s' ${quoted(facadeSettings(host.fake))} > ${quoted(`${facade}/facade.json`)});`} true`);
 
 	/**
 	 * A container's clean: every process in it but its first - the editor's server, the ptyds, their agents - and the fake CLIs'
@@ -248,27 +247,26 @@ New-Item -ItemType Directory -Force -Path ${literal(host.at(facade))}, ${literal
 		if (removeRoot) {
 			return execFileSync('docker', ['rm', '--force', host.alias], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 		}
-		return host.run(`kill -TERM -1 2>/dev/null; sleep 0.5; rm -f ${quoted(record)}.*; rm -rf ${quoted(facade)} ${quoted(claude)}; mkdir -m 700 ${quoted(facade)} ${quoted(claude)}; true`);
+		return host.run(`kill -TERM -1 2>/dev/null; sleep 0.5; rm -f ${quoted(record)}.*; rm -rf ${quoted(facade)} ${quoted(claude)}; mkdir -m 700 ${quoted(facade)} ${quoted(claude)}; (umask 077; printf '%s' ${quoted(facadeSettings(host.fake))} > ${quoted(`${facade}/facade.json`)}); true`);
 	};
 
 	try {
 		fs.mkdirSync(facade, { mode: 0o700 });
 		fs.mkdirSync(claude, { mode: 0o700 });
+		localSettings();
 		fakeClis(root);
 		newRepository(local.app);
 		newRepository(local.peer);
-		// Each host's half: the same root, the server's machine settings pointing to its fake, and two repositories
+		// Each host's half: the same root, its Facade settings file pointing to its fake, and two repositories
 		for (const host of hosts) {
-			const { machine } = host;
-			const machineSettings = JSON.stringify(fakes(host.fake));
 			try {
 				host.run(host.platform === 'windows' ? `
 foreach ($file in ${literal(`${host.build}/extension-it/package.json`)}, ${literal(`${host.build}/out/test/integration/index.js`)}) {
 	if (-not (Test-Path -LiteralPath $file)) { throw "$file is missing" }
 }
 $root = ${literal(host.at(root))}
-New-Item -ItemType Directory -Force -Path $root, "$root\\facade", "$root\\claude", ${literal(machine)} | Out-Null
-[IO.File]::WriteAllText((Join-Path ${literal(machine)} 'settings.json'), ${literal(machineSettings)})
+New-Item -ItemType Directory -Force -Path $root, "$root\\facade", "$root\\claude" | Out-Null
+[IO.File]::WriteAllText("$root\\facade\\facade.json", ${literal(facadeSettings(host.fake))})
 # Its paths by name: Windows PowerShell drops the double quotes of an argument it gives a program
 $env:FACADE_IT_EDITORS = ${literal(`${host.build}/out/test/integration/editors.js`)}
 $env:FACADE_IT_FAKE_ROOT = $root
@@ -287,8 +285,7 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 mkdir ${quoted(root)}
 cd ${quoted(root)}
 mkdir facade claude
-mkdir -p ${quoted(machine)}
-printf '%s' ${quoted(machineSettings)} > ${quoted(`${machine}/settings.json`)}
+printf '%s' ${quoted(facadeSettings(host.fake))} > facade/facade.json
 printf '#!/bin/sh\\nexec %s %s "$@"\\n' "'$node'" ${quoted(quoted(`${host.build}/out/test/integration/fakeCli.js`))} > fake-cli
 chmod 755 fake-cli
 for repo in app remote-peer; do
@@ -361,6 +358,7 @@ done
 				fs.rmSync(dir, { recursive: true, force: true });
 				fs.mkdirSync(dir, { mode: 0o700 });
 			}
+			localSettings();
 		};
 		const app = (host: Host): Folder => ({ host, remote: `${root}/app` });
 		const remotePeer = (host: Host): Folder => ({ host, remote: `${root}/remote-peer` });

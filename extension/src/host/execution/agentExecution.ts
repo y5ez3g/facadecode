@@ -14,6 +14,7 @@ import { writeAsOwner } from '../../record/ownership';
 import { timeout } from '../../base/async';
 import type { TerminalOwner } from '../../base/windowIdentity';
 import { activityOf, interruptVerified } from '../../clis/activity';
+import { builtInOf } from '../../clis/catalog';
 import {
 	ActivityReport, CleanupResult, Event, ExecutionPort, ExitReport, LaunchPlan, LiveRun, PairFacts, RunId, RunMeta
 } from '../../core/ports';
@@ -93,6 +94,8 @@ export interface AgentExecutionOptions {
 	readonly home: string;
 	/** The extension's `media` folder, where the CLIs' logos are. */
 	readonly media: vscode.Uri;
+	/** The icon a CLI's terminal tab shows, by its API ID (CONFIGURATION-2.4); none: each name's own. */
+	readonly icon?: (cli: string) => string;
 	/** One line of the agents log: no secrets, no terminal content (ARCHITECTURE-3.3). */
 	readonly log: (line: string) => void;
 	/** The local companion registers actual native objects under this activation claim. */
@@ -140,6 +143,8 @@ interface Pair {
 	spawnSent?: boolean;
 	/** The CLI whose adapter reads its reports and exit. */
 	cli: string;
+	/** The built-in whose adapter runs it (CONFIGURATION-2.3): its exits are read by it. None for a program. */
+	builtIn?: string;
 	process?: { readonly pid: number; readonly startedAt: number };
 	/** When its startup ends, by this window's monotonic clock (CLIS-2.3); and whether it is told again then. */
 	startupEnds?: number;
@@ -276,7 +281,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		this.colourChanges = this.colours.onDidChange(() => this.session.coloursChanged());
 		try {
 			this.terminals = new AgentTerminals({
-				media: options.media, log: options.log, terminalOwner: options.terminalOwner,
+				media: options.media, log: options.log, terminalOwner: options.terminalOwner, ...options.icon ? { icon: options.icon } : {},
 				activated: run => this.activations.fire(run),
 				closed: (run, marked) => this.closes.fire({ run, marked }),
 				placed: (run, column) => this.placements.fire({ run, place: column === undefined ? 'hidden' : { column } }),
@@ -482,6 +487,9 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			throw new Error('The agent was closed before its CLI started.');
 		}
 		pair.cli = plan.cli;
+		pair.builtIn = builtInOf(plan.cli, plan.builtIn);
+		// A program shows its activity only where it reports it: its start awaits no first report (CONFIGURATION-2.3, CLIS-2.3)
+		pair.shown = pair.builtIn === undefined;
 		pair.inputAdapter = plan.input.adapter;
 		pair.toolsPending = plan.tools.state === 'injected';
 		this.listen(pair, client);
@@ -574,6 +582,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		// in its turn (openPinned; LIFECYCLE-3.5)
 		const pair = this.pairs.get(live.run) ?? this.create(facts, false, true);
 		pair.cli = live.meta.cli;
+		pair.builtIn = builtInOf(live.meta.cli, typeof live.meta.builtIn === 'string' ? live.meta.builtIn : undefined);
+		pair.shown ||= pair.builtIn === undefined;
 		pair.inputAdapter = typeof live.meta.inputAdapter === 'string' ? live.meta.inputAdapter : undefined;
 		// Tools not connected yet as its window went: its startup still waits for them, within its bound (RULES-3.2)
 		pair.toolsPending = live.meta.tools === 'connecting';
@@ -639,7 +649,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			// as the core tells the end of one the listing said ended, so that its card does not stay running for good (RULES-3.3)
 			setImmediate(() => {
 				if (this.pairs.get(live.run) === pair) {
-					this.exits.fire({ run: live.run, ...this.exitOf(pair.cli, exit) });
+					this.exits.fire({ run: live.run, ...this.exitOf(pair.builtIn ?? pair.cli, exit) });
 				}
 			});
 		}
@@ -817,7 +827,7 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 				meta: run.meta as unknown as RunMeta,
 				pid: run.pid,
 				startedAt: run.startedAt,
-				...(run.exited ? { exited: this.exitOf(String(run.meta.cli), run.exited) } : {}),
+				...(run.exited ? { exited: this.exitOf(builtInOf(String(run.meta.cli), typeof run.meta.builtIn === 'string' ? run.meta.builtIn : undefined) ?? String(run.meta.cli), run.exited) } : {}),
 				...(run.uncertain ? { uncertain: true } : {}),
 				claimedElsewhere: run.claimedElsewhere
 			});
@@ -1013,9 +1023,10 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 		}
 		pair.exited = exit;
 		pair.terminal.pty.exited(this.endLine(exit));
-		this.exits.fire({ run: pair.run, ...this.exitOf(pair.cli, exit) });
+		this.exits.fire({ run: pair.run, ...this.exitOf(pair.builtIn ?? pair.cli, exit) });
 	}
 
+	/** How `exit` ended, read by the adapter of `cli` - the built-in that runs it (CONFIGURATION-2.3) - for a verified interrupt (RULES-3.3). */
 	private exitOf(cli: string, exit: RunExit): { readonly code?: number; readonly signal?: string; readonly interruptVerified: boolean } {
 		const signal = signalName(exit.signal);
 		return { code: exit.exitCode, ...(signal ? { signal } : {}), interruptVerified: interruptVerified(cli, { code: exit.exitCode, ...(signal ? { signal } : {}), ctrlC: !!exit.ctrlC }) };

@@ -40,11 +40,10 @@ let restoring = savedBrowsing();
 
 const DOTS: readonly unknown[] = ['working', 'error', 'none'];
 const EMPTY: readonly unknown[] = ['noFolder', 'noAgents', 'noMatch'];
-const AVATAR_COLORS: readonly unknown[] = ['blue', 'orange', 'purple'];
 
 const isMenu: Check = value => isShaped(value, { moveUp: isBoolean, moveDown: isBoolean }, { pin: isBoolean, unpin: isBoolean });
-const isAvatar: Check = value => isShaped(value, { file: value => isString(value) && /^[\w.-]+$/.test(value as string) })
-	|| isShaped(value, { initial: value => isString(value) && value !== '', color: value => AVATAR_COLORS.includes(value) });
+const isFile: Check = value => isString(value) && /^[\w.-]+$/.test(value as string);
+const isAvatar: Check = value => isShaped(value, { file: isFile }, { eyes: isFile });
 const PLACE_KINDS: readonly unknown[] = ['repo', 'worktree', 'folder'];
 /** A fact of a card's details whose ID is one of `ids`, with what else it has. */
 const isFact = (ids: readonly unknown[], more: Readonly<Record<string, Check>> = {}): Check => value => isShaped(value, { id: id => ids.includes(id), label: isString, value: isString, ...more });
@@ -184,70 +183,12 @@ function renderList(): void {
 	}
 	renderEmpty();
 	draw(state.cards);
-	// Only the letters just drawn: a redraw that keeps its faces measures nothing
-	checkInitials(untested.splice(0));
+	lookSoon();
 	if (restoring) {
 		restoreBrowsing(restoring);
 		restoring = undefined;
 	}
 	rememberBrowsing();
-}
-
-/** How far apart a custom CLI's letter and its circle are to be: as far as WCAG asks of text (UX-2.1). */
-const READABLE = 4.5;
-
-/** The circles a custom CLI's letter can be on, strongest first: its tint, a fainter one, the side bar's own colour (UX-2.1). */
-const GROUNDS = ['', 'faint', 'unreadable'] as const;
-
-/** Faces with a letter drawn since the letters were last tested. */
-const untested: HTMLElement[] = [];
-
-/**
- * Tests each custom CLI's letter of `faces` on its circle as the theme draws them now (UX-2.1): it goes on the strongest circle on
- * which it reads as far as WCAG asks of text, else on the one it reads best on - the side bar's own colour only where that is better,
- * as a theme may have its own text closer still. A colour the page cannot measure leaves the tint as it is.
- */
-function checkInitials(faces: readonly HTMLElement[]): void {
-	if (!faces.length) {
-		return;
-	}
-	// All measured at once on each circle: three looks at the page's styles, not three for each face
-	const contrasts = GROUNDS.map(ground => {
-		faces.forEach(face => face.classList.remove('faint', 'unreadable'));
-		if (ground) {
-			faces.forEach(face => face.classList.add(ground));
-		}
-		return faces.map(face => {
-			const style = getComputedStyle(face);
-			return contrastOf(style.color, style.backgroundColor);
-		});
-	});
-	faces.forEach((face, i) => {
-		face.classList.remove('faint', 'unreadable');
-		const seen = contrasts.map(each => each[i]);
-		if (seen.some(each => each === undefined)) {
-			return;
-		}
-		const readable = seen.findIndex(each => each! >= READABLE);
-		const best = readable >= 0 ? readable : seen.indexOf(Math.max(...seen as number[]));
-		if (GROUNDS[best]) {
-			face.classList.add(GROUNDS[best]);
-		}
-	});
-}
-
-/** A card's face, a custom CLI's letter among those to test once it is on the page (UX-2.1). */
-function newFace(avatar: Card['avatar']): HTMLElement {
-	const element = face(avatar);
-	if (element.classList.contains('initial')) {
-		untested.push(element);
-	}
-	return element;
-}
-
-/** Tests every custom CLI's letter again: the theme changed. */
-function checkAllInitials(): void {
-	checkInitials([...list.querySelectorAll<HTMLElement>('.face.initial')]);
 }
 
 /** A theme colour as the page draws it: `property` set to the variable on an element out of sight. */
@@ -274,10 +215,69 @@ function checkFlatDim(): void {
 }
 checkFlatDim();
 
-// The theme changed - VS Code sets its colours on the page's root and its kind on the body: the letters are tested again
+/** How far a robot's eyes move toward the pointer, at most, as a part of its face's width; and how much of the way they go each frame. */
+const EYE_REACH = 4 / 32;
+const EYE_EASE = 0.25;
+/** Where the pointer is over the panel; none once it has left, when the eyes look ahead again. */
+let pointerAt: { readonly x: number; readonly y: number } | undefined;
+let looking = 0;
+const eyesAt = new WeakMap<HTMLElement, { x: number; y: number }>();
+
+/**
+ * Moves each robot's eyes a step toward where they look (CONFIGURATION-2.4): toward the pointer while it is over the panel, the full
+ * reach once it is a face and a half away, and ahead once it leaves - not at all with reduced motion. It stops once every pair is
+ * where it looks, so that a still panel computes nothing.
+ */
+function look(): void {
+	looking = 0;
+	let moving = false;
+	for (const eyes of list.querySelectorAll<HTMLElement>('.face .eyes')) {
+		const box = (eyes.parentElement ?? eyes).getBoundingClientRect();
+		let x = 0;
+		let y = 0;
+		if (pointerAt && !reducedMotion()) {
+			const dx = pointerAt.x - (box.left + box.width / 2);
+			const dy = pointerAt.y - (box.top + box.height / 2);
+			const distance = Math.hypot(dx, dy);
+			if (distance > 0) {
+				const reach = box.width * EYE_REACH * Math.min(1, distance / (box.width * 1.5));
+				x = dx / distance * reach;
+				y = dy / distance * reach;
+			}
+		}
+		const at = eyesAt.get(eyes) ?? { x: 0, y: 0 };
+		const still = reducedMotion();
+		at.x += (x - at.x) * (still ? 1 : EYE_EASE);
+		at.y += (y - at.y) * (still ? 1 : EYE_EASE);
+		if (Math.abs(x - at.x) < 0.05 && Math.abs(y - at.y) < 0.05) {
+			at.x = x;
+			at.y = y;
+		} else {
+			moving = true;
+		}
+		eyesAt.set(eyes, at);
+		eyes.style.transform = at.x || at.y ? `translate(${at.x.toFixed(2)}px, ${at.y.toFixed(2)}px)` : '';
+	}
+	if (moving) {
+		looking = requestAnimationFrame(look);
+	}
+}
+
+/** The eyes look again at the next frame: the pointer moved or left, or the cards moved under it. */
+function lookSoon(): void {
+	if (!looking) {
+		looking = requestAnimationFrame(look);
+	}
+}
+document.addEventListener('pointermove', event => { pointerAt = { x: event.clientX, y: event.clientY }; lookSoon(); });
+document.addEventListener('mouseout', event => { if (!event.relatedTarget) { pointerAt = undefined; lookSoon(); } });
+window.addEventListener('blur', () => { pointerAt = undefined; lookSoon(); });
+document.addEventListener('scroll', lookSoon, { passive: true });
+
+// The theme changed - VS Code sets its colours on the page's root and its kind on the body: what depends on them is measured again
 const themeChanged = () => {
 	checkFlatDim();
-	checkAllInitials();
+	lookSoon();
 	fitPlaces();
 	checkQuietText();
 	if (detailed) {
@@ -540,7 +540,7 @@ function make(card: Card): Drawn {
 	element.tabIndex = -1;
 	const avatar = el('span', 'avatar');
 	const dot = el('span', 'dot');
-	avatar.append(newFace(card.avatar), dot);
+	avatar.append(face(card.avatar), dot);
 	const body = el('span', 'body');
 	const top = el('span', 'line top');
 	const name = el('span', 'name');
@@ -707,7 +707,7 @@ function update(entry: Drawn, card: Card): void {
 	const look = lookOf(card.avatar);
 	if (look !== entry.look) {
 		entry.look = look;
-		entry.avatar.firstElementChild?.replaceWith(newFace(card.avatar));
+		entry.avatar.firstElementChild?.replaceWith(face(card.avatar));
 	}
 	if (!entry.dot.classList.contains(card.dot)) {
 		entry.dot.className = `dot ${card.dot}`;
@@ -1462,5 +1462,5 @@ function highlight(runId: string | undefined): void {
 // The system's reduced-motion preference, which the extension host cannot read: said with ready and as it changes, for the agents'
 // tab spinners under `workbench.reduceMotion: auto` (LIFECYCLE-2.2, UX-2.2)
 const systemMotion = matchMedia('(prefers-reduced-motion: reduce)');
-systemMotion.addEventListener('change', () => post({ type: 'motion', reduced: systemMotion.matches }));
+systemMotion.addEventListener('change', () => { post({ type: 'motion', reduced: systemMotion.matches }); lookSoon(); });
 post({ type: 'ready', reducedMotion: systemMotion.matches });

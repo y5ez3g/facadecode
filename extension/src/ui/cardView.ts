@@ -5,7 +5,8 @@
 import { clauseOf } from '../base/errors';
 import type { ActivityUnknown, Catalog, Location, RunFacts, ToolsProblem } from '../core/ports';
 import { dotOf } from '../core/status';
-import type { AvatarColor, Card, CardMenu, DetailField, DetailId, PlaceKind } from '../webview/protocol';
+import { PROGRAM_ICON, robotOf } from '../base/robot';
+import type { Card, CardMenu, DetailField, DetailId, PlaceKind } from '../webview/protocol';
 
 /** The words a card is said in, in the person's language. */
 export interface CardWords {
@@ -55,8 +56,6 @@ export interface CardWords {
 	readonly saidByAgent: (sender: string, line: string) => string;
 	readonly saidByPerson: (line: string) => string;
 	readonly saidByFacade: (line: string) => string;
-	/** The person's language, as a custom CLI's initial is uppercased in it (UX-2.1). */
-	readonly locale: string;
 }
 
 /** Where a card's agent works, as the card says it (PANEL-1.3). */
@@ -246,40 +245,13 @@ const AVATARS: { readonly [cli: string]: string } = {
 	pi: 'avatar-pi.png'
 };
 
-/** How a name is cut into what a reader sees as characters: an accented letter or an emoji whole. */
-const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
-
-/** The `charts` colours a custom CLI's avatar can take: none that a status dot uses (UX-2.1). */
-const AVATAR_COLORS: readonly AvatarColor[] = ['blue', 'orange', 'purple'];
-
 /**
- * A card's avatar (PANEL-1.3, UX-2.1): a built-in's maker avatar; for another CLI - a custom one - the uppercased first grapheme of
- * its name in the `charts` colour a stable hash of its normalized name picks, the same for every agent of that CLI; none for a name
- * with nothing to show.
+ * A card's avatar (PANEL-1.3, CONFIGURATION-2.4), by the icon its CLI's entry shows: a built-in's maker avatar, or a robot. Anything else
+ * - a CLI's name where no icon is known for it - shows a program's.
  */
-export function avatarOf(cli: string, displayName: string, locale: string): Card['avatar'] {
-	if (Object.hasOwn(AVATARS, cli)) {
-		return { file: AVATARS[cli] };
-	}
-	const name = displayName.trim().normalize('NFC');
-	const [first] = GRAPHEMES.segment(name);
-	if (!first) {
-		return undefined;
-	}
-	let hash = 0;
-	for (const char of name.toLowerCase()) {
-		hash = (hash * 31 + char.codePointAt(0)!) >>> 0;
-	}
-	return { initial: upper(first.segment, locale), color: AVATAR_COLORS[hash % AVATAR_COLORS.length] };
-}
-
-/** `text` uppercased in `locale`, where the runtime knows it; else as the runtime's default does. */
-function upper(text: string, locale: string): string {
-	try {
-		return text.toLocaleUpperCase(locale);
-	} catch {
-		return text.toUpperCase();
-	}
+export function avatarOf(icon: string): NonNullable<Card['avatar']> {
+	const known = Object.hasOwn(AVATARS, icon) || robotOf(icon) ? icon : PROGRAM_ICON;
+	return Object.hasOwn(AVATARS, known) ? { file: AVATARS[known] } : { file: `robot-${robotOf(known)}-face.svg`, eyes: 'robot-eyes.svg' };
 }
 
 /**
@@ -295,7 +267,7 @@ export function labelOf(format: (value: string) => string): string {
  * started it, and where it works (the page adds when it started); and an accessible label of name, short run ID, state, location,
  * CLI and second line, its description the details' facts the label does not say.
  */
-export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly repeated?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly readsTitles?: boolean }): Card {
+export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; readonly repeated?: boolean; readonly selected: boolean; readonly menu: CardMenu; readonly words: CardWords; readonly readsTitles?: boolean; readonly icon?: string }): Card {
 	const { place, words } = input;
 	const status = statusOf(facts, words);
 	const field = (id: DetailId, format: (value: string) => string, value: string): DetailField => ({ id, label: labelOf(format), value });
@@ -323,7 +295,7 @@ export function cardOf(facts: RunFacts, input: { readonly place: CardPlace; read
 		title: summary ? spoken.has(summary.value) ? '' : words.title(summary.value) : words.title(untitled ?? ''),
 		place: [...location.value !== place.qualified ? [words.location(location.value)] : [], words.path(place.path)].join(', ')
 	};
-	const avatar = avatarOf(facts.cli, facts.displayName, words.locale);
+	const avatar = avatarOf(input.icon ?? facts.cli);
 	return {
 		runId: facts.id,
 		...(facts.pin ? { pinned: true } : {}),

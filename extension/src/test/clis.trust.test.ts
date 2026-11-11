@@ -2,6 +2,7 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
+import { legacy, sourceOf } from './settingsFixtures';
 import * as assert from 'assert';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
@@ -327,7 +328,7 @@ suite('CLIs: the window trusts each start\'s folder before it starts (CLIS-3.3)'
 	});
 	teardown(() => temp.remove());
 
-	const clis = (log: string[] = []) => new HostClis({ read: name => settings[name], destination: () => destination, log: line => log.push(line) });
+	const clis = (log: string[] = []) => new HostClis({ settings: sourceOf(legacy(name => settings[name])), destination: () => destination, log: line => log.push(line) });
 	const request = (cli: string, run: string): PlanRequest => ({ run, alias: '#a1', name: 'n', cli, location, yolo: false });
 
 	test('Codex is planned through the same catalog, with per-launch trust and no native configuration writes', async () => {

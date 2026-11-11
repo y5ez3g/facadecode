@@ -1,4 +1,5 @@
-// Native terminal rendering regression for LIFECYCLE-2.2 (VERIFICATION U15). Run after compile and package.
+// Native terminal rendering regression for LIFECYCLE-2.2 and CONFIGURATION-2.4 (VERIFICATION U15): each built-in's logo, and each
+// of the 16 robots an entry's icon can name. Run after compile and package.
 // Only the test's own temporary editor is controlled; no CLI process or owner profile is used.
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -14,7 +15,9 @@ const stage = path.join(source, 'build', 'extension');
 const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'fd-icons-')));
 const file = (...parts) => path.join(root, ...parts);
 const manifest = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
-const clis = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi'];
+// The built-ins' logos, then every robot, each a tab named by the icon it shows
+const robots = ['red', 'orange', 'amber', 'lime', 'green', 'teal', 'sky', 'blue', 'violet', 'pink', 'aurora', 'sunset', 'ocean', 'orchid', 'pearl', 'graphite'];
+const clis = ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi', ...robots.map(robot => `facade-${robot}`)];
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(label, read) {
 	for (let i = 0; i < 200; i++) {
@@ -45,15 +48,17 @@ function driver() {
 	exports.activate = async context => {
 		await v.commands.executeCommand('workbench.action.closeSidebar');
 		await v.commands.executeCommand('workbench.action.closeAuxiliaryBar');
-		for (const cli of ['claude', 'codex', 'agy', 'muse', 'opencode', 'pi']) {
+		const icons = {};
+		for (const cli of JSON.parse(process.env.FACADE_ICON_CLIS)) {
 			const output = new v.EventEmitter();
+			icons[cli] = cliTerminalIcon(cli).id;
 			const terminal = v.window.createTerminal({ name: cli, iconPath: cliTerminalIcon(cli),
 				location: v.TerminalLocation.Editor, isTransient: true,
 				pty: { onDidWrite: output.event, open() { output.fire('Icon rendering test\r\n'); }, close() {} } });
 			terminal.show(true);
 			context.subscriptions.push(terminal, output);
 		}
-		fs.writeFileSync(path.join(root, 'ready.json'), JSON.stringify({ version: v.version, generation: Date.now() }));
+		fs.writeFileSync(path.join(root, 'ready.json'), JSON.stringify({ version: v.version, generation: Date.now(), icons }));
 		let busy = false;
 		const timer = setInterval(async () => {
 			const request = path.join(root, 'request.json');
@@ -77,7 +82,7 @@ const log = fs.openSync(file('editor.log'), 'a');
 const child = spawn(officialEditor(), [file('workspace'), '--new-window', '--disable-extensions',
 	'--user-data-dir', file('u'), '--extensions-dir', file('x'), '--shared-data-dir', file('s'),
 	'--remote-debugging-port=0', '--remote-debugging-address=127.0.0.1', `--extensionDevelopmentPath=${file('driver')}`, ...EDITOR_FLAGS],
-{ env: { ...process.env, FACADE_HOME: file('facade'), FACADE_ICON_TEST: root, FACADE_ICON_SOURCE: source }, stdio: ['ignore', log, log] });
+{ env: { ...process.env, FACADE_HOME: file('facade'), FACADE_ICON_TEST: root, FACADE_ICON_SOURCE: source, FACADE_ICON_CLIS: JSON.stringify(clis) }, stdio: ['ignore', log, log] });
 fs.closeSync(log);
 let ws;
 let serial = 0;
@@ -133,16 +138,19 @@ try {
 		assert.ok(!state.exceptionDetails, JSON.stringify(state.exceptionDetails));
 		const tabs = state.result.value;
 		assert.deepStrictEqual(tabs.map(t => t.name).sort(), [...clis].sort());
+		const { icons } = JSON.parse(fs.readFileSync(file('ready.json'), 'utf8'));
 		for (const tab of tabs) {
 			if (fileTheme === null) { assert.ok(tab.hidden, 'respect disabled file icons'); continue; }
-			assert.ok(tab.loaded && tab.font.includes('agent-icons.woff'), `${id}/${tab.name}: real logo font loaded`);
-			assert.strictEqual(tab.glyph.codePointAt(0), 0xe001 + clis.indexOf(tab.name), `${id}/${tab.name}: logo, not generic file glyph`);
+			// The glyph the manifest registers for the icon the extension gives the tab: a logo, or a robot
+			const { fontPath, fontCharacter } = manifest.contributes.icons[icons[tab.name]].default;
+			assert.ok(tab.loaded && tab.font.includes(path.basename(fontPath)), `${id}/${tab.name}: real ${path.basename(fontPath)} loaded`);
+			assert.strictEqual(tab.glyph.codePointAt(0), parseInt(fontCharacter.slice(1), 16), `${id}/${tab.name}: its own glyph, not a generic file glyph`);
 			assert.ok(Math.abs(tab.width - tab.slot) < 0.05, `${id}/${tab.name}: ${tab.width}px glyph in ${tab.slot}px slot`);
 		}
 		results.push({ id, tabs });
 		const screenshot = await call('Page.captureScreenshot', { format: 'png' });
 		fs.writeFileSync(file(`${id}.png`), Buffer.from(screenshot.data, 'base64'));
-		console.log(`${id}: ${fileTheme === null ? 'native hidden-icon preference respected' : 'all six logos loaded at the native icon size'}`);
+		console.log(`${id}: ${fileTheme === null ? 'native hidden-icon preference respected' : 'all six logos and 16 robots loaded at the native icon size'}`);
 	}
 	fs.writeFileSync(file('results.json'), JSON.stringify({ editor: JSON.parse(fs.readFileSync(file('ready.json'), 'utf8')), results }, null, 2));
 	console.log(`Evidence: ${root}`);

@@ -2,8 +2,8 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// The CLI catalog and launch planner of this execution environment (CLIS-1.1, 4.2): the pure adapters of `clis/`, given the
-// editor's settings and the destination folder's terminal environment. Read on every use, so a setting or PATH change applies to
+// The CLI catalog and launch planner of this execution environment (CLIS-1.1, 4.2): the pure adapters of `clis/`, given Facade's
+// settings file and the destination folder's terminal environment. Read on every use, so a saved setting or a PATH change applies to
 // the next list and the next start. A start given the Facade tools has their files written before it is returned: where that
 // fails, the CLI starts without them (CLIS-2.2). A start of a CLI that keeps its trust in a file of its own has its folder trusted
 // there first; where it cannot be, the start goes ahead and the CLI asks in its terminal (CLIS-3.3).
@@ -15,24 +15,23 @@ import type { StoreEnvironments } from '../clis/history';
 import { facadeHome } from '../record/paths';
 import * as vscode from 'vscode';
 import { messageOf } from '../base/errors';
-import { CatalogEntry, catalogOf, entryOf, SettingsReader } from '../clis/catalog';
+import { builtInOf, Catalog, CatalogEntry, catalogOf, entryOf, iconOf, isProgram } from '../clis/catalog';
 import { acquireProject, injectedRecordOf, markPlanned, reconcileRuns, releaseRun, removeRunFiles, writeRunFiles } from '../clis/injected';
-import { CliPlanError, DestinationEnvironment, discover, discoverEntry, environmentOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough, targetOf, turnedOffError } from '../clis/plan';
+import { CliPlanError, configurationProblems, DestinationEnvironment, discover, discoverEntry, environmentOf, inputOf, PlanInput, planLaunch, PlannedLaunch, takesThrough, targetOf, turnedOffError } from '../clis/plan';
 import { installedVersionOf } from '../clis/version';
 import { markedSkill, McpServer, runDirOf, ToolsInput } from '../clis/tools';
 import { writeTrust } from '../clis/trust';
 import type { CliFacts } from '../contract/tools';
 import { CliCatalogPort, CliChoice, CliChoices, LaunchPlan, LaunchPlanner, Location, PlanError, PlanRequest } from '../core/ports';
 import { FACADE_SKILL } from '../schema/skill';
-import { readCollaboration, readSetting } from './settings';
+import { FacadeSettings } from './facadeSettings';
 import type { CliProblem } from '../clis/config';
-import { CUSTOM_SETTING } from '../clis/custom';
 import { describeLaunches, EffectiveInputs, LaunchDescription, PLACEHOLDERS } from '../clis/describe';
 import { destinationEnvironment } from './terminals';
 
-/** Where the planner reads from: the editor's settings and terminal environment unless a test gives its own. */
+/** Where the planner reads from: Facade's settings file and the editor's terminal environment unless a test gives its own. */
 export interface HostClisOptions {
-	readonly read?: SettingsReader;
+	readonly settings?: Pick<FacadeSettings, 'snapshot'>;
 	/** The destination environment of a location; for none, the window's. */
 	readonly destination?: (location: Location | undefined) => DestinationEnvironment;
 	/** Where a diagnostic goes: a folder trusted or not (CLIS-3.3), the Facade tools' files. */
@@ -60,7 +59,7 @@ function destinationOf(location: Location | undefined): DestinationEnvironment {
 /** CliCatalogPort and LaunchPlanner for this window's execution environment. */
 export class HostClis implements CliCatalogPort, LaunchPlanner {
 
-	private readonly read: SettingsReader;
+	private readonly settings: Pick<FacadeSettings, 'snapshot'>;
 	private readonly destination: (location: Location | undefined) => DestinationEnvironment;
 	private readonly log: (line: string) => void;
 	private readonly home: string;
@@ -70,7 +69,7 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	private readonly server: HostClisOptions['server'];
 
 	constructor(options: HostClisOptions = {}) {
-		this.read = options.read ?? readSetting;
+		this.settings = options.settings ?? new FacadeSettings();
 		this.destination = options.destination ?? destinationOf;
 		this.log = options.log ?? (() => undefined);
 		this.home = options.home ?? facadeHome();
@@ -79,16 +78,15 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 		this.server = options.server;
 	}
 
-	/**
-	 * Whether a start now is given the Facade tools (RULES-4.4): `facade.collaboration.enabled`, read on each start, so a change
-	 * applies to future starts alone; a value that is neither true nor false gives none, its problem logged.
-	 */
-	collaborationEnabled(): boolean {
-		const { value, problem } = readCollaboration(this.read);
-		if (problem !== undefined) {
-			this.log(problem);
-		}
-		return value;
+	/** The catalog as the settings file reads now (CLIS-1.1, CONFIGURATION-2.1). */
+	private catalog(): Catalog {
+		return catalogOf(this.settings.snapshot());
+	}
+
+	/** The icon each CLI shows, by its API ID, from one reading of the settings file (CONFIGURATION-2.4). */
+	icons(): (cli: string) => string {
+		const catalog = this.catalog();
+		return cli => iconOf(catalog, cli);
 	}
 
 	/**
@@ -97,12 +95,12 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	 */
 	describe(location: Location, _yolo: boolean): { readonly launches: readonly CliFacts[] } {
 		const destination = this.destination(location);
-		return { launches: discover(catalogOf(this.read), destination, location.path).map(found => this.factsOf(found, destination, location, true)) };
+		return { launches: discover(this.catalog(), destination, location.path).map(found => this.factsOf(found, destination, location, true)) };
 	}
 
 	private factsOf({ entry, executable, env }: ReturnType<typeof discover>[number], destination: DestinationEnvironment, location: Location, details: boolean): CliFacts {
 		const { adapter } = entry;
-		const version = details && executable ? installedVersionOf(adapter.id, executable) : undefined;
+		const version = details && executable ? installedVersionOf(builtInOf(adapter.id, adapter.builtIn) ?? adapter.id, executable) : undefined;
 		const target = executable && env ? targetOf(entry, executable, env, destination.platform, location.path) : undefined;
 		return {
 			cli: adapter.id,
@@ -115,48 +113,74 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 
 	storeEnvironments(location: Location): StoreEnvironments {
 		const destination = this.destination(location);
-		return Object.fromEntries(catalogOf(this.read).entries.filter(entry => entry.enabled && !entry.problems.length)
+		return Object.fromEntries(this.catalog().entries.filter(entry => entry.enabled && !configurationProblems(entry, destination).length)
 			.map(entry => [entry.adapter.id, environmentOf(entry, destination)]));
 	}
 
 	storeArguments(): Readonly<Record<string, readonly string[]>> {
-		return Object.fromEntries(catalogOf(this.read).entries.map(entry => [entry.adapter.id, entry.extra]));
+		return Object.fromEntries(this.catalog().entries.map(entry => [entry.adapter.id, entry.extra]));
+	}
+
+	/** The built-in each added entry of a built-in's type runs, by its name: whose store its conversations are in (CONFIGURATION-2.3). */
+	storeBuiltIns(): Readonly<Record<string, string>> {
+		return Object.fromEntries(this.catalog().entries.flatMap(entry => entry.adapter.builtIn ? [[entry.adapter.id, entry.adapter.builtIn]] : []));
 	}
 
 	/**
 	 * Why a conversation of `cli` cannot be resumed at `location` now, where it cannot (LIFECYCLE-3.2): its CLI alone is found there - the
 	 * picker asks for each conversation it lists, so no other CLI's program is looked for.
 	 */
-	resumeProblem(cli: string, location: Location): string | undefined {
-		const entry = entryOf(catalogOf(this.read), cli);
-		if (!entry || !entry.enabled || (!entry.custom && !entry.adapter.groups.resume)) { return 'This CLI cannot resume conversations here.'; }
+	resumeProblem(cli: string, location: Location, store?: string): string | undefined {
+		const catalog = this.catalog();
+		if (catalog.problems.length) {
+			return catalog.problems.map(each => each.text).join('; ');
+		}
+		const entry = entryOf(catalog, cli);
+		// The entry that started it, as it is now: gone, wrong, turned off or of another type, it is said, never another chosen
+		// (CONFIGURATION-3.4); what is wrong with it before its being turned off, as New Agent and a start say it (CONFIGURATION-4.1)
+		if (!entry) { return `${JSON.stringify(cli)} is no longer in clis of ${catalog.file}, so this conversation cannot be resumed with it.`; }
+		const problems = configurationProblems(entry, this.destination(location));
+		if (problems.length) { return problems.map(each => each.text).join('; '); }
+		if (!entry.enabled) { return turnedOffError(entry.adapter).message; }
+		const runs = builtInOf(entry.adapter.id, entry.adapter.builtIn);
+		if (store !== undefined && runs !== store) {
+			return `${entry.entry.setting} runs ${runs === undefined ? 'a program' : entryOf(catalog, runs)?.adapter.displayName ?? runs} now, so this conversation cannot be resumed with it.`;
+		}
+		if (isProgram(entry) || !entry.adapter.groups.resume) { return 'This CLI cannot resume conversations here.'; }
 		const found = discoverEntry(entry, this.destination(location), location.path);
 		return found.available ? undefined : found.problem ?? 'This CLI is unavailable.';
 	}
 
-	/** Why the built-in `cli` is not offered for new starts, where its `.enabled` setting turns it off (CLIS-1.1); none otherwise. */
+	/** Why `cli` is not offered for new starts, where its entry's `enabled` turns it off (CLIS-1.1); none otherwise. */
 	turnedOff(cli: string): string | undefined {
-		const entry = entryOf(catalogOf(this.read), cli);
+		const entry = entryOf(this.catalog(), cli);
 		return entry && !entry.enabled ? turnedOffError(entry.adapter).message : undefined;
 	}
 
 	/**
-	 * The built-ins new starts are offered in CLIS-1.1 order - a turned-off one hidden - then the custom CLIs, for `location`; and the
-	 * errors of `facade.custom` no CLI stands for (CLIS-3.4).
+	 * The built-ins new starts are offered in CLIS-1.1 order - a turned-off one hidden - then the added CLIs, for `location`; and what is
+	 * wrong with the settings file as a whole, which stops every start (CONFIGURATION-4.1).
 	 */
+	/** What no CLI stands for - the settings file wrong as a whole - by the file, of `catalog`'s reading of it (CONFIGURATION-4.1). */
+	problems(catalog: Catalog = this.catalog()): CliChoices['problems'] {
+		return catalog.problems.map(each => ({ setting: catalog.file, problem: each.text, said: each.said }));
+	}
+
 	async list(location: Location, details = false): Promise<CliChoices & { readonly launches: readonly CliFacts[] }> {
-		const catalog = catalogOf(this.read);
+		const catalog = this.catalog();
 		const destination = this.destination(location);
 		const found = discover(catalog, destination, location.path);
 		const clis = found.map(({ entry, available, problem, said, notInstalled }): CliChoice => ({
 			id: entry.adapter.id,
 			displayName: entry.adapter.displayName,
+			icon: entry.entry.icon,
 			available,
 			...problem !== undefined ? { problem } : {},
 			...said ? { said } : {},
 			...notInstalled ? { notInstalled } : {}
 		}));
-		const problems = catalog.problems.map(each => ({ setting: CUSTOM_SETTING, problem: each.text, said: each.said }));
+		// Of the same reading as its CLIs: a save landing meanwhile never pairs one version's CLIs with another's problems
+		const problems = this.problems(catalog);
 		const fields = { location_id: location.id, path: location.path,
 			clis: clis.map(({ id, available, problem }) => ({ cli: id, available, problem })),
 			problems: problems.map(({ setting, problem }) => ({ setting, problem })) };
@@ -166,21 +190,23 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 	}
 
 	/**
-	 * What Show Agent Launch shows (CLIS-4.1): each CLI as a start in `location` would have it now, with `yolo`, computed without
-	 * running any CLI or writing any file - none without a location - each CLI's settings as read, and what is wrong with
-	 * `facade.custom` as a whole (CLIS-3.4).
+	 * What Show Agent Launch shows (CLIS-4.1), from one reading of the settings file: `yolo`, each CLI as a start in `location` would
+	 * have it now, computed without running any CLI or writing any file - none without a location - each CLI's entry as read, and what
+	 * is wrong with the file as a whole, which leaves no CLI to show (CONFIGURATION-4.1).
 	 */
-	describeLaunch(location: Location | undefined, yolo: boolean): { readonly launches: readonly LaunchDescription[]; readonly entries: readonly CatalogEntry[]; readonly problems: readonly CliProblem[] } {
-		const catalog = catalogOf(this.read);
+	describeLaunch(location: Location | undefined): { readonly yolo: boolean; readonly launches: readonly LaunchDescription[]; readonly entries: readonly CatalogEntry[]; readonly problems: readonly CliProblem[]; readonly file: string } {
+		const settings = this.settings.snapshot();
+		const catalog = catalogOf(settings);
 		// What a start adds, as plan() gives it: its session tracking always, the tools where they are on - named, never written
 		const file = sessionFileOf(this.home, PLACEHOLDERS.run);
 		const script = path.join(sessionDirOf(file), 'hook.cjs');
 		const effective: EffectiveInputs = {
 			sessionFile: file,
-			sessionHook: (cli, platform) => sessionHookCommand(process.execPath, platform, cli, file, script),
-			...this.server && this.collaborationEnabled() ? { tools: this.toolsOf(PLACEHOLDERS.run, this.server(PLACEHOLDERS.run)) } : {}
+			sessionHook: (cli, platform) => sessionHookCommand(process.execPath, platform, builtInOf(cli, entryOf(catalog, cli)?.adapter.builtIn) ?? cli, file, script),
+			runDir: runDirOf(this.home, PLACEHOLDERS.run),
+			...this.server ? { tools: this.toolsOf(PLACEHOLDERS.run, this.server(PLACEHOLDERS.run)) } : {}
 		};
-		return { launches: location ? describeLaunches(catalog, this.destination(location), location.path, yolo, effective) : [], entries: catalog.entries, problems: catalog.problems };
+		return { yolo: settings.yolo, launches: location ? describeLaunches(catalog, this.destination(location), location.path, settings.yolo, effective) : [], entries: catalog.entries, problems: catalog.problems, file: catalog.file };
 	}
 
 	/**
@@ -197,22 +223,30 @@ export class HostClis implements CliCatalogPort, LaunchPlanner {
 			yolo: request.yolo,
 			...request.model !== undefined ? { model: request.model } : {},
 			...request.effort !== undefined ? { effort: request.effort } : {},
-			...request.prompt !== undefined ? { prompt: request.prompt } : {}
+			...request.prompt !== undefined ? { prompt: request.prompt } : {},
+			...request.builtIn !== undefined ? { builtIn: request.builtIn } : {}
 		};
 		try {
-			const catalog = catalogOf(this.read);
+			const catalog = this.catalog();
 			const destination = this.destination(request.location);
 			const file = sessionFileOf(this.home, request.run);
 			const script = path.join(sessionDirOf(file), 'hook.cjs');
-			const resumable = { ...input, resume: request.resume, sessionFile: file, sessionHook: sessionHookCommand(process.execPath, destination.platform, request.cli, file, script) };
+			// The session hook is the built-in's whose adapter runs it: an added entry's is its built-in's (CONFIGURATION-2.3)
+			const hookCli = builtInOf(request.cli, entryOf(catalog, request.cli)?.adapter.builtIn) ?? request.cli;
+			const resumable = { ...input, resume: request.resume, sessionFile: file, sessionHook: sessionHookCommand(process.execPath, destination.platform, hookCli, file, script), runDir: runDirOf(this.home, request.run) };
 			let planned = planLaunch(catalog, { ...resumable, ...request.tools ? { tools: this.toolsOf(request.run, request.tools) } : {} }, destination);
 			const failure = planned.injection && this.inject(request.run, input.cwd, planned);
 			if (failure) {
 				planned = { ...planLaunch(catalog, resumable, destination), tools: { state: 'unavailable', reason: failure.reason, problem: failure.problem, ...failure.file !== undefined ? { file: failure.file } : {} } };
 			}
-			for (const owned of [...planned.files ?? [], ...planned.exactResume ? [{ file: script, content: SESSION_HOOK_SCRIPT }] : []]) {
-				fs.mkdirSync(path.dirname(owned.file), { recursive: true, mode: 0o700 });
-				fs.writeFileSync(owned.file, owned.content, { mode: 0o600 });
+			const owned = [...planned.files ?? [], ...planned.exactResume ? [{ file: script, content: SESSION_HOOK_SCRIPT }] : []];
+			// A file in the run's own folder is planned first, so that no window's reconcile takes it before its process starts (CLIS-2.2)
+			if (owned.some(each => each.file.startsWith(runDirOf(this.home, request.run)))) {
+				markPlanned(this.home, request.run);
+			}
+			for (const each of owned) {
+				fs.mkdirSync(path.dirname(each.file), { recursive: true, mode: 0o700 });
+				fs.writeFileSync(each.file, each.content, { mode: 0o600 });
 			}
 			const plan = launchPlanOf(planned);
 			this.trust(planned);

@@ -49,8 +49,10 @@ interface PanelModelDeps {
 	readonly ready: Promise<unknown>;
 	/** How a remote environment is named in a card's details (LIFECYCLE-1.1): as VS Code's remote indicator names it. */
 	readonly environmentLabel?: (environment: string) => string;
-	/** Whether Facade has a history reader for a CLI, so a run's title can come: a custom CLI has none (PANEL-1.5, CLIS-2.4). */
+	/** Whether Facade has a history reader for a CLI, so a run's title can come: a program has none (PANEL-1.5, CLIS-2.4). */
 	readonly readsTitles?: (cli: string) => boolean;
+	/** The icon each CLI shows, by its API ID, from one reading of the settings file (CONFIGURATION-2.4); none: each name's own. */
+	readonly icons?: () => (cli: string) => string;
 	readonly timers?: Timers;
 }
 
@@ -135,6 +137,11 @@ export class PanelModel implements Disposable {
 	/** The state sent last. */
 	state(): PanelState {
 		return this.current;
+	}
+
+	/** The cards drawn again: the settings file changed, and with it the icons they show (CONFIGURATION-2.4). */
+	refresh(): void {
+		this.schedule();
 	}
 
 	/** The selected agent, as of the state sent last: what a palette command without a target is about (UX-3.1). */
@@ -351,6 +358,7 @@ export class PanelModel implements Disposable {
 		const shownSet = new Set(shown);
 		// Counted among all of this window's cards, those the filter hides too (PANEL-1.3)
 		const repeated = repeatedNames(runs);
+		const icon = this.deps.icons?.();
 		const visible = (id: string) => shownSet.has(id);
 		const cards = shown.map(id => {
 			const facts = byId.get(id)!;
@@ -361,7 +369,7 @@ export class PanelModel implements Disposable {
 				moveUp: moved(ids, id, -1, withinArea) !== undefined,
 				moveDown: moved(ids, id, 1, withinArea) !== undefined
 			};
-			return cardOf(facts, { place: this.placeOf(facts, catalog), repeated: repeated.has(facts.name.trim()), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.readsTitles ? { readsTitles: this.deps.readsTitles(facts.cli) } : {} });
+			return cardOf(facts, { place: this.placeOf(facts, catalog), repeated: repeated.has(facts.name.trim()), selected: id === this.selectedRun, menu, words: this.deps.words, ...this.deps.readsTitles ? { readsTitles: this.deps.readsTitles(facts.builtIn ?? facts.cli) } : {}, ...icon ? { icon: icon(facts.cli) } : {} });
 		});
 		const exited = [...this.exited];
 		this.exited.clear();

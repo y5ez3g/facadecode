@@ -6,7 +6,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { canonicalFolder, isEqualPath, realFolderOf } from '../base/files';
-import { CliAdapter, sigintExit } from './adapter';
+import { setOwn } from '../base/json';
+import { CliAdapter, EntryEnvironment, mergeSettings, RunSettingsGiven, sigintExit } from './adapter';
 import { Environment, setVariable, variableOf } from './environment';
 import { homeOf } from './executable';
 import { MCP_CONFIG, mcpConfigText, pluginManifest, SERVER_NAME, SKILL_FILE, ToolsIntegration } from './tools';
@@ -28,22 +29,96 @@ const TITLE_SWITCH = 'CLAUDE_CODE_DISABLE_TERMINAL_TITLE';
 const AUTO_INSTALL_SWITCH = 'CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL';
 
 /**
- * Claude Code's settings for one run, passed inline with `--settings`, which overrides the same keys of its settings files for
- * that session alone: no more than a run needs, so that the person's own settings stay in force (CLIS-1.3). It never takes a
- * project's `facade` server from `.mcp.json`, which would ask about it at its start. Its title switch also
- * turns off its OSC 7501 status reports, which a run needs to show its activity (CLIS-2.3), and it reapplies `env` from its
- * settings files after launch, so the run's settings clear the switch too. With YOLO off its sandbox is turned on where it has one;
- * with YOLO on its sandbox is its own setting's, as YOLO maps to the permission bypass alone.
+ * The variables Claude Code reads its key from, which it takes as unset where they are empty (CONFIGURATION-5.1): an entry that removes
+ * one has it written empty in the run's settings, so that a key of the person's own settings files never goes with the entry's API.
+ * Only these two are known to read so; another variable an entry removes is never written empty in their place.
  */
-export function claudeRunSettings(yolo: boolean, platform: NodeJS.Platform, sessionHook?: string): object {
+const CLAUDE_KEY_VARIABLES: readonly string[] = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'];
+
+/** The key variable `name` is, as `platform` compares variable names - Windows ignoring case - by its own spelling; none for another. */
+function keyVariableOf(name: string, platform: NodeJS.Platform): string | undefined {
+	return CLAUDE_KEY_VARIABLES.find(key => platform === 'win32' ? key.toLowerCase() === name.toLowerCase() : key === name);
+}
+
+/**
+ * Claude Code's settings for one run (CLIS-3.2, CONFIGURATION-5.1), which override the same keys of its settings files for that
+ * session alone: no more than a run needs, so that the person's own settings stay in force (CLIS-1.3). Its entry's `env` is among
+ * them - Claude Code's settings files' `env` would otherwise win over the run's environment - with its removed key variables empty.
+ * It never takes a project's `facade` server from `.mcp.json`, which would ask about it at its start. Its title switch also turns off
+ * its OSC 7501 status reports, which a run needs to show its activity (CLIS-2.3), and it reapplies `env` from its settings files
+ * after launch, so the run's settings clear the switch too, whatever the entry sets. With YOLO off its sandbox is turned on where it
+ * has one; with YOLO on its sandbox is its own setting's, as YOLO maps to the permission bypass alone.
+ */
+export function claudeRunSettings(yolo: boolean, platform: NodeJS.Platform, sessionHook?: string, entryEnv?: EntryEnvironment): { [key: string]: unknown } {
+	// A key variable removed in any spelling the platform reads as it is written empty, by its own spelling
+	const removed = (entryEnv?.removed ?? []).flatMap(name => keyVariableOf(name, platform) ?? []);
 	return {
-		env: { [TITLE_SWITCH]: '' },
+		env: { ...entryEnv?.set, ...Object.fromEntries(removed.map(name => [name, ''])), [TITLE_SWITCH]: '' },
 		...(sessionHook ? { hooks: Object.fromEntries(['SessionStart', 'UserPromptSubmit', 'Stop', 'SessionEnd'].map(event => [event, [{ hooks: [{ type: 'command', command: sessionHook }] }]])) } : {}),
 		// A project's own `facade` server - Muse Code's shared entry, on Windows - is never this run's: it has its own, and no question
 		// about the project's stops it at its start
 		disabledMcpjsonServers: [SERVER_NAME],
 		...!yolo && hasSandbox(platform) ? { sandbox: { enabled: true } } : {}
 	};
+}
+
+/** The `env` a Claude Code settings file `file` sets, as Claude Code reads it: none where the file is not there or not a JSON object. */
+function settingsEnvOf(file: string): { readonly [name: string]: unknown } {
+	try {
+		const value: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+		return typeof value === 'object' && value !== null && !Array.isArray(value) ? envOf(value as { readonly [key: string]: unknown }) : {};
+	} catch {
+		return {};
+	}
+}
+
+/** The variables a Claude Code settings object gives in its `env`: none where that is no object. */
+function envOf(settings: { readonly [key: string]: unknown }): { readonly [name: string]: unknown } {
+	const env = settings.env;
+	return typeof env === 'object' && env !== null && !Array.isArray(env) ? env as { readonly [name: string]: unknown } : {};
+}
+
+/**
+ * The `env` of Claude Code's settings `sources`, lowest precedence first: each variable as the last source that sets it gives it - in
+ * a source, as the last of its properties that names it - names compared as `platform` compares them, on Windows in any case. One
+ * name holds each variable, its last spelling: Claude Code is given one value for it, never two it would set in an order of its own.
+ */
+function mergedEnv(sources: readonly { readonly [name: string]: unknown }[], platform: NodeJS.Platform): { [name: string]: unknown } {
+	const result: { [name: string]: unknown } = {};
+	for (const source of sources) {
+		for (const [name, value] of Object.entries(source)) {
+			Object.keys(result).filter(key => platform === 'win32' ? key.toLowerCase() === name.toLowerCase() : key === name).forEach(key => delete result[key]);
+			setOwn(result, name, value);
+		}
+	}
+	return result;
+}
+
+/**
+ * The Claude Code settings that would set again a variable `removed` that a launch's entry removes, other than its key variables
+ * (CONFIGURATION-5.1): its user settings, in the folder `CLAUDE_CONFIG_DIR` names, else `~/.claude`; the working folder's shared and
+ * local settings, `.claude/settings.json` and `.claude/settings.local.json` in `cwd`; and the person's own `--settings` of the entry,
+ * `theirs`, each by the argument that gives it. The first that sets one, by the variable and where; none where none sets any.
+ */
+function claudeReadded(removed: readonly string[], env: Environment, cwd: string, platform: NodeJS.Platform, theirs: readonly RunSettingsGiven[]): { readonly name: string; readonly file: string } | undefined {
+	const others = removed.filter(name => keyVariableOf(name, platform) === undefined);
+	if (!others.length) {
+		return undefined;
+	}
+	const set = variableOf(env, 'CLAUDE_CONFIG_DIR', platform);
+	const configDir = set ? path.resolve(cwd, set) : path.join(homeOf(env, platform), '.claude');
+	const files = [path.join(configDir, 'settings.json'), path.join(cwd, '.claude', 'settings.json'), path.join(cwd, '.claude', 'settings.local.json')];
+	const sources: { readonly file: string; readonly env: { readonly [name: string]: unknown } }[] = [
+		...files.map(file => ({ file, env: settingsEnvOf(file) })),
+		...theirs.map(each => ({ file: each.place, env: envOf(each.settings) }))
+	];
+	for (const name of others) {
+		const source = sources.find(each => Object.keys(each.env).some(key => platform === 'win32' ? key.toLowerCase() === name.toLowerCase() : key === name));
+		if (source) {
+			return { name, file: source.file };
+		}
+	}
+	return undefined;
 }
 
 /**
@@ -185,10 +260,62 @@ const claudeTools: ToolsIntegration = {
 export const claudeAdapter: CliAdapter = {
 	id: 'claude',
 	sessionIdentity: true,
-	identityOptions: ['--continue', '-c', '-r', '--fork-session', '--resume-session-at', '--no-session-persistence'],
 	displayName: 'Claude Code',
-	setting: 'facade.claude',
+	setting: 'clis.claude',
 	command: 'claude',
+	// What its entry's args cannot hold (CONFIGURATION-3.1): approvals (yolo), model and effort (their fields), the session, the folder,
+	// where it runs, a print mode and a task. Its `--settings` is merged into the run's own; its list options take several values.
+	grammar: {
+		reserved: ['--dangerously-skip-permissions', '--allow-dangerously-skip-permissions', '--permission-mode', '--session-id', '--resume', '-r', '--continue', '-c',
+			'--fork-session', '--resume-session-at', '--no-session-persistence', '--from-pr', '--worktree', '-w', '--tmux', '--environment', '--cloud', '--teleport',
+			'--desktop', '--bg', '--background', '--print', '-p', '--model', '--effort',
+			// Modes that skip the run's hooks and servers, or refuse its permission bypass
+			'--bare', '--safe-mode', '--restricted'],
+		attached: ['-r', '-w'],
+		variadic: ['--add-dir', '--allowedTools', '--allowed-tools', '--disallowedTools', '--disallowed-tools', '--tools', '--mcp-config', '--betas', '--file'],
+		clusters: { values: ['-d', '-n', '-r', '-w'] },
+		// The options its help writes with `<value>`, whose value Commander takes whatever it looks like
+		required: ['--add-dir', '--agent', '--agents', '--allowedTools', '--allowed-tools', '--append-system-prompt', '--autocompact', '--betas', '--debug-file',
+			'--disallowedTools', '--disallowed-tools', '--effort', '--environment', '--fallback-model', '--file', '--input-format', '--json-schema', '--max-budget-usd',
+			'--mcp-config', '--model', '-n', '--name', '--output-format', '--permission-mode', '--permission-prompts', '--plugin-dir', '--plugin-url',
+			'--remote-control-session-name-prefix', '--session-id', '--setting-sources', '--settings', '--system-prompt', '--system-prompt-snapshot', '--tools']
+	},
+	// The person's --settings merged into the run's, which a file of the run carries: never inline, where a process list shows it
+	runSettings: {
+		option: '--settings',
+		name: 'claude-settings.json',
+		build: (input, theirs) => {
+			const readded = input.env ? claudeReadded(input.entryEnv?.removed ?? [], input.env, input.cwd, input.platform, theirs) : undefined;
+			if (readded) {
+				const at = `${input.setting ?? 'clis.claude'}.env.${readded.name}`;
+				return {
+					problem: `${at} removes ${readded.name}, but ${readded.file} sets it again for Claude Code; remove it there, or set it in env instead`,
+					said: { kind: 'claude_env_readded', values: [at, readded.name, readded.file] }
+				};
+			}
+			// Their settings in their order, then Facade's; the variables of each over those before it, by name as the platform reads it
+			const ours = claudeRunSettings(input.yolo, input.platform, input.sessionHook, input.entryEnv);
+			const settings = theirs.reduce<{ [key: string]: unknown }>((merged, each) => mergeSettings(merged, each.settings), {});
+			return { settings: { ...mergeSettings(settings, ours), env: mergedEnv([...theirs.map(each => envOf(each.settings)), envOf(ours)], input.platform) } };
+		},
+		// Claude Code sets its settings' env over the environment it starts with, its session hook's included: a variable Facade gives
+		// the run last that the entry's env or the person's --settings names holds the run's value, or goes where the run removes it
+		finish: (settings, { last, platform }) => {
+			const env: { [name: string]: unknown } = { ...settings.env as { readonly [name: string]: unknown } };
+			for (const { name, value } of last) {
+				const named = Object.keys(env).filter(key => platform === 'win32' ? key.toLowerCase() === name.toLowerCase() : key === name);
+				if (named.length) {
+					named.forEach(key => delete env[key]);
+					if (value !== undefined) {
+						setOwn(env, name, value);
+					}
+				}
+			}
+			return { ...settings, env };
+		}
+	},
+	// The person's tools and servers go with Facade's in one occurrence, so that Claude Code keeps both
+	additive: [['--allowedTools', '--allowed-tools'], ['--mcp-config']],
 	groups: {
 		session: ['--session-id', '${sessionId}'],
 		resume: ['--resume', '${sessionId}'],
@@ -202,7 +329,6 @@ export const claudeAdapter: CliAdapter = {
 	},
 	takes: { model: true, effort: true },
 	values: input => ({
-		runSettings: JSON.stringify(claudeRunSettings(input.yolo, input.platform, input.sessionHook)),
 		...input.model !== undefined ? { model: input.model } : {},
 		...input.effort !== undefined ? { effort: input.effort } : {}
 	}),

@@ -14,6 +14,7 @@ import {
 import { facadeHome } from '../record/paths';
 import { DamagedWindowRecord, windowToken } from '../record/windowIdentity';
 import { editorEnvironment } from './editorEnvironment';
+import { homeRecordOf, homeReloadText, rememberHome, UnusableHome, useFacadeHome, useRememberedHome } from './home';
 import { NotServed, WindowNetwork } from './windowNetwork';
 import { WindowTerminals } from './windowTerminals';
 
@@ -37,6 +38,30 @@ async function serveHere(request: ServedRoute): Promise<unknown> {
 
 /** The local component has no exported API and no process ownership; its public command serves this window alone. */
 export function activate(context: vscode.ExtensionContext): void {
+	// The Facade home first, before the window registry reads it (ARCHITECTURE-3.1): this computer's. A local window's workspace
+	// extension shares this process, sets the same and says what is wrong with it; this component writes it down, now and as it changes.
+	// In a remote window VS Code gives no extension this computer's Facade: Home - it keeps machine settings for the remote one - so its
+	// component reads what the local windows wrote down, never the remote machine's value
+	if (vscode.env.remoteName === undefined) {
+		const record = homeRecordOf(context);
+		const log = (line: string) => console.error(line);
+		context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(event => {
+			if (event.affectsConfiguration('facade.home')) {
+				rememberHome(record, log);
+			}
+		}));
+		rememberHome(record, log);
+		try {
+			useFacadeHome(context, { terminals: false, offerReload: false, reloadText: homeReloadText });
+		} catch (err) {
+			if (!(err instanceof UnusableHome)) {
+				throw err;
+			}
+			return;
+		}
+	} else {
+		useRememberedHome(context, homeReloadText);
+	}
 	let token: string;
 	try {
 		token = windowToken(context.logUri.fsPath);
