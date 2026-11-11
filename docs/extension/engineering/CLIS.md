@@ -16,22 +16,23 @@ current-platform certification (5.1).
 
 ### 1.1 CLI catalog
 
-**Built-ins and configured custom CLIs are discovered in the destination execution environment.**
+**Built-ins and added entries are discovered in the destination execution environment.**
 
-| Display name | API ID | Executable | Setting segment |
+| Display name | Entry ID | Default command | Settings entry |
 | --- | --- | --- | --- |
-| Claude Code | `claude` | `claude` | `claude` |
-| Codex | `codex` | `codex` | `codex` |
-| Antigravity | `agy` | `agy` | `antigravity` |
-| Muse Code | `muse` | `muse` | `muse` |
-| OpenCode | `opencode` | `opencode` | `opencode` |
-| Pi | `pi` | `pi` | `pi` |
+| Claude Code | `claude` | `claude` | `clis.claude` |
+| Codex | `codex` | `codex` | `clis.codex` |
+| Antigravity | `agy` | `agy` | `clis.agy` |
+| Muse Code | `muse` | `muse` | `clis.muse` |
+| OpenCode | `opencode` | `opencode` | `clis.opencode` |
+| Pi | `pi` | `pi` | `clis.pi` |
 
-Use this order, then custom entries in configuration order. `.enabled:false` hides a built-in from new starts and never
-stops its runs; a start that asks for it, start_agent's too, is refused, saying it is turned off by its
-`facade.<cli>.enabled` setting. Recompute on relevant settings/PATH changes, picker/discovery request, and immediately
-before launch. Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or
-modifying settings.
+Use this order, then added entries in file order (CONFIGURATION-2.1). Each entry is independent; its `type` selects
+an adapter and its name remains the CLI ID. A valid `enabled: false` entry is hidden from New Agent and refused on
+explicit start or restoration, naming `clis["<name>"].enabled`. Existing processes remain. Invalid entries, including
+disabled ones, report CONFIGURATION-4.1's errors. Recompute on settings-file/PATH changes, picker/discovery requests,
+and immediately before launch. Discovery inspects files/configuration without invoking a model, logging in, installing/updating a CLI, or
+modifying settings, except creating a missing settings file under CONFIGURATION-1.3.
 
 A line of a CLI Facade does not support, known by the version its installation names, is unavailable for new starts and
 refused at a start, saying how to update. That line is OpenCode below version 2, as the `package.json` of npm's
@@ -46,14 +47,21 @@ with the Facade tools exits at `--standalone` with its usage.
 
 Use this environment order for both discovery and launch: execution extension host environment; resource-scoped
 `terminal.integrated.env.<platform>`; the explicitly configured `env` map of the selected default terminal profile; the
-CLI's configured launch environment; the variables every run is given. Resolve the profile through
+entry's `env`; the variables every run is given and final cleanup. Resolve the profile through
 `terminal.integrated.defaultProfile.<platform>` and its entry in `terminal.integrated.profiles.<platform>` in the
 destination environment. A profile without a configured env map adds nothing. Do not start a shell or parse its startup
 scripts to discover extra variables; shell-only PATH changes are not part of Facade's computed environment.
 
 In every configured environment map, a string sets the value, null removes the variable and an omitted key inherits
-the preceding layer. `${env:NAME}` in environment values reads the host environment (missing becomes empty); Windows
-keys compare case-insensitively. The execution extension host environment is taken as VS Code's integrated terminal
+the preceding layer. `${env:NAME}` is expanded only in environment string values, once, from the execution host's
+environment. A missing reference in an entry's `env` is an error for that entry; an existing empty variable stays empty.
+In `terminal.integrated.env.<os>` and the default profile's `env`, a missing reference expands to an empty string,
+as VS Code's terminal reads it. This keeps existing terminal settings working. For example, with `PYTHONPATH` unset,
+`"PYTHONPATH": "${env:PYTHONPATH}:/work/src"` in either editor layer becomes `:/work/src`; the same reference in the
+entry's own `env` is an error.
+References never read sibling values or the merged terminal layers, and inserted text is not expanded again.
+Windows keys compare without regard to case; duplicate names differing only in case within one entry's `env` are
+errors (CONFIGURATION-3.2). The execution extension host environment is taken as VS Code's integrated terminal
 inherits it: without what its `sanitizeProcessEnvironment` removes - `ELECTRON_*`; `VSCODE_*` except `VSCODE_PORTABLE`,
 `VSCODE_SHELL_LOGIN`, `VSCODE_ENV_REPLACE`/`_APPEND`/`_PREPEND` and `VSCODE_IPC_HOOK_CLI`; `SNAP` and `SNAP_*`;
 `GDK_PIXBUF_*` - with, on macOS, `NODE_OPTIONS` and `NODE_REPL_EXTERNAL_MODULE` restored from their `VSCODE_` copies;
@@ -70,8 +78,9 @@ extension, Claude Code installs that extension and shows a welcome that waits fo
 Claude Code never runs with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`, whichever layer sets it: that switch also turns off
 its OSC 7501 reports (2.3), so its run settings clear it as well for the copy its settings files carry.
 
-Empty `.path` means command on PATH. A simple name is searched on that PATH; relative path is from launch cwd; leading
-`~` uses that environment's home; absolute path is exact. Whitespace-only is invalid, no silent fallback to another CLI.
+An omitted `command` uses the type's command on PATH; `custom` requires one (CONFIGURATION-2.2). A simple name is
+searched on that PATH; a relative path is from launch cwd; leading `~` uses that environment's home; an absolute path
+is exact. Empty or whitespace-only is invalid. There is no silent fallback to another CLI.
 Require executable file on POSIX, file plus PATHEXT resolution on Windows. Preserve quoted PATH entries. A Windows
 `.cmd` launcher, recognized only as its installer writes it, starts what it runs, using an argument array: npm's shim
 for a package's Node script runs that script with Node, its shim for a native program runs that program, the `pi.cmd`
@@ -80,7 +89,7 @@ one and it is there - and Muse Code's installer launcher runs its active native 
 beside npm's shim, else a Node program (`.exe` or `.com`) on the launch's PATH, never a version manager's `.cmd` or
 `.bat`. Any other `.cmd` or `.bat` runs through cmd.exe, which Facade gives no text it would read as its own: a launch
 through cmd.exe is refused before execution where an argument or the program's own path holds `"`, `%`, `^`, `&`, `|`,
-`<`, `>`, `!` or a line break, saying to set the CLI's `.path` to its own program or Node entry point; a configured
+`<`, `>`, `!` or a line break, saying to set the entry's `command` to its own program or Node entry point; a configured
 argument is named by its place in its setting and that character, never quoted. Where only the Facade tools' arguments
 cannot pass, the CLI starts without the tools, which are unavailable with why (2.2). A launch never builds an unescaped
 shell string. cmd.exe starts in no UNC folder - a network share's, a WSL distribution's `\\wsl$` one - but in the Windows
@@ -104,7 +113,7 @@ an authentication boundary.
 | --- | --- | --- |
 | Claude Code | Permission bypass; its sandbox as its own settings have it | Its sandbox enabled where it has one (not on Windows); its own approvals |
 | Codex | Approval and sandbox bypass | `--sandbox workspace-write`; its own approval policy |
-| Antigravity | `--mode accept-edits --dangerously-skip-permissions` | Its own approvals; it has no sandbox |
+| Antigravity | `--mode accept-edits --dangerously-skip-permissions` | Its own approvals; Facade does not yet map its newer sandbox option |
 | Muse Code | `--disable-approval --disable-sandbox` | Its own approvals and shell sandbox, on unless its configuration turns it off |
 | OpenCode | `--auto` | Its own permission configuration; it has no sandbox |
 | Pi | Nothing to bypass | Nothing to enable: it has no approvals and no sandbox |
@@ -118,26 +127,30 @@ creator (MCP-6.2). If the requested actual mode cannot be supplied, report that 
 
 ### 1.4 Model and effort
 
-**The CLI owns model/effort defaults and saved session state; Facade passes only explicit current overrides.**
+**Facade resolves model and effort from this start, then the current entry, then the CLI's own configuration.**
 
-Current CLI availability and explicit override support are returned by list_agents for the actual destination.
-Facade records requested model/effort and process-start outcomes as structured diagnostic events. Values requested
-before are neither defaults nor an allowlist. Actual model selections, available models/efforts and model responses
-remain in the native CLI's own controls/history; Facade maintains no model-choice catalog or success statistics.
-An omitted value is unknown to Facade unless the native CLI separately reports it. Do not invent model IDs.
-An explicit model or effort in a `start_agent` call is passed through the CLI's own option for this launch only. An
-omitted field adds no override: the CLI's native default or saved session state applies. The call's explicit choice
-takes precedence over the matching mapped option in `.launch.arguments`; remove that configured option and its value, in
-any spelling the CLI takes - a short form such as `-m`, or a `-c`/`--config` override of the same key, with or without
-`=` - before adding the explicit choice, preserving other literal arguments and unrelated configuration keys. The
-adapters map these choices to their CLI argument/configuration mechanism; Facade reports the requested values alone, as
-the effective ones are the CLI's own. An ignored override is not verified success. Do not track every in-CLI change to
-reconstruct session settings. Claude Code and Antigravity take `--model` and `--effort`; Pi `--model` and `--thinking`;
-Codex `--model` and its `model_reasoning_effort`; Muse Code `--model` and, as its own effort option would save the choice
-in the person's settings, its `reasoning_effort` for the run, its per-model efforts cleared for that run as they would
-win over it - the effort is not offered where Muse Code runs through cmd.exe, on Windows, which cannot carry that JSON
-string. OpenCode's interface takes neither, nor does a custom CLI (3.4), so a start that asks one of them for either is
-refused with why.
+CONFIGURATION-3.3 owns the precedence and suggested values. Resolve each field independently. An absent request field
+can use `clis["<name>"].model` or `.effort`; with neither source present, add no override. A native restored session
+can keep its saved choice. Historical requested values never become current overrides. Model and effort options are
+not accepted in built-in `args` (3.1), so a start does not remove a competing configured argument.
+
+| Type | Model mapping | Effort mapping |
+| --- | --- | --- |
+| `claude`, `agy` | `--model` | `--effort` |
+| `codex` | `--model` | Per-run `-c model_reasoning_effort` |
+| `muse` | `--model` | Per-run `-c reasoning_effort`, with `model_reasoning_efforts` cleared for the run; unavailable through Windows cmd.exe, which cannot carry the JSON |
+| `pi` | `--model`, including `provider/model` | `--thinking` |
+| `opencode`, `custom` | Unavailable | Unavailable |
+
+Muse's native effort-selection option is not used because it saves the choice in the person's settings. An added
+entry has its type's supported overrides. Unsupported explicit request fields are refused; unsupported entry fields
+are configuration errors. For example, an entry's `effort: "high"` supplies a default, and a start's `effort: "low"`
+replaces it for that run alone.
+
+list_agents reports override support for the actual destination. Structured diagnostics record requested model/effort
+and startup outcomes. They do not establish effective native choices or successful model requests. Values are not a
+model catalog or an allowlist. The native CLI owns its model controls, history and later in-session changes; an omitted
+choice is unknown to Facade unless the CLI reports it.
 
 ## 2 Runtime adapters
 
@@ -288,9 +301,9 @@ unless its entry says `"mode": "optional"`, and fails a whole run over a require
 per-run entry says so; its project entry through cmd.exe cannot, as Muse Code refuses `mode` in a project file, so a
 Facade server failing there can fail that run. Codex waits up to 10 s for its optional servers before its first model
 request (`-c mcp_optional_startup_grace_ms=10000`), so a server that starts slowly still serves the first turn. The
-server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6. When
-`facade.collaboration.enabled` is off for a start (RULES-4.4), inject no Facade server, skill or approval into that new
-process. Where the tools cannot be given - a project file in conflict (below), launch files that cannot be written, a
+server runs over stdio with per-run identity. Its skill contains MCP mechanics only, consistent with MCP-6.
+Every start using a built-in type attempts this injection; there is no switch to turn it off (RULES-4.4).
+Where the tools cannot be given - a project file in conflict (below), launch files that cannot be written, a
 CLI variable that cannot be read, or arguments cmd.exe cannot carry (1.2) - the CLI starts without them, its tools
 unavailable with why, and nothing of them stays written.
 
@@ -338,7 +351,8 @@ tab is hidden (LIFECYCLE-2.2) has no editor to answer what only an editor knows;
 work so, from a start with its tab never opened. A run is still starting, with its startup stage, until its CLI first
 shows its activity - a valid report or, where its screen is read, a state its reader knows - and its injected Facade
 tools connect, for at most 60 s from its process start - many CLIs starting at once, as when an agent starts a group of
-them, each take far longer than one alone - a reloaded window counting from that start too. Past that bound, a run whose
+them, each take far longer than one alone - a reloaded window counting from that start too. A custom program, which has
+no adapter and no tools, has started once its process has: no first report is awaited (CONFIGURATION-2.3). Past that bound, a run whose
 CLI never showed its activity - no report at all, or a probe answered and no report since - or whose tools never
 connected did not start properly: red, with its reason (RULES-3.2). A report the CLI clears later is unknown activity,
 never idle. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A supported terminal
@@ -426,16 +440,16 @@ replaces the run's, its card told only where it changed. Before its CLI saved th
 that finds none, or fails - said in the log, never shown - keeps the last, and another conversation of the run has none
 until it is read. The title is kept with the run across a reload, its reattachment and an ended run's restoration, as a conversation
 title only where it was proven to come from the native conversation reader: a title an earlier build kept without that
-proof, which may have come from a CLI's report, is discarded. A custom CLI keeps no history Facade reads, so its
-runs have no title. The extension runs where its window's CLIs do, a remote window's included, and reads the stores
+proof, which may have come from a CLI's report, is discarded. A custom program keeps no history Facade reads, so
+its runs have no title (CONFIGURATION-2.3). The extension runs where its window's CLIs do, a remote window's included, and reads the stores
 their launches use.
 
 A session already running in Facade is not duplicated; later Pin restorations skip it. Facade does not scan for or
 acquire external writer locks. An externally active session may be resumed; return the vendor's actual acceptance or
 error without promising concurrency safety. Restoration context follows RULES-4.2.
 Verify interoperability with the actual Claude/Codex/vendor extensions where promised. Different stores cannot be
-silently imported and called the same conversation. Custom Resume/Pin depends on exact capabilities, not CLI branding.
-Configuration alone supplies no discovery or live identity.
+silently imported and called the same conversation. An added entry of a built-in's type resumes and pins as its built-in does
+(CONFIGURATION-3.4); a program does neither. Configuration alone supplies no discovery or live identity.
 
 All six built-ins support native history discovery and exact Resume: Claude Code, Codex, Antigravity, Muse Code,
 OpenCode 2.x and Pi. Pin and Unpin require a maintained, process-bound session identity, including native new, switch,
@@ -451,8 +465,8 @@ the person's other settings stay as they are.
 
 Release verification covers each built-in's actual native history format, exact resume arguments, session changes,
 native tab synchronization and reload/reopen persistence. Reader fixtures establish format compatibility, not live
-vendor interoperability on an untested platform. Custom CLIs still require a maintained discovery and identity adapter
-before advertising these capabilities.
+vendor interoperability on an untested platform. A custom program has no discovery or identity
+adapter, so it advertises neither (CONFIGURATION-2.3).
 
 Compose session identity and Facade tool settings in the same launch; neither may overwrite the other's settings or a
 user's hooks. An initial prompt remains after all launch options. On Windows, Muse Code's recognized installer is
@@ -468,26 +482,62 @@ records its session as its run's.
 
 ### 3.1 Launch arguments and environment
 
-**Expose executable paths, literal arguments and environment values; keep vendor integration inside adapters.**
+**Entries use `command`, `args` and `env`; each adapter rejects options that replace Facade's launch choices.**
 
-Built-in `.path` follows 1.2; `.launch` defaults to `{}` and accepts only:
+CONFIGURATION-2.2 owns field shapes and defaults, CONFIGURATION-3.1 literal arguments, and 1.2 environment handling.
+Arrays are used whole, in order. There is no public argument-group engine, placeholder template, trust-file merger
+or input-delay field. Errors name the field or argument position and expected type, never the supplied value.
 
-| Field | Shape / default |
+For built-in types, permissions come from `yolo`, model and effort from their fields, and location, session,
+interactive terminal and first task from the launch request. Cloud, remote, background and desktop redirection cannot
+replace the process Facade manages. The reserved options are:
+
+| Type | Reserved arguments and configuration paths |
 | --- | --- |
-| arguments | `string[]`, default `[]`; additional literal CLI options in supplied order |
-| environment | Map of string/null values, default `{}`; use 1.2's single environment rule |
+| `claude` | `--dangerously-skip-permissions`, `--allow-dangerously-skip-permissions`, `--permission-mode`, `--bare`, `--safe-mode`, `--restricted`, `--session-id`, `--resume` / `-r`, `--continue` / `-c`, `--fork-session`, `--resume-session-at`, `--no-session-persistence`, `--from-pr`, `--worktree` / `-w`, `--tmux`, `--environment`, `--cloud`, `--teleport`, `--desktop`, `--bg` / `--background`, `--print` / `-p`, `--model`, `--effort`; positional arguments |
+| `codex` | `--dangerously-bypass-approvals-and-sandbox` / `--yolo`, `--sandbox` / `-s`, `--ask-for-approval` / `-a`, `--approve-for-me`, `--not-so-yolo`, `--cd` / `-C`, `--worktree`, `--remote`, `--remote-auth-token-env`, `--no-daemon`, `--model` / `-m`, `--last`; subcommands such as `resume` and `exec`; positional arguments. In `-c` / `--config`: `check_for_update_on_startup`, `projects`, `mcp_servers.facade`, `mcp_optional_startup_grace_ms`, `approval_policy`, `sandbox_mode`, `model`, `model_reasoning_effort` |
+| `agy` | `--dangerously-skip-permissions`, `--mode`, `--sandbox`, `--conversation`, `--continue` / `-c`, `--remote-agent`, `--print` / `-p` / `--prompt`, `--prompt-interactive` / `-i`, `--model`, `--effort`; subcommands |
+| `muse` | `--disable-approval`, `--disable-sandbox`, `--yolo`, `--approval-mode`, `--permission-profile`, `--approval-judge`, `--trust-workspace`, `--worktree` / `-w`, `--worktree-existing`, `--worktree-base`, `--no-session-log`, `--model`, `--reasoning-effort` / `--effort`, `--continue`, `--last`; subcommands such as `resume` and `exec`; positional arguments. In `-c`: `mcpServers.facade`, `model`, `reasoning_effort`, `model_reasoning_efforts` |
+| `opencode` | `--auto` / `--yolo` / `--dangerously-skip-permissions`, `--session` / `-s`, `--continue` / `-c`, `--fork`, `--standalone`, `--server`, `--prompt`; subcommands; positional arguments, which OpenCode treats as its working folder |
+| `pi` | `--session`, `--session-id`, `--continue` / `-c`, `--resume` / `-r`, `--fork`, `--no-session`, `--no-mcp`, `--no-tools` / `-nt`, `--approve` / `-a`, `--no-approve` / `-na`, `--print` / `-p`, `--mode`, `--export`, `--model`, `--provider`, `--thinking`; positional arguments |
 
-Arrays are replaced as a whole, not merged by named groups. There is no public argument-group/template engine,
-deep-merged native settings object, generic trust-file merge or input-delay setting. Custom start/Resume argument
-templates are the limited exception defined in 3.4. A field the launch schema does not have reports its setting path; it
-is never translated or ignored. Preserve the user's values so they can correct them. An argument that repeats an option
-the adapter sets itself - its run settings, its YOLO mapping in either mode, or its session options: the resume and
-session-ID options and the CLI's own continue, resume, fork and no-session shortcuts, such as Claude Code's `--continue`
-or Pi's `--no-session`, which would leave the exact conversation (2.4) - in any spelling its CLI takes, such as Codex's
-`-s` and `--yolo` or OpenCode's `--yolo` and `--dangerously-skip-permissions`, is a configuration error naming its place
-in `arguments`: the CLI would take the person's value in place of Facade's (RULES-4.3). A generic configuration option -
-Codex's and Muse Code's `-c` - is never reserved whole, as it carries unrelated settings too. A problem names a received
-value by its JSON type, never the value, which may be a secret. Running processes keep their actual plan.
+Each adapter has an explicit table, not a comparison with whatever strings it happens to generate today. Recognize
+aliases, separate values, `--name=value` and the CLI's supported short forms. Parse `-c` and `--config` consistently
+where supported. Compare configuration paths: replacing a reserved node's parent or child also conflicts. For example,
+`mcp_servers={...}` cannot bypass the rule for `mcp_servers.facade`; another server's own path is allowed.
+
+Antigravity also reads long options after one dash, as Go programs do. Refuse `-mode` wherever `--mode` is reserved;
+apply the same rule to every reserved long option. Its allowed `-settings` is merged like `--settings` (3.4).
+Claude, Codex, Muse and OpenCode also read short options joined together. Check each one until an option takes the
+remaining text as its value. For example, Claude's `-cp` means `-c -p`, while Codex's `-pwork` selects profile `work`.
+
+An end-of-options `--` is refused in a built-in entry's `args`: the options Facade adds after it would become positional.
+It remains literal and allowed for a custom program. The table also reserves modes that turn off integration a
+Facade run needs, such as Claude's `--bare` and Pi's `--no-mcp`.
+
+Read each option together with its value, following that CLI's parser:
+
+| CLI and option | How Facade reads a separate value |
+| --- | --- |
+| Claude Code options documented with `<value>` | Take the next argument whatever it looks like, as Commander does |
+| Antigravity non-boolean flags | Take the next argument whatever it looks like, as Go's flag package does |
+| Pi value options | Take the next argument whatever it looks like, as Pi's parser does |
+| Codex, Muse and OpenCode options | Never take a following argument that starts with `-`, matching their clap or yargs parser |
+
+Any other option takes the next argument only when it does not start with `-`. For unknown options, this lenient
+rule prefers missing a positional argument to rejecting a newly added native option that takes a value.
+Pi treats `--name=value` for its own options as an unknown flag, so Facade neither extracts a model from that spelling
+nor merges it into a list, but still refuses it when the option name is reserved.
+
+Validation, migration, `--settings` extraction, list merging and `-c` hook merging all read arguments this same way.
+An argument already taken as a value is not read again as an option, subcommand or end marker. For example,
+`--profile resume` selects a profile named `resume`. Claude's
+`["--append-system-prompt", "--model=literal"]` adds the text `--model=literal` to its system prompt; it does not select
+a model. A `--settings=...` string in that same value position is prompt text too, and is not extracted or merged.
+
+Pi's provider is part of its `model`, such as `openrouter/my-model`; its native `--provider` requires `--model`, which
+Facade supplies. `--session-dir` remains allowed, and history discovery follows Pi's native precedence.
+Custom-program arguments pass through without these adapter reservations. Additive and merged integrations follow 3.4.
 
 ### 3.2 Adapter-owned invocation
 
@@ -541,41 +591,48 @@ Keep administrator settings and user deny policies effective according to verifi
 native settings are unknown, report that fact instead of claiming trust or sandbox evidence. Test isolation remains
 ARCHITECTURE-5's separate concern.
 
-### 3.4 Custom CLIs
+### 3.4 Named entries and native settings
 
-**A custom CLI definition requires an explicit exact-session Resume command before it can be used.**
+**An entry's type selects the adapter, while its name and settings stay its own.**
 
-Under `facade.custom`, map a unique custom CLI key to `{path, launch}`. Do not shadow built-in IDs;
-CLI registry keys are distinct from agent display names. A key names its CLI wherever CLIs are listed, so it has a
-visible character and no control character; a key that cannot be an ID is a configuration error that defines no CLI.
-`path` is a required nonempty string resolved under 1.2. Custom `launch` accepts:
+CONFIGURATION-2 defines entry identity and capabilities. Resolve a built-in type using this entry's `command`, `args`
+and `env`, without inheriting another entry. Use that type's readers, native history, trust and supported options.
+Its name remains the API ID, and its icon follows CONFIGURATION-2.4. Record name and type with conversation metadata
+so restoration can validate the original entry (CONFIGURATION-3.4); a missing or changed entry never falls back to a
+built-in.
 
-| Field | Shape / meaning |
+For example, `"Codex · work": {"type": "codex", "args": ["--profile", "work"]}` uses the Codex adapter with the
+`work` profile. Provider configuration remains native (CONFIGURATION-5). There is no Facade `baseUrl`, `apiKey`,
+provider generator or generated key-helper mechanism.
+
+| User input | How the adapter keeps both user and Facade integrations |
 | --- | --- |
-| start | `string[]`, default `[]`; arguments for a new interactive conversation |
-| resume | Required nonempty `string[]`; exact-session arguments containing `${sessionId}` |
-| environment | Map of string/null values, default `{}`; follows 1.2 |
+| Claude `--mcp-config`, `--plugin-dir`, `--allowedTools` / `--allowed-tools`; Pi `-e` / `--extension` | Use native additive behavior where verified; otherwise merge before passing one effective input |
+| Claude `--settings` | Merge user settings first, then Facade-owned fields; preserve unrelated settings and user rules |
+| Antigravity `--settings` / `-settings` | Merge in argument order, replacing each named top-level key; then add the run's tools permission and tracked title command |
+| Codex or Muse `-c hooks` | Merge user hooks with Facade's session hook |
 
-Both commands use `path` as the executable in the selected working location; Resume uses the conversation's original
-cwd and replaces the start arguments.
-Substitute the exact session ID once as literal argument data; `${sessionId}` is the only custom argument placeholder,
-and only `resume` takes it: any other `${...}`, or `${sessionId}` in `start`, is a configuration error naming its place.
-Do not invoke a shell or expand integration/configuration variables. A wrapper executable can handle a CLI with a
-different command structure. For example, `{"path":"my-cli","launch":{"start":[],"resume":["resume","${sessionId}"]}}`.
-Missing/empty Resume or a command without the exact-session placeholder is a configuration error, not an accepted
-interactive-only definition. No YOLO mapping and no implicit model, effort, prompt or resume flags are invented:
-`facade.yolo` leaves a custom launch as configured, and Show Agent Launch says so, reporting its sandbox and approvals
-as unknown to Facade and that Facade gives it no trust (3.3). A start that asks a custom CLI for a model or effort is
-refused (1.4). A custom CLI is given no Facade tools - no server, skill or approval - and no input reader, so ordinary
-messages to it fail as `unsupported`, and no screen reader. The errors of `facade.custom` are listed by list_agents and
-Show Agent Launch.
+Verify repeated-option behavior with the supported CLI; do not assume repetition appends. The merged Claude or
+Antigravity settings go into a per-run file with mode 0600 on POSIX. On Windows, Facade sets no access control list;
+the file inherits its folder's permissions. CONFIGURATION-1.3 describes the default profile's protection and the
+private-folder requirement for another `FACADE_HOME`. Pass `--settings <file>`, not inline JSON containing values.
+The file follows 2.2's cleanup rules. CONFIGURATION-5.1 owns Claude's environment mirroring, the two null exceptions,
+and checks against settings that reintroduce a removed variable, including the entry's own `--settings` input.
+These checks can refuse a launch; optional tool or identity integration failures do not bypass them.
 
-Capabilities are what the shipped adapter or the run itself proves under 2.1 and 2.3 - a custom CLI that sends OSC 7501
-reports shows its activity - never configured by the user. There is no `capabilities` field in a custom definition. An
-interactive CLI without runtime capability proofs can still start and accept direct terminal control after its
-definition passes validation; unproved capabilities remain unavailable. A Resume command is necessary but does not
-prove session discovery/identity or successful restoration; the definition requirement never becomes a claim that an
-untested integration works.
+Every Antigravity launch passes one `--settings <file of the run>`, even when the file contains only `{}`.
+Read each user occurrence in argument order: `--settings`, `-settings`, and either spelling with `=`. Each replaces
+the top-level keys it names. For example, a later `{"theme": "light"}` replaces an earlier `theme` but keeps other keys.
+Then add Facade's tools permission if the run has the tools, and its title command if the session is tracked.
+An unreadable or invalid user settings value is a configuration error at that argument's path, as for Claude.
+If Antigravity's own settings file cannot be read, identity tracking is unavailable; the per-run settings file is
+still made with the person's settings and any active tools permission.
+
+`type: custom` starts its literal command and arguments with 1.2's shared environment, including `FACADE_AGENT` and
+cleanup. It gets no Facade tools, skill, trust or YOLO mapping, no model/effort override, no input or screen reader,
+and no native history integration. An ordinary message or first task fails as `unsupported` without stopping the
+program's launch; direct text and keys still work. Startup completes when the process starts. Without an activity
+report its state stays unknown, not an integration error (CONFIGURATION-2.3).
 
 ## 4 Inspection and design
 
@@ -588,10 +645,16 @@ folder is trusted and configuration errors. It includes the arguments and variab
 tracking (2.4) add at a start, in their literal order, without writing any launch file to show them: a value that exists
 only once a start makes it - a generated path or session ID - appears as a named placeholder, and what cannot be planned
 without writing files is said in words. Use one launch configuration and RULES-4.3's YOLO source. A chosen inspection
-location is not an API launch default. Redact account secrets and sensitive environment values; do not invent
-invalid-plan defaults. Where 3.3 withholds trust for a broad folder, or the CLI's trust file does not exist, say that no
-trust entry is written and the CLI asks in its terminal, instead of claiming an entry will be written. The document does
-not certify observed behavior of a process never started.
+location is not an API launch default. Apply CONFIGURATION-4.2: show the person's environment names and sources,
+never their values. Show Facade's constants; values generated for each run keep their placeholders.
+When Claude or Antigravity receives a per-run settings file, also show that file's JSON with the person's environment
+values and other secret values hidden, and per-run values replaced by placeholders. This preview writes no file.
+Redact generated arguments and files structurally before serialization, including nested values from the person's
+environment; hide
+sensitive user arguments in separate, equals and configuration-assignment forms. Do not log raw full argv or invent
+invalid-plan defaults. Where 3.3 withholds trust for a broad folder, or the CLI's
+trust file does not exist, say that no trust entry is written and the CLI asks in its terminal, instead of claiming an
+entry will be written. The document does not certify observed behavior of a process never started.
 
 Its location is the one a `{ location_id }` names, the window's only one, or the person's choice in native steps by
 folder that offer locations alone: in a window of several folders, the folders, as Change Working Location lists
@@ -611,7 +674,7 @@ LIFECYCLE-1.5; do not delete it or roll back files. Existing-location launches p
 without creation.
 
 Each CLI's adapter and the PTY adapter form the one launch path; there is no second launch path and no public
-trust/template machinery. A run keeps safe metadata - its CLI, location, YOLO, requested model and effort, version and
+trust/template machinery. A run keeps safe metadata - its entry name and type, location, YOLO, requested model and effort, version and
 tools state - and the injection record keeps owned-file hashes and reference counts (2.2); neither keeps the
 arguments, environment values or a credential. Capability facts are computed at each launch from its adapter and the
 installation found, so a changed executable, version or platform applies to the next start.
@@ -640,11 +703,11 @@ installed CLI is the runtime evidence.
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.4 | Each built-in's destination discovery, unknown-version launch, OpenCode below version 2 refused with how to update, a turned-off CLI refused as turned off, matching profile/PATH/env/quoting, Windows launcher recognition and cmd.exe refusals, native permission mapping, explicit per-call model/effort and native defaults |
+| 1.1–1.4 | Destination discovery, independent entries, unknown-version launch, OpenCode below version 2 refusal, disabled entries, matching PATH/env/quoting, missing references fail only in entry env and expand to empty in terminal/profile layers, Windows duplicate names, launcher recognition and cmd.exe refusals, native permissions, request/entry/native model-effort precedence |
 | 2.1–2.3 | Adapter evidence, input readers that read only the box around the cursor, on recorded screens of several versions, unrecognized layouts untouched, direct versus ordinary input, the person's submitted text read before Enter, pre-approved Facade tools and Muse Code's own approvals, optional server, owned-file cleanup, startup until the first activity and the tools' connection or its bound - a reload too - then red where not ready, terminal and report titles rejected for each built-in (2.3), Muse Code's screen reader on its fixtures and its reports' precedence |
 | 2.4 | Each built-in's native history, exact resume, session changes and Pin from a start with session integration, on reader fixtures and isolated native checks; native-title refresh at 2.4's read times, its cache and its retention across reattachment, as VERIFICATION U14 checks |
-| 3.1–3.4 | `.enabled` affects new starts only, custom CLIs require Resume without capability declarations or other placeholders, minimal argument/env schema, owned and session options refused, no generic file merge, native prompt mapping, adapter-owned evidence, each built-in's trust: per-launch arguments, Claude Code's and Antigravity's entries merged and preserved user configuration, Antigravity asking nothing in a folder given through a link or in another case of its letters |
-| 4.1–4.2 | Show Agent Launch describes and redacts the configured launch and says where no trust entry is written; staged cwd validation |
+| 3.1–3.4 | Literal arguments, reserved-option tables and aliases, short clusters and attached values, Go single-dash options, end marker versus a required value, parent/child config conflicts, per-CLI dash-prefixed values read consistently by validation/migration/settings extraction/list merging/hook merging, additive integrations and settings/hooks merges, run settings with POSIX 0600 and inherited Windows permissions, Antigravity's file with and without tools or identity tracking, Claude null conflicts, custom-program limits, native prompt mapping, folder trust and user configuration preserved |
+| 4.1–4.2 | Show Agent Launch describes and redacts the configured launch and run-settings JSON, writes no preview files, and says where no trust entry is written; staged cwd validation |
 | 5.1–5.2 | Fresh versioned fixtures plus isolated real CLI probes; no claim inferred from a dated observation |
 
 See [Verification](VERIFICATION.md). Never probe a real CLI in the owner's state directory; never run Qwen probes.

@@ -22,8 +22,10 @@ card loading. Title actions in order: Filter by Working Location (`filter`, fill
 (`history`), New Agent, so New Agent is rightmost. New Agent's icon is Facade's own copy of the `new-session` codicon,
 shipped with the extension and shown in every editor: VS Code has that codicon only from 1.111, later than the
 supported minimum. The view's native `Views and More Actions...` (`…`) menu holds Add Folder to Workspace... (the
-editor's command), then New Worktree... when a workspace folder is open, followed by Configure Agents... in a separate
-group. Go to Agent..., Show Agent Launch... and Show Agents Log are Command Palette entries, not view-menu items.
+editor's command), then New Worktree... when a workspace folder is open, followed by Open Settings in a separate
+group. Open Settings follows CONFIGURATION-1.2: Facade Code's Settings section and its Edit in facade.json link, or
+facade.json directly for a remote window whose Settings open as JSON, including file creation and migration conflicts.
+Go to Agent..., Show Agent Launch... and Show Agents Log are Command Palette entries, not view-menu items.
 Facade commands use the titles and flows in UX-3.1. The badge counts this window's cards, including starting,
 retained-error and temporarily disconnected records. Tooltip `1 agent` / `{n} agents`; omit zero. A display filter does
 not change the underlying card count.
@@ -54,6 +56,10 @@ Invoking New Agent with no folder opens a native Quick Pick titled `New Agent`, 
 the prerequisite. Cancel changes nothing. Opening a folder uses the editor's normal behavior as above; it does not
 automatically launch an agent. This prerequisite step does not ask the person to select a CLI.
 
+Once a folder is available, New Agent uses LIFECYCLE-1.1's CLI picker. Configuration errors come before the disabled
+check: an invalid entry with `enabled: false` appears under Unavailable with its error and Open Settings. A valid
+disabled entry is not listed (CONFIGURATION-4.1).
+
 ### 1.3 Card geometry and identity
 
 **A card is two lines beside a CLI avatar and status dot; the first line identifies the agent and shows its Pin at the
@@ -70,9 +76,18 @@ right, and there, under the pointer, the card's details, menu and Pin buttons.**
 | Dot | 10 px at avatar bottom right, offset 1 px outward, 2 px ring of current row background |
 | Text block | Vertically centered; whole-pixel geometry; accents/descenders never clipped |
 
-Use maker avatars in `media/agents`: `avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`,
-`avatar-muse.png`, `avatar-opencode.png` and `avatar-pi.png`. Custom avatars are an uppercased first grapheme in a
-circle; deterministic theme colors from UX-2.1. No card shows its location, at any width, under the pointer or on
+Choose the avatar by the entry's `icon` under CONFIGURATION-2.4. Built-in icons use `media/agents`:
+`avatar-claude.png`, `avatar-codex.png`, `avatar-antigravity.png`, `avatar-muse.png`, `avatar-opencode.png` and
+`avatar-pi.png`. Robot icons use `robot-<color>-face.svg` with `robot-eyes.svg` over it.
+
+While the pointer is over the panel, each robot's eyes move toward it, at most 4/32 of the face's width. They reach
+that limit when the pointer is a face and a half away, and move a quarter of the remaining distance each frame.
+They return to the middle when the pointer leaves the panel or the window loses focus. VS Code's or the system's
+reduced-motion setting keeps them still; turning either preference on returns eyes already off center to the
+middle at once, without easing or waiting for a pointer event.
+Once the eyes rest, no further animation frames are computed.
+
+No card shows its location, at any width, under the pointer or on
 focus: the first line is the agent's name, a shortened location being no help to read, and the location is the
 details' and the accessible label's in full (1.5). A location's label there is alias/branch/folder, prefixed by workspace folder in a
 multi-folder window unless it is named that folder's name already, as a plain folder is; a related worktree can be
@@ -153,7 +168,7 @@ was sent to the agent, and by whom, shows at a glance; Facade's own words carry 
 `🧑‍💻` come from who sent the item as its record keeps it, never from a name, the destination or an emoji the text
 begins with. It says where that item came from, not what the agent works on now or
 whether it read it. The last message, and whether the run resumed a conversation, are kept across a reload. A CLI
-without its Facade tools says so in plain words, for example `Collaboration off · move or rename {file}`, or
+without its Facade tools says so in plain words, for example `Collaboration off · move or rename {0}`, or
 `Collaboration stopped · end and resume` once its tools went away, and stays usable. The second line never says a
 title - its conversation's is the details' (1.5), and a terminal's is never shown (CLIS-2.3) - nor `Working`, `Idle`
 or, without a red dot, `Status unavailable · check terminal`, nor `Error · ` before a red card's reason: the state is
@@ -196,7 +211,7 @@ never cut:
 1. `comment-discussion`, as VS Code's chat marks a conversation: its conversation's complete title as its CLI
    stores it, the one Resume Agent lists (CLIS-2.4) - an actual stored title kept even where it equals its CLI's name or the agent's - else, after the same `Title: ` label, in the
    quieter color, `No title yet` when Facade has no title from a CLI whose history it can read, or `Title unavailable` where Facade has no history
-   reader for its CLI - a custom CLI (CLIS-2.4) - so none can come. Never its terminal's title, nor its creation prompt.
+   reader for its CLI - a custom program (CONFIGURATION-2.3) - so none can come. Never its terminal's title, nor its creation prompt.
 2. `tag`: who - its name, then in the quieter color its short run ID: `Hinge #a1`. An empty name is its `#aN` alone.
 3. `clockface`: when it started, in the text color, as Resume Agent says a time: `Started 5 mins ago`,
    and for an agent another started `Started 5 mins ago by Ada #a3`. How long ago is in Resume Agent's words and steps
@@ -323,7 +338,8 @@ Pin button (1.3), and the others the empty-state buttons of 1.2; `rename` asks t
 commands run in the host through validated targets. Page-held state is navigation/typeahead/scroll, not business rules.
 Use the webview's saved page state to restore the still-valid scroll position and keyboard navigation target when the
 person hides and reopens the view; restoring a navigation target does not take actual input focus. Rebuild current cards
-from the host model and discard a navigation target whose card is gone. Use this saved page state without a host
+from the host model and discard a navigation target whose card is gone. Saving, creating or removing facade.json
+refreshes the cards, so a changed icon appears at once (CONFIGURATION-2.4). Use this saved page state without a host
 persistence service or retainContextWhenHidden; keep cards keyed and avatars reused within a page.
 
 ### 3.2 Security and resource use
@@ -395,8 +411,8 @@ fully visible row count minus one (minimum one).
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Title and menu entries, the empty and filtered states, the failed-start and missing-component pages and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, the green and red dots and no dot otherwise, error/ended first, then a native blocker before other red conditions or generic unavailable status, with its CLI's own words kept (1.4), the state in words in the accessible label alone, the card's buttons and five-line details with no state, hover popup or native tooltip, all widths/themes/accessibility |
+| 1.1–1.5 | Built-in and robot avatars; eye reach/easing, pointer leave and blur, both reduced-motion settings with immediate centering on preference change without a pointer event and no frames at rest; title and menu entries, the empty and filtered states, the failed-start and missing-component pages and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, the green and red dots and no dot otherwise, error/ended first, then a native blocker before other red conditions or generic unavailable status, with its CLI's own words kept (1.4), the state in words in the accessible label alone, the card's buttons and five-line details with no state, hover popup or native tooltip, all widths/themes/accessibility |
 | 2.1–2.3 | Insertion into the two queues and manual order, retained failure, the selection unmoved while the pinned tabs of a reload, an extension-host restart or Pin restoration open and on the last one opened after, exact context target from the gear and the keys, no menu on a right click, the card under the pointer kept through the editor's menu and the click that closes it, filter removal/read failure |
-| 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
+| 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, icons refreshed on settings save/create/remove, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
 
 Evidence: [Verification](../engineering/VERIFICATION.md). Visual tests use an isolated editor profile.

@@ -203,7 +203,7 @@ when a new choice is needed. Defaults and already specified values require no ex
 | name | Required display name string; LIFECYCLE-2.1's label rules, so spaces, duplicates and an empty string are allowed |
 | window_id | Required destination window ID |
 | location_id | Required available location in that window |
-| cli | Required ID of a CLI that list_agents lists for that window: a built-in or a custom CLI (CLIS-3.4) |
+| cli | Required CLI entry name listed by list_agents for that window (CONFIGURATION-2.1) |
 | model | Optional nonempty literal; this call's choice takes precedence under CLIS-1.4 |
 | effort | Optional nonempty literal; this call's choice takes precedence under CLIS-1.4 |
 | prompt | Optional nonblank initial message, checked as a message body (4.1), at most 8,000 code points |
@@ -215,9 +215,9 @@ A new-worktree branch/base are explicit and validated by the Git flow; the agent
 A child joins the calling agent's creation tree, including across windows. Its run YOLO follows RULES-4.3;
 the caller cannot pass permissions/yolo to choose a mode. No unattended override exists.
 A window_id of another window sends the call to that window, which checks and starts it. Before acceptance the
-destination checks the location and that the CLI is listed and available there; a turned-off built-in is refused as
-UNAVAILABLE `unavailable`, naming its `facade.<cli>.enabled` setting, and a `facade.yolo` that is neither true nor false
-as `configuration_invalid` (UX-4.1). A model or effort for a CLI that takes none is INVALID `unsupported`.
+destination checks the location and that the entry is listed and available there. A valid disabled entry is refused as
+UNAVAILABLE `unavailable`, naming `clis["<name>"].enabled`. A configuration error is `configuration_invalid`, with the
+same file or entry path and reason as the human launch path (CONFIGURATION-4.1). A model or effort for a CLI that takes none is INVALID `unsupported`.
 
 ```json
 {"name":"backend review","window_id":"win-2","location_id":"loc-7","cli":"claude",
@@ -484,7 +484,8 @@ tools (CLIS-2.2); Muse Code cannot, so with YOLO off its own approvals apply to 
 and edits keep the approval mode that RULES-4.3 chose for the run. The server is never marked required, so a failure to
 start or connect it leaves a usable CLI with tools_state unavailable - except where Muse Code starts through cmd.exe,
 whose project entry cannot say `mode: optional`, so there a Facade server that fails can fail the run (CLIS-2.2). The
-MCP switch affects future injection, not existing connected runs. Version/integration failure leaves a usable CLI.
+six built-in types attempt injection on every start, with no MCP switch; custom programs have none (RULES-4.4).
+Existing connected runs keep their launch snapshot. Version/integration failure follows CLIS-2.2.
 
 Each tool the server lists carries `_meta: {"antigravity/alwaysLoad": true}`, which Antigravity reads to give the model
 the tool directly rather than on demand; other CLIs ignore it. A server started without a run's variables - by a session

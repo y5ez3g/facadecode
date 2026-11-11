@@ -311,7 +311,8 @@ went away - or a start not ready within its bound. Red comes before green. A nat
 question waiting for the person shows no dot even where its Facade tools are unusable or its start was not ready in
 time, as the second line says what it waits for (PANEL-1.4); an error or an ended run stays red. Idle, a reported
 blocker without a recognized kind and unknown activity show no dot either - a start whose CLI reports nothing within
-the bound is red, while activity unknown later in a run shows no dot until the CLI's next report; the card's accessible
+the bound is red, except a custom program's, which awaits no report (CONFIGURATION-2.3), while activity unknown later in a
+run shows no dot until the CLI's next report; the card's accessible
 label says which in words, and its second line what a blocker waits for (PANEL-1.4, 1.5). Neither the details nor a hover says a state. A
 blocker stays a blocker, never idle; idle still requires reliable evidence. Work that stops is shown so a second later,
 as a CLI between two steps does not blink; a blocker or a problem is shown at once. A quiet screen or an unrecognized
@@ -336,7 +337,8 @@ Launch failure retains the accepted pair even when no CLI process was created.
 
 **Use native notifications, their Show action and Go to Agent; maintain no separate human-attention queue.**
 
-Human notifications follow 1.8 and remain in the relevant window. There is no universal exactly-once-per-error popup
+Human notifications follow 1.8 and remain in the relevant window. The one-time settings migration notice follows
+CONFIGURATION-6.3 and appears only in the window that created the file. There is no universal exactly-once-per-error popup
 guarantee or durable notification claim/recovery protocol. This does not introduce repeated reminder popups. There is no
 unseen/seen attention state, attention ordering or Next Agent Needing Attention command. Opening a source does not erase
 its error or require a response. Explicit human contact is shown even while that agent's terminal is visible. No
@@ -387,7 +389,10 @@ window of the same workspace took over shows none of its agents; that other wind
 Pin stores the conversation key - none yet for an agent pinned before its CLI named one (LIFECYCLE-3.4) - original
 location, name and order. Keep the conversation/location
 association for non-pinned Facade conversations too; short-lived message cleanup must not erase it. No copied account
-credentials. Use current CLI startup configuration and 4.3's YOLO rule for the new run. The CLI restores its native model/effort unless current launch arguments override it; Facade does not maintain a second saved model/effort configuration to restore.
+credentials. Keep the CLI entry name and type, and use its current settings and 4.3's current YOLO for the new run.
+Model and effort follow CONFIGURATION-3.3: this request, then the current entry, then the native saved session or
+configuration. Historical requests are diagnostic only. A missing, disabled or changed-type entry refuses restoration
+with the reason, without switching entries (CONFIGURATION-3.4).
 Existing processes keep their actual plan.
 
 Explicit agent close, a person's close of the agent's editor tab showing its pin mark (LIFECYCLE-3.4), normal exit or
@@ -406,10 +411,10 @@ writer; vendor resume errors are returned as actual errors.
 The tree includes ancestors, descendants, siblings and other branches under the same root. Unrelated roots are outside
 normal non-YOLO reach. The caller's own run YOLO decides reach.
 
-Every launch reads the destination execution environment's current `facade.yolo` setting (default true) when the
-launch is accepted and keeps that value for the run. This includes human starts and agent-created children. Changing
-the setting does not change existing runs. Children keep their creator's tree, not their creator's YOLO value. There
-is no API choice of YOLO.
+Every launch reads `yolo` from the destination execution environment's current Facade settings file (default true)
+when accepted and keeps that value for the run. This includes human starts, agent-created children, Resume and Pin
+restoration. Changing the file does not change existing runs. A file error refuses new starts under CONFIGURATION-4.1.
+Children keep their creator's tree, not their creator's YOLO value. There is no API choice of YOLO.
 
 Window/location/CLI discovery includes valid startup destinations even with no agents. A new child there joins its
 creator's tree; tree membership alone grants no access to unrelated agents there. Each run's own YOLO still decides
@@ -420,14 +425,18 @@ YOLO off its own approvals apply to them too (CLIS-2.2). Facade's tree rules are
 authentication or a defense against deliberately spoofed IDs. Do not add credentials, scoped delegation or a new
 security service.
 
-### 4.4 Disabling optional services has bounded effects
+### 4.4 Configuration changes affect future runs
 
-**Launch settings affect subsequent starts; changing the MCP switch does not reconfigure current runs.**
+**Built-in types always receive Facade integration; configuration changes apply to new processes.**
 
-A disabled CLI cannot be newly started; existing processes remain (CLIS-1.1). YOLO
-uses 4.3's single launch-time rule. `facade.collaboration.enabled` controls injection on future starts only. It neither
-disables existing injected tools nor injects tools into a process already started without them. Re-enabling does not
-replay old messages. There is no worktree-management switch: detect Git and offer creation where supported; ordinary
+Every start using one of the six built-in types attempts to inject its Facade tools and skill. There is no tools or
+collaboration switch. An actual injection failure follows CLIS-2.2: keep the CLI usable where it can start, report the
+tools unavailable and explain why. A `custom` program receives no integration (CONFIGURATION-2.3).
+
+A valid disabled entry cannot be newly started or restored. Existing processes keep their launch snapshot, including
+tools and 4.3's YOLO, and reconnecting to them does not reinject or replay messages. For example, disabling `codex`
+leaves a running Codex agent alone and refuses the next start from that entry. CONFIGURATION-3.4 owns the shared
+snapshot rule. There is no worktree-management switch: detect Git and offer creation where supported; ordinary
 locations remain usable without Git.
 
 ## 5 Side effects

@@ -24,7 +24,7 @@ selection history or filesystem state. A person's accepted launch closes the pic
 immediately; an agent's start shows its card (LIFECYCLE-2.2).
 
 Use native view progress for initial loading and human Git operations, and existing card/terminal text for launch/setup.
-No progress, success or copy notifications. Long operation diagnostics are in Show Agents Log. A button/key receives
+No progress, success or copy notifications; the one-time settings migration notice is defined in CONFIGURATION-6.3. Long operation diagnostics are in Show Agents Log. A button/key receives
 immediate visual feedback without waiting for process/Git work. Routine errors keep relevant failure surfaces.
 
 ### 1.2 Notifications and errors
@@ -33,12 +33,16 @@ immediate visual feedback without waiting for process/Git work. Routine errors k
 
 RULES-3.4 and RULES-1.8 decide eligibility and error ownership. Errors use native error notifications; explicit
 agent-to-person messages use native information notifications, even while that agent is viewed. No ordinary
-news/warning/progress toasts. Agent-operation errors return to the caller; no message-delivery or result-handoff failure
+news/warning/progress toasts. CONFIGURATION-6.3 adds one migration notice with an Open action after file creation.
+Facade home changes offer Reload Window under ARCHITECTURE-3.1; another spelling of the home in use offers nothing.
+Agent-operation errors return to the caller; no message-delivery or result-handoff failure
 creates a human popup. Show a permitted human notification only in its related window. There is no durable
 notification-recovery protocol. Example: `Could not start Ada: {CLI error}.` Show opens the exact source run or final
-screen; a launch that failed on its CLI's configuration also offers Configure Agents, and ARCHITECTURE-4.3's
-missing-component notice offers Show Window Component, while Reload Window comes on a notice of its own once the
-component answers. A message to the person reads `{agent name}
+screen; a launch refused by its CLI entry or a program that cannot start also offers Edit in facade.json. A Pin
+restore offers it for a file error before any card
+or a restored card's launch failure, including an entry refusal or a program that cannot start. Other restore
+failures, such as a missing location, have no file action (LIFECYCLE-3.4). ARCHITECTURE-4.3's missing-component notice
+offers Show Window Component, while Reload Window comes on a notice of its own once the component answers. A message to the person reads `{agent name}
 #aN: {first line of the message}` (`#aN: ...` for an empty name) and offers `Open Message`, which opens the complete
 message read-only, then `Show Agent`, which opens that agent's terminal. No Retry or generic Learn More. Maximum 300
 display code points including ellipsis; full diagnostic or message remains available. Escape/neutralize Markdown and
@@ -86,10 +90,9 @@ language's natural grammar while preserving placeholders, product names and the 
 | Typeface | Workbench font, 13 px body, 12 px secondary, 600 emphasis |
 | Corners/inset | 4 px rows/buttons, 2 px fields, 4 px list side inset |
 
-No contributed color palette. A custom CLI's avatar uses a stable hash of its normalized name to choose `charts.blue`,
-`charts.orange` or `charts.purple` as a 30% tint over `sideBar.background` behind `foreground`; in any theme where that
-pair has less than 4.5:1 contrast it falls back to a 12% tint, then to `sideBar.background` alone. Status colors are not
-reused as avatar meanings. High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never
+No contributed color palette. CLI images and robot colors follow CONFIGURATION-2.4; they carry no status meaning.
+Terminal logo glyphs use the theme's text color; robots retain their own gradients. PANEL-1.3 owns robot eye motion.
+High contrast selection uses a dotted `contrastActiveBorder` outline, hover dashed, never
 over keyboard focus. Do not fade high-contrast text. Other secondary selection text uses 80% opacity only where it
 keeps 4.5:1 on the theme's selection, the page measuring it as the theme draws it, and full opacity otherwise; a card's
 details draw their quieter words and icons in the quieter color only where it keeps 4.5:1 on
@@ -184,7 +187,7 @@ are validated against current state, without falling back to the selection.
 | `closeAgent` | End Agent | Any owned starting/live/retained-ended record; card | LIFECYCLE-3.1 |
 | `showAgentDetails` | Show Agent Details | A selected record whose card the filter shows; the card's ⓘ | PANEL-1.5 |
 | `filter` | Filter by Working Location... | Panel title and Command Palette, except where every agent works in the window's one place to work and no filter is on | PANEL-2.3 |
-| `configureAgents` | Configure Agents... | Always; panel `…` menu; opens native Settings filtered to `@ext:facade.facadecode` | UX-4.1 |
+| `openSettings` | Open Settings | Always; panel `…` menu, New Agent's gear and configuration entries; opens the Settings section or remote facade.json under CONFIGURATION-1.2 | CONFIGURATION-1.2 |
 | `showAgentLaunch` | Show Agent Launch... | Always; Command Palette | CLIS-4.1 |
 | `showAgentsLog` | Show Agents Log | Always; Command Palette | ARCHITECTURE-3.3 |
 | `newWorktree` | New Worktree... | Menu-only: panel `…` when a workspace folder is open; hidden from Command Palette | WORKTREES-2.1, 4.3 |
@@ -200,8 +203,9 @@ its notification (UX-1.2).
 **Context-only actions carry their actual target and never substitute the foreground agent.**
 
 Hidden from palette: `newWorktree` (view-menu creation), `moveUp` (Move Up) and `moveDown` (Move Down) in the card menu,
-`filterOn` (the filled-icon form of `filter`, shown while a filter is active) and `revealAgent` (Show Agent,
-notification navigation). The worktree command follows WORKTREES-4.3. Facade contributes no terminal-tab context
+`filterOn` (the filled-icon form of `filter`, shown while a filter is active), `revealAgent` (Show Agent,
+notification navigation), and `openSettingsFile` (Open facade.json, used by Edit in facade.json links and error notifications under
+CONFIGURATION-1.2). The worktree command follows WORKTREES-4.3. Facade contributes no terminal-tab context
 entries; the card's gear menu covers Rename, Move Up, Move Down and End Agent, its Pin button pinning and unpinning
 (PANEL-1.3, 2.2), and the palette's selected-agent actions Rename, Pin, Unpin, End Agent and Show Agent Details (3.1), and no internal
 `$mid` terminal-context trick is used. There is no scripted-start command; UI and MCP use the same internal launch
@@ -222,26 +226,32 @@ place to work (LIFECYCLE-1.3).
 
 ### 4.1 Facade settings
 
-**Settings configure future starts; required name/window/location/CLI remain explicit for agent launches.**
+**Facade settings live in one JSONC file; the editor's Settings page links to it.**
 
-| Setting | Type / default | Scope | Behavioral owner |
-| --- | --- | --- | --- |
-| `facade.yolo` | boolean; true | machine in execution environment | RULES-4.3 |
-| `facade.collaboration.enabled` | boolean; true | machine in execution environment | RULES-4.4 |
-| `facade.<cli>.enabled` | boolean; true | machine in execution environment | CLIS-1.1 |
-| `facade.<cli>.path` | string; empty | machine in execution environment | CLIS-1.2 |
-| `facade.<cli>.launch` | object; `{}` | machine in execution environment | CLIS-3 |
-| `facade.custom` | object; `{}` | machine in execution environment | CLIS-3.4 |
+CONFIGURATION owns `facade.json` in the Facade home. Local and remote execution environments read their own file;
+Settings Sync does not copy it. ARCHITECTURE-3.1 owns home selection and reload behavior.
 
-`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. Settings sections in order: `Agents`
-(`facade.yolo`, `facade.collaboration.enabled`), then one section per built-in CLI
-in CLIS-1.1 order, then `Custom Agents` (`facade.custom`). Descriptions say what changes for the person, for example
-that agents can start, message and control other agents, and that a change applies to agents started afterwards. Read on
-use and apply live where RULES-4.4 allows. A value of the wrong type in `facade.yolo` refuses the launch with the
-reason, because the run's permissions depend on it; one in `facade.collaboration.enabled` starts agents without the
-Facade tools, with the reason in the agents log. How long a start or stop is waited for is no setting (MCP-1.3). Do not add
-an “agent default CLI/model/worktree” setting. Local and remote values are clearly scoped in the editor. The window
-components' network has no settings; it shares the same OS-user desktop boundary.
+| File field | Type / default | Behavioral owner |
+| --- | --- | --- |
+| `yolo` | Boolean; `true` | RULES-4.3 |
+| `names` | Array of nonblank strings; the 140 built-in names | CONFIGURATION-1.4, LIFECYCLE-2.1 |
+| `clis` | Object; `{}` | CONFIGURATION-2 |
+| `$schema` | Optional string; no runtime effect | CONFIGURATION-1.4 |
+
+Open Settings goes directly to the **Facade Code** section, on the Remote tab in a remote window and the User tab
+locally. A remote window with `workbench.settings.editor: json` opens facade.json directly through Open facade.json
+(CONFIGURATION-1.2). The unusable-home error still opens the setting itself, in remote editor settings JSON for
+that preference.
+
+The **Facade: Home** setting (`facade.home`, machine scope) shows `~/.facade` in its box. The description explains the home and links **Edit in facade.json** to
+**Open facade.json** (`facade.openSettingsFile`). It opens or creates the actual local or remote file
+(CONFIGURATION-1.2, CONFIGURATION-1.3); a migration conflict opens the old editor settings JSON (CONFIGURATION-6.2).
+
+The released 0.1.2 settings remain registered for migration, say **Moved to facade.json**, and no longer control
+launches. Unset legacy keys are hidden; set ones appear deprecated with a link to the file.
+There is no tools switch or default CLI/worktree setting. Entry model and effort follow CONFIGURATION-3.3; the
+launch target stays explicit in API calls. Wait durations and the window network are unconfigurable. File and entry
+errors have CONFIGURATION-4.1's distinct scopes; running agents keep their launch snapshot.
 
 ### 4.2 Follow existing editor settings
 
@@ -249,7 +259,7 @@ components' network has no settings; it shares the same OS-user desktop boundary
 
 | Editor setting | Owner/use |
 | --- | --- |
-| `terminal.integrated.env.osx/linux/windows`, configured default-profile env | CLIS-1.2 owns the shared discovery/launch environment; shell startup scripts are not evaluated |
+| `terminal.integrated.env.osx/linux/windows`, configured default-profile env | CLIS-1.2 combines these before the entry's `env` for both discovery and launch; shell startup scripts are not evaluated |
 | `git.path`, `git.branchPrefix` | WORKTREES executable and creation |
 | `git.worktreeIncludeFiles`, `git.worktreeSymlinkFolders` | WORKTREES setup where supported by editor version |
 | `git.detectWorktreesLimit` | Catalog pagination hint, never authorization or silent loss of locations |
@@ -257,7 +267,9 @@ components' network has no settings; it shares the same OS-user desktop boundary
 | `workbench.experimental.modernUI` | PANEL-3.3 scrollbar appearance |
 | `window.zoomLevel`, `workbench.reduceMotion` | Layout/motion |
 
-Unsupported optional editor settings use the documented empty/default behavior and do not block plain-folder agent use.
+The Facade file is not another layer of workspace editor settings. Native editor settings still apply where listed
+above; an entry's `env` follows CONFIGURATION-3.2. Unsupported optional editor settings use the documented
+empty/default behavior and do not block plain-folder agent use.
 Worktree creation uses the editor's native Git workflow through a supported, verified interface. Facade does not
 create a parallel setup/task runner; missing native integration does not block ordinary-folder agents.
 
@@ -299,7 +311,7 @@ they cannot certify native picker placement, focus or remote terminal behavior. 
 | 1.1–1.3 | Native flows/cancel, no progress/success toasts, error wording/action target, message-to-person notification, plain words without internal terms, language and naming consistency |
 | 2.1–2.4 | Theme/width/zoom/motion/contrast, keyboard/screen reader, localization completeness |
 | 3.1–3.2 | Manifest/registration catalog, selected-run palette actions after focus leaves the agent terminal, exact context targeting, unavailable without a target, test commands absent in production |
-| 4.1–4.2 | Scope/default/type validation, future-only collaboration switch and wait setting, live effects in local and remote windows |
+| 4.1–4.2 | Every Open Settings entry opens the Settings section on the User/Remote tab, or remote facade.json for JSON users; unusable-home errors open that tab at Facade: Home; its link and deprecated keys' links open the local/remote file; Facade: Home plus set deprecated legacy keys; migration conflicts open the old editor settings JSON; defaults and validation; native editor environment precedence; future starts versus living processes, locally and remotely |
 | 5.1–5.3 | Localization/build audit, idle/update measurement and isolated visual evidence |
 
 Evidence: [Verification](engineering/VERIFICATION.md).
