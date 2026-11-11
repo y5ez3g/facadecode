@@ -30,7 +30,7 @@ code --install-extension facade.facadecode
 
 다음으로 사용하려는 지원 에이전트 CLI(Claude Code, Codex, Antigravity, Muse Code, OpenCode 또는 Pi)를 설치하고 로그인하세요. Facade Code는 각 CLI의 자체 로그인 및 구독을 사용하여 실행합니다.
 
-> **에이전트는 기본적으로 승인 확인 없이 실행됩니다.** `facade.yolo`가 기본적으로 활성화되어 있어 에이전트가 먼저 묻지 않고 명령을 실행하고 파일을 변경할 수 있습니다. 각 CLI의 표준 승인 프롬프트를 복원하려면 이 설정을 끄세요. 자세한 내용은 [확장 README](../../../extension/README.md#install)를 참조하세요.
+> **에이전트는 기본적으로 승인 확인 없이 실행됩니다.** `yolo`가 기본적으로 활성화되어 있어 에이전트가 먼저 묻지 않고 명령을 실행하고 파일을 변경할 수 있습니다. 각 CLI의 표준 승인 프롬프트를 복원하려면 이 설정을 끄세요. 자세한 내용은 [확장 README](../../../extension/README.md#install)를 참조하세요.
 
 ## Agent Panel
 
@@ -58,7 +58,7 @@ MCP 및 터미널 프로토콜을 통해 에이전트는 다른 에이전트를 
 
 Facade Code는 이 컴퓨터에서 열려 있는 Facade 창의 에이전트들을 하나의 네트워크로 연결합니다. [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 창을 열어 협업을 다른 머신으로 확장하세요.
 
-- **창을 넘어.** `facade.yolo`가 켜져 있으면 에이전트가 로컬 창과 Remote - SSH 창을 가리지 않고 이 컴퓨터의 모든 Facade 창에 있는 에이전트에 도달할 수 있습니다. 꺼져 있으면 자신이 속한 그룹(사용자가 시작한 에이전트 및 그 에이전트가 파생 시작한 에이전트)에만 도달합니다.
+- **창을 넘어.** `yolo`가 켜져 있으면 에이전트가 로컬 창과 Remote - SSH 창을 가리지 않고 이 컴퓨터의 모든 Facade 창에 있는 에이전트에 도달할 수 있습니다. 꺼져 있으면 자신이 속한 그룹(사용자가 시작한 에이전트 및 그 에이전트가 파생 시작한 에이전트)에만 도달합니다.
 - **SSH를 통한 확장.** [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) 창에서 에이전트는 원격 머신의 도구, 파일, 계정을 사용하여 원격 호스트에서 직접 실행됩니다. 로컬 에이전트가 Remote - SSH 창에 있는 에이전트를 직접 시작하고 지시할 수 있습니다.
 - **휴대폰에서 조정.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control)을 사용하여 휴대폰의 Claude 앱을 컴퓨터의 Claude Code 세션에 연결하세요. 해당 세션이 Facade를 통해 다른 에이전트를 조정하고 진행 상황을 휴대폰으로 보고합니다.
 

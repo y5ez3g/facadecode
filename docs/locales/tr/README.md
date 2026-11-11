@@ -30,7 +30,7 @@ Veya **Facade Code**'u [VS Code Marketplace](https://marketplace.visualstudio.co
 
 Ardından, kullanmayı planladığınız desteklenen aracı CLI'larını yükleyin ve oturum açın: Claude Code, Codex, Antigravity, Muse Code, OpenCode veya Pi. Facade Code her CLI'yı kendi oturum açma bilgilerini ve aboneliklerini kullanarak başlatır.
 
-> **Aracılar varsayılan olarak onay istemi olmadan çalışır.** `facade.yolo` varsayılan olarak etkinken aracılar komutları çalıştırabilir ve dosyaları önceden sormadan değiştirebilir. Her CLI'nın standart onay istemlerini geri getirmek için bunu kapatın. [Uzantı README](../../../extension/README.md#install) dosyasına bakın.
+> **Aracılar varsayılan olarak onay istemi olmadan çalışır.** `yolo` varsayılan olarak etkinken aracılar komutları çalıştırabilir ve dosyaları önceden sormadan değiştirebilir. Her CLI'nın standart onay istemlerini geri getirmek için bunu kapatın. [Uzantı README](../../../extension/README.md#install) dosyasına bakın.
 
 ## Agent Panel
 
@@ -58,7 +58,7 @@ MCP ve bir terminal protokolü aracılığıyla aracılar diğer aracıları ba�
 
 Facade Code, bu bilgisayardaki Facade pencerelerinizdeki aracıları tek bir ağda birleştirir. Bu iş birliğini başka bir makineye genişletmek için bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresi açın.
 
-- **Pencereler arasında.** `facade.yolo` açıkken bir aracı, bu bilgisayardaki Facade pencerelerinizdeki yerel ve Remote - SSH dahil tüm aracılara ulaşır. Kapalıyken yalnızca kendi grubuna ulaşır: başlattığınız aracı ve ondan başlatılanlar.
+- **Pencereler arasında.** `yolo` açıkken bir aracı, bu bilgisayardaki Facade pencerelerinizdeki yerel ve Remote - SSH dahil tüm aracılara ulaşır. Kapalıyken yalnızca kendi grubuna ulaşır: başlattığınız aracı ve ondan başlatılanlar.
 - **SSH üzerinden genişletin.** Bir [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) penceresinde aracılar doğrudan uzak makinede oradaki araçlar, dosyalar ve hesaplarla çalışır. Yerel aracılar, Remote - SSH pencerelerindeki aracıları doğrudan başlatabilir ve onlara mesaj gönderebilir.
 - **Telefonunuzdan koordine edin.** [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) kullanarak Claude mobil uygulamasını bilgisayarınızdaki bir Claude Code oturumuna bağlayın. Bu oturum diğer aracıları Facade üzerinden koordine edebilir ve ilerlemeyi telefonunuza bildirebilir.
 

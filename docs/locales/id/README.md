@@ -30,7 +30,7 @@ Atau pasang **Facade Code** dari [VS Code Marketplace](https://marketplace.visua
 
 Selanjutnya, pasang dan masuk ke CLI agen yang didukung yang ingin Anda gunakan: Claude Code, Codex, Antigravity, Muse Code, OpenCode, atau Pi. Facade Code menjalankan setiap CLI menggunakan akun dan langganan miliknya sendiri.
 
-> **Agen berjalan tanpa konfirmasi persetujuan secara default.** Dengan `facade.yolo` yang aktif secara default, agen dapat menjalankan perintah dan mengubah berkas tanpa meminta izin terlebih dahulu. Nonaktifkan pengaturan ini untuk memulihkan konfirmasi persetujuan standar setiap CLI. Lihat [README ekstensi](../../../extension/README.md#install).
+> **Agen berjalan tanpa konfirmasi persetujuan secara default.** Dengan `yolo` yang aktif secara default, agen dapat menjalankan perintah dan mengubah berkas tanpa meminta izin terlebih dahulu. Nonaktifkan pengaturan ini untuk memulihkan konfirmasi persetujuan standar setiap CLI. Lihat [README ekstensi](../../../extension/README.md#install).
 
 ## Agent Panel
 
@@ -58,7 +58,7 @@ Melalui MCP dan protokol terminal, agen dapat memulai, menghentikan, menemukan, 
 
 Facade Code menghubungkan agen di seluruh jendela Facade Anda di komputer ini ke dalam satu jaringan. Buka jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) untuk memperluas kolaborasi tersebut ke mesin lain.
 
-- **Lintas jendela.** Dengan `facade.yolo` aktif, agen dapat menjangkau setiap agen di seluruh jendela Facade Anda di komputer ini, baik lokal maupun Remote - SSH. Dengan pengaturan tersebut nonaktif, agen hanya menjangkau grupnya sendiri: agen yang Anda mulai dan agen yang dimulai darinya.
+- **Lintas jendela.** Dengan `yolo` aktif, agen dapat menjangkau setiap agen di seluruh jendela Facade Anda di komputer ini, baik lokal maupun Remote - SSH. Dengan pengaturan tersebut nonaktif, agen hanya menjangkau grupnya sendiri: agen yang Anda mulai dan agen yang dimulai darinya.
 - **Perluas melalui SSH.** Di jendela [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), agen berjalan langsung di mesin jarak jauh dengan alat, berkas, dan akun di sana. Agen lokal dapat memulai dan mengirim pesan ke agen di jendela Remote - SSH secara langsung.
 - **Koordinasikan dari ponsel Anda.** Hubungkan aplikasi seluler Claude ke sesi Claude Code di komputer Anda menggunakan [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Sesi tersebut dapat mengoordinasikan agen lain melalui Facade dan melaporkan kemajuan kembali ke ponsel Anda.
 

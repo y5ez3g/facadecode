@@ -30,7 +30,7 @@ Ou instale o **Facade Code** pelo [VS Code Marketplace](https://marketplace.visu
 
 Em seguida, instale e faça login nas CLIs de agentes suportadas que planeja usar: Claude Code, Codex, Antigravity, Muse Code, OpenCode ou Pi. O Facade Code inicia cada CLI usando seus próprios dados de login e planos de assinatura.
 
-> **Os agentes são executados sem solicitações de aprovação por padrão.** Com o `facade.yolo` ativado por padrão, os agentes podem executar comandos e alterar arquivos sem perguntar primeiro. Desative-o para restaurar as solicitações de aprovação padrão de cada CLI. Consulte o [extension README](../../../extension/README.md#install).
+> **Os agentes são executados sem solicitações de aprovação por padrão.** Com o `yolo` ativado por padrão, os agentes podem executar comandos e alterar arquivos sem perguntar primeiro. Desative-o para restaurar as solicitações de aprovação padrão de cada CLI. Consulte o [extension README](../../../extension/README.md#install).
 
 ## Agent Panel
 
@@ -58,7 +58,7 @@ Por meio do MCP e de um protocolo de terminal, os agentes podem iniciar, parar, 
 
 O Facade Code conecta os agentes de todas as suas janelas do Facade neste computador em uma única rede. Abra uma janela do [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) para estender essa colaboração a outra máquina.
 
-- **Entre janelas.** Com o `facade.yolo` ativado, um agente alcança todos os agentes em suas janelas do Facade neste computador, tanto locais quanto do Remote - SSH. Com ele desativado, o agente alcança apenas seu próprio grupo: o agente que você iniciou e os iniciados a partir dele.
+- **Entre janelas.** Com o `yolo` ativado, um agente alcança todos os agentes em suas janelas do Facade neste computador, tanto locais quanto do Remote - SSH. Com ele desativado, o agente alcança apenas seu próprio grupo: o agente que você iniciou e os iniciados a partir dele.
 - **Estenda via SSH.** Em uma janela do [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh), os agentes rodam diretamente na máquina remota com as ferramentas, os arquivos e as contas de lá. Agentes locais podem iniciar e enviar mensagens diretamente para agentes em janelas do Remote - SSH.
 - **Coordene pelo celular.** Conecte o aplicativo móvel do Claude a uma sessão do Claude Code em seu computador usando o [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control). Essa sessão pode coordenar outros agentes pelo Facade e relatar o progresso de volta ao seu telefone.
 

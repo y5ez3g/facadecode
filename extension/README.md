@@ -27,7 +27,7 @@ Packages are available for macOS (Intel x64 and Apple silicon), Linux (x64 and A
 
 **Prerequisites**: Install and sign in to at least one supported CLI where your workspace runs: on your local computer for local projects, or on the remote host for Remote - SSH. For OpenCode, use version 2.x (`@opencode/cli`): Facade Code does not launch 1.x (`opencode-ai`) and explains how to upgrade. Git is required if you use worktrees.
 
-**Agents run without approval prompts by default.** By default, `facade.yolo` is enabled, allowing agents to run commands and modify files without asking for confirmation. Turn it off to restore each CLI's standard approval prompts and supported sandbox; this change applies to agents started afterwards. Pi has no approvals or sandbox, so it runs without asking even with `facade.yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. To open settings, select **Configure Agents...** from the panel's `...` menu. Facade also trusts the folder an agent starts in, equivalent to accepting the CLI's own workspace trust prompt. With `facade.yolo` on, agents can also stop, message, and type into every agent across your Facade windows. Custom CLIs are the exception to launch mapping and folder trust: `facade.yolo` does not alter how they start, and Facade grants them no folder trust.
+**Agents run without approval prompts by default.** By default, `yolo` is enabled in Facade's [settings](#settings), allowing agents to run commands and modify files without asking for confirmation. Turn it off to restore each CLI's standard approval prompts and supported sandbox; this change applies to agents started afterwards. Pi has no approvals or sandbox, so it runs without asking even with `yolo` off. OpenCode's default permissions allow every tool, so it also runs without asking unless you configure its permissions. To open the settings, select **Open Settings** from the panel's `...` menu. Facade also trusts the folder an agent starts in, equivalent to accepting the CLI's own workspace trust prompt. With `yolo` on, agents can also stop, message, and type into every agent across your Facade windows. `custom` programs are the exception to launch mapping and folder trust: `yolo` does not alter how they start, and Facade grants them no folder trust.
 
 ## Quick Start
 
@@ -66,7 +66,7 @@ For details on cross-agent messaging, automatic retries, and workspace files, se
 
 Facade Code connects agents across your Facade windows on this computer. Open a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window to extend that collaboration to another machine.
 
-- **Work across windows.** Open multiple project folders in separate VS Code windows. With `facade.yolo` on, agents in one window can see, message, and direct agents in any other window on your computer; with it off, agents reach only their own group.
+- **Work across windows.** Open multiple project folders in separate VS Code windows. With `yolo` on, agents in one window can see, message, and direct agents in any other window on your computer; with it off, agents reach only their own group.
 - **Connect over SSH.** In a [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh) window, agents run directly on the remote machine with its tools, files, and accounts, and can be started and directed by local agents.
 - **Check in from your phone.** In a Claude Code terminal, type `/remote-control` to enable [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control), then connect using the Claude app on iOS or Android. From your phone, ask for progress updates and let that session coordinate other agents through Facade.
 
@@ -74,29 +74,59 @@ Facade Code connects agents across your Facade windows on this computer. Open a 
 
 ## Settings
 
-| Setting | Default | What it does |
-|---|---|---|
-| `facade.yolo` | On | Runs agents without approval prompts. Turn off to use each CLI's normal approvals and supported sandbox. Applies to new agents only. |
-| `facade.collaboration.enabled` | On | Lets agents start and stop each other, send messages to each other and to you, and read and type in each other's terminals. Applies to new agents only. |
-| `facade.claude.path` | Empty | Path to Claude Code. Leave empty to use `claude` from the terminal environment's PATH. |
-| `facade.codex.path` | Empty | Path to Codex. Leave empty to use `codex` from the terminal environment's PATH. |
-| `facade.antigravity.path` | Empty | Path to Antigravity. Leave empty to use `agy` from the terminal environment's PATH. |
-| `facade.muse.path` | Empty | Path to Muse Code. Leave empty to use `muse` from the terminal environment's PATH. |
-| `facade.opencode.path` | Empty | Path to OpenCode. Leave empty to use `opencode` from the terminal environment's PATH. |
-| `facade.pi.path` | Empty | Path to Pi. Leave empty to use `pi` from the terminal environment's PATH. |
-| `facade.<cli>.enabled` | On | Controls whether the CLI is offered for new agents. Turning it off does not stop agents that are running. |
-| `facade.<cli>.launch` | `{}` | Advanced: additional command-line `arguments` and `environment` variables for the CLI. **Show Agent Launch...** shows what each agent starts with. |
-| `facade.custom` | `{}` | Your own CLIs, by ID, each with a `path` and a `launch`: `start` for a new conversation, `resume` for a saved one (required; it must contain `${sessionId}`), and `environment`. An ID cannot be a built-in one: `claude`, `codex`, `agy`, `muse`, `opencode` or `pi`. |
+Facade's settings are in `facade.json` in the Facade home, by default `~/.facade/facade.json`. Choose **Open Settings** in the panel's `...` menu or Command Palette, then **Edit in facade.json** under **Facade: Home**. In a remote window whose Settings open as JSON, **Open Settings** opens `facade.json` directly. The link creates the file if needed; remote windows open the remote file. **Facade: Home** (`facade.home`) overrides `FACADE_HOME`, which overrides `~/.facade`. Changing the home requires a window reload. Windows reach each other's agents only when they use the same Facade home.
 
-`<cli>` is `claude`, `codex`, `antigravity`, `muse`, `opencode` or `pi`. These are machine settings: for a remote window, set them in the remote host's settings.
+Saved changes apply to agents started afterwards; running agents keep their settings. The file is JSON with comments, and top-level fields are optional:
 
-For example, a CLI started as `my-cli --fast` and resumed as `my-cli resume <session ID>`:
-
-```json
-"facade.custom": {
-  "my-cli": { "path": "my-cli", "launch": { "start": ["--fast"], "resume": ["resume", "${sessionId}"] } }
+```jsonc
+{
+  // Ask for each CLI's own approvals
+  "yolo": false,
+  "clis": {
+    // A built-in, changed by its name
+    "codex": { "command": "/opt/homebrew/bin/codex", "model": "my-model" },
+    "pi": { "enabled": false },
+    // CLIs of your own, by names of your own
+    "Codex · work": { "type": "codex", "args": ["--profile", "work"] },
+    "aider": { "type": "custom", "command": "aider", "args": ["--model", "sonnet"] }
+  }
 }
 ```
+
+| Setting | Default | What it does |
+|---|---|---|
+| `yolo` | `true` | Runs agents without approval prompts, and lets agents reach every agent in your Facade windows. Turn off to use each CLI's normal approvals and supported sandbox, with agents reaching only their own group. Applies to new agents only. |
+| `names` | 140 built-in names | Names suggested at random, excluding names already used in this window. Blank names are filled the same way; an empty or exhausted list uses the agent ID. |
+| `clis.<name>.type` | The built-in's own | `claude`, `codex`, `agy`, `muse`, `opencode` or `pi` for a built-in CLI under settings of its own, or `custom` for any other program. Required for a name of your own. |
+| `clis.<name>.icon` | The type's icon; `facade-pearl` for `custom` | A built-in logo (`claude`, `codex`, `agy`, `muse`, `opencode`, `pi`) or one of the 16 `facade-` robots listed in the file. |
+| `clis.<name>.command` | The CLI's command on PATH | The program to start: a name found on the terminal's PATH, or a path. Required for `custom`. |
+| `clis.<name>.args` | `[]` | Arguments added to the command line, exactly as written. Facade refuses the options it sets itself, such as approvals, the model and the conversation. |
+| `clis.<name>.env` | `{}` | Environment variables: a string sets one, `null` removes one, and `${env:NAME}` reads one from the editor's environment. |
+| `clis.<name>.model`, `clis.<name>.effort` | The CLI's own | The model and reasoning effort new agents start with, for the CLIs that take them; a start that chooses its own wins. |
+| `clis.<name>.enabled` | `true` | Whether **New Agent** offers it. Turning it off does not stop agents that are running. |
+
+The built-in CLIs' names are `claude`, `codex`, `agy`, `muse`, `opencode` and `pi`; leaving one out keeps its defaults. A name of your own adds a CLI that takes nothing from the built-in of its type. **New Agent** lists it after the built-in CLIs, and its icon defaults to its type's icon, or the pearl robot for `custom`. Set `icon` to choose a built-in logo or one of the 16 robots. A `custom` program starts exactly as written: Facade adds no approvals mapping, folder trust, tools or messages, and cannot resume its conversations. **Show Agent Launch...** shows what each agent starts with, and a mistake in the file says where it is. Settings saved in version 0.1.2 move into the file when it is first made. The file includes comments, all six built-ins and examples for another provider or a custom program.
+
+To run Claude Code on another Anthropic-compatible API, give an entry the variables Claude Code reads, its key read from your environment rather than written in the file:
+
+```jsonc
+"Claude · work": {
+  "type": "claude",
+  "model": "my-large-model",
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://api.example.com/anthropic",
+    "ANTHROPIC_AUTH_TOKEN": "${env:WORK_API_KEY}",
+    "ANTHROPIC_API_KEY": null,
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-large-model",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "my-large-model",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "my-small-model"
+  }
+}
+```
+
+The generated file includes three commented examples: **Claude · Other**, **Codex · Other** and **Aider**. Uncomment any that you want. For the provider examples, replace `YOUR_PROVIDER_URL` and `YOUR_API_KEY` with your provider's address and key, and check its model names. Their comments give OpenRouter and Qwen Cloud addresses as samples; the sample model is DeepSeek V4.1 Flash. A key pasted into the file is stored in plain text. Use `${env:NAME}` to read it from the editor's environment and keep it out of this file.
+
+For Codex, the **Codex · Other** example defines its provider through `-c` options in `args` and supplies the key through `env`; no other configuration file is needed. The key then travels in the process environment, which Codex's shell snapshots may copy. You can instead keep a native profile such as `~/.codex/work.config.toml`, select it with `"args": ["--profile", "work"]`, and use its `auth` command to obtain the key without putting it in the environment. The [configuration guide](https://github.com/y5ez3g/facadecode/blob/main/docs/extension/features/CONFIGURATION.md#5-using-another-api) shows both Codex setups and the other CLIs.
 
 ## Status and Known Limitations
 

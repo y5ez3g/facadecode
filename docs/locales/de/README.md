@@ -30,7 +30,7 @@ Oder installieren Sie **Facade Code** über den [VS Code Marketplace](https://ma
 
 Installieren Sie als Nächstes die unterstützten Agenten-CLIs, die Sie verwenden möchten, und melden Sie sich dort an: Claude Code, Codex, Antigravity, Muse Code, OpenCode oder Pi. Facade Code startet jede CLI mit deren eigener Anmeldung und eigenen Abonnements.
 
-> **Agenten laufen standardmäßig ohne Bestätigungsabfragen.** Wenn `facade.yolo` standardmäßig aktiviert ist, können Agenten Befehle ausführen und Dateien ändern, ohne zuvor nachzufragen. Deaktivieren Sie diese Option, um die gewohnten Bestätigungsabfragen der jeweiligen CLI wiederherzustellen. Siehe [extension README](../../../extension/README.md#install).
+> **Agenten laufen standardmäßig ohne Bestätigungsabfragen.** Wenn `yolo` standardmäßig aktiviert ist, können Agenten Befehle ausführen und Dateien ändern, ohne zuvor nachzufragen. Deaktivieren Sie diese Option, um die gewohnten Bestätigungsabfragen der jeweiligen CLI wiederherzustellen. Siehe [extension README](../../../extension/README.md#install).
 
 ## Agent Panel
 
@@ -58,7 +58,7 @@ Facade Code führt native Agenten-CLIs (Claude Code, Codex, Antigravity, Muse Co
 
 Facade Code verbindet die Agenten aller Ihrer Facade-Fenster auf diesem Computer zu einem gemeinsamen Netzwerk. Öffnen Sie ein [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)-Fenster, um diese Zusammenarbeit auf einen weiteren Rechner auszuweiten.
 
-- **Über Fenster hinweg.** Wenn `facade.yolo` aktiviert ist, erreicht ein Agent jeden Agenten in allen Ihren Facade-Fenstern auf diesem Computer – gleichermaßen lokal wie über Remote - SSH. Ist es deaktiviert, erreicht ein Agent nur seine eigene Gruppe: den von Ihnen gestarteten Agenten und alle daraus hervorgegangenen.
+- **Über Fenster hinweg.** Wenn `yolo` aktiviert ist, erreicht ein Agent jeden Agenten in allen Ihren Facade-Fenstern auf diesem Computer – gleichermaßen lokal wie über Remote - SSH. Ist es deaktiviert, erreicht ein Agent nur seine eigene Gruppe: den von Ihnen gestarteten Agenten und alle daraus hervorgegangenen.
 - **Über SSH erweitern.** In einem [VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh)-Fenster laufen Agenten direkt auf dem Remote-Rechner mit den dortigen Werkzeugen, Dateien und Konten. Lokale Agenten können Agenten in Remote - SSH-Fenstern direkt starten und ihnen Nachrichten senden.
 - **Vom Smartphone aus koordinieren.** Verbinden Sie die mobile Claude-App über [Claude Code Remote Control](https://code.claude.com/docs/en/remote-control) mit einer Claude Code-Sitzung auf Ihrem Computer. Diese Sitzung kann andere Agenten über Facade koordinieren und den Fortschritt direkt an Ihr Telefon melden.
 
