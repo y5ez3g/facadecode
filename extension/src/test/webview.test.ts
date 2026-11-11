@@ -2098,7 +2098,9 @@ suite('The agent panel in Chromium', function () {
 		}
 	});
 
-	test('a robot\'s eyes go a quarter of the way each frame, reach less within a face and a half of the pointer, look ahead again when the window loses focus, keep still with the system\'s reduced motion, and ask for no frame at rest (PANEL-1.3)', async () => {
+	test('a robot\'s eyes go a quarter of the way each frame, reach less within a face and a half of the pointer, look ahead again when the window loses focus, keep still with the system\'s reduced motion, and ask for no frame at rest (PANEL-1.3)', async function () {
+		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
+		this.timeout(60_000);
 		const seen = await evaluate(`(async () => {
 			agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 });
 			const frames = count => new Promise(resolve => { const step = left => left ? requestAnimationFrame(() => step(left - 1)) : resolve(); step(count); });
@@ -2108,25 +2110,27 @@ suite('The agent panel in Chromium', function () {
 			const reach = box.width * 4 / 32;
 			const cx = box.left + box.width / 2, cy = box.top + box.height / 2;
 			const move = x => document.dispatchEvent(new PointerEvent('pointermove', { clientX: x, clientY: cy, bubbles: true }));
+			// Until the eyes stand still: three frames alike
+			const settled = async () => { let last; for (let same = 0, left = 240; same < 3 && left; left--) { await frames(1); const now = eyes.style.transform; same = now === last ? same + 1 : 0; last = now; } };
 			// From rest, one frame goes a quarter of the way
 			move(cx + 500); await frames(1);
 			const first = at()[0] / reach;
-			await frames(60);
+			await settled();
 			// Three quarters of a face from its middle: half the reach
-			move(cx + box.width * 0.75); await frames(60);
+			move(cx + box.width * 0.75); await settled();
 			const near = at()[0] / reach;
 			// The window loses focus: ahead again
-			window.dispatchEvent(new Event('blur')); await frames(60);
+			window.dispatchEvent(new Event('blur')); await settled();
 			const blurred = at();
 			// The system's reduced motion, while the eyes look aside: in the middle at once
-			move(cx + 500); await frames(60);
+			move(cx + 500); await settled();
 			const real = window.matchMedia;
 			window.matchMedia = query => query.includes('reduced-motion') ? { matches: true, addEventListener() {}, removeEventListener() {} } : real.call(window, query);
 			move(cx + 500); await frames(2);
 			const still = at();
 			window.matchMedia = real;
 			// At rest, nothing asks for a frame
-			move(cx + 500); await frames(60);
+			move(cx + 500); await settled();
 			let asked = 0;
 			const ask = window.requestAnimationFrame;
 			window.requestAnimationFrame = callback => { asked++; return ask.call(window, callback); };
@@ -2139,17 +2143,21 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual([blurred, still, asked], [[0, 0], [0, 0], 0]);
 	});
 
-	test('a robot\'s eyes look toward the pointer over the panel, up to 4/32 of its face, and ahead again once it leaves; not with reduced motion (CONFIGURATION-2.4)', async () => {
+	test('a robot\'s eyes look toward the pointer over the panel, up to 4/32 of its face, and ahead again once it leaves; not with reduced motion (CONFIGURATION-2.4)', async function () {
+		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
+		this.timeout(60_000);
 		const seen = await evaluate(`(async () => {
 			agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 });
 			const frames = count => new Promise(resolve => { const step = left => left ? requestAnimationFrame(() => step(left - 1)) : resolve(); step(count); });
 			const eyes = document.querySelector('.agent .face .eyes');
 			const box = eyes.parentElement.getBoundingClientRect();
+			// Until the eyes stand still: three frames alike
+			const settled = async () => { let last; for (let same = 0, left = 240; same < 3 && left; left--) { await frames(1); const now = eyes.style.transform; same = now === last ? same + 1 : 0; last = now; } };
 			const at = () => { const shift = /translate\\((-?[\\d.]+)px, (-?[\\d.]+)px\\)/.exec(eyes.style.transform); return shift ? [Number(shift[1]), Number(shift[2])] : [0, 0]; };
 			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 200, clientY: box.top + box.height / 2, bubbles: true }));
 			await frames(4);
 			const moving = at();
-			await frames(60);
+			await settled();
 			const right = at();
 			// Reduced motion turned on while the eyes look aside: they stand in the middle at once, without easing there
 			document.body.classList.add('vscode-reduce-motion');
@@ -2158,13 +2166,13 @@ suite('The agent panel in Chromium', function () {
 			const snapped = at();
 			document.body.classList.remove('vscode-reduce-motion');
 			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 200, clientY: box.top + box.height / 2, bubbles: true }));
-			await frames(60);
+			await settled();
 			document.dispatchEvent(new MouseEvent('mouseout', { relatedTarget: null, bubbles: true }));
-			await frames(60);
+			await settled();
 			const left = at();
 			document.body.classList.add('vscode-reduce-motion');
 			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.left - 200, clientY: box.top, bubbles: true }));
-			await frames(30);
+			await settled();
 			const reduced = at();
 			document.body.classList.remove('vscode-reduce-motion');
 			return [box.width, moving, right, snapped, left, reduced];
@@ -2176,26 +2184,30 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual([snapped, left, reduced], [[0, 0], [0, 0], [0, 0]]);
 	});
 
-	test('a robot\'s eyes looking aside stand in the middle at once when reduced motion turns on - the editor\'s or the system\'s - with the pointer still and nothing else moving, and look again when it turns off (PANEL-1.3)', async () => {
+	test('a robot\'s eyes looking aside stand in the middle at once when reduced motion turns on - the editor\'s or the system\'s - with the pointer still and nothing else moving, and look again when it turns off (PANEL-1.3)', async function () {
+		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
+		this.timeout(60_000);
 		const aside = await evaluate(`(async () => {
 			agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 });
 			window.framesOf = count => new Promise(resolve => { const step = left => left ? requestAnimationFrame(() => step(left - 1)) : resolve(); step(count); });
+			// Until the eyes stand still: three frames alike
+			window.settledOf = async () => { let last; for (let same = 0, left = 240; same < 3 && left; left--) { await framesOf(1); const now = document.querySelector('.agent .face .eyes').style.transform; same = now === last ? same + 1 : 0; last = now; } };
 			window.eyesAt = () => { const shift = /translate\\((-?[\\d.]+)px, (-?[\\d.]+)px\\)/.exec(document.querySelector('.agent .face .eyes').style.transform); return shift ? [Number(shift[1]), Number(shift[2])] : [0, 0]; };
 			const box = document.querySelector('.agent .face').getBoundingClientRect();
 			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 300, clientY: box.top + box.height / 2, bubbles: true }));
-			await framesOf(60);
+			await settledOf();
 			return eyesAt();
 		})()`) as number[];
 		// The editor's: VS Code's class on the page's body, and no other event
 		const editor = await evaluate(`(async () => { document.body.classList.add('vscode-reduce-motion'); await framesOf(2); return eyesAt(); })()`);
-		const editorOff = await evaluate(`(async () => { document.body.classList.remove('vscode-reduce-motion'); await framesOf(60); return eyesAt(); })()`) as number[];
+		const editorOff = await evaluate(`(async () => { document.body.classList.remove('vscode-reduce-motion'); await settledOf(); return eyesAt(); })()`) as number[];
 		// The system's: the media query the page listens to changes, and no other event; the page is told it in a later frame, and
 		// the eyes stand in the middle in the frame after - easing there would take some twenty
 		await evaluate(`(() => { window.motionQuery = matchMedia('(prefers-reduced-motion: reduce)'); window.motionChanged = new Promise(resolve => motionQuery.addEventListener('change', resolve, { once: true })); })()`);
 		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'reduce' }] });
 		const system = await evaluate(`(async () => { await motionChanged; await framesOf(2); return eyesAt(); })()`);
 		await call('Emulation.setEmulatedMedia', { features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }] });
-		const systemOff = await evaluate(`(async () => { await framesOf(60); return eyesAt(); })()`) as number[];
+		const systemOff = await evaluate(`(async () => { await settledOf(); return eyesAt(); })()`) as number[];
 		assert.ok(aside[0] > 0 && editorOff[0] > 0 && systemOff[0] > 0, JSON.stringify([aside, editorOff, systemOff]));
 		assert.deepStrictEqual([editor, system], [[0, 0], [0, 0]]);
 	});

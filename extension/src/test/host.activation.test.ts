@@ -3,6 +3,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
+import { EventEmitter } from 'events';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -66,6 +67,26 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			delete: (variable: string) => { terminalHome.push(`${variable} removed`); }
 		}
 	});
+
+	/**
+	 * The files as they are, with watches the test tells of each change itself as it makes it: the system's own notice comes when it
+	 * will - seconds later on a busy machine, and not at all for a change made as a watch starts - which no test can wait on. `before`
+	 * runs as a watch starts.
+	 */
+	const toldFiles = (before?: () => void) => {
+		const watches: { readonly watcher: fs.FSWatcher; readonly listener: (event: string, name: string | null) => void; closed: number }[] = [];
+		const files = { ...fs, watch: (_folder: fs.PathLike, _options: unknown, listener: (event: string, name: string | null) => void) => {
+			before?.();
+			const watcher = new EventEmitter() as unknown as fs.FSWatcher;
+			const each = { watcher, listener, closed: 0 };
+			watcher.close = () => { each.closed++; };
+			watches.push(each);
+			return watcher;
+		} };
+		// Each change told twice, as the system often tells a write
+		const tell = () => watches.filter(each => !each.closed).forEach(each => { each.listener('rename', 'home.json'); each.listener('change', 'home.json'); });
+		return { files, tell, watches };
+	};
 
 	setup(() => {
 		temp = fs.mkdtempSync(path.join(os.tmpdir(), 'fd-activation-'));
@@ -295,24 +316,21 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			home = '/srv/facade';
 			remoteName = 'ssh-remote';
 			process.env.FACADE_HOME = '/somewhere/else';
-			withModules({ vscode: api() })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
+			const told = toldFiles();
+			withModules({ vscode: api(), fs: told.files })<typeof import('../host/window')>(require.resolve('../host/window')).activate(windowContext() as never);
 			assert.deepStrictEqual([process.env.FACADE_HOME, shown], [local, []]);
 			// A local window writes down another: the remote window offers the reload that uses it, once
 			fs.writeFileSync(record, JSON.stringify({ home: path.join(os.homedir(), 'facade-new') }));
-			for (let wait = 0; wait < 40 && !informed.length; wait++) {
-				await new Promise(resolve => setTimeout(resolve, 50));
-			}
+			told.tell();
 			assert.deepStrictEqual(informed, [{ text: 'The new Facade home applies only after the window reloads.', items: ['Reload Window'] }]);
 			// Written again the same, then back to the home this window uses: nothing more to reload; then another: offered again
 			fs.writeFileSync(record, JSON.stringify({ home: path.join(os.homedir(), 'facade-new') }));
-			await new Promise(resolve => setTimeout(resolve, 300));
+			told.tell();
 			fs.writeFileSync(record, JSON.stringify({ home: local }));
-			await new Promise(resolve => setTimeout(resolve, 300));
+			told.tell();
 			const quiet = informed.length;
 			fs.writeFileSync(record, JSON.stringify({ home: path.join(os.homedir(), 'facade-other') }));
-			for (let wait = 0; wait < 40 && informed.length < 2; wait++) {
-				await new Promise(resolve => setTimeout(resolve, 50));
-			}
+			told.tell();
 			assert.deepStrictEqual([quiet, informed.length], [1, 2]);
 			// Unset there, nothing is written down, and a remote window goes by FACADE_HOME as the local windows do
 			remoteName = undefined;
@@ -336,7 +354,6 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 	test('a remote window\'s component with nothing written down uses FACADE_HOME, as the local windows do: that folder written down offers nothing, another does, and its removal back to that folder nothing more; a reload chosen after the window let go does nothing; a watch that fails stops (ARCHITECTURE-3.1)', async () => {
 		const before = process.env.FACADE_HOME;
 		const subscriptions: { dispose(): void }[] = [];
-		const watchers: { readonly watcher: fs.FSWatcher; closed: number }[] = [];
 		try {
 			fs.writeFileSync(path.join(temp, 'handover.json'), '{');
 			const storage = path.join(temp, 'storage');
@@ -347,39 +364,29 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			home = '/srv/facade';
 			let choose: (choice: string | undefined) => void = () => undefined;
 			answer = () => new Promise(resolve => { choose = resolve; });
-			const watching = { ...fs, watch: (...args: Parameters<typeof fs.watch>) => {
-				const watcher = fs.watch(...args);
-				const each = { watcher, closed: 0 };
-				const close = watcher.close.bind(watcher);
-				watcher.close = () => { each.closed++; close(); };
-				watchers.push(each);
-				return watcher;
-			} };
-			const start = () => withModules({ vscode: api(), fs: watching })<typeof import('../host/window')>(require.resolve('../host/window'))
+			const told = toldFiles();
+			const start = (files = told.files) => withModules({ vscode: api(), fs: files })<typeof import('../host/window')>(require.resolve('../host/window'))
 				.activate({ logUri: { fsPath: temp }, globalStorageUri: { fsPath: storage }, subscriptions } as never);
 			start();
-			const wait = async (ms: number) => { await new Promise(resolve => setTimeout(resolve, ms)); };
 			// The folder it uses, written down: nothing to reload
 			fs.mkdirSync(storage, { recursive: true });
 			fs.writeFileSync(record, JSON.stringify({ home: used }));
-			await wait(300);
+			told.tell();
 			const same = informed.length;
 			// Another: offered; removed, back to the folder in use: nothing more
 			fs.writeFileSync(record, JSON.stringify({ home: path.join(temp, 'facade-new') }));
-			for (let tries = 0; tries < 40 && !informed.length; tries++) {
-				await wait(50);
-			}
+			told.tell();
 			fs.rmSync(record);
-			await wait(300);
+			told.tell();
 			assert.deepStrictEqual([process.env.FACADE_HOME, same, informed.length], [used, 0, 1]);
 			// The window lets go, then the reload offered is chosen: nothing runs
 			subscriptions.splice(0).forEach(each => each.dispose());
 			choose('Reload Window');
-			await wait(0);
+			await new Promise(resolve => setImmediate(resolve));
 			assert.ok(!executed.includes('workbench.action.reloadWindow'), executed.join(', '));
 			// A watch that fails later, its folder gone, stops quietly: the change applies at the next reload
 			start();
-			const [failing] = watchers.slice(-1);
+			const [failing] = told.watches.slice(-1);
 			failing.watcher.emit('error', Object.assign(new Error('EPERM: operation not permitted, watch'), { code: 'EPERM' }));
 			assert.strictEqual(failing.closed, 1);
 			subscriptions.splice(0).forEach(each => each.dispose());
@@ -390,21 +397,12 @@ suite('A window whose Facade cannot start says what helps (ARCHITECTURE-2.2, UX-
 			informed = [];
 			start();
 			fs.writeFileSync(record, JSON.stringify({ home: link }));
-			await wait(300);
+			told.tell();
 			const linked = informed.length;
 			subscriptions.splice(0).forEach(each => each.dispose());
-			// One written after the first reading, before the watch began: seen all the same
+			// One written after the first reading, as the watch starts: seen all the same
 			fs.rmSync(record);
-			let racing = true;
-			const racer = { ...fs, watch: (...args: Parameters<typeof fs.watch>) => {
-				if (racing) {
-					racing = false;
-					fs.writeFileSync(record, JSON.stringify({ home: path.join(temp, 'facade-raced') }));
-				}
-				return fs.watch(...args);
-			} };
-			withModules({ vscode: api(), fs: racer })<typeof import('../host/window')>(require.resolve('../host/window'))
-				.activate({ logUri: { fsPath: temp }, globalStorageUri: { fsPath: storage }, subscriptions } as never);
+			start(toldFiles(() => fs.writeFileSync(record, JSON.stringify({ home: path.join(temp, 'facade-raced') }))).files);
 			assert.deepStrictEqual([linked, informed.length], [0, 1]);
 		} finally {
 			subscriptions.forEach(each => each.dispose());
