@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.3
+
+- **All of Facade's settings are in one file.** `facade.json` in the Facade home (`~/.facade/facade.json` by default) holds `yolo`, `names` and `clis`. **Open Settings** opens the editor's Settings at Facade Code, and **Edit in facade.json** opens the file, creating it if needed. Completion, hover help and checks come with it. A save applies to agents started afterwards.
+- **CLIs of your own.** Add a built-in under another name, such as Claude Code on another Anthropic-compatible API through `env` or Codex with a profile through `args`, or any other program with `type: "custom"`. A built-in under another name keeps that CLI's tools, folder trust, status, Resume and Pin, so Codex on another API key no longer shows a red dot. The new file lists every field of each built-in and has commented examples.
+- **Mistakes in the file say where they are.** A file error stops every start and names its line and column, with a way to the file. An error in one entry makes only that entry unavailable.
+- **Icons for every CLI.** Six CLI logos and 16 Facade robots, shown in New Agent, Resume, Go to Agent, cards and terminal tabs. In the panel, the robots look toward the pointer; where your system reduces motion they stay still.
+- **Your 0.1.2 settings move over.** The first read writes them into a new `facade.json`, never over an existing one, and says once what moved. The old settings show as deprecated.
+- **Facade: Home** chooses the Facade home, ahead of `FACADE_HOME` and `~/.facade`. The 140 agent names are in the file to edit, and API keys stay off command lines, logs and `list_agents`.
+- **Installing the Window Component installs Facade Code too.** Either one now brings the other.
+
 ## 0.1.2
 
 - **Drag selection works in Claude Code's fullscreen layout.** A drag in an agent's terminal no longer selects nothing after a few seconds without typing. Claude Code writes its mouse settings again with the first input after five seconds, and VS Code's terminal then dropped the drag that input started; Facade no longer passes on mouse settings that leave the terminal's mouse as it was. This applies to every CLI on every platform.
