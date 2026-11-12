@@ -13,7 +13,7 @@
  * cleanup. An upgrade alone never ends an earlier protocol's runs. 9: a run's MCP shim connects and its tool calls are carried
  * to the window that owns the run and back; `read`, `type`, `keys` and `inspect` read and write a run's terminal for its owner.
  */
-export const PTYD_PROTOCOL = 16;
+export const PTYD_PROTOCOL = 17;
 /**
  * The first protocol whose ptyd takes its window's terminal colours, `colours`, and answers its runs' programs' OSC 10, 11 and 12 with
  * them (ARCHITECTURE-2.3). Colour scheme reports - mode 2031 and DSR 996 - are 16's: a run of a 15 ptyd gets the new colours as its
@@ -34,9 +34,11 @@ export const COLOURS_PROTOCOL = 15;
  * answers on.
  * 15 lacks 16's colour scheme reports (mode 2031, DSR 996): it answers its runs' colour questions, but tells none of a program that
  * its colour scheme turned dark or light, nor whether it would (ARCHITECTURE-2.3).
+ * 16 lacks 17's reading of Codex's turn from its title's spinner, from 0.166.0 on: it reads 0.166.0's completed-turn screen alone
+ * (CLIS-2.3).
  * New runs go to none of these.
  */
-export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13, 14, 15];
+export const EARLIER_PROTOCOLS: readonly number[] = [8, 9, 10, 11, 12, 13, 14, 15, 16];
 
 /** The first protocol whose ptyd answers its runs' terminal queries itself: a window filters its editor terminal's answers (ARCHITECTURE-2.3). */
 export const QUERY_ANSWERS_PROTOCOL = 15;
@@ -81,11 +83,13 @@ export interface SpawnParams {
 	readonly rows: number;
 	/** What the window keeps of the agent with its run, to show it again after a reload. Plain JSON. */
 	readonly meta: { readonly [key: string]: unknown };
-	/**
-	 * The adapter's tested status layout, by its ID in `screenStatus.ts`: a fallback before reports, or the version-scoped
-	 * Codex correction of aggregate working (CLIS-2.3). An unknown ID reads nothing.
-	 */
+	/** The adapter's tested status layout, by its ID in `screenStatus.ts`: a fallback before reports (CLIS-2.3). An unknown ID reads none. */
 	readonly screenStatus?: string;
+	/**
+	 * Whether the program's title spinner shows its turn alone, as Codex's does from 0.166.0 on: once it has shown, a title without
+	 * it reads the program's `working` - work its turn left running - as idle (CLIS-2.3).
+	 */
+	readonly titleSpinner?: boolean;
 }
 
 /** What a program reports it is doing (OSC 7501). */

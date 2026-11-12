@@ -1100,24 +1100,19 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		await until('a fresh screen recovers after reset', () => latest()?.state === 'working');
 	});
 
-	test('Codex completion and follow-up status reach events, list and reattach while its background process remains alive (CLIS-2.3)', async function () {
+	test('Codex turns read from its title reach events, list and reattach while a process its turn started remains alive (CLIS-2.3)', async function () {
 		this.timeout(15_000);
 		const client = await connect();
 		const events = eventsOf(client, 'codex-background');
-		const captures: { label: string; lines: string[]; dimLines: number[] }[] = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../src/test/fixtures/screens/codex/0.166.0-background.json'), 'utf8'));
-		const frame = (label: string) => {
-			const capture = captures.find(each => each.label === label)!;
-			return '\x1b[2J\x1b[H' + capture.lines.map((line, index) => capture.dimLines.includes(index) ? `\x1b[2m${line}\x1b[22m` : line).join('\r\n');
-		};
+		const title = (text: string) => `\x1b]0;${text}\x07`;
 		const native = (body: string) => `\x1b]7501;${body}\x1b\\`;
+		// Its report stays working while the process runs on; its title's spinner shows its turns alone
 		const frames = {
-			i: frame('background-completed'), w: frame('follow-up-working'), t: frame('follow-up-streaming'),
-			s: '\x1b[?2026h' + frame('follow-up-working'), e: '\x1b[?2026l',
-			b: native('state=blocked:kind=permission') + frame('background-completed'),
-			f: native('state=error') + frame('background-completed'),
-			c: native('state=clear') + frame('background-completed'),
-			n: native('state=working') + frame('follow-up-working'),
-			r: '\x1bc' + frame('background-completed')
+			n: native('state=working') + title('⠋ work'), i: title('work'), w: title('⠙ work'),
+			b: native('state=blocked:kind=permission') + title('[ ! ] Action Required | work'),
+			f: native('state=error') + title('work'),
+			c: native('state=clear'),
+			r: '\x1bc' + title('work')
 		};
 		const pidFile = path.join(socketDir, 'background.pid');
 		const source = `process.stdin.setRawMode(true);
@@ -1128,7 +1123,7 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		process.stdout.write(frames.n);
 		process.stdin.on('data', chunk => { for (const command of chunk.toString()) { process.stdout.write(frames[command] || ''); } });
 		setInterval(() => {}, 1000);`;
-		await spawn(client, 'codex-background', source, { cols: 120, rows: 40, screenStatus: 'codex-0.166' });
+		await spawn(client, 'codex-background', source, { cols: 120, rows: 40, titleSpinner: true });
 		const latest = () => events.flatMap(event => event.event === 'status' && event.status ? [event.status] : []).at(-1);
 		const send = (data: string) => client.request('input', { run: 'codex-background', data });
 		await until('native working', () => latest()?.state === 'working');
@@ -1137,14 +1132,8 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		const firstCompletion = latest()!.at;
 		const backgroundPid = Number(fs.readFileSync(pidFile, 'utf8'));
 		assert.ok(alive(backgroundPid), 'the background process did not end with the interactive turn');
-		await send('s');
-		await new Promise(resolve => setTimeout(resolve, 250));
-		assert.strictEqual(latest()!.at, firstCompletion, 'a partial synchronized update is not a status observation');
-		await send('e');
+		await send('w');
 		await until('follow-up working without another native report', () => latest()?.state === 'working');
-		await send('t');
-		await new Promise(resolve => setTimeout(resolve, 250));
-		assert.strictEqual(latest()?.state, 'working', 'streaming has a background-only footer but no new completed-turn summary');
 		await send('i');
 		await until('next completion', () => latest()?.state === 'idle' && latest()!.at > firstCompletion);
 		for (const [command, expected] of [['b', 'blocked'], ['f', 'error'], ['c', 'pending'], ['n', 'working'], ['r', 'pending'], ['n', 'working'], ['i', 'idle']]) {

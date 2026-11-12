@@ -205,6 +205,8 @@ export interface LaunchPlan {
 	readonly input: { readonly adapter?: string; readonly capability: CapabilityState };
 	/** How ptyd reads its status from its screen while it reports nothing, where its adapter names a reader (CLIS-2.3). */
 	readonly screenStatus?: string;
+	/** Whether its title's spinner shows its turn alone, for ptyd to read its `working` by (CLIS-2.3). */
+	readonly titleSpinner?: true;
 	readonly sessionId?: string;
 	/** Whether a run can keep identifying its exact conversation, including after native session changes. */
 	readonly exactResume?: boolean;

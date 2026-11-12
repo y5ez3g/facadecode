@@ -67,7 +67,7 @@ function inlineToml(value: unknown): string | undefined {
 	if (!parts || parts.some(part => part === undefined)) { return undefined; }
 	return Array.isArray(value) ? `[${parts.join(',')}]` : `{${parts.join(',')}}`;
 }
-import { MOST_CALL_SECONDS, SERVER_NAME, ToolsIntegration } from './tools';
+import { laterVersion, MOST_CALL_SECONDS, SERVER_NAME, ToolsIntegration } from './tools';
 
 /** A TOML basic string for Codex's per-launch configuration (CLIS-3.2), including every control character. */
 export function tomlString(text: string): string {
@@ -114,8 +114,9 @@ const codexTools: ToolsIntegration = {
  */
 export const codexAdapter: CliAdapter = {
 	id: 'codex',
-	// Its root status includes retained background commands; only this version's completed-turn layout is verified (CLIS-2.3).
-	screenStatus: version => version === '0.166.0' ? 'codex-0.166' : undefined,
+	// Its root report stays `working` while a command its turn started runs on; its title's spinner shows the turn alone, from 0.166.0
+	// on (CLIS-2.3)
+	titleSpinner: version => version !== undefined && (version === '0.166.0' || laterVersion(version, '0.166.0')),
 	sessionIdentity: true,
 	sessionIntegration: codexSession,
 	displayName: 'Codex',

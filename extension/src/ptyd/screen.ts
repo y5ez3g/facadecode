@@ -68,25 +68,20 @@ export function drawnCells(line: IBufferLine | undefined, cell: IBufferCell | un
 }
 
 /** Visible logical lines only, preserving soft-wrap boundaries and whether the first line's beginning was clipped. */
-export function readStatusLines(raw: Terminal): { readonly lines: readonly string[]; readonly clippedStart: boolean; readonly boldHeads: ReadonlySet<number>; readonly dimLines: ReadonlySet<number> } {
+export function readStatusLines(raw: Terminal): { readonly lines: readonly string[]; readonly clippedStart: boolean; readonly boldHeads: ReadonlySet<number> } {
 	const buffer = raw.buffer.active;
 	const cell = buffer.getNullCell();
 	const lines: string[] = [];
 	const boldHeads = new Set<number>();
-	const dimLines = new Set<number>();
 	let start = buffer.baseY;
 	for (let row = start; row < buffer.baseY + raw.rows; row++) {
 		if (row + 1 === buffer.baseY + raw.rows || !buffer.getLine(row + 1)?.isWrapped) {
 			if (buffer.getLine(start)?.getCell(0, cell)?.isBold()) { boldHeads.add(lines.length); }
-			const line = renderLine(buffer, start, row, cell);
-			if (line.plain.trim() && line.styles.some(style => style.dim && style.start <= line.plain.search(/\S/u) && style.end >= [...line.plain].length)) {
-				dimLines.add(lines.length);
-			}
-			lines.push(line.plain);
+			lines.push(renderLine(buffer, start, row, cell).plain);
 			start = row + 1;
 		}
 	}
-	return { lines, clippedStart: !!buffer.getLine(buffer.baseY)?.isWrapped, boldHeads, dimLines };
+	return { lines, clippedStart: !!buffer.getLine(buffer.baseY)?.isWrapped, boldHeads };
 }
 
 /**

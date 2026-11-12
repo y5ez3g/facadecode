@@ -2,8 +2,9 @@
  *  Licensed under the MIT License. See LICENSE.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-// Native Codex 0.166.0 regression (CLIS-2.3). Run after compile, with Node 24:
+// Native Codex regression, from 0.166.0 on (CLIS-2.3). Run after compile, with Node 24:
 // node scripts/probe-codex-status.cjs --cli /absolute/path/to/codex --output /tmp/codex-status
+// --usage has the provider report a weekly limit 81% used, as Codex then draws its usage notice above its input.
 // --compiled /path/to/earlier/build/out runs the same assertions against an earlier supervisor implementation.
 // Only a loopback deterministic provider is used. No account, owner configuration, editor or live supervisor is accessed.
 const assert = require('node:assert/strict');
@@ -12,10 +13,12 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { parseArgs } = require('node:util');
-const { values } = parseArgs({ options: { cli: { type: 'string' }, output: { type: 'string' }, compiled: { type: 'string' } } });
+const { values } = parseArgs({ options: { cli: { type: 'string' }, output: { type: 'string' }, compiled: { type: 'string' }, usage: { type: 'boolean' } } });
 assert.ok(values.cli && path.isAbsolute(values.cli), '--cli must name the native executable by its absolute path');
 const { installedVersionOf } = require('../build/out/clis/version');
-assert.equal(installedVersionOf('codex', values.cli)?.version, '0.166.0', 'this probe is scoped to Codex 0.166.0');
+const { codexAdapter } = require('../build/out/clis/codex');
+const titleSpinner = codexAdapter.titleSpinner(installedVersionOf('codex', values.cli)?.version);
+assert.ok(titleSpinner, 'this probe is for the Codex versions whose title spinner Facade reads, 0.166.0 on');
 const { Run } = require(path.resolve(values.compiled || path.join(__dirname, '../build/out'), 'ptyd/run.js'));
 // This reader records evidence only; the selected Run above owns status evaluation.
 const { readStatusLines } = require('../build/out/ptyd/screen');
@@ -51,7 +54,11 @@ const server = http.createServer(async (req, res) => {
     }
     const response = { id: 'resp_' + n, object: 'response', created_at: Math.floor(Date.now() / 1000), status: 'completed', model: body.model,
       output: [item], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 }, error: null };
-    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    // The usage its service reports with a response: a five-hour window 10% and a weekly one 81% used, reset in five days
+    const usage = values.usage ? { 'x-codex-primary-used-percent': '10', 'x-codex-primary-window-minutes': '300',
+      'x-codex-primary-reset-at': String(Math.floor(Date.now() / 1000) + 3600), 'x-codex-secondary-used-percent': '81',
+      'x-codex-secondary-window-minutes': '10080', 'x-codex-secondary-reset-at': String(Math.floor(Date.now() / 1000) + 5 * 86400) } : {};
+    res.writeHead(200, { 'content-type': 'text/event-stream', ...usage });
     let sequence = 0;
     const event = (type, data) => res.write(`event: ${type}\ndata: ${JSON.stringify({ type, sequence_number: sequence++, ...data })}\n\n`);
     event('response.created', { response: { ...response, status: 'in_progress', output: [] } });
@@ -76,7 +83,7 @@ const capture = label => {
   const screen = readStatusLines(run.terminal);
   const info = run.info(false);
   const snapshot = { label, status: info.status, title: info.title, cols: run.terminal.cols, clippedStart: screen.clippedStart,
-    dimLines: [...screen.dimLines], lines: screen.lines.map(line => line.replaceAll(root, '/isolated')) };
+    lines: screen.lines.map(line => line.replaceAll(root, '/isolated')) };
   snapshots.push(snapshot);
   console.log(`${label}: ${info.status?.state}; title=${JSON.stringify(info.title)}`);
   return snapshot;
@@ -104,7 +111,7 @@ const renderedCompletions = () => readStatusLines(run.terminal).lines.filter(lin
       TERM: 'xterm-256color', COLORTERM: 'truecolor', TERM_PROGRAM: 'vscode', TMPDIR: root };
     run = new Run({ run: 'fixture', owner: 'fixture', file: values.cli,
       args: ['--no-daemon', '--dangerously-bypass-approvals-and-sandbox', '-c', `projects={${JSON.stringify(cwd)}={trust_level="trusted"}}`],
-      env, cwd, cols: 120, rows: 40, meta: {}, screenStatus: 'codex-0.166' });
+      env, cwd, cols: 120, rows: 40, meta: {}, titleSpinner });
     run.pty.onData(data => raw += data);
     await until('initial idle', () => run.info(false).status?.state === 'idle'); capture('initial');
     await run.type('Start the isolated background fixture.', true);
@@ -123,9 +130,12 @@ const renderedCompletions = () => readStatusLines(run.terminal).lines.filter(lin
     for (const snapshot of snapshots) {
       const idle = ['initial', 'background-completed', 'follow-up-completed', 'resize-60', 'resize-120'].includes(snapshot.label);
       assert.equal(snapshot.status?.state, idle ? 'idle' : 'working', snapshot.label);
+      // Its title's spinner shows its turn alone, the command left running included
+      assert.equal(/(?:^| )[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏](?: |$)/u.test(snapshot.title), !idle, snapshot.label + ': ' + snapshot.title);
       if (snapshot.label.includes('completed')) assert.ok(snapshot.lines.some(line => line.startsWith('  1 background terminal running')), 'background command remains alive');
+      if (values.usage && /completed|resize/u.test(snapshot.label)) assert.ok(snapshot.lines.some(line => / ⚠ weekly (?:limit: )?19% left/u.test(line)), snapshot.label + ' shows the usage notice');
     }
-    console.log('PASS: native completion, retained command, follow-up, streaming and resize');
+    console.log(`PASS: native completion, retained command, follow-up, streaming and resize${values.usage ? ', with the usage notice' : ''}`);
   } finally {
     fs.mkdirSync(path.dirname(output), { recursive: true });
     fs.writeFileSync(output + '.json', JSON.stringify({ root, snapshots }, null, 2) + '\n');

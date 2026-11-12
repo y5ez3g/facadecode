@@ -96,8 +96,10 @@ export interface PlannedLaunch {
 	readonly input: { readonly adapter?: string; readonly capability: Capability };
 	/** The files the run's launch needs written before it starts, where the tools are injected (CLIS-2.2). */
 	readonly injection?: Injection;
-	/** The adapter's native status layout for ptyd, as a fallback or version-scoped correction (CLIS-2.3). */
+	/** The adapter's native status layout for ptyd, as a fallback (CLIS-2.3). */
 	readonly screenStatus?: string;
+	/** Whether the CLI's title spinner shows its turn alone, for ptyd to read its `working` by (CLIS-2.3). */
+	readonly titleSpinner?: true;
 	/** What its start types before its first turn, where the tools are injected and its adapter needs it (COLLABORATION-2.2). */
 	readonly warmUp?: WarmUp;
 }
@@ -566,6 +568,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		runFiles.push({ file: runSettings.file, content: `${JSON.stringify(finished, undefined, 2)}\n` });
 	}
 	const screenStatus = adapter.screenStatus?.(version);
+	const titleSpinner = adapter.titleSpinner?.(version) === true;
 	// The run's settings and what its integration merged are files of the run, removed when it ends (CLIS-2.2, CONFIGURATION-4.2)
 	const files = [...integration?.files ?? [], ...runFiles];
 	return {
@@ -590,6 +593,7 @@ export function planLaunch(catalog: Catalog, input: PlanInput, destination: Dest
 		input: inputOf(adapter),
 		...injection ? { injection } : {},
 		...screenStatus ? { screenStatus } : {},
+		...titleSpinner ? { titleSpinner } : {},
 		// Only for the tools: without them, nothing waits on its first turn
 		...injection && adapter.warmUp ? { warmUp: adapter.warmUp } : {}
 	};
