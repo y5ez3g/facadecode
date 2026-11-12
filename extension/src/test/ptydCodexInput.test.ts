@@ -10,7 +10,6 @@ import type { RunFacts } from '../core/ports';
 import { OrdinaryInput } from '../host/input';
 import { InputScreen, inputScreenOf, readInput } from '../ptyd/composer';
 import { isOwnDraft } from '../ptyd/drafts';
-import { codexCompletedBackground } from '../ptyd/screenStatus';
 import { settled, useFakeClock } from './clock';
 
 interface Capture {
@@ -145,15 +144,5 @@ suite('Codex passive transcript footers keep ordinary input separate from active
 			await settled(new Promise<void>(resolve => terminal.write('\x1b[?2026l', resolve)));
 			assert.strictEqual(read(inputScreenOf(terminal)).state, 'usable');
 		} finally { terminal.dispose(); }
-	});
-
-	test('passive input never extends the completed-turn status correction to possibly old transcript content', () => {
-		const completed = (JSON.parse(fs.readFileSync(path.join(__dirname, '../../../src/test/fixtures/screens/codex/0.166.0-background.json'), 'utf8')) as
-			{ label: string; cols: number; lines: string[]; dimLines: number[] }[]).find(each => each.label === 'background-completed')!;
-		for (const each of CAPTURES.filter(each => each.expect === 'usable')) {
-			const lines = [...completed.lines.slice(0, -1), each.rows.at(-1)!.cells];
-			assert.strictEqual(read(screenOf(each)).state, 'usable');
-			assert.strictEqual(codexCompletedBackground(lines, false, undefined, new Set(completed.dimLines), each.cols), undefined, each.label);
-		}
 	});
 });

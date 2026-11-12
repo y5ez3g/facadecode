@@ -505,7 +505,8 @@ export class AgentExecution implements ExecutionPort, vscode.Disposable {
 			const spawned = client.request('spawn', {
 				run, owner: this.options.owner, file: plan.executable, args: plan.args, cwd: plan.cwd, env: plan.env,
 				cols: size?.columns ?? START_COLUMNS, rows: size?.rows ?? START_ROWS, meta: { ...latest },
-				...plan.screenStatus ? { screenStatus: plan.screenStatus } : {}
+				...plan.screenStatus ? { screenStatus: plan.screenStatus } : {},
+				...plan.titleSpinner ? { titleSpinner: true } : {}
 			});
 			pair.spawnSent = true;
 			info = await spawned;

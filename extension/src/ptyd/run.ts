@@ -280,7 +280,7 @@ export class Run {
 	/** Of those, the ones answered that its headless terminal has not parsed yet: it answers none of them again. */
 	private answeredQueries = 0;
 	private readonly queue = new InputQueue();
-	/** The adapter's tested native status layout, as a fallback or a version-scoped correction (CLIS-2.3). */
+	/** How its screen is read as its status while its program reports nothing, where its adapter names a reader (CLIS-2.3). */
 	private readonly screenReader: ScreenReader | undefined;
 	private screenRead: ReturnType<typeof setTimeout> | undefined;
 	/** The number of the last output chunk: each is numbered as it is drawn, so that a reattach never shows one twice. */
@@ -349,7 +349,7 @@ export class Run {
 	constructor(readonly params: SpawnParams, options: { readonly later?: boolean } = {}) {
 		this.meta = params.meta;
 		this.screenReader = screenReaderOf(params.screenStatus);
-		this.programStatus = new ProgramStatus(params.screenStatus === 'codex-0.166');
+		this.programStatus = new ProgramStatus(params.titleSpinner === true);
 		const { Terminal } = loadXterm();
 		const { SerializeAddon } = loadSerialize();
 		const terminal = this.terminal = new Terminal({ cols: params.cols, rows: params.rows, scrollback: scrollbackRows(params.cols), allowProposedApi: true,
@@ -360,9 +360,11 @@ export class Run {
 		const { Unicode11Addon } = loadUnicode11();
 		terminal.loadAddon(new Unicode11Addon() as never);
 		terminal.unicode.activeVersion = '11';
-		// Kept for `list` alone: no window shows a terminal's title, so none is told it as it changes (CLIS-2.3)
+		// Kept for `list` - no window shows a terminal's title, so none is told it as it changes - and read for the turn its spinner
+		// shows, where it shows one (CLIS-2.3)
 		terminal.onTitleChange(title => {
 			this.title = boundedTitle(title);
+			this.programStatus.titled(title);
 		});
 		this.followStatus();
 		this.followModes();
@@ -967,16 +969,17 @@ export class Run {
 	}
 
 	/**
-	 * Reads eligible native screen evidence after drawing (CLIS-2.3): at most every {@link SCREEN_READ_MS}, never in the middle
-	 * of a synchronized update or after exit. ProgramStatus owns when the adapter's fallback/correction can apply.
+	 * Reads its screen as its status a moment after it drew (CLIS-2.3), where its adapter names a reader and its program has
+	 * neither asked nor reported: at most every {@link SCREEN_READ_MS}, never in the middle of a synchronized update, and no more once
+	 * the program takes part or ends.
 	 */
 	private readScreenSoon(): void {
-		if (!this.screenReader || this.screenRead || !this.programStatus.acceptsScreen || this.exited) {
+		if (!this.screenReader || this.screenRead || this.programStatus.takesPart || this.exited) {
 			return;
 		}
 		this.screenRead = setTimeout(() => {
 			this.screenRead = undefined;
-			if (!this.programStatus.acceptsScreen || this.exited) {
+			if (this.programStatus.takesPart || this.exited) {
 				return;
 			}
 			if (this.drawing.length || this.terminal.modes.synchronizedOutputMode) {
@@ -984,7 +987,7 @@ export class Run {
 				return;
 			}
 			const screen = readStatusLines(this.terminal);
-			this.programStatus.observed(this.screenReader!(screen.lines, screen.clippedStart, screen.boldHeads, screen.dimLines, this.terminal.cols));
+			this.programStatus.observed(this.screenReader!(screen.lines, screen.clippedStart, screen.boldHeads));
 		}, SCREEN_READ_MS);
 		this.screenRead.unref?.();
 	}

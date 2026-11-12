@@ -356,7 +356,7 @@ no adapter and no tools, has started once its process has: no first report is aw
 CLI never showed its activity - no report at all, or a probe answered and no report since - or whose tools never
 connected did not start properly: red, with its reason (RULES-3.2). A report the CLI clears later is unknown activity,
 never idle. It never implies an empty input. No “screen quiet for two seconds means done” fallback. A supported terminal
-animation may establish working, but its absence supplies no idle proof.
+animation may establish working, but its absence supplies no idle proof beyond Codex's title spinner below.
 
 Muse Code's observed Windows versions send no reports, so its adapter names a screen reader that ptyd applies to a run
 whose CLI has neither asked nor reported. It reads logical lines, joining terminal soft wraps without guessing where
@@ -368,17 +368,15 @@ establish their corresponding blockers only when replacing the input frame. An u
 prior screen evidence; a full reset does too. A synchronized update still being drawn is not observed. Its own reports
 always take precedence: once the CLI asks or reports, its screen is not read from then on. Evidence becomes stale after
 route loss/reset; title/status from a new run does not update a previous one. A status episode starts on
-state/kind/reason change; progress-only updates keep its start time.  Codex 0.166.0 reports root `working` while any
-background command it started survives, even after its interactive turn ends; its own terminal-title animation follows
-the active turn instead. For this version alone, the adapter names a correction that narrows `working` to idle while the
-current completed screen shows its native dim `Worked for … • …` turn summary, then only blank spacing and its dim
-background-terminal footer, followed by the complete input/model/hints layout. Draft text is outside that evidence, and
-the footer may be clipped exactly at the native width as long as its identifying text and the whole turn summary stay
-visible. The footer alone is insufficient: Codex also draws it while it streams an answer. A new turn, an unfamiliar
-drawing or a lost layout removes the correction and restores the CLI's own report; a synchronized update still being
-drawn supplies no new observation. Native idle/done, blockers, errors, clear/reset and probe states are never
-overridden, and the report's record and title stay intact. Other versions and other CLIs keep their own reports until
-verified the same way; a run held by an older ptyd keeps that ptyd's behavior (ARCHITECTURE-2.4).
+state/kind/reason change; progress-only updates keep its start time.  Codex reports root `working` while any command its
+turn started runs on, even after the turn ends; the spinner its default terminal title animates follows the turn alone.
+From 0.166.0 on, its adapter has ptyd read that title: once a spinner frame - `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` as a word of its own,
+wherever its title items put it - has shown in a run, a title without one reads its `working` as idle until a spinner
+shows again, which starts a new working episode. A title that never shows one - animations off, or items without it -
+leaves its own report as it is. Its screen is not read for this: the notices it adds, the terminal's width and drafts
+change nothing. Native idle/done, blockers, errors, clear/reset and probe states are never overridden, and the report's
+record and title stay intact. Earlier versions and other CLIs keep their own reports; a run held by an older ptyd keeps
+that ptyd's behavior (ARCHITECTURE-2.4).
 
 Accept bounded valid UTF-8/base64 messages up to 2,048 decoded bytes and titles up to 192 decoded bytes; reject controls
 and malformed reports. Sanitize invisible formatting and whitespace without stripping visible decorations. Keep the

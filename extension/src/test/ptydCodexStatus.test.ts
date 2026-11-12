@@ -3,139 +3,122 @@
  *--------------------------------------------------------------------------------------------*/
 
 import * as assert from 'assert';
-import * as fs from 'fs';
-import * as path from 'path';
-import { Terminal } from '@xterm/headless';
 import { codexAdapter } from '../clis/codex';
 import { activityOf } from '../clis/activity';
-import { codexCompletedBackground } from '../ptyd/screenStatus';
-import { readStatusLines } from '../ptyd/screen';
 import { ProgramStatus } from '../ptyd/status';
-import { settled, sleep, useFakeClock } from './clock';
+import { sleep, useFakeClock } from './clock';
 
-interface Capture {
-	readonly label: string;
-	readonly cols: number;
-	readonly clippedStart: boolean;
-	readonly lines: readonly string[];
-	readonly dimLines: readonly number[];
+// Codex 0.166.0's and 0.167.0's own titles and reports, as scripts/probe-codex-status.cjs recorded them alike: a turn that leaves
+// a command running, then a follow-up that streams its answer. Its report stays `working` from the first turn on.
+const RECORDED = [
+	{ label: 'initial', title: 'work', report: 'idle', activity: 'not_working' },
+	{ label: 'working', title: '⠹ work', report: 'working', activity: 'working' },
+	{ label: 'background-completed', title: 'work', report: 'working', activity: 'not_working' },
+	{ label: 'follow-up-working', title: '⠧ work', report: 'working', activity: 'working' },
+	{ label: 'follow-up-streaming', title: '⠏ work', report: 'working', activity: 'working' },
+	{ label: 'follow-up-completed', title: 'work', report: 'working', activity: 'not_working' }
+] as const;
+
+/** A run whose title has shown its spinner and whose report says working, its turn still going on. */
+function spun(): ProgramStatus {
+	const status = new ProgramStatus(true);
+	status.titled('⠋ work');
+	status.report({ state: 'working' });
+	return status;
 }
 
-const CAPTURES: readonly Capture[] = JSON.parse(fs.readFileSync(path.join(__dirname, '../../../src/test/fixtures/screens/codex/0.166.0-background.json'), 'utf8'));
-const completed = CAPTURES.find(capture => capture.label === 'background-completed')!;
-const read = (capture: Capture) => codexCompletedBackground(capture.lines, capture.clippedStart, undefined, new Set(capture.dimLines), capture.cols);
-
-suite('Codex 0.166.0 interactive turns with retained background commands (CLIS-2.3)', () => {
+suite('Codex turns read from its title spinner while a command its turn started runs on (CLIS-2.3)', () => {
 	useFakeClock();
 
-	test('native captures distinguish completion from genuine work and a follow-up, including the cropped 60-column footer', () => {
-		for (const capture of CAPTURES) {
-			const idle = ['background-completed', 'follow-up-completed', 'resize-60', 'resize-120'].includes(capture.label);
-			assert.deepStrictEqual(read(capture), idle ? { state: 'idle' } : undefined, capture.label);
-		}
-		assert.deepStrictEqual(['0.165.0', '0.166.0', '0.166.1', '0.167.0', undefined].map(version => codexAdapter.screenStatus?.(version)),
-			[undefined, 'codex-0.166', undefined, undefined, undefined]);
+	test('its adapter names the spinner from 0.166.0 on, an unknown version none', () => {
+		assert.deepStrictEqual(['0.165.0', '0.166.0', '0.166.1', '0.167.0', '0.166.0-dev', '1.0.0', undefined].map(version => codexAdapter.titleSpinner?.(version)),
+			[false, true, true, true, false, true, false]);
 	});
 
-	test('a footer cropped at any width is its native prefix, a crop ending on a space included, as a row keeps no trailing spaces', () => {
-		const background = completed.lines.findIndex(line => line.startsWith('  1 background'));
-		const footer = completed.lines[background];
-		const croppedAt = (cols: number): Capture => ({ ...completed, cols, lines: completed.lines.map((line, index) => index === background ? footer.slice(0, cols).trimEnd() : line) });
-		// From the width that still shows all of its count's words on
-		const legible = '  1 background terminal running'.length;
-		for (let cols = legible; cols < footer.length; cols++) {
-			assert.deepStrictEqual(read(croppedAt(cols)), { state: 'idle' }, `${cols} columns: ${JSON.stringify(croppedAt(cols).lines[background])}`);
-		}
-		// Narrower, it no longer says that a command is running: nothing is read from it
-		assert.strictEqual(read(croppedAt(legible - 1)), undefined);
-		// Cut shorter than the width it was drawn at is no native crop
-		const short: Capture = { ...completed, cols: 60, lines: completed.lines.map((line, index) => index === background ? footer.slice(0, 40) : line) };
-		assert.strictEqual(read(short), undefined);
-	});
-
-	test('a background footer, available input, old summary, output words or an incomplete layout alone never prove idle', () => {
-		const summary = completed.lines.findIndex(line => line.includes('Worked for'));
-		const background = completed.lines.findIndex(line => line.startsWith('  1 background'));
-		const prompt = completed.lines.findIndex(line => line.startsWith('› Ask'));
-		const changed = (at: number, text: string): Capture => ({ ...completed, lines: completed.lines.map((line, index) => index === at ? text : line) });
-		for (const capture of [
-			changed(summary, ''),
-			changed(background - 1, '• The response is still streaming'),
-			changed(background - 1, '› A new instruction'),
-			changed(background - 1, '• Working (1s • esc to interrupt)'),
-			changed(summary, '  Done: all tests passed'),
-			changed(background, '  1 background terminal running'),
-			changed(prompt, ''),
-			{ ...completed, lines: completed.lines.slice(0, -2) },
-			{ ...completed, dimLines: completed.dimLines.filter(index => index !== summary) },
-			{ ...completed, dimLines: completed.dimLines.filter(index => index !== background) },
-			{ ...completed, lines: completed.lines.slice(summary), dimLines: completed.dimLines.map(index => index - summary), clippedStart: true }
-		]) { assert.strictEqual(read(capture), undefined, JSON.stringify(capture.lines)); }
-		// A draft is independent of activity, even if it contains words that resemble working/completion indicators.
-		assert.deepStrictEqual(read(changed(prompt, '› Working (1s • esc to interrupt)')), { state: 'idle' });
-	});
-
-	test('terminal styling is required and preserved through the actual screen reader', async () => {
-		const terminal = new Terminal({ cols: completed.cols, rows: completed.lines.length, allowProposedApi: true });
-		try {
-			for (const styled of [false, true]) {
-				const drawing = completed.lines.map((line, index) => styled && completed.dimLines.includes(index) ? `\x1b[2m${line}\x1b[22m` : line).join('\r\n');
-				await settled(new Promise<void>(resolve => terminal.write(`\x1bc${drawing}`, resolve)));
-				const screen = readStatusLines(terminal);
-				assert.deepStrictEqual(codexCompletedBackground(screen.lines, screen.clippedStart, screen.boldHeads, screen.dimLines, terminal.cols), styled ? { state: 'idle' } : undefined);
+	test('the recorded turns: working while its spinner shows, idle once its turn is over and the command runs on, in either order', () => {
+		for (const titleFirst of [true, false]) {
+			const status = new ProgramStatus(true);
+			for (const step of RECORDED) {
+				if (titleFirst) { status.titled(step.title); }
+				status.report({ state: step.report });
+				if (!titleFirst) { status.titled(step.title); }
+				assert.strictEqual(activityOf(status.status).activity, step.activity, `${step.label}, title ${titleFirst ? 'first' : 'last'}`);
 			}
-		} finally { terminal.dispose(); }
+		}
 	});
 
-	test('one native working report spans completed and follow-up turns; effective episodes and title changes stay accurate', async () => {
+	test('a title that never shows a spinner - its animations off or its items without one - leaves its report as it is', () => {
+		for (const title of ['work', 'codex | work', '[ ! ] Action Required | work', '']) {
+			const status = new ProgramStatus(true);
+			status.titled(title);
+			status.report({ state: 'working' });
+			status.titled(title === 'work' ? 'codex | work' : 'work');
+			assert.strictEqual(status.status!.state, 'working', JSON.stringify(title));
+		}
+	});
+
+	test('the spinner is read wherever its title items put it, as a word of its own', () => {
+		for (const [title, turn] of [['⠋ work', true], ['work ⠙', true], ['Fix the bug ⠹ work', true], ['● ⠸ work', true],
+			['work', false], ['⠋work', false], ['w⠋ork', false], ['⠿ work', false], ['', false], ['[ ! ] Action Required | work', false]] as const) {
+			const status = spun();
+			status.titled(title);
+			assert.strictEqual(status.status!.state, turn ? 'working' : 'idle', JSON.stringify(title));
+		}
+	});
+
+	test('the idle a turn ends in keeps its time through its record\'s changes; a new turn is a new working episode', async () => {
 		const status = new ProgramStatus(true);
+		status.titled('⠋ work');
 		status.report({ state: 'working', title: 'Native title' });
 		const began = status.status!.at;
 		await sleep(20);
-		status.observed(read(completed));
+		status.titled('work');
 		assert.strictEqual(activityOf(status.status).activity, 'not_working');
 		const finished = status.status!.at;
 		assert.ok(finished > began);
 		await sleep(20);
 		status.report({ state: 'working', title: 'New title' });
-		status.observed(read(completed));
 		assert.deepStrictEqual(status.status, { state: 'idle', title: 'New title', at: finished });
 		status.report({ id: 'worker', state: 'working' });
 		assert.strictEqual(status.status!.at, finished);
-		status.observed(read(CAPTURES.find(capture => capture.label === 'follow-up-working')!));
+		status.titled('⠙ work');
 		assert.strictEqual(activityOf(status.status).activity, 'working');
 		assert.ok(status.status!.at > finished);
-		await sleep(20);
-		status.observed(read(completed));
-		assert.strictEqual(status.status!.state, 'idle');
-		status.observed(undefined);
-		assert.strictEqual(status.status!.state, 'working', 'lost correction restores the actual root report');
 	});
 
-	test('native non-working states, blockers, errors, clear/reset and negotiation always win; other CLIs keep report precedence', () => {
+	test('a new turn reported before its spinner shows stays in the idle before it until the spinner shows', async () => {
+		const status = spun();
+		status.titled('work');
+		status.report({ state: 'idle' });
+		const idle = status.status!.at;
+		await sleep(20);
+		status.report({ state: 'working' });
+		assert.deepStrictEqual(status.status, { state: 'idle', at: idle });
+		status.titled('⠙ work');
+		assert.strictEqual(status.status!.state, 'working');
+	});
+
+	test('its own idle, done, blocker, error, clear and negotiation always win; another CLI keeps its report', () => {
 		for (const report of [{ state: 'idle' }, { state: 'done' }, { state: 'blocked' }, { state: 'blocked', kind: 'permission' }, { state: 'error' }, { state: 'clear' }] as const) {
-			const status = new ProgramStatus(true);
-			status.report({ state: 'working' });
-			status.observed(read(completed));
+			const status = spun();
+			status.titled('work');
 			status.report(report);
-			status.observed(read(completed));
 			assert.strictEqual(status.status!.state, report.state === 'clear' ? 'pending' : report.state);
 			assert.strictEqual(status.status!.kind, 'kind' in report ? report.kind : undefined);
 		}
 		const status = new ProgramStatus(true);
-		status.observed(read(completed));
-		assert.strictEqual(status.status, undefined, 'no native working record to correct');
+		status.titled('⠋ work');
+		status.titled('work');
+		assert.strictEqual(status.status, undefined, 'no report to read');
 		status.asked();
-		status.observed(read(completed));
 		assert.strictEqual(status.status!.state, 'pending');
 		status.report({ state: 'working' });
-		status.observed(read(completed));
 		status.clear();
-		status.observed(read(completed));
 		assert.strictEqual(status.status!.state, 'pending');
 		const other = new ProgramStatus();
+		other.titled('⠋ work');
 		other.report({ state: 'working' });
-		other.observed(read(completed));
+		other.titled('work');
 		assert.strictEqual(other.status!.state, 'working');
 	});
 });

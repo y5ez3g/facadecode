@@ -310,11 +310,13 @@ export interface CliAdapter {
 	 * environment `env` in `cwd`; undefined for any other file, which is then started as `launchTarget` starts it.
 	 */
 	launchTarget?(file: string, platform: NodeJS.Platform, env: Environment, cwd: string): LaunchTarget | undefined;
-	/**
-	 * A tested native status layout, by its ID in `ptyd/screenStatus.ts`: Muse's fallback before native reports, or Codex's
-	 * completed-turn correction for a known installed version (CLIS-2.3). Unknown versions receive no version-scoped correction.
-	 */
+	/** A tested native status layout, by its ID in `ptyd/screenStatus.ts`: Muse's fallback before native reports (CLIS-2.3). */
 	screenStatus?(version: string | undefined): string | undefined;
+	/**
+	 * Whether its title's spinner shows its turn alone in the installed version: ptyd then reads a `working` report that only work
+	 * its turn left running keeps up as idle (CLIS-2.3). An unknown version has none.
+	 */
+	titleSpinner?(version: string | undefined): boolean;
 	/** Its sandbox for a launch with this YOLO on this platform, as Show Agent Launch says it (CLIS-1.3, 4.1). */
 	sandbox(yolo: boolean, platform: NodeJS.Platform): SandboxFact;
 	/** Its approvals for a launch with this YOLO (CLIS-1.3, 4.1). */

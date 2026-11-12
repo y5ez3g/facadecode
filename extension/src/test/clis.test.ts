@@ -332,14 +332,15 @@ suite('CLIs: the launch plan (CLIS-1.3, 3.2, 4.2)', () => {
 			tomlString(fs.realpathSync(cwd).replace(/[A-Z]/g, letter => letter.toLowerCase())));
 	});
 
-	test('Codex selects its completed-background correction only for the installed version that was verified (CLIS-2.3)', () => {
+	test('Codex has its title spinner read from the installed version it was first verified in on (CLIS-2.3)', () => {
 		const metadata = path.join(temp.dir, 'codex-package.json');
-		assert.strictEqual(plan({ cli: 'codex' }).screenStatus, undefined);
+		assert.strictEqual(plan({ cli: 'codex' }).titleSpinner, undefined);
 		for (const version of ['0.165.0', '0.166.0', '0.166.1', '0.167.0', '0.166.0-dev']) {
 			fs.writeFileSync(metadata, JSON.stringify({ version }));
 			const launch = plan({ cli: 'codex' });
 			assert.strictEqual(launch.version, version);
-			assert.strictEqual(launch.screenStatus, version === '0.166.0' ? 'codex-0.166' : undefined);
+			assert.strictEqual(launch.titleSpinner, ['0.165.0', '0.166.0-dev'].includes(version) ? undefined : true);
+			assert.strictEqual(launch.screenStatus, undefined);
 		}
 	});
 
