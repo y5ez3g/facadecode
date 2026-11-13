@@ -89,9 +89,9 @@ jobs:
       run:
         working-directory: extension
     steps:
+      # The workflow's own ref, not the tag: publishing reads only the Release, and a manual run from main finishes an
+      # earlier tag with main's fixed tooling.
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.plan.outputs.tag }}
       - uses: actions/setup-node@v4
         with:
           node-version-file: extension/.nvmrc

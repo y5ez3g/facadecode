@@ -288,6 +288,19 @@ async function openVsxFile(version, artifact) {
 /** The Window Component first: the execution component's extension pack names it. */
 export const storeOrder = artifacts => [...artifacts].sort((a, b) => (b.target === 'universal') - (a.target === 'universal'));
 
+/**
+ * A store's listing can lag behind its own publication, so a file it says it already has counts as published; the check
+ * that both stores serve the Release's bytes comes after, whichever way the file got there.
+ */
+export const alreadyPublished = output => /already (exists|published)/i.test(output);
+function publish(store, args, artifact) {
+	const result = run('npx', args, { env: { ...process.env } });
+	const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+	process.stdout.write(output);
+	if (result.status !== 0 && alreadyPublished(output)) { console.log(`${store} already has ${artifact.file}.`); return; }
+	assert.equal(result.status, 0, `${store} refused ${artifact.file}`);
+}
+
 async function stores(tag, work) {
 	const version = versionOfTag(tag);
 	const artifacts = storeOrder(downloadRelease(tag, version, fs.mkdtempSync(path.join(work, `${version}-stores-`))));
@@ -296,14 +309,12 @@ async function stores(tag, work) {
 	for (const artifact of artifacts) {
 		if (marketplaceFile(listed, version, artifact)) { console.log(`Marketplace already has ${artifact.file}.`); continue; }
 		assert.ok(process.env.VSCE_PAT, 'VSCE_PAT is required to publish to VS Code Marketplace');
-		const result = run('npx', ['--yes', vsce, 'publish', '--packagePath', artifact.path], { stdio: 'inherit', env: { ...process.env } });
-		assert.equal(result.status, 0, `Marketplace refused ${artifact.file}`);
+		publish('Marketplace', ['--yes', vsce, 'publish', '--packagePath', artifact.path], artifact);
 	}
 	for (const artifact of artifacts) {
 		if (await openVsxFile(version, artifact)) { console.log(`Open VSX already has ${artifact.file}.`); continue; }
 		assert.ok(process.env.OVSX_PAT, 'OVSX_PAT is required to publish to Open VSX');
-		const result = run('npx', ['--yes', ovsx, 'publish', artifact.path], { stdio: 'inherit', env: { ...process.env } });
-		assert.equal(result.status, 0, `Open VSX refused ${artifact.file}`);
+		publish('Open VSX', ['--yes', ovsx, 'publish', artifact.path], artifact);
 	}
 	// Both stores serve exactly the Release's bytes; the Marketplace can take some minutes to list a new version.
 	for (let attempt = 0, left = artifacts; left.length; attempt++) {
