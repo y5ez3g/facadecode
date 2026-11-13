@@ -1251,8 +1251,8 @@ suite('The agent panel in Chromium', function () {
 			await frames();
 			const style = getComputedStyle(details);
 			const motion = [style.transitionProperty, style.transitionDuration];
-			// Settled once the 400 ms have gone
-			await new Promise(resolve => setTimeout(resolve, 450));
+			// Await the transitions themselves: CI can delay a rendering frame beyond a wall-clock sleep.
+			await Promise.all(details.getAnimations().map(animation => animation.finished));
 			motion.push(style.opacity, style.translate);
 			const box = card.getBoundingClientRect(), shown = details.getBoundingClientRect(), arrow = details.querySelector('.details-arrow').getBoundingClientRect(), button = info.getBoundingClientRect();
 			const open = { role: details.getAttribute('role'), named: wordsOf(document.getElementById(details.getAttribute('aria-labelledby')).parentElement), ariaHidden: details.getAttribute('aria-hidden'), shown: details.classList.contains('open'),
