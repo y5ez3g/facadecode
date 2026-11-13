@@ -1602,7 +1602,7 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(await pixelAt(395, 5), [255, 255, 255]);
 		await snapshot('scrollbar-hidden');
 		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 100, y: 100 });
-		await wait(160);
+		assert.ok(await becomes(`getComputedStyle(document.querySelector('.facade-scrollbar')).opacity === '1'`), 'hover must finish revealing the scrollbar');
 		assert.deepStrictEqual(await pixelAt(395, 5), [255, 0, 0]);
 		assert.deepStrictEqual(await bounds(), hiddenBounds);
 		await snapshot('scrollbar-visible');
@@ -1618,7 +1618,7 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual(await bounds(), hiddenBounds);
 		// A scroll without hover, such as keyboard navigation, wakes the thumb and extends its idle deadline.
 		await evaluate(`document.scrollingElement.scrollTop = 50`);
-		await wait(180);
+		assert.ok(await becomes(`getComputedStyle(document.querySelector('.facade-scrollbar')).opacity === '1'`), 'scrolling must finish revealing the scrollbar');
 		assert.deepStrictEqual(await pixelAt(395, 25), [255, 0, 0]);
 		await wait(250);
 		await evaluate(`document.scrollingElement.scrollTop = 100`);
@@ -2116,7 +2116,7 @@ suite('The agent panel in Chromium', function () {
 			// Until the eyes stand still: three frames alike
 			const settled = async () => { let last; for (let same = 0, left = 240; same < 3 && left; left--) { await frames(1); const now = eyes.style.transform; same = now === last ? same + 1 : 0; last = now; } };
 			// From rest, one frame goes a quarter of the way
-			move(cx + 500); await frames(1);
+			move(cx + box.width * 2); await frames(1);
 			const first = at()[0] / reach;
 			await settled();
 			// Three quarters of a face from its middle: half the reach
@@ -2126,14 +2126,14 @@ suite('The agent panel in Chromium', function () {
 			window.dispatchEvent(new Event('blur')); await settled();
 			const blurred = at().map(value => value / reach);
 			// The system's reduced motion, while the eyes look aside: in the middle at once
-			move(cx + 500); await settled();
+			move(cx + box.width * 2); await settled();
 			const real = window.matchMedia;
 			window.matchMedia = query => query.includes('reduced-motion') ? { matches: true, addEventListener() {}, removeEventListener() {} } : real.call(window, query);
-			move(cx + 500); await frames(2);
+			move(cx + box.width * 2); await frames(2);
 			const still = at();
 			window.matchMedia = real;
 			// At rest, nothing asks for a frame
-			move(cx + 500); await settled();
+			move(cx + box.width * 2); await settled();
 			let asked = 0;
 			const ask = window.requestAnimationFrame;
 			window.requestAnimationFrame = callback => { asked++; return ask.call(window, callback); };
@@ -2147,7 +2147,7 @@ suite('The agent panel in Chromium', function () {
 		assert.deepStrictEqual([still, asked], [[0, 0], 0]);
 	});
 
-	test('a robot\'s eyes look toward the pointer over the panel, up to 4/32 of its face, keep that gaze once it leaves; not with reduced motion (CONFIGURATION-2.4)', async function () {
+	test('a robot\'s eyes follow the pointer up to 4/32 of its face, return to the middle on exit, and stay still with reduced motion (PANEL-1.3)', async function () {
 		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
 		this.timeout(60_000);
 		const seen = await evaluate(`(async () => {
@@ -2171,7 +2171,7 @@ suite('The agent panel in Chromium', function () {
 			document.body.classList.remove('vscode-reduce-motion');
 			document.dispatchEvent(new PointerEvent('pointermove', { clientX: box.right + 200, clientY: box.top + box.height / 2, bubbles: true }));
 			await settled();
-			document.dispatchEvent(new MouseEvent('mouseout', { relatedTarget: null, bubbles: true }));
+			document.dispatchEvent(new PointerEvent('pointerout', { relatedTarget: null, clientX: -1, clientY: box.top, bubbles: true }));
 			await settled();
 			const left = at();
 			document.body.classList.add('vscode-reduce-motion');
@@ -2185,7 +2185,7 @@ suite('The agent panel in Chromium', function () {
 		// Partway there after a few frames, then the full reach toward the pointer on its right
 		assert.ok(moving[0] > 0 && moving[0] < width * 4 / 32, JSON.stringify(seen));
 		assert.ok(Math.abs(right[0] - width * 4 / 32) < 0.06 && Math.abs(right[1]) < 0.06, JSON.stringify(seen));
-		assert.deepStrictEqual(left, right);
+		assert.deepStrictEqual(left, [0, 0]);
 		assert.deepStrictEqual([snapped, reduced], [[0, 0], [0, 0]]);
 	});
 
@@ -2209,20 +2209,68 @@ suite('The agent panel in Chromium', function () {
 		assert.ok(before && before !== 'translate(0.00px, 0.00px)', before);
 		await pressAt(at);
 		assert.deepStrictEqual(await evaluate(`posted.filter(message => message.type === 'act').map(message => [message.what, message.target])`), [['open', 'run-1']]);
-		// The host focuses the terminal after Open Agent; a menu can take both focus and the pointer from the webview too.
-		await evaluate(`window.dispatchEvent(new Event('blur')); document.dispatchEvent(new MouseEvent('mouseout', { relatedTarget: null, bubbles: true }))`);
+		// The host focuses the terminal after Open Agent; losing focus alone does not mean the pointer left the panel.
+		await evaluate(`window.dispatchEvent(new Event('blur'))`);
 		assert.strictEqual(await evaluate(read), before, 'opening the terminal must keep the gaze');
 		await evaluate(`document.querySelector('.details-button').click()`);
 		assert.strictEqual(await evaluate(read), before, 'details must keep the gaze');
 		await evaluate(`document.querySelector('.menu-button').click(); document.body.classList.add('vscode-context-menu-visible')`);
-		await away();
+		await evaluate(`document.dispatchEvent(new PointerEvent('pointerout', { relatedTarget: null, clientX: ${at.x}, clientY: ${at.y}, bubbles: true }))`);
 		assert.strictEqual(await evaluate(read), before, 'a menu taking the pointer must keep the gaze');
-		await evaluate(`document.body.classList.remove('vscode-context-menu-visible'); agents[0] = { ...agents[0], selected: true, dot: 'none', line: 'Updated' }; redraw({ revision: 3 })`);
+		await evaluate(`document.body.classList.remove('vscode-context-menu-visible'); agents[0] = { ...agents[0], selected: true, dot: 'none', line: 'Updated' }; redraw({ revision: 3 }); document.dispatchEvent(new PointerEvent('pointerover', { clientX: ${at.x}, clientY: ${at.y}, bubbles: true }))`);
 		assert.strictEqual(await evaluate(read), before, 'menu dismissal, selection and status must keep the gaze');
 		// The next real movement takes over smoothly from the retained position.
 		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: at.y });
 		const after = await evaluate(read);
 		assert.ok(after.startsWith('translate(-'), after);
+		assert.deepStrictEqual(await evaluate('errors'), []);
+	});
+
+	test('PANEL-1.3: real pointer exits at every panel edge center the eyes, scrolling and redraw do not restore the old gaze, and captured movement outside centers them too', async function () {
+		this.timeout(60_000);
+		await evaluate(`agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })); redraw({ revision: 2 })`);
+		const eye = `document.querySelector('.agent .face .eyes').style.transform`;
+		const viewport = await evaluate(`({ width: innerWidth, height: innerHeight })`) as { width: number; height: number };
+		for (const outside of [{ x: -10, y: 100 }, { x: viewport.width + 10, y: 100 }, { x: 100, y: -10 }, { x: 100, y: viewport.height + 10 }]) {
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...await middleOf('.agent .title') });
+			assert.ok(await becomes(`${eye} !== ''`), 'reentering the panel must resume tracking');
+			await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...outside });
+			assert.ok(await becomes(`${eye} === ''`), `exit at ${JSON.stringify(outside)} must center the eyes`);
+		}
+		await evaluate(`(async () => { document.scrollingElement.scrollTop = 100; agents[0] = { ...agents[0], line: 'Updated after exit' }; redraw({ revision: 3 }); await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))); })()`);
+		assert.ok(await becomes(`${eye} === ''`), 'scrolling and redraw after exit must keep eyes centered');
+		// The webview's original mouseout signal is sufficient on its own, without a PointerEvent or a focus change.
+		await evaluate(`document.dispatchEvent(new PointerEvent('pointermove', { clientX: 200, clientY: 100, bubbles: true }))`);
+		assert.ok(await becomes(`${eye} !== ''`));
+		await evaluate(`document.dispatchEvent(new MouseEvent('mouseout', { relatedTarget: null, clientX: -1, clientY: 100, bubbles: true }))`);
+		assert.ok(await becomes(`${eye} === ''`), 'a mouse exit alone must center the eyes');
+		const thumb = await middleOf('.facade-scrollbar-thumb');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...thumb });
+		await call('Input.dispatchMouseEvent', { type: 'mousePressed', button: 'left', clickCount: 1, ...thumb });
+		assert.ok(await becomes(`document.querySelector('.facade-scrollbar').classList.contains('dragging')`), 'scrollbar must capture the drag');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', buttons: 1, x: viewport.width + 10, y: thumb.y + 30 });
+		assert.ok(await becomes(`${eye} === ''`), 'captured movement outside the viewport must center the eyes');
+		await call('Input.dispatchMouseEvent', { type: 'mouseReleased', button: 'left', clickCount: 1, x: viewport.width + 10, y: thumb.y + 30 });
+		assert.deepStrictEqual(await evaluate('errors'), []);
+	});
+
+	test('PANEL-1.3: a menu taking the pointer inside the panel keeps the gaze only until its pointer wait expires; an outside leave centers even while it shows', async function () {
+		this.timeout(60_000);
+		await evaluate(`agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 })`);
+		const eye = `document.querySelector('.agent .face .eyes').style.transform`;
+		const at = await middleOf('.agent .title');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at });
+		assert.ok(await becomes(`${eye} !== ''`));
+		const menu = `document.querySelector('.menu-button').click(); document.body.classList.add('vscode-context-menu-visible')`;
+		await evaluate(`${menu}; document.dispatchEvent(new PointerEvent('pointerout', { relatedTarget: null, clientX: ${at.x}, clientY: ${at.y}, bubbles: true }))`);
+		assert.notStrictEqual(await evaluate(eye), '', 'a menu handoff inside the panel keeps the gaze');
+		await evaluate(`document.body.classList.remove('vscode-context-menu-visible')`);
+		assert.ok(await becomes(`${eye} === ''`), 'closing the menu without another pointer event must eventually center the eyes');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: at.y });
+		assert.ok(await becomes(`${eye} !== ''`));
+		await evaluate(`${menu}; document.dispatchEvent(new PointerEvent('pointerout', { relatedTarget: null, clientX: -1, clientY: ${at.y}, bubbles: true }))`);
+		assert.ok(await becomes(`${eye} === ''`), 'an exit outside the panel centers while the menu is still open');
+		await evaluate(`document.body.classList.remove('vscode-context-menu-visible')`);
 		assert.deepStrictEqual(await evaluate('errors'), []);
 	});
 
