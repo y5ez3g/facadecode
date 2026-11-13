@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.4
+
+- Fixed Codex agents incorrectly staying busy after a turn ends.
+- Robot eyes now keep their gaze during panel interactions.
+- Added DeepSeek context-window configuration examples for Claude Code and Codex.
+
 ## 0.1.3
 
 - **All of Facade's settings are in one file.** `facade.json` in the Facade home (`~/.facade/facade.json` by default) holds `yolo`, `names` and `clis`. **Open Settings** opens the editor's Settings at Facade Code, and **Edit in facade.json** opens the file, creating it if needed. Completion, hover help and checks come with it. A save applies to agents started afterwards.

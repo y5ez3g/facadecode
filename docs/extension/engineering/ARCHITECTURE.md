@@ -618,7 +618,7 @@ launch-group, trust or settings-template fields are configuration errors, not a 
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
 feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
-Open VSX only when the owner asks. Both components carry one release version, 0.1.3, which the changelog's heading
+Open VSX only when the owner asks. Both components carry one release version, 0.1.4, which the changelog's heading
 names; the build refuses a window component of another version. Release candidates target darwin-x64, darwin-arm64,
 linux-x64, linux-arm64, win32-x64 and win32-arm64, together with the window component. Publication requires each
 platform's build and verification evidence from the release run. The version advances when preparing a
