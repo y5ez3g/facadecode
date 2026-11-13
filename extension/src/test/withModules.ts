@@ -6,8 +6,8 @@ import * as fs from 'fs';
 import { createRequire } from 'module';
 import * as path from 'path';
 
-/** Loads the compiled adapters with their outside world supplied, without changing Node's shared module cache. */
-export function withModules(modules: Readonly<Record<string, unknown>>): <T>(file: string) => T {
+/** Loads the compiled adapters with their outside world supplied, without changing Node's shared module cache or globals. */
+export function withModules(modules: Readonly<Record<string, unknown>>, globals: Readonly<Record<string, unknown>> = {}): <T>(file: string) => T {
 	const cache = new Map<string, { exports: unknown }>();
 	function load<T>(file: string): T {
 		const cached = cache.get(file);
@@ -18,7 +18,7 @@ export function withModules(modules: Readonly<Record<string, unknown>>): <T>(fil
 		cache.set(file, loaded);
 		const requireAt = createRequire(file);
 		const requireWith = (id: string) => Object.hasOwn(modules, id) ? modules[id] : id.startsWith('.') ? load(requireAt.resolve(id)) : requireAt(id);
-		new Function('require', 'module', 'exports', '__filename', '__dirname', fs.readFileSync(file, 'utf8'))(requireWith, loaded, loaded.exports, file, path.dirname(file));
+		new Function('require', 'module', 'exports', '__filename', '__dirname', ...Object.keys(globals), fs.readFileSync(file, 'utf8'))(requireWith, loaded, loaded.exports, file, path.dirname(file), ...Object.values(globals));
 		return loaded.exports as T;
 	}
 	return load;

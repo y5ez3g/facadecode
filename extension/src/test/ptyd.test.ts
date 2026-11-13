@@ -859,7 +859,24 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 		let emit: (data: string) => void = () => undefined;
 		const written: string[] = [];
 		const pty = { pid: 4343, onData(listener: (data: string) => void) { emit = listener; }, onExit() {}, kill() {}, write(data: string) { written.push(data); }, resize() {}, pause() {}, resume() {} };
-		const Server = withModules({ 'node-pty': { spawn: () => pty } })<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		// CI can stall again during a real sleep. Give this module tree its own clock and monitor tick, leaving Node's globals alone.
+		let now = 10_000;
+		let tick: () => void = () => assert.fail('The stall monitor has not started.');
+		const Server = withModules({ 'node-pty': { spawn: () => pty } }, {
+			Date: class extends Date { static override now(): number { return now; } },
+			setInterval: (callback: () => void, ms: number) => {
+				assert.strictEqual(ms, 20, 'the stall monitor interval');
+				tick = callback;
+				return { unref() {} };
+			}
+		})<typeof import('../ptyd/server')>(require.resolve('../ptyd/server')).PtydServer;
+		const advance = (ms: number) => {
+			const end = now + ms;
+			while (now < end) {
+				now = Math.min(end, now + 20);
+				tick();
+			}
+		};
 		const asking = new Server(pipe('colours'));
 		assert.strictEqual(await asking.listen(), true);
 		try {
@@ -885,12 +902,13 @@ suite('ptyd: runs held for windows (ARCHITECTURE-2.3, 2.4, RULES-4.1)', function
 			assert.strictEqual(await answered(window, '\x1b]11;rgb:0000/0000/0000\x1b\\'), '');
 			// ptyd's one thread held - as creating a program holds it - past a tenth of a second: a question that arrives within a second
 			// after may have waited, and no answer is better than a late one; then it is answered again
-			const heldUntil = Date.now() + 150;
-			while (Date.now() < heldUntil) { /* held */ }
-			await new Promise(resolve => setTimeout(resolve, 30));
+			now += 150;
+			tick();
 			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'just held up: not answered');
-			await new Promise(resolve => setTimeout(resolve, 1_100));
-			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\', 'answered again a second after');
+			advance(999);
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '', 'still protected one millisecond before the guard ends');
+			advance(1);
+			assert.strictEqual(await answered(window, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\', 'answered again at the one-second boundary');
 			const reloaded = await open(2);
 			await reloaded.request('attach', { run: 'asks' });
 			assert.strictEqual(await answered(reloaded, '\x1b]11;?\x1b\\'), '\x1b]11;rgb:1919/1a1a/1b1b\x1b\\');

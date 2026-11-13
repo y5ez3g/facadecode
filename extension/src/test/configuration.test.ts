@@ -12,9 +12,10 @@ import { ROBOT_ICONS } from '../base/robot';
 import { BUILT_IN_ADAPTERS, BUILT_IN_FACTS, iconOf } from '../clis/catalog';
 import { entrySetting, readEntries, readEntry } from '../clis/entries';
 import { Migration, migrationOf, settingsText } from '../clis/migration';
+import { planLaunch } from '../clis/plan';
 import { parseSettings } from '../clis/settingsFile';
 import { FacadeSettings, shownFile } from '../host/facadeSettings';
-import { catalogFrom, TEST_SETTINGS_FILE } from './settingsFixtures';
+import { catalogFrom, runSettingsOf, TEST_SETTINGS_FILE } from './settingsFixtures';
 import { tempDir } from './util';
 import { withModules } from './withModules';
 
@@ -469,10 +470,10 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 			{ name: 'Claude · Other', value: { type: 'claude', icon: 'facade-blue', model: 'deepseek/deepseek-v4.1-flash', env: {
 				ANTHROPIC_BASE_URL: 'YOUR_PROVIDER_URL', ANTHROPIC_AUTH_TOKEN: 'YOUR_API_KEY', ANTHROPIC_API_KEY: null,
 				ANTHROPIC_DEFAULT_OPUS_MODEL: 'deepseek/deepseek-v4.1-flash', ANTHROPIC_DEFAULT_SONNET_MODEL: 'deepseek/deepseek-v4.1-flash',
-				ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek/deepseek-v4.1-flash'
+				ANTHROPIC_DEFAULT_HAIKU_MODEL: 'deepseek/deepseek-v4.1-flash', CLAUDE_CODE_MAX_CONTEXT_TOKENS: '1000000'
 			} } },
 			{ name: 'Codex · Other', value: { type: 'codex', icon: 'facade-lime', model: 'deepseek/deepseek-v4.1-flash', args: [
-				'-c', 'model_provider=provider', '-c', 'model_providers.provider.name=Provider',
+				'-c', 'model_provider=provider', '-c', 'model_context_window=1000000', '-c', 'model_providers.provider.name=Provider',
 				'-c', 'model_providers.provider.base_url=YOUR_PROVIDER_URL',
 				'-c', 'model_providers.provider.wire_api=responses', '-c', 'model_providers.provider.env_key=PROVIDER_API_KEY'
 			], env: { PROVIDER_API_KEY: 'YOUR_API_KEY' } } },
@@ -481,6 +482,33 @@ suite('Moving the editor\'s earlier settings into the file (CONFIGURATION-6)', (
 		for (const chosen of [[0], [1], [2], [0, 1], [0, 2], [1, 2], [0, 1, 2]].map(each => each.map(index => examples[index]))) {
 			const names = chosen.map(each => each.name);
 			assert.deepStrictEqual(written(uncommented(text, names)), { problems: [], yolo: true, clis: builtInsWith({}, chosen) }, names.join(', '));
+		}
+	});
+
+	test('CONFIGURATION-5.1, 5.2: the generated DeepSeek examples pass their context windows to the native launch alone, Claude\'s in its settings too', () => {
+		const temp = tempDir('fc-context-');
+		try {
+			const bin = path.join(temp.dir, 'bin');
+			fs.mkdirSync(bin);
+			for (const cli of ['claude', 'codex']) {
+				fs.writeFileSync(path.join(bin, cli), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+			}
+			const catalog = catalogFrom(uncommented(settingsText(undefined, []), ['Claude · Other', 'Codex · Other']));
+			assert.deepStrictEqual(catalog.problems, []);
+			assert.deepStrictEqual(catalog.entries.flatMap(entry => entry.problems), []);
+			const where = { host: { PATH: bin, HOME: temp.dir, CLAUDE_CODE_MAX_CONTEXT_TOKENS: '32768' }, platform: 'darwin' as const };
+			const launch = (cli: string) => planLaunch(catalog, { cli, alias: '#a1', cwd: temp.dir, yolo: false }, where);
+			const claude = launch('Claude · Other'), codex = launch('Codex · Other');
+			assert.strictEqual(claude.env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '1000000');
+			assert.strictEqual(runSettingsOf(claude).env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '1000000');
+			const context = codex.args.indexOf('model_context_window=1000000');
+			assert.ok(context > 0);
+			assert.strictEqual(codex.args[context - 1], '-c');
+			assert.strictEqual(codex.args.filter(arg => arg.startsWith('model_context_window=')).length, 1);
+			assert.strictEqual(launch('claude').env.CLAUDE_CODE_MAX_CONTEXT_TOKENS, '32768');
+			assert.ok(!launch('codex').args.some(arg => arg.startsWith('model_context_window=')));
+		} finally {
+			temp.remove();
 		}
 	});
 

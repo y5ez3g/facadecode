@@ -327,11 +327,31 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			throw error;
 		});
 		await vscode.commands.executeCommand('facade.unpinAgent', { run_id: card.runId });
-		await until('the unpinned card and tab', async () => !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && !tab.isPinned) ? true : undefined);
-		// A native action saves the same restoration intent.
+		// LIFECYCLE-3.4: the tab-change event can precede completion of Facade's own mark command. Observe the unpinned state across
+		// two polls before issuing a separate native action; one early observation can still be inside that command's event guard.
+		let unpinned = 0;
+		await until('the unpinned card and tab to settle', async () => {
+			const agreed = !(await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && !tab.isPinned);
+			unpinned = agreed ? unpinned + 1 : 0;
+			return unpinned >= 2 ? true : undefined;
+		});
+		// A native action acts on the active group's front tab alone and saves the same restoration intent.
+		await vscode.commands.executeCommand('facade.revealAgent', { run_id: card.runId });
+		await until('the resumed terminal in front for native Pin', async () => {
+			const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+			return tab?.input instanceof vscode.TabInputTerminal && unspun(tab.label).startsWith(card.name) && !tab.isPinned ? true : undefined;
+		});
 		await vscode.commands.executeCommand('workbench.action.pinEditor');
-		await until('the card following a native Pin', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned ? true : undefined);
-		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		try {
+			await until('the card and tab following a native Pin', async () => (await state()).cards.find(each => each.runId === card.runId)?.pinned && vscode.window.tabGroups.all.flatMap(group => group.tabs).some(tab => unspun(tab.label).startsWith(card.name) && tab.isPinned) ? true : undefined);
+		} catch (error) {
+			console.error('Native Pin synchronization', JSON.stringify({ cards: (await state()).cards.map(each => ({ runId: each.runId, name: each.name, pinned: each.pinned })),
+				tabs: vscode.window.tabGroups.all.flatMap(group => group.tabs).map(tab => ({ label: tab.label, pinned: tab.isPinned, active: tab.isActive, groupActive: tab.group.isActive })) }));
+			throw error;
+		} finally {
+			// A failed Pin check must not leave this resumed card in the following filter scenario.
+			await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		}
 	});
 
 	test('PANEL-1.2, 2.3: a card\'s location filter keeps the count; with no card left the page says none is in its location, and its Clear Filter shows every agent again', async function () {

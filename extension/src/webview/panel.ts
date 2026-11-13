@@ -218,14 +218,14 @@ checkFlatDim();
 /** How far a robot's eyes move toward the pointer, at most, as a part of its face's width; and how much of the way they go each frame. */
 const EYE_REACH = 4 / 32;
 const EYE_EASE = 0.25;
-/** Where the pointer is over the panel; none once it has left, when the eyes look ahead again. */
+/** The last pointer position in the panel, kept when a terminal or menu takes focus or the pointer (PANEL-1.3). */
 let pointerAt: { readonly x: number; readonly y: number } | undefined;
 let looking = 0;
 const eyesAt = new WeakMap<HTMLElement, { x: number; y: number }>();
 
 /**
- * Moves each robot's eyes a step toward where they look (CONFIGURATION-2.4): toward the pointer while it is over the panel, the full
- * reach once it is a face and a half away, and ahead once it leaves - not at all with reduced motion. It stops once every pair is
+ * Moves each robot's eyes a step toward the last pointer position (PANEL-1.3), the full reach once it is a face and a half away -
+ * not at all with reduced motion. Focus and pointer handoffs keep that position. It stops once every pair is
  * where it looks, so that a still panel computes nothing.
  */
 function look(): void {
@@ -263,15 +263,16 @@ function look(): void {
 	}
 }
 
-/** The eyes look again at the next frame: the pointer moved or left, or the cards moved under it. */
+/** The eyes look again at the next frame: the pointer or the cards moved. */
 function lookSoon(): void {
 	if (!looking) {
 		looking = requestAnimationFrame(look);
 	}
 }
-document.addEventListener('pointermove', event => { pointerAt = { x: event.clientX, y: event.clientY }; lookSoon(); });
-document.addEventListener('mouseout', event => { if (!event.relatedTarget) { pointerAt = undefined; lookSoon(); } });
-window.addEventListener('blur', () => { pointerAt = undefined; lookSoon(); });
+// A click can focus the terminal and a menu can take the pointer out of the webview: neither resets the gaze (PANEL-1.3).
+for (const type of ['pointerover', 'pointermove', 'pointerdown'] as const) {
+	document.addEventListener(type, event => { pointerAt = { x: event.clientX, y: event.clientY }; lookSoon(); });
+}
 document.addEventListener('scroll', lookSoon, { passive: true });
 
 // The theme changed - VS Code sets its colours on the page's root and its kind on the body: what depends on them is measured again

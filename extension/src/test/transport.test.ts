@@ -373,7 +373,10 @@ suite('Transport: the run\'s MCP shim (MCP-1.1, 1.2, 6.1)', function () {
 		assert.deepStrictEqual(failureOf(await odd), ['UNAVAILABLE', 'protocol_incompatible', 'none']);
 	});
 
-	test('arguments and answers of several megabytes go whole both ways', async () => {
+	test('arguments and answers of several megabytes go whole both ways', async function () {
+		// MCP-5.2: this full-payload check exceeded the suite's 30 s budget on shared Intel macOS CI. Allow its serialization and
+		// pipe I/O more time; the payload, complete-content assertions and the protocol deadline tests keep their existing values.
+		this.timeout(60_000);
 		const fake = await ptyd();
 		const shim = shimOf('run-3');
 		const text = 'é\n\t"🌍\\'.repeat(400_000);
