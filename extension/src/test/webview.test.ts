@@ -1986,9 +1986,12 @@ suite('The agent panel in Chromium', function () {
 		}
 		// Touch has no persistent hover after release, even when the finger ends inside the view.
 		await evaluate('scrollTo(0, 50)');
-		await wait(30);
+		// PANEL-3.3: the scroll event reveals the bar asynchronously, and CDP can acknowledge touch input before Chromium applies it.
+		await until(() => evaluate(`scrollY === 50 && !document.querySelector('.facade-scrollbar').hidden && document.querySelector('.facade-scrollbar').classList.contains('visible')`), 5_000, 'The scrollbar did not become ready for touch.');
 		await call('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: 395, y: 20 }] });
+		await until(() => evaluate(`document.querySelector('.facade-scrollbar').hasPointerCapture(window.pointer) && document.querySelector('.facade-scrollbar').classList.contains('dragging')`), 5_000, 'The touch did not capture the scrollbar.');
 		await call('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: 395, y: 150 }] });
+		await until(() => evaluate('scrollY > 50'), 5_000, 'The captured touch did not scroll the page.');
 		assert.ok(await evaluate('scrollY') > 50);
 		await call('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
 		await wait(550);
