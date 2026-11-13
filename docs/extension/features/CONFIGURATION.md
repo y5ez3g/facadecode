@@ -470,6 +470,12 @@ For example, replace the address and model names below with ones supported by th
 | `ANTHROPIC_API_KEY: null` | Removes the person's inherited Anthropic API key |
 | All three default-model variables | Maps Claude's aliases and subagent choices to models the service knows |
 
+The generated file's DeepSeek V4.1 Flash example also sets `CLAUDE_CODE_MAX_CONTEXT_TOKENS` to `"1000000"`, its
+[context window in tokens](https://docs.qwencloud.com/models/deepseek-v4-1-flash#context-limits), so Claude Code does not
+have to guess the window of an unrecognized model ID. Its adjacent
+comment says to use the chosen model's actual context window after changing models, including a model chosen at
+launch. This is a native Claude setting, not a window Facade infers or changes for another model.
+
 Facade also writes this entry's string environment values into the run's Claude settings `env`. Otherwise Claude's
 own settings files can override them. Null values are handled as follows:
 
@@ -519,6 +525,8 @@ The generated file's `Codex · Other` example needs no other configuration file.
   "model": "deepseek/deepseek-v4.1-flash",
   "args": [
     "-c", "model_provider=provider",
+    // DeepSeek V4.1 Flash: use the new model's actual context window if you change models.
+    "-c", "model_context_window=1000000",
     "-c", "model_providers.provider.name=Provider",
     "-c", "model_providers.provider.base_url=YOUR_PROVIDER_URL",
     "-c", "model_providers.provider.wire_api=responses",
@@ -532,6 +540,7 @@ The generated file's `Codex · Other` example needs no other configuration file.
 | --- | --- |
 | `model` | The starting model; a model chosen for a particular start wins |
 | `model_provider=provider` | Selects the provider defined by the following options |
+| `model_context_window=1000000` | Declares the example DeepSeek V4.1 Flash model's context window in tokens ([Codex reference](https://learn.chatgpt.com/docs/config-file/config-reference)) |
 | `model_providers.provider.name` | Gives the provider its display name |
 | `model_providers.provider.base_url` | Sets the API address |
 | `model_providers.provider.wire_api=responses` | Selects the Responses API format |
@@ -539,7 +548,9 @@ The generated file's `Codex · Other` example needs no other configuration file.
 | `env.PROVIDER_API_KEY` | Supplies that variable to the process |
 
 These `-c` options apply to this entry's agents. They do not edit Codex's configuration files or change other Codex
-entries. To keep the key out of Facade's settings file, replace `"YOUR_API_KEY"` with `"${env:PROVIDER_API_KEY}"` and make
+entries. The context option's adjacent comment says to use the chosen model's actual context window after changing
+models, including a model chosen at launch; Facade does not infer a replacement value. To keep the key out of Facade's
+settings file, replace `"YOUR_API_KEY"` with `"${env:PROVIDER_API_KEY}"` and make
 that variable available in the editor's environment (3.2).
 
 With `env_key`, the key is in the process environment. Codex's native shell snapshots may copy it. A profile using
@@ -684,7 +695,7 @@ to reset to product defaults, keep the file and write `{}` instead of deleting i
 | 2.1–2.4 | All eight fields and defaults; names and reserved IDs; built-in type repeated or changed; valid and invalid icons; independent entries; NUL and Windows env duplicates; errors before disabled checks; capabilities; all built-in and robot icons on every surface, current-file selection, immediate card refresh on save/create/remove and removed-entry fallback; robot assets and COLR v1 font |
 | 3.1–3.4 | Literal and empty arguments; reserved aliases, config parent/child paths and shared per-CLI option-value parsing; additive integrations; missing references fail in entry env and expand to empty in editor layers, existing empty values and one-pass expansion; matching discovery and launch; model/effort precedence; current settings and original-type checks on Resume/Pin, with and without a conversation; native store mismatch by a launch in the conversation's own folder, including its CLI settings and every offered folder choice; same-store comparisons through links and platform letter case; unchanged living processes |
 | 4.1–4.2 | File and entry failures; Resume file-problem rows and their gear buttons open Settings without reading history; field-list error order; duplicate keys; identical UI/MCP errors and accurate paths; the person's environment values hidden, including generated nested values and previewed run-settings JSON; Facade constants shown and per-run values kept as placeholders; sensitive argument forms and numeric values hidden; no raw argv logs |
-| 5.1–5.3 | Simulated endpoints and fake keys check protocol/authentication; Claude string overrides, both null exceptions, all four reintroduction sources, Windows case-insensitive precedence, final run variables and merged settings with 1.3's access rules; Codex provider options with env_key and a native profile with auth, including their different key storage; distinguish startup, tools and actual model responses |
+| 5.1–5.3 | DeepSeek examples declare the native context window, document updates after model changes and preserve built-in defaults; simulated endpoints and fake keys check protocol/authentication; Claude string overrides, both null exceptions, all four reintroduction sources, Windows case-insensitive precedence, final run variables and merged settings with 1.3's access rules; Codex provider options with env_key and a native profile with auth, including their different key storage; distinguish startup, tools and actual model responses |
 | 6.1–6.3 | Each migration row; explicit values versus manifest defaults; path trimming and empty/blank paths; native option spellings, attached values and end marker; invalid-value preservation including explicit nulls; collisions with no file and a route to correct legacy settings; old settings unchanged and set legacy keys shown as deprecated; one notice across competing windows, including missing environment references; deletion re-migrates and `{}` resets |
 
 These checks describe required evidence, not completed tests. [Verification](../engineering/VERIFICATION.md) owns the

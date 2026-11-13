@@ -315,6 +315,9 @@ const TEMPLATE = `// Facade settings. A saved change applies to agents started a
 		// 		"ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek/deepseek-v4.1-flash",
 		// 		"ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek/deepseek-v4.1-flash",
 		// 		"ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek/deepseek-v4.1-flash",
+		// 		// DeepSeek V4.1 Flash supports 1,000,000 context tokens. If you use another model,
+		// 		// including one chosen when starting an agent, set this to its actual context window:
+		// 		"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "1000000",
 		// 	},
 		// },
 		//
@@ -336,6 +339,9 @@ const TEMPLATE = `// Facade settings. A saved change applies to agents started a
 		// 		// Selects the provider defined below. "provider" is only its name; any name works
 		// 		// as long as all lines use the same one:
 		// 		"-c", "model_provider=provider",
+		// 		// DeepSeek V4.1 Flash supports 1,000,000 context tokens. If you use another model,
+		// 		// including one chosen when starting an agent, set this to its actual context window:
+		// 		"-c", "model_context_window=1000000",
 		// 		// The display name of the provider. Any name works here:
 		// 		"-c", "model_providers.provider.name=Provider",
 		// 		// The address Codex sends requests to: the provider's OpenAI-compatible address,
