@@ -2098,7 +2098,7 @@ suite('The agent panel in Chromium', function () {
 		}
 	});
 
-	test('a robot\'s eyes go a quarter of the way each frame, reach less within a face and a half of the pointer, look ahead again when the window loses focus, keep still with the system\'s reduced motion, and ask for no frame at rest (PANEL-1.3)', async function () {
+	test('a robot\'s eyes go a quarter of the way each frame, reach less within a face and a half of the pointer, keep their gaze when the window loses focus, keep still with the system\'s reduced motion, and ask for no frame at rest (PANEL-1.3)', async function () {
 		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
 		this.timeout(60_000);
 		const seen = await evaluate(`(async () => {
@@ -2119,9 +2119,9 @@ suite('The agent panel in Chromium', function () {
 			// Three quarters of a face from its middle: half the reach
 			move(cx + box.width * 0.75); await settled();
 			const near = at()[0] / reach;
-			// The window loses focus: ahead again
+			// A card click can move focus to its terminal: the eyes keep looking at the pointer
 			window.dispatchEvent(new Event('blur')); await settled();
-			const blurred = at();
+			const blurred = at().map(value => value / reach);
 			// The system's reduced motion, while the eyes look aside: in the middle at once
 			move(cx + 500); await settled();
 			const real = window.matchMedia;
@@ -2140,10 +2140,11 @@ suite('The agent panel in Chromium', function () {
 		})()`);
 		const [first, near, blurred, still, asked] = seen as [number, number, number[], number[], number];
 		assert.ok(Math.abs(first - 0.25) < 0.01 && Math.abs(near - 0.5) < 0.02, JSON.stringify(seen));
-		assert.deepStrictEqual([blurred, still, asked], [[0, 0], [0, 0], 0]);
+		assert.ok(Math.abs(blurred[0] - near) < 0.02 && blurred[1] === 0, JSON.stringify(seen));
+		assert.deepStrictEqual([still, asked], [[0, 0], 0]);
 	});
 
-	test('a robot\'s eyes look toward the pointer over the panel, up to 4/32 of its face, and ahead again once it leaves; not with reduced motion (CONFIGURATION-2.4)', async function () {
+	test('a robot\'s eyes look toward the pointer over the panel, up to 4/32 of its face, keep that gaze once it leaves; not with reduced motion (CONFIGURATION-2.4)', async function () {
 		// Each frame is drawn without a graphics card on a CI runner: as many as the eyes take to settle, and time for them
 		this.timeout(60_000);
 		const seen = await evaluate(`(async () => {
@@ -2181,7 +2182,76 @@ suite('The agent panel in Chromium', function () {
 		// Partway there after a few frames, then the full reach toward the pointer on its right
 		assert.ok(moving[0] > 0 && moving[0] < width * 4 / 32, JSON.stringify(seen));
 		assert.ok(Math.abs(right[0] - width * 4 / 32) < 0.06 && Math.abs(right[1]) < 0.06, JSON.stringify(seen));
-		assert.deepStrictEqual([snapped, left, reduced], [[0, 0], [0, 0], [0, 0]]);
+		assert.deepStrictEqual(left, right);
+		assert.deepStrictEqual([snapped, reduced], [[0, 0], [0, 0]]);
+	});
+
+	test('PANEL-1.3: a robot keeps looking at the pointer through a card click, terminal focus, details, menu handoff and state updates', async function () {
+		this.timeout(60_000);
+		await evaluate(`(() => {
+			agents = [newCard(1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })]; redraw({ revision: 2 });
+			window.settleEyes = async () => {
+				let last;
+				for (let same = 0, left = 240; same < 3 && left; left--) {
+					await new Promise(resolve => requestAnimationFrame(resolve));
+					const now = document.querySelector('.agent .face .eyes').style.transform;
+					same = now === last ? same + 1 : 0; last = now;
+				}
+			};
+		})()`);
+		const read = `(async () => { await settleEyes(); return document.querySelector('.agent .face .eyes').style.transform; })()`;
+		const at = await middleOf('.agent .title');
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', ...at });
+		const before = await evaluate(read);
+		assert.ok(before && before !== 'translate(0.00px, 0.00px)', before);
+		await pressAt(at);
+		assert.deepStrictEqual(await evaluate(`posted.filter(message => message.type === 'act').map(message => [message.what, message.target])`), [['open', 'run-1']]);
+		// The host focuses the terminal after Open Agent; a menu can take both focus and the pointer from the webview too.
+		await evaluate(`window.dispatchEvent(new Event('blur')); document.dispatchEvent(new MouseEvent('mouseout', { relatedTarget: null, bubbles: true }))`);
+		assert.strictEqual(await evaluate(read), before, 'opening the terminal must keep the gaze');
+		await evaluate(`document.querySelector('.details-button').click()`);
+		assert.strictEqual(await evaluate(read), before, 'details must keep the gaze');
+		await evaluate(`document.querySelector('.menu-button').click(); document.body.classList.add('vscode-context-menu-visible')`);
+		await away();
+		assert.strictEqual(await evaluate(read), before, 'a menu taking the pointer must keep the gaze');
+		await evaluate(`document.body.classList.remove('vscode-context-menu-visible'); agents[0] = { ...agents[0], selected: true, dot: 'none', line: 'Updated' }; redraw({ revision: 3 })`);
+		assert.strictEqual(await evaluate(read), before, 'menu dismissal, selection and status must keep the gaze');
+		// The next real movement takes over smoothly from the retained position.
+		await call('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 1, y: at.y });
+		const after = await evaluate(read);
+		assert.ok(after.startsWith('translate(-'), after);
+		assert.deepStrictEqual(await evaluate('errors'), []);
+	});
+
+	test('PANEL-1.3: pointer entry and presses update a robot\'s gaze without a move, and scrolling follows the cards at the retained pointer position', async function () {
+		this.timeout(60_000);
+		const seen = await evaluate(`(async () => {
+			agents = Array.from({ length: 30 }, (_, i) => newCard(i + 1, { avatar: { file: 'robot-sky-face.svg', eyes: 'robot-eyes.svg' } })); redraw({ revision: 2 });
+			const eyes = document.querySelectorAll('.agent .face .eyes')[3];
+			const face = eyes.parentElement;
+			const settle = async () => {
+				let last;
+				for (let same = 0, left = 240; same < 3 && left; left--) {
+					await new Promise(resolve => requestAnimationFrame(resolve));
+					const now = eyes.style.transform;
+					same = now === last ? same + 1 : 0; last = now;
+				}
+			};
+			const at = () => (eyes.style.transform.match(/-?[\\d.]+(?=px)/g) ?? ['0', '0']).map(Number);
+			const box = face.getBoundingClientRect(), cy = box.top + box.height / 2;
+			document.dispatchEvent(new PointerEvent('pointerover', { clientX: box.right + 100, clientY: cy, bubbles: true }));
+			await settle(); const entered = at();
+			document.dispatchEvent(new PointerEvent('pointerdown', { clientX: 1, clientY: cy, bubbles: true }));
+			await settle(); const pressed = at();
+			// No pointer event follows: scrolling alone moves the face above the retained pointer.
+			document.scrollingElement.scrollTop = 100;
+			await settle(); const scrolled = at();
+			return [entered, pressed, scrolled, document.scrollingElement.scrollTop];
+		})()`);
+		const [entered, pressed, scrolled, scrollTop] = seen as [number[], number[], number[], number];
+		assert.ok(entered[0] > 0 && entered[1] === 0, JSON.stringify(seen));
+		assert.ok(pressed[0] < 0 && pressed[1] === 0, JSON.stringify(seen));
+		assert.ok(scrollTop === 100 && scrolled[0] < 0 && scrolled[1] > 0, JSON.stringify(seen));
 	});
 
 	test('a robot\'s eyes looking aside stand in the middle at once when reduced motion turns on - the editor\'s or the system\'s - with the pointer still and nothing else moving, and look again when it turns off (PANEL-1.3)', async function () {
