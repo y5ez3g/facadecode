@@ -2,7 +2,7 @@
 	"name": "facadecode-window",
 	"displayName": "%windowDisplayName%",
 	"description": "%windowDescription%",
-	"version": "0.1.4",
+	"version": "0.1.5",
 	"private": true,
 	"publisher": "facade",
 	"repository": { "type": "git", "url": "https://github.com/y5ez3g/facadecode.git", "directory": "extension" },

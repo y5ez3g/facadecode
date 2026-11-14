@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.5
+
+- Fixed robot eyes not returning to center when the pointer leaves the panel.
+
 ## 0.1.4
 
 - Fixed Codex agents incorrectly staying busy after a turn ends.
