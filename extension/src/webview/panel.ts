@@ -218,14 +218,14 @@ checkFlatDim();
 /** How far a robot's eyes move toward the pointer, at most, as a part of its face's width; and how much of the way they go each frame. */
 const EYE_REACH = 4 / 32;
 const EYE_EASE = 0.25;
-/** The last pointer position in the panel, kept when a terminal or menu takes focus or the pointer (PANEL-1.3). */
+/** The pointer position while it is in the panel, kept through focus changes and temporary menu handoffs (PANEL-1.3). */
 let pointerAt: { readonly x: number; readonly y: number } | undefined;
 let looking = 0;
 const eyesAt = new WeakMap<HTMLElement, { x: number; y: number }>();
 
 /**
  * Moves each robot's eyes a step toward the last pointer position (PANEL-1.3), the full reach once it is a face and a half away -
- * not at all with reduced motion. Focus and pointer handoffs keep that position. It stops once every pair is
+ * not at all with reduced motion. No position means looking ahead. It stops once every pair is
  * where it looks, so that a still panel computes nothing.
  */
 function look(): void {
@@ -263,15 +263,26 @@ function look(): void {
 	}
 }
 
-/** The eyes look again at the next frame: the pointer or the cards moved. */
+/** The eyes look again at the next frame: the pointer moved or left, or the cards moved. */
 function lookSoon(): void {
 	if (!looking) {
 		looking = requestAnimationFrame(look);
 	}
 }
-// A click can focus the terminal and a menu can take the pointer out of the webview: neither resets the gaze (PANEL-1.3).
+/** Pointer capture can deliver movement beyond the viewport without a leave event (PANEL-1.3). */
+function insidePanel(event: MouseEvent): boolean {
+	return event.clientX >= 0 && event.clientX < window.innerWidth && event.clientY >= 0 && event.clientY < window.innerHeight;
+}
+
+/** A pointer gone from the panel no longer gives the eyes a target (PANEL-1.3). */
+function lookAhead(): void {
+	pointerAt = undefined;
+	lookSoon();
+}
+
+// Focus alone says nothing about where the pointer is: clicking a card can focus its terminal (PANEL-1.3).
 for (const type of ['pointerover', 'pointermove', 'pointerdown'] as const) {
-	document.addEventListener(type, event => { pointerAt = { x: event.clientX, y: event.clientY }; lookSoon(); });
+	document.addEventListener(type, event => { pointerAt = insidePanel(event) ? { x: event.clientX, y: event.clientY } : undefined; lookSoon(); });
 }
 document.addEventListener('scroll', lookSoon, { passive: true });
 
@@ -628,12 +639,18 @@ function setHovered(entry: Drawn, on: boolean): void {
 	}
 }
 
-// The pointer leaving the view leaves every card
-document.addEventListener('pointerout', event => {
-	if (!event.relatedTarget) {
-		pointerLeft();
-	}
-});
+// Keep the mouse exit signal too: it was the panel's original way to notice leaving the webview (PANEL-1.3).
+for (const type of ['pointerout', 'mouseout'] as const) {
+	document.addEventListener(type, event => {
+		if (!event.relatedTarget) {
+			pointerLeft();
+			// A menu over the panel can take the pointer without its moving outside. Actual exits still center the eyes.
+			if (!insidePanel(event) || (!menuOn && !document.body.classList.contains('vscode-context-menu-visible'))) {
+				lookAhead();
+			}
+		}
+	});
+}
 
 /**
  * Where the page last knew the pointer to be (PANEL-2.2). `seen`: as its events say. `taken`: the page heard that the pointer left
@@ -671,6 +688,7 @@ function menuGone(): void {
 	pointerClock = window.setTimeout(() => {
 		if (pointer === 'awaited') {
 			pointer = 'seen';
+			lookAhead();
 			for (const entry of drawn?.values() ?? []) {
 				setHovered(entry, false);
 			}

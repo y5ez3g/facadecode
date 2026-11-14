@@ -82,9 +82,14 @@ Choose the avatar by the entry's `icon` under CONFIGURATION-2.4. Built-in icons 
 
 While the pointer is over the panel, each robot's eyes move toward it, at most 4/32 of the face's width. They reach
 that limit when the pointer is a face and a half away, and move a quarter of the remaining distance each frame.
-They keep looking toward the last known pointer position when a click focuses a terminal, a menu takes the pointer,
-or the pointer leaves the panel. A pointer entering, moving or pressing in the panel updates that position; selection,
-details, status updates and scrolling do not reset it. This keeps the eyes from jumping back during panel operations.
+They keep looking toward the pointer when a click focuses a terminal; losing focus alone does not reset them.
+When the pointer leaves the panel, they ease back to the middle, including when a captured pointer moves outside its
+bounds. A pointer entering, moving or pressing in the panel updates its position; selection, details, status updates
+and scrolling do not reset it or restore a position from before a leave. This keeps the eyes from jumping back during
+panel operations without leaving them looking at a pointer that is gone.
+An editor menu taking the pointer at a position inside the panel temporarily keeps the gaze. A leave with coordinates
+outside the panel returns the eyes to the middle even while a menu shows. After a menu closes without another pointer
+event, the gaze returns to the middle when the existing one-second pointer wait in 2.2 expires.
 VS Code's or the system's reduced-motion setting keeps them still; turning either preference on returns eyes already
 off center to the middle at once, without easing or waiting for a pointer event.
 Once the eyes rest, no further animation frames are computed.
@@ -413,7 +418,7 @@ fully visible row count minus one (minimum one).
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.5 | Built-in and robot avatars; eye reach/easing, gaze kept through terminal focus, menus, pointer leave, selection and updates; gaze updated on pointer entry, press and scrolling, both reduced-motion settings with immediate centering on preference change without a pointer event and no frames at rest; title and menu entries, the empty and filtered states, the failed-start and missing-component pages and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, the green and red dots and no dot otherwise, error/ended first, then a native blocker before other red conditions or generic unavailable status, with its CLI's own words kept (1.4), the state in words in the accessible label alone, the card's buttons and five-line details with no state, hover popup or native tooltip, all widths/themes/accessibility |
+| 1.1–1.5 | Built-in and robot avatars; eye reach/easing, gaze kept through terminal focus, menu handoffs inside the panel, selection and updates; eyes centered on pointer exit including capture and after the menu pointer wait expires, no old gaze restored by scrolling or redraw; gaze updated on pointer entry, press and scrolling, both reduced-motion settings with immediate centering on preference change without a pointer event and no frames at rest; title and menu entries, the empty and filtered states, the failed-start and missing-component pages and the no-folder New Agent prerequisite, empty/filter distinction, slow/no Git, the green and red dots and no dot otherwise, error/ended first, then a native blocker before other red conditions or generic unavailable status, with its CLI's own words kept (1.4), the state in words in the accessible label alone, the card's buttons and five-line details with no state, hover popup or native tooltip, all widths/themes/accessibility |
 | 2.1–2.3 | Insertion into the two queues and manual order, retained failure, the selection unmoved while the pinned tabs of a reload, an extension-host restart or Pin restoration open and on the last one opened after, exact context target from the gear and the keys, no menu on a right click, the card under the pointer kept through the editor's menu and the click that closes it, filter removal/read failure |
 | 3.1–3.3 | Generation-isolated replies/actions with current target validation, coherent badge, icons refreshed on settings save/create/remove, XSS/command-link payloads, hide/show browsing-position restore without focus theft, input-to-paint and scrolling |
 
