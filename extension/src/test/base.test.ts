@@ -387,8 +387,9 @@ suite('Base: a lock windows take turns at', () => {
 		this.timeout(10_000);
 		const file = path.join(temp.dir, 'shared.json');
 		const lock = `${file}.lock`;
-		// Another window holds it for half a second, and says when it took it and when it let it go.
-		const other = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.writeFileSync(${JSON.stringify(lock)}, 'other', { flag: 'wx' }); console.log('took', Date.now()); setTimeout(() => { fs.rmSync(${JSON.stringify(lock)}); console.log('let go', Date.now()); }, 500);`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+		// Record before removal: another process can take the lock before the holder reports releasing it. Delay that report
+		// deliberately, so the assertion cannot accidentally depend on stdout being scheduled first.
+		const other = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.writeFileSync(${JSON.stringify(lock)}, 'other', { flag: 'wx' }); console.log('took', Date.now()); setTimeout(() => { const letGo = Date.now(); fs.rmSync(${JSON.stringify(lock)}); setTimeout(() => console.log('let go', letGo), 50); }, 500);`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
 		let said = '';
 		other.stdout.on('data', (chunk: Buffer) => said += chunk.toString('utf8'));
 		const exited = new Promise(resolve => other.on('exit', resolve));
@@ -407,8 +408,9 @@ suite('Base: a lock windows take turns at', () => {
 		this.timeout(10_000);
 		const file = path.join(temp.dir, '.claude.json');
 		const lock = `${file}.lock`;
-		// Claude Code holds it for half a second, as proper-lockfile does: a folder of its own.
-		const claude = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.mkdirSync(${JSON.stringify(lock)}); console.log('took', Date.now()); setTimeout(() => { fs.rmdirSync(${JSON.stringify(lock)}); console.log('let go', Date.now()); }, 500);`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
+		// The folder form has the same release/report race. Keep the half-second hold and assert against the release boundary,
+		// not the later stdout report, just as for a file lock above.
+		const claude = spawn(process.execPath, ['-e', `const fs = require('fs'); fs.mkdirSync(${JSON.stringify(lock)}); console.log('took', Date.now()); setTimeout(() => { const letGo = Date.now(); fs.rmdirSync(${JSON.stringify(lock)}); setTimeout(() => console.log('let go', letGo), 50); }, 500);`], { env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } });
 		let said = '';
 		claude.stdout.on('data', (chunk: Buffer) => said += chunk.toString('utf8'));
 		const exited = new Promise(resolve => claude.on('exit', resolve));
