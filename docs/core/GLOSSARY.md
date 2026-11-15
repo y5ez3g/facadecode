@@ -1,0 +1,282 @@
+# Glossary
+
+One meaning, one word. New code, documentation comments, logs, error messages, test names and the text Facade core gives
+people and models use the words below. Where a person sees a word, in a command, `--help`, an MCP tool, the settings
+file or a model's instructions, the code uses that word too. Some older names in the code still differ; [Names not yet
+changed](#names-not-yet-changed) lists them, and a change that touches one renames it.
+
+Each table gives the word to use, what it means, and the words not to use for that meaning. A word in "Not these" may still
+have a meaning of its own elsewhere in this glossary.
+
+Other programs and protocols keep their own words: the standard library's `spawn` and `create_dir`, JSON-RPC's `id` and
+`result`, alacritty's `scrolling_history`, Antigravity's `conversationId`. Names already on the wire keep their spelling for
+now; [Names on the wire](#names-on-the-wire) lists those that differ from this glossary.
+
+## Agents and runs
+
+| Use | Means | Not these |
+|---|---|---|
+| agent | A CLI session Facade knows, with its own ID such as `#a3`: a run Facade started, or a guest | — |
+| run | One CLI run Facade started, from a start or a resume until it ends | process, child, session (for this) |
+| process | An operating system's process: its ID, its group, its exit | run (for this) |
+| session | A CLI's own session, the one it can resume | conversation |
+| guest | A CLI session a person started that joined Facade through an integration | — |
+| member, MCP member | An MCP client that neither Facade started nor a CLI's hooks report, listed as a guest through its relay | — |
+| CLI | One of the coding CLIs Facade runs, such as Claude Code or Codex; `facade` itself is not one | tool, client (for this) |
+| rule | A CLI's built-in knowledge file, `core/rules/<cli>.json` | — |
+| entry | An item of `clis` in the settings file | setup |
+| command line | The program, arguments and environment a CLI starts with, `CommandLine` in code | launch |
+| record | An agent's record: its ID, name, CLI, folder and reach, kept in the store | — |
+
+## Starting and ending
+
+| Use | Means | Not these |
+|---|---|---|
+| start | Start a new agent; also start Facade's keeper or daemon | create, launch |
+| spawn | Create an operating system process, as `std::process::Command::spawn` does | — |
+| resume | Run an ended agent again in its session, keeping its ID: a new run of the same agent | restart |
+| stop | Facade ending a running agent: a hangup, then a kill at the deadline | terminate |
+| remove | Delete an agent's record, stopping it first if it runs | delete, forget (for this) |
+| end, ended | A run that no longer runs, for any reason | finish, gone |
+| exit | A process's own exit code or signal | — |
+| kill | Send SIGKILL | — |
+| hang up | Send SIGHUP | — |
+
+## Messages
+
+| Use | Means | Not these |
+|---|---|---|
+| message | A Facade message, with its number such as `#m12` | mail, letter, note |
+| send | Put a message on its way | post |
+| deliver, delivery | Bring a message to its recipient: type it into the CLI's input, or let the recipient take it | hand over |
+| take | A guest's hook or a reader collecting the messages that wait | — |
+| inbox | The messages waiting for one agent | mailbox |
+| settle | A delivery getting its outcome: delivered or failed | — |
+| withdraw | Take a message out of the inbox before its paste began: its send was cancelled, or it failed before a byte was typed | retract |
+| result | A message Facade itself sends about a delivery, shown with 🔔 | notice |
+| person | The one using Facade; the person's ID is `human`, written `#human` | user |
+| sender, recipient | Who sent a message and who it is for | from, to (outside the wire fields) |
+| first prompt | The task an agent is started with, delivered once its CLI is ready | — |
+
+## Input
+
+| Use | Means | Not these |
+|---|---|---|
+| input | The bytes written into a terminal | — |
+| input box | The CLI's field where text is typed before Enter | — |
+| draft | The text in the input box that was not entered yet | — |
+| type | Write text or keys into a terminal, as `agent.type` does | — |
+| typist | The one writer of an agent's automatic input: messages, the first prompt, typed calls | — |
+| paste | The typist putting a message's text into the input box as a bracketed paste | — |
+| confirm | The CLI showing it accepted a paste, as in `submission_unconfirmed` | settle (for this) |
+| said | The text last entered into the input box | — |
+| readiness | Everything between a run's start and its first prompt: answering the trust question, waiting for the tools | warmup, boot |
+| answer | Respond to a CLI's own question on screen, such as its trust question | — |
+
+## Screens and viewers
+
+| Use | Means | Not these |
+|---|---|---|
+| screen | What an agent's terminal shows, and the `Screen` that computes it | view (for this) |
+| terminal | A terminal without a display; the pseudo-terminal an agent's CLI runs in | tty |
+| terminal app | The program a person sees terminals in, such as Terminal or iTerm, named by `TERM_PROGRAM` | — |
+| output | The bytes a terminal writes | — |
+| scrollback | The lines that scrolled off the top of a screen | history |
+| redraw | Draw a whole screen again for a viewer | repaint, refresh |
+| screen log | An agent's screen changes, logged on disk before the screen takes them | — |
+| checkpoint | A saved screen in the screen log, which a recovery replays from | snapshot (for this) |
+| replay | Rebuild a screen from its log | — |
+| query, reply | A terminal's question, such as a cursor position request, and the terminal's answer to it | answer (for this) |
+| client | A program connected to the daemon: a `facade` command, the relay, an editor | — |
+| viewer | A client showing an agent's screen | subscriber, watcher |
+| watch, topic, snapshot, change | A client's subscription to a topic, what it gets first, and each change after | — |
+
+## Calls, responses and errors
+
+| Use | Means | Not these |
+|---|---|---|
+| operation | One of a protocol's operations, such as `agent.start` | — |
+| response | What a protocol request gets back from the daemon, the keeper or an MCP server | answer |
+| reply | What a command inside a process gets back, through a oneshot channel | answer |
+| notification, notify | A request that gets no response | tell, told |
+| request ID | The ID a caller gives a call so that it can repeat the call safely | call ID, idempotency key |
+| repeat | A call that comes again with the same request ID; the response says `repeated` | again |
+| retry | Facade trying again on its own | again |
+| cancel | A caller calling off a call that is under way | abort |
+| refuse | The daemon not taking a call, and saying why | reject, deny |
+| fail, failure | Something done that did not succeed | — |
+| reason | The kind of a failure on the wire, such as `not_found` | code (for this) |
+| error | A Rust error, or a JSON-RPC error object | — |
+
+## States
+
+| Use | Means | Not these |
+|---|---|---|
+| state | What an agent is doing: one of eight, such as `working` or `waiting_for_you` | status (for this) |
+| waiting | The state of an agent that needs the person; its kind is `WaitKind` | blocked (for this) |
+| tools | Whether an agent's CLI can use Facade's tools, and why not | — |
+
+## Windows, locations and folders
+
+| Use | Means | Not these |
+|---|---|---|
+| window | An editor window that connects to the daemon | — |
+| terminal window | The window, ID `terminal`, that agents started from a terminal belong to | — |
+| location | A place a window offers to start agents in: a checkout, a worktree or a folder | place |
+| folder | A folder on disk | directory, dir |
+| checkout | A Git working copy | working copy |
+| worktree | A further working copy Git made from a checkout | — |
+| grace | The time an agent keeps running after its window left, in case the window comes back | — |
+| take over | A newer one taking over what an older one had: a window of the same workspace taking the agents of one that left, or a newer build taking over the running Facade | hand over |
+
+## Settings
+
+| Use | Means | Not these |
+|---|---|---|
+| settings file | `facade.json` in the Facade home | configuration file, config file |
+| settings | What the settings file holds | configuration, config |
+| problem | One thing wrong in the settings file, with where it is | issue |
+| home | The folder `FACADE_HOME` names, `~/.facade` by default | root, base (for this) |
+| home folder | The operating system user's own home, `$HOME`; Facade's is the Facade home | home (for this) |
+
+## Reach
+
+| Use | Means | Not these |
+|---|---|---|
+| creation tree | An agent and every agent it started, directly or not | family, lineage |
+| creator | The agent that started an agent | parent |
+| root | The first agent of a creation tree | — |
+| reach | The agents a caller's tools act on: everyone with YOLO, otherwise its creation tree | access, scope |
+| YOLO | Running a CLI without its own permission questions; with it, an agent's reach is everyone | — |
+
+## Wiring, integrations and hooks
+
+| Use | Means | Not these |
+|---|---|---|
+| wiring | Facade's way into each CLI: the MCP server entry, hooks and plugins a run gets, and the format of integrations | — |
+| integration | What Facade writes into a CLI's user settings so that sessions a person starts join as guests | — |
+| hook | A command a CLI runs when something happens, such as `facade hook session-start` | — |
+| hook output | What a hook prints for the CLI to read; functions that make it are `*_output` | answer |
+| plugin, extension | A CLI's own way to extend it, by that CLI's own name | — |
+| skill | How to use Facade, written for each CLI's model | — |
+| instructions | What the MCP server or a hook tells a model about Facade | — |
+| guide | The protocol's description for client authors, `PROTOCOL.md` | — |
+
+## Services, builds and takeover
+
+| Use | Means | Not these |
+|---|---|---|
+| keeper | The process that holds every agent's terminal and starts the daemon | service (for this) |
+| daemon | The process that runs agents, messages and the protocol | service (for this) |
+| relay | `facade-mcp`: forwards MCP lines between an MCP client and the daemon, line by line | proxy, bridge, shim |
+| link | A long connection that reconnects when it breaks: the relay's `DaemonLink`, the daemon's keeper link | — |
+| program | An executable file | binary, executable |
+| launcher | One of the two links in `core/bin/` that name the current build's programs | shim |
+| build | The programs of one build, in `core/bin/<build>/` | — |
+| install | Copy a build's programs into `core/bin/<build>/` | — |
+| version | A three-part version number | — |
+| sync | The daemon giving a keeper the terminals it lacks, with `agent.sync` | hand over |
+| drain | The daemon letting calls under way finish before a newer build takes over | — |
+| closing | Telling clients that a newer build takes over | — |
+| quiet | An agent that neither types nor reads during a takeover | paused, frozen |
+| roll back | Go back to the build before | revert |
+| upgrade | A person installing a newer version; in text for people only | — |
+
+## Core's parts
+
+| Use | Means | Not these |
+|---|---|---|
+| island | A part of core that owns its data and offers a few interfaces: a crate, a module or a file | — |
+| parent, child, sibling | Of islands: the island that contains another, the islands it contains, and islands with the same parent. An agent that started another is its creator, not its parent | — |
+| base | The crate of shared contracts and small tools, `facade-base` | common, shared, utils |
+| handle | What a part gets at creation to reach another part's data: a small type, a channel's sender, or a closure | — |
+| table | A handle to one database table, `<Thing>Table`, with that table's methods and nothing else | — |
+
+## Naming rules
+
+### Names in code
+
+- Follow the Rust API Guidelines: `UpperCamelCase` types and variants, `snake_case` functions and modules,
+  `SCREAMING_SNAKE_CASE` constants; conversions `as_`, `to_`, `into_`; no `get_` on getters; `new` and `with_*` to build;
+  `is_` and `has_` for questions.
+- A type's name reads on its own, because callers often import only the type: `AgentHandle`, not `Handle`, `Data`, `Info`
+  or `Manager`.
+- An actor's handle is `<Thing>Handle` and its commands `<Thing>Command`. What a part reports to the part above it is a
+  `<Thing>Event` sent on a channel it was given. What a watch sends is a `Change`.
+- A file or module says what it holds. Not `utils`, `helpers`, `common`, `misc`, `types` or `manager`.
+- A `bool` argument whose meaning the call site does not show becomes a two-variant enum.
+- The store's methods use SQL's verbs: `insert_`, `update_`, `delete_`. The domain uses its own verbs: remove, withdraw,
+  settle.
+
+### Constants
+
+| Kind | Name | Not these |
+|---|---|---|
+| An upper limit, with its unit | `MAX_<thing>_<unit>`, such as `MAX_LINE_BYTES` | `MOST_`, `_LIMIT`, `_AT_MOST` |
+| A lower limit | `MIN_<thing>_<unit>` | — |
+| The longest one wait lasts before Facade gives up | `_TIMEOUT` | `_WITHIN`, `_TIME`, `_WAIT` |
+| A fixed period | `_INTERVAL` | `_EVERY` |
+| How long Facade waits before it acts | `_DELAY` | `_AFTER`, `AFTER_` |
+| Time given on purpose to the other side before Facade acts | `_GRACE` | — |
+| An absolute point in time | deadline | until |
+
+### Text for people
+
+- Use the person's words from the tables above: agent, run, message, inbox, settings file, folder.
+- American spelling: color, not colour.
+- Short sentences that say what happened and what to do next.
+- Error messages start in lower case, end without a period, and name what failed and on what.
+- Logs state facts in English, one fact a line. They never hold prompts, screen contents, full arguments or a person's
+  environment.
+
+## Names on the wire
+
+These names are part of the daemon protocol, the keeper protocol, MCP or the settings file. They keep their spelling, and
+code that mirrors them keeps it too.
+
+| On the wire | Means, in this glossary's words |
+|---|---|
+| `daemon.upgrade`, reason `upgrading` | A newer build taking over: take over |
+| `status`: the MCP result's field, the `facade status` command, the Program Status Protocol (OSC 7501) | The outcome of a call; Facade's own state; a CLI reporting its state |
+| reason `configuration_invalid` | The settings file has problems |
+| `process` in an agent's record | The state of the run's operating system process |
+| the rule file keys `launch` and `status` | The rule's command line and state sections |
+| `BlockKind` and the value `blocked` of the Program Status Protocol | What a CLI reports it waits for; Facade's word is waiting, `WaitKind` |
+| `answer` in `PROTOCOL.md`'s prose | response |
+| `HandOver`, the result of `hook.prompt` and `hook.turn-end` | The messages a guest takes at its next turn: take |
+
+## Names from elsewhere
+
+| Name | Comes from |
+|---|---|
+| `dir`, `directory` | The standard library and libc, such as `create_dir`, `read_dir` and `DirEntry` |
+| `tty` | The standard library and libc, such as `isatty` and `ttyname` |
+| `history` | alacritty, such as `scrolling_history` |
+| `abort` | tokio's `JoinHandle::abort`; `io::ErrorKind::ConnectionAborted` |
+| `conversation` | Antigravity's fields, such as `conversationId` |
+| `launchd` | macOS |
+| `forget` | `std::mem::forget` |
+
+## Names not yet changed
+
+These names in the code still differ from this glossary. Each is renamed when a change touches it; the wire names above
+stay.
+
+| Rule | Names in the code |
+|---|---|
+| start, not launch | `service::launch`, `Runs::launch`, `RunLaunch`, `Supervisor::launch`, `launch_with_settings` |
+| send, not post | `Messages::post`, `Posted` |
+| folder, not dir | `paths::core_dir`, `socket_dir` |
+| take over or drain, not hand over | `hand_over` (takeover), `handed_over_cleanly`, `HANDOVER_TIME` |
+| ended, not gone | `daemon_gone` (keeper) |
+| response or reply, not answer | `TypingAnswer`, `StartAnswer`, `hello_answer`, `closing_answered`, `answer_to`, `settled_answer` |
+| scrollback, not history | `HistoryKeeper` (screen) |
+| remove or `delete_`, not forget | `Windows::forget`, `forget_integration_file` |
+| commands, not mailbox | an actor's `mailbox` |
+| resume, not restart | screen's `restart.rs`, `leave_for_restart`, `reset_for_restart` |
+| one meaning for settle | rules' `settle_time`, how long a draft must stay still |
+| a name that reads alone | `programs::Held` (the programs a daemon holds open); the daemon's `Sender` (who said something), which shares its name with channel senders |
+| `_TIMEOUT`, not `_TIME`, `_WAIT` or `_WITHIN` | `QUIET_TIME`, `DRAIN_TIME`, `CLOSING_TIME`, `HANDOVER_TIME`, `COMMAND_TIME`, `DELIVERY_TIME`, `READY_WAIT`, `RESPONSE_WAIT`, `SAID_WAIT`, `CLOSING_ANSWERED_WITHIN` |
+| `MAX_`, not `_LIMIT` or `MOST_` | `READ_LIMIT`, `ADD_LIMIT`, `TURN_LIMIT`, `OUTBOX_LIMIT`, `SESSION_FILE_LIMIT`, `OPENCODE_ID_LIMIT`, `MAX_MESSAGES_LIMIT`, `MOST_SAID`, `MOST_PARTS`, `MOST_RETRY_DELAY` |
+| `_DELAY` or a threshold, not `_AFTER` or `AFTER_` | `ENTER_DRAWN_AFTER`, `HEALTHY_AFTER`, `AFTER_REPEATS`, `CHECKPOINT_AFTER_BYTES` |
+| `_INTERVAL`, not `_EVERY` | `FOLLOW_EVERY` |
