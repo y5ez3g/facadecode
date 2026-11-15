@@ -1,0 +1,102 @@
+//! Facade's skill (MCP-6.2): how the eight tools work together. A CLI's model reads it beside the
+//! agent's instructions ([`crate::instructions::for_agent`]) and each tool's description, and it
+//! repeats no sentence of them. Every place a CLI takes it gets the same bytes, which end in the
+//! version that wrote them.
+
+/// How every Facade skill's description begins, which tells a `facade` skill is Facade's
+/// (CLIS-2.2).
+pub const DESCRIPTION_PREFIX: &str = "How the Facade Code tools work:";
+
+/// The skill's description, which tells a CLI when it applies.
+pub const DESCRIPTION: &str = "How the Facade Code tools work: start and stop agents, send and \
+                               read Facade messages, and read or type into agent \
+                               terminals. Use when you work with other agents through Facade, or a \
+                               Facade message or result appears.";
+
+/// What MCP-6.2 has the skill say verbatim: how a model handles a message delivered twice, as
+/// Facade does not deduplicate.
+pub const REPEATED_MESSAGE: &str = "The same Facade message can arrive more than once. Use its \
+                                    message ID to recognize a repeat and do not \
+                                    redo work for that same message. A new send call has a new ID, \
+                                    even if its text matches. A Facade system result about a \
+                                    message is a separate kind of information, not another copy of \
+                                    that message's instruction.";
+
+/// The skill's sections before the repeated-message paragraph: the tools, agents and messages.
+const BEFORE_REPEATS: &str = "# Facade Code tools
+
+Server `facade` has eight tools: start_agent, list_agents, stop_agent, send_message, read_messages, read_screen,
+type_text and press_keys. Each answers with `status`: success, with `data` where it has facts to give, or failure, with
+`reason` and a `message` that says what is wrong, whether anything was done, and what to do next.
+
+## Agents
+
+`start_agent({cli: \"codex\", window: \"win-2\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser
+test.\"})` starts Codex there; the answer's `data.id`, such as \"#a7\", addresses it from then on. Its run takes YOLO from
+`facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person set it up. Either way it can
+use these tools too, which no CLI asks about. `list_agents({})` shows the windows, each with its folders and the CLIs it
+can start, and the agents you reach, ended ones too: with YOLO off, those of your creation tree, any other refused as
+`out_of_reach`. A name that more than one agent has is refused: use the ID.
+
+## Messages
+
+`send_message({to: \"#a7\", text: \"Run the tests again.\"})` types the message into #a7's terminal under a header that
+names you, such as `📨 Message from Max (#a3) · #m42`, then its text. A reply names what it answers, `reply_to: \"#m42\"`,
+and its header adds `· Reply to #m42`. Messages the person sends come from #human; yours to #human reach them only
+through an editor window that shows your messages.
+A start's prompt is answered later by Facade, not by the agent: `🔔 Ada (#a7) has started. · #m43`, under its own number,
+says whether the prompt was passed on, and asks for no reply.
+Delivery is finite: a message the recipient's CLI does not take in time fails, and no one tries it again; one to a guest,
+a CLI session the person started, waits for its next turn.
+`read_messages({})` returns your messages not yet delivered, `read_messages({last: 5})` the five newest, and
+`read_messages({after: \"#m42\"})` every one after #m42. No agent reads another's inbox.
+";
+
+/// The skill's section after the repeated-message paragraph: the terminals.
+const AFTER_REPEATS: &str = "## Terminals
+
+`read_screen({agent: \"#a7\"})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go
+where its cursor is, as `press_keys({agent: \"#a7\", keys: [\"Down\", \"Enter\"]})` picks a menu's second item.
+";
+
+/// The skill's `SKILL.md`: the frontmatter with `name` and the quoted description, the sections
+/// with the repeated-message paragraph between them, and last a line naming the version of Facade
+/// core that wrote it.
+pub fn text() -> String {
+    let description = serde_json::to_string(DESCRIPTION).expect("a string serializes");
+    let version = crate::version();
+    format!(
+        "---\nname: facade\ndescription: {description}\n---\n\n\
+         {BEFORE_REPEATS}\n{REPEATED_MESSAGE}\n\n{AFTER_REPEATS}\n\
+         Written by Facade core {version}.\n"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The frontmatter is YAML with `name` and a quoted `description` that begins with Facade's
+    /// prefix, the repeated-message paragraph stands alone, and the last line names this version.
+    #[test]
+    fn the_skill_has_its_frontmatter_its_paragraph_and_its_version_last() {
+        let text = text();
+        let (frontmatter, _) = text
+            .strip_prefix("---\n")
+            .and_then(|rest| rest.split_once("\n---\n"))
+            .expect("a frontmatter");
+        let lines: Vec<&str> = frontmatter.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "name: facade");
+        let description: String =
+            serde_json::from_str(lines[1].strip_prefix("description: ").unwrap()).unwrap();
+        assert_eq!(description, DESCRIPTION);
+        assert!(description.starts_with(DESCRIPTION_PREFIX));
+        assert!(
+            text.contains(&format!("\n{REPEATED_MESSAGE}\n")),
+            "the paragraph stands alone"
+        );
+        assert!(text.ends_with(&format!("\nWritten by Facade core {}.\n", crate::VERSION)));
+        assert!(!text.contains('\r') && !text.contains('\t'), "plain lines");
+    }
+}
