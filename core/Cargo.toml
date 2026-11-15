@@ -3,6 +3,7 @@
 [workspace]
 resolver = "3"
 members = [
+	"crates/relay",
 	# A member so that its own tests run with Facade's (vendor/README.md).
 	"vendor/alacritty_terminal",
 ]
