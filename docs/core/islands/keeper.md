@@ -1,0 +1,203 @@
+# Keeper
+
+The keeper is the long-lived parent of every CLI in a Facade home, one per home. It holds a copy of
+each CLI's PTY master, so a terminal outlives a daemon crash, and it keeps one daemon running. It is
+its own island because it must stay small and stable: CLIs and terminals survive anything that
+happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `facade keeper`.
+
+## Owns
+
+- **The CLI processes.** Each CLI it starts is its child and leads a session and process group of its
+  own. CLIs the daemon syncs to it after a keeper ended are held too, without being children.
+- **One PTY master per CLI.** The keeper's own copy; it never reads or writes it.
+- **The daemon process** it starts, and the watch on a daemon it found already running.
+- **The daemon's link**: the one proved connection on the keeper's socket.
+- **Files:**
+  - `<home>/core/keeper.lock`;
+  - the socket `keeper-<key>.sock` in the socket folder, at the path
+    `facade_base::paths::keeper_socket` gives, removed when the keeper exits.
+- **Its log**, `<home>/core/logs/keeper.log`: its standard error, which whoever started it opened.
+
+## Keeps
+
+- One thread, one `poll` loop: no tokio, no locks, no other threads.
+- Only the process holding `keeper.lock` serves; a second keeper reports `contention` and exits.
+- A connection is accepted only from this user's process whose pid and birth match
+  `core/daemon.lock`; a newly proved connection replaces the one before.
+- `hello` comes first and only once per connection; anything else before it is
+  `invalid_argument`.
+- A CLI starts with every signal at its default, no signal blocked, exactly the environment
+  `agent.start` gave, in its own session with the PTY as its controlling terminal.
+- A group signal is sent only after the leader's pid, birth and group prove the group is still
+  the CLI's. A forked CLI stays unreaped until its group is dealt with, so its IDs cannot be reused.
+- `changed` for a CLI always follows the response to its `agent.start`, and goes only to a link that
+  said hello.
+- The daemon always starts from the launcher, `core/bin/facade daemon`, so it runs whichever build
+  the launcher points at.
+- The keeper exits when no daemon runs and it holds no CLI, and never otherwise except on
+  SIGTERM or SIGINT.
+
+## Never does
+
+- Interpret a CLI, read a screen or terminal, touch the database, or know about messages,
+  rules or settings.
+- Add, remove or change environment variables for a CLI.
+- Replace itself with another build in place. A new keeper build runs only after the old keeper exited.
+- Stop a CLI the daemon did not ask it to stop. It does kill a CLI whose start failed after the
+  spawn. On SIGTERM or SIGINT, only groups already being stopped get SIGKILL.
+- Wait for anything except in `poll`. The only bounded wait is writing to the daemon
+  (`SEND_TIMEOUT`, 1 second).
+- Queue messages for a daemon that is not connected. A CLI end with nobody to tell is not reported;
+  the next `hello` shows the CLI has ended.
+
+## Interface
+
+**The `facade` program** (`crates/facade`):
+
+- `facade keeper` calls `facade_keeper::serve() -> anyhow::Result<()>`. This is the crate's only
+  public item.
+
+**Whoever starts it**, through `facade_base::service::launch(Service::Keeper, <launcher>)`:
+
+- A command that cannot reach the daemon and finds no daemon or keeper running
+  (`crates/facade/src/daemon_client.rs`).
+- The daemon, when its keeper ended (`crates/daemon/src/runs/keeper_link`).
+- Both read the startup report on `FACADE_STARTUP_CHANNEL`: `started`, `contention` or
+  `failed <reason>`.
+
+**The daemon**, over the keeper protocol ([KEEPER.md](../../../core/protocol/KEEPER.md);
+types in `facade_base::keeper`):
+
+- Requests the keeper serves: `hello`, then `call` with `agent.start`, `agent.stop`,
+  `agent.sync` and `daemon.ping`.
+- The one notification it sends: `changed`, when a CLI ended.
+- PTY masters travel with `SCM_RIGHTS`, at most one per message.
+
+**Programs it starts:** `core/bin/facade daemon`, and the CLIs `agent.start` names.
+
+**Environment it reads:** `FACADE_STARTUP_CHANNEL`, and `FACADE_HOME` through
+`facade_base::paths`.
+
+## Depends on
+
+- **`facade-base`:**
+  - protocol: `keeper` (types, versions, timeouts), `jsonrpc` (framing, `ErrorBody`), `operations`
+    (`CallParams`);
+  - platform:
+    - `service` (locks, peer proof, `launch`, `StartupChannel`, inherited descriptors, private
+      home);
+    - `descriptors` (lines with descriptors);
+    - `unix_process` (birth, group signals, process observation, child exits);
+    - `limits`, `paths`, `programs::launcher`;
+  - `log`, `time`.
+- **Third party:** `nix`, `libc`, `signal-hook`, `serde`, `serde_json`, `anyhow`.
+
+## Inside
+
+### Startup
+
+`serve` takes the startup channel, closes every other inherited descriptor, creates the private
+home and takes `keeper.lock`. It then calls `Keeper::bind`, which:
+
+1. raises the open-files limit (each CLI holds a terminal, and the CLIs inherit the limit);
+2. ignores SIGHUP and SIGPIPE;
+3. installs the SIGCHLD and SIGTERM/SIGINT pipes;
+4. replaces any stale socket file and binds;
+5. finds the daemon.
+
+Then `serve` reports `started`. Any failure before that is reported as `failed`. `Keeper::run`
+starts a daemon unless one already holds `daemon.lock`. That happens when a daemon started this
+keeper after the previous one ended.
+
+### The loop
+
+```mermaid
+flowchart TD
+    D[nearest deadline:<br/>SIGKILL deadlines, watchdog, next daemon start] --> P[poll]
+    P --> C[SIGCHLD: forked CLIs that exited, then the forked daemon]
+    C --> T[SIGTERM / SIGINT: kill groups being stopped, exit]
+    T --> R[ready descriptors: new connections, link lines,<br/>ends of adopted CLIs, end of an adopted daemon]
+    R --> X[deadlines that passed]
+    X --> D
+```
+
+Work that takes milliseconds (spawn, signal, duplicate a descriptor, write a line) is done in the
+loop. Anything that takes longer is a deadline or an event. SIGCHLD and SIGTERM/SIGINT reach `poll`
+as bytes their handlers write to two pipes (`wake.rs`). Exits are collected before a shutdown is
+handled, so the daemon still hears of them.
+
+### What it holds
+
+`Keeper` (`keeper.rs`) holds the listener, the link, the supervisor, and the CLIs by agent ID.
+
+A `Cli` (`cli.rs`) is the leader's pid and birth, the master, its `Tie` and, while it is being
+stopped, its SIGKILL deadline. The `Tie` says how the keeper learns of the CLI's end:
+
+- `Parent`: the keeper forked it, and SIGCHLD tells, with the exit code or signal.
+- `Observed`: synced to the keeper by `agent.sync`, and a pidfd (Linux) or kqueue (macOS) descriptor tells,
+  without an exit code.
+- `Blind`: synced where the system gives no such descriptor. Only a later stop or sync
+  from the daemon deals with it.
+
+### Requests
+
+The link (`link.rs`) reads every line that has arrived and takes the descriptor each line carries.
+`keeper/requests.rs` turns each line into a `Request`, carries it out, and writes the response with
+the master it carries, if any.
+
+- **`agent.start`:** opens the PTY (`terminal.rs`), spawns the CLI and reads its birth. A CLI
+  whose birth cannot be read is killed and the start fails.
+- **`agent.stop`:**
+  1. SIGHUP to the group, then SIGKILL after `STOP_TIMEOUT` (3 seconds) or as soon as the CLI ends,
+     whichever comes first.
+  2. A repeated stop keeps the first deadline.
+  3. A SIGKILL that fails is tried again after 100 ms.
+- **`agent.sync`:** gives the master to whichever side lacks it. When the daemon syncs a CLI
+  that has already ended, the keeper reports `changed` right after the response.
+
+### Ends
+
+When a CLI ends, the keeper kills the rest of its group if a stop was under way, while the unreaped
+leader still proves the group. Then it reaps the CLI, closes its master, drops it, and sends
+`changed` if a daemon said hello. A CLI that ends by itself leaves behind any processes it started,
+as closing a terminal does.
+
+### The daemon
+
+`Supervisor` (`supervisor.rs`) is either watching a daemon or waiting to start the next one.
+`due(now)` tells the loop what is owed.
+
+- **Watchdog:** the daemon pings once a second from its hello on. After `PING_TIMEOUT` (15 seconds)
+  without a ping, counted from the start of watching until the first ping, the keeper sends
+  SIGKILL.
+- **Restart:** once the daemon ended, a keeper holding CLIs starts the next one after a delay. The
+  delay starts at 0.5 seconds and doubles up to 30 seconds; it starts over after a daemon that ran
+  60 seconds. A daemon that cannot be started counts as one that ended at once. A keeper holding
+  no CLI exits instead.
+- **How the end is seen:** SIGCHLD for a daemon the keeper forked. For a daemon it found running,
+  a process descriptor, or, where the system gives none, only its silence.
+
+### When the daemon changes
+
+- **The daemon crashes or is killed by the watchdog.** The CLIs keep running on the keeper's
+  masters. The next daemon says hello, learns from the response which CLIs the keeper holds, and
+  gets each master back with `agent.sync`.
+- **A new build takes over.** The old daemon installs the new build, points the launcher at it,
+  drains and exits. A keeper holding CLIs treats that as an ordinary end and starts the launcher's
+  daemon, which is the new build. A keeper holding none exits, and the next command starts a new
+  keeper from the launcher. A keeper keeps running its own build until it exits.
+- **Another proved daemon connects.** It becomes the daemon being watched, and its connection
+  replaces the old one. A daemon the keeper forked and no longer watches is still reaped when it
+  exits.
+- **The keeper itself ended.** The daemon still holds every master. It starts a new keeper through
+  the launcher and syncs each CLI to it with `agent.sync`. Those CLIs then end without an exit code.
+
+## Reading the code
+
+1. `src/lib.rs`: `serve`, from startup to `Keeper::run`.
+2. `src/keeper.rs`: `Keeper::turn`, the loop, then `collect_children`, `cli_ended` and
+   `on_deadlines`.
+3. `src/keeper/requests.rs`: `serve_line` and `decode`, then `start`, `stop` and `sync`.
+4. `src/cli.rs`: `Cli::spawn`, `own_terminal`, `begin_stop` and `kill_group`.
+5. `src/supervisor.rs`: `Supervisor::due`, `launch`, `kill` and `ended`.
+6. `src/link.rs` and `src/wake.rs`: the connection and the `poll`.

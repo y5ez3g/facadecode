@@ -1,0 +1,29 @@
+[package]
+name = "facade-relay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "facade-mcp, the relay that passes each MCP line between a CLI and the Facade daemon."
+
+[[bin]]
+name = "facade-mcp"
+path = "src/main.rs"
+
+[dependencies]
+# Not the workspace's nix: the relay uses only poll, the user calls, and on Linux the socket
+# option that names the daemon's user (SO_PEERCRED).
+nix = { version = "0.31", default-features = false, features = ["poll", "user", "socket"] }
+# The daemon socket's name holds a hash of the Facade home's path.
+sha2.workspace = true
+
+# Stricter than the workspace: the relay is meant to change almost never.
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+as_conversions = "deny"

@@ -1,0 +1,5 @@
+# Lints clippy's defaults do not hold, kept for the whole workspace.
+disallowed-methods = [
+	{ path = "std::env::vars", reason = "it panics on a variable that is not UTF-8: use std::env::vars_os" },
+	{ path = "std::env::args", reason = "it panics on an argument that is not UTF-8: use std::env::args_os" },
+]

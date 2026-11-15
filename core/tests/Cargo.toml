@@ -1,0 +1,22 @@
+[package]
+name = "facade-scenarios"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+description = "Scenario tests that run built Facade programs in isolated Facade homes, with the fake CLI they drive and the stress test."
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+facade-base.workspace = true
+facade-screen.workspace = true
+facade-rules.workspace = true
+anyhow.workspace = true
+crossterm.workspace = true
+serde_json.workspace = true
+libc.workspace = true
+nix.workspace = true
+rusqlite.workspace = true

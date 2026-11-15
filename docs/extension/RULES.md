@@ -233,7 +233,7 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 
 ### 2.2 Window, workspace, agent and creation tree have different identities
 
-**A run ID identifies one accepted launch; a workspace and creation tree survive different lifetimes.**
+**An agent ID identifies one agent across its runs; a workspace and creation tree survive different lifetimes.**
 
 | Identity | Meaning |
 | --- | --- |
@@ -243,11 +243,13 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | Workspace | Saved editor workspace/folder context for preferences and Pin intent |
 | Conversation key | Execution environment, CLI and exact vendor session ID |
 | Pin | Saved intent to restore an exact conversation |
-| Agent/run ID | One accepted launch, unique across the client network and never reassigned |
-| Agent alias `#aN` | The run's short reference, numbered by the client network's counter: never given twice, also across an update from an earlier build |
+| Agent ID | One agent, from its accepted start until its record is removed; unique across the client network and never reassigned |
+| Agent alias `#aN` | The agent's short reference, numbered by the client network's counter: never given twice, also across an update from an earlier build |
+| Run | One start or Resume of the agent's CLI, until that CLI ends |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
 
-Keep the same run ID through startup, rename and reattachment of the same process. A fresh start or Resume has a new run ID.
+Keep the same agent ID and `#aN` through startup, rename, reattachment and Resume. A fresh start is a new agent with a new
+ID; Resume keeps the agent and starts a new run.
 Tree membership does not disappear when an ancestor closes. IDs are routing addresses, not credentials; no token
 issuance or anti-impersonation system is required.
 
@@ -478,7 +480,7 @@ No arbitrary accumulated-operation counter may permanently disable an otherwise 
 | Rules | Acceptance |
 | --- | --- |
 | 1.1–1.10 | One recipient; response/attempt budgets; delivery by terminal, native prompt or read_messages; one delivery state; stable duplicate IDs; drafts and unrecognized input boxes untouched; no human fallback; closure |
-| 2.1–2.4 | Client network across local and remote windows, unique run IDs, duplicate names, `#human` and `@human`, tree survival, remote paths, folder/worktree removal |
+| 2.1–2.4 | Client network across local and remote windows, unique agent IDs kept through Resume, duplicate names, `#human` and `@human`, tree survival, remote paths, folder/worktree removal |
 | 3.1–3.4 | Work green, errors red, no dot otherwise, independent tool/input evidence, exits, errors to initiator, no routine notices or attention queue |
 | 4.1, 4.3–4.4 | Immediate close, reload/disconnect, children outlive creators, every started agent remains shown across updates, tree reach, current-setting YOLO on every launch, unchanged live runs, future-only MCP setting |
 | 5.1–5.3 | Invalid requests, request-ID retries and independent starts without a request ID, simple cancellation/capacity, thirty-day message cleanup |

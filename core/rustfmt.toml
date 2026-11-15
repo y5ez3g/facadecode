@@ -1,0 +1,2 @@
+# Facade core's own code: rustfmt's defaults at 100 columns. vendor/ keeps its upstream form.
+max_width = 100

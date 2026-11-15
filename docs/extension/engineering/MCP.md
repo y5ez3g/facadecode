@@ -1,15 +1,15 @@
 # MCP contract
 
-Layer 4. Tool protocol **6** defines the contract. [Rules](../RULES.md) owns effects and
+Layer 4. Tool interface **2** defines the contract. [Rules](../RULES.md) owns effects and
 [Collaboration](../features/COLLABORATION.md) owns message experience.
 
 | Group | Decides |
 | --- | --- |
 | 1 Common contract | Eight tools, outcomes, waits and validation |
-| 2 Discover and start | Startup choices, required identity/location and optional prompt |
+| 2 Discover and start | Startup choices, required window/path/CLI and optional prompt |
 | 3 Inspect and stop | Scoped agent lists and single-agent stop |
 | 4 Messages and history | One recipient, result reports and own inbox |
-| 5 Terminal operations | Screen, unrestricted direct text and keys |
+| 5 Terminal operations | Screen, direct text and keys |
 | 6 Technical design | Run routing, injection, versioning and schema ownership |
 
 ## 1 Common contract
@@ -26,156 +26,94 @@ separate startup discovery.
 Arguments are JSON objects with known keys and correct types; an absent arguments object is `{}`. Do not coerce missing
 choices into defaults except where explicitly allowed below. Every advertised argument has a JSON Schema `type` and no
 `oneOf`, so that every model provider takes the tool list; a list argument also takes a single string, or the list
-written as JSON text, as some CLIs send it. Report every problem of a call together in one INVALID answer: reason
-`missing_argument` where a required field is absent, otherwise `invalid_argument`, with `data.missing` naming the
-absent fields and `data.invalid` each other problem by field.
+written as JSON text, as some CLIs send it. Report every problem of a call together as `invalid_argument`: the
+`message` names missing fields first, then each other problem by field, and says that nothing was done.
 IDs are nonempty strings; references accept exact IDs and RULES-2.3's `#aN`, a name with or without `@`, or a
 display-name-plus-ID form, plus the person's `#human`. Names can repeat; ambiguity requires an ID. A reference resolves
 once within the caller's normal reach.
 
-start_agent and send_message take an optional `request_id` of the caller's own, 1–200 code points: the same one again
-from that caller to the same tool within an hour of the first call answers what the first call started - as it stands
-- or sent - as RULES-1.2 says - with `request_id` and `repeated: true`, and does nothing again. It is kept on the run or message record - a
-message to another window's agent carries it there, where its record is made - and a repeated start answers as its start
-went: accepted while its process still starts, the start's failure where it could not start, success otherwise - its
-prompt as it stands, pending included, with the first call's `call_id`, `result_message_id` and prompt `message_id`.
-Concurrent calls share that operation. The recipient deduplicates a routed send before input, so a lost route reply
-cannot make a retry send again. A send whose route answer was lost, so that the message may have arrived, keeps the
-sender's copy with its outcome unknown; a retry with the same `request_id` asks the window that holds the message and
-never resolves `to` again, which could now name another agent. Request-bearing run metadata remains available for the
-original one-hour request period even after its card closes or its process exits; it does not restore a closed card or
-process. An interrupted start whose outcome was not recorded reports unknown effects instead of starting again. Removing
-a card does not prove process termination: a repeated request reports that process state as unknown where no exit was
-recorded. No other tool takes one, and none takes a selectable YOLO/permission profile or input_policy. A new invocation
-without one is a new request; a repeated start may create another agent. Facade may number internal work. The normal
-shim supplies its run ID from launch context; it is an address, not a credential. A call travels within 5.2's transport
-bound.
+No tool takes `request_id`, a selectable YOLO/permission profile or input_policy. The relay numbers calls and keeps
+that identity when it reconnects to a daemon, so a resumed start or send joins the original operation. The model does
+not supply or repeat that number. A new tool invocation is a new request. The normal relay supplies its run ID from
+launch context; it is an address, not a credential.
 
 ### 1.2 Result envelope and effects
 
 **Every result provides English text and equivalent structured facts without overstating effects.**
 
 Agent-facing results use one compact JSON object as both structured content and serialized text, without an additional
-narrative headline. Keep the envelope below, meaningful field names, all actual effects and useful error diagnostics.
-Public agent/message identities use their directly callable short references where known (`#aN`, `#mN`), with the full
-ID as a fallback; do not repeat alias/reference variants, and leave `effects.agent_id` out where `data` names the same
-agent. Internal routing and stored records retain their complete identities. Project only at the caller's public result
-boundary, after cross-window routing and caller-side file transfer. This contract is tool protocol 6. All callers use
-this contract; a call of another tool protocol fails as UNAVAILABLE `protocol_incompatible` before effects, with no
-parallel result format or automatic downgrade.
-
-Do not echo ordinary input bodies, routine character counts or requested key arrays in results. Preserve pending
-deadlines/obstacles, repeated-request facts, prompt outcomes and partial/unknown effects. List detail under 3.1 keeps
-infrequent facts retrievable. Message and screen bodies are complete, inline or through COLLABORATION-4.2's files.
-Explicit false, null, empty and unknown values are not removed as though they were absent. Human-facing records and
-notifications keep their own presentation; their wording is not the machine result contract.
+narrative headline. Parsing the text as JSON yields exactly `structuredContent`. A failure sets MCP `isError` to true;
+a success sets it to false. There is no `accepted` status.
 
 ```ts
-type Result<T> = {
-  status: "success" | "failure" | "accepted";
-  effects: {
-    outcome: "none" | "confirmed" | "partial" | "unknown" | "pending";
-    text_written?: "none" | "partial" | "full" | "unknown";
-    enter_written?: boolean | null;
-    keys_sent?: number;
-    agent_id?: string;
-    worktree_created?: string;
-  };
-  data: T;
-  error?: {
-    code: "INVALID" | "NOT_FOUND" | "REFUSED" | "UNAVAILABLE" | "FAILED";
-    reason: string;
-    message: string;
-  };
-  recovery?: {
-    action: "correct_arguments" | "resolve_target" | "check_capability" | "resolve_blocker" | "inspect_effects"
-      | "repeat_original_request" | "reconnect" | "update_tools";
-    check?: { tool: "list_agents" | "read_screen"; arguments: object };
-    request_id?: string;
-    condition?: "within_original_hour";
-  };
-};
+type Result<T> =
+  | { status: "success"; data?: T }
+  | { status: "failure"; reason: string; message: string };
 ```
 
-Failure sets MCP isError; accepted means finite work continues, not success. Unknown is not false/no effect.
-Process and tools facts use `process_state` and `tools_state` consistently across starts, lists, repeated requests and
-receipts. Activity remains separate; idle, delivery and input writes never establish task completion.
-For native initial-prompt acceptance, use confirmed outcome without inventing terminal text/Enter writes; omit those
-optional fields when that path did not use them. RULES-1.3 defines delivery for every path.
-Agent and message IDs identify public objects; no public operation-query identity is required.
+Success includes `data` only when it has facts to return. stop_agent, type_text and press_keys return status alone.
+Failure has only `status`, `reason` and `message`: no `data`, `effects`, `error`, error code or `recovery` object.
+The message says what went wrong, whether anything was done, and what to do next. Partial or unknown effects must be
+stated in that message; unknown does not mean nothing happened. CLI/Git/transport errors keep their useful diagnostic.
 
-| Code | Reasons |
+An object's own identity is `id`; references to other objects use `agent`, `window`, `to`, `from`, `creator` or
+`reply_to`. Public agent and message IDs use directly callable short references (`#aN`, `#mN`). Internal routing and
+stored records retain their own identities. Do not echo ordinary input bodies, character counts or requested keys.
+Message and screen bodies are complete, inline or in a file whose path is the string `data.file`.
+Human-facing records and notifications keep their own presentation.
+
+Common failure reasons:
+
+| Reason | Meaning |
 | --- | --- |
-| INVALID | `missing_argument`, `invalid_argument`, `ambiguous_reference`, `unsupported` (an unknown tool, or a model or effort for a CLI that takes none), `ownership_lost` |
-| NOT_FOUND | `not_found` |
-| REFUSED | `out_of_tree` |
-| UNAVAILABLE | `ended`, `not_started`, `unavailable`, `unsupported` (a CLI without an input reader), `configuration_invalid`, `protocol_incompatible`, `window_unavailable`, `timeout` (a route that did not answer in time), `capacity_exceeded` |
-| FAILED | `input_draft`, `input_interaction`, `input_unknown`, `timeout` (a delivery that ran out of time), `submission_unconfirmed`, `partial_input`, `too_long` (a post-start prompt no whole stage fits, 2.3), `ended` (a start closed before it finished), `launch_failed`, `worktree_failed`, `termination_unconfirmed`, `cleanup_failed`, `route_failed`, `invalid_response`, `unexpected_error` |
+| `invalid_argument` | Missing, unknown or invalid arguments, including an invalid startup window, path or CLI |
+| `not_found` | No matching agent or message |
+| `ambiguous_reference` | A name matches more than one agent; give an ID |
+| `out_of_reach` | The target is outside the caller's creation tree with YOLO off |
+| `ended` | The target ended and cannot take the requested input |
+| `unsupported` | An unknown tool or a CLI without message input support |
+| `configuration_invalid` | Invalid settings or a server that cannot act for this caller |
+| `unavailable` | Facade or a window cannot be reached, or the result is unknown |
+| `capacity_exceeded` | Input capacity is exhausted |
+| `partial_input` | Only part of the input reached the terminal |
+| `stop_unconfirmed` | A stop was requested but the process's end is not confirmed |
+| `worktree_failed` | Worktree creation failed; the message keeps Git's diagnostic |
+| `input_draft`, `input_interaction`, `input_unknown`, `timeout` | Message delivery could not finish in time |
+| `submission_unconfirmed` | The message was pasted but its submission is not confirmed |
 
-An ordinary message to a CLI that has no input reader fails immediately with `unsupported`, a permanent obstacle under
-RULES-1.5. A reader that does not recognize the input box leaves it untouched; the send ends at its deadline with
-`input_unknown`, and the message names the CLI and the version Facade found (CLIS-2.1).
-A request refused before it reached its effect reports no effect: a routed message the destination refuses before
-recording it - its agent gone or out of reach - is `NOT_FOUND`, and direct text or keys that never reached the
-terminal's runtime are `UNAVAILABLE`.
-A failed route preserves timeout versus unavailable versus malformed-response reasons and the known destination.
-Unreachable windows do not prove absent agents. Lost answers to pure queries report no agent/message-state effect;
-read_messages is different because handoff can mark messages delivered. A malformed reply or disconnected route after
-forwarding a mutation leaves its effect unknown. A failed lookup of an earlier uncertain request cannot erase that
-uncertainty merely because its target is now gone. Only an authoritative original record can settle the earlier effect.
-CLI/Git/transport errors retain their actual useful diagnostic.
+An ordinary message to a CLI without an input reader fails with `unsupported`. A reader that does not recognize the
+input box leaves it untouched and can end with `input_unknown`. A message withdrawn before delivery may be sent again
+later, as its failure message says. Pasted or unknown input is not safe to replay automatically; inspect the screen
+first. An unreachable agent is not proof that it ended. Lost answers to pure queries change no agent/message state;
+read_messages is different because reading delivers messages. Agent-operation errors never notify the person
+automatically.
 
-A failure may include compact `recovery` facts, the first of these that applies: `repeat_original_request`, with the
-call's `request_id` and `condition: within_original_hour`, for a start or send with a request ID whose route answer was
-lost; `inspect_effects` where its effects are partial, unknown, confirmed or pending, or a worktree was created;
-`update_tools` for `protocol_incompatible`; `resolve_target` for an ambiguous, missing, ended or out-of-tree target;
-`correct_arguments` for any other INVALID; `check_capability` for `unsupported` or `configuration_invalid`; `reconnect`
-where a window or its route failed and nothing took effect; and `resolve_blocker` otherwise - an obstacle, a launch
-failure, or a delivery that ran out of time. `resolve_blocker`, `inspect_effects`, `check_capability` and an
-ambiguous name's `resolve_target` may carry a read-only `check` naming the existing tool to look with and its
-arguments: list_agents with the target for a start, a stop, pending work or a capability, list_agents with no arguments
-for an ambiguous name, and otherwise read_screen with the target. A closed or unnamed target has no invented check.
-Only original-request reuse includes `request_id`, and it never restarts that hour. Partial/unknown effects never
-authorize automatic input replay, replacement starts, worktree deletion or escalation. Repeating never retries input; a
-send returns its record's current delivery state, including a subsequent inbox handoff (RULES-1.2), while the first call's
-answer stays what it said when given; a deliberate new effect requires a new request after addressing its cause.
-Normal success and accepted work have no recovery object. Prompt-level failure/uncertainty keeps its recovery alongside
-that prompt. These are API mechanics, not instructions to organize or escalate work. Agent-operation errors never
-create an automatic human notification.
+The exact answers are locked by [MCP golden files](../../../core/tests/golden/mcp-responses.json) and
+[guest golden files](../../../core/tests/golden/mcp-guest-responses.json). Examples below copy those answers;
+`<test>` and `<time>` are the golden files' normalized test path and timestamp.
 
 ### 1.3 Waits, progress and async completion
 
-**Return current results promptly and keep ordinary-message deadlines independent from startup/cleanup waiting.**
+**Return a start when its CLI runs, a stop when it ends, and a send within thirty seconds.**
 
-Queries - list_agents, read_messages and read_screen - use a ten-second route deadline from the shim's ingress and
-report unavailable windows rather than invent an empty result. A start or a stop is waited for two minutes from the
-shim's ingress, forwarding included - most end in seconds, and a start in a burst of many takes longer, which a caller is
-better answered than told later - and no setting changes it. Completion can return sooner. A start or stop routed to
-another window gives that window what remains of the two minutes less half a second, kept for the answer's way back;
-type_text and press_keys routed to another window have thirty seconds, and a Facade result routed back to its caller's
-window one thirty-second stage. A CLI that times its MCP calls is given 3660 seconds for one of Facade's - far
-more than any wait and the call's own route and answer - so that it never gives up on a call Facade is still answering. Every forwarding layer charges connection and queue time to the same
-remaining route budget. A budget exhausted before forwarding writes no request; a forwarded request whose reply is lost
-remains uncertain. Transport timeouts end waiting, not the destination's operation. Locally measured elapsed time uses a
-monotonic clock; process clocks are never subtracted across environments. Query deadlines do not make
-delivery-confirming reads side-effect-free. An actual continuing operation may return accepted with its run/effects;
-later completion of a start or stop returns to its initiating agent through a Facade system result. The accepted response and later result
-identify the same originating tool call and target run, using existing call correlation facts so concurrent calls,
-including calls to the same target, are distinguishable. Accepted start/stop results, and a start answered while its
-prompt is pending (2.3), expose `call_id` and `result_message_id`, reserved from the message namespace before
-acceptance; a stop whose window cannot take that number answers without it and sends no later result (3.2). The later
-receipt has that same ID. The full `call_id` stays in structured data and records; a same-request start lookup keeps
-both original IDs, including after reload. Reservation creates no inbox item and promises no durable delivery. The
-original prompt/message ID identifies prompt delivery separately. Message records retain originating-call correlation
-while delivery resumes after reload. Local and routed receipts retain the target's known name and short reference even
-after its card closes; rendering does not depend on looking up that removed target again. This adds no public operation
-object or query API. Result handoff follows RULES-1.7, including no duplicate receipt for an immediate final result and
-no human fallback when handoff fails. Use list_agents for current run state; there is no separate operation inspection
-API. A pending operation continues without another send/start. Final system results request no reply. Unknown outcomes
-with no active operation promise no later verification. Receipt delivery remains finite and may end when its initiator
-is unreachable. send_message answers with its outcome within RULES-1.2's thirty seconds and never answers accepted. A slow operation never keeps a closed card/terminal visible or extends a message budget beyond
-RULES-1.5's own, within which a pending post-start creation prompt holds its run's input (RULES-1.10). A continuing call sends no MCP
-progress notification and produces no progress popup.
+start_agent answers success once the new agent's CLI runs. A prompt continues separately and produces one later
+Facade result saying whether it reached the agent. stop_agent waits for the CLI to end; an unconfirmed stop fails with
+`stop_unconfirmed`. Neither tool returns `accepted` or exposes `call_id` or `result_message_id`.
+A Facade result is a message with its own `id`, `from: "facade"` and plain `text` (4.2). It asks for no reply and is
+not the new agent's answer or proof that its task is complete. Use list_agents for current state; there is no operation
+query API. Idle, delivery and input writes never establish task completion.
+
+send_message answers within thirty seconds from the relay's ingress, connection and queue time included. Delivery gets
+what remains less half a second reserved for the answer. The deadline is not extended by a draft, menu, pending prompt
+or daemon reconnection. A message that could not be typed in time is withdrawn; pasted input whose submission is
+uncertain cannot be withdrawn. A guest's message waits in its inbox and the send answers immediately.
+There is no later send result. The recipient's reply is a separate send.
+
+Each tool call opens its own daemon connection, so a waiting send holds up no other call. Connection setup waits up to
+ten seconds; failure to connect is `unavailable`. A transport timeout ends waiting, not an operation already started.
+Locally measured elapsed time uses a monotonic clock; process clocks are never subtracted across environments.
+read_messages and read_screen each read once and never wait for new activity. A continuing call sends no MCP progress
+notification and produces no progress popup. Result delivery remains finite, with no automatic human fallback.
 
 ## 2 Discover and start
 
@@ -183,10 +121,9 @@ progress notification and produces no progress popup.
 
 **Current launch destinations and CLI availability are part of list_agents; historical facts are read from logs.**
 
-There is no separate startup-discovery tool. MCP-3.1 returns empty windows too, their folders and worktrees, and compact
-CLI availability scoped to actual locations. An agent's startup context supplies its own window/location IDs and the
-absolute path, in its execution environment, of its workspace's structured event log (ARCHITECTURE-3.3), which
-list_agents also gives as each window's `history_log`. Existing IDs can be used without another discovery call.
+There is no separate startup-discovery tool. MCP-3.1 returns connected windows, including empty ones, their folders
+and worktrees, and the CLIs each can start. An agent's startup context identifies its window and folder. list_agents
+does not return log paths or model histories. Existing window IDs and paths can be used without another discovery call.
 The execution-time checks of start_agent remain authoritative; a snapshot reserves nothing.
 
 CLIS-1.4 owns model/effort values. Facade logs requested settings and actual startup results under ARCHITECTURE-3.3;
@@ -196,35 +133,34 @@ when a new choice is needed. Defaults and already specified values require no ex
 
 ### 2.2 start_agent arguments
 
-**Name, CLI, window and location are required; model, effort, prompt and new-worktree creation are optional.**
+**CLI, window and path are required; name, model, effort, prompt and worktree are optional.**
 
 | Field | Type / meaning |
 | --- | --- |
-| name | Required display name string; LIFECYCLE-2.1's label rules, so spaces, duplicates and an empty string are allowed |
-| window_id | Required destination window ID |
-| location_id | Required available location in that window |
-| cli | Required CLI entry name listed by list_agents for that window (CONFIGURATION-2.1) |
-| model | Optional nonempty literal; this call's choice takes precedence under CLIS-1.4 |
-| effort | Optional nonempty literal; this call's choice takes precedence under CLIS-1.4 |
-| prompt | Optional nonblank initial message, checked as a message body (4.1), at most 8,000 code points |
-| worktree | Optional `{branch:string, base_ref:string}`, both nonblank, to create a worktree from the selected location |
-| request_id | Optional caller ID of the start, 1–200 code points: the same one again within an hour answers the agent it started (1.1) |
+| cli | Required nonempty CLI entry name listed by list_agents for that window |
+| window | Required nonempty destination window ID, such as `win-2` or `terminal` |
+| path | Required nonempty folder path; relative to the caller's folder when not absolute |
+| name | Optional display name string; spaces, duplicates and an empty string are allowed |
+| model | Optional nonblank literal; this call's choice takes precedence under CLIS-1.4 |
+| effort | Optional nonblank literal; defaults as model does |
+| prompt | Optional nonblank initial message, checked as a message body (4.1) |
+| worktree | Optional nonempty branch name; reuse its worktree or create one from the repository's current HEAD |
 
-No worktree field means use location_id directly, including ordinary folders and worktrees made by other tools.
-A new-worktree branch/base are explicit and validated by the Git flow; the agent's display name is not its branch.
+Without name, Facade gives the agent a default name. Without worktree, start directly in path, including an existing
+worktree. An editor window requires a folder listed for it; `terminal` accepts any folder. The agent's display name
+is not its branch. There is no location_id, base_ref or request_id argument.
 A child joins the calling agent's creation tree, including across windows. Its run YOLO follows RULES-4.3;
 the caller cannot pass permissions/yolo to choose a mode. No unattended override exists.
-A window_id of another window sends the call to that window, which checks and starts it. Before acceptance the
-destination checks the location and that the entry is listed and available there. A valid disabled entry is refused as
-UNAVAILABLE `unavailable`, naming `clis["<name>"].enabled`. A configuration error is `configuration_invalid`, with the
-same file or entry path and reason as the human launch path (CONFIGURATION-4.1). A model or effort for a CLI that takes none is INVALID `unsupported`.
+The destination checks that the window, folder and CLI are available before starting. Invalid choices fail as
+`invalid_argument`; a closed or disconnected window is `unavailable`. A configuration error is `configuration_invalid`,
+with the file or entry path and reason. Worktree failure is `worktree_failed`, with Git's diagnostic.
 
 ```json
-{"name":"backend review","window_id":"win-2","location_id":"loc-7","cli":"claude",
+{"name":"backend review","window":"win-2","path":"/work/app","cli":"claude",
  "prompt":"Review the changes in this folder."}
 ```
 
-For new-worktree creation, add for example `"worktree":{"branch":"review-api","base_ref":"HEAD"}`.
+For a branch's worktree, add `"worktree":"review-api"`.
 Historical requested models/efforts are observations, not an exhaustive allowlist or proof of native acceptance.
 Omitting either field leaves the launch configuration, then the CLI's own default, in control under CLIS-1.4. Report
 ignored/rejected requested overrides honestly. Do not substitute another CLI, path or conversation.
@@ -233,103 +169,80 @@ ignored/rejected requested overrides honestly. Do not substitute another CLI, pa
 
 **Startup confirms a process, while initial-prompt submission has a separate outcome.**
 
-The call waits up to two minutes (1.3): `success` once the process runs - never waiting on a
-post-start prompt, which goes on after the answer - `failure` where the launch failed, `accepted` while it still starts,
-its outcome reported later under 1.3. Return `agent_id`, `name`, `window_id`, `window` (its label), `environment`,
-`location_id`, `cwd`, `cli`, `creator`, `root`, `yolo`, `process_state` (`starting`, `running` or `failed`; `unknown`
-with `closed: true`; a repeated start's run as it is now), `tools_state` (`connecting`, `available`, `unavailable` or
-`not_injected`, with `tools_reason` where unavailable) and `requested_model` and `requested_effort` where given; an
-accepted start, and one answered while its prompt is pending, add `call_id` and `result_message_id`, and a created
-worktree is `effects.worktree_created`. Such a call has one later result, under that `result_message_id`, once the
-process's start and its prompt's delivery have both settled - a prompt whose delivery stays unknown settling as unknown
-- never one for each. `prompt` gives the prompt's `message_id`, its `path` (`native` or `post_start`) with its
-`capability` (`supported`, `unverified` or `unavailable`, and why), its `status` (`success`, `pending`, `failure` or
-`unknown`) and its actual input `effects` under RULES-1.3 and 1.2, with `reason`, `message`, `obstacle`, `deadline` and
-`delivered_via` where they apply. A post-start prompt too long for any stage at its CLI's rates (RULES-1.5) is given up
-with nothing typed, its `reason` `too_long`; its record stays readable through read_messages, so that its creator can
-ask the new agent to read it rather than send it again. An unverified native prompt has unknown acceptance, with no invented pending delivery
-or promised later receipt. Its message record retains that uncertainty and can be delivered by an explicit inbox read
-without another paste. The run retains its original prompt message ID. A repeated start returns that record's current
-outcome, or explicit unknown (`prompt_unrecorded`) where the record is absent; it never replays the prompt or uses
-replacement prompt text from the retry. Startup closed midway fails as `ended`, retains any known created-worktree path
-in its final effects and reports `closed:true` with `process_state:unknown`. Closure alone does not establish that no
-process was started or that it exited. For a delivered post-start prompt, `delivered_via` (`terminal` or `read`) keeps
-terminal submission and an inbox read distinct. COLLABORATION-2.2 owns native/post-start prompt selection and budget
-start. Answering that the process runs neither renews the prompt's delivery budget nor cancels the one later result
-above. A prompt failure does not destroy a successfully started agent. Acceptance creates the pair immediately in the
-destination, its terminal's tab hidden (LIFECYCLE-2.2); pre-acceptance validation failure creates none. Later
-cwd-dependent validation or startup failure under CLIS-4.2 retains its error pair and fails as `launch_failed`, or as
-`worktree_failed` where the worktree could not be created, with partial effects. Tool unavailability does not kill a
-usable CLI. There is no task object, task_operation_id, completion expectation or automatic creator progress report.
+Success returns only `id`, `name`, `path` and `window` in data. With worktree, path is the resulting worktree's folder.
+It does not expose process/tools state, requested settings, prompt details, effects or call correlation IDs.
+The golden start of helper answers:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "id": "#a3",
+    "name": "helper",
+    "path": "<test>/project",
+    "window": "terminal"
+  }
+}
+```
+
+A missing path answers:
+
+```json
+{
+  "status": "failure",
+  "reason": "invalid_argument",
+  "message": "start_agent requires path; nothing was done"
+}
+```
+
+A start with a prompt has the same result fields. Its later Facade message says whether the prompt reached the agent;
+a prompt failure does not destroy a successfully started agent. Tool unavailability does not kill a usable CLI.
+COLLABORATION-2.2 owns native/post-start prompt selection. A failure states any known or unknown startup effects in
+message, including the path of a worktree that was created and kept. There is no task object, completion expectation
+or automatic creator progress report.
 
 ## 3 Inspect and stop
 
 ### 3.1 list_agents
 
-**One query returns current windows, launch locations, CLI availability and agents within the caller's reach.**
+**One query returns connected windows, their folders and CLIs, and agents within the caller's reach.**
 
-Arguments: `window_id?:string`, `location_id?:string`, `agent?:string`, `details?:boolean=false`,
-`cursor?:string`, `limit?:integer=100` (1–200). A location filter requires its window. A single-agent selection excludes
-cursor; conflicting window/location/agent filters fail explicitly. Default agent rows exclude ended records; targeted
-lookup can return a retained terminal outcome for recovery. Bulk ended-agent history is read from logs instead.
+No arguments. There are no filters, details mode or pagination. Ended agents are included, oldest first.
+YOLO permits every agent; otherwise only the creation tree is visible. Window/folder/CLI discovery is not restricted
+to that tree. The execution-time checks of start_agent remain authoritative; a snapshot reserves nothing.
 
-Return `windows`, compact `agents`, `counts`, `complete`, `unavailable_windows`, `scope` (`all` with YOLO, otherwise
-`creation_tree`) and `next_cursor` when paged. `counts` has `known_windows`, `responding_windows`, `folders`,
-`locations`, `worktrees` and `agents`. Every responding window is represented, including windows without agents or
-folders. Its record has `window_id`, `label`, `environment`, `observed_at`, `folders`, `locations`, `clis`, `problems`,
-`counts`, `complete` and `history_log` (2.1); a targeted lookup, or a window without locations, has
-`clis_queried: false`, and a location whose CLIs could not be read is in `unavailable_locations`. Count folders as
-workspace folders, worktrees as non-main checkouts, and agents within the caller's reach. Deduplicate locations and
-agents rather than nesting copies beneath every associated folder. Main checkout and plain-folder locations remain
-launchable locations. A resumed conversation's subfolder, a Resume cwd recorded within a location (WORKTREES-1.2), is not
-listed as a separate location: its agent belongs to that anchor, reported and filtered by the anchor's `location_id` with
-its exact `cwd` retained, in counts and a targeted lookup too, and a `location_id` formerly issued for the subfolder
-starts a new agent at its anchor.
-Window CLI rows have `cli`, `display_name`, `available`, `problem` where unavailable, and `overrides` for model and
-effort (true, false or `unknown`); details:true adds `version`, `message_input` and `initial_prompt` capability. Equal
-choices across all locations are represented once; a differing choice names the exact `location_ids` it applies to.
-No model catalog or historical usage statistics are returned. Configuration problems and an incomplete Git catalog
-remain explicit.
+Return `windows` and `agents` in data. Each window has `id`, `name` and `clis`, the names of CLIs available there.
+Editor windows also have `folders`, with worktrees included and each path listed once. The terminal window omits
+folders because it can start an agent in any folder. Disconnected windows are omitted; absence from this connected
+snapshot does not prove a window or its agents no longer exist. There are no counts or coverage fields.
 
-Unreachable windows are not empty: retain their identity and reason, with their counts unknown. A window whose window
-component carries no requests between windows lists the other windows as unavailable, with `complete: false`, never as
-absent. Aggregate counts are for responding windows and the caller's scope, never an implied complete machine census.
-YOLO permits every agent; otherwise only the creation tree is visible. Window/location/CLI discovery is not restricted
-to that tree.
-Agent rows have `agent_id`, `name`, `window_id`, `environment`, `location_id`, `cwd`, `cli`, `requested_model` and
-`requested_effort` where recorded, `yolo`, `process_state` (`starting`, `running` or `ended`), `activity` (`working`,
-`not_working` or `unknown`), `blocker` (its `kind` - `permission`, `question`, `auth` or `unknown` - and `text`),
-`tools_state`, `message_input` (its capability state, with its reason unless supported), `error`, `exit` (its `kind`,
-`abnormal` or `failed`, with its code or signal), `observed_at`, `state_observed_at` and `stale`. Requested settings do
-not claim the native CLI's current effective model. details:true adds `creator`, `root`, `created_at`, `window` (its
-label), `title` - its conversation's complete title as its CLI stores it, the one Resume Agent lists (CLIS-2.4), where it has one;
-never its terminal's - and `activity_reason`; compact rows keep `activity_reason` where activity is unknown. A targeted
-lookup reads only that agent's window and avoids unrelated CLI discovery.
+Each agent has `id`, `name`, `cli`, `window`, `path`, `state` and `creator` (`#aN` or `#human`).
+State is `starting`, `working`, `waiting_for_you`, `just_done`, `idle`, `error`, `ended` or `unknown`.
+Only waiting_for_you adds `waiting_for`: `permission`, `question`, `auth` or `unknown`.
+State describes the CLI's observed activity, not task completion. Model, effort, YOLO, tools state and detailed process
+or terminal facts are not returned. Guests and MCP members use the same public rows.
 
-Agents and locations page with the same opaque cursor, bound to selection, limit and reach. Counts describe the whole
-matched scope, not the page. Pages observe changing state, not an atomic distributed snapshot. `complete` describes
-response and catalog coverage, independently of pagination. state_observed_at comes from the source state episode;
-observed_at is observation time. Reload/query never freshens source activity. Disconnection, not age alone, determines
-stale.
+Above 8,000 code points in the serialized data, return only `data.file`, a path to a JSON file holding the complete
+windows and agents object. Do not truncate or page it.
 
 ### 3.2 stop_agent
 
-**Stop one identified agent and remove its UI immediately; clean up its process in the background.**
+**Stop one identified agent's CLI and answer once it has ended; its record and screen stay.**
 
-Arguments: `agent:string` required. No delete_worktree, discard_changes, recipient array or request ID. Resolve an
-allowed run, remove card/terminal, prevent new input, then terminate its process as needed. Do not stop children.
-Missing IDs fail without guessing. A stop while the agent's process is being started answers how that start's cleanup
-ended, never that none started. The call waits up to two minutes (1.3) and returns `agent_id`,
-`closed: true`, `process_state` and `cleanup`: `terminated` or `already_exited` (success, `process_state: ended`);
-`already_ended` (success, with `already_ended: true`); `not_started` (success: closed before its process was asked for,
-so it never starts); `pending` (accepted, `process_state: stopping`, with `call_id` and `result_message_id`, its outcome
-later under 1.3 - except where the window cannot take a number for that result (RULES-2.2): the answer then has no
-`result_message_id` and reports the cleanup as still pending, and no later result comes; the closed agent is no longer
-listed, which is no proof that its process ended); `unconfirmed` (FAILED `termination_unconfirmed`); or `failed` (FAILED
-`cleanup_failed`). Both failures have partial effects and `process_state: unknown`, never a successful stop.
-Accepted/unknown cleanup is not proof of exit, but does not restore a Stopping card. Self-stop may end the caller before
-it receives a result; no public recovery tool is added. Errors go to the invoking agent, with no automatic human popup.
-External location deletion is observed separately.
+Arguments: `agent:string` required. No delete_worktree, discard_changes, recipient array or request ID.
+Resolve an allowed agent, prevent new input and stop its process. Do not stop children. Missing IDs fail without
+guessing. Stopping an agent that has already ended succeeds. Success returns no data:
+
+```json
+{
+  "status": "success"
+}
+```
+
+A requested stop whose end is not confirmed fails as `stop_unconfirmed`; its message says to check list_agents.
+An unknown outcome is not proof of exit. Self-stop may end the caller before it receives a result; no operation query
+is added. Errors go to the invoking agent, with no automatic human popup. External location deletion is observed
+separately.
 
 ## 4 Messages and history
 
@@ -338,73 +251,107 @@ External location deletion is observed separately.
 **Send exactly one complete message to one agent or explicitly to the person.**
 
 Required `to:string`, `text:string`; optional `reply_to:string` naming a message in the caller's inbox - another is
-`not_found` - and `request_id` (1.1). Resolve an exact ID or unique eligible name; an ended agent is no candidate for a
-name, and an ambiguous name fails and requires an ID. `#human` addresses the person in the caller's window; RULES-2.3
-decides when `@human` does. No array or merged recipient result.
-Text is nonblank and at most 8,000 Unicode code points. Preserve Unicode, line breaks and tabs as content; control
-characters other than tab, line feed and carriage return - DEL, C1 controls and lone surrogates included - would act
-outside the message paste, so they are refused as `invalid_argument` instead of silently transforming the body.
-Raw terminal control is a separate tool. Never replace the body with a pointer and call that full-content delivery. A
-text that begins with `[Earlier output truncated]` - how Antigravity marks a long argument it cut to its last 8,000
-characters - lost its beginning on its way: send_message, start_agent's prompt and type_text refuse it with
-invalid_argument before any effect, asking for shorter parts, rather than pass a part on as the whole. The 8,000 code
-points are the most any send takes, not a length every recipient can: a send whose text no whole delivery stage could
-take at its recipient's paste rate (RULES-1.5, CLIS-2.1) is refused the same way, before its record is made - no message
-ID, and nothing for read_messages - its message naming the recipient and its CLI, and asking for shorter parts.
+`invalid_argument`. Resolve an exact ID or unique eligible name; an ended agent is no candidate for a name, and an
+ambiguous name fails and requires an ID. `#human` addresses the person in the caller's editor window; RULES-2.3 decides
+when `@human` does. No array, request ID or merged recipient result.
+Text is nonblank, at most 8,000 Unicode code points and 540 lines. Preserve Unicode, line breaks and tabs as content;
+control characters other than tab, line feed and carriage return - DEL, C1 controls and lone surrogates included -
+would act outside the message paste, so they are refused as `invalid_argument` instead of transforming the body.
+Raw terminal control is a separate tool. Never replace the body with a pointer and call that full-content delivery.
+Text beginning with `[Earlier output truncated]` lost its beginning on its way: send_message, start_agent's prompt
+and type_text refuse it as invalid_argument before any effect, asking for shorter parts.
 
-Within RULES-1.2's thirty seconds, return `message_id` and `target`, with `disposition` on success - `submitted_to_cli`,
-`read_messages` or `notified` (the person) - or the failure with its reason and effects; a repeated request answers
-its original's outcome as RULES-1.2 says. Add `reply_to` where given, `window_id` for another window's agent, and
-`request_id` with `repeated: true` for a repeated request. Ordinary delivery follows RULES-1.4–1.6's input checks and
-attempt budget, with two boundaries no draft, delivery, pending creation prompt or native question moves: the answer is
-due thirty seconds after Facade ingress, and the delivery stage ends half a second before, 29.5 seconds after ingress -
-the half second kept once, for the answer's way back, however many windows the call crosses. Message
-ID allocation/reuse follows RULES-1.1; a message's text is typed at most once (RULES-1.6). Expiry is failure. An
-optional `request_id` makes a retry safe under 1.1. No cancel_message is provided. B's actual reply is another send.
-Human contact means notification handoff in the sender's window; no migration to another window on closure. All A-to-B
-delivery/reply/system-result errors remain with agents or end if nobody can receive them.
+Within thirty seconds (1.3), return only the message's `id` and `delivery` in data:
+
+| Delivery | Meaning |
+| --- | --- |
+| `typed_into_input` | Typed into the recipient's input and submitted |
+| `read_by_recipient` | The recipient read it with read_messages before it was typed |
+| `shown_to_person` | Handed to the person through the caller's editor window |
+| `waiting_in_inbox` | A guest or MCP member takes it from its inbox later |
+
+Ordinary delivery follows RULES-1.4–1.6's input checks. A message's text is typed at most once.
+If delivery cannot start in time because of a draft, menu, unknown input box or timeout, withdraw the message from the
+recipient's inbox and fail, saying it is safe to send again later. Pasted input whose submission is unconfirmed cannot
+be withdrawn; the failure says to inspect the recipient's screen before sending again. A disconnected call may have
+sent its message, as its failure says. There is no public cancel tool or later send result.
+Human contact means notification handoff in the sender's editor window; a terminal-window caller cannot notify #human.
+No migration to another window on closure. Delivery/reply/system-result errors remain with agents or end if nobody
+can receive them. Success is delivery, not a reply or task completion. The recipient's reply is another send.
+
+The golden send to bob answers:
 
 ```json
-{"status":"success","effects":{"outcome":"confirmed","text_written":"full","enter_written":true},
- "data":{"message_id":"#m42","target":"#a2","disposition":"submitted_to_cli"}}
+{
+  "status": "success",
+  "data": {
+    "id": "#m1",
+    "delivery": "typed_into_input"
+  }
+}
 ```
 
+A missing recipient answers:
+
 ```json
-{"status":"failure","error":{"code":"FAILED","reason":"input_draft","message":"The recipient's input held a draft, which is never typed over."},
- "effects":{"outcome":"none","text_written":"none","enter_written":false},"data":{"message_id":"#m42","target":"#a2"}}
+{
+  "status": "failure",
+  "reason": "invalid_argument",
+  "message": "send_message requires to; nothing was done"
+}
+```
+
+A send to a guest answers:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "id": "#m1",
+    "delivery": "waiting_in_inbox"
+  }
+}
 ```
 
 ### 4.2 read_messages
 
 **Read only the calling agent's incoming messages, never its sent messages or another inbox; reading delivers.**
 
-Arguments: `ids?:string[]` (1–100 IDs; one ID alone is taken too), `all?:boolean=false`, `cursor?:string`,
-`limit?:integer=100` (1–200). Explicit ids exclude all/cursor. Without them, return the caller's incoming records
-that are not yet delivered: still being delivered, not delivered at their deadline, uncertain, and Facade results that
-were not pasted. all:true pages every retained incoming record. IDs accept message IDs or their `#mN` aliases, not
-agent references. Lookup by ID is still inside that inbox, including for YOLO. IDs not in it are listed in `not_found`
-without exposing another recipient's record; where none is found, the read fails as `not_found`. Multiple read IDs are
-a query, not a multiple-recipient send.
+Arguments: `after?:string` naming a message ID, or `last?:integer` (1–100). Giving both is `invalid_argument`.
+With neither, return messages not yet delivered. after returns every retained message after that ID; last returns
+the newest messages up to that count. There are no ids, all, cursor or limit arguments. Selection stays inside the
+caller's inbox, including with YOLO. Every returned message is delivered, including unread messages selected by
+after or last. Reading cancels unstarted pastes; an already pasted owned draft may finish under RULES-1.5.
 
-Return records oldest first, each with `message_id`, `kind` (`message`, or `result` for a Facade result), `from` (the
-sender's `@name #aN`, `#aN` alone for an empty name, or `facade`), `at`, the `window` and `environment` it was recorded
-in, `reply_to` where given, a result's `about`, `call_id`, `operation` and `agent`, the exact body as `text` - or, for a
-system result with structured operation facts, those facts as `result` instead of its human-readable body - and
-`delivery`: `status` (`pending`, `success`, `failure` or `unknown`), `reason`, `effects`, `deadline`, `delivered_via`
-(`terminal`, `read`, `launch` or `notification`) and `delivered_at`, as they apply. Once the result is handed back,
-every record in it is delivered (RULES-1.3): its sender's result says it was delivered through read_messages. RULES-1.5
-cancels unstarted pastes and permits only completion of an already pasted owned draft. An uncertain return may repeat
-the same record without starting another paste to the terminal. Above 8,000 combined code points, return the complete
-selected content in a file readable in the caller environment, as `file` (`path`, `size` in bytes and `code_points`),
-with each record's metadata inline without its body. COLLABORATION-4.2 defines transfer and expiry. An empty result
-describes only this read's snapshot. A next_cursor continues the same all/default selection and limit. The tool's own
-description states that this is not a wait operation and that automatic delivery needs no polling. An empty snapshot
-includes the factual `notice` `New messages are delivered automatically, including after this turn ends. This read does
-not wait for them.`; it neither promises a pending task will finish nor asks the model to end its turn. No instructions
-to poll, end a turn, print, answer, escalate or follow a workflow are embedded in results. The compact projection omits
-duplicate identity spellings, the already-known recipient, routine length and delivery attempt counts. Ordinary message
-bodies and text-only system results remain exact. Large-result files carry the same selected content, with message
-boundaries and correlation, and are still marked delivered only at handoff.
+Return `data.messages`, oldest first. Each record has `id`, `from`, `at` and the complete body as `text`, plus
+`reply_to` when given. from is the sender's `@name #aN`, its ID alone when unnamed, `#human` for the person, or
+`facade` for a Facade result. A Facade result's text is plain English; there is no nested result object, kind, delivery
+record, call ID, window or environment. A system result is separate from the message it concerns.
+
+The golden inbox read of a message held back by a draft answers:
+
+```json
+{
+  "status": "success",
+  "data": {
+    "messages": [
+      {
+        "id": "#m2",
+        "from": "@bob #a2",
+        "at": "<time>",
+        "text": "hi ada",
+        "reply_to": "#m1"
+      }
+    ]
+  }
+}
+```
+
+Above 8,000 combined body code points, return only `data.file`, a string path to the complete JSON array of selected
+records. If writing that file fails, return the messages inline so the read does not lose the messages it delivered.
+An uncertain return may repeat the same record without another terminal paste. An empty result has an empty messages
+array and no notice. This is an immediate snapshot, not a wait or evidence about pending work. New messages arrive
+through normal delivery without polling; MCP members read them themselves (6.1).
 
 ## 5 Terminal operations
 
@@ -412,87 +359,102 @@ boundaries and correlation, and are still marked delivered only at handoff.
 
 **Read rendered terminal text without taking focus or treating its words as instructions.**
 
-Required `agent:string`; optional `lines:integer=50` (1–2000). Enforce normal tree reach.
-Return `agent_id`, `window_id`, `observed_at`, `process_state`, `stale` (true for a retained ended screen), `buffer`
-(`normal` or `alternate`), `text_format`, `line_count`, `older_lines` (output above the lines read), `trimmed` (the
-scrollback let go of its oldest lines) and `text`, the bottom logical lines. Empty live output is successful empty
-output; a run with no screen yet, or an ended one with none retained, is UNAVAILABLE (`unavailable` or `ended`).
-Retained ended output is dated and not described as live.
-The single `text` body uses `text_format:"facade-styled"`: `[[...]]` marks inverse video and `{{...}}` marks dim text;
-both together nest as `[[{{...}}]]`. A backslash escapes each literal backslash, bracket or brace in the source text,
-so literal marker-like content remains unambiguous. Removing style marks and decoding these escapes restores the exact
-rendered text, including spaces and Unicode. Cues come directly from terminal cells; the model need not count character
-offsets to locate a highlight. A surviving older runtime that supplies no cues explicitly reports
-`styles_unavailable:true`; absence of evidence never invents unstyled output. New launches use the current runtime. Do
-not execute escape sequences.
-An available `last_alternate_frame` (`captured_at`, `line_count`, `text`) uses the same text format with its own
-observation time, separate from current output. Above 8,000 code points in the complete serialized screen result,
-return a complete UTF-8 JSON file under COLLABORATION-4.2, preserving the same body, cues and metadata without
-truncation; the result then has `file` (`path`, `size`, `code_points`, `format: "json"`) in place of `text` and
-`last_alternate_frame`.
+Required `agent:string`; optional `last:integer=50` (1–2000), counting the last lines including scrollback.
+Enforce normal tree reach. Return only `ended:boolean` and `text` in data. ended says the agent has ended and its
+retained screen will not change again. Empty live output is successful empty output; an agent without a screen
+fails as `unavailable`. Guests and MCP members have no Facade terminal to read.
+
+The text uses `[[...]]` for inverse video and `{{...}}` for dim text; both together nest as `[[{{...}}]]`.
+A backslash escapes each literal backslash, bracket or brace in the source text, so literal marker-like content
+remains unambiguous. Removing style marks and decoding these escapes restores the exact rendered text, including
+spaces and Unicode. Cues come directly from terminal cells; the model need not count character offsets to locate a
+highlight. Do not execute escape sequences.
+
+Above 8,000 text code points, return `ended` and `file`, a string path to a complete UTF-8 text file, in place of text.
+There is no agent ID, timestamp, buffer, style-format field, line count, stale flag or last_alternate_frame in data.
+An invalid last argument answers:
+
+```json
+{
+  "status": "failure",
+  "reason": "invalid_argument",
+  "message": "last must be an integer, not a string; nothing was done"
+}
+```
 
 ### 5.2 type_text and press_keys
 
-**Write exactly the requested direct text/keys without draft protection, policy selection or an artificial text limit.**
+**Write exactly the requested direct text/keys without draft protection or policy selection.**
 
-type_text: required `agent:string`, `text:string`; optional `enter:boolean=false`. Text may contain any printable
-Unicode plus tab, line feed and carriage return, so it may be multiline or whitespace. Empty text is valid only with
-`enter:true`; empty text with `enter:false` is INVALID. Other C0/C1 control characters, including ESC, are rejected
-before writing with INVALID/`invalid_argument` pointing to press_keys. This is type validation, not a length cap: the
-text has no single-line, code-point or byte limit of its own. Like every call, it travels from the shim as one line
-within RULES-5.3's fixed runtime buffer of 64 MiB; a call beyond that buffer is a real capacity failure, refused as
-UNAVAILABLE `capacity_exceeded` before any effect and never cut.
+type_text: required `agent:string`, `text:string`; optional `enter:boolean=false`. Text is nonempty and at most 1 MiB.
+It may contain printable Unicode plus tab, line feed and carriage return, including multiline or whitespace text.
+Other C0/C1 control characters, including ESC, are rejected as `invalid_argument` before writing; use press_keys for
+control keys. An empty string is invalid even with enter:true; use press_keys to press Enter alone.
 
-press_keys: required `agent:string`, `keys:string[]` (one key alone is taken too), a nonempty sequence of recognized
-terminal keys with no count limit. Names are Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right,
-Home, End, PageUp, PageDown, Space and Ctrl+A through Ctrl+Z, in any letter case, and any one printable character
-exactly; Return, Esc, ArrowUp, ArrowDown, ArrowLeft and ArrowRight are taken for the names they stand for. Unsupported
-key names are rejected before writing. Use the terminal's actual encoding; delay only when its input protocol requires
-it.
+press_keys: required `agent:string`, `keys:string[]` (one key alone is taken too), with 1–100 recognized keys.
+Names are Enter, Escape, Tab, Shift+Tab, Backspace, Delete, Up, Down, Left, Right, Home, End, PageUp, PageDown, Space
+and Ctrl+A through Ctrl+Z, in any letter case, and any one printable character exactly. Return, Esc and ArrowUp-style
+aliases are rejected as `invalid_argument`, as are other unsupported names, before writing. Use the terminal's actual
+encoding; delay only when its input protocol requires it.
 
 Both operate on the addressed live terminal within normal tree reach and serialize with other automated input.
 They can act on drafts, menus or unknown layouts, and on a CLI without an input reader; no input-box evidence is
-required. No mandatory read_screen or permission question is added. They return their actual effects - `text_written`
-and `enter_written`, or `keys_sent` - and no screen. A run still starting refuses them as UNAVAILABLE `not_started` and
-an ended one as `ended`; input that never reached the terminal's runtime is UNAVAILABLE with no effect, and a run that
-ends while its input goes in fails as `partial_input` with what went in. No automatic raw-content retry occurs after
-unknown effects. type_text's Enter goes in a write of its own after its text, once the CLI can have read the text - a
-tenth of a second plus CLIS-2.1's paste time for the text's size, lines and characters - because a CLI that reads a
-paste's end and an Enter together, as Claude Code does, may drop the Enter.
+required. No mandatory read_screen or permission question is added. Guests and MCP members have no Facade terminal
+to write into. Both tools return status alone on success:
+
+```json
+{
+  "status": "success"
+}
+```
+
+An ended agent fails as `ended`; a run that ends during input can fail as `partial_input`. The message states any
+partial or unknown effect and says to inspect the screen before typing again. No automatic raw-content retry occurs
+after unknown effects. type_text's Enter goes in a write of its own after its text, once the CLI can have read the
+text, because a CLI that reads a paste's end and an Enter together may drop the Enter.
 Ordinary messages keep their own draft rules and are typed at most once (RULES-1.6).
 
 ## 6 Technical design
 
 ### 6.1 MCP identity and configuration
 
-**A per-run stdio shim routes calls using its launch run ID, with no authentication or anti-impersonation protocol.**
+**A per-run stdio relay routes calls using its launch run ID, with no authentication or anti-impersonation protocol.**
 
 Inject server `facade` through startup arguments/per-run files where supported, under CLIS-2.2's preservation/cleanup
-rules. The shim's normal launch context supplies caller run, window and execution environment so routing and tree rules
+rules. The relay's normal launch context supplies caller run, window and execution environment so routing and tree rules
 are applied consistently. IDs are addresses, not credentials. Do not generate private run tokens, token files,
 authenticated enrollment, source-binding proofs or scoped delegation. A deliberately forged caller ID is outside the
 protection provided. Basic schema/routing validation remains.
 
-The shim keeps one connection to its execution environment's runtime (ARCHITECTURE-2.3) and says hello on it as the
-run's shim, which tells the window holding the run that its tools are there (RULES-3.1). That connection may take thirty
-seconds to be answered, as a runtime busy starting many CLIs answers late, and it serves the calls after it; a lost one
-is made again for the next call. A call waits at most two seconds for it, and otherwise fails as `window_unavailable`
-with no effect.
+The relay keeps a connection to the daemon and says hello with its process identity, environment and folder.
+The run's MCP presence tells Facade that its tools are there (RULES-3.1). Each tool call opens a daemon connection of
+its own (1.3). Failure to connect is `unavailable`, with a message saying that nothing was done.
 
 Calls to Facade's own tools are approved in advance, with YOLO on or off, for each CLI that can approve one server's
 tools (CLIS-2.2); Muse Code cannot, so with YOLO off its own approvals apply to them (RULES-4.3). The CLI's own commands
 and edits keep the approval mode that RULES-4.3 chose for the run. The server is never marked required, so a failure to
-start or connect it leaves a usable CLI with tools_state unavailable - except where Muse Code starts through cmd.exe,
+start or connect it leaves a usable CLI with tools unavailable - except where Muse Code starts through cmd.exe,
 whose project entry cannot say `mode: optional`, so there a Facade server that fails can fail the run (CLIS-2.2). The
 six built-in types attempt injection on every start, with no MCP switch; custom programs have none (RULES-4.4).
 Existing connected runs keep their launch snapshot. Version/integration failure follows CLIS-2.2.
 
-Each tool the server lists carries `_meta: {"antigravity/alwaysLoad": true}`, which Antigravity reads to give the model
-the tool directly rather than on demand; other CLIs ignore it. A server started without a run's variables - by a session
-the person started in a folder whose shared entry is a running agent's - speaks for no run: it lists no tools and says
-so in its instructions, and a call to it fails with `configuration_invalid` and no effect.
+Each tool carries `_meta: {"anthropic/alwaysLoad": true, "antigravity/alwaysLoad": true}` to request direct loading
+by clients that support those keys.
 
-The shim speaks MCP 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05, answering in the client's version where it is
+An MCP client that is neither a Facade run nor a guest CLI session joins as a guest member when it sends initialize.
+It gets a new #aN, a default name, an inbox and its own creation tree. Its CLI name is clientInfo.name, or `mcp` when
+that name is absent or invalid. YOLO comes from the settings for the relay's folder. Initialization instructions name
+its ID and name, say how many messages wait, and tell it to read them with read_messages. All eight tools act for it.
+It appears in list_agents with state unknown, like a guest without a hook. It has no Facade screen or input terminal.
+Messages to it return waiting_in_inbox; it reads them itself, with no push notification.
+
+The member stays online while its relay is connected. An ordinary disconnect ends it, removes its list entry and
+discards undelivered inbox messages. A daemon restart or handover preserves it: the same relay process reconnects
+with the same ID and inbox. Members whose relays never return are removed by the normal hourly guest cleanup.
+A guest server that steps aside because a Facade run already has its own server still lists no tools and explains why;
+it does not join as another member.
+
+The relay speaks MCP 2025-11-25, 2025-06-18, 2025-03-26 and 2024-11-05, answering in the client's version where it is
 one of these and otherwise in the newest, and answers a method it does not know with JSON-RPC's method-not-found, so a
 newer CLI is never left without tools. Its instructions tell a CLI that lists tools by name alone until they are
 loaded, as Claude Code does, to load one before calling it. A test keeps the tool list, the instructions and the skill
@@ -503,20 +465,22 @@ within a byte budget, which every turn of every agent pays for.
 **Use one schema source for tools, descriptions and wire validation, and report incompatible protocols plainly.**
 
 Text/structured results express the same facts. No incompatible old call is silently translated into another action.
-Parsing the text as JSON yields exactly the structured object. Unsupported tool protocols, including protocol 2, fail
-explicitly before effects as `protocol_incompatible`, with the recovery action `update_tools`; the calls of an agent
-that an earlier build's runtime holds are answered the same way (ARCHITECTURE-2.4). Cross-window calls carry the current
-tool protocol without a missing-version fallback.
-A system receipt carries the same operation facts as an immediate result, with its message/call correlation; its
-human-readable text is kept separately (COLLABORATION-3.1). A text-only receipt is not parsed or guessed into
-structured state.
-Connection recovery reuses only actual surviving runs and unexpired work under RULES; it never replays closed-run mail.
+Parsing the text as JSON yields exactly the structured object. Tool interface v2 is separate from the MCP date
+versions in 6.1 and the internal relay contract. An incompatible relay contract fails as protocol_incompatible before
+effects and says to restart the CLI; there is no recovery object or automatic downgrade. Old argument names fail
+validation rather than being translated into another action.
+A system result is a plain-text Facade message under its own ID (4.2). It is not parsed or guessed into structured
+operation state.
+Connection recovery reuses only actual surviving runs and unexpired work under RULES.
+It never replays messages from closed runs.
 The bundled skill teaches the eight tools, required startup fields, optional defaults, RULES-4.3's launch/reach policy,
 normal creation trees, unique-name resolution, `#human`, own inbox, that read_messages without arguments returns the
-messages not yet received and that all:true returns every retained one, and finite delivery. It explicitly tells the
-model: “The same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo
-work for that same message. A new send call has a new ID, even if its text matches. A Facade system result about a
-message is a separate kind of information, not another copy of that message's instruction.”
+messages not yet received, after selects newer messages and last selects the newest ones, and finite delivery.
+It explicitly tells the model: “The same Facade message can arrive more than once.
+Use its message ID to recognize a repeat and do not redo work for that same message.
+A new send call has a new ID, even if its text matches.
+A Facade system result about a message is a separate kind of information,
+not another copy of that message's instruction.”
 This is model-side handling of transport duplicates, not a Facade deduplication database or an exactly-once guarantee.
 The skill does not prescribe project workflow, mandatory replies or escalation to a person.
 Its frontmatter is valid YAML with string name/description fields. Quote descriptions so punctuation such as a colon
@@ -524,19 +488,23 @@ cannot become YAML structure; verify native skill loading separately from an MCP
 Initialization owns private launch facts and cross-tool delivery/reach semantics; each tool's description and parameters
 own its use, effects and success/retry boundaries; the skill provides cross-tool examples and occasional reference.
 Necessary facts remain local to a tool that a client loads alone, especially inbox delivery acknowledgment, raw input's
-lack of draft protection, and bounded optional request-ID reuse. The skill does not duplicate the eight argument schemas.
-Tools publish standard human-readable titles - `Start an agent`, `List agents`, `Stop an agent`, `Send a message`,
-`Read messages`, `Read an agent's screen`, `Type into an agent's terminal` and `Press keys in an agent's terminal` - and
-conservative annotations under the [MCP tool schema](https://modelcontextprotocol.io/specification/2025-11-25/schema#toolannotations).
-Only list_agents and read_screen are read-only business-state queries (`readOnlyHint: true`, `openWorldHint: false`).
-read_messages acknowledges delivery. Optional request IDs do not make start/send unconditionally idempotent. Mutating
-tools retain conservative destructive/open-world defaults; annotations are hints, never permissions or a reason to
-change native approval behavior.
-Tool names, argument schemas and the native private-context paths stay identical across presentation changes.
-Per-run initialization instructions identify the agent, its creator (or person), initial message ID when present, and
-launch window/environment/location including folder and worktree, with 2.1's launch IDs and event log path. A creator's
-short ID is a callable send_message address, never a reporting requirement. Context is private to the run's launch and
-survives shim reconnect/reload.
+lack of draft protection, and the consequences of unknown input. The skill does not duplicate the eight argument
+schemas.
+Tool definitions, descriptions and argument validation share
+[tools.json](../../../core/crates/base/src/texts/tools.json). Tool names stay the same in v2; their arguments follow
+sections 2–5. The MCP annotations are:
+
+| Tools | readOnlyHint | destructiveHint | idempotentHint | openWorldHint |
+| --- | --- | --- | --- | --- |
+| list_agents, read_screen | true | omitted | omitted | false |
+| stop_agent | false | true | true | false |
+| start_agent, send_message, read_messages, type_text, press_keys | false | false | false | false |
+
+read_messages acknowledges delivery. All tools act within Facade. Annotations are hints, never permissions or a reason
+to change native approval behavior.
+Per-run initialization instructions identify the agent, its creator (or person), its folder and window, and its reach
+under YOLO. A creator's short ID is a callable send_message address, never a reporting requirement. Personalized
+context is private to the run and survives relay reconnect/reload.
 The creator is named explicitly with its address; a general explanation of #human must not substitute for that fact.
 The MCP launch explicitly carries the caller's short ID; a client's filtered child environment must not erase it.
 Initialization explains that terminal delivery continues after a model turn ends, while read_messages is an immediate
@@ -554,17 +522,17 @@ Missing facts stay absent, and launch context never claims to track shell cd.
 
 Task workflows, operation-query or deletion tools, input_policy and authentication instructions are absent. No
 migration guide for published skills is required: Facade brings its own skill files up to date (CLIS-2.2), and a call
-of another tool protocol fails explicitly.
+with incompatible arguments fails explicitly.
 
 ## Checks
 
 | Rules | Acceptance |
 | --- | --- |
-| 1.1–1.3 | Eight-tool schemas, complete missing-field report, request IDs on start and send alone, current effects, error and recovery literals, `unsupported` and `input_unknown` reasons and message budgets |
-| 2.1–2.3 | Empty/remote windows, built-in and custom CLIs, optional model/effort, shared YOLO rule, cataloged/new-worktree locations, both prompt paths |
-| 3.1–3.2 | Same-tree lists, duplicate names, one-agent stop, immediate UI close, no delete/query extensions |
-| 4.1–4.2 | One recipient, `#human`, fixed retries/duplicates, no human fallback, own inbox including ID lookups, reading delivers and cancels unstarted pastes while an owned draft can finish, long-file expiry |
-| 5.1–5.2 | Current/final screen, direct multiline/unbounded text and drafts, control characters refused toward press_keys, recognized keys, true input effects |
-| 6.1–6.2 | Run routing without credentials, Facade tools pre-approved where the CLI can approve them, optional server, future-only MCP setting, version errors, consistent schemas and explicit ID deduplication skill text |
+| 1.1–1.3 | Eight schemas, complete validation, v2 envelopes, golden answers, relay-owned request IDs, finite waits |
+| 2.1–2.3 | Window/path/CLI choices, optional name/model/effort, shared YOLO rule, branch worktrees, prompt result |
+| 3.1–3.2 | Same-tree and ended-agent lists, duplicate names, retained screen after stop, no delete/query tools |
+| 4.1–4.2 | One recipient, `#human`, delivery modes, withdrawal, own inbox after/last, reading delivers, long files |
+| 5.1–5.2 | Current/final screen, last lines, text/key limits, drafts, rejected controls/aliases, partial input |
+| 6.1–6.2 | Run/guest/member identity, member reconnect/end, optional server, schemas, annotations, ID deduplication |
 
 [Verification](VERIFICATION.md) owns the evidence.

@@ -1,0 +1,630 @@
+{
+  "initialize by claude's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "claude"
+      ],
+      "environment": {
+        "CLAUDE_CODE_SESSION_ID": "claude-golden"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        }
+      }
+    }
+  },
+  "list_agents by claude's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {}
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "windows": [
+          {
+            "id": "terminal",
+            "name": "Terminal",
+            "clis": [
+              "fake"
+            ]
+          }
+        ],
+        "agents": [
+          {
+            "id": "#a1",
+            "name": "host",
+            "cli": "fake",
+            "window": "terminal",
+            "path": "<test>/project",
+            "state": "starting",
+            "creator": "#human"
+          },
+          {
+            "id": "#a2",
+            "name": "#a2",
+            "cli": "claude",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          }
+        ]
+      }
+    }
+  },
+  "initialize by codex's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "codex"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        }
+      }
+    }
+  },
+  "list_agents by codex's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {},
+      "_meta": {
+        "sessionId": "codex-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "windows": [
+          {
+            "id": "terminal",
+            "name": "Terminal",
+            "clis": []
+          }
+        ],
+        "agents": [
+          {
+            "id": "#a1",
+            "name": "host",
+            "cli": "fake",
+            "window": "terminal",
+            "path": "<test>/project",
+            "state": "starting",
+            "creator": "#human"
+          },
+          {
+            "id": "#a2",
+            "name": "#a2",
+            "cli": "claude",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a3",
+            "name": "#a3",
+            "cli": "codex",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          }
+        ]
+      }
+    }
+  },
+  "initialize by agy's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "agy"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        }
+      }
+    }
+  },
+  "list_agents by agy's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {},
+      "_meta": {
+        "antigravity.google/root_conversation_id": "agy-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "windows": [
+          {
+            "id": "terminal",
+            "name": "Terminal",
+            "clis": []
+          }
+        ],
+        "agents": [
+          {
+            "id": "#a1",
+            "name": "host",
+            "cli": "fake",
+            "window": "terminal",
+            "path": "<test>/project",
+            "state": "starting",
+            "creator": "#human"
+          },
+          {
+            "id": "#a2",
+            "name": "#a2",
+            "cli": "claude",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a3",
+            "name": "#a3",
+            "cli": "codex",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a4",
+            "name": "#a4",
+            "cli": "agy",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          }
+        ]
+      }
+    }
+  },
+  "initialize by muse's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "muse"
+      ],
+      "environment": {
+        "MUSE_SESSION_ID": "muse-golden"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        }
+      }
+    }
+  },
+  "list_agents by muse's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {}
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "windows": [
+          {
+            "id": "terminal",
+            "name": "Terminal",
+            "clis": [
+              "fake"
+            ]
+          }
+        ],
+        "agents": [
+          {
+            "id": "#a1",
+            "name": "host",
+            "cli": "fake",
+            "window": "terminal",
+            "path": "<test>/project",
+            "state": "starting",
+            "creator": "#human"
+          },
+          {
+            "id": "#a2",
+            "name": "#a2",
+            "cli": "claude",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a3",
+            "name": "#a3",
+            "cli": "codex",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a4",
+            "name": "#a4",
+            "cli": "agy",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a5",
+            "name": "#a5",
+            "cli": "muse",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          }
+        ]
+      }
+    }
+  },
+  "initialize by opencode's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "opencode"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "You are a Facade guest, in a terminal of your own. Messages and Facade's results reach you only as your turn ends or with the person's next prompt, so never promise to report one unprompted. Facade's tools start, list and stop the agents on this computer, exchange messages with them, and read and type into the terminals of the agents Facade started. Address an agent by its ID, such as #a3, its unique @name, or both. 🔔 is Facade's result, not an agent's reply. Starting an agent and delivering a message never prove its work is done.\n\n---\nname: facade\ndescription: \"How the Facade Code tools work: start and stop agents, send and read Facade messages, and read or type into agent terminals. Use when you work with other agents through Facade, or a Facade message or result appears.\"\n---\n\n# Facade Code tools\n\nServer `facade` has eight tools: start_agent, list_agents, stop_agent, send_message, read_messages, read_screen,\ntype_text and press_keys. Each answers with `status`: success, with `data` where it has facts to give, or failure, with\n`reason` and a `message` that says what is wrong, whether anything was done, and what to do next.\n\n## Agents\n\n`start_agent({cli: \"codex\", window: \"win-2\", path: \"/work/app\", name: \"Ada\", prompt: \"Fix the failing parser\ntest.\"})` starts Codex there; the answer's `data.id`, such as \"#a7\", addresses it from then on. Its run takes YOLO from\n`facade.json`: on, the CLI asks for no approval and has no sandbox; off, it runs as the person set it up. Either way it can\nuse these tools too, which no CLI asks about. `list_agents({})` shows the windows, each with its folders and the CLIs it\ncan start, and the agents you reach, ended ones too: with YOLO off, those of your creation tree, any other refused as\n`out_of_reach`. A name that more than one agent has is refused: use the ID.\n\n## Messages\n\n`send_message({to: \"#a7\", text: \"Run the tests again.\"})` types the message into #a7's terminal under a header that\nnames you, such as `📨 Message from Max (#a3) · #m42`, then its text. A reply names what it answers, `reply_to: \"#m42\"`,\nand its header adds `· Reply to #m42`. Messages the person sends come from #human; yours to #human reach them only\nthrough an editor window that shows your messages.\nA start's prompt is answered later by Facade, not by the agent: `🔔 Ada (#a7) has started. · #m43`, under its own number,\nsays whether the prompt was passed on, and asks for no reply.\nDelivery is finite: a message the recipient's CLI does not take in time fails, and no one tries it again; one to a guest,\na CLI session the person started, waits for its next turn.\n`read_messages({})` returns your messages not yet delivered, `read_messages({last: 5})` the five newest, and\n`read_messages({after: \"#m42\"})` every one after #m42. No agent reads another's inbox.\n\nThe same Facade message can arrive more than once. Use its message ID to recognize a repeat and do not redo work for that same message. A new send call has a new ID, even if its text matches. A Facade system result about a message is a separate kind of information, not another copy of that message's instruction.\n\n## Terminals\n\n`read_screen({agent: \"#a7\"})` shows what its CLI shows: a draft, a question, a menu. `type_text` and `press_keys` go\nwhere its cursor is, as `press_keys({agent: \"#a7\", keys: [\"Down\", \"Enter\"]})` picks a menu's second item.\n\nWritten by Facade core <version>.\n"
+      }
+    }
+  },
+  "list_agents by opencode's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {},
+      "_meta": {
+        "ai.opencode/sessionID": "opencode-golden"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "windows": [
+          {
+            "id": "terminal",
+            "name": "Terminal",
+            "clis": []
+          }
+        ],
+        "agents": [
+          {
+            "id": "#a1",
+            "name": "host",
+            "cli": "fake",
+            "window": "terminal",
+            "path": "<test>/project",
+            "state": "starting",
+            "creator": "#human"
+          },
+          {
+            "id": "#a2",
+            "name": "#a2",
+            "cli": "claude",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a3",
+            "name": "#a3",
+            "cli": "codex",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a4",
+            "name": "#a4",
+            "cli": "agy",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a5",
+            "name": "#a5",
+            "cli": "muse",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a6",
+            "name": "#a6",
+            "cli": "opencode",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          }
+        ]
+      }
+    }
+  },
+  "initialize by pi's guest server": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "pi"
+      ],
+      "environment": {
+        "PI_SESSION_ID": "pi-golden"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        }
+      }
+    }
+  },
+  "list_agents by pi's guest": {
+    "call": {
+      "tool": "list_agents",
+      "arguments": {}
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "windows": [
+          {
+            "id": "terminal",
+            "name": "Terminal",
+            "clis": [
+              "fake"
+            ]
+          }
+        ],
+        "agents": [
+          {
+            "id": "#a1",
+            "name": "host",
+            "cli": "fake",
+            "window": "terminal",
+            "path": "<test>/project",
+            "state": "starting",
+            "creator": "#human"
+          },
+          {
+            "id": "#a2",
+            "name": "#a2",
+            "cli": "claude",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a3",
+            "name": "#a3",
+            "cli": "codex",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a4",
+            "name": "#a4",
+            "cli": "agy",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a5",
+            "name": "#a5",
+            "cli": "muse",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a6",
+            "name": "#a6",
+            "cli": "opencode",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          },
+          {
+            "id": "#a7",
+            "name": "#a7",
+            "cli": "pi",
+            "window": "terminal",
+            "path": "<test>/home",
+            "state": "unknown",
+            "creator": "#human"
+          }
+        ]
+      }
+    }
+  },
+  "send_message to a guest": {
+    "call": {
+      "tool": "send_message",
+      "arguments": {
+        "to": "#a3",
+        "text": "hello guest"
+      }
+    },
+    "response": {
+      "status": "success",
+      "data": {
+        "id": "#m1",
+        "delivery": "waiting_in_inbox"
+      }
+    }
+  },
+  "initialize by the muse run's own entry": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "muse"
+      ],
+      "environment": {
+        "FACADE_AGENT": "a8"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "You are Facade agent #a8, working in <test>/project in window \"Terminal\" (window terminal). Your creator is the person (#human). These tools start, list and stop the agents on this computer, exchange messages with them, and read and type into their terminals. Your run has YOLO on, so they reach every agent. Address an agent by its ID, such as #a3, its unique @name, or both. 📨 brings a complete message, typed into your terminal or returned by read_messages, even after your turn ends. 🔔 is Facade's result, not an agent's reply. Starting an agent and delivering a message never prove its work is done. Do not poll read_messages or read_screen while you wait: each reads once and does not wait. If your tools are listed by name alone, load the one you need before calling it."
+      }
+    }
+  },
+  "initialize by the agy run's own entry": {
+    "call": {
+      "method": "initialize",
+      "server": [
+        "--guest",
+        "agy"
+      ],
+      "environment": {
+        "FACADE_AGENT": "a9"
+      }
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "2025-06-18",
+        "capabilities": {
+          "tools": {
+            "listChanged": false
+          }
+        },
+        "serverInfo": {
+          "name": "facade",
+          "version": "<version>"
+        },
+        "instructions": "This Facade server serves no tools here: the Facade run it started in has a server of its own."
+      }
+    }
+  },
+  "tools/list by the agy run's own entry": {
+    "call": {
+      "method": "tools/list",
+      "server": [
+        "--guest",
+        "agy"
+      ]
+    },
+    "response": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "tools": []
+      }
+    }
+  }
+}

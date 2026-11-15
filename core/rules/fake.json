@@ -1,0 +1,10 @@
+{
+	"cli": "fake",
+	"display_name": "Fake CLI",
+	"program": "facade-fakecli",
+	"arguments": {"reserved": ["--resume", "--model", "--effort"], "required": ["--model", "--effort"]},
+	"choices": {"model": ["--model", "${value}"], "effort": ["--effort", "${value}"], "spelling": {"model": ["--model"], "effort": ["--effort"]}},
+	"input": { "mechanism": "prompt_row", "prompt": "❯" },
+	"paste": { "enter_ms": 80, "placeholders": [{ "pattern": "^\\[Pastedtext#\\d+\\+(\\d+)lines?\\]$", "count": "lines_after_first" }] },
+	"session": { "capture": "session_start", "resume": ["--resume", "${session_id}"] }
+}
