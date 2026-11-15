@@ -1,0 +1,25 @@
+[package]
+name = "facade"
+description = "The facade program: terminal commands, and the keeper and daemon services."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "facade"
+path = "src/main.rs"
+
+[dependencies]
+facade-base.workspace = true
+facade-rules.workspace = true
+facade-keeper.workspace = true
+facade-daemon.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+crossterm.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+signal-hook.workspace = true
+unicode-width.workspace = true

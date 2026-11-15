@@ -7,6 +7,7 @@ members = [
 	"crates/base",
 	"crates/keeper",
 	"crates/daemon",
+	"crates/facade",
 	# A member so that its own tests run with Facade's (vendor/README.md).
 	"vendor/alacritty_terminal",
 	"crates/screen",
