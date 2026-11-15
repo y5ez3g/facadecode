@@ -432,6 +432,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "facade-scenarios"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "crossterm",
+ "facade-base",
+ "facade-rules",
+ "facade-screen",
+ "libc",
+ "nix",
+ "rusqlite",
+ "serde_json",
+]
+
+[[package]]
 name = "facade-screen"
 version = "0.2.0"
 dependencies = [
