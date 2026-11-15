@@ -1,0 +1,11 @@
+[package]
+name = "facade-screen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "A headless terminal for one agent: query replies, reads, views and full redraws."
+
+[dependencies]
+alacritty_terminal.workspace = true
+base64.workspace = true

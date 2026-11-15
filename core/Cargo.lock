@@ -158,6 +158,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "facade-screen"
+version = "0.2.0"
+dependencies = [
+ "alacritty_terminal",
+ "base64",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
