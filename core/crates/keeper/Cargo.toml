@@ -1,0 +1,16 @@
+[package]
+name = "facade-keeper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Parent of the CLIs: starts and stops them, holds their PTYs, and keeps a daemon running."
+
+[dependencies]
+facade-base.workspace = true
+anyhow.workspace = true
+libc.workspace = true
+nix.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+signal-hook.workspace = true

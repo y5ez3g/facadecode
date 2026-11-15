@@ -183,6 +183,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "facade-keeper"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "facade-base",
+ "libc",
+ "nix",
+ "serde",
+ "serde_json",
+ "signal-hook",
+]
+
+[[package]]
 name = "facade-relay"
 version = "0.2.0"
 dependencies = [
