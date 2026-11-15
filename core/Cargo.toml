@@ -9,6 +9,7 @@ members = [
 	# A member so that its own tests run with Facade's (vendor/README.md).
 	"vendor/alacritty_terminal",
 	"crates/screen",
+	"crates/rules",
 ]
 
 [workspace.package]
