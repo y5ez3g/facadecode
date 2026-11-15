@@ -40,7 +40,8 @@
     "integration.list",
     "window.update",
     "worktree.create",
-    "daemon.upgrade"
+    "daemon.upgrade",
+    "daemon.log"
   ],
   "$defs": {
     "AgentArgs": {
@@ -572,6 +573,21 @@
             "op",
             "args"
           ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "daemon.log"
+            },
+            "args": {
+              "$ref": "#/$defs/DaemonLogArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
         }
       ],
       "description": "Parameters for `call`."
@@ -660,6 +676,34 @@
         }
       ],
       "description": "The kind of client connecting to the daemon."
+    },
+    "DaemonLogArgs": {
+      "type": "object",
+      "properties": {
+        "lines": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many of the log's last lines to read: 200 where absent, and at most 200."
+        }
+      },
+      "description": "Arguments for `daemon.log`."
+    },
+    "DaemonLogResult": {
+      "type": "object",
+      "properties": {
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The last lines of `core/logs/daemon.log`, oldest first, the home folder written as `~`.\nEmpty where there is no log."
+        }
+      },
+      "required": [
+        "lines"
+      ],
+      "description": "The result of `daemon.log`."
     },
     "DeliveredVia": {
       "oneOf": [
@@ -2239,7 +2283,7 @@
           "additionalProperties": {
             "type": "string"
           },
-          "description": "The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`,\nand `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor,\nand CLI session variables, then sets `TERM`, `COLORTERM`, and `PWD`. Supply the user's\nremaining environment explicitly. `facade start` does this, omitting non-UTF-8 variables and\nnaming them on stderr. A start from an `mcp` client takes its agent's environment instead,\nas that agent's CLI started with it, less what that CLI's rule added: a CLI chooses what it\ngives its MCP server, while a `facade` command sends its shell's. Where that environment\ncannot be read, as when the CLI is not running or the system hides it, the start fails with\n`unavailable` and starts nothing. A start that an agent asks for, from its tools or its\nterminal, inherits that environment as it is, including what the agent's own entry `env`\nset or removed, as a shell started from another inherits its variables; the started CLI's\nown entry applies on top (CONFIGURATION-2.1, 3.2).",
+          "description": "The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`,\nand `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor,\nand CLI session variables, but keeps `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`, which tell\nthe CLI which terminal app displays it; then it sets `TERM`, `COLORTERM`, and `PWD`. Supply\nthe user's remaining environment explicitly. `facade start` does this, omitting non-UTF-8\nvariables and naming them on stderr. A start from an `mcp` client takes its agent's\nenvironment instead, as that agent's CLI started with it, less what that CLI's rule added: a\nCLI chooses what it gives its MCP server, while a `facade` command sends its shell's. Where\nthat environment cannot be read, as when the CLI is not running or the system hides it, the\nstart fails with `unavailable` and starts nothing. A start that an agent asks for, from its\ntools or its terminal, inherits that environment as it is, including what the agent's own\nentry `env` set or removed, as a shell started from another inherits its variables; the\nstarted CLI's own entry applies on top (CONFIGURATION-2.1, 3.2).",
           "default": {}
         },
         "cols": {

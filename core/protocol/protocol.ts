@@ -4,7 +4,7 @@ export const PROTOCOL = 1;
 export const OLDEST_PROTOCOL = 1;
 export const METHODS = ["hello","call","watch","unwatch","cancel","changed","closing"] as const;
 export const TOPICS = ["agents","screen","messages","windows"] as const;
-export const OPS = ["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade"] as const;
+export const OPS = ["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"] as const;
 export type Topic = typeof TOPICS[number];
 export type Operation = typeof OPS[number];
 
@@ -49,7 +49,7 @@ export type AgentState = 'starting' | 'working' | 'waiting_for_you' | 'just_done
 export type AgentsChange = { readonly kind: 'updated'; readonly agent: AgentInfo } | { readonly kind: 'removed'; readonly agent_id: string };
 
 /** Parameters for `call`. */
-export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs };
+export type CallParams = { readonly op: 'agent.start'; readonly args: StartArgs } | { readonly op: 'agent.resume'; readonly args: ResumeArgs } | { readonly op: 'agent.stop'; readonly args: AgentArgs } | { readonly op: 'agent.remove'; readonly args: AgentArgs } | { readonly op: 'agent.inspect'; readonly args: AgentArgs } | { readonly op: 'agent.type'; readonly args: TypeArgs } | { readonly op: 'agent.screen'; readonly args: ScreenArgs } | { readonly op: 'agent.resize'; readonly args: ResizeArgs } | { readonly op: 'agent.rename'; readonly args: RenameArgs } | { readonly op: 'agent.send'; readonly args: SendArgs } | { readonly op: 'hook.session-start'; readonly args: HookSession } | { readonly op: 'hook.prompt'; readonly args: HookSession } | { readonly op: 'hook.turn-end'; readonly args: HookSession } | { readonly op: 'hook.idle'; readonly args: HookSession } | { readonly op: 'hook.session-end'; readonly args: HookSession } | { readonly op: 'integration.add'; readonly args: IntegrationArgs } | { readonly op: 'integration.remove'; readonly args: IntegrationArgs } | { readonly op: 'integration.list'; readonly args: IntegrationsArgs } | { readonly op: 'window.update'; readonly args: WindowDescription } | { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } | { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } | { readonly op: 'daemon.log'; readonly args: DaemonLogArgs };
 
 /** A `changed` notification for one watch. */
 export interface ChangedParams {
@@ -68,6 +68,16 @@ export interface CliInfo {
 
 /** The kind of client connecting to the daemon. */
 export type ClientKind = 'terminal' | 'mcp' | 'ide';
+
+/** Arguments for `daemon.log`. */
+export interface DaemonLogArgs {
+	readonly lines?: number;
+}
+
+/** The result of `daemon.log`. */
+export interface DaemonLogResult {
+	readonly lines: string[];
+}
 
 /** How a message was delivered. */
 export type DeliveredVia = 'terminal' | 'read' | 'notified';
@@ -613,6 +623,7 @@ export interface Operations {
 	readonly "window.update": { readonly args: WindowDescription; readonly result: EmptyResult };
 	readonly "worktree.create": { readonly args: WorktreeCreateArgs; readonly result: LocationInfo };
 	readonly "daemon.upgrade": { readonly args: UpgradeArgs; readonly result: UpgradeResult };
+	readonly "daemon.log": { readonly args: DaemonLogArgs; readonly result: DaemonLogResult };
 }
 
 /** Argument, snapshot, and change types for each topic. Skip unknown change kinds. */

@@ -47,7 +47,7 @@ message. The redraw's base64 value is abbreviated.
 
 ```text
 → {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[1,1],"build":"0.2.0","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"build":"0.2.0","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade"]}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"build":"0.2.0","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"command":["claude"],"cwd":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","name":"Pixel","cli":"claude","cwd":"/Users/me/project","window_id":"terminal","location_id":"loc-5f3c2a1b9e8d7c60","pid":5001,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:22:05.123Z","root":"a1","yolo":false,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"agent":"a1"}}}
@@ -454,8 +454,9 @@ launches. A missing file, an empty one, one of only spaces and comments, and one
 comments and trailing commas, read strictly: one that cannot be read, that is not JSON with comments, has a key twice in one
 object, holds something other than one object, or has a top-level key other than `yolo`, `names`, `clis` and `$schema` or one
 of the wrong type, refuses every launch with `configuration_invalid`, its message saying each problem with the file's path and,
-where known, its line and column. The core reads `yolo` from the file and checks the whole file as the extension does; it does
-not yet use `names` and `clis`. The daemon only reads the file. No argument chooses YOLO.
+where known, its line and column. The core checks the whole file as the extension does: `yolo` decides YOLO, `names` the
+default names (Agent IDs and names, above), and `clis` the CLIs a start runs (CLI rules, above). The daemon only reads the
+file. No argument chooses YOLO.
 
 With YOLO on, the CLI runs without asking: its approvals bypassed and its sandbox off wherever it has one, for that launch, and
 the launch's folder trusted, for that launch where the CLI takes the trust by its own arguments or run settings.
@@ -498,6 +499,15 @@ records for the run of the same CLI that the client acts for, or any session whi
 CLI, nested in the run, is a guest's. A CLI with no hook for a session's end, Antigravity, has its hooks name its process that ran them,
 `pid`: that process ending ends the session, and a session that joins from the same process ends the one before. The process
 is watched for that alone; the guest's record names no pid.
+
+An MCP client that Facade did not start, and that no CLI's hooks report, joins as a guest through its relay: a `facade-mcp`
+started without `--guest`, outside a run. When the relay passes on the client's `initialize`, the daemon lists the client
+with the next agent ID, a default name and `guest: true`. Its `cli` is the `name` in the request's `clientInfo`, or `mcp`
+where that is missing or is not a valid CLI name. The answer gives its ID, its name and how many messages wait for it. The
+guest lasts as long as the relay's connection. When the connection closes without the daemon having said `closing`, the
+guest ends, and its waiting messages go with it. After the daemon starts anew, the same relay process's hello finds the guest
+again, with its number and its inbox. Its state is `unknown`, it takes its messages only with `read_messages`, and its tools
+reach as a guest's do, with YOLO from the settings file of the relay's `cwd`.
 
 A guest's terminal is not Facade's: reading its screen, typing, resizing, stopping, resuming, removing and a screen watch answer
 `unavailable`, and `agent.inspect` reads its input as `unknown`. A message to a guest waits in its inbox, with no deadline,
@@ -759,6 +769,7 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 | `window.update` | `WindowDescription` | `EmptyResult` | For an `ide` client: replaces its window's description with this one, which keeps the window's ID, and reads the window's locations again, which the client asks for when a repository of the window changes. Answers once they are read. An agent whose location was in a folder the window no longer has, and in none it still has, ends as `agent.stop` ends it. |
 | `worktree.create` | `WorktreeCreateArgs` | `LocationInfo` | Makes a Git worktree from the checkout at `cwd`, a location of the window, with a new branch that starts at `base_ref`, at `<main folder>.worktrees/<branch>`: the branch less the window's branch prefix, with characters a folder name cannot hold replaced by `-`, and `-1`, `-2` and so on after it where that path is taken. Answers with the new location. Refuses before changing anything a branch Git does not accept, a folder name some system cannot hold, and a location that is not a checkout with a commit. Creations into one `.worktrees` folder run one at a time; one that waits more than 120 seconds for another fails. Git's failures answer `worktree_failed`: one partway keeps what it made, and its error says what in `data.kept`. |
 | `daemon.upgrade` | `UpgradeArgs` | `UpgradeResult` | Hands the running Facade over to a newer build, `program`, while every agent runs on, and answers once the handover is under way; `closing` follows on every connection past `hello`. The build must be of a higher version than this daemon's and speak its daemon protocol version; while agents run, it must also speak the running keeper's protocol, as the keeper never changes build while it holds CLIs. This daemon installs the build, points the launchers at it, drains and exits; the keeper then starts the launcher's daemon, the new build, and starts it again with its restart delay where it does not come up. Nothing rolls back. Calls that arrive meanwhile answer `upgrading` and did nothing. A second request while a handover is under way answers when the first does. |
+| `daemon.log` | `DaemonLogArgs` | `DaemonLogResult` | Reads the daemon's log, `core/logs/daemon.log`, which Facade keeps for 30 days: its last `lines` lines, oldest first. For the person's clients alone: the log names every agent and who sent whom a message, so a call that acts for an agent or a guest answers `refused`, YOLO or not. More than 200 lines answers `invalid_argument`. |
 
 ## Error reasons
 
@@ -837,7 +848,7 @@ A change to the `agents` topic. Skip unknown change kinds.
 
 Parameters for `call`.
 
-`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs }`
+`{ readonly op: 'agent.start'; readonly args: StartArgs } \| { readonly op: 'agent.resume'; readonly args: ResumeArgs } \| { readonly op: 'agent.stop'; readonly args: AgentArgs } \| { readonly op: 'agent.remove'; readonly args: AgentArgs } \| { readonly op: 'agent.inspect'; readonly args: AgentArgs } \| { readonly op: 'agent.type'; readonly args: TypeArgs } \| { readonly op: 'agent.screen'; readonly args: ScreenArgs } \| { readonly op: 'agent.resize'; readonly args: ResizeArgs } \| { readonly op: 'agent.rename'; readonly args: RenameArgs } \| { readonly op: 'agent.send'; readonly args: SendArgs } \| { readonly op: 'hook.session-start'; readonly args: HookSession } \| { readonly op: 'hook.prompt'; readonly args: HookSession } \| { readonly op: 'hook.turn-end'; readonly args: HookSession } \| { readonly op: 'hook.idle'; readonly args: HookSession } \| { readonly op: 'hook.session-end'; readonly args: HookSession } \| { readonly op: 'integration.add'; readonly args: IntegrationArgs } \| { readonly op: 'integration.remove'; readonly args: IntegrationArgs } \| { readonly op: 'integration.list'; readonly args: IntegrationsArgs } \| { readonly op: 'window.update'; readonly args: WindowDescription } \| { readonly op: 'worktree.create'; readonly args: WorktreeCreateArgs } \| { readonly op: 'daemon.upgrade'; readonly args: UpgradeArgs } \| { readonly op: 'daemon.log'; readonly args: DaemonLogArgs }`
 
 ### ChangedParams
 
@@ -865,6 +876,22 @@ A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1).
 The kind of client connecting to the daemon.
 
 `'terminal' \| 'mcp' \| 'ide'`
+
+### DaemonLogArgs
+
+Arguments for `daemon.log`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `lines` | `number` | no | How many of the log's last lines to read: 200 where absent, and at most 200. |
+
+### DaemonLogResult
+
+The result of `daemon.log`.
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `lines` | `string[]` | yes | The last lines of `core/logs/daemon.log`, oldest first, the home folder written as `~`. Empty where there is no log. |
 
 ### DeliveredVia
 
@@ -1399,7 +1426,7 @@ Arguments for `agent.start`, supplied by the client.
 | `name` | `string` | no | The display name, trimmed. A missing, empty, or blank name gets a name from the settings file's `names`, else from the built-in names: one no agent of the window has, ignoring case and surrounding spaces, or, where every one is taken or the list is empty, the agent's ID, such as `#a7` (LIFECYCLE-2.1). Given names may repeat. |
 | `cwd` | `string` | yes | The CLI's working folder, an absolute path. In an editor window it must be one of the window's locations, which `worktree.create` adds to. |
 | `window_id` | `string` | no | The window the agent goes in: an editor window that is there now, by its ID, or `terminal`, where any folder will do. Omitted, `terminal`. |
-| `env` | `{ readonly [key: string]: string }` | no | The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`, and `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor, and CLI session variables, then sets `TERM`, `COLORTERM`, and `PWD`. Supply the user's remaining environment explicitly. `facade start` does this, omitting non-UTF-8 variables and naming them on stderr. A start from an `mcp` client takes its agent's environment instead, as that agent's CLI started with it, less what that CLI's rule added: a CLI chooses what it gives its MCP server, while a `facade` command sends its shell's. Where that environment cannot be read, as when the CLI is not running or the system hides it, the start fails with `unavailable` and starts nothing. A start that an agent asks for, from its tools or its terminal, inherits that environment as it is, including what the agent's own entry `env` set or removed, as a shell started from another inherits its variables; the started CLI's own entry applies on top (CONFIGURATION-2.1, 3.2). |
+| `env` | `{ readonly [key: string]: string }` | no | The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`, and `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor, and CLI session variables, but keeps `TERM_PROGRAM` and `TERM_PROGRAM_VERSION`, which tell the CLI which terminal app displays it; then it sets `TERM`, `COLORTERM`, and `PWD`. Supply the user's remaining environment explicitly. `facade start` does this, omitting non-UTF-8 variables and naming them on stderr. A start from an `mcp` client takes its agent's environment instead, as that agent's CLI started with it, less what that CLI's rule added: a CLI chooses what it gives its MCP server, while a `facade` command sends its shell's. Where that environment cannot be read, as when the CLI is not running or the system hides it, the start fails with `unavailable` and starts nothing. A start that an agent asks for, from its tools or its terminal, inherits that environment as it is, including what the agent's own entry `env` set or removed, as a shell started from another inherits its variables; the started CLI's own entry applies on top (CONFIGURATION-2.1, 3.2). |
 | `cols` | `number` | yes | The initial terminal width in columns, at least 2. |
 | `rows` | `number` | yes | The initial terminal height in rows, at least 1. |
 | `prompt` | `string` | no | The agent's first message, its text as `agent.send` takes it: from the agent the client acts for, or else from the person. It is kept as the start answers, and delivered once the CLI's tools connected or will not, before any other message. A prompt from an agent owes that agent a result once it is settled. Only a CLI of the settings file takes one: a program started by its path or name is refused one, and the program of a `custom` entry, whose input Facade does not read, starts and fails it as `unsupported` (CONFIGURATION-2.3). |
