@@ -6,7 +6,7 @@ The crates.io release (upstream commit `94e7c8874e526b1e67b349d9ba30ddf81669119e
 `[patch.crates-io]` in `core/Cargo.toml`. It is a workspace member so that `cargo test -p alacritty_terminal` runs its own
 tests with Facade's. `vendor/rustfmt.toml` keeps its upstream formatting.
 
-Facade changes it so that each agent's screen stays within its memory bound (`core/README.md`, "Saving screens and limits").
+Facade changes it so that each agent's screen stays within its memory bound (`docs/core/islands/screen.md`).
 Every change is marked `// Facade (memory)` in the source:
 
 | File | Change | Why |
