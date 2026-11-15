@@ -1,0 +1,2928 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Facade daemon protocol",
+  "description": "The daemon protocol uses JSON-RPC 2.0, one message per line: hello, call, watch, unwatch, and changed notifications. Clients skip unknown change kinds.",
+  "protocol": 1,
+  "oldest_protocol": 1,
+  "methods": [
+    "hello",
+    "call",
+    "watch",
+    "unwatch",
+    "cancel",
+    "changed",
+    "closing"
+  ],
+  "topics": [
+    "agents",
+    "screen",
+    "messages",
+    "windows"
+  ],
+  "ops": [
+    "agent.start",
+    "agent.resume",
+    "agent.stop",
+    "agent.remove",
+    "agent.inspect",
+    "agent.type",
+    "agent.screen",
+    "agent.resize",
+    "agent.rename",
+    "agent.send",
+    "hook.session-start",
+    "hook.prompt",
+    "hook.turn-end",
+    "hook.idle",
+    "hook.session-end",
+    "integration.add",
+    "integration.remove",
+    "integration.list",
+    "window.update",
+    "worktree.create",
+    "daemon.upgrade"
+  ],
+  "$defs": {
+    "AgentArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by\nits ID, such as `@Pixel #a3`."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "description": "Arguments for an operation on one agent."
+    },
+    "AgentInfo": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "The stable ID: `a` followed by a number, unique within the Facade home while its counter\nfile remains."
+        },
+        "name": {
+          "type": "string",
+          "description": "The display name. Names are nonempty but may repeat."
+        },
+        "cli": {
+          "type": "string",
+          "description": "The CLI: the name of its entry in Facade's settings file, a built-in's such as `claude` or\nan added one such as `Codex · work` (CONFIGURATION-2.1), or the program's file name for a\nprogram started by its path or name."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "The CLI's working folder at startup."
+        },
+        "window_id": {
+          "type": "string",
+          "description": "The window the agent is in: the editor window it was started in, or `terminal` for an agent\nstarted from a terminal."
+        },
+        "location_id": {
+          "type": "string",
+          "description": "The ID of its location, `cwd`, as its window lists it."
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The CLI's process ID. Omitted for a guest, whose process Facade does not know."
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState",
+          "description": "Whether the CLI is running or ended."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width in columns. Omitted for a guest, which has no terminal of Facade's."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height in rows. Omitted for a guest."
+        },
+        "created_at": {
+          "type": "string",
+          "description": "The start time in UTC ISO 8601 format with milliseconds."
+        },
+        "creator": {
+          "type": "string",
+          "description": "The agent whose client started it. Omitted where the person started it, and for a guest."
+        },
+        "root": {
+          "type": "string",
+          "description": "The first agent of its creation tree: itself where it has no creator, or else its creator's\nroot. It stays when agents of the tree end or go."
+        },
+        "yolo": {
+          "type": "boolean",
+          "description": "Whether its run has YOLO on: its CLI runs without asking, and it reaches every agent. With\nYOLO off, its CLI runs as it natively does, and it reaches only the agents of its creation\ntree. A launch takes it from Facade's settings file, `facade.json`, as it is accepted; a\nguest as it joins."
+        },
+        "exit": {
+          "description": "The recorded exit. Omitted while the agent is running.",
+          "$ref": "#/$defs/ProcessExit"
+        },
+        "session": {
+          "type": "string",
+          "description": "The ID of the CLI session the agent's CLI last reported, which `agent.resume` continues.\nOmitted until one is reported."
+        },
+        "state": {
+          "$ref": "#/$defs/AgentState",
+          "description": "What the agent is doing."
+        },
+        "state_detail": {
+          "description": "More about the state: what the CLI waits for, its own words, how its process ended, or why\nthe state is unknown.",
+          "$ref": "#/$defs/StateDetail"
+        },
+        "said": {
+          "description": "The last thing that went into the agent's message input. Omitted until something has.",
+          "$ref": "#/$defs/Said"
+        },
+        "tools_state": {
+          "$ref": "#/$defs/ToolsState",
+          "description": "Whether the agent's CLI can use Facade's tools."
+        },
+        "tools_reason": {
+          "description": "Why the agent's CLI cannot use Facade's tools. Omitted unless they are unavailable.",
+          "$ref": "#/$defs/ToolsReason"
+        },
+        "guest": {
+          "type": "boolean",
+          "description": "A guest: a session of a CLI the person started outside Facade, which joined through the\nCLI's hooks. Its terminal is not Facade's: Facade cannot read its screen, type into it,\nresize, stop or resume it. Omitted for an agent Facade started."
+        }
+      },
+      "required": [
+        "agent_id",
+        "name",
+        "cli",
+        "cwd",
+        "window_id",
+        "location_id",
+        "process",
+        "created_at",
+        "root",
+        "yolo",
+        "state",
+        "tools_state"
+      ],
+      "description": "An agent record. Field names match MCP `list_agents`."
+    },
+    "AgentState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "starting",
+          "description": "The CLI has not shown what it is doing yet, within 60 seconds of its start or resume."
+        },
+        {
+          "type": "string",
+          "const": "working",
+          "description": "The CLI is working, or stopped working less than a second ago."
+        },
+        {
+          "type": "string",
+          "const": "waiting_for_you",
+          "description": "The CLI waits for the person; `state_detail.kind` says for what. A menu or question it draws\nin place of its input counts, with `kind` `unknown` where it did not say, also while it\nstarts."
+        },
+        {
+          "type": "string",
+          "const": "just_done",
+          "description": "A turn ended while no terminal showed the agent. It stays so until one does. Work before the\nCLI is asked to do anything is no turn: an Enter typed into it asks, unless it answers a\nquestion the CLI shows. Words after the CLI's name at its start are the CLI's own and ask\nnothing."
+        },
+        {
+          "type": "string",
+          "const": "idle",
+          "description": "The CLI is not working and waits for nothing."
+        },
+        {
+          "type": "string",
+          "const": "error",
+          "description": "The CLI reported an error or its screen shows that the turn it reported ended failed, or,\nstarted by its rule's name, it showed nothing of what it is doing within 60 seconds of its\nstart or resume."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The CLI's process ended; `state_detail.how` says how, where that is known."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "Nothing shows what the CLI is doing; `state_detail.reason` says why."
+        }
+      ],
+      "description": "What an agent is doing, from its CLI's own status reports, from its screen where its CLI's rule\nreads it, and from Facade's own facts. The first state that holds, in this order, is the\nagent's: `waiting_for_you`, `error`, `just_done`, `working`, `idle`, `starting`, then `unknown`;\n`ended` once its process ended."
+    },
+    "AgentsChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "updated"
+            },
+            "agent": {
+              "$ref": "#/$defs/AgentInfo"
+            }
+          },
+          "required": [
+            "kind",
+            "agent"
+          ],
+          "description": "Insert or replace the whole agent record by `agent_id`, including when an agent starts."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            },
+            "agent_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "agent_id"
+          ],
+          "description": "Remove the record with this `agent_id`."
+        }
+      ],
+      "description": "A change to the `agents` topic. Skip unknown change kinds."
+    },
+    "CallParams": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.start"
+            },
+            "args": {
+              "$ref": "#/$defs/StartArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.resume"
+            },
+            "args": {
+              "$ref": "#/$defs/ResumeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.stop"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.remove"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.inspect"
+            },
+            "args": {
+              "$ref": "#/$defs/AgentArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.type"
+            },
+            "args": {
+              "$ref": "#/$defs/TypeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.screen"
+            },
+            "args": {
+              "$ref": "#/$defs/ScreenArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.resize"
+            },
+            "args": {
+              "$ref": "#/$defs/ResizeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.rename"
+            },
+            "args": {
+              "$ref": "#/$defs/RenameArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "agent.send"
+            },
+            "args": {
+              "$ref": "#/$defs/SendArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "hook.session-start"
+            },
+            "args": {
+              "$ref": "#/$defs/HookSession"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "hook.prompt"
+            },
+            "args": {
+              "$ref": "#/$defs/HookSession"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "hook.turn-end"
+            },
+            "args": {
+              "$ref": "#/$defs/HookSession"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "hook.idle"
+            },
+            "args": {
+              "$ref": "#/$defs/HookSession"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "hook.session-end"
+            },
+            "args": {
+              "$ref": "#/$defs/HookSession"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "integration.add"
+            },
+            "args": {
+              "$ref": "#/$defs/IntegrationArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "integration.remove"
+            },
+            "args": {
+              "$ref": "#/$defs/IntegrationArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "integration.list"
+            },
+            "args": {
+              "$ref": "#/$defs/IntegrationsArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "window.update"
+            },
+            "args": {
+              "$ref": "#/$defs/WindowDescription"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "worktree.create"
+            },
+            "args": {
+              "$ref": "#/$defs/WorktreeCreateArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "op": {
+              "const": "daemon.upgrade"
+            },
+            "args": {
+              "$ref": "#/$defs/UpgradeArgs"
+            }
+          },
+          "required": [
+            "op",
+            "args"
+          ]
+        }
+      ],
+      "description": "Parameters for `call`."
+    },
+    "ChangedParams": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The watch number returned on this connection."
+        },
+        "change": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/AgentsChange"
+            },
+            {
+              "$ref": "#/$defs/ScreenChange"
+            },
+            {
+              "$ref": "#/$defs/MessagesChange"
+            },
+            {
+              "$ref": "#/$defs/WindowsChange"
+            }
+          ],
+          "description": "A change with the type defined by the watched topic."
+        }
+      },
+      "required": [
+        "watch",
+        "change"
+      ],
+      "description": "A `changed` notification for one watch."
+    },
+    "CliInfo": {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "string",
+          "description": "The name a start gives: a built-in's, such as `claude`, or the name of a CLI the settings\nfile adds."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "The name people know it by: a built-in's, such as `Claude Code`, or an added CLI's own."
+        },
+        "available": {
+          "type": "boolean",
+          "description": "Whether it can be started: its entry is right and its program is found."
+        },
+        "problem": {
+          "type": "string",
+          "description": "Why it cannot be started: what is wrong with its entry, or that its program cannot run where\nit would start, each said by its setting. Omitted where it can."
+        },
+        "overrides": {
+          "$ref": "#/$defs/Overrides",
+          "description": "Whether a start can choose its model and its effort (CLIS-1.4)."
+        }
+      },
+      "required": [
+        "cli",
+        "display_name",
+        "available",
+        "overrides"
+      ],
+      "description": "A CLI a start can run: an entry of Facade's settings file (CONFIGURATION-2.1)."
+    },
+    "ClientKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "terminal",
+          "description": "A `facade` command, or a client that reads as one does, as `facade-mcp` does to learn where\nits agent works."
+        },
+        {
+          "type": "string",
+          "const": "mcp",
+          "description": "`facade-mcp`, the MCP server of one agent's CLI. Its hello names the agent it acts for."
+        },
+        {
+          "type": "string",
+          "const": "ide",
+          "description": "An editor window: the part of it that runs where its agents run. Its hello describes the\nwindow, and it acts for the person."
+        }
+      ],
+      "description": "The kind of client connecting to the daemon."
+    },
+    "DeliveredVia": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "terminal",
+          "description": "Typed into the recipient's terminal and submitted."
+        },
+        {
+          "type": "string",
+          "const": "read",
+          "description": "Returned by a snapshot of the recipient's `messages` topic."
+        },
+        {
+          "type": "string",
+          "const": "notified",
+          "description": "A message to the person: handed to the sender's editor window, which shows it."
+        }
+      ],
+      "description": "How a message was delivered."
+    },
+    "Delivery": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/DeliveryStatus",
+          "description": "`pending` while the message is being delivered, then `success` or `failure`."
+        },
+        "reason": {
+          "description": "Why it was not delivered. Omitted unless it failed.",
+          "$ref": "#/$defs/DeliveryFailure"
+        },
+        "text_written": {
+          "$ref": "#/$defs/TextWritten",
+          "description": "How much of the message reached the recipient's terminal."
+        },
+        "enter_written": {
+          "type": "boolean",
+          "description": "Whether the Enter that submits it reached the recipient's terminal. Omitted when that is not\nknown: the recipient read the message while its typist was typing it, its typist did not say\nby the deadline, what it typed was still queued then, or the daemon before a restart had\nbegun its paste."
+        },
+        "deadline": {
+          "type": "string",
+          "description": "When a pending delivery fails if the message is not delivered by then. Omitted once it is\nsettled."
+        },
+        "delivered_via": {
+          "description": "How the message was delivered. Omitted unless it was.",
+          "$ref": "#/$defs/DeliveredVia"
+        },
+        "delivered_at": {
+          "type": "string",
+          "description": "When the message was delivered. Omitted unless it was."
+        }
+      },
+      "required": [
+        "status",
+        "text_written"
+      ],
+      "description": "What became of a message."
+    },
+    "DeliveryFailure": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The recipient ended, or its terminal stopped taking input, before the message was delivered."
+        },
+        {
+          "type": "string",
+          "const": "input_draft",
+          "description": "A draft held the recipient's input until the deadline. A draft that is not the message's own\nis never typed over."
+        },
+        {
+          "type": "string",
+          "const": "input_interaction",
+          "description": "A menu, login, or question of the recipient's CLI held its input until the deadline."
+        },
+        {
+          "type": "string",
+          "const": "input_unknown",
+          "description": "The recipient's input was not recognized as empty until the deadline: its screen did not\nshow it as its CLI's rule describes it."
+        },
+        {
+          "type": "string",
+          "const": "timeout",
+          "description": "The input was empty, but the deadline passed before a paste of the message, its Enter, and\nits confirmation could fit."
+        },
+        {
+          "type": "string",
+          "const": "submission_unconfirmed",
+          "description": "Its paste began, but the recipient's CLI did not take the message before the deadline. A\npaste its terminal had not taken whole by then still goes in, and no Enter follows it."
+        },
+        {
+          "type": "string",
+          "const": "unsupported",
+          "description": "The recipient's CLI has no rule to read its input by, so Facade types no message into it."
+        }
+      ],
+      "description": "Why a message was not delivered."
+    },
+    "DeliveryStatus": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "pending",
+          "description": "The message is being delivered, or waits for its guest's next turn."
+        },
+        {
+          "type": "string",
+          "const": "success",
+          "description": "The message was delivered."
+        },
+        {
+          "type": "string",
+          "const": "failure",
+          "description": "The message was not delivered."
+        }
+      ],
+      "description": "The state of a message's delivery."
+    },
+    "EmptyResult": {
+      "type": "object",
+      "description": "An empty success result: `{}`."
+    },
+    "EndReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "terminal_closed",
+          "description": "Neither service held the CLI's terminal, so it closed. A CLI that ignores hangup may still\nbe running."
+        }
+      ],
+      "description": "Why an exit has no code or signal."
+    },
+    "ErrorBody": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int64",
+          "description": "The JSON-RPC error code: -32700 for invalid JSON, -32600 for an invalid request, -32601 for\nan unknown method, -32602 for invalid arguments, and -32000 for other failures."
+        },
+        "message": {
+          "type": "string",
+          "description": "A plain-language explanation of the error."
+        },
+        "data": {
+          "$ref": "#/$defs/ErrorData",
+          "description": "Structured error details."
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "data"
+      ],
+      "description": "A request error."
+    },
+    "ErrorData": {
+      "type": "object",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/Reason",
+          "description": "The error reason for clients to inspect."
+        },
+        "text_written": {
+          "description": "With `partial_input` for text: how much of the text reached the agent's terminal.",
+          "$ref": "#/$defs/TextWritten"
+        },
+        "enter_written": {
+          "type": "boolean",
+          "description": "With `partial_input` for text: whether its Enter reached the agent's terminal."
+        },
+        "keys_sent": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "With `partial_input` for keys: how many keys reached the agent's terminal whole."
+        },
+        "kept": {
+          "description": "With `worktree.create`, or `agent.start` with a `worktree`, that failed after Git made part\nor all of the worktree: what it made, which stays.",
+          "$ref": "#/$defs/Kept"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "description": "Error details for clients to inspect."
+    },
+    "HandOver": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "description": "Every message that was not yet delivered to the guest, oldest first, now delivered through\n`read`."
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "description": "The messages `hook.prompt` and `hook.turn-end` take for a guest's model, at its next turn."
+    },
+    "HelloParams": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The oldest and newest daemon protocol versions the client supports."
+        },
+        "build": {
+          "type": "string",
+          "description": "The client's build."
+        },
+        "kind": {
+          "$ref": "#/$defs/ClientKind",
+          "description": "The client kind. Unsupported kinds are rejected at hello."
+        },
+        "agent": {
+          "type": "string",
+          "description": "The agent this client acts for, by ID: the agent of `facade-mcp`, or the agent in whose\nterminal a `facade` command runs. Messages the client sends come from that agent, and the\n`messages` topic reads its inbox. Required for `mcp`, whose agent must be listed: a hello\nnaming one that is not is refused with `not_found`."
+        },
+        "sessions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The sessions the client's CLI names in its environment, such as `CLAUDE_CODE_SESSION_ID`.\nThe client acts for the agent that has one of them, the newest where several do, ahead of\n`agent`: a command a guest's model runs acts for the guest."
+        },
+        "window": {
+          "description": "The editor window this client is part of. Required for `ide`, and refused for any other\nkind. Every connection of a window describes it; the window is there while one of them is\nopen.",
+          "$ref": "#/$defs/WindowDescription"
+        }
+      },
+      "required": [
+        "protocol",
+        "build",
+        "kind"
+      ],
+      "description": "Parameters for `hello`."
+    },
+    "HelloResult": {
+      "type": "object",
+      "properties": {
+        "protocol": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The highest protocol version shared by both peers."
+        },
+        "build": {
+          "type": "string",
+          "description": "The daemon's build."
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The daemon's process ID."
+        },
+        "agent": {
+          "type": "string",
+          "description": "The agent this client acts for, as `agent` and `sessions` decided. Omitted where it acts for\nnone."
+        },
+        "agents": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "description": "The number of agent records when `hello` runs. Watch `agents` to receive changes."
+        },
+        "keeper": {
+          "description": "The keeper holding the agents' terminals. Omitted while no keeper runs; the daemon starts\none for the first agent.",
+          "$ref": "#/$defs/KeeperInfo"
+        },
+        "topics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Topic names accepted by `watch`."
+        },
+        "ops": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Operation names accepted by `call`."
+        }
+      },
+      "required": [
+        "protocol",
+        "build",
+        "pid",
+        "agents",
+        "topics",
+        "ops"
+      ],
+      "description": "The result of `hello`: daemon details and supported topics and operations."
+    },
+    "HiddenRows": {
+      "type": "object",
+      "properties": {
+        "above": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Rows hidden above the visible input."
+        },
+        "below": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "Rows hidden below the visible input."
+        }
+      },
+      "required": [
+        "above",
+        "below"
+      ],
+      "description": "Rows of a draft scrolled out of the CLI's input, as the CLI marks them."
+    },
+    "HookSession": {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "string",
+          "description": "The CLI, by its rule's name, such as `claude`."
+        },
+        "session": {
+          "type": "string",
+          "description": "The session ID the CLI gives its hooks."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "The CLI's working folder, where the hook knows it."
+        },
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "For a CLI that has no hook for a session's end, Antigravity, the process of the CLI that ran\nthe hook: its end is the session's end. Facade watches it for that alone, and a guest's\nrecord names no pid."
+        },
+        "parent": {
+          "type": "string",
+          "description": "The session this one is part of, as a subagent's session is the session that started it. A\npart acts for the guest of the session it is part of, and its own turns leave that guest's\nstate alone. Omitted for a session of its own."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The environment the CLI gives the hook, or the server of this session alone, which joins it\nas it starts: an agent the guest starts runs with it. A server many sessions share gives\nnone. Kept with the guest, in memory alone; a later one replaces it."
+        },
+        "status_file": {
+          "type": "string",
+          "description": "Where the CLI itself reports how the session stands, as Claude Code's prompt hook names it:\nClaude Code's file of its process, `sessions/<pid>.json` in its configuration folder. While\nthe guest reads `working`, the daemon reads it once a second: `idle` there, written since\nthe turn began, ends the turn as `hook.idle` does, for a turn the person cut short, which\nruns no hook. Omitted by the other hooks and CLIs."
+        }
+      },
+      "required": [
+        "cli",
+        "session"
+      ],
+      "description": "The session a CLI's hook reports on."
+    },
+    "HowEnded": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "normal",
+          "description": "It exited with code 0."
+        },
+        {
+          "type": "string",
+          "const": "stopped",
+          "description": "Facade stopped it."
+        },
+        {
+          "type": "string",
+          "const": "crashed",
+          "description": "It exited with another code, or a signal ended it."
+        }
+      ],
+      "description": "How an agent's process ended."
+    },
+    "InputInfo": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "$ref": "#/$defs/InputState"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "What on the screen the state rests on, such as `the input frame at row 22 is empty`. Never\nthe draft's text."
+        },
+        "mechanism": {
+          "description": "The layout the agent's CLI rule reads. Omitted without a rule.",
+          "$ref": "#/$defs/InputMechanism"
+        },
+        "hidden": {
+          "description": "Draft rows scrolled out of the input. Omitted unless the CLI marks such rows.",
+          "$ref": "#/$defs/HiddenRows"
+        }
+      },
+      "required": [
+        "state",
+        "evidence"
+      ],
+      "description": "An agent's message input as its screen shows it now."
+    },
+    "InputMechanism": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "frame",
+          "description": "A prompt row inside a frame of two rules."
+        },
+        {
+          "type": "string",
+          "const": "prompt",
+          "description": "A prompt row above a model line at the bottom of the screen."
+        },
+        {
+          "type": "string",
+          "const": "editor",
+          "description": "An editor between two rules, with a cursor the CLI draws."
+        },
+        {
+          "type": "string",
+          "const": "box",
+          "description": "A box of bar rows above a border."
+        },
+        {
+          "type": "string",
+          "const": "prompt_row",
+          "description": "The last row that starts with the prompt."
+        }
+      ],
+      "description": "The layout a CLI's rule reads its input from."
+    },
+    "InputState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "usable",
+          "description": "The CLI's input is drawn empty."
+        },
+        {
+          "type": "string",
+          "const": "draft",
+          "description": "The CLI's input holds text, typed, pasted, or recalled."
+        },
+        {
+          "type": "string",
+          "const": "interaction",
+          "description": "A menu or question of the CLI's own is drawn in place of its input."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "The screen does not show the input as the CLI's rule describes it."
+        }
+      ],
+      "description": "How an agent's message input reads on its screen. A reading never means input may be typed."
+    },
+    "InspectResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo"
+        },
+        "rule": {
+          "type": "string",
+          "description": "The CLI rule the agent was started by: its CLI's name, such as `claude`. Omitted for an\nagent started by a program path or a name without a rule."
+        },
+        "input": {
+          "$ref": "#/$defs/InputInfo"
+        },
+        "session_tracking": {
+          "type": "boolean",
+          "description": "Whether the running CLI reports its session to Facade. False for an ended agent."
+        }
+      },
+      "required": [
+        "agent",
+        "input",
+        "session_tracking"
+      ],
+      "description": "The result of `agent.inspect`."
+    },
+    "IntegrationArgs": {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "string",
+          "description": "The CLI, by its rule's name: `claude`, `codex`, `opencode` or `pi`."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The caller's environment, as `agent.start` takes it. It says where the CLI keeps its user\nconfiguration (`HOME`, `XDG_CONFIG_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`), and `PATH`\nfinds `claude`."
+        }
+      },
+      "required": [
+        "cli",
+        "env"
+      ],
+      "description": "Arguments for `integration.add` and `integration.remove`."
+    },
+    "IntegrationInfo": {
+      "type": "object",
+      "properties": {
+        "cli": {
+          "type": "string"
+        },
+        "added_at": {
+          "type": "string",
+          "description": "When `integration.add` first wrote its files. Omitted where it did not, or the record is\ngone."
+        },
+        "parts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IntegrationPart"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What the person should know, such as that Codex asks to review new hooks once."
+        }
+      },
+      "required": [
+        "cli",
+        "parts"
+      ],
+      "description": "A CLI's integration: Facade's entries in the CLI's user configuration, through which its\nsessions join as guests."
+    },
+    "IntegrationPart": {
+      "type": "object",
+      "properties": {
+        "file": {
+          "type": "string",
+          "description": "The file, or `claude mcp` for Claude Code's user server, which only its own command changes."
+        },
+        "state": {
+          "$ref": "#/$defs/PartState"
+        }
+      },
+      "required": [
+        "file",
+        "state"
+      ],
+      "description": "A file of a CLI's integration, and whether it holds Facade's entries."
+    },
+    "IntegrationsArgs": {
+      "type": "object",
+      "properties": {
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The caller's environment, as for `integration.add`."
+        }
+      },
+      "required": [
+        "env"
+      ],
+      "description": "Arguments for `integration.list`."
+    },
+    "IntegrationsList": {
+      "type": "object",
+      "properties": {
+        "integrations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/IntegrationInfo"
+          }
+        }
+      },
+      "required": [
+        "integrations"
+      ],
+      "description": "What `integration.list` answers: each CLI Facade can integrate."
+    },
+    "KeeperInfo": {
+      "type": "object",
+      "properties": {
+        "pid": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "The keeper process ID."
+        },
+        "build": {
+          "type": "string",
+          "description": "The keeper build identifier."
+        }
+      },
+      "required": [
+        "pid",
+        "build"
+      ],
+      "description": "The keeper holding the agents' terminals."
+    },
+    "Kept": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string",
+          "description": "The branch it made."
+        },
+        "path": {
+          "type": "string",
+          "description": "The folder it made, an absolute path."
+        }
+      },
+      "description": "What a worktree creation that failed partway made, which stays: its branch, its folder, or both."
+    },
+    "LocationInfo": {
+      "type": "object",
+      "properties": {
+        "location_id": {
+          "type": "string",
+          "description": "`loc-` followed by 16 hexadecimal digits of the SHA-256 of the location's path: the same in\nevery window that lists it."
+        },
+        "label": {
+          "type": "string",
+          "description": "The checkout's branch, or else the folder's name."
+        },
+        "path": {
+          "type": "string",
+          "description": "The absolute path, with symbolic links resolved."
+        },
+        "kind": {
+          "$ref": "#/$defs/LocationKind",
+          "description": "What the location is: a folder, a repository's main checkout, or a linked worktree."
+        }
+      },
+      "required": [
+        "location_id",
+        "label",
+        "path",
+        "kind"
+      ],
+      "description": "A place an agent can work: a window's folder, or a checkout of a Git repository one of its\nfolders is in."
+    },
+    "LocationKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "folder",
+          "description": "A folder outside any Git checkout, or one inside a checkout that is not its root."
+        },
+        {
+          "type": "string",
+          "const": "main",
+          "description": "A repository's main checkout."
+        },
+        {
+          "type": "string",
+          "const": "worktree",
+          "description": "A linked worktree of a repository."
+        }
+      ],
+      "description": "What a location is."
+    },
+    "Message": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "description": "`m` followed by a number, unique within the Facade home."
+        },
+        "from": {
+          "type": "string",
+          "description": "The sender: an agent ID, `human` for the person, or `facade` for a result: Facade's own\nwords on what became of a start, not an agent's."
+        },
+        "from_name": {
+          "type": "string",
+          "description": "The sender's name when it sent the message. Omitted for the person."
+        },
+        "to": {
+          "type": "string",
+          "description": "The recipient's agent ID, or `human` for the person."
+        },
+        "text": {
+          "type": "string",
+          "description": "The complete text as sent."
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "The message this one answers."
+        },
+        "from_window": {
+          "type": "string",
+          "description": "The name of the sender's window when it sent the message, where that was not the recipient's\nwindow. Omitted otherwise."
+        },
+        "call_id": {
+          "type": "string",
+          "description": "A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the\ncall its result answers."
+        },
+        "result": {
+          "description": "A result's facts, which its text words. Omitted for any other message.",
+          "$ref": "#/$defs/StartOutcome"
+        },
+        "at": {
+          "type": "string",
+          "description": "When Facade received it, in UTC ISO 8601 format with milliseconds."
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        }
+      },
+      "required": [
+        "message_id",
+        "from",
+        "to",
+        "text",
+        "at",
+        "delivery"
+      ],
+      "description": "A message: one sender, one recipient, the complete text, and what became of it."
+    },
+    "MessagesChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "updated"
+            },
+            "message": {
+              "$ref": "#/$defs/Message"
+            }
+          },
+          "required": [
+            "kind",
+            "message"
+          ],
+          "description": "Insert or replace the whole message by `message_id`: a message arrived or its delivery\nchanged. A change does not deliver the message."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            },
+            "message_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "message_id"
+          ],
+          "description": "The message is no longer kept: withdrawn by its send's `cancel` before its paste began, gone\nafter its 30 days, or gone with its recipient's inbox."
+        }
+      ],
+      "description": "A change to the `messages` topic. Skip unknown change kinds."
+    },
+    "MessagesSnapshot": {
+      "type": "object",
+      "properties": {
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Message"
+          },
+          "description": "The selected messages, oldest first."
+        },
+        "not_found": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "IDs in `ids` that are not in the inbox."
+        },
+        "next_cursor": {
+          "type": "string",
+          "description": "Pass as `cursor` to read the next page. Omitted on the last page."
+        }
+      },
+      "required": [
+        "messages"
+      ],
+      "description": "The inbox at the start of a `messages` watch."
+    },
+    "MessagesWatchArgs": {
+      "type": "object",
+      "properties": {
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "These messages, by ID (`m4` or `#m4`): 1 to 100. Excludes `all` and `cursor`."
+        },
+        "all": {
+          "type": "boolean",
+          "description": "Every message in the inbox, delivered or not: messages are kept 30 days."
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Continues the previous page of the same selection from its `next_cursor`."
+        },
+        "limit": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The most messages in a page, 1 to 200. Defaults to 100."
+        }
+      },
+      "description": "Arguments for the `messages` topic: which messages of the inbox to read. Without `ids` or `all`,\nthe messages not yet delivered."
+    },
+    "NoArgs": {
+      "type": "object",
+      "description": "Empty arguments: `{}`. May be omitted for topics that take no arguments."
+    },
+    "Notification": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "description": "Always `2.0`.",
+          "default": "2.0"
+        },
+        "method": {
+          "type": "string",
+          "description": "The notification method, such as `changed`."
+        },
+        "params": {
+          "description": "Parameters for the notification method."
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "description": "A message without an ID or response, such as `changed`."
+    },
+    "Overrides": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "type": "boolean"
+        },
+        "effort": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "model",
+        "effort"
+      ],
+      "description": "Whether a start can choose a CLI's model and its effort."
+    },
+    "PartState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "as_written",
+          "description": "As `integration.add` writes them now."
+        },
+        {
+          "type": "string",
+          "const": "changed",
+          "description": "Some, but not as they would be written now: the person changed them, or another Facade home\nor version wrote them."
+        },
+        {
+          "type": "string",
+          "const": "missing",
+          "description": "None."
+        }
+      ],
+      "description": "Whether a file of a CLI's integration holds Facade's entries."
+    },
+    "ProcessExit": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The exit code, if the CLI exited normally and its status is known."
+        },
+        "signal": {
+          "type": "string",
+          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system."
+        },
+        "reason": {
+          "description": "Why no code or signal is available, if known. If all three fields are absent, the exit\nstatus is unavailable.",
+          "$ref": "#/$defs/EndReason"
+        },
+        "at": {
+          "type": "string",
+          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade noticed it."
+        }
+      },
+      "required": [
+        "at"
+      ],
+      "description": "A recorded CLI exit. Without a code or signal, its status is unavailable; do not treat it as\nexit code zero."
+    },
+    "ProcessState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "running",
+            "ended"
+          ]
+        }
+      ],
+      "description": "The reported process state of an agent."
+    },
+    "PromptOutcome": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string"
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        }
+      },
+      "required": [
+        "message_id",
+        "delivery"
+      ],
+      "description": "A start prompt's message ID and what became of it."
+    },
+    "Reason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "invalid_argument",
+          "description": "An argument is missing, malformed, or out of range, or the request is unsupported."
+        },
+        {
+          "type": "string",
+          "const": "not_found",
+          "description": "The agent, run, message, or watch does not exist."
+        },
+        {
+          "type": "string",
+          "const": "ambiguous_reference",
+          "description": "A reference names more than one agent, or the person and an agent: select one by its ID."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The agent ended: it takes no more input or messages."
+        },
+        {
+          "type": "string",
+          "const": "partial_input",
+          "description": "A text or keys call stopped partway: the agent ended, or its terminal stopped taking input,\nafter part of the call reached the terminal. The error's data says what went in."
+        },
+        {
+          "type": "string",
+          "const": "unavailable",
+          "description": "The operation cannot complete: for example, a stop or a screen watch's snapshot timed out,\nor the keeper disconnected."
+        },
+        {
+          "type": "string",
+          "const": "protocol_incompatible",
+          "description": "The peers share no protocol version, or a required client kind, operation, or field is\nunsupported."
+        },
+        {
+          "type": "string",
+          "const": "capacity_exceeded",
+          "description": "A message exceeds the line limit, or input exceeds the per-call limit or available queue\nroom."
+        },
+        {
+          "type": "string",
+          "const": "internal",
+          "description": "An internal Facade error."
+        },
+        {
+          "type": "string",
+          "const": "refused",
+          "description": "The caller is not allowed to perform this operation. The keeper accepts only the daemon\nholding the daemon lock."
+        },
+        {
+          "type": "string",
+          "const": "configuration_invalid",
+          "description": "Facade's settings file, `facade.json` in the Facade home, cannot be read as it must, which\nstops every launch until it is fixed. The message says each problem, with the file's path\nand, where known, its line and column."
+        },
+        {
+          "type": "string",
+          "const": "cancelled",
+          "description": "The call was withdrawn by its `cancel` before it took effect: a message whose paste had not\nbegun, which is not kept."
+        },
+        {
+          "type": "string",
+          "const": "worktree_failed",
+          "description": "Git could not make a worktree it was asked for: `data.kept` says what it made, which stays."
+        },
+        {
+          "type": "string",
+          "const": "upgrading",
+          "description": "A newer Facade is taking over: the call did nothing, and a client repeats it once the new\ndaemon answers."
+        },
+        {
+          "type": "string",
+          "const": "unsupported",
+          "description": "The CLI cannot do what the call asks of it: take a model or an effort it has no way to set,\nor resume a conversation that a CLI of another type had."
+        }
+      ],
+      "description": "Error reasons shared by both protocols."
+    },
+    "RenameArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by\nits ID, such as `@Pixel #a3`."
+        },
+        "name": {
+          "type": "string",
+          "description": "The new name, trimmed. An empty or blank name gets a default name chosen from the suggested\nnames: unused while one is available, otherwise reused. Names may repeat."
+        }
+      },
+      "required": [
+        "agent",
+        "name"
+      ],
+      "description": "Arguments for `agent.rename`."
+    },
+    "Request": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "description": "Always `2.0`.",
+          "default": "2.0"
+        },
+        "id": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "A non-negative integer request ID, at most u64::MAX. Omit it for a notification. The\nresponse repeats this ID."
+        },
+        "method": {
+          "type": "string",
+          "description": "The method name, such as `hello` or `call`."
+        },
+        "params": {
+          "description": "Parameters for the named method."
+        }
+      },
+      "required": [
+        "method"
+      ],
+      "description": "A method call. Calls with an ID receive a response; calls without an ID are notifications."
+    },
+    "ResizeArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by\nits ID, such as `@Pixel #a3`."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width in columns, at least 2."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height in rows, at least 1."
+        }
+      },
+      "required": [
+        "agent",
+        "cols",
+        "rows"
+      ],
+      "description": "Arguments for `agent.resize`."
+    },
+    "Response": {
+      "type": "object",
+      "properties": {
+        "jsonrpc": {
+          "type": "string",
+          "description": "Always `2.0`.",
+          "default": "2.0"
+        },
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The request ID, or `null` for a malformed request."
+        },
+        "result": {
+          "description": "The success result, with the type defined by the method or operation."
+        },
+        "error": {
+          "description": "The error on failure. Omitted when the response contains a result.",
+          "$ref": "#/$defs/ErrorBody"
+        }
+      },
+      "required": [
+        "id"
+      ],
+      "description": "A response containing either a result or an error."
+    },
+    "ResumeArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by\nits ID, such as `@Pixel #a3`."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The environment supplied by the client, filtered as for `agent.start`. The agent's earlier\nenvironment is not reused.",
+          "default": {}
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The terminal width in columns, at least 2."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The terminal height in rows, at least 1."
+        },
+        "window_id": {
+          "type": "string",
+          "description": "The window the agent runs in again, as for `agent.start`: an editor window that is there now\nand has the agent's folder among its locations, by its ID, or `terminal`. Omitted,\n`terminal`."
+        }
+      },
+      "required": [
+        "agent",
+        "cols",
+        "rows"
+      ],
+      "description": "Arguments for `agent.resume`, supplied by the client."
+    },
+    "Said": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "The text on one line, at most 1,024 characters."
+        },
+        "from": {
+          "type": "string",
+          "description": "Who said it: an agent ID, or `human` for the person."
+        },
+        "from_name": {
+          "type": "string",
+          "description": "The agent's name when it said it. Omitted for the person."
+        },
+        "at": {
+          "type": "string",
+          "description": "When, in UTC ISO 8601 format with milliseconds."
+        }
+      },
+      "required": [
+        "text",
+        "from",
+        "at"
+      ],
+      "description": "What last went into an agent's message input with Enter: what the person submitted in its\nterminal and its CLI took, text typed with `agent.type` and `enter`, or a message delivered\nthrough the terminal."
+    },
+    "ScreenArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by\nits ID, such as `@Pixel #a3`."
+        },
+        "lines": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The number of lines to return, from 1 to 2000. Defaults to 50."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "description": "Arguments for `agent.screen`."
+    },
+    "ScreenBuffer": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "normal",
+          "description": "The normal screen, with scrollback."
+        },
+        {
+          "type": "string",
+          "const": "alternate",
+          "description": "The alternate screen, which a full-screen view draws on. It has no scrollback."
+        }
+      ],
+      "description": "The screen buffer a CLI shows."
+    },
+    "ScreenChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "output"
+            },
+            "data": {
+              "type": "string",
+              "description": "Standard base64 with padding. Decode to bytes and continue the viewer's terminal parser\nwith them."
+            }
+          },
+          "required": [
+            "kind",
+            "data"
+          ],
+          "description": "Base64-encoded terminal output with queries removed."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "redraw"
+            },
+            "data": {
+              "type": "string",
+              "description": "Standard base64 with padding. Decode to terminal bytes and apply at this redraw's size."
+            },
+            "cols": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535,
+              "description": "Terminal width required to apply this redraw."
+            },
+            "rows": {
+              "type": "integer",
+              "format": "uint16",
+              "minimum": 0,
+              "maximum": 65535,
+              "description": "Terminal height required to apply this redraw."
+            }
+          },
+          "required": [
+            "kind",
+            "data",
+            "cols",
+            "rows"
+          ],
+          "description": "A full redraw after missed output, a resize, or a return to the main screen. Apply it at its\nown size, which may differ from the snapshot."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "exit"
+            },
+            "exit": {
+              "$ref": "#/$defs/ProcessExit"
+            }
+          },
+          "required": [
+            "kind",
+            "exit"
+          ],
+          "description": "The recorded exit of the agent."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            }
+          },
+          "required": [
+            "kind"
+          ],
+          "description": "The agent was removed. No changes follow on this watch."
+        }
+      ],
+      "description": "A change to the `screen` topic. `exit` follows all output the CLI wrote before ending; processes\nstill holding its terminal may write afterward. On macOS, the terminal is taken from those\nprocesses when the CLI ends. `removed` is the watch's last change. Skip unknown change kinds.\n\n`snapshot.redraw`, `output.data`, and `redraw.data` contain standard base64 with padding. Decode\nthem to bytes and feed those bytes to the viewer's terminal parser. Set the viewer to\n`snapshot.cols` by `snapshot.rows` before the initial redraw. Each redraw change carries its own\n`cols` and `rows`; use that size before applying its `data`. Process changes for each watch in\narrival order. Apply `output` as continuation bytes; `redraw` supplies a replacement terminal\nsequence. Preserve parser state between messages. Do not treat the decoded bytes as plain text;\nuse `agent.screen` for plain text."
+    },
+    "ScreenSnapshot": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "The ID of the agent being viewed."
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal width required to apply the redraw."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "Terminal height required to apply the redraw."
+        },
+        "redraw": {
+          "type": "string",
+          "description": "Base64-encoded terminal bytes that redraw the screen at this size. Restores cursor state,\ncharsets, and modes. On the main screen, up to 1,000 rows of agent scrollback come first\nunless `include_scrollback` is false. `keep_scrollback` controls whether the viewer's\nexisting scrollback is cleared before the redraw."
+        },
+        "exit": {
+          "description": "The recorded exit, if the agent has ended.",
+          "$ref": "#/$defs/ProcessExit"
+        },
+        "process": {
+          "description": "The agent's process state captured with this snapshot.",
+          "$ref": "#/$defs/ProcessState"
+        }
+      },
+      "required": [
+        "agent_id",
+        "cols",
+        "rows",
+        "redraw"
+      ],
+      "description": "A full screen snapshot at the start of a watch."
+    },
+    "ScreenText": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string"
+        },
+        "process": {
+          "$ref": "#/$defs/ProcessState",
+          "description": "Whether the agent's CLI is running. An ended agent's screen is the one it left."
+        },
+        "observed_at": {
+          "type": "string",
+          "description": "When the screen was read, in UTC ISO 8601 format with milliseconds; for an ended agent, when\nit ended, as its screen is the one it left."
+        },
+        "buffer": {
+          "$ref": "#/$defs/ScreenBuffer"
+        },
+        "text": {
+          "type": "string",
+          "description": "The lines, joined by line feeds, each wrapped row joined into its line. Inverse text is\nbetween `[[` and `]]` and dim text between `{{` and `}}`, inverse outside dim. Each\nbackslash, bracket, and brace of the screen's own text is escaped with a backslash, so\nremoving the marks and the escapes gives the text exactly; see [`plain`]."
+        },
+        "line_count": {
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "description": "How many lines `text` holds."
+        },
+        "older_lines": {
+          "type": "boolean",
+          "description": "Whether output lies above the lines read."
+        },
+        "trimmed": {
+          "type": "boolean",
+          "description": "Whether the scrollback let go of its oldest lines."
+        }
+      },
+      "required": [
+        "agent_id",
+        "process",
+        "observed_at",
+        "buffer",
+        "text",
+        "line_count",
+        "older_lines",
+        "trimmed"
+      ],
+      "description": "The result of `agent.screen`: the last logical lines of an agent's screen and scrollback, as\nthey show."
+    },
+    "ScreenWatchArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by\nits ID, such as `@Pixel #a3`."
+        },
+        "keep_scrollback": {
+          "type": "boolean",
+          "description": "Keep the viewer's existing scrollback. Defaults to false: every snapshot and redraw clears\nit first. A main-screen snapshot then replays up to 1,000 rows of the agent's scrollback\nunless `include_scrollback` is false. Later redraws include only the visible screen.\n`facade attach` sets this option to true.",
+          "default": false
+        },
+        "include_scrollback": {
+          "type": "boolean",
+          "description": "Include up to 1,000 main-screen scrollback rows before the visible screen in the snapshot.\nDefaults to true. `facade attach` sets it to false on reconnect so the viewer does not\nreceive those rows twice.",
+          "default": true
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "description": "Arguments for the `screen` topic."
+    },
+    "SendArgs": {
+      "type": "object",
+      "properties": {
+        "to": {
+          "type": "string",
+          "description": "The recipient: an agent ID (`a3`, `#a3`, or `3`), a unique name of a running agent with or\nwithout `@`, or a name followed by its ID, such as `@Pixel #a3`."
+        },
+        "text": {
+          "type": "string",
+          "description": "The complete message: at most 8,000 characters and 540 lines of text, tabs, and line breaks,\nnot blank."
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "The message this one answers: one in the sender's inbox, by ID (`m4` or `#m4`)."
+        },
+        "request_id": {
+          "type": "string",
+          "description": "The caller's own ID of this send, 1 to 200 characters. The same ID again from the same\nsender within an hour of the message answers that message as it stands now, joining its\ndelivery while it lasts, and sends nothing again. A send refused or withdrawn keeps none."
+        },
+        "time_left_ms": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "What is left of the send's 30 seconds as it leaves the client, in milliseconds: its\ndelivery's deadline counts that from the daemon's receipt, at most 29,500. Omitted, 29,500."
+        }
+      },
+      "required": [
+        "to",
+        "text"
+      ],
+      "description": "Arguments for `agent.send`."
+    },
+    "SendResult": {
+      "type": "object",
+      "properties": {
+        "message_id": {
+          "type": "string",
+          "description": "`m` followed by a number, unique within the Facade home."
+        },
+        "from": {
+          "type": "string",
+          "description": "The sender: an agent ID, `human` for the person, or `facade` for a result: Facade's own\nwords on what became of a start, not an agent's."
+        },
+        "from_name": {
+          "type": "string",
+          "description": "The sender's name when it sent the message. Omitted for the person."
+        },
+        "to": {
+          "type": "string",
+          "description": "The recipient's agent ID, or `human` for the person."
+        },
+        "text": {
+          "type": "string",
+          "description": "The complete text as sent."
+        },
+        "reply_to": {
+          "type": "string",
+          "description": "The message this one answers."
+        },
+        "from_window": {
+          "type": "string",
+          "description": "The name of the sender's window when it sent the message, where that was not the recipient's\nwindow. Omitted otherwise."
+        },
+        "call_id": {
+          "type": "string",
+          "description": "A result's call: the ID of the MCP `tools/call` it answers later. On a start's prompt, the\ncall its result answers."
+        },
+        "result": {
+          "description": "A result's facts, which its text words. Omitted for any other message.",
+          "$ref": "#/$defs/StartOutcome"
+        },
+        "at": {
+          "type": "string",
+          "description": "When Facade received it, in UTC ISO 8601 format with milliseconds."
+        },
+        "delivery": {
+          "$ref": "#/$defs/Delivery"
+        },
+        "repeated": {
+          "type": "boolean",
+          "description": "The call repeated an earlier one by its request ID: the message is that call's. Omitted\notherwise."
+        },
+        "withdrawn": {
+          "type": "boolean",
+          "description": "Its delivery failed with nothing of it typed, and it was taken out of its recipient's inbox,\nso it can be sent again. Omitted otherwise."
+        }
+      },
+      "required": [
+        "message_id",
+        "from",
+        "to",
+        "text",
+        "at",
+        "delivery"
+      ],
+      "description": "The response to `agent.send`: the message as it stands, whether the call repeated an earlier\none, and whether its failure withdrew it."
+    },
+    "ServerMessage": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/Notification"
+        },
+        {
+          "$ref": "#/$defs/Response"
+        }
+      ],
+      "description": "A response or notification received from a server."
+    },
+    "SessionStartResult": {
+      "type": "object",
+      "properties": {
+        "agent_id": {
+          "type": "string",
+          "description": "The guest the session joined as. Omitted for a session of a run Facade started, which the\nhook leaves alone."
+        },
+        "instructions": {
+          "type": "string",
+          "description": "What the guest's model is told: its ID, and how its messages reach it; then Facade's skill."
+        }
+      },
+      "description": "What `hook.session-start` answers."
+    },
+    "StartArgs": {
+      "type": "object",
+      "properties": {
+        "command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The CLI followed by more of its arguments. The exact name of a CLI of Facade's settings\nfile, `facade.json` in the Facade home - a built-in's, such as `claude`, or one its `clis`\nadds - starts that CLI as its entry says, its entry's `args` before these (CONFIGURATION-2,\n3). Any other word, including a path, runs as that program, as given. A start from an `mcp`\nclient names one CLI of the file and nothing more; another name is refused with `not_found`,\nnaming the CLIs there. A file that cannot be read as a whole refuses every start with\n`configuration_invalid`, and so does a CLI whose entry is wrong, saying each problem; a CLI\nits entry turns off is refused with `unavailable`, and one whose program cannot run where it\nstarts with `not_found`, saying so by its setting."
+        },
+        "name": {
+          "type": "string",
+          "description": "The display name, trimmed. A missing, empty, or blank name gets a name from the settings\nfile's `names`, else from the built-in names: one no agent of the window has, ignoring case\nand surrounding spaces, or, where every one is taken or the list is empty, the agent's ID,\nsuch as `#a7` (LIFECYCLE-2.1). Given names may repeat."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "The CLI's working folder, an absolute path. In an editor window it must be one of the\nwindow's locations, which `worktree.create` adds to."
+        },
+        "window_id": {
+          "type": "string",
+          "description": "The window the agent goes in: an editor window that is there now, by its ID, or `terminal`,\nwhere any folder will do. Omitted, `terminal`."
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The environment supplied by the client. If omitted, the CLI gets only `TERM`, `COLORTERM`,\nand `PWD`. It does not inherit the daemon's environment. Facade removes terminal, editor,\nand CLI session variables, then sets `TERM`, `COLORTERM`, and `PWD`. Supply the user's\nremaining environment explicitly. `facade start` does this, omitting non-UTF-8 variables and\nnaming them on stderr. A start from an `mcp` client takes its agent's environment instead,\nas that agent's CLI started with it, less what that CLI's rule added: a CLI chooses what it\ngives its MCP server, while a `facade` command sends its shell's. Where that environment\ncannot be read, as when the CLI is not running or the system hides it, the start fails with\n`unavailable` and starts nothing. A start that an agent asks for, from its tools or its\nterminal, inherits that environment as it is, including what the agent's own entry `env`\nset or removed, as a shell started from another inherits its variables; the started CLI's\nown entry applies on top (CONFIGURATION-2.1, 3.2).",
+          "default": {}
+        },
+        "cols": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The initial terminal width in columns, at least 2."
+        },
+        "rows": {
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "description": "The initial terminal height in rows, at least 1."
+        },
+        "prompt": {
+          "type": "string",
+          "description": "The agent's first message, its text as `agent.send` takes it: from the agent the client acts\nfor, or else from the person. It is kept as the start answers, and delivered once the CLI's\ntools connected or will not, before any other message. A prompt from an agent owes that\nagent a result once it is settled. Only a CLI of the settings file takes one: a program\nstarted by its path or name is refused one, and the program of a `custom` entry, whose input\nFacade does not read, starts and fails it as `unsupported` (CONFIGURATION-2.3)."
+        },
+        "call_id": {
+          "type": "string",
+          "description": "The ID of the MCP `tools/call` that asked for the start, which the prompt's result names."
+        },
+        "request_id": {
+          "type": "string",
+          "description": "The caller's own ID of this start, 1 to 200 characters. The same ID again from the same\ncreator within an hour of the agent's start answers that agent as it stands now, and starts\nnothing. A start that failed keeps none, and the ID goes with its agent's record."
+        },
+        "worktree": {
+          "description": "A worktree to make from `cwd`, a checkout of the window, with a new branch, as\n`worktree.create` makes one, and to start in. It is made after the request ID is looked for,\nso a repeat makes none.",
+          "$ref": "#/$defs/Worktree"
+        },
+        "model": {
+          "type": "string",
+          "description": "The model this start chooses, over its entry's `model` (CONFIGURATION-3.3, CLIS-1.4). A CLI\nthat takes none from Facade, as OpenCode and a program do not, refuses it with\n`unsupported`. Omitted, a model the command's own words choose, else the entry's, else the\nCLI's own."
+        },
+        "effort": {
+          "type": "string",
+          "description": "The effort this start chooses, over its entry's `effort`, as `model` is."
+        }
+      },
+      "required": [
+        "command",
+        "cwd",
+        "cols",
+        "rows"
+      ],
+      "description": "Arguments for `agent.start`, supplied by the client."
+    },
+    "StartOutcome": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo",
+          "description": "The started agent as it was when its prompt was settled."
+        },
+        "prompt": {
+          "$ref": "#/$defs/PromptOutcome"
+        }
+      },
+      "required": [
+        "agent",
+        "prompt"
+      ],
+      "description": "What became of a start with a prompt, as its result tells the agent that started it."
+    },
+    "StartResult": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "$ref": "#/$defs/AgentInfo",
+          "description": "The agent's record."
+        },
+        "prompt": {
+          "description": "The prompt, kept and pending, where one was given.",
+          "$ref": "#/$defs/Message"
+        },
+        "result_message_id": {
+          "type": "string",
+          "description": "The ID of the result the prompt owes the agent the client acts for, a message from `facade`\nonce the prompt is settled. Omitted where no result is owed."
+        },
+        "repeated": {
+          "type": "boolean",
+          "description": "The call repeated an earlier one by its request ID: the agent is that call's, as it stands\nnow. Omitted otherwise."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "description": "The result of `agent.start`."
+    },
+    "StateDetail": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "description": "What the CLI waits for, on `waiting_for_you`.",
+          "$ref": "#/$defs/WaitKind"
+        },
+        "text": {
+          "type": "string",
+          "description": "The CLI's own words where it gave any, on `waiting_for_you` and on an `error` the CLI\nreported. Untrusted text on one line."
+        },
+        "how": {
+          "description": "How the process ended, on `ended`. Omitted when its exit status is unavailable and Facade\ndid not stop it; `exit.reason` says what is known.",
+          "$ref": "#/$defs/HowEnded"
+        },
+        "reason": {
+          "description": "Why nothing shows what the CLI is doing, on `unknown`, or what Facade found wrong, on an\n`error` it found: a start that showed nothing, or tools the CLI cannot use.",
+          "$ref": "#/$defs/StateReason"
+        }
+      },
+      "description": "More about an agent's state."
+    },
+    "StateReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "not_shown",
+          "description": "`unknown`: a program without a rule has shown nothing of what it is doing since it started."
+        },
+        {
+          "type": "string",
+          "const": "asked",
+          "description": "`unknown`: the CLI asked to report what it is doing and has not reported since."
+        },
+        {
+          "type": "string",
+          "const": "taken_back",
+          "description": "`unknown`: the CLI took back what it reported, or a full reset or a shell's new prompt ended\nit."
+        },
+        {
+          "type": "string",
+          "const": "unrecognized",
+          "description": "`unknown`: the CLI's screen shows nothing its rule recognizes."
+        },
+        {
+          "type": "string",
+          "const": "not_ready",
+          "description": "`error`: a CLI started by its rule's name showed nothing of what it is doing within 60\nseconds of its start or resume."
+        },
+        {
+          "type": "string",
+          "const": "tools_unavailable",
+          "description": "`error`: the CLI cannot use the Facade tools it was given; `tools_reason` says why."
+        }
+      ],
+      "description": "Why nothing shows what an agent's CLI is doing, or what Facade found wrong with it."
+    },
+    "StopResult": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "format": "int32",
+          "description": "The exit code, if the CLI exited normally and its status is known."
+        },
+        "signal": {
+          "type": "string",
+          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system."
+        },
+        "reason": {
+          "description": "Why no code or signal is available, if known. If all three fields are absent, the exit\nstatus is unavailable.",
+          "$ref": "#/$defs/EndReason"
+        },
+        "at": {
+          "type": "string",
+          "description": "The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or\nsignal, the time Facade noticed it."
+        },
+        "already_ended": {
+          "type": "boolean",
+          "description": "The CLI had ended before this stop, so the stop signaled nothing. Omitted when false."
+        }
+      },
+      "required": [
+        "at"
+      ],
+      "description": "The result of `agent.stop`: the CLI's recorded exit, and whether it had ended before this stop."
+    },
+    "TextWritten": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "none",
+          "description": "None of it."
+        },
+        {
+          "type": "string",
+          "const": "partial",
+          "description": "Part of it."
+        },
+        {
+          "type": "string",
+          "const": "full",
+          "description": "All of it."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "Not known: the recipient read the message while its typist was typing it, its typist did not\nsay by the deadline, what it typed was still queued then, to reach the terminal once the CLI\nreads, or the daemon before a restart had begun its paste."
+        }
+      ],
+      "description": "How much of a message reached the recipient's terminal."
+    },
+    "ToolsReason": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "not_given",
+          "description": "Facade could not give them to this run's CLI; the daemon's log says why."
+        },
+        {
+          "type": "string",
+          "const": "not_connected",
+          "description": "Its Facade server did not connect within 60 seconds of the run's start or resume, or of a\ndaemon's recovery of the run."
+        },
+        {
+          "type": "string",
+          "const": "not_started",
+          "description": "Its CLI starts its servers only with its first turn or its panel of servers, and the run's\nstart could not have the panel start Facade's server before the first turn; the daemon's log\nsays why. The first turn starts it."
+        },
+        {
+          "type": "string",
+          "const": "disconnected",
+          "description": "Its Facade server's last connection closed while the run went on."
+        },
+        {
+          "type": "string",
+          "const": "ended",
+          "description": "The CLI ended."
+        }
+      ],
+      "description": "Why an agent's CLI cannot use the Facade tools it was given."
+    },
+    "ToolsState": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "not_injected",
+          "description": "The CLI was not given the tools: it has no rule, or its rule does not give them."
+        },
+        {
+          "type": "string",
+          "const": "connecting",
+          "description": "The CLI was given the tools, and its server has not answered the CLI's `tools/list` yet."
+        },
+        {
+          "type": "string",
+          "const": "available",
+          "description": "The CLI's server answered its `tools/list` and holds a connection."
+        },
+        {
+          "type": "string",
+          "const": "unavailable",
+          "description": "The CLI was given the tools but cannot use them; `tools_reason` says why."
+        }
+      ],
+      "description": "Whether an agent's CLI can use Facade's tools: `facade-mcp`, the MCP server that a CLI started\nby its rule is given for its run."
+    },
+    "TypeArgs": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "string",
+          "description": "An agent ID (`a3`, `#a3`, or `3`), a unique name with or without `@`, or a name followed by\nits ID, such as `@Pixel #a3`."
+        },
+        "raw": {
+          "type": "string",
+          "description": "Bytes from an attached terminal, encoded as standard base64 with padding. They are queued as\nthey are, also between a typed text and its Enter."
+        },
+        "text": {
+          "type": "string",
+          "description": "Text to paste as one input: printable characters, tabs, and line breaks. When the CLI turned\non bracketed paste, the text goes between the paste brackets with each line break as a\ncarriage return; otherwise it goes as given."
+        },
+        "enter": {
+          "type": "boolean",
+          "description": "Press Enter after `text`, in a write of its own 0.1 seconds and the CLI's settle time for\nthe text after the whole text reached the terminal. Empty text with `enter` presses Enter\nalone. Defaults to false."
+        },
+        "keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Keys to press in order: Enter (or Return), Escape (or Esc), Tab, Shift+Tab, Backspace,\nDelete, Up, Down, Left, Right (or ArrowUp, ArrowDown, ArrowLeft, ArrowRight), Home, End,\nPageUp, PageDown, Space, and Ctrl+A to Ctrl+Z, in any letter case, or any one character\nother than a control character, exactly as given. Each goes as a terminal sends it in the\nCLI's modes. After an Escape, the next key waits 50 ms."
+        }
+      },
+      "required": [
+        "agent"
+      ],
+      "description": "Arguments for `agent.type`: exactly one of `raw`, `text`, or `keys`."
+    },
+    "UnwatchParams": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The watch number returned by `watch` on this connection."
+        }
+      },
+      "required": [
+        "watch"
+      ],
+      "description": "Parameters for `unwatch`."
+    },
+    "UpgradeArgs": {
+      "type": "object",
+      "properties": {
+        "program": {
+          "type": "string",
+          "description": "The program, a `facade`, with its `facade-mcp` beside it."
+        },
+        "build": {
+          "type": "string",
+          "description": "Its build, as its `hello` says it."
+        },
+        "daemon_protocol": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The daemon protocol versions it speaks, lowest and highest."
+        },
+        "keeper_protocol": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "format": "uint32",
+            "minimum": 0
+          },
+          "minItems": 2,
+          "maxItems": 2,
+          "description": "The keeper protocol versions it speaks, lowest and highest."
+        }
+      },
+      "required": [
+        "program",
+        "build",
+        "daemon_protocol",
+        "keeper_protocol"
+      ],
+      "description": "Arguments for `daemon.upgrade`: the program of a newer build that takes over, as the command\nthat asks runs it."
+    },
+    "UpgradeResult": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string",
+          "description": "The build that hands over."
+        },
+        "agents": {
+          "type": "integer",
+          "format": "uint",
+          "minimum": 0,
+          "description": "The agents that keep running through the takeover: those whose run runs."
+        }
+      },
+      "required": [
+        "from",
+        "agents"
+      ],
+      "description": "The result of `daemon.upgrade`."
+    },
+    "WaitKind": {
+      "oneOf": [
+        {
+          "type": "string",
+          "const": "permission",
+          "description": "The person's permission to go on."
+        },
+        {
+          "type": "string",
+          "const": "question",
+          "description": "The person's answer to a question."
+        },
+        {
+          "type": "string",
+          "const": "auth",
+          "description": "The person to sign in."
+        },
+        {
+          "type": "string",
+          "const": "unknown",
+          "description": "The CLI did not say."
+        }
+      ],
+      "description": "What a CLI waits for."
+    },
+    "WatchParams": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "const": "agents"
+            },
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "topic"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "const": "screen"
+            },
+            "args": {
+              "$ref": "#/$defs/ScreenWatchArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "const": "messages"
+            },
+            "args": {
+              "$ref": "#/$defs/MessagesWatchArgs"
+            }
+          },
+          "required": [
+            "topic",
+            "args"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "topic": {
+              "const": "windows"
+            },
+            "args": {
+              "$ref": "#/$defs/NoArgs"
+            }
+          },
+          "required": [
+            "topic"
+          ]
+        }
+      ],
+      "description": "Parameters for `watch`."
+    },
+    "WatchResult": {
+      "type": "object",
+      "properties": {
+        "watch": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The watch number used by `changed` notifications and `unwatch`."
+        },
+        "snapshot": {
+          "oneOf": [
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/AgentInfo"
+              }
+            },
+            {
+              "$ref": "#/$defs/ScreenSnapshot"
+            },
+            {
+              "$ref": "#/$defs/MessagesSnapshot"
+            },
+            {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/WindowInfo"
+              }
+            }
+          ],
+          "description": "The topic snapshot. Later changes arrive as ordered `changed` notifications."
+        }
+      },
+      "required": [
+        "watch",
+        "snapshot"
+      ],
+      "description": "The result of `watch`, sent before any changes for that watch."
+    },
+    "WindowDescription": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "The window's ID, which stays the same across its reloads. `terminal` is not an editor\nwindow's."
+        },
+        "label": {
+          "type": "string",
+          "description": "The window's name."
+        },
+        "environment": {
+          "type": "string",
+          "description": "`local`, or the remote authority, such as `ssh-remote+devbox`, of a window whose user\ninterface is on another computer. Once the window's last connection closes, its agents end\nafter 90 seconds if it is `local`, otherwise after five minutes, unless it connects again or\na window of the same workspace takes them over first."
+        },
+        "workspace": {
+          "type": "string",
+          "description": "The key the window's agents are kept under across its reloads: a window that connects with\nthe same key while this one has no connection takes its agents over. Omitted for a window\nwith no folder."
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The window's folders, as absolute paths, in the editor's order. Each is a location, and so\nis every checkout of a Git repository one of them is in.",
+          "default": []
+        },
+        "branch_prefix": {
+          "type": "string",
+          "description": "The window's Git branch prefix, which a new worktree's folder name leaves out. Omitted where\nnone is set."
+        }
+      },
+      "required": [
+        "id",
+        "label",
+        "environment"
+      ],
+      "description": "An editor window as it describes itself, in `hello` and again with `window.update` whenever any\nof it changes."
+    },
+    "WindowInfo": {
+      "type": "object",
+      "properties": {
+        "window_id": {
+          "type": "string",
+          "description": "The window's ID: an editor window's own, or `terminal`."
+        },
+        "label": {
+          "type": "string",
+          "description": "The window's name."
+        },
+        "environment": {
+          "type": "string",
+          "description": "`local`, or the remote authority of an editor window whose user interface is on another\ncomputer."
+        },
+        "connected": {
+          "type": "boolean",
+          "description": "Whether the window is there now. An editor window with no connection left is not, until it\nconnects again or its agents end; the terminal window always is."
+        },
+        "folders": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The window's folders, in its order. The terminal window has none."
+        },
+        "locations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LocationInfo"
+          },
+          "description": "Where an agent of the window can start: each folder and Git checkout once, a repository's\nmain checkout first. The terminal window's are the folders its running agents work in."
+        },
+        "problems": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "What Facade could not read of the window's locations, which are then as last read."
+        },
+        "observed_at": {
+          "type": "string",
+          "description": "When Facade last read the window's locations, in UTC ISO 8601 format with milliseconds; for\nthe terminal window, when it was listed. Omitted for a window whose locations this daemon\nhas not read yet."
+        },
+        "clis": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/CliInfo"
+          },
+          "description": "The CLIs a start by the agent the client acts for can run in this window, each found on that\nagent's `PATH` or not; none where Facade's settings file cannot be read as a whole. Omitted\nfor a client that acts for no agent."
+        },
+        "settings_problem": {
+          "type": "string",
+          "description": "For a client that acts for an agent, what is wrong with Facade's settings file where it\ncannot be read as a whole, which then lists no CLI and stops every start, as one text.\nOmitted where the file reads."
+        }
+      },
+      "required": [
+        "window_id",
+        "label",
+        "environment",
+        "connected",
+        "folders",
+        "locations"
+      ],
+      "description": "A window: an editor window, or the terminal window, `terminal`, which holds the agents started\nfrom a terminal."
+    },
+    "WindowsChange": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "updated"
+            },
+            "window": {
+              "$ref": "#/$defs/WindowInfo"
+            }
+          },
+          "required": [
+            "kind",
+            "window"
+          ],
+          "description": "Insert or replace this window by `window_id`."
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "removed"
+            },
+            "window_id": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "window_id"
+          ],
+          "description": "The window is gone: its last connection closed and it holds no agents, or a window of its\nworkspace took its agents."
+        }
+      ],
+      "description": "A change to the windows."
+    },
+    "Worktree": {
+      "type": "object",
+      "properties": {
+        "branch": {
+          "type": "string",
+          "description": "The new branch, which must not exist yet."
+        },
+        "base_ref": {
+          "type": "string",
+          "description": "The commit the branch starts from, as Git reads it: `HEAD`, a branch, a tag, or a commit."
+        }
+      },
+      "required": [
+        "branch",
+        "base_ref"
+      ],
+      "description": "A new worktree: its branch and where the branch starts."
+    },
+    "WorktreeCreateArgs": {
+      "type": "object",
+      "properties": {
+        "window_id": {
+          "type": "string",
+          "description": "The window to add the worktree to."
+        },
+        "cwd": {
+          "type": "string",
+          "description": "A location of that window: the checkout the worktree branches from."
+        },
+        "branch": {
+          "type": "string",
+          "description": "The new branch, which must not exist yet."
+        },
+        "base_ref": {
+          "type": "string",
+          "description": "The commit the branch starts from, as Git reads it: `HEAD`, a branch, a tag, or a commit."
+        }
+      },
+      "required": [
+        "window_id",
+        "cwd",
+        "branch",
+        "base_ref"
+      ],
+      "description": "Arguments for `worktree.create`."
+    }
+  }
+}

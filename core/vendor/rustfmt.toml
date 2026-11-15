@@ -1,0 +1,2 @@
+# vendor/ keeps its upstream form: a plain cargo fmt in core/ would otherwise apply core/rustfmt.toml here
+disable_all_formatting = true
