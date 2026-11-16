@@ -2,7 +2,6 @@
 //! the search for a terminal's agent only talk to one that runs. Help, argument errors and the
 //! version need no daemon.
 
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -12,6 +11,7 @@ use facade_base::daemon::{
 };
 use facade_base::daemon_client::{DaemonClient, Identity, takeover_timeout};
 use facade_base::keeper::{KEEPER_PROTOCOL_VERSION, MIN_KEEPER_PROTOCOL_VERSION};
+use facade_base::paths::ClientSocket;
 use facade_base::service::{self, Candidate, Report, Service};
 
 /// The longest one attempt to reach the daemon takes, starting it included.
@@ -46,7 +46,7 @@ impl From<ConnectFailure> for anyhow::Error {
 /// cancelled, and a look at each connection before hello. Blocks for at most 10 seconds.
 pub(crate) type Reconnect = dyn Fn(
     &dyn Fn() -> bool,
-    &mut dyn FnMut(&UnixStream) -> bool,
+    &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure>;
 
 /// Wraps an error that another attempt would only repeat.
@@ -125,7 +125,7 @@ pub(super) fn connect_or_start_for(agent: &str) -> anyhow::Result<DaemonClient> 
 /// connection before hello and can close it.
 pub(super) fn attempt(
     cancelled: &dyn Fn() -> bool,
-    opening: &mut dyn FnMut(&UnixStream) -> bool,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure> {
     attempt_as(&identity_for(terminal_agent(), true), cancelled, opening)
 }
@@ -135,7 +135,7 @@ pub(super) fn attempt(
 fn attempt_as(
     identity: &Identity,
     cancelled: &dyn Fn() -> bool,
-    opening: &mut dyn FnMut(&UnixStream) -> bool,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure> {
     let mut client = reach(identity, cancelled, opening)?;
     let ours = facade_base::build_id();
@@ -310,7 +310,7 @@ fn silent_keeper(logs: &Path) -> String {
 impl Drop for StartedKeeper {
     fn drop(&mut self) {
         if let Some(keeper) = self.0.take() {
-            let mut process = keeper.into_child();
+            let process = keeper.into_process();
             std::thread::spawn(move || process.wait());
         }
     }
@@ -322,7 +322,7 @@ impl Drop for StartedKeeper {
 fn reach(
     identity: &Identity,
     cancelled: &dyn Fn() -> bool,
-    opening: &mut dyn FnMut(&UnixStream) -> bool,
+    opening: &mut dyn FnMut(&ClientSocket) -> bool,
 ) -> Result<DaemonClient, ConnectFailure> {
     let home = service::create_private_home().map_err(permanent)?;
     let logs = home.join("logs");

@@ -357,10 +357,9 @@ dependencies = [
  "facade-daemon",
  "facade-keeper",
  "facade-rules",
- "libc",
  "serde",
  "serde_json",
- "signal-hook 0.4.6",
+ "tokio",
  "unicode-width",
 ]
 

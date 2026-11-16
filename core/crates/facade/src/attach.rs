@@ -8,23 +8,26 @@
 //! do not wait.
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
+use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering::SeqCst};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::time::Duration;
 
+use facade_base::console::{ConsoleRead, ConsoleReader, ConsoleSignal, ConsoleSignals, VtModes};
 use facade_base::daemon::{self, ScreenChange, ScreenSnapshot, ScreenTopic};
 use facade_base::daemon_client::{DaemonClient, RECONNECT_DELAY};
 use facade_base::jsonrpc::{self, ErrorBody, Reason};
 use facade_base::operations::{CallParams, Operation};
+use facade_base::paths::ClientSocket;
 use facade_base::process::ProcessExit;
+use facade_base::unix_process::signal_number;
 use facade_base::{base64, service};
 
 use crate::ExitText;
 use crate::daemon_client::{ConnectFailure, Reconnect};
 
-/// Ctrl-], as plain input and in the kitty keyboard encoding.
+/// Ctrl-], as plain input and in the kitty keyboard encoding. In win32-input-mode it comes as a
+/// key-down record of its character, which [`is_detach_record`] recognizes.
 const DETACH_KEYS: [&[u8]; 2] = [b"\x1d", b"\x1b[93;5u"];
 /// The longest Ctrl-] waits for the keys typed before it to be sent.
 const DETACH_SEND_TIMEOUT: Duration = Duration::from_secs(1);
@@ -33,6 +36,8 @@ const MAX_QUEUED_KEY_BYTES: usize = 1024 * 1024;
 
 /// Whether raw mode is on and the person's terminal still has to be restored.
 static RAW_MODE_ACTIVE: AtomicBool = AtomicBool::new(false);
+/// The console modes entered after raw mode, which the restoration puts back.
+static VT_MODES: Mutex<Option<VtModes>> = Mutex::new(None);
 /// Whether the agent's output has switched to the alternate screen.
 static ALTERNATE_SCREEN_ACTIVE: AtomicBool = AtomicBool::new(false);
 /// Held while writing to the person's terminal and while restoring it, so that none of the agent's
@@ -80,10 +85,24 @@ fn spawn_with(input: &Arc<AgentInput>, work: fn(&AgentInput)) {
     std::thread::spawn(move || work(&input));
 }
 
-/// Turns raw mode on; from here on every end of the attachment restores the terminal.
+/// Turns raw mode on, then the console modes that make keys travel as bytes; from here on every end
+/// of the attachment restores the terminal.
 fn enter_raw_mode() -> std::io::Result<()> {
     RAW_MODE_ACTIVE.store(true, SeqCst);
-    crossterm::terminal::enable_raw_mode().inspect_err(|_| RAW_MODE_ACTIVE.store(false, SeqCst))
+    crossterm::terminal::enable_raw_mode().inspect_err(|_| RAW_MODE_ACTIVE.store(false, SeqCst))?;
+    let modes = VtModes::enter().inspect_err(|_| {
+        RAW_MODE_ACTIVE.store(false, SeqCst);
+        let _ = crossterm::terminal::disable_raw_mode();
+    })?;
+    *lock_vt_modes() = Some(modes);
+    Ok(())
+}
+
+/// Takes the console modes to restore, even if an earlier holder panicked.
+fn lock_vt_modes() -> MutexGuard<'static, Option<VtModes>> {
+    VT_MODES
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// Why an attachment ended.
@@ -124,9 +143,7 @@ impl AttachEnd {
 fn exit_code(exit: &ProcessExit) -> i32 {
     match (exit.code, exit.signal.as_deref()) {
         (Some(code), _) => code,
-        (None, Some(name)) => (1..65)
-            .find(|&number| signal_hook::low_level::signal_name(number) == Some(name))
-            .map_or(1, |number| 128 + number),
+        (None, Some(name)) => signal_number(name).map_or(1, |number| 128 + number),
         (None, None) => 1,
     }
 }
@@ -273,45 +290,79 @@ fn not_found(error: &anyhow::Error) -> bool {
 /// Queues a resize on each size change; on a termination signal, restores the terminal and exits
 /// with 128 plus the signal's number.
 fn follow_signals(input: Arc<AgentInput>) -> anyhow::Result<()> {
-    use signal_hook::consts::{SIGHUP, SIGINT, SIGQUIT, SIGTERM, SIGWINCH};
-    let mut signals =
-        signal_hook::iterator::Signals::new([SIGWINCH, SIGTERM, SIGHUP, SIGINT, SIGQUIT])?;
+    let signals = ConsoleSignals::new()?;
     std::thread::spawn(move || {
-        for signal in signals.forever() {
-            if signal == SIGWINCH {
-                input.push_resize();
-                continue;
-            }
-            let name = signal_hook::low_level::signal_name(signal).unwrap_or("a signal");
+        for signal in signals {
+            let (name, number) = match signal {
+                ConsoleSignal::Resized => {
+                    input.push_resize();
+                    continue;
+                }
+                ConsoleSignal::Ended { name, number } => (name, number),
+            };
             let note = format!("attachment ended by {name}");
             restore_terminal(&with_unsent(note, input.unsent_bytes()));
             // A test holds the exit here, as a loaded machine can, while the agent's output
             // keeps coming.
             service::gate_for_test("attach-restored");
-            std::process::exit(128 + signal);
+            std::process::exit(128 + number);
         }
     });
     Ok(())
 }
 
-/// The one reader of the person's keys: queues them until Ctrl-] or the end of the input, then
-/// ends the attachment once the keys before it are sent.
+/// The one reader of the person's keys and, where the console reports them with its keys, its size
+/// changes: queues keys until Ctrl-] or the end of the input, then ends the attachment once the
+/// keys before it are sent.
 fn read_keys(input: &AgentInput) {
-    let mut stdin = std::io::stdin();
     let mut buffer = [0u8; 4096];
-    while let Ok(read @ 1..) = stdin.read(&mut buffer) {
-        let keys = &buffer[..read];
-        let detach_at = DETACH_KEYS
-            .iter()
-            .filter_map(|key| keys.windows(key.len()).position(|window| window == *key))
-            .min();
-        // Keys before Ctrl-] in the same read still go.
-        input.push_keys(&keys[..detach_at.unwrap_or(read)]);
-        if detach_at.is_some() {
-            break;
+    if let Ok(mut console) = ConsoleReader::new() {
+        loop {
+            let read = match console.read(&mut buffer) {
+                Ok(ConsoleRead::Resized) => {
+                    input.push_resize();
+                    continue;
+                }
+                Ok(ConsoleRead::Keys(read @ 1..)) => read,
+                Ok(ConsoleRead::Keys(0)) | Err(_) => break,
+            };
+            let keys = &buffer[..read];
+            let detach_at = detach_position(keys);
+            // Keys before Ctrl-] in the same read still go.
+            input.push_keys(&keys[..detach_at.unwrap_or(read)]);
+            if detach_at.is_some() {
+                break;
+            }
         }
     }
     input.detach_after_sending();
+}
+
+/// Where the first Ctrl-] begins in `keys`, in any of its forms.
+fn detach_position(keys: &[u8]) -> Option<usize> {
+    let encoded = DETACH_KEYS
+        .iter()
+        .filter_map(|key| keys.windows(key.len()).position(|window| window == *key));
+    let records = (0..keys.len()).filter(|&at| is_detach_record(&keys[at..]));
+    encoded.chain(records).min()
+}
+
+/// Whether `keys` begins with Ctrl-] going down in win32-input-mode, which the person's console
+/// uses once the agent's console host has asked for it: `CSI <vk>;<sc>;29;1;<cs>;<rc>_`, a key-down
+/// record of the character 0x1D, whatever the key, scan code and modifier state.
+fn is_detach_record(keys: &[u8]) -> bool {
+    let Some(record) = keys.strip_prefix(b"\x1b[") else {
+        return false;
+    };
+    let length = record
+        .iter()
+        .take_while(|&&byte| byte.is_ascii_digit() || byte == b';')
+        .count();
+    if record.get(length) != Some(&b'_') {
+        return false;
+    }
+    let fields: Vec<&[u8]> = record[..length].split(|&byte| byte == b';').collect();
+    fields.len() == 6 && fields[2] == b"29" && fields[3] == b"1"
 }
 
 /// The person's input on its way to the agent. Readers queue keys and size changes; one writer
@@ -337,11 +388,11 @@ struct InputQueue {
     dropped_bytes: usize,
     /// The connection to send on; none while disconnected. A failed write ends it only if it is
     /// still the one the write used.
-    connection: Option<Arc<UnixStream>>,
+    connection: Option<Arc<ClientSocket>>,
     /// Whether the writer is sending something it took from `waiting`.
     writing: bool,
     /// A connection being opened; detaching shuts it down so that the reconnect returns.
-    opening: Option<UnixStream>,
+    opening: Option<ClientSocket>,
     /// Ctrl-], the end of the person's input or the end of the attachment.
     detached: bool,
 }
@@ -435,7 +486,7 @@ impl AgentInput {
     }
 
     /// Hands the writer a new connection to send the waiting input on.
-    fn connected(&self, connection: UnixStream) {
+    fn connected(&self, connection: ClientSocket) {
         let mut queue = self.lock();
         queue.opening = None;
         queue.connection = Some(Arc::new(connection));
@@ -448,7 +499,7 @@ impl AgentInput {
 
     /// Notes a connection being opened, so that detaching can shut it down. False once the
     /// attachment has ended.
-    fn opening(&self, stream: &UnixStream) -> bool {
+    fn opening(&self, stream: &ClientSocket) -> bool {
         let mut queue = self.lock();
         queue.opening = stream.try_clone().ok();
         !queue.detached
@@ -517,7 +568,7 @@ impl AgentInput {
 
     /// Waits for input and a connection, then takes the next input with the connection to send it
     /// on. None once the attachment has ended.
-    fn next_to_send(&self) -> Option<(Arc<UnixStream>, Outgoing)> {
+    fn next_to_send(&self) -> Option<(Arc<ClientSocket>, Outgoing)> {
         let mut queue = self.lock();
         while !queue.detached {
             if let Some(connection) = queue.connection.clone()
@@ -614,20 +665,30 @@ fn show_note(note: &str) {
 }
 
 /// Restores plain text, visible cursor, normal keyboard and keypad modes, wrapping, ASCII charset,
-/// and full-screen scrolling. Disables paste, mouse, focus, and synchronized-update modes; pops
-/// kitty flags and resets modifyOtherKeys. Preserves the cursor position.
+/// and full-screen scrolling. Disables paste, mouse, focus, win32-input-mode and
+/// synchronized-update modes; pops kitty flags and resets modifyOtherKeys. Preserves the cursor
+/// position.
 const RESTORE_TERMINAL_SEQUENCE: &[u8] =
     b"\x1b[0m\x1b[?25h\x1b[?2004l\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1005l\x1b[?\
-      1006l\x1b[?1015l\x1b[?1004l\x1b[<u\x1b[>4m\x1b[?2026l\x1b[?7h\x1b(B\x0f\x1b7\x1b[r\x1b8";
+      1006l\x1b[?1015l\x1b[?1004l\x1b[?9001l\x1b[<u\x1b[>4m\x1b[?2026l\x1b[?7h\x1b(B\x0f\x1b7\
+      \x1b[r\x1b8";
 
 /// Restores the person's terminal and prints why the attachment ended below the agent's screen.
 /// Only the first call does anything, so a signal cannot restore a half-restored terminal again.
+/// The sequences go out while the console still reads them; then its modes go back, those entered
+/// after raw mode first.
 fn restore_terminal(note: &str) {
     let _terminal = lock_terminal();
     if !RAW_MODE_ACTIVE.swap(false, SeqCst) {
         return;
     }
+    write_terminal(&restoration(note));
+    drop(lock_vt_modes().take());
     let _ = crossterm::terminal::disable_raw_mode();
+}
+
+/// What restores the person's terminal, with the note below the agent's screen.
+fn restoration(note: &str) -> Vec<u8> {
     // CAN ends any escape sequence the agent's output left open.
     let mut restoration = b"\x18".to_vec();
     if ALTERNATE_SCREEN_ACTIVE.load(SeqCst) {
@@ -636,7 +697,7 @@ fn restore_terminal(note: &str) {
     restoration.extend_from_slice(RESTORE_TERMINAL_SEQUENCE);
     // From the last row, the line feed scrolls the agent's screen up above the note.
     restoration.extend_from_slice(format!("\x1b[999;1H\r\n[facade: {note}]\r\n").as_bytes());
-    write_terminal(&restoration);
+    restoration
 }
 
 /// Adds how many typed bytes were not sent, if any.
@@ -649,14 +710,25 @@ fn with_unsent(note: String, unsent: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{BufRead, BufReader};
+    use facade_base::sockets::{self, ServerSocket};
+    use tokio::io::{AsyncBufReadExt, BufReader};
 
     use super::*;
 
-    /// Reads one `agent.type` notification and decodes its keys.
-    fn typed(daemon: &mut BufReader<UnixStream>) -> Vec<u8> {
+    /// The daemon's end of a connection, read on a runtime of its own.
+    struct Daemon {
+        end: BufReader<ServerSocket>,
+        runtime: tokio::runtime::Runtime,
+    }
+
+    /// Reads one `agent.type` notification and decodes its keys; fails after 5 seconds.
+    fn typed(daemon: &mut Daemon) -> Vec<u8> {
         let mut line = String::new();
-        daemon.read_line(&mut line).unwrap();
+        let read = daemon.end.read_line(&mut line);
+        let read = daemon
+            .runtime
+            .block_on(async { tokio::time::timeout(Duration::from_secs(5), read).await });
+        read.unwrap().unwrap();
         let request: serde_json::Value = serde_json::from_str(&line).unwrap();
         assert_eq!(
             (request["params"]["op"].as_str(), request.get("id")),
@@ -673,13 +745,18 @@ mod tests {
         input
     }
 
-    /// A connection for the input and the daemon's end of it, which fails a read after 5 seconds.
-    fn connection() -> (UnixStream, BufReader<UnixStream>) {
-        let (writer, daemon) = UnixStream::pair().unwrap();
-        daemon
-            .set_read_timeout(Some(Duration::from_secs(5)))
+    /// A connection for the input and the daemon's end of it.
+    fn connection() -> (ClientSocket, Daemon) {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
             .unwrap();
-        (writer, BufReader::new(daemon))
+        let (writer, end) = {
+            let _entered = runtime.enter();
+            sockets::pair().unwrap()
+        };
+        let end = BufReader::new(end);
+        (writer, Daemon { end, runtime })
     }
 
     #[test]
@@ -713,7 +790,7 @@ mod tests {
     #[test]
     fn keys_handed_to_a_lost_connection_are_never_sent_again() {
         let input = input();
-        let (writer, daemon) = UnixStream::pair().unwrap();
+        let (writer, daemon) = connection();
         input.connected(writer);
         drop(daemon);
         // The write fails, so whether these keys arrived is unknown: they are neither kept nor
@@ -736,7 +813,7 @@ mod tests {
     fn a_blocked_write_never_holds_up_typing_counting_or_detaching() {
         let input = input();
         // The daemon reads nothing, so the writer soon blocks in a write.
-        let (writer, daemon) = UnixStream::pair().unwrap();
+        let (writer, daemon) = connection();
         input.connected(writer);
         let chunk = vec![b'k'; 64 * 1024];
         let maximum_unsent = 40 * chunk.len();

@@ -16,7 +16,7 @@ The `facade` program: the terminal commands that people and agents run, the hook
 - A command acts for the agent of its terminal: the agent that holds a CLI session its environment names, else `FACADE_AGENT`.
 - A build that reaches an older running Facade asks it to let this build take over, waits for a daemon of its own build, and says on one line how it went. A Facade that refuses, or serves on, is used as it is.
 - `facade hook …` only talks to a daemon that already runs, never starts Facade, and exits 0 whatever happens. That includes a hook line this build cannot parse.
-- A command whose output closes early, as `facade list | head` does, ends quietly. The keeper and the daemon keep treating a closed peer as an error.
+- A command whose output closes early, as `facade list | head` does, ends quietly: by SIGPIPE on macOS and Linux (`service::default_broken_pipe`), and on Windows through `print_or_end!`. The keeper and the daemon keep treating a closed peer as an error.
 
 ## Never does
 
@@ -46,10 +46,10 @@ The `facade` program: the terminal commands that people and agents run, the hook
 
 ## Depends on
 
-- [base](base.md): the daemon protocol's types and `DaemonClient`; the service locks and starting services (`service`); installing the running build and pointing the launcher at it (`programs`); the home and socket paths; the log; build identity and `takes_over`.
+- [base](base.md): the daemon protocol's types, `DaemonClient` and the client's socket (`ClientSocket`); the person's console while attached (`console`); signal numbers (`unix_process::signal_number`); the service locks and starting services (`service`); installing the running build and pointing the launcher at it (`programs`); the home and socket paths; the log; build identity and `takes_over`.
 - [rules](rules.md): `SESSION_VARIABLES` and `session_variable`; the `hook` module; the session file, run folder, instructions and skill file names.
 - [keeper](keeper.md): `serve`. [daemon](daemon.md): `run`.
-- Third-party: anyhow, clap, crossterm, libc, serde, serde_json, signal-hook, unicode-width.
+- Third-party: anyhow, clap, crossterm, serde, serde_json, unicode-width.
 
 ## Inside
 
@@ -79,7 +79,8 @@ Shared with the children:
 
 - `ConnectFailure`: why one attempt failed. `Timeout` means another attempt may succeed, `Permanent` means it will not, and `Cancelled` means the caller gave up.
 - `Reconnect`: the type of the function attach reconnects with, `daemon_client::attempt`.
-- `ExitText`: an agent's exit as a person reads it: `code 3`, the signal's name, or why neither is known.
+- `print_or_end!` and `println_or_end!`: every print to standard output. A reader that went away, as `head` once it has its lines, ends the command quietly with code 0; on macOS and Linux SIGPIPE ends it first, and Windows, without SIGPIPE, fails the write instead.
+- `ExitText`: an agent's exit as a person reads it: `code 3`, the signal's name, or why neither is known. A code outside 0–255, as a Windows status, shows its 32 bits in hex: `code 0xC000013A`.
 
 `daemon_client.rs` reaches the daemon:
 
@@ -115,13 +116,14 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 `src/attach.rs`: shows one agent's terminal in the person's terminal and sends the person's keys and size changes to it. It reconnects by agent ID until the person detaches or the agent ends.
 
 - **Owns:**
-  - The person's terminal while attached: raw mode, whether the agent's output switched to the alternate screen, and a lock that every write and the restoration take. These are three statics that no other code touches.
+  - The person's console while attached: raw mode and the console's VT modes (`facade_base::console::VtModes`), whether the agent's output switched to the alternate screen, and a lock that every write and the restoration take. These are statics that no other code touches.
   - The key queue, `AgentInput`: keys and resizes in the order they happened, the current connection, a connection being opened, and whether the attachment has ended.
   - The screen watch it opens on each connection.
-  - Its threads. The caller's thread draws the screen and reconnects. One thread reads the person's keys. One thread writes the queue as `agent.type` and `agent.resize` notifications, and never holds the queue's lock while it writes. One thread handles signals: SIGWINCH queues a resize; SIGTERM, SIGHUP, SIGINT and SIGQUIT restore the terminal and exit with 128 plus the signal.
+  - Its threads. The caller's thread draws the screen and reconnects. One thread reads the person's keys and, on Windows, the console's size changes, through `facade_base::console::ConsoleReader`. One thread writes the queue as `agent.type` and `agent.resize` notifications, and never holds the queue's lock while it writes. One thread follows `facade_base::console::ConsoleSignals`: a size change (SIGWINCH) queues a resize; SIGTERM, SIGHUP, SIGINT and SIGQUIT restore the terminal and exit with 128 plus the signal's number. On Windows it has nothing to follow and ends at once.
 - **Keeps:**
   - Every end restores the person's terminal exactly once, with the note after the restoration. The ends are a detach, the agent ending, its removal, a termination signal and an error. Once the terminal is restored, no more of the agent's output is written.
-  - Ctrl-] detaches, in plain input and in the kitty encoding. Keys before it in the same read are still sent, and it waits up to 1 second for them. Signals do not wait.
+  - Ctrl-] detaches, in plain input, in the kitty encoding, and as a win32-input-mode key-down record of the character 0x1D (`CSI <vk>;<sc>;29;1;<cs>;<rc>_`). Keys before it in the same read are still sent, and it waits up to 1 second for them. Signals do not wait.
+  - The agent's output goes to the person's console unchanged. On Windows the agent's console host turns win32-input-mode on and off; the person's console follows it, so keys arrive in either form, and go to the agent as they come. The restoration turns win32-input-mode off.
   - While disconnected, at most 1 MiB of keys waits. Keys that do not fit are dropped, and the final note counts them with the keys still waiting.
   - Keys handed to a connection are never sent again, even when the write fails.
   - On a takeover, the keys handed to the old connection are written before its response to `closing`.
@@ -138,7 +140,7 @@ A command runs on one thread. attach adds its own threads (see [attach](#attach)
 
 `src/hooks.rs`: runs `facade hook …`, what a CLI's hooks run, both in a run Facade started and in a guest's session, one the person started.
 
-- **Owns:** the hook's input, read from standard input: at most 1 MiB, for at most one second. The writes to a run's session file, through `facade_rules::write_session_file`. The person's own title command, which `title` runs with `/bin/sh -c` and the same input. The run hooks (`session-start <file>`, `title`, `instructions`, `approve`) each have a function of their own. The five guest hooks share `report_guest`, keyed by `GuestEvent`, which makes the one protocol call that event needs.
+- **Owns:** the hook's input, read from standard input: at most 1 MiB, for at most one second. The writes to a run's session file, through `facade_rules::write_session_file`. The person's own title command, which `title` runs with the same input, through the program and arguments `facade_rules::hook::title_command` gives for it. The run hooks (`session-start <file>`, `title`, `instructions`, `approve`) each have a function of their own. The five guest hooks share `report_guest`, keyed by `GuestEvent`, which makes the one protocol call that event needs.
 - **Keeps:**
   - Every hook exits 0 and fails silently. A hook with nothing to say prints nothing, or `hook::empty_output(cli)` for a CLI that reads every hook's output as JSON.
   - It reaches the daemon only through `connect`, so a hook never starts Facade.
