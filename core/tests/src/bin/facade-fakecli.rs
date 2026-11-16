@@ -35,6 +35,10 @@
 //! from its screen, as a CLI's permission question does: the question and a menu in place of its
 //! input, the cursor hidden, until Enter or Escape.
 //!
+//! Colors: `/fake colors` asks its terminal for its foreground, background and cursor colors, as a
+//! CLI that picks its colors by the background does: OSC 10 and 12 ended by BEL, OSC 11 by ST. Its
+//! screen shows each answer as `color <number>;<color> <bel|st>`, ended as the answer was.
+//!
 //! Tools: `FAKECLI_MCP` names an MCP server it runs, as a CLI given Facade's tools does: with its
 //! own environment, starting the server's MCP session at once and holding it until it ends.
 //! `/fake mcp stop` ends the server while the CLI goes on. `FAKECLI_MCP_DELAY_MS` starts it that
@@ -200,6 +204,8 @@ struct FakeCli {
     panel_drawn_ready: bool,
     /// A first frame was drawn.
     drawn: bool,
+    /// Terminal queries the next frame sends, before it draws.
+    queries: Vec<String>,
 }
 
 impl FakeCli {
@@ -330,6 +336,11 @@ impl FakeCli {
                 self.log_line("turn without Facade's server");
             }
             self.run_plugin_hook();
+        }
+        if first.trim() == "/fake colors" {
+            self.queries
+                .extend(["\x1b]10;?\x07", "\x1b]11;?\x1b\\", "\x1b]12;?\x07"].map(String::from));
+            return;
         }
         if let Some(question) = first.trim().strip_prefix("/fake menu ") {
             self.menu = Some(question.to_string());
@@ -501,7 +512,7 @@ impl FakeCli {
     fn draw(&mut self, out: &mut impl Write) {
         let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
         let (cols, rows) = (cols as usize, rows as usize);
-        let mut frame = String::new();
+        let mut frame: String = self.queries.drain(..).collect();
         if let Some(status) = self.status.as_mut() {
             frame.extend(status.reports.drain(..));
         }
@@ -923,6 +934,7 @@ fn run() -> anyhow::Result<()> {
         server_answered,
         panel_drawn_ready: false,
         drawn: false,
+        queries: Vec::new(),
     };
     let resumed = arguments
         .iter()
@@ -1054,6 +1066,17 @@ fn run() -> anyhow::Result<()> {
                     }
                     if rest.starts_with(b"7501;?") {
                         app.transcript.push("status reports taken".into());
+                    }
+                    if [&b"10;"[..], b"11;", b"12;"]
+                        .iter()
+                        .any(|number| rest.starts_with(number))
+                    {
+                        let ended = if rest[end] == 0x1b { "st" } else { "bel" };
+                        app.transcript.push(format!(
+                            "color {} {ended}",
+                            String::from_utf8_lossy(&rest[..end])
+                        ));
+                        dirty = true;
                     }
                     i += 2 + end + if rest[end] == 0x1b { 2 } else { 1 };
                     continue;

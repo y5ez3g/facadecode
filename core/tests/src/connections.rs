@@ -197,11 +197,20 @@ pub fn error_reason(response: &Value) -> &str {
 }
 
 /// An editor window's client, describing `window`, with Facade started first where it is not
-/// running.
+/// running. The window's description may give its `colors` and `env`.
 pub fn ide(home: &TestHome, window: &Value) -> DaemonTestClient {
+    ide_with(home, window, json!({}))
+}
+
+/// As [`ide`], with more fields of `hello`, such as `numbers_given`.
+pub fn ide_with(home: &TestHome, window: &Value, more: Value) -> DaemonTestClient {
     drop(connect(home));
     let mut wire = DaemonTestClient::open(home);
-    let welcome = wire.hello("ide", [1, 1], json!({ "window": window }));
+    let mut params = json!({ "window": window });
+    if let (Some(params), Some(more)) = (params.as_object_mut(), more.as_object()) {
+        params.extend(more.clone());
+    }
+    let welcome = wire.hello("ide", [1, 1], params);
     assert!(welcome["result"].is_object(), "{welcome}");
     wire
 }
