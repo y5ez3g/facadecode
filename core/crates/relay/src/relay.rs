@@ -1,17 +1,22 @@
-//! The relay's one loop, on one thread: it waits for a line from the CLI or the daemon and passes
+//! The relay's one loop: it waits for a line from the CLI or the daemon and passes
 //! it on. A request the daemon has not responded to is pending. When the daemon's connection
 //! ends, as when a newer Facade takes over, the relay connects again, gives the next daemon the
 //! pending requests, then the lines that came meanwhile. Where no one listens, it starts Facade
 //! once for each time it is disconnected.
 
+#[cfg(unix)]
 use std::fs::File;
 use std::io::{self, StdoutLock, Write};
 use std::mem;
+#[cfg(unix)]
 use std::os::fd::AsFd;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+#[cfg(windows)]
+use crate::windows::{Events, Input};
+#[cfg(unix)]
 use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
 
 use crate::daemon::{self, DaemonLink, Hello};
@@ -30,8 +35,17 @@ pub(crate) fn log(level: &str, fact: &str) {
 /// Relays between standard input and output and the daemon at `socket`, saying `hello`, until
 /// the CLI's input ends and every request has its response, or no daemon is connected then.
 pub(crate) fn run(socket: PathBuf, hello: Hello) -> ExitCode {
+    #[cfg(unix)]
     let input = match io::stdin().as_fd().try_clone_to_owned() {
         Ok(input) => File::from(input),
+        Err(err) => {
+            log("error", &format!("cannot open its standard input: {err}"));
+            return ExitCode::FAILURE;
+        }
+    };
+    #[cfg(windows)]
+    let (events, input) = match Events::new() {
+        Ok(pair) => pair,
         Err(err) => {
             log("error", &format!("cannot open its standard input: {err}"));
             return ExitCode::FAILURE;
@@ -41,6 +55,8 @@ pub(crate) fn run(socket: PathBuf, hello: Hello) -> ExitCode {
         socket,
         hello,
         input: Some(input),
+        #[cfg(windows)]
+        events,
         cli_lines: Lines::default(),
         output: io::stdout().lock(),
         daemon: Daemon::ended(),
@@ -53,7 +69,16 @@ pub(crate) fn run(socket: PathBuf, hello: Hello) -> ExitCode {
             return ExitCode::SUCCESS;
         }
         relay.connect_when_due();
+        #[cfg(unix)]
         let (cli_ready, daemon_ready) = relay.wait();
+        #[cfg(windows)]
+        let (cli_ready, daemon_ready) = match relay.wait() {
+            Ok(ready) => ready,
+            Err(err) => {
+                log("error", &format!("cannot wait for input: {err}"));
+                return ExitCode::FAILURE;
+            }
+        };
         if cli_ready {
             relay.read_cli();
         }
@@ -107,7 +132,12 @@ struct Relay {
     socket: PathBuf,
     hello: Hello,
     /// The CLI's input, until it ends.
+    #[cfg(unix)]
     input: Option<File>,
+    #[cfg(windows)]
+    input: Option<Input>,
+    #[cfg(windows)]
+    events: Events,
     cli_lines: Lines,
     output: StdoutLock<'static>,
     daemon: Daemon,
@@ -127,6 +157,7 @@ impl Relay {
 
     /// Blocks until the CLI's input or the daemon has something, or, while no daemon is
     /// connected, until it is time to try again. Gives which of the two has something.
+    #[cfg(unix)]
     fn wait(&self) -> (bool, bool) {
         let cli = self
             .input
@@ -156,6 +187,21 @@ impl Relay {
         (
             has_cli && has_events(fds.first()),
             has_daemon && has_events(fds.last()),
+        )
+    }
+
+    #[cfg(windows)]
+    fn wait(&mut self) -> io::Result<(bool, bool)> {
+        let timeout = match self.daemon {
+            Daemon::Disconnected { next_try, .. } => {
+                Some(next_try.saturating_duration_since(Instant::now()))
+            }
+            _ => None,
+        };
+        self.events.wait(
+            self.input.as_mut(),
+            self.daemon.link().map(|link| &mut link.stream),
+            timeout,
         )
     }
 
@@ -212,8 +258,13 @@ impl Relay {
     }
 
     /// Opens a link to the daemon and writes it the pending requests.
-    fn open(&self) -> io::Result<DaemonLink> {
-        let mut link = DaemonLink::open(&self.socket, &self.hello)?;
+    fn open(&mut self) -> io::Result<DaemonLink> {
+        let mut link = DaemonLink::open(
+            &self.socket,
+            &self.hello,
+            #[cfg(windows)]
+            &mut self.events,
+        )?;
         for pending in &self.pending {
             link.stream.write_all(&pending.line).map_err(|err| {
                 io::Error::other(format!(

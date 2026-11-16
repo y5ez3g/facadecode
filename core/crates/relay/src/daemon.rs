@@ -2,10 +2,14 @@
 //! user before it says anything, says hello, and responds to `closing`.
 
 use std::io::{self, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::process::{Command, Stdio};
 
+#[cfg(windows)]
+use crate::windows::{Events, Stream};
+#[cfg(unix)]
 use nix::unistd::Uid;
 
 use crate::jsonrpc::{self, Message};
@@ -51,7 +55,10 @@ impl Hello {
 
 /// A connection to a daemon that took the relay's hello.
 pub(crate) struct DaemonLink {
+    #[cfg(unix)]
     pub(crate) stream: UnixStream,
+    #[cfg(windows)]
+    pub(crate) stream: Stream,
     /// What the daemon sent that is no whole line yet.
     pub(crate) lines: Lines,
 }
@@ -61,15 +68,25 @@ impl DaemonLink {
     /// Fails, saying why, where no daemon listens there, it runs as another user, or it refuses
     /// the hello, as it does before the agent is listed; the relay then tries again. Where no one
     /// listens, the error's kind is `NotFound` or `ConnectionRefused`.
-    pub(crate) fn open(socket: &Path, hello: &Hello) -> io::Result<DaemonLink> {
+    pub(crate) fn open(
+        socket: &Path,
+        hello: &Hello,
+        #[cfg(windows)] events: &mut Events,
+    ) -> io::Result<DaemonLink> {
         let at = socket.display();
         let fail = |what: String| io::Error::other(what);
         // Its kind tells the relay whether anyone listens there.
-        let mut stream = UnixStream::connect(socket).map_err(|err| {
+        #[cfg(unix)]
+        let connection = UnixStream::connect(socket);
+        #[cfg(windows)]
+        let connection = Stream::connect(socket, events);
+        let mut stream = connection.map_err(|err| {
             io::Error::new(err.kind(), format!("cannot reach Facade at {at}: {err}"))
         })?;
+        #[cfg(unix)]
         let user = peer_user(&stream)
             .map_err(|err| fail(format!("cannot tell whose Facade is at {at}: {err}")))?;
+        #[cfg(unix)]
         if user != Uid::current() {
             return Err(fail(format!("the Facade at {at} is another user's")));
         }
@@ -114,8 +131,15 @@ impl DaemonLink {
 pub(crate) fn start_facade() -> Result<(), String> {
     let program = std::env::current_exe()
         .map_err(|err| format!("cannot find facade-mcp's own folder: {err}"))?
-        .with_file_name("facade");
-    let status = Command::new(&program)
+        .with_file_name(if cfg!(windows) {
+            "facade.exe"
+        } else {
+            "facade"
+        });
+    let mut command = Command::new(&program);
+    #[cfg(windows)]
+    crate::windows::no_window(&mut command);
+    let status = command
         .args(["daemon", "--detach"])
         .stdin(Stdio::null())
         .stdout(io::stderr())
@@ -131,6 +155,7 @@ pub(crate) fn start_facade() -> Result<(), String> {
 }
 
 /// The user the process at the other end of `stream` runs as.
+#[cfg(unix)]
 fn peer_user(stream: &UnixStream) -> nix::Result<Uid> {
     #[cfg(target_os = "linux")]
     {

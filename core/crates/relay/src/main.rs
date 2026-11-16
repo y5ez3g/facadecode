@@ -19,6 +19,8 @@ mod jsonrpc;
 mod lines;
 mod relay;
 mod socket;
+#[cfg(windows)]
+mod windows;
 
 use std::process::ExitCode;
 

@@ -419,6 +419,7 @@ version = "0.2.0"
 dependencies = [
  "nix",
  "sha2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
