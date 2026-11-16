@@ -15,10 +15,11 @@ function required(file: string): string[] {
 suite('Integration drivers: copied alone into a test window (VERIFICATION)', () => {
 	const dir = path.join(__dirname, 'integration');
 
-	test('the drivers copied alone as an extension\'s extension.js require only fs, path and vscode at run time - the focus probe\'s also its cdpInput, copied beside it - so they load where nothing of the extension is', () => {
+	test('the drivers copied alone as an extension\'s extension.js require only fs, path and vscode at run time - the conversion driver\'s also Node\'s child_process, the focus probe\'s also its cdpInput, copied beside it - so they load where nothing of the extension is', () => {
 		const allowed = ['fs', 'path', 'vscode'];
 		const drivers: Readonly<Record<string, readonly string[]>> = {
-			'conversionDriver.js': allowed,
+			// It asks core's `facade list` on the Rust engine: child_process is Node's own, there wherever the driver loads
+			'conversionDriver.js': [...allowed, 'child_process'],
 			'pinsDriver.js': allowed,
 			'updateDriver.js': allowed,
 			'focusProbeDriver.js': [...allowed, './cdpInput'],

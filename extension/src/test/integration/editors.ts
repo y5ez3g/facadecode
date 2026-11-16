@@ -6,6 +6,7 @@
 // the editors they start themselves, the repositories they open and how they see another editor's window join the Facade windows.
 
 import { ChildProcess, execFileSync, spawnSync } from 'child_process';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -182,4 +183,39 @@ export function fakeClis(root: string): FakeClis {
 		'EXIT /B %pi_exit_code%', ':node_missing', 'ECHO Pi could not find Node.js. Install Node.js 22.19.0 or newer, or rerun the installer at https://pi.dev. 1>&2', 'EXIT /B %pi_exit_code%', ''
 	].join('\r\n'));
 	return { fake, launchers: { pi } };
+}
+
+/** The daemon socket of Facade core for `home`, by the rule core and the extension share (`host/rust/connection.ts`'s `daemonSocketPath`). */
+export function coreSocket(home: string): string {
+	const key = createHash('sha256').update(Buffer.from(home, 'utf8')).digest('hex').slice(0, 10);
+	return path.join('/tmp', `facade-core-${process.getuid?.() ?? 0}`, `daemon-${key}.sock`);
+}
+
+/**
+ * Ends what a run left of Facade core in the Facade root `home`, as core's README cleans up a home: every agent removed through
+ * `program`, the home's own `facade`, then a wait for the daemon, which exits five seconds after its last agent and client, to take
+ * its socket away. Only processes of this `home` are touched - never one by name - and nothing where no daemon of it runs.
+ */
+export async function endCore(program: string, home: string, ms = 30_000): Promise<void> {
+	const socket = coreSocket(home);
+	if (!fs.existsSync(program) || !fs.existsSync(socket)) {
+		return;
+	}
+	// Not as an agent: `facade` acts for the agent whose terminal it runs in
+	const { FACADE_AGENT: _agent, ...own } = process.env;
+	const env = { ...own, FACADE_HOME: home };
+	const call = (...args: string[]) => spawnSync(program, args, { env, encoding: 'utf8', timeout: 15_000 });
+	const listed = call('list', '--json');
+	for (const agent of listed.status === 0 ? JSON.parse(listed.stdout || '[]') as { agent_id?: string }[] : []) {
+		if (agent.agent_id) {
+			call('remove', agent.agent_id);
+		}
+	}
+	const end = Date.now() + ms;
+	while (fs.existsSync(socket) && Date.now() < end) {
+		await new Promise(resolve => setTimeout(resolve, 200));
+	}
+	if (fs.existsSync(socket)) {
+		console.warn(`Facade core of ${home} still runs after ${ms} ms.`);
+	}
 }

@@ -30,7 +30,8 @@ const ST = `${ESC}\\`;
 const ANSWER = `${ESC}]7501;?:`;
 
 const record = process.env.FACADE_IT_RECORD!;
-const agent = process.env.FACADE_AGENT!;
+// The old engine says `#a1`, core `a1`: the files this fixture leaves, and the tests that read them, name it `#a1` on both
+const agent = `#${process.env.FACADE_AGENT!.replace(/^#/, '')}`;
 const args = process.argv.slice(2);
 // With the variables of Facade's that reach it: the run's own, and OpenCode's inline configuration
 const facadeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^FACADE_(RUN|PTYD|AGENT)$|^OPENCODE_CONFIG_CONTENT$/.test(name)));
@@ -60,6 +61,41 @@ if (sessionFile) {
 		db.close();
 	}
 	fs.writeFileSync(sessionFile, JSON.stringify({ session_id: session, cwd: process.cwd(), source: 'startup' }));
+}
+// Claude Code names its conversation to Facade's SessionStart hook, from the settings it was started with, as it starts (CLIS-2.2): the
+// Rust engine learns the session so, where the old engine's file above says it. A resumed conversation keeps its ID; a new one has one.
+{
+	const given = args.indexOf('--settings');
+	let hook: string | undefined;
+	try {
+		hook = given >= 0 ? JSON.parse(args[given + 1]).hooks?.SessionStart?.[0]?.hooks?.[0]?.command as string | undefined : undefined;
+	} catch { /* a file's path, the old engine's */ }
+	// The other five report in the ways core's rules wire (title command, hooks, a plugin, an extension): where the wiring says the run's
+	// session file is, this fixture writes the file as those reports end up (core's `sessions`: the ID and a newline), once, as it starts
+	if (!hook && !sessionFile && process.env.FACADE_AGENT) {
+		const files = args.flatMap((arg, at) => ['-e', '--settings'].includes(args[at - 1] ?? '') && fs.existsSync(arg) ? [fs.readFileSync(arg, 'utf8')] : []);
+		const text = [...args, process.env.OPENCODE_CONFIG_CONTENT ?? '', process.env.OPENCODE_CLI_CONFIG_CONTENT ?? '', ...files].join('\n');
+		// The run's folder, named by its session file, or by the folder of the plugin that writes it (OpenCode's)
+		const folder = /(\/[^\s'"\\]*\/runs\/[^\s'"\\/]+\/[^\s'"\\/]+)\/(?:session|facade-session)(?![\w.-])/.exec(text)?.[1];
+		const file = folder && `${folder}/session`;
+		if (file) {
+			const flag = args.findIndex(arg => ['--resume', '--conversation', '--session', 'resume'].includes(arg));
+			const session = flag >= 0 ? args[flag + 1] : process.env.FACADE_IT_AS === 'opencode' ? `ses_fake${randomUUID().replace(/-/g, '').slice(0, 12)}` : randomUUID();
+			fs.writeFileSync(file, `${session}\n`);
+		}
+	}
+	if (hook && !sessionFile) {
+		const flag = args.findIndex(arg => arg === '--resume' || arg === '--session-id');
+		const session = flag >= 0 ? args[flag + 1] : randomUUID();
+		// The conversation's file, which core waits for before it counts the session (PROTOCOL "CLI rules"): where Claude Code keeps it
+		const transcript = path.join(process.env.CLAUDE_CONFIG_DIR ?? process.cwd(), 'projects', process.cwd().replace(/[^A-Za-z0-9]/g, '-'), `${session}.jsonl`);
+		fs.mkdirSync(path.dirname(transcript), { recursive: true });
+		if (!fs.existsSync(transcript)) {
+			fs.writeFileSync(transcript, `${JSON.stringify({ type: 'user', sessionId: session, cwd: process.cwd(), parentUuid: null, message: { role: 'user', content: 'Fake conversation' } })}\n`);
+		}
+		const run = spawn('/bin/sh', ['-c', hook], { stdio: ['pipe', 'ignore', 'ignore'], env: process.env });
+		run.stdin.end(JSON.stringify({ hook_event_name: 'SessionStart', session_id: session, transcript_path: transcript, cwd: process.cwd(), source: flag >= 0 ? 'resume' : 'startup' }));
+	}
 }
 process.stdout.write('fake agent ready\r\n');
 
@@ -366,7 +402,8 @@ function start(): void {
  * Whether it stands in for Antigravity: Facade gives Antigravity alone its run's settings in `agy-settings.json` (CLIS-3.4). What the
  * settings hold tells nothing, as a Claude Code entry's own may hold the same keys.
  */
-const antigravity = args.includes('--settings') && path.basename(args[args.indexOf('--settings') + 1] ?? '') === 'agy-settings.json';
+// The old engine gives its run settings as a file of that name, core inline
+const antigravity = args.includes('--settings') && (path.basename(args[args.indexOf('--settings') + 1] ?? '') === 'agy-settings.json' || (as === 'agy' && (args[args.indexOf('--settings') + 1] ?? '').trimStart().startsWith('{')));
 /** Starts the server Antigravity was given, at its first turn or once its MCP panel opens; nothing until then. */
 let startsServer: (() => void) | undefined;
 

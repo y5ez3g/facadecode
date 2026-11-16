@@ -32,6 +32,8 @@ const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	pi: ['--approve'],
 	'my-cli': ['--from-custom', 'two words']
 };
+/** Whether the windows run on the Rust engine: core starts each CLI with its own wiring (an inline `--settings`, no run files of the extension's). */
+const RUST = process.env.FACADE_IT_ENGINE === 'rust';
 /** Whether this run's CLI is the suite's program rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
 
@@ -114,10 +116,13 @@ async function newCard(): Promise<PanelState['cards'][number]> {
 	return until('a new card', async () => {
 		const now = await state();
 		const added = now.cards.find(card => !before.has(card.runId));
-		if (added) {
+		// On the Rust engine its short ID comes with core's answer to the start (RULES-2.2): the card is the test's once it has it
+		if (added && /#a\d+/.test(linesOf(added).join(' '))) {
 			return added;
 		}
-		await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+		if (!added) {
+			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+		}
 		return undefined;
 	});
 }
@@ -162,6 +167,14 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		} else if (CLI === 'codex') {
 			assert.ok(launch.args.includes('--dangerously-bypass-approvals-and-sandbox'), launch.args.join(' '));
 			assert.ok(launch.args.some(arg => arg.startsWith('projects={ ') && arg.includes('trust_level = "trusted"')));
+		} else if (CLI === 'claude' && RUST) {
+			// Core's own wiring: its tools and its SessionStart hook come inline, in one `--settings`, and its plugin and MCP files are its run's
+			const settingsAt = launch.args.indexOf('--settings');
+			assert.ok(settingsAt >= 0 && launch.args.filter(arg => arg === '--settings').length === 1, 'one --settings carries the native session hook');
+			const settings = JSON.parse(launch.args[settingsAt + 1]);
+			assert.match(settings.hooks.SessionStart[0].hooks[0].command, /hook session-start/);
+			assert.ok(launch.args.includes('--mcp-config'));
+			assert.ok(launch.args.includes('--dangerously-skip-permissions'));
 		} else if (CLI === 'claude') {
 			const settingsAt = launch.args.indexOf('--settings');
 			assert.ok(settingsAt >= 0, 'the native session hooks accompany the MCP configuration');
@@ -182,7 +195,8 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 		// Antigravity's trust in the folder, in its settings in the home its terminal sees: the suite's, never the person's (CLIS-3.3)
 		if (CLI === 'agy') {
-			const settings = JSON.parse(fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8')) as { trustedWorkspaces: string[] };
+			// Core gives it in the run's own inline `--settings`, the old engine writes it into the CLI's settings file
+			const settings = (RUST ? JSON.parse(launch.args[launch.args.indexOf('--settings') + 1]) : JSON.parse(fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8'))) as { trustedWorkspaces: string[] };
 			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
 		}
 		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
@@ -308,8 +322,9 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const card = await until('the resumed card', async () => {
 			const current = await state();
 			const added = current.cards.find(each => !before.has(each.runId));
-			if (added) { return added; }
-			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
+			// On the Rust engine its short ID and name come with core's answer to the start
+			if (added && /#a\d+/.test(linesOf(added).join(' '))) { return added; }
+			if (!added) { await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem'); }
 			return undefined;
 		});
 		assert.ok(BUILT_IN_NAMES.includes(card.name), `Resume assigns a short name, not the history title: ${card.name}`);
@@ -362,16 +377,20 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		const card = await newCard();
 		// Filter by Working Location..., as the person takes the card's location: in this window of one folder, the item after its
 		// whole folder
-		void vscode.commands.executeCommand('facade.filter');
+		// The picker lists its locations once the window's locations are read, later in a remote window: a key before that accepts the
+		// first item, every agent, which closes the picker - so it is opened again and given its time before the keys
 		const filtered = await until('the filter', async () => {
 			const now = await state();
 			if (now.filter) {
 				return now;
 			}
+			void vscode.commands.executeCommand('facade.filter');
+			await new Promise(resolve => setTimeout(resolve, 2_500));
 			await vscode.commands.executeCommand('workbench.action.quickOpenSelectNext');
 			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-			return undefined;
-		});
+			await new Promise(resolve => setTimeout(resolve, 500));
+			return (await state()).filter ? await state() : undefined;
+		}, 60_000);
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
 		const left = await until('the filtered empty panel', async () => { const now = await state(); return now.empty === 'noMatch' ? now : undefined; });
 		const said = await until('the page to say so', async () => {
@@ -391,6 +410,14 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 			this.skip();
 		}
 		const before = (await state()).cardCount;
+		// The Rust engine has no Show Agent Launch (the specification takes it away); its log is core's own
+		if (RUST) {
+			await vscode.commands.executeCommand('facade.showAgentsLog');
+			const log = await until('the log document', async () => vscode.workspace.textDocuments.find(document => document.uri.scheme === 'facade-agents-log'));
+			assert.ok(log.getText().trim() && log.getText() !== 'No agent events yet\n', 'core has logged this run');
+			assert.strictEqual((await state()).cardCount, before, 'no agent was started');
+			return;
+		}
 		// As the Command Palette runs it; Resume may have remembered a nested cwd, so accept the location picker if shown.
 		const showing = vscode.commands.executeCommand('facade.showAgentLaunch');
 		const launch = await until('the launch document', async () => {
