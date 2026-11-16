@@ -21,7 +21,7 @@ use crate::command_line::{self, Configured};
 use crate::lifecycle::Work;
 use crate::messages::OwedResult;
 use crate::records::{self, Named, Reach};
-use crate::runs::{ExitSink, FirstRead, RunExit, RunLaunch, RunRequest};
+use crate::runs::{ExitSink, FirstRead, RunExit, RunKind, RunRequest};
 use crate::store::AgentRecord;
 use crate::{Daemon, HUMAN, Sender, blocking, gate_for_test, log, pause_for_test};
 
@@ -392,7 +392,8 @@ impl Daemon {
             window_label: &label,
             creator: creator.as_deref().map(|creator| (creator, creator_name)),
             yolo,
-            resume: args.session.as_deref(),
+            session: args.session.as_deref(),
+            kind: RunKind::Start,
         };
         let mut prepared = match self.runs.prepare(request).await {
             Ok(prepared) => prepared,
@@ -404,7 +405,7 @@ impl Daemon {
         let (tx, rx) = mpsc::channel(agent::MAX_QUEUED_COMMANDS);
         let started = self
             .runs
-            .launch(
+            .start(
                 reservation,
                 &id,
                 agent::FIRST_RUN,
@@ -412,7 +413,6 @@ impl Daemon {
                 args.cols,
                 args.rows,
                 exit_sink(tx.clone()),
-                RunLaunch::Start,
             )
             .await;
         let started = match started {
@@ -851,7 +851,8 @@ impl Daemon {
                 .as_deref()
                 .map(|creator| (creator, creator_name.as_deref())),
             yolo,
-            resume: Some(&session),
+            session: Some(&session),
+            kind: RunKind::Resume,
         };
         let mut prepared = self.runs.prepare(request).await?;
         if !self
@@ -881,7 +882,7 @@ impl Daemon {
         prepared_screen.await.map_err(|_| agent_stopped(&id))?;
         let started = self
             .runs
-            .launch(
+            .start(
                 reservation,
                 &id,
                 number,
@@ -889,7 +890,6 @@ impl Daemon {
                 args.cols,
                 args.rows,
                 exit_sink(agent.mailbox()),
-                RunLaunch::Resume,
             )
             .await?;
         gate_for_test("before-restart-commit");

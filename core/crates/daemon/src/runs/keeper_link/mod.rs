@@ -20,7 +20,7 @@ use facade_base::terminal::PtyMaster;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
-use super::{ExitRecorded, ExitSink, FoundKeeper, RunEvent, RunExit, RunLaunch, StartedRun};
+use super::{ExitRecorded, ExitSink, FoundKeeper, RunEvent, RunExit, RunKind, StartedRun};
 use client::{ConnectError, KeeperClient};
 use registry::{Run, RunRegistry, RunRole};
 
@@ -155,7 +155,7 @@ impl KeeperLink {
         number: u64,
         args: StartArgs,
         exits: ExitSink,
-        kind: RunLaunch,
+        kind: RunKind,
     ) -> Result<StartedRun, ErrorBody> {
         let selected = reservation.keeper.lock().unwrap().clone();
         let keeper = match selected {
@@ -198,7 +198,7 @@ impl KeeperLink {
                         ))
                     }
                     Ok(copy) => {
-                        if kind == RunLaunch::Start {
+                        if kind == RunKind::Start {
                             crate::gate_for_test("after-run-start-response");
                         }
                         self.runs.register(
@@ -212,7 +212,7 @@ impl KeeperLink {
                                 exit: None,
                                 stopping: false,
                                 role: RunRole::Agent,
-                                committed: kind == RunLaunch::Start,
+                                committed: kind == RunKind::Start,
                                 number,
                                 exits: Some(exits),
                             },
@@ -229,7 +229,7 @@ impl KeeperLink {
             self.runs.cancel(id);
         }
         drop(reservation);
-        if started.is_ok() && kind == RunLaunch::Start {
+        if started.is_ok() && kind == RunKind::Start {
             crate::pause_for_test("after-run-start");
         }
         started
