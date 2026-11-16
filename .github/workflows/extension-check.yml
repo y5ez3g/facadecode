@@ -69,8 +69,10 @@ jobs:
         if: runner.os != 'Windows'
         working-directory: core
         run: rustup toolchain install
+      # rustup target add acts on the toolchain of the directory it runs in: core's pinned one, which builds, not the runner's default
       - name: musl for core on Linux
         if: runner.os == 'Linux'
+        working-directory: core
         run: |
           sudo apt-get update
           sudo apt-get install -y musl-tools
