@@ -63,8 +63,10 @@ pub fn this_program() -> std::io::Result<PathBuf> {
 }
 
 /// Reads the build a test has this program play, and clears both variables, so that a program
-/// this one starts plays it only when started through the test's script too. Call it first thing
-/// in `main`, while no other thread runs. A release build ignores both variables.
+/// this one starts plays it only when started through the test's script too. Without them, a
+/// test that cannot run a script, as on Windows, names the build in a file beside the program
+/// ([`TEST_BUILD_SUFFIX`]). Call it first thing in `main`, while no other thread runs. A release
+/// build ignores both variables and the file.
 pub fn take_test_build() {
     #[cfg(debug_assertions)]
     {
@@ -80,10 +82,43 @@ pub fn take_test_build() {
                 build,
                 program: program.into(),
             }),
-            _ => None,
+            _ => played_by_file(),
         };
         let _ = PLAYED.set(played);
     }
+}
+
+/// What a debug build's program appends to its own file name for the file that names the build a
+/// test has it play: line 1 the build, and an optional line 2 the absolute path of a log, to which
+/// the program first appends its arguments, joined by single spaces. `install` and
+/// `point_launchers_at` carry the file with the program.
+pub const TEST_BUILD_SUFFIX: &str = ".test-build";
+
+/// The build that the file beside this program has it play, with this program as its own; None
+/// without the file.
+#[cfg(debug_assertions)]
+fn played_by_file() -> Option<Played> {
+    use std::io::Write;
+    let program = std::env::current_exe().ok()?;
+    let mut name = program.file_name()?.to_os_string();
+    name.push(TEST_BUILD_SUFFIX);
+    let text = std::fs::read_to_string(program.with_file_name(name)).ok()?;
+    let mut lines = text.lines().map(str::trim);
+    let build = lines.next().filter(|build| !build.is_empty())?.to_string();
+    if let Some(log) = lines.next().filter(|log| !log.is_empty()) {
+        let words: Vec<String> = std::env::args_os()
+            .skip(1)
+            .map(|word| word.to_string_lossy().into_owned())
+            .collect();
+        let opened = std::fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(log);
+        if let Ok(mut log) = opened {
+            let _ = writeln!(log, "{}", words.join(" "));
+        }
+    }
+    Some(Played { build, program })
 }
 
 /// The build a test has this program play, and the script that runs it. Only a debug build makes

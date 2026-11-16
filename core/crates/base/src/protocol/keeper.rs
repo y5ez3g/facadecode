@@ -1,30 +1,43 @@
 //! The keeper protocol connects the daemon and keeper over JSON-RPC 2.0, one message per line
-//! ([`super::jsonrpc`]), on the keeper's socket, `keeper-<key>.sock`. It shares framing and error
-//! reasons with the daemon protocol. Version 1 is frozen: later versions only add optional fields,
-//! and every daemon keeps speaking version 1. Unknown fields are ignored, and an unknown operation
-//! is `invalid_argument`.
+//! ([`super::jsonrpc`]), on the keeper's socket: `keeper-<key>.sock` on Unix, the named pipe
+//! `\\.\pipe\facade-core-keeper-<key>` on Windows. It shares framing and error reasons with the
+//! daemon protocol. Version 1 is frozen: later versions only add optional fields, and every daemon
+//! keeps speaking version 1. Unknown fields are ignored, and an unknown operation is
+//! `invalid_argument`.
 //!
-//! The keeper checks its peer through the kernel as it accepts the connection: its user ID must be
-//! this user's, and its process ID and birth must match the daemon lock's record. Any other peer
-//! is closed at once, before a word. A connection it accepts replaces the one before. Send `hello`
+//! The keeper checks its peer through the system as it accepts the connection: its user must be
+//! this user, and its process ID and birth must match the daemon lock's record. Any other peer is
+//! closed at once, before a word. A connection it accepts replaces the one before. Send `hello`
 //! first; each side then speaks the highest version both ranges share.
 //!
-//! The keeper holds one CLI per agent: the CLI process and its PTY master. `agent.start` answers
-//! with a master descriptor, passed with `SCM_RIGHTS`; `agent.sync` passes one either way, from
-//! the side that has it to the side that lacks it. Once a CLI ends, the keeper notifies `changed`
-//! where a daemon is connected, reaps it, closes its master and forgets it: a daemon that misses
-//! the notification finds the agent gone from the next hello. Only the keeper that started a CLI
-//! has its exit code or signal; a CLI it took over by `agent.sync` ends without either.
+//! The keeper holds one CLI per agent: the CLI process and its terminal. `agent.start` answers with
+//! the terminal; `agent.sync` passes one either way, from the side that has it to the side that
+//! lacks it. A message carries at most one terminal. On Unix the terminal is a PTY master, passed
+//! with `SCM_RIGHTS`. On Windows it is the message's top-level member
+//! `"terminal": {"input": …, "output": …, "signal": …, "job": …}`: the pseudo console's input pipe's
+//! write end, its output pipe's read end, its signal pipe's write end, and the CLI's job, each a
+//! handle number in the receiving process, which the sender duplicated there before it wrote the
+//! line. The keeper opens the daemon's process from the daemon lock's record, and the daemon the
+//! keeper's from the keeper lock's. `signal` is absent where the sender had let go of its copy for a stop. The receiver owns
+//! the handles from the line on, and closes them when it refuses the line.
 //!
-//! `agent.stop` sends SIGHUP to the CLI's process group, then SIGKILL to the group once the CLI
-//! ends or [`STOP_TIMEOUT`] passes, whichever comes first. A repeated stop keeps the first
-//! deadline. Each signal needs the group's leader proved by its process ID, birth and group.
+//! Once a CLI ends, the keeper notifies `changed` where a daemon is connected, forgets the CLI and
+//! closes its terminal: a daemon that misses the notification finds the agent gone from the next
+//! hello. On Unix, only the keeper that started a CLI has its exit code or signal, and a CLI it
+//! took over by `agent.sync` ends without either. On Windows the keeper has the exit code of every
+//! CLI it holds, and an exit never has a signal.
+//!
+//! `agent.stop` hangs up, then kills once the CLI ends or [`STOP_TIMEOUT`] passes, whichever comes
+//! first. A repeated stop keeps the first deadline. On Unix it hangs up with SIGHUP to the CLI's
+//! process group and kills with SIGKILL to the group, each needing the group's leader proved by its
+//! process ID, birth and group. On Windows it hangs up by closing the keeper's copy of the signal
+//! pipe, after the daemon closed its own, so that the console ends; it kills with
+//! `TerminateJobObject` on the CLI's job.
 //!
 //! The daemon pings once a second from its hello on. After [`PING_TIMEOUT`] without one, the keeper
-//! ends it with SIGKILL. Once the daemon ends, a keeper holding CLIs starts the launcher's daemon
-//! again after a delay that starts at [`MIN_RESTART_DELAY`] and doubles up to
-//! [`MAX_RESTART_DELAY`], starting over after a daemon that ran [`RESTART_DELAY_RESET`]; a keeper
-//! holding none exits.
+//! kills it. Once the daemon ends, a keeper holding CLIs starts the launcher's daemon again after
+//! a delay that starts at [`MIN_RESTART_DELAY`] and doubles up to [`MAX_RESTART_DELAY`], starting
+//! over after a daemon that ran [`RESTART_DELAY_RESET`]; a keeper holding none exits.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -38,7 +51,7 @@ use crate::process::ProcessExit;
 pub const KEEPER_PROTOCOL_VERSION: u32 = 1;
 pub const MIN_KEEPER_PROTOCOL_VERSION: u32 = 1;
 
-/// From a stop's SIGHUP to its SIGKILL, unless the CLI ends first.
+/// From a stop's hang-up to its kill, unless the CLI ends first.
 pub const STOP_TIMEOUT: Duration = Duration::from_secs(3);
 /// How long the keeper waits for a ping before it ends the daemon.
 pub const PING_TIMEOUT: Duration = Duration::from_secs(15);
@@ -101,7 +114,8 @@ pub struct HeldAgent {
     pub pid: u32,
     /// The CLI's birth: an opaque string, compared for equality alone. On macOS it is the
     /// process's start time as `<seconds>.<6-digit microseconds>`; on Linux, the starttime field,
-    /// the 22nd, of `/proc/<pid>/stat`, in decimal.
+    /// the 22nd, of `/proc/<pid>/stat`, in decimal; on Windows, the creation time from
+    /// `GetProcessTimes`, a decimal count of 100-nanosecond intervals since 1601-01-01.
     pub birth: String,
     /// The keeper is stopping it. Absent means false.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
@@ -126,7 +140,7 @@ pub struct StartArgs {
     pub rows: u16,
 }
 
-/// The result of `agent.start`. Its response carries the PTY master.
+/// The result of `agent.start`. Its response carries the terminal.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct StartResult {
     /// The CLI's process ID.
@@ -143,7 +157,7 @@ pub struct AgentArgs {
 }
 
 /// Arguments for `agent.sync`: the CLI the daemon knows for the agent. The request carries the
-/// daemon's PTY master where it has one.
+/// daemon's terminal where it has one.
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema)]
 pub struct SyncArgs {
     /// The agent's ID.
@@ -170,11 +184,13 @@ pub enum AgentChange {
 pub struct AgentStart;
 impl Operation for AgentStart {
     const NAME: &'static str = "agent.start";
-    const DOC: &'static str = "Starts the agent's CLI in a new PTY, in a session and process \
-                               group of its own, as its parent. Answers once the program runs, \
-                               with the PTY master. Fails with `invalid_argument` for an empty \
-                               command or an agent it holds, and `unavailable` where the PTY, the \
-                               program, the folder or the CLI's birth cannot be had.";
+    const DOC: &'static str = "Starts the agent's CLI in a new terminal, as its parent: on Unix a \
+                               PTY, in a session and process group of its own; on Windows a \
+                               pseudo console, in a job of its own. Answers once the program \
+                               runs, with the terminal. Fails with `invalid_argument` for an \
+                               empty command or an agent it holds, and `unavailable` where the \
+                               terminal, the program, the folder or the CLI's birth cannot be \
+                               had.";
     type Args = StartArgs;
     type Result = StartResult;
 }
@@ -182,11 +198,14 @@ impl Operation for AgentStart {
 pub struct AgentStop;
 impl Operation for AgentStop {
     const NAME: &'static str = "agent.stop";
-    const DOC: &'static str = "Sends SIGHUP to the CLI's process group and answers. Sends SIGKILL \
-                               to the group once the CLI ends or 3 seconds pass, whichever comes \
-                               first; a repeated stop keeps the first deadline. A group whose \
-                               leader cannot be proved gets no signal, and the stop still \
-                               answers. Fails with `not_found` for an agent it does not hold.";
+    const DOC: &'static str = "Hangs up and answers, then kills once the CLI ends or 3 seconds \
+                               pass, whichever comes first; a repeated stop keeps the first \
+                               deadline. On Unix it sends SIGHUP, then SIGKILL, to the CLI's \
+                               process group; a group whose leader cannot be proved gets no \
+                               signal, and the stop still answers. On Windows it closes the \
+                               keeper's copy of the signal pipe, after the daemon let go of its \
+                               own, then calls `TerminateJobObject` on the CLI's job. Fails with \
+                               `not_found` for an agent it does not hold.";
     type Args = AgentArgs;
     type Result = EmptyResult;
 }
@@ -194,10 +213,10 @@ impl Operation for AgentStop {
 pub struct AgentSync;
 impl Operation for AgentSync {
     const NAME: &'static str = "agent.sync";
-    const DOC: &'static str = "Gives the PTY master to the side that lacks it. A request without \
-                               one is answered with the keeper's; one with a master for a CLI the \
-                               keeper lacks is held, and watched until it ends, without its exit \
-                               code. A CLI that has already ended is answered as held and \
+    const DOC: &'static str = "Gives the terminal to the side that lacks it. A request without \
+                               one is answered with the keeper's; one with a terminal for a CLI \
+                               the keeper lacks is held, and watched until it ends: without its \
+                               exit code on Unix, with it on Windows. A CLI that has already ended is answered as held and \
                                reported ended at once. Both sides holding one, the process ID and \
                                birth must match (`invalid_argument` otherwise); neither, \
                                `not_found`.";
@@ -209,8 +228,8 @@ pub struct DaemonPing;
 impl Operation for DaemonPing {
     const NAME: &'static str = "daemon.ping";
     const DOC: &'static str = "Tells the keeper the daemon is alive; send it once a second from \
-                               hello on. After 15 seconds without one, the keeper ends the daemon \
-                               with SIGKILL.";
+                               hello on. After 15 seconds without one, the keeper kills the \
+                               daemon: SIGKILL on Unix, `TerminateProcess` on Windows.";
     type Args = NoArgs;
     type Result = EmptyResult;
 }

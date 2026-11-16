@@ -11,21 +11,39 @@
 
 use std::collections::BTreeMap;
 use std::io;
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+#[cfg(unix)]
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::sys::signal::Signal;
+#[cfg(unix)]
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
+#[cfg(unix)]
 use nix::unistd::Pid;
 
-use crate::process::{ProcessExit, ProcessIdentity};
+#[cfg(unix)]
+use crate::process::ProcessExit;
+use crate::process::ProcessIdentity;
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use super::io_thread::WaitPacket;
+#[cfg(windows)]
+use windows as os;
+#[cfg(windows)]
+pub use windows::{birth, monotonic_now, presence};
 
 // The exits of this process's children.
 
 /// The exit `status` reports, where it reports one: by its code, or by its signal, named alike on
 /// every system.
+#[cfg(unix)]
 pub fn exit_from_status(status: WaitStatus) -> Option<ProcessExit> {
     let (code, signal) = match status {
         WaitStatus::Exited(_, code) => (Some(code), None),
@@ -37,6 +55,7 @@ pub fn exit_from_status(status: WaitStatus) -> Option<ProcessExit> {
 
 /// Reaps child `pid` where it has ended, and returns its exit. A failure, `ECHILD` for a process
 /// that is not this process's child among them, is no exit.
+#[cfg(unix)]
 pub fn reap_child(pid: i32) -> Option<ProcessExit> {
     match waitpid(Pid::from_raw(pid), Some(WaitPidFlag::WNOHANG)) {
         Ok(status) => exit_from_status(status),
@@ -46,6 +65,7 @@ pub fn reap_child(pid: i32) -> Option<ProcessExit> {
 
 /// Child `pid`'s exit, left unreaped, so that its process ID and group ID stay its own. A child
 /// that stopped, went on or is traced has not exited, though macOS reports those too.
+#[cfg(unix)]
 pub fn peek_child_exit(pid: i32) -> Option<ProcessExit> {
     let info = waited_unreaped(pid)?;
     // SAFETY: waitid filled the status of the child it reported.
@@ -65,6 +85,7 @@ pub fn peek_child_exit(pid: i32) -> Option<ProcessExit> {
 
 /// What `waitid` reports of child `pid` without waiting or reaping it; None where it reports
 /// nothing.
+#[cfg(unix)]
 fn waited_unreaped(pid: i32) -> Option<libc::siginfo_t> {
     // SAFETY: an all-zero siginfo_t is valid.
     let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
@@ -77,6 +98,7 @@ fn waited_unreaped(pid: i32) -> Option<libc::siginfo_t> {
 }
 
 /// An exit that happened now.
+#[cfg(unix)]
 fn exit_now(code: Option<i32>, signal: Option<String>) -> ProcessExit {
     let at = crate::time::iso_now();
     ProcessExit {
@@ -90,6 +112,7 @@ fn exit_now(code: Option<i32>, signal: Option<String>) -> ProcessExit {
 // Deadlines, kept on the clock that does not jump.
 
 /// Nanoseconds on this machine's `CLOCK_MONOTONIC`, the clock of stop deadlines.
+#[cfg(unix)]
 pub fn monotonic_now() -> u64 {
     // SAFETY: an all-zero timespec is valid.
     let mut now: libc::timespec = unsafe { std::mem::zeroed() };
@@ -111,6 +134,7 @@ pub fn instant_at(at: u64) -> Instant {
 
 /// What the kernel says of a process.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg(unix)]
 pub struct ProcessSnapshot {
     pub birth: String,
     /// Its process group.
@@ -121,11 +145,13 @@ pub struct ProcessSnapshot {
 }
 
 /// What the kernel says of process `pid`; None where no process has that ID.
+#[cfg(unix)]
 pub fn snapshot(pid: u32) -> io::Result<Option<ProcessSnapshot>> {
     os::snapshot(pid)
 }
 
 /// The birth value of process `pid`; None where no process has that ID.
+#[cfg(unix)]
 pub fn birth(pid: u32) -> io::Result<Option<String>> {
     snapshot(pid).map(|found| found.map(|found| found.birth))
 }
@@ -150,6 +176,7 @@ pub enum Presence {
 
 /// Whether the process `identity` still runs. One the kernel no longer has, one born at another
 /// moment, and one that exited all through have ended.
+#[cfg(unix)]
 pub fn presence(identity: &ProcessIdentity) -> io::Result<Presence> {
     let same = snapshot(identity.pid)?.filter(|found| found.birth == identity.birth);
     Ok(match same.map(|found| found.exited) {
@@ -165,6 +192,7 @@ pub fn presence(identity: &ProcessIdentity) -> io::Result<Presence> {
 pub const PROC_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 /// How the system lets a process be watched, or that it has ended already.
+#[cfg(unix)]
 enum Watch {
     Ended,
     /// A descriptor that becomes readable when the process ends.
@@ -175,10 +203,14 @@ enum Watch {
     Proc,
 }
 
-/// Watches a process that is not this process's child until it ends.
+/// Watches a process that is not this process's child until it ends. On Windows it holds the
+/// process's handle, which also keeps its ID from passing to another process meanwhile.
 pub struct ProcessObservation {
     identity: ProcessIdentity,
+    #[cfg(unix)]
     exit_event: Option<OwnedFd>,
+    #[cfg(windows)]
+    process: std::os::windows::io::OwnedHandle,
 }
 
 /// What starting to watch a process found.
@@ -192,6 +224,7 @@ impl ProcessObservation {
     /// Starts watching the process `identity`. One the kernel no longer has, or one born at another
     /// moment, has ended. A failure for permission or resources proves nothing; the caller tries
     /// again.
+    #[cfg(unix)]
     pub fn open(identity: &ProcessIdentity) -> io::Result<Observed> {
         let exit_event = match os::watch(identity)? {
             Watch::Ended => return Ok(Observed::Ended),
@@ -211,11 +244,13 @@ impl ProcessObservation {
 
     /// The descriptor that becomes readable when the process ends. None where there is none: then
     /// ask [`ProcessObservation::ended`] every [`PROC_POLL_INTERVAL`].
+    #[cfg(unix)]
     pub fn descriptor(&self) -> Option<BorrowedFd<'_>> {
         self.exit_event.as_ref().map(AsFd::as_fd)
     }
 
     /// Whether the process has ended, without waiting; None where the kernel does not tell.
+    #[cfg(unix)]
     pub fn ended(&self) -> io::Result<Option<bool>> {
         if let Some(event) = &self.exit_event {
             if readable(event.as_fd(), Duration::ZERO)? {
@@ -233,6 +268,7 @@ impl ProcessObservation {
     }
 
     /// Waits up to `timeout` for the process to end, and returns whether it did.
+    #[cfg(unix)]
     pub fn wait(&self, timeout: Duration) -> io::Result<bool> {
         let deadline = Instant::now() + timeout;
         while self.ended()? != Some(true) {
@@ -252,6 +288,7 @@ impl ProcessObservation {
     /// Sends `signal` to the process, and returns false where it has ended. A Linux process
     /// descriptor reaches only this process; otherwise the birth value is checked right before the
     /// signal goes to the ID, which leaves a short moment in which the ID could pass to another.
+    #[cfg(unix)]
     pub fn signal(&self, signal: Signal) -> io::Result<bool> {
         os::signal(self.descriptor(), &self.identity, signal)
     }
@@ -267,6 +304,7 @@ pub fn wait_for_end(identity: &ProcessIdentity, timeout: Duration) -> io::Result
 
 /// Sends `signal` to the ID of the process `identity` right after checking its birth value, and
 /// returns false where it has ended.
+#[cfg(unix)]
 fn signal_checked(identity: &ProcessIdentity, signal: Signal) -> io::Result<bool> {
     if presence(identity)? == Presence::Ended {
         return Ok(false);
@@ -279,6 +317,7 @@ fn signal_checked(identity: &ProcessIdentity, signal: Signal) -> io::Result<bool
 }
 
 /// Whether `fd` becomes readable within `timeout`, waiting through interruptions.
+#[cfg(unix)]
 fn readable(fd: BorrowedFd<'_>, timeout: Duration) -> io::Result<bool> {
     use std::os::fd::AsRawFd;
     let mut wanted = libc::pollfd {
@@ -302,6 +341,7 @@ fn readable(fd: BorrowedFd<'_>, timeout: Duration) -> io::Result<bool> {
 
 /// What came of signalling a process group.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg(unix)]
 pub enum GroupSignal {
     Sent,
     /// Neither the leader nor a recorded member showed the group is still the same; nothing was
@@ -312,11 +352,13 @@ pub enum GroupSignal {
 }
 
 /// The processes in process group `group`.
+#[cfg(unix)]
 pub fn group_members(group: i32) -> io::Result<Vec<ProcessIdentity>> {
     os::group_members(group)
 }
 
 /// The processes among `pids` that are in `group`, with their birth values.
+#[cfg(unix)]
 fn identities_in(group: i32, pids: impl Iterator<Item = u32>) -> Vec<ProcessIdentity> {
     let in_group = |pid: u32| {
         let found = snapshot(pid).ok().flatten()?;
@@ -329,6 +371,7 @@ fn identities_in(group: i32, pids: impl Iterator<Item = u32>) -> Vec<ProcessIden
 /// Shows that process group `group` is still the recorded one, by its `leader` or one of the
 /// `members` recorded before, then adds the group's current processes to `members`. Returns whether
 /// it was shown. A process that took a reused group ID cannot show the group itself.
+#[cfg(unix)]
 pub fn refresh_group_members(
     group: i32,
     leader: &ProcessIdentity,
@@ -356,6 +399,7 @@ pub fn refresh_group_members(
 }
 
 /// Whether `witness` still runs in `group`, unreaped where it ended.
+#[cfg(unix)]
 fn proves(witness: &ProcessIdentity, group: i32) -> io::Result<bool> {
     if cfg!(debug_assertions) && proof_read_fails(witness.pid) {
         return Err(io::Error::other("the process identity could not be read"));
@@ -366,6 +410,7 @@ fn proves(witness: &ProcessIdentity, group: i32) -> io::Result<bool> {
 
 /// In a test of a debug build: whether `core/fail-proof-read` names `pid`, and it is the first
 /// read since, which removes it.
+#[cfg(unix)]
 fn proof_read_fails(pid: u32) -> bool {
     let Ok(core) = crate::paths::core_dir() else {
         return false;
@@ -378,6 +423,7 @@ fn proof_read_fails(pid: u32) -> bool {
 /// Sends `signal` to process group `group` only where its `leader`, unreaped if it ended, shows it
 /// is the same group. The group can end, and its ID pass on, between the check and the signal; a
 /// signal to a group's number cannot rule that out.
+#[cfg(unix)]
 pub fn signal_group(
     group: i32,
     leader: &ProcessIdentity,
@@ -404,6 +450,7 @@ pub fn signal_group(
 }
 
 /// Whether `leader` is exiting and is the one process left in `group`.
+#[cfg(unix)]
 fn leader_exiting_alone(group: i32, leader: &ProcessIdentity) -> io::Result<bool> {
     if !os::leader_exiting(group, leader)? {
         return Ok(false);
@@ -414,6 +461,7 @@ fn leader_exiting_alone(group: i32, leader: &ProcessIdentity) -> io::Result<bool
 
 /// Logs, as `service`, what came of signalling the group of run `run`. A caller that keeps trying
 /// until a deadline logs each stretch of failures once.
+#[cfg(unix)]
 pub fn log_group_signal(
     service: &str,
     run: &str,
@@ -478,9 +526,10 @@ pub fn calling_program_of(pid: u32) -> Option<u32> {
     nearest_program(line.map(|up| (up, name(up).ok().flatten())))
 }
 
-/// The first process of `line`, given with its name, whose name is known and is not a shell's.
+/// The first process of `line`, given with its name, whose name is known and is not a shell's:
+/// a CLI runs its hooks through `sh -c` on Unix, and through Git Bash or `cmd.exe` on Windows.
 fn nearest_program(line: impl IntoIterator<Item = (u32, Option<String>)>) -> Option<u32> {
-    let is_program = |name: &str| !["sh", "bash", "zsh", "dash"].contains(&name);
+    let is_program = |name: &str| !["sh", "bash", "zsh", "dash", "cmd"].contains(&name);
     for (pid, name) in line {
         if name.as_deref().is_some_and(is_program) {
             return Some(pid);
@@ -528,7 +577,7 @@ fn variable(entry: Vec<u8>) -> Option<(String, String)> {
 /// The environment's entries in a `KERN_PROCARGS2` buffer, which holds, each string ending in a
 /// NUL: `argc` as a native-endian int, the program's path, NUL padding, `argc` arguments, and the
 /// entries up to an empty one or the end. None where there are fewer arguments than it says.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", all(test, unix)))]
 fn procargs_environment(buffer: &[u8]) -> Option<Vec<Vec<u8>>> {
     let (argc, rest) = buffer.split_first_chunk::<4>()?;
     let argc = i32::from_ne_bytes(*argc);
@@ -554,6 +603,7 @@ pub fn boot_time() -> Option<SystemTime> {
 }
 
 /// The process at the other end of a Unix socket; None where the kernel does not say.
+#[cfg(unix)]
 pub fn peer_pid(socket: BorrowedFd<'_>) -> Option<u32> {
     use nix::sys::socket::getsockopt;
     #[cfg(target_os = "linux")]
@@ -572,6 +622,46 @@ pub static FORK_LOCK: Mutex<()> = Mutex::new(());
 /// Takes [`FORK_LOCK`], also after a thread panicked holding it.
 pub fn fork_lock() -> MutexGuard<'static, ()> {
     FORK_LOCK.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The system's number for the signal `name`, such as `SIGKILL`; None for a name it does not have,
+/// and on Windows, which has no signals.
+pub fn signal_number(name: &str) -> Option<i32> {
+    #[cfg(unix)]
+    return name.parse::<Signal>().ok().map(|signal| signal as i32);
+    #[cfg(windows)]
+    {
+        let _ = name;
+        None
+    }
+}
+
+#[cfg(unix)]
+impl ProcessObservation {
+    /// Returns once the process ended: when its descriptor becomes readable on tokio's reactor, and
+    /// checked every [`PROC_POLL_INTERVAL`] too, or only so without a descriptor. Needs a tokio
+    /// runtime.
+    pub async fn until_ended(&self) {
+        use tokio::io::Interest;
+        use tokio::io::unix::AsyncFd;
+        let watched = self
+            .exit_event
+            .as_ref()
+            .and_then(|event| event.try_clone().ok())
+            // SAFETY: the copy is owned by the AsyncFd, so it stays open, and the same descriptor,
+            // for as long as it is registered.
+            .and_then(|copy| {
+                unsafe { AsyncFd::register_with_interest(copy, Interest::READABLE) }.ok()
+            });
+        while !matches!(self.ended(), Ok(Some(true))) {
+            match &watched {
+                Some(watched) => {
+                    let _ = tokio::time::timeout(PROC_POLL_INTERVAL, watched.readable()).await;
+                }
+                None => tokio::time::sleep(PROC_POLL_INTERVAL).await,
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -1078,7 +1168,7 @@ mod os {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::test_folder::TestFolder;

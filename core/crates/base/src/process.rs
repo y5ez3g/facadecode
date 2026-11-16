@@ -67,10 +67,13 @@ fn says_nothing(reason: &Option<EndReason>) -> bool {
 /// exit code zero.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessExit {
-    /// The exit code, if the CLI exited normally and its status is known.
+    /// The exit code, if the CLI exited normally and its status is known. On Windows every exit
+    /// has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is
+    /// -1073741510.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub code: Option<i32>,
-    /// The terminating signal name, such as `SIGKILL`. Signal numbers vary by system.
+    /// The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on
+    /// Windows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signal: Option<String>,
     /// Why no code or signal is available, if known. If all three fields are absent, the exit
@@ -84,7 +87,7 @@ pub struct ProcessExit {
 
 /// A process ID with the process's birth value. The birth value tells a process apart from a later
 /// one given the same ID: on Linux, its start time from `/proc/<pid>/stat`; on macOS, its start
-/// time in seconds and microseconds.
+/// time in seconds and microseconds; on Windows, its creation time in 100-nanosecond intervals.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct ProcessIdentity {
     /// The process ID.

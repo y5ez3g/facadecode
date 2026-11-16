@@ -376,7 +376,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "signal-hook 0.4.6",
+ "tokio",
  "unicode-segmentation",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

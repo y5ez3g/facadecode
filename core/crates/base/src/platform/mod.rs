@@ -1,14 +1,40 @@
-//! What Facade asks of the operating system: processes and their groups, descriptors passed over
-//! sockets, the services' locks and start, the installed programs, private files, open-file limits
-//! and the socket folder. Every branch by system in this crate is here.
+//! What Facade asks of the operating system: processes, terminals, the services' sockets, locks and
+//! start, the installed programs, private files, the person's console and open-file limits. Every
+//! branch by system in this crate is here: each module's public items are the same on every system
+//! unless their documentation says otherwise, and the code of each system sits beside them.
 
+pub mod console;
+#[cfg(unix)]
 pub mod descriptors;
 pub mod files;
 pub mod limits;
 pub mod programs;
 pub mod service;
+pub mod sockets;
+pub mod system;
+pub mod terminal;
+pub mod terminal_lines;
 pub mod unix_process;
 
-mod sockets;
+#[cfg(windows)]
+mod io_thread;
+mod random;
+mod socket_paths;
 
-pub use sockets::{daemon_socket, daemon_socket_for, keeper_socket, keeper_socket_for, socket_dir};
+pub use random::random_u64;
+
+/// The public modules, which the crate root re-exports.
+pub mod modules {
+    #[cfg(unix)]
+    pub use super::descriptors;
+    pub use super::{
+        console, files, limits, programs, service, sockets, system, terminal, terminal_lines,
+        unix_process,
+    };
+}
+
+/// What the crate root re-exports under `paths`: the socket paths, the client's socket and the
+/// test for a lost connection.
+pub mod paths {
+    pub use super::socket_paths::*;
+}

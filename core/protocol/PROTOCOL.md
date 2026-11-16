@@ -7,8 +7,12 @@ Protocol version 1 (oldest accepted: 1). See `protocol.schema.json` for JSON Sch
 ## Connect to the daemon
 
 The Facade home is the absolute path in `FACADE_HOME`. If unset, use `HOME/.facade`, or `USERPROFILE/.facade` if `HOME` is
-unset. The daemon socket is `/tmp/facade-core-<uid>/daemon-<key>.sock`, where `uid` is the process's real user ID. Only that
-user can access the socket folder.
+unset. On macOS and Linux the daemon socket is `/tmp/facade-core-<uid>/daemon-<key>.sock`, where `uid` is the process's real
+user ID. Only that user can access the socket folder. On Windows the daemon listens on the named pipe
+`\\.\pipe\facade-core-daemon-<key>`, and the keeper on `\\.\pipe\facade-core-keeper-<key>`. The pipes let in their owner
+alone (DACL `D:P(A;;GA;;;OW)`). Before its `hello`, a Windows client checks that the server process runs as its own user
+(`GetNamedPipeServerProcessId`, then that process's token's user SID), and closes the connection otherwise. Lines, framing
+and every operation are the same on every system.
 
 To compute `key`, encode the home's path string as UTF-8. Replace invalid path bytes with U+FFFD, as Rust's
 `Path::to_string_lossy` does. Take the first five bytes of its SHA-256 digest and write them as ten lowercase hexadecimal
@@ -415,7 +419,7 @@ message is deleted. A daemon that ends before answering an `agent.send` answers 
 what became of the message is not known to it. The next daemon goes on delivering the message within the 30 seconds it had
 (see [Daemon replacement](#daemon-replacement)).
 
-### Windows
+### Editor windows
 
 Every agent is in a window: the editor window it was started or last resumed in, or the terminal window, `terminal`, which
 holds the agents started or resumed from a terminal, guests among them. `AgentInfo.window_id` names the window, and
@@ -1220,8 +1224,8 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. |
-| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. |
+| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
+| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
 | `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
 
@@ -1479,8 +1483,8 @@ The result of `agent.stop`: the CLI's recorded exit, and whether it had ended be
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. |
-| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. |
+| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
+| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
 | `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
 | `already_ended` | `boolean` | no | The CLI had ended before this stop, so the stop signaled nothing. Omitted when false. |

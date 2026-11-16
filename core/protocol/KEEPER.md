@@ -61,10 +61,10 @@ Operations available to `call`. Set `op` to the name and `args` to its arguments
 
 | Name | Arguments | Result | Description |
 |---|---|---|---|
-| `agent.start` | `StartArgs` | `StartResult` | Starts the agent's CLI in a new PTY, in a session and process group of its own, as its parent. Answers once the program runs, with the PTY master. Fails with `invalid_argument` for an empty command or an agent it holds, and `unavailable` where the PTY, the program, the folder or the CLI's birth cannot be had. |
-| `agent.stop` | `AgentArgs` | `EmptyResult` | Sends SIGHUP to the CLI's process group and answers. Sends SIGKILL to the group once the CLI ends or 3 seconds pass, whichever comes first; a repeated stop keeps the first deadline. A group whose leader cannot be proved gets no signal, and the stop still answers. Fails with `not_found` for an agent it does not hold. |
-| `agent.sync` | `SyncArgs` | `EmptyResult` | Gives the PTY master to the side that lacks it. A request without one is answered with the keeper's; one with a master for a CLI the keeper lacks is held, and watched until it ends, without its exit code. A CLI that has already ended is answered as held and reported ended at once. Both sides holding one, the process ID and birth must match (`invalid_argument` otherwise); neither, `not_found`. |
-| `daemon.ping` | `NoArgs` | `EmptyResult` | Tells the keeper the daemon is alive; send it once a second from hello on. After 15 seconds without one, the keeper ends the daemon with SIGKILL. |
+| `agent.start` | `StartArgs` | `StartResult` | Starts the agent's CLI in a new terminal, as its parent: on Unix a PTY, in a session and process group of its own; on Windows a pseudo console, in a job of its own. Answers once the program runs, with the terminal. Fails with `invalid_argument` for an empty command or an agent it holds, and `unavailable` where the terminal, the program, the folder or the CLI's birth cannot be had. |
+| `agent.stop` | `AgentArgs` | `EmptyResult` | Hangs up and answers, then kills once the CLI ends or 3 seconds pass, whichever comes first; a repeated stop keeps the first deadline. On Unix it sends SIGHUP, then SIGKILL, to the CLI's process group; a group whose leader cannot be proved gets no signal, and the stop still answers. On Windows it closes the keeper's copy of the signal pipe, after the daemon let go of its own, then calls `TerminateJobObject` on the CLI's job. Fails with `not_found` for an agent it does not hold. |
+| `agent.sync` | `SyncArgs` | `EmptyResult` | Gives the terminal to the side that lacks it. A request without one is answered with the keeper's; one with a terminal for a CLI the keeper lacks is held, and watched until it ends: without its exit code on Unix, with it on Windows. A CLI that has already ended is answered as held and reported ended at once. Both sides holding one, the process ID and birth must match (`invalid_argument` otherwise); neither, `not_found`. |
+| `daemon.ping` | `NoArgs` | `EmptyResult` | Tells the keeper the daemon is alive; send it once a second from hello on. After 15 seconds without one, the keeper kills the daemon: SIGKILL on Unix, `TerminateProcess` on Windows. |
 
 ## Error reasons
 
@@ -114,7 +114,7 @@ A CLI the keeper holds, as `hello` reports it.
 |---|---|---|---|
 | `id` | `string` | yes | The agent's ID, an opaque string. |
 | `pid` | `number` | yes | The CLI's process ID. |
-| `birth` | `string` | yes | The CLI's birth: an opaque string, compared for equality alone. On macOS it is the process's start time as `<seconds>.<6-digit microseconds>`; on Linux, the starttime field, the 22nd, of `/proc/<pid>/stat`, in decimal. |
+| `birth` | `string` | yes | The CLI's birth: an opaque string, compared for equality alone. On macOS it is the process's start time as `<seconds>.<6-digit microseconds>`; on Linux, the starttime field, the 22nd, of `/proc/<pid>/stat`, in decimal; on Windows, the creation time from `GetProcessTimes`, a decimal count of 100-nanosecond intervals since 1601-01-01. |
 | `stopping` | `boolean` | no | The keeper is stopping it. Absent means false. |
 
 ### HelloParams
@@ -147,8 +147,8 @@ A recorded CLI exit. Without a code or signal, its status is unavailable; do not
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. |
-| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. |
+| `code` | `number` | no | The exit code, if the CLI exited normally and its status is known. On Windows every exit has one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is -1073741510. |
+| `signal` | `string` | no | The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on Windows. |
 | `reason` | `EndReason` | no | Why no code or signal is available, if known. If all three fields are absent, the exit status is unavailable. |
 | `at` | `string` | yes | The exit time in UTC ISO 8601 format with milliseconds. For an exit without a code or signal, the time Facade noticed it. |
 
@@ -167,7 +167,7 @@ Arguments for `agent.start`.
 
 ### StartResult
 
-The result of `agent.start`. Its response carries the PTY master.
+The result of `agent.start`. Its response carries the terminal.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -176,7 +176,7 @@ The result of `agent.start`. Its response carries the PTY master.
 
 ### SyncArgs
 
-Arguments for `agent.sync`: the CLI the daemon knows for the agent. The request carries the daemon's PTY master where it has one.
+Arguments for `agent.sync`: the CLI the daemon knows for the agent. The request carries the daemon's terminal where it has one.
 
 | Field | Type | Required | Description |
 |---|---|---|---|

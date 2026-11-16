@@ -227,6 +227,33 @@ impl DescriptorLines {
             came => Err(came),
         }
     }
+
+    /// The descriptors that the line spanning `begin..end`, its newline included, carries, for a
+    /// reader that does not know which lines carry some: empty for a line that carries none. A
+    /// read's descriptors came with the send that ends it on Linux and with the send that starts
+    /// it on macOS, so they are the last line's that begins in that read on Linux, and on macOS
+    /// the line's that begins with it. Where the kernel dropped some, those that came are closed
+    /// and the error is their count.
+    pub fn take_carried(&mut self, begin: u64, end: u64) -> Result<Vec<OwnedFd>, usize> {
+        let Some(read) = self.reads.front() else {
+            return Ok(Vec::new());
+        };
+        #[cfg(target_os = "linux")]
+        let carries = read.span.contains(&begin) && end >= read.span.end;
+        #[cfg(not(target_os = "linux"))]
+        let carries = {
+            let _ = end;
+            read.span.start == begin
+        };
+        if !carries {
+            return Ok(Vec::new());
+        }
+        match self.reads.pop_front() {
+            Some(Received { chunk, .. }) if !chunk.truncated => Ok(chunk.fds),
+            Some(Received { chunk, .. }) => Err(chunk.fds.len()),
+            None => Ok(Vec::new()),
+        }
+    }
 }
 
 /// Reads one chunk and up to `most` descriptors with it, which are close-on-exec when it returns,

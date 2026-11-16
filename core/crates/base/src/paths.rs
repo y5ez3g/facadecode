@@ -1,13 +1,14 @@
-//! The Facade home, and the sockets its services listen on.
+//! The Facade home, its sockets and the client's end of one.
+//!
+//! The socket paths, [`ClientSocket`] and [`is_connection_lost`] come from the platform: on Unix a
+//! socket is a file in this user's socket folder, on Windows a named pipe.
 
 use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
-pub use crate::platform::{
-    daemon_socket, daemon_socket_for, keeper_socket, keeper_socket_for, socket_dir,
-};
+pub use crate::platform::paths::*;
 
 /// The Facade home. `FACADE_HOME` names it, as an absolute path; without it, it is `.facade` in
 /// the user's home folder, `HOME` or else `USERPROFILE`. A `FACADE_HOME` that is set but empty,

@@ -3,9 +3,10 @@
 //! - Both protocols: the daemon's and the keeper's messages, their framing and errors, and a
 //!   blocking daemon client ([`daemon`], [`keeper`], [`jsonrpc`], [`operations`],
 //!   [`daemon_client`]).
-//! - What differs between operating systems: watching processes, passing descriptors, starting
-//!   services, installing programs and the sockets' paths ([`unix_process`], [`descriptors`],
-//!   [`service`], [`programs`], [`paths`]).
+//! - What differs between operating systems: which one this is, watching processes, terminals,
+//!   the services' sockets and start, installing programs, private files and the person's
+//!   console ([`system`], [`unix_process`], [`terminal`], [`terminal_lines`], [`sockets`],
+//!   [`service`], [`programs`], [`files`], [`console`], [`paths`]).
 //! - The settings file ([`settings`]), and the texts a model reads ([`instructions`], [`skill`],
 //!   [`tools`]).
 //! - Here: which build this is, the Facade home, timestamps and the log line.
@@ -23,9 +24,10 @@ pub mod settings;
 pub mod time;
 
 pub use build::{
-    VERSION, build_id, take_test_build, takes_over, this_program, version, version_of,
+    TEST_BUILD_SUFFIX, VERSION, build_id, take_test_build, takes_over, this_program, version,
+    version_of,
 };
-pub use platform::{descriptors, files, limits, programs, service, unix_process};
+pub use platform::modules::*;
 pub use protocol::{base64, daemon, daemon_client, jsonrpc, keeper, operations};
 pub use texts::{instructions, skill, tools};
 
@@ -33,12 +35,7 @@ pub use texts::{instructions, skill, tools};
 /// the system cannot give them, which a supported system never fails to, as the standard library
 /// does for its own keys.
 pub fn random_u64() -> u64 {
-    let mut bytes = [0u8; 8];
-    // SAFETY: the buffer holds the 8 bytes asked for.
-    match unsafe { libc::getentropy(bytes.as_mut_ptr().cast(), bytes.len()) } {
-        0 => u64::from_ne_bytes(bytes),
-        _ => panic!("no random bytes: {}", std::io::Error::last_os_error()),
-    }
+    platform::random_u64()
 }
 
 #[cfg(test)]

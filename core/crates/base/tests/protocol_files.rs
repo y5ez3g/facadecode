@@ -19,13 +19,17 @@ fn generated_protocol_files_match_rust_definitions() {
     if std::env::var_os("FACADE_REGENERATE").is_some() {
         std::fs::create_dir_all(&dir).unwrap();
         for (name, text) in &files {
-            std::fs::write(dir.join(name), text).unwrap();
+            std::fs::write(dir.join(name), text.replace("\r\n", "\n")).unwrap();
         }
     }
     for (name, text) in &files {
-        let kept = std::fs::read_to_string(dir.join(name)).unwrap_or_default();
+        // A checkout may turn line endings into CRLF, as Git does on Windows: the files', and the
+        // guide's that the generated text takes in.
+        let kept = std::fs::read_to_string(dir.join(name))
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         assert!(
-            kept == *text,
+            kept == text.replace("\r\n", "\n"),
             "core/protocol/{name} differs from the Rust definitions; regenerate with \
              FACADE_REGENERATE=1 cargo test -p facade-base --test protocol_files"
         );

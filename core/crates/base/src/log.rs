@@ -17,11 +17,13 @@ pub fn write(program: &str, level: &str, message: &str) {
 #[cfg(test)]
 mod tests {
     /// A line written to a pipe nobody reads is dropped, and `write` returns. Runs in a process of
-    /// its own, since it breaks that process's standard error.
+    /// its own, whose standard error is a pipe whose reading end is closed before it starts.
     #[test]
     fn a_line_that_cannot_be_written_is_dropped() {
         const OWN_PROCESS: &str = "FACADE_TEST_OWN_PROCESS";
         if std::env::var_os(OWN_PROCESS).is_none() {
+            let (unread, broken) = std::io::pipe().unwrap();
+            drop(unread);
             let child = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
                     "log::tests::a_line_that_cannot_be_written_is_dropped",
@@ -30,26 +32,15 @@ mod tests {
                     "--nocapture",
                 ])
                 .env(OWN_PROCESS, "1")
+                .stderr(broken)
                 .output()
                 .unwrap();
             let stdout = String::from_utf8_lossy(&child.stdout);
-            let stderr = String::from_utf8_lossy(&child.stderr);
             assert!(
                 child.status.success() && stdout.contains(" 1 passed"),
-                "{stdout}{stderr}"
+                "{stdout}"
             );
             return;
-        }
-        let mut ends = [-1; 2];
-        // SAFETY: these calls touch only descriptors of this process, which runs this test alone.
-        unsafe {
-            assert_eq!(libc::pipe(ends.as_mut_ptr()), 0);
-            libc::close(ends[0]);
-            assert_eq!(
-                libc::dup2(ends[1], libc::STDERR_FILENO),
-                libc::STDERR_FILENO
-            );
-            libc::close(ends[1]);
         }
         super::write("test", "warn", "nobody reads this line");
     }

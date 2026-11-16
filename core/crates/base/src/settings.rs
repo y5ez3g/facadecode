@@ -788,7 +788,7 @@ mod tests {
         std::fs::create_dir(&file).unwrap();
         let unreadable = read_file(&file).unwrap_err();
         assert!(
-            unreadable.starts_with(&format!("{} could not be read: ", file.display())),
+            unreadable.starts_with(&format!("{} could not be read: ", shown(&file))),
             "{unreadable}"
         );
     }

@@ -1600,11 +1600,11 @@
         "code": {
           "type": "integer",
           "format": "int32",
-          "description": "The exit code, if the CLI exited normally and its status is known."
+          "description": "The exit code, if the CLI exited normally and its status is known. On Windows every exit\nhas one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is\n-1073741510."
         },
         "signal": {
           "type": "string",
-          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system."
+          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on\nWindows."
         },
         "reason": {
           "description": "Why no code or signal is available, if known. If all three fields are absent, the exit\nstatus is unavailable.",
@@ -2438,11 +2438,11 @@
         "code": {
           "type": "integer",
           "format": "int32",
-          "description": "The exit code, if the CLI exited normally and its status is known."
+          "description": "The exit code, if the CLI exited normally and its status is known. On Windows every exit\nhas one: the process's 32-bit exit code carried as an `i32`, so that 0xC000013A is\n-1073741510."
         },
         "signal": {
           "type": "string",
-          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system."
+          "description": "The terminating signal name, such as `SIGKILL`. Signal numbers vary by system. Never on\nWindows."
         },
         "reason": {
           "description": "Why no code or signal is available, if known. If all three fields are absent, the exit\nstatus is unavailable.",

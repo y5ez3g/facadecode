@@ -6,30 +6,53 @@
 //! the other service, and its clients, know it. A process that cannot take the lock leaves the
 //! holder's record, store and sockets as they are.
 //!
-//! **The start.** A service is started in a session of its own, reading /dev/null and writing to
-//! its log. It closes every descriptor it inherited but its startup channel, and tells on that
+//! **The start.** A service is started detached from its caller, reading nothing and writing to
+//! its log: on Unix in a session of its own; on Windows without a console or window. It holds no
+//! handle or descriptor it inherited but its startup channel and its log, and tells on that
 //! channel, once, how its start went: it started, another process holds the lock, or it failed and
-//! why.
+//! why. On Unix the lock is `flock`'s, on Windows `LockFileEx`'s.
 
-use std::fs::{DirBuilder, File, OpenOptions, Permissions};
-use std::io::{self, PipeReader, PipeWriter, Read, Write};
-use std::os::fd::{AsFd, AsRawFd, FromRawFd, RawFd};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::os::unix::process::CommandExt;
+use std::fs::{File, OpenOptions};
+use std::io::{self, PipeReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[cfg(unix)]
+use std::fs::{DirBuilder, Permissions};
+#[cfg(unix)]
+use std::io::PipeWriter;
+#[cfg(unix)]
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, RawFd};
+#[cfg(unix)]
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
+#[cfg(unix)]
+use std::process::{Child, Command, Stdio};
+
+#[cfg(unix)]
 use nix::errno::Errno;
+#[cfg(unix)]
 use nix::fcntl::{FcntlArg, FdFlag, Flock, FlockArg};
 
-use super::unix_process::{Presence, birth, fork_lock, own_identity, presence};
-use crate::process::ProcessIdentity;
+use super::socket_paths::ClientSocket;
+use super::unix_process::{Presence, presence};
+#[cfg(unix)]
+use super::unix_process::{birth, fork_lock, own_identity};
+use crate::process::{ProcessExit, ProcessIdentity};
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+pub use windows::*;
+#[cfg(windows)]
+use windows::{Child, readable_by, stop_self};
 
 /// The environment variable that names a started service's startup channel.
 const STARTUP_CHANNEL: &str = "FACADE_STARTUP_CHANNEL";
 
 /// The user this process runs as.
+#[cfg(unix)]
 fn this_user() -> u32 {
     // SAFETY: getuid has no preconditions and cannot fail.
     unsafe { libc::getuid() }
@@ -71,6 +94,7 @@ impl Service {
 /// Makes the home and its `core/` and `core/logs/` where they are missing, checks that they are
 /// private before anything in them is trusted, and returns `core/`. The person may choose the home
 /// through a symbolic link: what it leads to is checked.
+#[cfg(unix)]
 pub fn create_private_home() -> anyhow::Result<PathBuf> {
     let home = crate::paths::facade_home()?;
     DirBuilder::new()
@@ -85,6 +109,7 @@ pub fn create_private_home() -> anyhow::Result<PathBuf> {
 }
 
 /// Makes `dir` where it is missing, checks it is private, and makes it this user's alone.
+#[cfg(unix)]
 fn make_private_dir(dir: &Path) -> anyhow::Result<()> {
     if let Err(err) = DirBuilder::new().mode(0o700).create(dir)
         && err.kind() != io::ErrorKind::AlreadyExists
@@ -97,6 +122,7 @@ fn make_private_dir(dir: &Path) -> anyhow::Result<()> {
 }
 
 /// Refuses `dir` unless it is a folder of this user's that neither its group nor others may write.
+#[cfg(unix)]
 fn refuse_unless_private(dir: &Path) -> anyhow::Result<()> {
     let meta = std::fs::symlink_metadata(dir)?;
     let dir = dir.display();
@@ -123,8 +149,10 @@ pub enum Locked {
 
 /// A service's lock file, opened only as a regular file of this user's: never through a symbolic
 /// link, and never waiting on a FIFO.
+#[cfg(unix)]
 struct LockFile(PathBuf);
 
+#[cfg(unix)]
 impl LockFile {
     fn of(core: &Path, service: Service) -> LockFile {
         LockFile(core.join(service.lock_name()))
@@ -194,6 +222,7 @@ impl LockFile {
 
 /// Takes `service`'s lock without waiting. Where this process gets it, writes this process's
 /// identity into the lock file as one JSON line, and holds the lock until this process exits.
+#[cfg(unix)]
 pub fn lock_home(core: &Path, service: Service) -> anyhow::Result<Locked> {
     let Some(mut lock) = LockFile::of(core, service).try_lock("lock")? else {
         return Ok(Locked::Contended);
@@ -210,6 +239,7 @@ pub fn lock_home(core: &Path, service: Service) -> anyhow::Result<Locked> {
 }
 
 /// The identity in `service`'s lock file; None where the file is missing, empty or incomplete.
+#[cfg(unix)]
 pub fn lock_record(core: &Path, service: Service) -> io::Result<Option<ProcessIdentity>> {
     LockFile::of(core, service).record()
 }
@@ -224,12 +254,14 @@ pub fn live_holder(core: &Path, service: Service) -> io::Result<Option<ProcessId
 /// At the daemon's start, while the keeper's lock file names no keeper: the keeper's lock, where no
 /// process holds it. The daemon keeps it through its recovery, so that no keeper starts meanwhile.
 /// None where another process holds it.
+#[cfg(unix)]
 pub fn lock_keeper_if_unowned(core: &Path) -> anyhow::Result<Option<Flock<File>>> {
     LockFile::of(core, Service::Keeper).try_lock("check")
 }
 
 /// Checks that the process at the other end of `stream` is this user's and holds `service`'s
 /// lock, by its process ID and birth value. Returns its identity, or why it is not that process.
+#[cfg(unix)]
 pub fn authenticate(
     stream: &impl AsFd,
     core: &Path,
@@ -255,12 +287,14 @@ pub fn authenticate(
 
 /// The process at the other end of a Unix socket, as the kernel tells it.
 #[derive(Clone, Copy, Debug)]
+#[cfg(unix)]
 pub struct Peer {
     pub uid: u32,
     pub pid: u32,
 }
 
 /// The user and process at the other end of `stream`, from the kernel.
+#[cfg(unix)]
 pub fn peer(stream: &impl AsFd) -> io::Result<Peer> {
     use nix::sys::socket::getsockopt;
     #[cfg(target_os = "linux")]
@@ -283,6 +317,7 @@ pub fn peer(stream: &impl AsFd) -> io::Result<Peer> {
 /// Points this process's standard error at `file`, appended to and made, private, where it is
 /// missing: where a service whose log file was replaced writes from then on. Blocks while it
 /// opens the file.
+#[cfg(unix)]
 pub fn redirect_stderr(file: &Path) -> io::Result<()> {
     let log = OpenOptions::new()
         .append(true)
@@ -297,6 +332,7 @@ pub fn redirect_stderr(file: &Path) -> io::Result<()> {
 
 /// Starts `program`, a `facade`, as `program <service> <words>`: under the fork lock, in a session
 /// of its own, reading /dev/null, its output appended to its log, with a startup channel.
+#[cfg(unix)]
 pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Result<Candidate> {
     let log_path = create_private_home()?.join("logs").join(service.log_name());
     let log = OpenOptions::new()
@@ -317,6 +353,7 @@ pub fn launch(service: Service, program: &Path, words: &[&str]) -> anyhow::Resul
 }
 
 /// The command that starts `service`, given `channel` to report on and `log` for its output.
+#[cfg(unix)]
 fn service_command(
     service: Service,
     program: &Path,
@@ -413,13 +450,20 @@ impl Candidate {
         }
     }
 
+    /// The started process, to wait for its end.
+    pub fn into_process(self) -> ServiceProcess {
+        ServiceProcess(self.child)
+    }
+
     /// The started process, for its parent to reap.
+    #[cfg(unix)]
     pub fn into_child(self) -> Child {
         self.child
     }
 }
 
 /// Whether `channel` has something to read, or has ended, before `deadline`.
+#[cfg(unix)]
 fn readable_by(channel: &PipeReader, deadline: Instant) -> io::Result<bool> {
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
@@ -444,6 +488,7 @@ pub struct StartupChannel(File);
 impl StartupChannel {
     /// The startup channel the environment names, where this process was started with one. Call it
     /// before any thread starts.
+    #[cfg(unix)]
     pub fn take() -> Option<StartupChannel> {
         let named = std::env::var(STARTUP_CHANNEL).ok()?;
         let fd = named.parse::<RawFd>().ok().filter(|&fd| fd > 2)?;
@@ -458,6 +503,7 @@ impl StartupChannel {
         Some(StartupChannel(channel))
     }
 
+    #[cfg(unix)]
     pub fn raw_fd(&self) -> RawFd {
         self.0.as_raw_fd()
     }
@@ -532,6 +578,7 @@ impl Default for RestartBackoff {
 
 /// Closes the descriptors this process inherited above standard error, but those in `keep`, before
 /// they can pass to another process.
+#[cfg(unix)]
 pub fn close_inherited_fds(keep: &[RawFd]) -> io::Result<()> {
     if cfg!(debug_assertions) && test_file("fail-fd-enumeration").is_some_and(|file| file.exists())
     {
@@ -558,6 +605,7 @@ pub fn close_inherited_fds(keep: &[RawFd]) -> io::Result<()> {
 
 /// The descriptors open in this process, as the system lists them. The listing's own descriptor is
 /// among them, closed by the time they are returned.
+#[cfg(unix)]
 pub fn open_fds() -> io::Result<Vec<RawFd>> {
     let listing = if cfg!(target_os = "linux") {
         "/proc/self/fd"
@@ -590,14 +638,14 @@ fn first_to_reach(marker: &str) -> Option<PathBuf> {
     path.parent().map(Path::to_path_buf)
 }
 
-/// In a debug build, stops this process with SIGSTOP the first time it reaches `point` in this
+/// In a debug build, stops this process the first time it reaches `point` in this
 /// home, where `FACADE_TEST_PAUSE_AT` names that point. A scenario test stops a service at an exact
 /// step this way; the file `core/paused-at-<point>` shows it got there.
 pub fn pause_for_test(point: &str) {
     let wanted = || std::env::var_os("FACADE_TEST_PAUSE_AT").is_some_and(|at| at == point);
     if cfg!(debug_assertions) && wanted() && first_to_reach(&format!("paused-at-{point}")).is_some()
     {
-        let _ = nix::sys::signal::raise(nix::sys::signal::Signal::SIGSTOP);
+        stop_self();
     }
 }
 
@@ -632,7 +680,128 @@ pub fn gate_for_test(point: &str) {
     }
 }
 
-#[cfg(test)]
+/// Stops this process, as a debugger or SIGSTOP would, until a test lets it go on.
+#[cfg(unix)]
+fn stop_self() {
+    let _ = nix::sys::signal::raise(nix::sys::signal::Signal::SIGSTOP);
+}
+
+// A started service's process.
+
+/// A started service's process, until it ends.
+pub struct ServiceProcess(Child);
+
+impl ServiceProcess {
+    pub fn pid(&self) -> u32 {
+        self.0.id()
+    }
+
+    /// Its exit, where it has ended, without waiting.
+    pub fn try_wait(&mut self) -> io::Result<Option<ProcessExit>> {
+        Ok(self.0.try_wait()?.map(exit_of))
+    }
+
+    /// Waits for it to end, and returns its exit.
+    pub fn wait(mut self) -> io::Result<ProcessExit> {
+        self.0.wait().map(exit_of)
+    }
+}
+
+/// The process's handle, which a wait can use.
+#[cfg(windows)]
+impl std::os::windows::io::AsHandle for ServiceProcess {
+    fn as_handle(&self) -> std::os::windows::io::BorrowedHandle<'_> {
+        self.0.as_handle()
+    }
+}
+
+/// The exit `status` tells, at this moment: by its code, or on Unix by its signal.
+fn exit_of(status: std::process::ExitStatus) -> ProcessExit {
+    #[cfg(unix)]
+    let signal = {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal().map(|number| {
+            nix::sys::signal::Signal::try_from(number).map_or_else(
+                |_| format!("signal {number}"),
+                |signal| signal.as_str().to_string(),
+            )
+        })
+    };
+    #[cfg(windows)]
+    let signal = None;
+    ProcessExit {
+        code: status.code(),
+        signal,
+        reason: None,
+        at: crate::time::iso_now(),
+    }
+}
+
+// What a service does as it starts and ends.
+
+/// Lets go of what this process inherited from the one that started it, but `keep`, before any of
+/// it can pass to another process: Unix closes every descriptor above standard error; Windows does
+/// nothing, as a service inherits only what [`launch`] chose.
+pub fn close_inherited(keep: Option<&StartupChannel>) -> io::Result<()> {
+    #[cfg(unix)]
+    return close_inherited_fds(
+        &keep
+            .map(StartupChannel::raw_fd)
+            .into_iter()
+            .collect::<Vec<_>>(),
+    );
+    #[cfg(windows)]
+    {
+        let _ = keep;
+        Ok(())
+    }
+}
+
+/// Checks that the process serving `socket` is this user's and holds `service`'s lock, by its
+/// process ID and birth value. Returns its identity, or why it is not that process.
+pub fn authenticate_server(
+    socket: &ClientSocket,
+    core: &Path,
+    service: Service,
+) -> Result<ProcessIdentity, String> {
+    #[cfg(unix)]
+    return authenticate(socket, core, service);
+    #[cfg(windows)]
+    windows::server_identity(socket, core, service)
+}
+
+/// Returns once this process is asked to end: Unix by SIGTERM or SIGINT. On Windows a service runs
+/// without a console, so nothing asks it and this never returns.
+pub async fn termination_requested() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{SignalKind, signal};
+        let (Ok(mut terminate), Ok(mut interrupt)) = (
+            signal(SignalKind::terminate()),
+            signal(SignalKind::interrupt()),
+        ) else {
+            return std::future::pending().await;
+        };
+        tokio::select! {
+            _ = terminate.recv() => {}
+            _ = interrupt.recv() => {}
+        }
+    }
+    #[cfg(windows)]
+    std::future::pending::<()>().await;
+}
+
+/// Lets a write to output that closed early end this command, as a Unix command's does: Unix puts
+/// SIGPIPE's action back to its default; Windows does nothing. Call it before any thread starts.
+pub fn default_broken_pipe() {
+    #[cfg(unix)]
+    // SAFETY: called before any thread starts; it only puts SIGPIPE's default action back.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use crate::test_folder::TestFolder;
