@@ -388,6 +388,7 @@ impl Daemon {
             plain_program: &args.command[0],
             inherited: configured.env.clone(),
             cwd: &args.cwd,
+            location_id: &location_id(&args.cwd),
             window_id: &window,
             window_label: &label,
             creator: creator.as_deref().map(|creator| (creator, creator_name)),
@@ -844,6 +845,7 @@ impl Daemon {
             plain_program: &rule.cli,
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
+            location_id: &location_id(&info.cwd),
             window_id: &window,
             window_label: &label,
             creator: info

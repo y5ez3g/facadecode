@@ -91,11 +91,10 @@ impl Preparation {
         let captures = request.session.is_some()
             || rule.session.capture == facade_rules::Capture::SessionStart;
         let report = captures.then_some(&report);
-        let location = facade_base::daemon::location_id(request.cwd);
         let place = facade_base::instructions::Place {
             window: request.window_label,
             window_id: request.window_id,
-            location_id: &location,
+            location_id: request.location_id,
             folder: request.cwd,
         };
         let run = facade_base::instructions::Run {

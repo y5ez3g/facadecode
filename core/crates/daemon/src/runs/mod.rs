@@ -82,6 +82,8 @@ pub(crate) struct RunRequest<'a> {
     /// The environment the settings give the CLI; Facade's variables go on top.
     pub(crate) inherited: BTreeMap<String, String>,
     pub(crate) cwd: &'a str,
+    /// The agent's location ID, which its instructions name.
+    pub(crate) location_id: &'a str,
     pub(crate) window_id: &'a str,
     pub(crate) window_label: &'a str,
     /// The agent that starts it, by ID and name.
