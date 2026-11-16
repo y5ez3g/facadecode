@@ -935,3 +935,38 @@ fn a_message_between_windows_names_its_sender_s_window() {
     );
     drop((first, second));
 }
+
+/// An editor window's agents reply to their CLI's color queries with the window's colors, each
+/// reply ended as its query was; after `window.update`, with the new colors.
+#[test]
+fn an_editor_window_s_agents_answer_color_queries_with_its_colors() {
+    let home = TestHome::new("windowcolors");
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
+    let folder = real(&home.project);
+    let mut described = window("win-1", Some("k1"), std::slice::from_ref(&folder));
+    described["colors"] =
+        json!({ "foreground": "#333333", "background": "#ffffff", "cursor": "#000000" });
+    let mut wire = ide(&home, &described);
+    let id = start_fake(&mut wire, &home, "win-1", &folder, "painter");
+    type_raw(&mut wire, &id, "/fake colors\r");
+    for reply in [
+        "color 10;rgb:3333/3333/3333 bel",
+        "color 11;rgb:ffff/ffff/ffff st",
+        "color 12;rgb:0000/0000/0000 bel",
+    ] {
+        assert!(
+            wait_for_screen_text(&home, "painter", reply),
+            "{reply}: {}",
+            home.screen("painter")
+        );
+    }
+    described["colors"]["background"] = json!("#1e1e1e");
+    let updated = wire.call("window.update", described);
+    assert_eq!(updated["result"], json!({}), "{updated}");
+    type_raw(&mut wire, &id, "/fake colors\r");
+    assert!(
+        wait_for_screen_text(&home, "painter", "color 11;rgb:1e1e/1e1e/1e1e st"),
+        "the new background: {}",
+        home.screen("painter")
+    );
+}
