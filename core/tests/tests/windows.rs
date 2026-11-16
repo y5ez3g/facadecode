@@ -421,9 +421,14 @@ fn a_daemon_restart_gives_each_window_its_grace_from_the_restart() {
         home.daemon_log()
     );
     assert!(
-        wait_until(secs(5), || stored() == ["win-back"]),
-        "a window goes with its agents: {:?}",
-        stored()
+        wait_until(secs(5), || listed(&home, "win-gone").is_none()),
+        "the window that never came back goes from the list"
+    );
+    assert_eq!(
+        stored(),
+        ["win-back", "win-gone"],
+        "a window that went keeps its row while its ended agents' records stay, for a later window \
+         of its workspace"
     );
     assert!(
         restarted.elapsed() >= std::time::Duration::from_millis(3500),
@@ -1009,4 +1014,36 @@ fn a_start_in_a_folder_inside_a_location_continues_its_session_there() {
     let record = agent(&home, &id);
     assert_eq!(record["cwd"], json!(nested), "{record}");
     assert_eq!(record["location_id"], location, "{record}");
+}
+
+/// A window of the same workspace that connects after an earlier window's grace ran out takes over
+/// that window's ended agents: its first snapshot lists them, in the new window.
+#[test]
+fn a_later_window_of_the_workspace_takes_over_the_ended_agents() {
+    let home = TestHome::new("windowexpired");
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
+    let folders = vec![real(&home.project)];
+    let mut first = ide(&home, &window("win-old", Some("k1"), &folders));
+    let id = start_shell(&mut first, &home, "win-old", &real(&home.project), "kept");
+    drop(first);
+    assert!(
+        wait_until(secs(15), || !running(&home, &id)),
+        "the grace ends it: {}",
+        home.daemon_log()
+    );
+    assert!(
+        wait_until(secs(5), || listed(&home, "win-old").is_none()),
+        "the window went"
+    );
+    let mut later = ide(&home, &window("win-new", Some("k1"), &folders));
+    let watching = later.request("watch", json!({ "topic": "agents" }));
+    let taken = watching["result"]["snapshot"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{watching}"))
+        .iter()
+        .find(|agent| agent["agent_id"] == id.as_str())
+        .cloned()
+        .unwrap_or_else(|| panic!("no {id} in the first snapshot: {watching}"));
+    assert_eq!(taken["window_id"], "win-new", "{taken}");
+    assert_ne!(taken["process"], "running", "{taken}");
 }
