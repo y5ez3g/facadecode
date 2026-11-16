@@ -242,8 +242,12 @@ impl ToolStart {
             self.deadline = bounded(view, now + START_TIMEOUT);
             return None;
         }
-        // A draft read while the CLI still draws may be half of a redraw: judged once the screen is still.
-        if view.input == InputState::Draft && now < still_at(now, view) {
+        // A draft read while the CLI still draws may be half of a redraw: judged once the screen is
+        // still, or once the start's time is up.
+        if view.input == InputState::Draft
+            && now < still_at(now, view)
+            && view.start_bound.is_none_or(|end| now < end)
+        {
             self.deadline = bounded(view, still_at(now, view));
             return None;
         }
