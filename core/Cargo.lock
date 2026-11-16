@@ -348,7 +348,7 @@ dependencies = [
 
 [[package]]
 name = "facade"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "clap",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "facade-base"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "base64",
@@ -383,7 +383,7 @@ dependencies = [
 
 [[package]]
 name = "facade-daemon"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "facade-base",
@@ -398,7 +398,7 @@ dependencies = [
 
 [[package]]
 name = "facade-keeper"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "facade-base",
@@ -412,7 +412,7 @@ dependencies = [
 
 [[package]]
 name = "facade-relay"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "nix",
  "sha2",
@@ -421,7 +421,7 @@ dependencies = [
 
 [[package]]
 name = "facade-rules"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "facade-base",
  "facade-screen",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "facade-scenarios"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "crossterm",
@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "facade-screen"
-version = "0.2.0"
+version = "0.1.6"
 dependencies = [
  "alacritty_terminal",
  "base64",

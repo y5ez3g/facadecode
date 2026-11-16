@@ -656,7 +656,7 @@ launch-group, trust or settings-template fields are configuration errors, not a 
 
 The minimum editor is VS Code 1.105 (`engines.vscode` is `^1.105.0` in both components); a newer public API is
 feature-detected or raises the declared minimum, never called unguarded. Facade Code is published to the Marketplace and
-Open VSX only when the owner asks. Both components and core carry one release version, 0.2.0, which the changelog's
+Open VSX only when the owner asks. Both components and core carry one release version, 0.1.6, which the changelog's
 heading names; the build refuses a window component of another version, packaging refuses a core of another version or a
 protocol copy (`src/base/coreProtocol.ts`) that differs from core's, and `scripts/release.mjs version` raises all three.
 The darwin-x64, darwin-arm64, linux-x64 and linux-arm64 packages carry core's release programs, `bin/facade` and
