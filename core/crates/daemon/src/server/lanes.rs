@@ -118,7 +118,6 @@ fn open<S: Service>(context: LaneContext<S>) -> Lane {
                 Some(_) => (WhenFull::Refuse, Cancel::default()),
                 None => (WhenFull::Wait, context.peer.hangup()),
             };
-            crate::gate_for_test("before-type-input");
             let result = context
                 .service
                 .call(

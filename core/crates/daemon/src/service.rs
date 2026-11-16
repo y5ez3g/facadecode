@@ -513,6 +513,7 @@ impl Daemon {
         when_full: WhenFull,
         cancel: Cancel,
     ) -> Result<(), ErrorBody> {
+        crate::gate_for_test("before-type-input");
         let TypeArgs {
             agent,
             raw,
