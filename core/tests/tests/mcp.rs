@@ -1318,16 +1318,16 @@ fn an_agent_started_through_facade_mcp_gets_its_creator_s_environment() {
     );
     #[cfg(target_os = "macos")]
     {
-        // macOS hides the environment of its own programs, such as the shell and `sleep`.
+        // Either report is right: whether macOS lets the environment of its own programs, such as
+        // the shell and `sleep`, be read depends on the machine (SIP).
         let mut wire = connect(&home);
         let shell = start_script(&mut wire, &home, "shell", "sleep 60");
         let hidden =
             McpTestClient::open_stripped(&home, &shell).call("start_agent", start("hidden"));
+        let message = hidden["message"].as_str().unwrap();
         assert!(
-            hidden["message"]
-                .as_str()
-                .unwrap()
-                .contains("the system keeps it hidden"),
+            message.contains("the system keeps it hidden")
+                || message.contains("was not found on the PATH of a terminal"),
             "{hidden}"
         );
     }

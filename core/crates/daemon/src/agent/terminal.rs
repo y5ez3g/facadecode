@@ -112,7 +112,19 @@ impl Terminal {
                     }
                 }
             }
-            result = master.async_io(Interest::WRITABLE, |mut file| file.write(head)), if !head.is_empty() => {
+            result = async {
+                loop {
+                    let mut guard = master.writable().await?;
+                    let closed = guard.ready().is_write_closed();
+                    match guard.try_io(|file| file.get_ref().write(head)) {
+                        Ok(result) => return result,
+                        // Once the CLI side closed, Linux answers EAGAIN, not an error, and the closed
+                        // state stays ready: retrying would never yield. The run's end drops the input.
+                        Err(_) if closed => return pending().await,
+                        Err(_) => {}
+                    }
+                }
+            }, if !head.is_empty() => {
                 match result {
                     Ok(n) => {
                         self.input.drain(..n);
