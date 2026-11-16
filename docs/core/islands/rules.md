@@ -25,6 +25,12 @@ files in `core/rules/`. It is a library; it starts no program.
 - No CLI name appears outside rules: what differs by CLI is in a rule file or behind a rules
   function that takes `cli`.
 - Facade only recognizes and changes entries it wrote itself, in any CLI's files.
+- No `cfg` by system. What differs by system is data, chosen by `facade_base::system::SYSTEM` at
+  run time: each CLI's hook shell, `${folder_toml}`, console typing and the wrappers. On Unix,
+  every command line, hook command, file and path is as it was before Windows.
+- Every read of a variable of a CLI's environment goes through `facade_base::system::env_var`
+  (names without case on Windows), and the home folder the CLIs use is
+  `facade_base::system::home_folder_in` (Unix `HOME`, Windows `USERPROFILE`).
 
 ## Never does
 
@@ -43,12 +49,19 @@ files in `core/rules/`. It is a library; it starts no program.
 - `installed_version(rule, program)`: the version the installation names beside its program,
   read without running it.
 - `entries`: the `clis` entries of `facade.json`.
+- `direct_command(rule: Option<&Rule>, program, env, cwd) -> Vec<String>`: what starts `program`,
+  the file a start's command resolved to. On Windows, Pi's and Muse Code's installers' wrappers
+  start the CLI's own program; everything else is as base's `programs::direct_command` has it.
+- `console_typing(rule) -> Option<ConsoleTyping>`, for the typist: on Windows, for a CLI that reads
+  console input records, the wait before Enter for each UTF-16 code unit typed and whether
+  characters above U+FFFF go as key-down records.
 - The input, state, sessions and wiring functions listed under each child below.
 - `session_meta_keys`, `always_load_keys`, `instructions_from_server`: what each CLI's MCP client
   does that the daemon's MCP server responds to.
 
 **facade** (`facade hook …`, and finding the agent of a command's terminal)
-- `hook`: what each CLI's hooks print and the keys their input uses.
+- `hook`: what each CLI's hooks print and the keys their input uses, and `hook::title_command`,
+  which runs the person's title command with the shell of the CLI that runs title hooks.
 - `session_from_hook`, `session_from_title`, `write_session_file`, `run_folder`, `SKILL_FILE`,
   `INSTRUCTIONS_FILE`, `session_variable`, `SESSION_VARIABLES`.
 
@@ -58,7 +71,9 @@ files in `core/rules/`. It is a library; it starts no program.
 
 - `facade-base`: `settings` (the `facade.json` model the entries read), `daemon` (`InputMechanism`,
   `InputInfo`, `InputState`, `HiddenRows`, `is_session_id`), `skill::text` and `version()` for the
-  files a run and the plugin are given.
+  files a run and the plugin are given; `system` (`SYSTEM`, `env_var`, `home_folder_in`),
+  `programs` (`direct_command`, `on_path`) and `files` (`private_options`, `is_private`,
+  `sync_folder`), and `base64` for encoded PowerShell hooks.
 - `facade-screen`: `ScreenView` and its cells, which the input and state readers read.
 - serde, serde_json, regex, toml, sha2, unicode-width.
 
@@ -70,14 +85,27 @@ command line together. The children never use each other. They may use the layer
 
 - `lib.rs`: `Rule` and the type of each section, `parse` and the checks. Each section checks
   itself (`InputRule`, `PasteRule`, `Frame`, `Editor`, the three state mechanisms); `Rule` returns
-  the first problem, naming the file. Also `find`, `rules`, `installed_version` and the MCP keys.
-  Every child's public items are re-exported at the crate root.
+  the first problem, naming the file. Also `find`, `rules`, `installed_version`, the MCP keys and
+  `console_typing`. Every child's public items are re-exported at the crate root.
+- `wrappers.rs`: `direct_command`, and the two wrappers it reads: Pi's `pi.cmd`, whole as Pi's
+  installer writes it, starts its `pi-launcher.js` with the installer's own Node or a Node program
+  on `PATH`; Muse Code's wrapper starts `muse-bin-<version>.exe` beside it, for the version and
+  channel its installer chose. A file that is not exactly that is base's to start.
 - `args.rs`: how a CLI reads its arguments, from the rule's `arguments` section. A `Reader` walks
   the words into pieces (option, override, positional, end of options). `problems` refuses
   options and settings keys (Codex's config keys) Facade sets itself in an entry's `args`; `found`, `overrides`,
   `holds` and `end_of_options` serve command_line and wiring.
 - `formats.rs`: the CLIs' own text formats in one place: JSON with comments, shell words, TOML
-  strings and inline values, and merging Facade's settings into the person's.
+  strings and inline values, and merging Facade's settings into the person's. `Shell` is the shell
+  a CLI runs Facade's hook commands with: POSIX on Unix, and for Claude Code on Windows, whose
+  Git Bash takes `'C:\…'` words as they are; cmd.exe for the other Windows CLIs except Codex. A cmd.exe
+  command is `[set "NAME=value" && ]…@"<program>" <word> …`: it never starts with a quote, which
+  `cmd /c` without `/s` would take away with the last one. A text cmd.exe cannot carry in quotes,
+  one with `"` or a line break, never goes into one.
+  Codex's Windows hooks use encoded UTF-16LE PowerShell scripts, carried unchanged through its
+  session shell (normally PowerShell) or cmd.exe fallback. The scripts quote each argument as a
+  PowerShell literal, preserve the exit code, and put `--skill` inside the encoded session hook.
+  Integration recognizes these encoded hooks as well as the earlier shell forms for updates and removal.
 - `compose.rs`: `start_command_line` and `resume_command_line`. In order:
   1. wiring gives the tools (`wire`), and YOLO's run settings are merged into the wiring's;
   2. wiring has the CLI report its session, through its settings (`report_session`) or a hook,
@@ -105,6 +133,7 @@ Rust regular expressions.
 | `ready_tools` | what to type so the CLI starts Facade's tools before its first turn |
 | `mcp` | what the CLI's MCP client does: session `_meta` key, always-load key |
 | `yolo` | YOLO's arguments, run settings, and the trust question to answer |
+| `console` | on Windows, for a CLI that reads console input records: `per_char_ms`, the wait before Enter for each UTF-16 code unit, and `records_above_bmp` |
 
 **Adding a CLI.** Write `core/rules/<cli>.json` and add it to `FILES` in `lib.rs`; its place there
 is its place in `facade`'s lists. With a rule file alone, Facade starts the CLI and reads its
@@ -126,7 +155,9 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
 - **Keeps:**
   - A rule's `session.resume` names `${session_id}` exactly once and nothing else to fill in, so a
     resume puts the session ID in one place.
-  - YOLO off adds nothing; YOLO on fills only `${folder}` and `${folder_toml}`.
+  - YOLO off adds nothing; YOLO on fills only `${folder}` and `${folder_toml}`. On Windows
+    `${folder_toml}` is the folder with `A`–`Z` in lower case, as Codex keys a project there.
+  - `${env:NAME}` in an entry is read through `env_var`.
   - Each choice in `choices` holds exactly one `${value}`, `${value_toml}` or `${value_json}`.
     When the person's own words already pick a model or an effort, the entry's choice is not
     added.
@@ -201,7 +232,8 @@ Which session a run is in, and the variables through which CLIs name their sessi
 - **Keeps:**
   - A session ID has one spelling: a UUID in lowercase, or OpenCode's `ses_` followed by 1 to 64 letters and digits.
   - A session counts only once it is saved. If the file names a path that does not exist yet, it reads as no session, so a session the CLI has not saved cannot be resumed. This holds for every CLI.
-  - A write goes to a temporary file that only its owner can read. The file is synced, then renamed over the session file, so a reader sees the old file or the new one, never part of either.
+  - A write goes to a temporary file that only its owner can read (base's `files::private_options`). The file is synced, then renamed over the session file, so a reader sees the old file or the new one, never part of either; the folder is synced through `files::sync_folder`.
+  - On Windows a session variable's name is compared without case.
   - The run's folder is never created, so a late hook from a removed run writes nothing.
   - "Which CLI variables must not carry into a new agent" has no other owner in core: these variables together with `Rule::remove_wiring_environment`.
 - **Never does:** create or remove run folders; handle Facade's own `FACADE_*` variables or terminal variables (the daemon owns those); decide when a session is resumed.
@@ -243,6 +275,13 @@ the entries `facade integration add` writes into a CLI's user settings, and the 
   - Integration writes keep every other byte of the file: a file that already holds Facade's current entries comes
     back unchanged, Codex's TOML keeps its comments, and a JSON file with comments is refused rather than rewritten.
   - Whatever a run added to its CLI's environment, `remove_wiring_environment` takes out again.
+  - Codex's session-start hook is trusted under its synthetic session-flags layer: `/<session-flags>/config.toml`
+    on Unix and `C:\<session-flags>\config.toml` on Windows, with a literal `C:` regardless of the run's drive.
+    Persistent integration hooks in `hooks.json` keep Codex's one-time review; Facade writes no trust keys for them.
+  - Each hook command is written for its CLI's shell (`Shell::of`, or encoded PowerShell for Codex on Windows).
+    Recognition accepts these forms with either `facade` or `facade.exe` as the program. Where Antigravity's own
+    title command cannot go through cmd.exe, it stays as it is and Facade adds no title hook. On Windows Claude Code keys a project in
+    `.claude.json` by its folder with forward slashes, and conflicts look it up so too.
   - No entry names the daemon's socket. The server finds it from its Facade home; `FACADE_HOME` is written where the
     home is not the default.
 - **Never does:** write an entry Facade did not write, or run a CLI (`claude mcp add` is run by the daemon; this only

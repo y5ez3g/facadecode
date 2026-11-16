@@ -14,7 +14,8 @@ use super::servers::{
     pi_entry,
 };
 use super::{INSTRUCTIONS_FILE, OPENCODE_CONFIG, SKILL_FILE, Server, Wiring};
-use crate::formats::{parse_jsonc, shell_word};
+use crate::formats::{Shell, parse_jsonc};
+use facade_base::system::env_var;
 
 /// The variable that gives the test CLI the server, which it runs itself.
 const FAKE_SERVER: &str = "FAKECLI_MCP";
@@ -179,7 +180,7 @@ export default function (pi) {{
 
 /// `facade hook <hook> <cli>`, `facade` this program.
 pub(super) fn facade_hook(facade: &str, hook: &str, cli: &str) -> String {
-    format!("{} hook {hook} {cli}", shell_word(facade))
+    format!("{} hook {hook} {cli}", Shell::of(cli).program(facade))
 }
 
 /// Muse Code: `-c mcpServers.facade=<entry>` for the run alone, and two hooks: `SessionStart`,
@@ -213,16 +214,12 @@ pub(super) fn muse(
             json!({ "command": server.program, "args": [], "env": references, "mode": "optional" });
         args = vec!["-c".into(), format!("mcpServers.{SERVER}={entry}")];
     }
-    let variables: String = server
-        .env
-        .iter()
-        .map(|(name, value)| format!("{name}={} ", shell_word(value)))
-        .collect();
     let instructions = facade_hook(server.facade, "instructions", "muse");
+    let instructions = Shell::of("muse").with_variables(server.env, &instructions);
     Ok(Wiring {
         args,
         hooks: vec![
-            ("SessionStart".into(), variables + &instructions),
+            ("SessionStart".into(), instructions),
             (
                 "PermissionRequest".into(),
                 facade_hook(server.facade, "approve", "muse"),
@@ -282,7 +279,7 @@ pub(super) fn unwire(cli: &str, env: &mut BTreeMap<String, String>) {
             if let Some(Value::Object(rules)) = config.get_mut("permission") {
                 rules.shift_remove("facade_*");
             }
-            let runs = match (env.get("FACADE_HOME"), env.get("FACADE_AGENT")) {
+            let runs = match (env_var(env, "FACADE_HOME"), env_var(env, "FACADE_AGENT")) {
                 (Some(home), Some(agent)) => Some(Path::new(home).join("core/runs").join(agent)),
                 _ => None,
             };

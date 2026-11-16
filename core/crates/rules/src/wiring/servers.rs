@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use facade_base::programs::program_name;
 use serde_json::{Map, Value, json};
 
 use crate::formats::{inline_toml, toml_string};
@@ -156,11 +157,8 @@ pub(super) fn runs_facade_mcp(entry: &Value) -> bool {
     is_server_program(program)
 }
 
-/// Whether `program` is a path of `facade-mcp`.
+/// Whether `program` is a path of `facade-mcp`, by its name as this system runs it:
+/// `facade-mcp.exe` on Windows.
 pub(super) fn is_server_program(program: Option<&str>) -> bool {
-    program.is_some_and(|program| {
-        Path::new(program)
-            .file_name()
-            .is_some_and(|name| name == SERVER_PROGRAM)
-    })
+    program.is_some_and(|program| program_name(Path::new(program)) == SERVER_PROGRAM)
 }

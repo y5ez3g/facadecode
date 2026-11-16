@@ -14,7 +14,11 @@ use super::servers::{
     Entry, SERVER, agy_entry, claude_entry, codex_entry, is_server_program, muse_guest_entry,
     opencode_allow, opencode_entry, pi_entry,
 };
-use crate::formats::{parse_jsonc, shell_word};
+use crate::formats::{
+    Shell, encoded_powershell, encoded_powershell_words, parse_jsonc, powershell_word,
+};
+use facade_base::programs::program_name;
+use facade_base::system::{SYSTEM, System, env_var, home_folder_in};
 
 /// The CLIs Facade integrates.
 pub const CLIS: [&str; 6] = ["claude", "codex", "opencode", "pi", "muse", "agy"];
@@ -162,7 +166,7 @@ pub enum Held {
 
 /// The variable `name` of `env` as a path, where it is set and not empty.
 fn path_variable(env: &BTreeMap<String, String>, name: &str) -> Option<PathBuf> {
-    env.get(name)
+    env_var(env, name)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
 }
@@ -176,7 +180,7 @@ pub fn session_status_file(cli: &str, env: &BTreeMap<String, String>, pid: u32) 
         return None;
     }
     let folder = path_variable(env, "CLAUDE_CONFIG_DIR")
-        .or_else(|| Some(path_variable(env, "HOME")?.join(".claude")))?;
+        .or_else(|| Some(home_folder_in(env)?.join(".claude")))?;
     Some(folder.join("sessions").join(format!("{pid}.json")))
 }
 
@@ -191,8 +195,8 @@ pub fn command_program(cli: &str) -> Option<&'static str> {
 /// otherwise. An error for a CLI Facade does not integrate, or without a home folder to look in.
 pub fn targets(cli: &str, env: &BTreeMap<String, String>) -> Result<Vec<Target>, String> {
     let home = || {
-        path_variable(env, "HOME").ok_or_else(|| {
-            "HOME is not set, so Facade cannot find the CLI's configuration".to_string()
+        home_folder_in(env).ok_or_else(|| {
+            "HOME (USERPROFILE on Windows) is not set, so Facade cannot find the CLI's configuration".to_string()
         })
     };
     let named_or_home = |name: &str, in_home: &str| -> Result<PathBuf, String> {
@@ -219,11 +223,18 @@ pub fn targets(cli: &str, env: &BTreeMap<String, String>) -> Result<Vec<Target>,
             let folder = named_or_home("XDG_CONFIG_HOME", ".config")?.join("opencode");
             vec![
                 (folder.join("opencode.json"), Kind::OpencodeConfig),
-                (folder.join("plugins/facade/index.js"), Kind::OpencodePlugin),
+                (
+                    folder.join("plugins").join("facade").join("index.js"),
+                    Kind::OpencodePlugin,
+                ),
             ]
         }
         "pi" => vec![(
-            home()?.join(".pi/agent/extensions/facade.js"),
+            home()?
+                .join(".pi")
+                .join("agent")
+                .join("extensions")
+                .join("facade.js"),
             Kind::PiExtension,
         )],
         "muse" => {
@@ -234,15 +245,21 @@ pub fn targets(cli: &str, env: &BTreeMap<String, String>) -> Result<Vec<Target>,
                 Some(config) => config,
                 None => home()?.join(".config"),
             };
-            vec![(config.join("muse/settings.json"), Kind::MuseSettings)]
+            vec![(
+                config.join("muse").join("settings.json"),
+                Kind::MuseSettings,
+            )]
         }
         "agy" => {
             let folder = home()?.join(".gemini");
             vec![
-                (folder.join("config/mcp_config.json"), Kind::AgyServers),
-                (folder.join("config/hooks.json"), Kind::AgyHooks),
                 (
-                    folder.join("antigravity-cli/settings.json"),
+                    folder.join("config").join("mcp_config.json"),
+                    Kind::AgyServers,
+                ),
+                (folder.join("config").join("hooks.json"), Kind::AgyHooks),
+                (
+                    folder.join("antigravity-cli").join("settings.json"),
                     Kind::AgySettings,
                 ),
             ]
@@ -808,35 +825,49 @@ fn hook_events(cli: &str) -> &'static [(&'static str, &'static str)] {
     }
 }
 
-/// The shell command of Facade's hook for `event` of `cli`. The approval hook names its CLI as a
-/// run's does, and no Facade home.
+/// The command of Facade's hook for `event` of `cli`, for the shell `cli` runs it with. The
+/// approval hook names its CLI as a run's does, and no Facade home.
 fn hook_command(event: &str, cli: &str, programs: &Programs) -> String {
-    let facade = shell_word(programs.facade);
+    if SYSTEM == System::Windows && cli == "codex" {
+        let home = programs
+            .home
+            .map(|home| format!("$env:FACADE_HOME={}; ", powershell_word(home)))
+            .unwrap_or_default();
+        return encoded_powershell(&format!(
+            "{home}& {} 'hook' {} '--cli' 'codex'; exit $LASTEXITCODE",
+            powershell_word(programs.facade),
+            powershell_word(event),
+        ));
+    }
+    let shell = Shell::of(cli);
+    let facade = shell.program(programs.facade);
     match (event, programs.home) {
         ("approve", _) => format!("{facade} hook approve {cli}"),
-        (_, Some(home)) => format!(
-            "FACADE_HOME={} {facade} hook {event} --cli {cli}",
-            shell_word(home)
+        (_, Some(home)) => shell.with_variables(
+            &[("FACADE_HOME".into(), home.into())],
+            &format!("{facade} hook {event} --cli {cli}"),
         ),
         (_, None) => format!("{facade} hook {event} --cli {cli}"),
     }
 }
 
-/// Whether `command` is one of Facade's hooks for `cli`, whatever its Facade home or the path of
-/// its `facade`.
+/// Whether `command` is one of Facade's hooks for `cli`, in either shell's form, whatever its
+/// Facade home or the path of its `facade`.
 fn is_facade_hook(command: &str, cli: &str) -> bool {
-    let words = shell_words(command).unwrap_or_default();
+    let words = (if cli == "codex" {
+        encoded_powershell_words(command)
+    } else {
+        None
+    })
+    .or_else(|| Shell::words(command))
+    .unwrap_or_default();
     let skip = usize::from(
         words
             .first()
             .is_some_and(|word| word.starts_with("FACADE_HOME=")),
     );
     let words: Vec<&str> = words[skip..].iter().map(String::as_str).collect();
-    let is_facade = |program: &str| {
-        Path::new(program)
-            .file_name()
-            .is_some_and(|name| name == "facade")
-    };
+    let is_facade = |program: &str| program_name(Path::new(program)) == "facade";
     let reports =
         |event: &str| event != "approve" && hook_events(cli).iter().any(|(ours, _)| *ours == event);
     match words[..] {
@@ -846,41 +877,6 @@ fn is_facade_hook(command: &str, cli: &str) -> bool {
         }
         _ => false,
     }
-}
-
-/// The characters outside quotes that make a command more than plain words to a shell.
-const SHELL_SYNTAX: &str = "\"$`;&|<>()*?[#~{";
-
-/// The words a shell splits `command` into, where it is plain words, single quotes and backslashes
-/// alone; None where it holds anything else a shell reads.
-fn shell_words(command: &str) -> Option<Vec<String>> {
-    /// The word being read, a new one where none is.
-    fn word<'a>(words: &'a mut Vec<String>, in_word: &mut bool) -> &'a mut String {
-        if !std::mem::replace(in_word, true) {
-            words.push(String::new());
-        }
-        words.last_mut().expect("a word")
-    }
-    let mut words = Vec::new();
-    let (mut in_word, mut quoted, mut escaped) = (false, false, false);
-    for c in command.chars() {
-        if quoted && c == '\'' {
-            quoted = false;
-        } else if quoted || escaped {
-            escaped = false;
-            word(&mut words, &mut in_word).push(c);
-        } else if c == '\'' || c == '\\' {
-            word(&mut words, &mut in_word);
-            (quoted, escaped) = (c == '\'', c == '\\');
-        } else if c.is_whitespace() {
-            in_word = false;
-        } else if SHELL_SYNTAX.contains(c) {
-            return None;
-        } else {
-            word(&mut words, &mut in_word).push(c);
-        }
-    }
-    (!quoted && !escaped).then_some(words)
 }
 
 /// Facade's hooks for `cli` under `hooks` of `map`: each in the place of Facade's first group for
@@ -1182,11 +1178,37 @@ mod tests {
         home: Some("/h"),
     };
 
+    /// `rest` after the program `/opt/facade/facade`, as `cli` runs its hooks on this system.
+    fn facade_command(cli: &str, rest: &str) -> String {
+        if SYSTEM == System::Windows && cli == "codex" {
+            let args = rest
+                .split_whitespace()
+                .map(powershell_word)
+                .collect::<Vec<_>>()
+                .join(" ");
+            return encoded_powershell(&format!(
+                "& '/opt/facade/facade' {args}; exit $LASTEXITCODE"
+            ));
+        }
+        let program = match (facade_base::system::SYSTEM, cli) {
+            (facade_base::system::System::Windows, cli) if cli != "claude" => {
+                r#"@"/opt/facade/facade""#
+            }
+            _ => "'/opt/facade/facade'",
+        };
+        format!("{program} {rest}")
+    }
+
+    /// The environment `pairs` make; the home a test names is the CLIs' home on either system.
     fn env(pairs: &[(&str, &str)]) -> BTreeMap<String, String> {
-        pairs
+        let mut env: BTreeMap<String, String> = pairs
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_string()))
-            .collect()
+            .collect();
+        if let Some(home) = env.get("HOME").cloned() {
+            env.insert("USERPROFILE".into(), home);
+        }
+        env
     }
 
     fn json(text: &str) -> Value {
@@ -1224,6 +1246,11 @@ mod tests {
     /// Each CLI's files are where its own variables say, under HOME otherwise.
     #[test]
     fn each_cli_s_files_are_where_its_variables_say() {
+        // An absolute folder on this system.
+        let absolute_g = match facade_base::system::SYSTEM {
+            facade_base::system::System::Unix => "/g",
+            facade_base::system::System::Windows => "C:/g",
+        };
         let home = env(&[("HOME", "/u")]);
         let files = |cli: &str, env: &BTreeMap<String, String>| {
             targets(cli, env)
@@ -1277,8 +1304,11 @@ mod tests {
             [PathBuf::from("/u/.config/muse/settings.json")]
         );
         assert_eq!(
-            files("muse", &env(&[("HOME", "/u"), ("XDG_CONFIG_HOME", "/g")])),
-            [PathBuf::from("/g/muse/settings.json")]
+            files(
+                "muse",
+                &env(&[("HOME", "/u"), ("XDG_CONFIG_HOME", absolute_g)])
+            ),
+            [PathBuf::from(absolute_g).join("muse/settings.json")]
         );
         let relative = env(&[("HOME", "/u"), ("XDG_CONFIG_HOME", "g")]);
         assert_eq!(
@@ -1298,7 +1328,7 @@ mod tests {
         assert!(
             targets("claude", &env(&[]))
                 .unwrap_err()
-                .contains("HOME is not set")
+                .contains("is not set")
         );
     }
 
@@ -1498,7 +1528,7 @@ mod tests {
             assert!(!is_facade_hook(command, "claude"), "{command}");
         }
         assert_eq!(
-            shell_words(&hook_command(
+            Shell::words(&hook_command(
                 "prompt",
                 "claude",
                 &Programs {
@@ -1632,7 +1662,7 @@ mod tests {
         for (event, name) in CODEX_HOOK_EVENTS {
             assert_eq!(
                 hooks["hooks"][name][0]["hooks"][0]["command"],
-                format!("'/opt/facade/facade' hook {event} --cli codex"),
+                facade_command("codex", &format!("hook {event} --cli codex")),
                 "{name}"
             );
         }
@@ -1826,9 +1856,9 @@ mod tests {
         assert_eq!(alone["mcpServers"]["facade"], server);
         for (event, name) in MUSE_HOOK_EVENTS {
             let command = if event == "approve" {
-                "'/opt/facade/facade' hook approve muse".to_string()
+                facade_command("muse", "hook approve muse")
             } else {
-                format!("'/opt/facade/facade' hook {event} --cli muse")
+                facade_command("muse", &format!("hook {event} --cli muse"))
             };
             let mut handler = json!({ "type": "command", "command": command });
             // Muse Code admits an `Interrupt` hook only as one that does not hold it up.
@@ -1848,11 +1878,21 @@ mod tests {
         );
         assert_eq!(
             moved["hooks"]["Stop"][0]["hooks"][0]["command"],
-            "FACADE_HOME='/h' '/new/facade' hook turn-end --cli muse"
+            match facade_base::system::SYSTEM {
+                facade_base::system::System::Unix => {
+                    "FACADE_HOME='/h' '/new/facade' hook turn-end --cli muse"
+                }
+                facade_base::system::System::Windows => {
+                    r#"set "FACADE_HOME=/h" && @"/new/facade" hook turn-end --cli muse"#
+                }
+            }
         );
         assert_eq!(
             moved["hooks"]["PermissionRequest"][0]["hooks"][0]["command"],
-            "'/new/facade' hook approve muse"
+            match facade_base::system::SYSTEM {
+                facade_base::system::System::Unix => "'/new/facade' hook approve muse",
+                facade_base::system::System::Windows => r#"@"/new/facade" hook approve muse"#,
+            }
         );
 
         let theirs = json!({ "hooks": [{ "type": "command", "command": "say done" }] });
@@ -1933,7 +1973,7 @@ mod tests {
                 json!([
                     {
                         "type": "command",
-                        "command": format!("'/opt/facade/facade' hook {event} --cli agy"),
+                        "command": facade_command("agy", &format!("hook {event} --cli agy")),
                     },
                 ])
             );

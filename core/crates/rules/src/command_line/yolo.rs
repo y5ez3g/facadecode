@@ -14,6 +14,16 @@ use serde_json::Value;
 
 use crate::Pattern;
 use crate::formats::toml_string;
+use facade_base::system::{SYSTEM, System};
+
+/// The folder as `${folder_toml}` writes it: on Windows with `A`-`Z` in lower case, as Codex keys
+/// a project there.
+fn toml_folder(path: &str) -> String {
+    match SYSTEM {
+        System::Windows => path.to_ascii_lowercase(),
+        System::Unix => path.to_string(),
+    }
+}
 
 /// Matches the two ways a rule writes the start's folder: `${folder}` and `${folder_toml}`.
 static FOLDER: LazyLock<Regex> =
@@ -55,7 +65,7 @@ impl YoloRule {
     /// The extra arguments for a start in `folder`.
     pub(crate) fn args(&self, folder: &Path) -> Vec<String> {
         let path = folder.to_string_lossy();
-        let quoted = toml_string(&path);
+        let quoted = toml_string(&toml_folder(&path));
         let fill = |arg: &String| with_folder(arg, &path, &quoted);
         self.args.iter().map(fill).collect()
     }

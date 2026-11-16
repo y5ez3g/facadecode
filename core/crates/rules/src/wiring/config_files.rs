@@ -4,6 +4,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use facade_base::system::{env_var, home_folder_in};
 use serde_json::Value;
 
 use crate::formats::parse_jsonc;
@@ -18,13 +19,12 @@ pub(super) fn read_config(file: &Path) -> Option<Value> {
 
 /// The home folder of `environment`.
 pub(super) fn home(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
-    environment.get("HOME").map(PathBuf::from)
+    home_folder_in(environment)
 }
 
 /// The folder `name` in `environment` names, where it is set and not empty.
 pub(super) fn folder_named(environment: &BTreeMap<String, String>, name: &str) -> Option<PathBuf> {
-    environment
-        .get(name)
+    env_var(environment, name)
         .filter(|folder| !folder.is_empty())
         .map(PathBuf::from)
 }
@@ -32,7 +32,7 @@ pub(super) fn folder_named(environment: &BTreeMap<String, String>, name: &str) -
 /// The user configuration folder of `environment`: an absolute `XDG_CONFIG_HOME`, or `.config` in
 /// the home folder.
 pub(super) fn config_home(environment: &BTreeMap<String, String>) -> Option<PathBuf> {
-    let xdg = environment.get("XDG_CONFIG_HOME").map(PathBuf::from);
+    let xdg = env_var(environment, "XDG_CONFIG_HOME").map(PathBuf::from);
     xdg.filter(|folder| folder.is_absolute())
         .or_else(|| Some(home(environment)?.join(".config")))
 }

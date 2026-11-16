@@ -15,11 +15,14 @@ mod input;
 mod sessions;
 mod state;
 mod wiring;
+mod wrappers;
 
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::LazyLock;
+use std::time::Duration;
 
+use facade_base::system::{SYSTEM, System};
 use regex::Regex;
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -41,6 +44,7 @@ pub use wiring::{
     guest_entry_serves_run, hook, integration, plugin_files, plugin_version,
     runs_start_guest_entry, session_ends_with_process, uses_folder_plugin,
 };
+pub use wrappers::direct_command;
 
 /// The rule files of the CLIs Facade starts, by name, in the order `facade` lists them.
 const FILES: [(&str, &str); 6] = [
@@ -102,6 +106,10 @@ pub struct Rule {
     /// What YOLO on adds: running without asking and without the sandbox, and the folder trusted.
     #[serde(default)]
     pub yolo: YoloRule,
+    /// What typing into the CLI needs where it reads console input records, as Codex and Muse Code
+    /// do on Windows (CLIS-2.1). See [`console_typing`].
+    #[serde(default)]
+    pub console: Option<ConsoleRule>,
 }
 
 /// What a CLI's MCP client does that Facade's MCP server answers to. It lives in the rule so that
@@ -141,6 +149,42 @@ pub struct ReadyTools {
     pub opened: Pattern,
     /// The key that closes the panel.
     pub close: String,
+}
+
+/// What typing into a CLI that reads console input records needs: a wait before Enter for each
+/// character typed, and characters above U+FFFF sent as key-down records.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConsoleRule {
+    /// The wait before Enter, in milliseconds, for each UTF-16 code unit of the text typed.
+    pub per_char_ms: u64,
+    /// Characters above U+FFFF go as win32-input-mode key-down records: the CLI loses them
+    /// otherwise.
+    pub records_above_bmp: bool,
+}
+
+/// How the typist types into a CLI where it reads console input records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConsoleTyping {
+    /// The wait before Enter for each UTF-16 code unit of the text typed.
+    pub per_char: Duration,
+    /// Characters above U+FFFF go as key-down records
+    /// ([`facade_base::terminal::key_down_records`]).
+    pub records_above_bmp: bool,
+}
+
+/// How to type into `rule`'s CLI where it reads console input records: Some only on Windows, for a
+/// rule with a `console` section. Elsewhere the CLI reads the terminal's bytes and needs nothing
+/// more.
+pub fn console_typing(rule: &Rule) -> Option<ConsoleTyping> {
+    let console = rule
+        .console
+        .as_ref()
+        .filter(|_| SYSTEM == System::Windows)?;
+    Some(ConsoleTyping {
+        per_char: Duration::from_millis(console.per_char_ms),
+        records_above_bmp: console.records_above_bmp,
+    })
 }
 
 /// How the CLI takes a pasted message: what its input shows of a paste, and how long the message
@@ -914,10 +958,8 @@ mod tests {
         let base = crate::test_folder::TestFolder::new("rules-version");
         let release = base.join("lib/codex");
         std::fs::create_dir_all(release.join("bin")).unwrap();
-        std::fs::create_dir_all(base.join("bin")).unwrap();
         std::fs::write(release.join("bin/codex"), "").unwrap();
-        std::os::unix::fs::symlink(release.join("bin/codex"), base.join("bin/codex")).unwrap();
-        let program = base.join("bin/codex");
+        let program = release.join("bin/codex");
         assert_eq!(
             installed_version(codex, &program),
             None,

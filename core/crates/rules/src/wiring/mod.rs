@@ -136,7 +136,9 @@ pub(crate) fn wire(
 /// [`merged_settings`] then says whether those settings could be merged.
 pub(crate) fn report_session(cli: &str, wiring: &mut Wiring, session: &SessionReport) -> bool {
     match cli {
-        "muse" => wiring.hooks.push(("SessionStart".into(), session.hook())),
+        "muse" => wiring
+            .hooks
+            .push(("SessionStart".into(), session.hook("muse"))),
         "agy" => wiring.title = Some(session.title()),
         _ => return false,
     }

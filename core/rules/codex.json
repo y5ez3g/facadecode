@@ -30,5 +30,6 @@
 		"footer": "  ${count} background terminal${s} running · /ps to view · /stop to close",
 		"worked": "^ {2}Worked for (?:<1s|(?:\\d+[hms] ?)+) • \\d{1,2}:\\d{2}(?: [AP]M)?$"
 	},
-	"yolo": { "args": ["--dangerously-bypass-approvals-and-sandbox", "-c", "projects={ ${folder_toml} = { trust_level = \"trusted\" } }"] }
+	"yolo": { "args": ["--dangerously-bypass-approvals-and-sandbox", "-c", "projects={ ${folder_toml} = { trust_level = \"trusted\" } }"] },
+	"console": { "per_char_ms": 3, "records_above_bmp": true }
 }
