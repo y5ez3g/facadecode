@@ -190,24 +190,31 @@ adds, the model and effort, the session a resume names, and the `clis` entries o
 
 ### input
 
-Reads a CLI's input box from its screen, and tells a pasted message's own draft from anything else in it (`input/mod.rs`, `input/paste.rs`).
+Reads a CLI's input box from its screen, tells a pasted message's own draft from anything else in it, and says what a probe's space and Backspace did to the box (`input/mod.rs`, `input/paste.rs`, `input/probe.rs`).
 
 - **Owns:** nothing. It reads the `input` and `paste` sections of a CLI's rule, and a screen view the caller gives it.
 - **Keeps:**
   - A reading comes from the screen alone: the cells, their dim, inverse and colored marks, the cursor, and an open synchronized update. It never uses the keys typed or the time since.
   - Each mechanism (`frame`, `prompt`, `editor`, `box`, `prompt_row`) knows only the layout its CLI was recorded drawing. Any other screen reads `unknown`, or `interaction` when one of the rule's menus or questions shows.
   - A screen in the middle of a synchronized update, a cursor off the screen, or a hidden terminal cursor with no inverse cell of the CLI's own at that position never reads `usable` or `draft`.
-  - Colored text alone where the input starts could be a hint or a draft, so it reads `unknown`. A dim placeholder, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
+  - Colored text alone where the input starts could be a hint or a draft, so it reads `unknown` and is marked unsure, with the input's first row. A dim hint, or a mode placeholder shown above its footer, counts as empty only while the cursor is where the input starts.
+  - A probe is judged from two readings, before its key and after, never from the time between them: whether its space went in by the cursor and the text, what the row was by the text alone, and whether Backspace put the box back by every cell and the cursor.
   - The evidence names the rows, never the draft's text. The draft's text leaves `read_draft` only as its second value and is never saved.
   - A message's own draft is its text alone, after the message's lead when one was typed. Whitespace is ignored, because wrapping and indentation draw it differently. The draft may also be the CLI's placeholder for a paste of that size, counted the way that CLI counts. A draft scrolled out above only has to show the text's end.
 - **Never does:** decide whether input may be typed; press Enter; read CLI reports, hooks or session files; keep state between readings.
 - **Interface** (re-exported from `facade_rules`):
-  - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)`, where `InputInfo` carries the state, evidence, mechanism and the rows scrolled out. The agent actor calls it for `inspect`, for readiness (whether the start holds input), for state (`interaction` means the CLI is asking the person), and to see whether a submitted draft was taken (`usable` or `interaction` afterwards). `read_input` is the same reading without the draft's text.
+  - `read_box(&InputRule, &ScreenView) -> BoxReading`: the reading, the draft's text, the input's first row (`InputLine`: its row, the column the input starts at, its `LineCell`s - text, dim, colored - whether rows under it show anything, and the cursor) and whether the reading is unsure. The typist reads the box with it.
+  - `read_draft(&InputRule, &ScreenView) -> (InputInfo, Option<String>)`, `read_box` without the row, where `InputInfo` carries the state, evidence, mechanism and the rows scrolled out. The agent actor calls it for `inspect`, for readiness (whether the start holds input), for state (`interaction` means the CLI is asking the person), and to see whether a submitted draft was taken (`usable` or `interaction` afterwards). `read_input` is the same reading without the draft's text.
   - `with_paste_text(&PasteRule, draft, pastes) -> String`: the agent actor uses it to give back the pasted text behind each placeholder in a draft the person submits.
   - For the typist:
     - `is_own_draft(&PasteRule, draft, text, lead, hidden) -> bool`: whether the box shows the message before its Enter.
     - `settle_time(&PasteRule, text) -> Duration`: how long that draft must stay the same before the Enter, which is the CLI's wait plus its wait for each line.
     - `is_same_draft(draft, seen, text, lead, hidden) -> bool`: whether the draft is still the one it pressed Enter over. The placeholder's paste number must match too, because a later paste of the same size gets a new number.
+  - For the typist's probe, each from the row before its key and the reading after:
+    - `space_taken(&InputLine, &BoxReading) -> bool`: whether its space went in: the cursor one column on, the row its space ahead of the text it held, or its space alone.
+    - `verdict_of(&InputLine, &BoxReading) -> ProbeVerdict`: the row gone, a `Hint`; moved on by the space, a `Draft`; else `Other`.
+    - `restored(ProbeVerdict, &InputLine, &BoxReading) -> bool`: whether Backspace put the box back: a hint's box empty or showing a hint where the input starts, else the row and the cursor as they were.
+    - `shape_of(Option<&InputLine>) -> String`: the row's shape for a log, never its text.
 
 ### state
 
