@@ -190,7 +190,7 @@ function draw(): void {
 	const height = Math.max(8, process.stdout.rows || 24);
 	if (quirks().garble) {
 		// Its input gone behind a screen of its own: the cursor at its top, nothing a reader knows
-		process.stdout.write(`\x1b[?2026h\x1b[H\x1b[2J\x1b[1;1HStill loading the workspace...\x1b[1;1H\x1b[?2026l`);
+		process.stdout.write(`\x1b[?2026h\x1b[H\x1b[J\x1b[1;1HStill loading the workspace...\x1b[1;1H\x1b[?2026l`);
 		return;
 	}
 	if (!draft) {
@@ -214,7 +214,8 @@ function draw(): void {
 		const parts = line.match(new RegExp(`.{1,${as === 'muse' ? width - 2 : width}}`, 'gu')) ?? [''];
 		return parts.map((part, index) => as === 'muse' && index > 0 ? `  ${part}` : part);
 	}).slice(-(height - input.length));
-	const out = ['\x1b[?2026h', '\x1b[H\x1b[2J'];
+	// Erased from the top down, never with \x1b[2J: that scrolls the old frame into the scrollback, where a read of a short terminal still finds a draft cleared since
+	const out = ['\x1b[?2026h', '\x1b[H\x1b[J'];
 	// What it printed sits right above its input, as a CLI's transcript does
 	const top = height - input.length;
 	body.forEach((line, at) => out.push(`\x1b[${top - body.length + at + 1};1H${line}`));
