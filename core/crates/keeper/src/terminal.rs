@@ -99,7 +99,9 @@ const fn ctrl(key: u8) -> u8 {
 /// The error for a PTY that could not be opened. Running out of PTYs is a macOS limit people hit,
 /// so there the message says how many are in use and how to raise the limit.
 fn no_terminal(err: std::io::Error) -> ErrorBody {
-    let mut message = format!("could not open a terminal: {err}");
+    let message = format!("could not open a terminal: {err}");
+    #[cfg(target_os = "macos")]
+    let mut message = message;
     #[cfg(target_os = "macos")]
     if let Some(limit) = macos::pty_limit() {
         let in_use = macos::ptys_in_use();
