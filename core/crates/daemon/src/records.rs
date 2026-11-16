@@ -90,6 +90,12 @@ impl Records {
         Ok(format!("a{number}"))
     }
 
+    /// Raises the counter so the next agent number is above `given`; one already above stays.
+    /// Blocks.
+    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
+        self.numbers.raise_above(given)
+    }
+
     /// Picks a name for agent `id`, started without one (LIFECYCLE-2.1), and holds it until
     /// `release_name`: at random, one of `names` (the settings file's, else the default names) that
     /// is not in `taken`, the names of the agents in its window, and that no other start holds;
