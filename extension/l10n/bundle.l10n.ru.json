@@ -354,5 +354,18 @@
 	"The working location {0} is not available in this window.": "Рабочее расположение {0} недоступно в этом окне.",
 	"Stop unconfirmed · check process": "Остановка не подтверждена · проверьте процесс",
 	"1 agent": "1 агент",
-	"{0} agents": "Агентов: {0}"
+	"{0} agents": "Агентов: {0}",
+	"The engine changes only after the window reloads.": "Движок сменится только после перезагрузки окна.",
+	"Every agent of the old engine has ended: reload this window to switch.": "Все агенты старого движка завершились: перезагрузите окно, чтобы переключиться.",
+	"Facade's settings file has a problem": "В файле настроек Facade есть проблема",
+	"Facade could not find it": "Facade не нашёл это",
+	"Facade cannot do this right now": "Facade сейчас не может это сделать",
+	"This CLI cannot do this": "Эта CLI так не умеет",
+	"Could not create the worktree": "Не удалось создать рабочее дерево",
+	"The agent has ended": "Агент завершён",
+	"Too much input at once": "Слишком много ввода за раз",
+	"Facade is updating; try again in a moment": "Facade обновляется; попробуйте ещё раз через минуту",
+	"Facade does not allow this": "Facade этого не разрешает",
+	"Something went wrong in Facade": "В Facade произошла ошибка",
+	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "Facade core не удалось запустить здесь, поэтому окно использует старый движок: {0}. Чтобы больше не пытаться, выключите {1} и перезагрузите окно."
 }

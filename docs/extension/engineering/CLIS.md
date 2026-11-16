@@ -77,6 +77,11 @@ and session tracking set (2.2, 2.4). Never copy credentials from the client to a
 extension, Claude Code installs that extension and shows a welcome that waits for Enter, past which no message goes.
 Claude Code never runs with `CLAUDE_CODE_DISABLE_TERMINAL_TITLE`, whichever layer sets it: that switch also turns off
 its OSC 7501 reports (2.3), so its run settings clear it as well for the copy its settings files carry.
+On the Rust engine (ARCHITECTURE-1.4) the window sends core these layers but the entry's own `env`, which core applies,
+with `TERM_PROGRAM=vscode`, `COLORTERM=truecolor`, `CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` where no layer sets it and
+`FACADE_HOME`; core keeps every other rule of this section. The window's own terminals get
+`CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL=1` too, so a Claude Code that `facade start` runs there shows no welcome; a Claude Code
+run directly there then does not install its VS Code extension, and one installed by hand works as before.
 
 An omitted `command` uses the type's command on PATH; `custom` requires one (CONFIGURATION-2.2). A simple name is
 searched on that PATH; a relative path is from launch cwd; leading `~` uses that environment's home; an absolute path

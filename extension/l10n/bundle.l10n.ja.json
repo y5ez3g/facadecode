@@ -354,5 +354,18 @@
 	"1 agent": "1 個のエージェント",
 	"{0} agents": "{0} 個のエージェント",
 	"Open Settings": "設定を開く",
-	"Edit in facade.json": "facade.json で編集"
+	"Edit in facade.json": "facade.json で編集",
+	"The engine changes only after the window reloads.": "エンジンはウィンドウを再読み込みした後に切り替わります。",
+	"Every agent of the old engine has ended: reload this window to switch.": "旧エンジンのエージェントはすべて終了しました。このウィンドウを再読み込みすると切り替わります。",
+	"Facade's settings file has a problem": "Facade の設定ファイルに問題があります",
+	"Facade could not find it": "Facade が見つけられません",
+	"Facade cannot do this right now": "Facade は今これを実行できません",
+	"This CLI cannot do this": "この CLI ではこの操作はできません",
+	"Could not create the worktree": "作業ツリーを作成できませんでした",
+	"The agent has ended": "エージェントは終了しています",
+	"Too much input at once": "一度に入力する量が多すぎます",
+	"Facade is updating; try again in a moment": "Facade を更新しています。しばらくしてからもう一度お試しください",
+	"Facade does not allow this": "Facade ではこの操作は許可されていません",
+	"Something went wrong in Facade": "Facade でエラーが発生しました",
+	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "ここでは Facade core を起動できないため、このウィンドウは旧エンジンを使います: {0}。試行をやめるには {1} をオフにしてウィンドウを再読み込みしてください。"
 }

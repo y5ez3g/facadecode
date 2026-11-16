@@ -61,5 +61,6 @@
 	"config.home": "Katalog Facade home to folder na ustawienia Facade, historię agentów i wiadomości. Tylko agenci w oknach z tym samym katalogiem Facade home mogą komunikować się ze sobą. Zmienna środowiskowa `FACADE_HOME` zastępuje domyślny katalog `~/.facade`; podana tutaj ścieżka zastępuje oba.\n\n[Edytuj w facade.json](command:facade.openSettingsFile), aby dodać własne programy CLI lub programy terminalowe. Możesz również wybrać sposób uruchamiania każdego z nich, opcje oferowane przez polecenie Nowy agent, sugerowane nazwy oraz to, czy tryb YOLO jest włączony.",
 	"config.home.pattern": "Ścieżka musi zaczynać się od ~/ lub być bezwzględna.",
 	"config.moved": "Przeniesiono do `facade.json`. [Edytuj w facade.json](command:facade.openSettingsFile)",
-	"config.movedPlain": "Przeniesiono do facade.json. Uruchom polecenie Facade Code: Otwórz ustawienia, aby przejść do niego."
+	"config.movedPlain": "Przeniesiono do facade.json. Uruchom polecenie Facade Code: Otwórz ustawienia, aby przejść do niego.",
+	"config.rustEngine": "Który silnik uruchamia agenty: `auto` używa silnika Rust, gdy na tym komputerze nie działa już żaden agent starego silnika, a `off` zawsze używa starego silnika. Okno wybiera go przy otwarciu lub ponownym załadowaniu. Okno zdalne czyta ustawienie maszyny zdalnej."
 }

@@ -61,5 +61,6 @@
 	"config.home": "Facade home; Facade ayarları, aracı geçmişi ve iletiler için kullanılan klasördür. Yalnızca aynı Facade home klasörüne sahip pencerelerdeki aracılar birbiriyle iletişim kurabilir. `FACADE_HOME` ortam değişkeni varsayılan `~/.facade` yolunu geçersiz kılar; buradaki bir yol ise her ikisini de geçersiz kılar.\n\nKendi CLI'lerinizi veya terminal programlarınızı eklemek için [facade.json içinde düzenle](command:facade.openSettingsFile) bağlantısını kullanın. Ayrıca her birinin nasıl başlayacağını, Yeni Aracı'nın neleri sunacağını, önerdiği adları ve YOLO'nun açık olup olmayacağını da belirlersiniz.",
 	"config.home.pattern": "Yol ~/ ile başlamalı veya mutlak olmalıdır.",
 	"config.moved": "`facade.json` dosyasına taşındı. [facade.json içinde düzenle](command:facade.openSettingsFile)",
-	"config.movedPlain": "facade.json dosyasına taşındı. Ulaşmak için Facade Code: Ayarları Aç komutunu çalıştırın."
+	"config.movedPlain": "facade.json dosyasına taşındı. Ulaşmak için Facade Code: Ayarları Aç komutunu çalıştırın.",
+	"config.rustEngine": "Aracıları çalıştıran motor: `auto`, bu bilgisayarda eski motorun hiçbir aracısı çalışmıyorsa Rust motorunu, `off` ise her zaman eski motoru kullanır. Pencere, açılırken veya yeniden yüklenirken motoru seçer. Uzak pencere, uzak makinedeki ayarı okur."
 }

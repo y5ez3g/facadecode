@@ -61,5 +61,6 @@
 	"config.home": "Facade home は Facade の設定、エージェントの履歴、メッセージを保存するフォルダーです。同じ Facade home を持つウィンドウのエージェント間でのみ通信できます。環境変数 `FACADE_HOME` は既定値 `~/.facade` を上書きし、ここで指定したパスはその両方を上書きします。\n\n[facade.json で編集](command:facade.openSettingsFile)して、独自の CLI やターミナル プログラムを追加できます。各 CLI の起動方法、[新しいエージェント] に表示する CLI、候補として提示する名前、YOLO を有効にするかも設定できます。",
 	"config.home.pattern": "パスは ~/ で始まるか、絶対パスである必要があります。",
 	"config.moved": "`facade.json` に移りました。[facade.json で編集](command:facade.openSettingsFile)",
-	"config.movedPlain": "facade.json に移りました。「Facade Code: 設定を開く」を実行してアクセスしてください。"
+	"config.movedPlain": "facade.json に移りました。「Facade Code: 設定を開く」を実行してアクセスしてください。",
+	"config.rustEngine": "エージェントを動かすエンジン: `auto` はこのコンピューターで旧エンジンのエージェントが動いていなければ Rust エンジンを使い、`off` は常に旧エンジンを使います。ウィンドウは開くときか再読み込みのときにエンジンを決めます。リモート ウィンドウはリモート マシン側の設定を読みます。"
 }

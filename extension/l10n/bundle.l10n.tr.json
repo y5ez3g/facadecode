@@ -354,5 +354,18 @@
 	"The working location {0} is not available in this window.": "{0} çalışma konumu bu pencerede kullanılamıyor.",
 	"Stop unconfirmed · check process": "Durdurma doğrulanamadı · işlemi kontrol edin",
 	"1 agent": "1 aracı",
-	"{0} agents": "{0} aracı"
+	"{0} agents": "{0} aracı",
+	"The engine changes only after the window reloads.": "Motor yalnızca pencere yeniden yüklendikten sonra değişir.",
+	"Every agent of the old engine has ended: reload this window to switch.": "Eski motorun tüm aracıları sona erdi: geçmek için bu pencereyi yeniden yükleyin.",
+	"Facade's settings file has a problem": "Facade ayar dosyasında bir sorun var",
+	"Facade could not find it": "Facade bunu bulamadı",
+	"Facade cannot do this right now": "Facade bunu şu anda yapamıyor",
+	"This CLI cannot do this": "Bu CLI bunu yapamıyor",
+	"Could not create the worktree": "Çalışma ağacı oluşturulamadı",
+	"The agent has ended": "Aracı sona erdi",
+	"Too much input at once": "Tek seferde çok fazla girdi",
+	"Facade is updating; try again in a moment": "Facade güncelleniyor; birazdan yeniden deneyin",
+	"Facade does not allow this": "Facade buna izin vermiyor",
+	"Something went wrong in Facade": "Facade'de bir sorun oluştu",
+	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "Facade core burada başlatılamadı, bu yüzden bu pencere eski motoru kullanıyor: {0}. Denemeyi bırakmak için {1} ayarını kapatıp pencereyi yeniden yükleyin."
 }

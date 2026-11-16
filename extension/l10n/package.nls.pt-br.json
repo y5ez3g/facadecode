@@ -61,5 +61,6 @@
 	"config.home": "A pasta Facade home armazena as configurações, o histórico de agentes e as mensagens do Facade. Apenas agentes em janelas com o mesmo Facade home podem se comunicar entre si. A variável de ambiente `FACADE_HOME` substitui o padrão `~/.facade`; um caminho aqui substitui ambos.\n\n[Editar no facade.json](command:facade.openSettingsFile) para adicionar suas próprias CLIs ou programas de terminal. Você também escolhe como cada um inicia, o que o Novo Agente oferece, os nomes sugeridos e se o YOLO está ativado.",
 	"config.home.pattern": "O caminho deve começar com ~/ ou ser absoluto.",
 	"config.moved": "Movido para `facade.json`. [Editar no facade.json](command:facade.openSettingsFile)",
-	"config.movedPlain": "Movido para facade.json. Execute Facade Code: Abrir Configurações para acessar."
+	"config.movedPlain": "Movido para facade.json. Execute Facade Code: Abrir Configurações para acessar.",
+	"config.rustEngine": "Qual mecanismo executa os agentes: `auto` usa o mecanismo em Rust quando nenhum agente do mecanismo antigo ainda está em execução neste computador, e `off` sempre usa o mecanismo antigo. Cada janela escolhe ao abrir ou recarregar. Uma janela remota lê a configuração da máquina remota."
 }

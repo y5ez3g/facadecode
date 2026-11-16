@@ -354,5 +354,18 @@
 	"1 agent": "1 agente",
 	"{0} agents": "{0} agentes",
 	"Open Settings": "Abrir configuración",
-	"Edit in facade.json": "Editar en facade.json"
+	"Edit in facade.json": "Editar en facade.json",
+	"The engine changes only after the window reloads.": "El motor cambia solo después de recargar la ventana.",
+	"Every agent of the old engine has ended: reload this window to switch.": "Todos los agentes del motor anterior terminaron: recarga esta ventana para cambiar.",
+	"Facade's settings file has a problem": "El archivo de configuración de Facade tiene un problema",
+	"Facade could not find it": "Facade no lo encontró",
+	"Facade cannot do this right now": "Facade no puede hacer esto ahora",
+	"This CLI cannot do this": "Esta CLI no puede hacer esto",
+	"Could not create the worktree": "No se pudo crear el árbol de trabajo",
+	"The agent has ended": "El agente terminó",
+	"Too much input at once": "Demasiada entrada a la vez",
+	"Facade is updating; try again in a moment": "Facade se está actualizando; inténtalo de nuevo en un momento",
+	"Facade does not allow this": "Facade no permite esto",
+	"Something went wrong in Facade": "Algo falló en Facade",
+	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "Facade core no pudo iniciarse aquí, así que esta ventana usa el motor anterior: {0}. Para dejar de intentarlo, desactiva {1} y recarga la ventana."
 }

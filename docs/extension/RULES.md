@@ -249,6 +249,9 @@ There is no multi-user discovery, hosted service or assumption of shared home di
 | Run | One start or Resume of the agent's CLI, until that CLI ends |
 | Creation tree | A human-created root and all agent-created descendants, including siblings |
 
+On the Rust engine core numbers agents and messages; a window's `hello` tells core the highest numbers this computer's
+counters gave, and core numbers on past them, so an update gives none twice. While old-engine windows still run, the two
+engines number apart and may repeat a number, which the switch's short overlap accepts.
 Keep the same agent ID and `#aN` through startup, rename, reattachment and Resume. A fresh start is a new agent with a new
 ID; Resume keeps the agent and starts a new run.
 Tree membership does not disappear when an ancestor closes. IDs are routing addresses, not credentials; no token

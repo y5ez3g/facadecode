@@ -354,5 +354,18 @@
 	"The working location {0} is not available in this window.": "Lokalizacja robocza {0} nie jest dostępna w tym oknie.",
 	"Stop unconfirmed · check process": "Zatrzymanie niepotwierdzone · sprawdź proces",
 	"1 agent": "1 agent",
-	"{0} agents": "Agenci: {0}"
+	"{0} agents": "Agenci: {0}",
+	"The engine changes only after the window reloads.": "Silnik zmieni się dopiero po ponownym załadowaniu okna.",
+	"Every agent of the old engine has ended: reload this window to switch.": "Wszystkie agenty starego silnika zakończyły działanie: załaduj ponownie to okno, aby przełączyć.",
+	"Facade's settings file has a problem": "Plik ustawień Facade ma problem",
+	"Facade could not find it": "Facade tego nie znalazł",
+	"Facade cannot do this right now": "Facade nie może tego teraz zrobić",
+	"This CLI cannot do this": "To CLI tego nie potrafi",
+	"Could not create the worktree": "Nie udało się utworzyć drzewa roboczego",
+	"The agent has ended": "Agent zakończył działanie",
+	"Too much input at once": "Za dużo danych naraz",
+	"Facade is updating; try again in a moment": "Facade się aktualizuje; spróbuj ponownie za chwilę",
+	"Facade does not allow this": "Facade na to nie pozwala",
+	"Something went wrong in Facade": "W Facade wystąpił błąd",
+	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "Facade core nie mógł się tu uruchomić, więc to okno używa starego silnika: {0}. Aby przestać próbować, wyłącz {1} i załaduj okno ponownie."
 }

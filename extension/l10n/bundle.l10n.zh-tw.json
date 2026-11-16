@@ -354,5 +354,18 @@
 	"1 agent": "1 個 Agent",
 	"{0} agents": "{0} 個 Agent",
 	"Open Settings": "開啟設定",
-	"Edit in facade.json": "在 facade.json 中編輯"
+	"Edit in facade.json": "在 facade.json 中編輯",
+	"The engine changes only after the window reloads.": "重新載入視窗後才會切換引擎。",
+	"Every agent of the old engine has ended: reload this window to switch.": "舊引擎的 Agent 都已結束：重新載入此視窗即可切換。",
+	"Facade's settings file has a problem": "Facade 的設定檔有問題",
+	"Facade could not find it": "Facade 找不到它",
+	"Facade cannot do this right now": "Facade 目前無法執行此操作",
+	"This CLI cannot do this": "此 CLI 不支援此操作",
+	"Could not create the worktree": "無法建立工作樹",
+	"The agent has ended": "Agent 已結束",
+	"Too much input at once": "一次輸入的內容太多",
+	"Facade is updating; try again in a moment": "Facade 正在更新，請稍後再試",
+	"Facade does not allow this": "Facade 不允許此操作",
+	"Something went wrong in Facade": "Facade 發生錯誤",
+	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "Facade core 無法在此啟動，此視窗改用舊引擎：{0}。若不想再嘗試，請關閉 {1} 並重新載入視窗。"
 }

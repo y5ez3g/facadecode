@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0
+
+- **The Rust engine runs your agents on macOS and Linux.** Facade core, written in Rust, now ships inside the extension. A window uses it once no agent of the old engine is still running on that computer; agents already running keep going, and the window offers to reload once they have ended. The panel, cards, tabs, Pins and New Agent look and work as before.
+- **`facade` in VS Code's terminal.** In a window on the Rust engine, `facade list` shows the same agents as the panel, and `facade start` starts one there.
+- **Facade: Rust Engine** turns the Rust engine off (`off`) or leaves the choice to Facade (`auto`, the default). Windows keeps the old engine for now.
+
 ## 0.1.5
 
 - Fixed robot eyes not returning to center when the pointer leaves the panel.
