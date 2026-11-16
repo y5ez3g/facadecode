@@ -436,6 +436,21 @@ impl NumberTable {
         )?;
         Ok(number as u64)
     }
+
+    /// Raises the counter so the next agent number is above `given`; one already above stays.
+    /// Blocks.
+    pub(crate) fn raise_above(&self, given: u64) -> anyhow::Result<()> {
+        self.0.with(
+            || "raise the agent counter".to_string(),
+            |connection| {
+                connection.execute(
+                    "UPDATE numbers SET next = MAX(next, ?1 + 1)",
+                    [given as i64],
+                )
+            },
+        )?;
+        Ok(())
+    }
 }
 
 /// Whether a test asked the store to fail a write, by the file `name` in `core/`.
