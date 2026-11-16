@@ -24,9 +24,11 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | member, MCP member | An MCP client that neither Facade started nor a CLI's hooks report, listed as a guest through its relay | — |
 | CLI | One of the coding CLIs Facade runs, such as Claude Code or Codex; `facade` itself is not one | tool, client (for this) |
 | rule | A CLI's built-in knowledge file, `core/rules/<cli>.json` | — |
-| entry | An item of `clis` in the settings file | setup |
+| entry | An item of `clis` in the settings file, named by its CLI's name, as `ErrorData.entry` gives the entry that caused an error | setup |
+| not installed | A built-in CLI whose entry has no problem and names no program of its own, and whose program is not found where a start would run, `CliInfo.not_installed` | missing, absent |
 | command line | The program, arguments and environment a CLI starts with, `CommandLine` in code | launch |
 | record | An agent's record: its ID, name, CLI, folder and reach, kept in the store | — |
+| numbers given | The highest agent and message numbers an editor gave before it used core, `NumbersGiven`; core's next numbers are above them | — |
 
 ## Starting and ending
 
@@ -35,6 +37,7 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | start | Start a new agent; also start Facade's keeper or daemon | create, launch |
 | spawn | Create an operating system process, as `std::process::Command::spawn` does | — |
 | resume | Run an ended agent again in its session, keeping its ID: a new run of the same agent | restart |
+| continue | Run a CLI in one of its sessions again: `agent.resume` continues an ended agent's session as the same agent, `agent.start` with `session` continues a session as a new agent | resume (for a new agent) |
 | stop | Facade ending a running agent: a hangup, then a kill at the deadline | terminate |
 | remove | Delete an agent's record, stopping it first if it runs | delete, forget (for this) |
 | end, ended | A run that no longer runs, for any reason | finish, gone |
@@ -86,7 +89,8 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | screen log | An agent's screen changes, logged on disk before the screen takes them | — |
 | checkpoint | A saved screen in the screen log, which a recovery replays from | snapshot (for this) |
 | replay | Rebuild a screen from its log | — |
-| query, reply | A terminal's question, such as a cursor position request, and the terminal's answer to it | answer (for this) |
+| query, reply | A terminal's question, such as a cursor position request or a color query (OSC 10, 11 and 12), and the terminal's answer to it | answer (for this) |
+| terminal colors | The foreground, background and cursor colors an editor window's terminals draw with, `TerminalColors`; its agents' screens reply to color queries with them | theme, palette (for this) |
 | client | A program connected to the daemon: a `facade` command, the relay, an editor | — |
 | viewer | A client showing an agent's screen | subscriber, watcher |
 | watch, topic, snapshot, change | A client's subscription to a topic, what it gets first, and each change after | — |
@@ -122,12 +126,14 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 |---|---|---|
 | window | An editor window that connects to the daemon | — |
 | terminal window | The window, ID `terminal`, that agents started from a terminal belong to | — |
-| location | A place a window offers to start agents in: a checkout, a worktree or a folder | place |
+| location | A place a window offers to start agents in: a checkout, a worktree or a folder; an agent's location is the innermost one that holds its folder | place |
 | folder | A folder on disk | directory, dir |
 | checkout | A Git working copy | working copy |
 | worktree | A further working copy Git made from a checkout | — |
 | grace | The time an agent keeps running after its window left, in case the window comes back | — |
 | take over | A newer one taking over what an older one had: a window of the same workspace taking the agents of one that left, or a newer build taking over the running Facade | hand over |
+| Rust engine | The editor extension running its agents on core, as its setting `facade.rustEngine` chooses; a word of the extension's, which core's code does not use | — |
+| old engine | The editor extension's own back end, from before core | original engine, legacy engine |
 
 ## Settings
 
@@ -292,14 +298,14 @@ stay.
 
 | Rule | Names in the code |
 |---|---|
-| start, not launch | `service::launch`, `Runs::launch`, `RunLaunch`, `Supervisor::launch`, `launch_with_settings` |
+| start, not launch | `service::launch`, `Supervisor::launch`, `launch_with_settings` |
 | send, not post | `Messages::post`, `Posted` |
 | folder, not dir | `paths::core_dir`, `socket_dir` |
 | take over or drain, not hand over | `hand_over` (takeover), `handed_over_cleanly`, `HANDOVER_TIME` |
 | ended, not gone | `daemon_gone` (keeper) |
 | response or reply, not answer | `TypingAnswer`, `StartAnswer`, `hello_answer`, `closing_answered`, `answer_to`, `settled_answer` |
 | scrollback, not history | `HistoryKeeper` (screen) |
-| remove or `delete_`, not forget | `Windows::forget`, `forget_integration_file` |
+| remove or `delete_`, not forget | `forget_integration_file` |
 | commands, not mailbox | an actor's `mailbox` |
 | resume, not restart | screen's `restart.rs`, `leave_for_restart`, `reset_for_restart` |
 | one meaning for settle | rules' `settle_time`, how long a draft must stay still |
