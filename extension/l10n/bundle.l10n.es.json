@@ -355,17 +355,17 @@
 	"{0} agents": "{0} agentes",
 	"Open Settings": "Abrir configuración",
 	"Edit in facade.json": "Editar en facade.json",
-	"The engine changes only after the window reloads.": "El motor cambia solo después de recargar la ventana.",
-	"Every agent of the old engine has ended: reload this window to switch.": "Todos los agentes del motor anterior terminaron: recarga esta ventana para cambiar.",
-	"Facade's settings file has a problem": "El archivo de configuración de Facade tiene un problema",
-	"Facade could not find it": "Facade no lo encontró",
+	"The engine changes only after you reload the window.": "El motor cambia solo después de volver a cargar la ventana.",
+	"All agents on the old engine have ended. Reload this window to switch.": "Todos los agentes del motor anterior han terminado. Vuelve a cargar esta ventana para cambiar de motor.",
+	"Facade's settings file has an error": "El archivo de configuración de Facade tiene un error",
+	"Facade could not find what you asked for": "Facade no encontró el elemento solicitado",
 	"Facade cannot do this right now": "Facade no puede hacer esto ahora",
-	"This CLI cannot do this": "Esta CLI no puede hacer esto",
+	"This CLI does not support this action": "Esta CLI no admite esta acción",
 	"Could not create the worktree": "No se pudo crear el árbol de trabajo",
 	"The agent has ended": "El agente terminó",
 	"Too much input at once": "Demasiada entrada a la vez",
 	"Facade is updating; try again in a moment": "Facade se está actualizando; inténtalo de nuevo en un momento",
 	"Facade does not allow this": "Facade no permite esto",
 	"Something went wrong in Facade": "Algo falló en Facade",
-	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "Facade core no pudo iniciarse aquí, así que esta ventana usa el motor anterior: {0}. Para dejar de intentarlo, desactiva {1} y recarga la ventana."
+	"Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.": "Facade core no pudo iniciarse: {0}. Esta ventana está usando el motor anterior. Para que Facade deje de intentar usar el motor de Rust, establece {1} en `off` y vuelve a cargar la ventana."
 }

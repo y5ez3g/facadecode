@@ -178,7 +178,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 			switchable = false;
 			// A core that cannot run here - WSL 1, a container that forbids process descriptors - leaves this window on the old engine
 			void vscode.commands.executeCommand('setContext', 'facade.engine', 'old');
-			void vscode.window.showWarningMessage(vscode.l10n.t("Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.", messageOf(err), 'facade.rustEngine'));
+			void vscode.window.showWarningMessage(vscode.l10n.t("Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.", messageOf(err), 'facade.rustEngine'));
 		}
 	}
 	facadeInTerminals(context.environmentVariableCollection, undefined);

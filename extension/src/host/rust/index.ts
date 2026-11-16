@@ -123,10 +123,10 @@ async function numbersGiven(home: string, session: string, log: (line: string) =
 /** Why core refused, in the person's language, then core's own words, which name what it refused (UX-2.4). */
 function describeDaemonError(err: DaemonError): string {
 	const said: Partial<Record<DaemonError['reason'], string>> = {
-		configuration_invalid: vscode.l10n.t("Facade's settings file has a problem"),
-		not_found: vscode.l10n.t('Facade could not find it'),
+		configuration_invalid: vscode.l10n.t("Facade's settings file has an error"),
+		not_found: vscode.l10n.t('Facade could not find what you asked for'),
 		unavailable: vscode.l10n.t('Facade cannot do this right now'),
-		unsupported: vscode.l10n.t('This CLI cannot do this'),
+		unsupported: vscode.l10n.t('This CLI does not support this action'),
 		worktree_failed: vscode.l10n.t('Could not create the worktree'),
 		ended: vscode.l10n.t('The agent has ended'),
 		capacity_exceeded: vscode.l10n.t('Too much input at once'),

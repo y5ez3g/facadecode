@@ -355,17 +355,17 @@
 	"{0} agents": "{0} 个 Agent",
 	"Open Settings": "打开设置",
 	"Edit in facade.json": "在 facade.json 中编辑",
-	"The engine changes only after the window reloads.": "重新加载窗口后才会切换引擎。",
-	"Every agent of the old engine has ended: reload this window to switch.": "旧引擎的 Agent 都已结束：重新加载此窗口即可切换。",
-	"Facade's settings file has a problem": "Facade 的设置文件有问题",
-	"Facade could not find it": "Facade 找不到它",
+	"The engine changes only after you reload the window.": "重新加载窗口后才会切换引擎。",
+	"All agents on the old engine have ended. Reload this window to switch.": "旧引擎的 Agent 都已结束：重新加载此窗口即可切换。",
+	"Facade's settings file has an error": "Facade 的设置文件有错误",
+	"Facade could not find what you asked for": "Facade 找不到请求的对象",
 	"Facade cannot do this right now": "Facade 现在无法执行此操作",
-	"This CLI cannot do this": "此 CLI 不支持此操作",
+	"This CLI does not support this action": "此 CLI 不支持此操作",
 	"Could not create the worktree": "无法创建工作树",
 	"The agent has ended": "Agent 已结束",
 	"Too much input at once": "一次输入的内容太多",
 	"Facade is updating; try again in a moment": "Facade 正在更新，请稍后再试",
 	"Facade does not allow this": "Facade 不允许此操作",
 	"Something went wrong in Facade": "Facade 出错了",
-	"Facade core could not start here, so this window uses the old engine: {0}. To stop trying, turn off {1} and reload the window.": "Facade core 无法在此启动，此窗口改用旧引擎：{0}。若不想再尝试，请关闭 {1} 并重新加载窗口。"
+	"Facade core could not start: {0}. This window is using the old engine. To stop Facade from trying the Rust engine, set {1} to `off` and reload the window.": "Facade core 无法启动：{0}。此窗口正在使用旧引擎。要让 Facade 不再尝试 Rust 引擎，请将 {1} 设置为 `off` 并重新加载窗口。"
 }

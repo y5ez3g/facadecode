@@ -74,7 +74,7 @@ export function watchRustEngineSetting(): vscode.Disposable {
 			return;
 		}
 		seen = now;
-		offerReload(vscode.l10n.t("The engine changes only after the window reloads."));
+		offerReload(vscode.l10n.t("The engine changes only after you reload the window."));
 	});
 }
 
@@ -87,7 +87,7 @@ export function sayReloadToSwitch(): void {
 }
 
 function reloadToSwitchText(): string {
-	return vscode.l10n.t("Every agent of the old engine has ended: reload this window to switch.");
+	return vscode.l10n.t("All agents on the old engine have ended. Reload this window to switch.");
 }
 
 function offerReload(text: string): void {

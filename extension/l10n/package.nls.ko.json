@@ -62,5 +62,5 @@
 	"config.home.pattern": "경로는 ~/로 시작하거나 절대 경로여야 합니다.",
 	"config.moved": "`facade.json`으로 옮겨졌습니다. [facade.json에서 편집](command:facade.openSettingsFile)",
 	"config.movedPlain": "facade.json으로 옮겨졌습니다. 'Facade Code: 설정 열기'를 실행하여 이동하세요.",
-	"config.rustEngine": "에이전트를 실행할 엔진: `auto`는 이 컴퓨터에서 이전 엔진의 에이전트가 실행 중이지 않으면 Rust 엔진을, `off`는 항상 이전 엔진을 사용합니다. 창은 열리거나 다시 로드될 때 엔진을 정합니다. 원격 창은 원격 컴퓨터의 설정을 읽습니다."
+	"config.rustEngine": "에이전트를 실행할 엔진을 제어합니다. 새 Rust 엔진은 최대 성능을 위해 만들어졌습니다.\n\n- `auto`: Rust 엔진을 사용합니다. 이 컴퓨터에서 이전 엔진의 에이전트가 모두 끝나면 창이 전환됩니다. 실행 중인 에이전트는 중단되지 않으며, 전환할 수 있게 되면 Facade가 창을 다시 로드하도록 안내합니다.\n- `off`: 이전 엔진을 사용합니다. Rust 엔진에 문제가 있으면 `off`를 선택하고 창을 다시 로드한 다음, [GitHub에 이슈를 남겨](https://github.com/y5ez3g/facadecode/issues) 알려 주세요.\n\nWindows에서는 당분간 에이전트가 이전 엔진에서 실행됩니다. 원격 창에서는 원격 컴퓨터의 설정이 적용됩니다."
 }

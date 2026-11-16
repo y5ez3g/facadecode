@@ -62,5 +62,5 @@
 	"config.home.pattern": "Yol ~/ ile başlamalı veya mutlak olmalıdır.",
 	"config.moved": "`facade.json` dosyasına taşındı. [facade.json içinde düzenle](command:facade.openSettingsFile)",
 	"config.movedPlain": "facade.json dosyasına taşındı. Ulaşmak için Facade Code: Ayarları Aç komutunu çalıştırın.",
-	"config.rustEngine": "Aracıları çalıştıran motor: `auto`, bu bilgisayarda eski motorun hiçbir aracısı çalışmıyorsa Rust motorunu, `off` ise her zaman eski motoru kullanır. Pencere, açılırken veya yeniden yüklenirken motoru seçer. Uzak pencere, uzak makinedeki ayarı okur."
+	"config.rustEngine": "Aracılarınızı hangi motorun çalıştıracağını denetler. Yeni Rust motoru en yüksek performans için tasarlandı.\n\n- `auto`: Rust motorunu kullanır. Bu bilgisayarda eski motorun çalışan hiçbir aracısı kalmadığında pencere ona geçer. Çalışan aracılar asla kesintiye uğramaz; geçiş mümkün olur olmaz Facade pencereyi yeniden yüklemeyi önerir.\n- `off`: Eski motoru kullanır. Rust motoruyla sorun yaşarsanız `off` seçeneğini seçin, pencereyi yeniden yükleyin ve [GitHub'da bir sorun bildirin](https://github.com/y5ez3g/facadecode/issues).\n\nWindows'ta aracılar şimdilik eski motorla çalışmaya devam eder. Uzak pencerede uzak makinedeki ayar geçerlidir."
 }

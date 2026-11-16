@@ -62,5 +62,5 @@
 	"config.home.pattern": "La ruta debe comenzar con ~/ o ser absoluta.",
 	"config.moved": "Se trasladó a `facade.json`. [Editar en facade.json](command:facade.openSettingsFile)",
 	"config.movedPlain": "Se trasladó a facade.json. Ejecute Facade Code: Abrir configuración para acceder.",
-	"config.rustEngine": "Qué motor ejecuta los agentes: `auto` usa el motor de Rust cuando ningún agente del motor anterior sigue en ejecución en este equipo, y `off` usa siempre el motor anterior. Cada ventana lo elige al abrirse o recargarse. Una ventana remota lee la configuración de la máquina remota."
+	"config.rustEngine": "Controla qué motor ejecuta tus agentes. El nuevo motor de Rust está diseñado para ofrecer el máximo rendimiento.\n\n- `auto`: usa el motor de Rust. Una ventana pasa a usarlo en cuanto no quede ningún agente del motor anterior en ejecución en este equipo. Los agentes en ejecución nunca se interrumpen, y Facade ofrece volver a cargar la ventana en cuanto pueda cambiar.\n- `off`: usa el motor anterior. Si el motor de Rust da problemas, selecciona `off`, vuelve a cargar la ventana y [notifica el problema en GitHub](https://github.com/y5ez3g/facadecode/issues).\n\nEn Windows, los agentes siguen usando el motor anterior por ahora. En una ventana remota, se aplica la configuración de la máquina remota."
 }

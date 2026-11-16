@@ -62,5 +62,5 @@
 	"config.home.pattern": "パスは ~/ で始まるか、絶対パスである必要があります。",
 	"config.moved": "`facade.json` に移りました。[facade.json で編集](command:facade.openSettingsFile)",
 	"config.movedPlain": "facade.json に移りました。「Facade Code: 設定を開く」を実行してアクセスしてください。",
-	"config.rustEngine": "エージェントを動かすエンジン: `auto` はこのコンピューターで旧エンジンのエージェントが動いていなければ Rust エンジンを使い、`off` は常に旧エンジンを使います。ウィンドウは開くときか再読み込みのときにエンジンを決めます。リモート ウィンドウはリモート マシン側の設定を読みます。"
+	"config.rustEngine": "エージェントを動かすエンジンを制御します。新しい Rust エンジンは、最高のパフォーマンスを追求して設計されています。\n\n- `auto`: Rust エンジンを使います。このコンピューターで旧エンジンのエージェントがすべて終了すると、ウィンドウが切り替わります。実行中のエージェントが中断されることはなく、切り替え可能になるとすぐに Facade がウィンドウの再読み込みを促します。\n- `off`: 旧エンジンを使います。Rust エンジンで問題が起きた場合は、`off` を選んでウィンドウを再読み込みし、[GitHub の issue](https://github.com/y5ez3g/facadecode/issues) でお知らせください。\n\nWindows では、当面はエージェントが旧エンジンで動きます。リモート ウィンドウでは、リモート マシン側の設定が使われます。"
 }
