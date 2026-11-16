@@ -970,3 +970,43 @@ fn an_editor_window_s_agents_answer_color_queries_with_its_colors() {
         home.screen("painter")
     );
 }
+
+/// In an editor window, a start that continues a session may work in a folder inside one of the
+/// window's locations, as "Recent" continues a conversation in the folder it was in: it starts,
+/// and its location is the one that holds the folder.
+#[test]
+fn a_start_in_a_folder_inside_a_location_continues_its_session_there() {
+    let home = TestHome::new("windowinside");
+    home.start_facade_with(&[("FACADE_TEST_GRACE_MS", GRACE_MS)]);
+    let folder = real(&home.project);
+    let nested = home.project.join("app").join("nested");
+    std::fs::create_dir_all(&nested).unwrap();
+    let nested = real(&nested);
+    let mut wire = ide(
+        &home,
+        &window("win-1", Some("k1"), std::slice::from_ref(&folder)),
+    );
+    let location = listed(&home, "win-1").unwrap()["locations"][0]["location_id"].clone();
+    let session = "11111111-2222-4333-8444-555555555555";
+    let env = json!({
+        "PATH": home.path_with_test_programs(), "FACADE_HOME": home.path,
+        "FAKECLI_LOG": home.fake_log,
+    });
+    let args = json!({
+        "command": ["fake"], "session": session, "name": "inside", "cwd": nested,
+        "window_id": "win-1", "env": env, "cols": 80, "rows": 24,
+    });
+    let started = wire.call("agent.start", args);
+    let id = started["result"]["agent"]["agent_id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{started}"))
+        .to_string();
+    assert!(
+        wait_for_screen_text(&home, "inside", &format!("session {session}")),
+        "the CLI continued the session: {}",
+        home.screen("inside")
+    );
+    let record = agent(&home, &id);
+    assert_eq!(record["cwd"], json!(nested), "{record}");
+    assert_eq!(record["location_id"], location, "{record}");
+}
