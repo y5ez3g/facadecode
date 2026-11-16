@@ -998,6 +998,7 @@ fn hooks_do_nothing_in_a_run_facade_started_of_the_same_cli() {
 /// job of Claude Code it does nothing. A hook exits 0 whatever its variables and words: a variable
 /// that is not UTF-8, which JSON cannot carry, is left out of the environment a guest joins with,
 /// and a line with a word that is not UTF-8 does nothing.
+#[cfg(unix)]
 #[test]
 fn a_hook_with_a_variable_or_a_word_that_is_not_utf8_exits_0() {
     use std::os::unix::ffi::OsStrExt;
@@ -1048,7 +1049,10 @@ fn hooks_never_start_facade_and_always_exit_0() {
             "{event}: {output:?}"
         );
     }
-    assert!(!home.daemon_socket().exists(), "a hook started Facade");
+    assert!(
+        !socket_exists(&home.daemon_socket()),
+        "a hook started Facade"
+    );
     connect(&home);
     let job = hook(
         &home,

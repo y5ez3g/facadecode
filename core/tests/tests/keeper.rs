@@ -14,7 +14,7 @@ fn the_keeper_refuses_every_process_but_its_own_daemon_at_hello() {
     let home = TestHome::new("keeperwire");
     let agent = home.start_fake("w1");
     // This test is not the daemon holding the daemon lock: the keeper closes it before a word.
-    let mut stranger = std::os::unix::net::UnixStream::connect(home.keeper_socket()).unwrap();
+    let mut stranger = facade_base::paths::ClientSocket::connect(home.keeper_socket()).unwrap();
     stranger
         .set_read_timeout(Some(std::time::Duration::from_secs(5)))
         .unwrap();
@@ -36,11 +36,13 @@ fn the_keeper_refuses_every_process_but_its_own_daemon_at_hello() {
 /// store, or keeper.
 #[test]
 fn a_second_daemon_loses_the_home_lock_and_changes_nothing() {
-    use std::os::unix::fs::MetadataExt;
     let home = TestHome::new("seconddaemon");
     home.start_fake("w1");
     let first = home.daemon_pid().expect("expected a running daemon");
-    let socket = std::fs::metadata(home.daemon_socket()).unwrap().ino();
+    // A pipe has no inode; on Windows its name goes with the daemon that made it.
+    #[cfg(unix)]
+    let socket =
+        std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(home.daemon_socket()).unwrap());
     let mut second = home
         .command(&test_binaries().facade)
         .arg("daemon")
@@ -63,8 +65,9 @@ fn a_second_daemon_loses_the_home_lock_and_changes_nothing() {
         Some(first),
         "the original daemon must still respond"
     );
+    #[cfg(unix)]
     assert_eq!(
-        std::fs::metadata(home.daemon_socket()).unwrap().ino(),
+        std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(home.daemon_socket()).unwrap()),
         socket,
         "the socket was not replaced"
     );
@@ -82,7 +85,7 @@ fn daemon_responds_while_keeper_is_blocked() {
     let home = TestHome::new("pausedkeeper");
     home.start_fake("w1");
     let keeper = home.keeper_pid().expect("expected a running keeper");
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     let mut flood = connect(&home);
     let cwd = home.project.clone();
     std::thread::spawn(move || {
@@ -101,7 +104,7 @@ fn daemon_responds_while_keeper_is_blocked() {
     let mut probe = connect(&home);
     assert!(probe.call("agent.screen", json!({ "agent": "w1" }))["result"]["text"].is_string());
     let took = asked.elapsed();
-    send_signal(keeper, libc::SIGCONT);
+    resume_process(keeper);
     assert!(
         took < secs(2),
         "daemon response took {took:?} with the keeper paused"
@@ -109,6 +112,7 @@ fn daemon_responds_while_keeper_is_blocked() {
 }
 
 /// A CLI must not inherit another run's PTY or descriptors inherited by the keeper.
+#[cfg(unix)]
 #[test]
 fn agents_do_not_inherit_other_ptys_or_launcher_fds() {
     use std::os::unix::process::CommandExt;
@@ -152,7 +156,7 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         home.keeper_pid().expect("expected a running keeper"),
         home.daemon_pid().unwrap(),
     );
-    send_signal(keeper, libc::SIGKILL);
+    kill_process(keeper);
     let mut replacement = None;
     assert!(
         wait_until(secs(10), || {
@@ -196,19 +200,26 @@ fn a_dead_keeper_is_replaced_and_the_daemon_keeps_every_terminal() {
         "the replacement keeper stopped the CLI"
     );
     let line = home.list_line("w1").expect("w1 is listed");
+    // A keeper that took a CLI over has its exit code on Windows, from the CLI's process handle;
+    // on Unix it is not the CLI's parent and has none.
+    #[cfg(unix)]
+    let said = "ended: stopped (exit status is unavailable)";
+    #[cfg(windows)]
+    let said = "ended: stopped (code 0xC000013A)";
     assert!(
-        line.contains("ended: stopped (exit status is unavailable)"),
+        line.contains(said),
         "Facade knows it stopped the CLI: {line}"
     );
 }
 
 /// A CLI stopped with SIGSTOP has not ended: it stays running, and once continued, a stop ends it
 /// as Facade's stop.
+#[cfg(unix)]
 #[test]
 fn a_stopped_cli_is_still_running_and_a_stop_ends_it() {
     let home = TestHome::new("sigstop");
     let agent = home.start_fake("w1");
-    send_signal(agent.pid, libc::SIGSTOP);
+    pause_process(agent.pid);
     // The keeper hears of the stop at once; a second is ample for it to misread one as an exit.
     std::thread::sleep(secs(1));
     assert_eq!(
@@ -216,7 +227,7 @@ fn a_stopped_cli_is_still_running_and_a_stop_ends_it() {
         "running",
         "a stopped CLI has not ended"
     );
-    send_signal(agent.pid, libc::SIGCONT);
+    resume_process(agent.pid);
     home.run_facade_ok(&["stop", "w1"]);
     let record = home.agent_from_list_json("w1").unwrap();
     assert_eq!(record["process"], "ended");
@@ -240,9 +251,9 @@ fn a_keeper_dying_after_the_daemon_registered_a_start_hands_the_run_over() {
     let mut wire = connect(&home);
     let daemon = home.lock_record("daemon").unwrap().0;
     let args = json!({
-        "command": ["/bin/sh", "-c", "echo $$ > cli-pid; echo READY; while :; do sleep 0.2; done"],
+        "command": [SH.as_str(), "-c", "echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > cli-pid; echo READY; while :; do sleep 0.2; done"],
         "name": "kept", "cwd": home.project,
-        "env": { "PATH": "/usr/bin:/bin", "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+        "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
     });
     let asked = wire.send("call", json!({ "op": "agent.start", "args": args }));
     assert!(
@@ -254,18 +265,33 @@ fn a_keeper_dying_after_the_daemon_registered_a_start_hands_the_run_over() {
         .expect("the keeper recorded itself")
         .0;
     let keeper_process = process_identity(keeper);
-    send_signal(keeper, libc::SIGKILL);
+    kill_process(keeper);
     assert!(wait_until(secs(5), || !alive(&keeper_process)));
-    send_signal(daemon, libc::SIGCONT);
+    resume_process(daemon);
     let started = wire
         .wait_for_response(asked, secs(15))
         .expect("the start responds");
     assert_eq!(started["result"]["agent"]["agent_id"], "a1", "{started}");
-    let cli: i32 = std::fs::read_to_string(home.project.join("cli-pid"))
+    // A pseudo console starts its program once its terminal answered, or after 3 seconds, and no
+    // daemon read this one while it was paused.
+    let mut shell = None;
+    assert!(
+        wait_until(secs(10), || {
+            shell = std::fs::read_to_string(home.project.join("cli-pid"))
+                .ok()
+                .and_then(|pid| pid.trim().parse::<i32>().ok());
+            shell.is_some()
+        }),
+        "the CLI did not report its PID"
+    );
+    let shell = shell.unwrap();
+    // On Windows Git's sh is a launcher whose child runs the script.
+    #[cfg(unix)]
+    let cli = shell;
+    #[cfg(windows)]
+    let cli = facade_base::unix_process::parent(shell as u32)
         .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
+        .expect("the shell's launcher") as i32;
     let cli_process = process_identity(cli);
     assert_eq!(started["result"]["agent"]["pid"], cli);
     assert!(
@@ -297,12 +323,12 @@ fn when_both_services_pause_past_the_watchdog_at_most_the_daemon_is_replaced() {
     );
     let keeper_process = process_identity(keeper);
     // The paused keeper leaves the daemon's next ping unanswered.
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     std::thread::sleep(Duration::from_millis(1500));
-    send_signal(daemon, libc::SIGSTOP);
+    pause_process(daemon);
     std::thread::sleep(secs(16));
-    send_signal(keeper, libc::SIGCONT);
-    send_signal(daemon, libc::SIGCONT);
+    resume_process(keeper);
+    resume_process(daemon);
     assert!(
         wait_until(secs(20), || home.hello_result().is_some()),
         "no daemon serves: {}",
@@ -322,6 +348,7 @@ fn when_both_services_pause_past_the_watchdog_at_most_the_daemon_is_replaced() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_keeper_and_daemon_asked_to_end_take_their_sockets_with_them() {
     let home = TestHome::new("socketsend");
@@ -332,7 +359,7 @@ fn a_keeper_and_daemon_asked_to_end_take_their_sockets_with_them() {
     );
     let keeper_process = process_identity(keeper);
     let daemon_process = process_identity(daemon);
-    assert!(home.keeper_socket().exists() && home.daemon_socket().exists());
+    assert!(socket_exists(&home.keeper_socket()) && socket_exists(&home.daemon_socket()));
     // Request normal shutdown of both processes.
     send_signal(daemon, libc::SIGTERM);
     send_signal(keeper, libc::SIGTERM);
@@ -342,11 +369,11 @@ fn a_keeper_and_daemon_asked_to_end_take_their_sockets_with_them() {
         "keeper and daemon did not exit"
     );
     assert!(
-        wait_until(secs(5), || !home.keeper_socket().exists()
-            && !home.daemon_socket().exists()),
+        wait_until(secs(5), || !socket_exists(&home.keeper_socket())
+            && !socket_exists(&home.daemon_socket())),
         "sockets remain after shutdown: keeper {} daemon {}",
-        home.keeper_socket().exists(),
-        home.daemon_socket().exists()
+        socket_exists(&home.keeper_socket()),
+        socket_exists(&home.daemon_socket())
     );
     // The keeper restarts a daemon that ends, but not while it is shutting down: no daemon is left
     // behind.
@@ -370,7 +397,7 @@ fn an_explicit_start_refusal_preserves_every_other_pipelined_start() {
         .map(|n| {
             let good = n % 5 != 0;
             let command = if good {
-                json!(["/bin/sh", "-c", "sleep 600"])
+                json!([SH.as_str(), "-c", "sleep 600"])
             } else {
                 json!(["/no/such/cli"])
             };

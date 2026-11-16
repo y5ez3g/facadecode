@@ -7,7 +7,11 @@
 //! start, the descriptors above 2 it was given; `FAKECLI_ARGS` names a file to which it writes, at
 //! start, its arguments as a JSON list; `FAKECLI_IGNORE_INPUT=1` makes it read no input at all, so
 //! its terminal's input fills up; `FAKECLI_IGNORE_ENTER=1` makes it keep its draft on Enter, as a
-//! CLI does that does not take it.
+//! CLI does that does not take it. `FAKECLI_HOOKS=1` makes it run hooks given as arguments
+//! instead, as Antigravity runs them (`run_hooks`). On Windows `FAKECLI_IGNORE_CLOSE=<file>` makes
+//! it hold its console's closing up and start a child outside the console, writing the child's
+//! process ID to `<file>`. `FAKECLI_KEYLOG=<file>` notes when each read of input arrives and when
+//! the frame it drew is written (`note_key_time`).
 //!
 //! Sessions: `--resume <id>` selects session `<id>`, as `FAKECLI_SESSION=<id>` does for a new
 //! start. `FAKECLI_SESSION_HOOK` is the shell command of its session-start hook, which it runs with
@@ -17,6 +21,9 @@
 //! many milliseconds. With `FAKECLI_TRANSCRIPTS`, a folder, the hook names `<folder>/<id>.jsonl` as
 //! the file the session is saved in, which it writes once the session takes its first message, as a
 //! CLI saves a session.
+//! On Windows, a copy named `codex.exe` reads its SessionStart hooks from `-c hooks=...`, checks
+//! their layer keys and trusted hashes, and runs trusted hooks through PowerShell, as Codex does
+//! with its default session shell.
 //!
 //! Status: `FAKECLI_STATUS=1` makes it report what it is doing over OSC 7501, as a CLI does. It
 //! first asks whether its terminal takes reports and shows `status reports taken` once answered,
@@ -57,7 +64,9 @@ enum InputSegment {
 
 /// The session-start hook the fake CLI was given, if any.
 struct SessionHook {
-    command: String,
+    commands: Vec<String>,
+    #[cfg(windows)]
+    codex: bool,
     /// The delay before the first hook's command, which then becomes zero.
     first_delay: Duration,
     /// The folder the sessions are saved in, where the hook names their files.
@@ -80,23 +89,37 @@ impl SessionHook {
         }
         let input = input.to_string();
         let delay = std::mem::take(&mut self.first_delay);
-        let command = if delay.is_zero() {
-            self.command.clone()
-        } else {
-            format!("sleep {}; {}", delay.as_secs_f64(), self.command)
-        };
-        let child = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(command)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
-        if let Ok(mut child) = child {
-            if let Some(mut stdin) = child.stdin.take() {
-                let _ = stdin.write_all(input.as_bytes());
+        // cmd.exe has no sleep: this waits before it starts the hook instead.
+        #[cfg(windows)]
+        std::thread::sleep(delay);
+        for command in &self.commands {
+            #[cfg(unix)]
+            let command = if delay.is_zero() {
+                command.clone()
+            } else {
+                format!("sleep {}; {command}", delay.as_secs_f64())
+            };
+            #[cfg(unix)]
+            let mut shell = shell_command(&command);
+            #[cfg(windows)]
+            let mut shell = if self.codex {
+                let mut shell = std::process::Command::new(facade_scenarios::powershell());
+                shell.args(["-NoProfile", "-Command", command]);
+                shell
+            } else {
+                shell_command(command)
+            };
+            let child = shell
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+            if let Ok(mut child) = child {
+                if let Some(mut stdin) = child.stdin.take() {
+                    let _ = stdin.write_all(input.as_bytes());
+                }
+                let _ = child.wait();
             }
-            let _ = child.wait();
         }
     }
 }
@@ -426,8 +449,7 @@ impl FakeCli {
             let Some(command) = hook["command"].as_str() else {
                 continue;
             };
-            let ran = std::process::Command::new("/bin/sh")
-                .args(["-c", command])
+            let ran = shell_command(command)
                 .stdin(std::process::Stdio::piped())
                 .stdout(std::process::Stdio::piped())
                 .spawn();
@@ -598,7 +620,102 @@ fn encode_log_entry(at: u128, text: &str) -> String {
     serde_json::json!({ "at": at as u64, "text": text }).to_string()
 }
 
+/// Runs `command` with the shell a CLI runs its hooks with: `/bin/sh`, or on Windows cmd.exe.
+fn shell_command(command: &str) -> std::process::Command {
+    #[cfg(unix)]
+    {
+        let mut shell = std::process::Command::new("/bin/sh");
+        shell.arg("-c").arg(command);
+        shell
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let mut shell = std::process::Command::new("cmd.exe");
+        // /s takes the outer quotes off and runs the rest as written.
+        shell
+            .args(["/d", "/s", "/c"])
+            .raw_arg(format!("\"{command}\""));
+        shell
+    }
+}
+
+/// The trusted SessionStart commands in the hooks override Facade gives its Codex stand-in.
+#[cfg(windows)]
+fn codex_session_hooks(arguments: &[String]) -> Option<Vec<String>> {
+    use sha2::{Digest, Sha256};
+
+    let pair = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "-c" && pair[1].starts_with("hooks="))?;
+    let settings: toml::Table = toml::from_str(&pair[1]).ok()?;
+    let configured = settings.get("hooks")?;
+    let groups = configured.get("SessionStart")?.as_array()?;
+    let state = configured.get("state")?.as_table()?;
+    let mut commands = Vec::new();
+    for (group_index, group) in groups.iter().enumerate() {
+        for (hook_index, hook) in group.get("hooks")?.as_array()?.iter().enumerate() {
+            if hook.get("type")?.as_str()? != "command" {
+                continue;
+            }
+            let command = hook
+                .get("commandWindows")
+                .or_else(|| hook.get("command_windows"))
+                .or_else(|| hook.get("command"))?
+                .as_str()?;
+            let timeout = hook
+                .get("timeout")
+                .and_then(toml::Value::as_integer)
+                .unwrap_or(600)
+                .max(1);
+            let mut handler = serde_json::json!({
+                "async": hook.get("async").and_then(toml::Value::as_bool).unwrap_or(false),
+                "command": command,
+                "timeout": timeout,
+                "type": "command",
+            });
+            if let Some(status) = hook.get("statusMessage").and_then(toml::Value::as_str) {
+                handler["statusMessage"] = serde_json::json!(status);
+            }
+            if let Some(limit) = hook
+                .get("additionalContextLimit")
+                .and_then(toml::Value::as_integer)
+                .filter(|limit| *limit != 2500)
+            {
+                handler["additionalContextLimit"] = serde_json::json!(limit);
+            }
+            let mut definition = serde_json::json!({
+                "event_name": "session_start",
+                "hooks": [handler],
+            });
+            if let Some(matcher) = group.get("matcher").and_then(toml::Value::as_str) {
+                definition["matcher"] = serde_json::json!(matcher);
+            }
+            definition.sort_all_objects();
+            let digest = Sha256::digest(serde_json::to_vec(&definition).ok()?);
+            let hash = format!("sha256:{digest:x}");
+            // Codex resolves this synthetic path against C:\, regardless of its session's folder or drive.
+            let key =
+                format!(r"C:\<session-flags>\config.toml:session_start:{group_index}:{hook_index}");
+            let trusted = state.get(&key);
+            if trusted
+                .and_then(|entry| entry.get("enabled"))
+                .and_then(toml::Value::as_bool)
+                != Some(false)
+                && trusted
+                    .and_then(|entry| entry.get("trusted_hash"))
+                    .and_then(toml::Value::as_str)
+                    == Some(hash.as_str())
+            {
+                commands.push(command.to_string());
+            }
+        }
+    }
+    Some(commands)
+}
+
 /// The descriptors above 2 that are open, one number per line.
+#[cfg(unix)]
 fn open_descriptors() -> String {
     // SAFETY: F_GETFD only reads the descriptor's flags; it fails with EBADF for a closed
     // descriptor.
@@ -609,6 +726,19 @@ fn open_descriptors() -> String {
 }
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if let Some(code) = run_script_beside()? {
+        std::process::exit(code);
+    }
+    if std::env::var_os("FAKECLI_HOOKS").is_some() {
+        run_hooks();
+        return Ok(());
+    }
+    #[cfg(windows)]
+    if std::env::var_os("FAKECLI_SLEEPER").is_some() {
+        std::thread::sleep(Duration::from_secs(600));
+        return Ok(());
+    }
     #[cfg(target_os = "linux")]
     if let Some(path) = std::env::var_os("FAKECLI_ZOMBIE_WORKER") {
         let path = std::path::PathBuf::from(path);
@@ -674,6 +804,10 @@ fn start_server(
 }
 
 fn run() -> anyhow::Result<()> {
+    #[cfg(windows)]
+    if let Some(path) = std::env::var_os("FAKECLI_IGNORE_CLOSE") {
+        ignore_close(std::path::Path::new(&path))?;
+    }
     if let Some(path) = std::env::var_os("FAKECLI_STARTS") {
         writeln!(
             std::fs::OpenOptions::new()
@@ -684,6 +818,7 @@ fn run() -> anyhow::Result<()> {
             std::process::id()
         )?;
     }
+    #[cfg(unix)]
     if let Some(path) = std::env::var_os("FAKECLI_FDS") {
         // Before this program opens anything itself.
         std::fs::write(path, open_descriptors())?;
@@ -710,18 +845,31 @@ fn run() -> anyhow::Result<()> {
         .map(|v| v != "0")
         .unwrap_or(true);
     let name = std::env::var("FAKECLI_NAME").unwrap_or_else(|_| "fakecli".into());
-    let hook = std::env::var("FAKECLI_SESSION_HOOK")
+    let arguments: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|word| word.to_string_lossy().into_owned())
+        .collect();
+    #[cfg(windows)]
+    let codex = std::env::current_exe()?
+        .file_stem()
+        .is_some_and(|name| name.eq_ignore_ascii_case("codex"));
+    let commands = std::env::var("FAKECLI_SESSION_HOOK")
         .ok()
-        .map(|command| SessionHook {
-            command,
-            first_delay: Duration::from_millis(
-                std::env::var("FAKECLI_FIRST_HOOK_DELAY_MS")
-                    .ok()
-                    .and_then(|delay| delay.parse().ok())
-                    .unwrap_or(0),
-            ),
-            transcripts: std::env::var_os("FAKECLI_TRANSCRIPTS").map(std::path::PathBuf::from),
-        });
+        .map(|command| vec![command]);
+    #[cfg(windows)]
+    let commands = commands.or_else(|| codex.then(|| codex_session_hooks(&arguments)).flatten());
+    let hook = commands.map(|commands| SessionHook {
+        commands,
+        #[cfg(windows)]
+        codex,
+        first_delay: Duration::from_millis(
+            std::env::var("FAKECLI_FIRST_HOOK_DELAY_MS")
+                .ok()
+                .and_then(|delay| delay.parse().ok())
+                .unwrap_or(0),
+        ),
+        transcripts: std::env::var_os("FAKECLI_TRANSCRIPTS").map(std::path::PathBuf::from),
+    });
     let milliseconds = |name: &str| {
         std::env::var(name)
             .ok()
@@ -776,15 +924,22 @@ fn run() -> anyhow::Result<()> {
         panel_drawn_ready: false,
         drawn: false,
     };
-    let arguments: Vec<String> = std::env::args_os()
-        .skip(1)
-        .map(|word| word.to_string_lossy().into_owned())
-        .collect();
     let resumed = arguments
         .iter()
         .position(|arg| arg == "--resume")
         .and_then(|at| arguments.get(at + 1))
         .cloned();
+    #[cfg(windows)]
+    let resumed = resumed.or_else(|| {
+        codex
+            .then(|| {
+                arguments
+                    .windows(2)
+                    .find(|pair| pair[0] == "resume")
+                    .map(|pair| pair[1].clone())
+            })
+            .flatten()
+    });
     match (resumed, std::env::var("FAKECLI_SESSION").ok()) {
         (Some(id), _) => app.select_session(Some(&id), "resume"),
         (None, Some(id)) => app.select_session(Some(&id), "startup"),
@@ -792,6 +947,10 @@ fn run() -> anyhow::Result<()> {
     }
 
     crossterm::terminal::enable_raw_mode()?;
+    // A console gives its input as key presses unless asked for terminal sequences; a CLI that reads
+    // bytes, pastes included, asks for them.
+    #[cfg(windows)]
+    terminal_input()?;
     let mut out = std::io::stdout();
     let _ = out.write_all(b"\x1b[?2004h");
     app.draw(&mut out);
@@ -813,6 +972,7 @@ fn run() -> anyhow::Result<()> {
             match stdin.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    note_key_time("in", n);
                     if tx.send(buffer[..n].to_vec()).is_err() {
                         break;
                     }
@@ -829,10 +989,12 @@ fn run() -> anyhow::Result<()> {
         // Nothing came for a while: an Escape that may begin a paste's start is the key alone, as a
         // terminal reads it.
         let mut quiet = false;
+        let mut typed = false;
         match rx.recv_timeout(Duration::from_millis(50)) {
             Ok(bytes) => {
                 pending.extend(bytes);
                 dirty = true;
+                typed = true;
             }
             Err(mpsc::RecvTimeoutError::Timeout) => quiet = true,
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
@@ -947,6 +1109,9 @@ fn run() -> anyhow::Result<()> {
                 .is_some_and(|status| !status.reports.is_empty())
         {
             app.draw(&mut out);
+            if typed {
+                note_key_time("out", 0);
+            }
         }
     }
     crossterm::terminal::disable_raw_mode()?;
@@ -960,6 +1125,126 @@ fn write_whole(file: &std::path::Path, text: &str) -> std::io::Result<()> {
     partial.push(".partial");
     std::fs::write(&partial, text)?;
     std::fs::rename(&partial, file)
+}
+
+/// Asks the console for its input as terminal sequences (`ENABLE_VIRTUAL_TERMINAL_INPUT`), as a CLI
+/// that reads bytes does on Windows: keys, and pastes between their bracketed-paste marks.
+#[cfg(windows)]
+fn terminal_input() -> std::io::Result<()> {
+    use windows_sys::Win32::System::Console::{
+        ENABLE_VIRTUAL_TERMINAL_INPUT, GetConsoleMode, GetStdHandle, STD_INPUT_HANDLE,
+        SetConsoleMode,
+    };
+    // SAFETY: the standard input handle is this process's; the mode is written into a valid u32.
+    unsafe {
+        let input = GetStdHandle(STD_INPUT_HANDLE);
+        let mut mode = 0u32;
+        if GetConsoleMode(input, &mut mode) == 0
+            || SetConsoleMode(input, mode | ENABLE_VIRTUAL_TERMINAL_INPUT) == 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
+/// `FAKECLI_IGNORE_CLOSE=<file>` on Windows: the fake CLI holds its console's closing up as long as
+/// Windows lets it (its handler does not return), and starts a child outside any console, which no
+/// closing reaches, whose process ID it writes to `<file>`. Only ending the CLI's job ends that child.
+#[cfg(windows)]
+fn ignore_close(child_pid: &std::path::Path) -> anyhow::Result<()> {
+    use std::os::windows::process::CommandExt;
+    use windows_sys::Win32::System::Console::{CTRL_CLOSE_EVENT, SetConsoleCtrlHandler};
+    use windows_sys::Win32::System::Threading::DETACHED_PROCESS;
+    unsafe extern "system" fn hold(event: u32) -> windows_sys::core::BOOL {
+        if event == CTRL_CLOSE_EVENT {
+            std::thread::sleep(Duration::from_secs(60));
+        }
+        1
+    }
+    // SAFETY: the handler is a plain function that lives as long as the program.
+    if unsafe { SetConsoleCtrlHandler(Some(hold), 1) } == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    let child = std::process::Command::new(std::env::current_exe()?)
+        .env("FAKECLI_SLEEPER", "1")
+        .creation_flags(DETACHED_PROCESS)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    write_whole(child_pid, &child.id().to_string())?;
+    Ok(())
+}
+
+/// A copy of this program that stands in for a test's shell script on Windows: where `<name>.shell`
+/// lies beside it, it runs `<name>.sh` in the shell that file names, with its own arguments and
+/// standard streams, and gives its exit code. None where it is the fake CLI itself.
+#[cfg(windows)]
+fn run_script_beside() -> anyhow::Result<Option<i32>> {
+    let program = std::env::current_exe()?;
+    let Ok(shell) = std::fs::read_to_string(program.with_extension("shell")) else {
+        return Ok(None);
+    };
+    // An MSYS program reads its command line by rules of its own, which lose quotes inside an
+    // argument and expand patterns, braces included (`HEAD^{commit}`). The arguments go through the
+    // environment instead, as FAKECLI_ARGC and FAKECLI_ARG_<n>, which the script's first lines put
+    // back as its own (`install_script`); and MSYS converts no path-like argument it passes on.
+    let mut shell = std::process::Command::new(shell.trim());
+    shell
+        .arg(program.with_extension("sh"))
+        .env("MSYS", "noglob")
+        .env("MSYS2_ARG_CONV_EXCL", "*");
+    let mut count = 0;
+    for (n, arg) in std::env::args_os().skip(1).enumerate() {
+        shell.env(format!("FAKECLI_ARG_{}", n + 1), arg);
+        count = n + 1;
+    }
+    let status = shell.env("FAKECLI_ARGC", count.to_string()).status()?;
+    Ok(Some(status.code().unwrap_or(1)))
+}
+
+/// `FAKECLI_HOOKS=1`: a CLI that runs hooks as its children, as Antigravity does. Its arguments are
+/// pairs of a hook's command and its input; it runs each command with the CLI's shell, gives it
+/// the input and waits for it, its output going to its own, then ends 3 seconds later.
+fn run_hooks() {
+    let words: Vec<String> = std::env::args_os()
+        .skip(1)
+        .map(|word| word.into_string().expect("hook arguments must be UTF-8"))
+        .collect();
+    for pair in words.chunks(2) {
+        let [command, input] = pair else { break };
+        let child = shell_command(command)
+            .stdin(std::process::Stdio::piped())
+            .spawn();
+        if let Ok(mut child) = child {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(input.as_bytes());
+            }
+            let _ = child.wait();
+        }
+    }
+    std::thread::sleep(Duration::from_secs(3));
+}
+
+/// With `FAKECLI_KEYLOG=<file>`: notes in the file `<what> <microseconds since 1970> <bytes>`, as
+/// `in` when a read of its input returns and `out` once the frame that input drew is written, so
+/// that a test can split a key's echo into its ways in and out.
+fn note_key_time(what: &str, bytes: usize) {
+    let Some(path) = std::env::var_os("FAKECLI_KEYLOG") else {
+        return;
+    };
+    let at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map(|since| since.as_micros())
+        .unwrap_or(0);
+    if let Ok(mut log) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = writeln!(log, "{what} {at} {bytes}");
+    }
 }
 
 #[cfg(test)]

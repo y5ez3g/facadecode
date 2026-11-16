@@ -502,7 +502,10 @@ fn a_repeated_start_with_a_worktree_makes_no_second_worktree() {
         .as_str()
         .unwrap_or_else(|| panic!("{first}"))
         .to_string();
-    assert!(cwd.ends_with("repo.worktrees/feat-x"), "{cwd}");
+    assert!(
+        std::path::Path::new(&cwd).ends_with(std::path::Path::new("repo.worktrees").join("feat-x")),
+        "{cwd}"
+    );
     let again = person.call("agent.start", args);
     assert_eq!(
         (

@@ -104,6 +104,7 @@ fn a_guest_server_for_one_session_joins_it_as_it_starts() {
 /// A guest's server serves whatever its variables and words: a variable that is not UTF-8, which
 /// JSON cannot carry, is left out of the environment its session joins with, and a word that is not
 /// UTF-8 is left aside.
+#[cfg(unix)]
 #[test]
 fn a_guest_server_with_a_variable_or_a_word_that_is_not_utf8_serves() {
     use std::os::unix::ffi::OsStrExt;
@@ -221,7 +222,7 @@ fn a_session_nested_in_a_run_of_its_own_cli_is_a_guest_of_its_own() {
     connect(&home);
     let folder = home.project.parent().unwrap().to_path_buf();
     let bin = folder.join("bin");
-    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let path = format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str());
     let tools = |server: &mut McpTestClient| {
         server.request("tools/list", json!({}))["result"]["tools"]
             .as_array()
@@ -387,17 +388,17 @@ fn a_started_agent_s_commands_act_for_it_not_for_the_guest_that_started_it() {
         json!({ "ai.opencode/sessionID": "ses_guest" }),
     );
     let guest = with_session(&home, "ses_guest").expect("the session joined")["agent_id"].clone();
-    let facade = test_binaries().facade.display().to_string();
+    let facade = sh_path(&test_binaries().facade);
     let script = format!(
         "env | grep -c _SESSION_ID; echo STARTED; read go; {facade} send {host} \
          from-the-helper; sleep 60"
     );
     let env = json!({
-        "PATH": "/usr/bin:/bin", "FACADE_HOME": home.path, "OPENCODE_SESSION_ID": "ses_guest",
+        "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path, "OPENCODE_SESSION_ID": "ses_guest",
         "CLAUDE_CODE_SESSION_ID": "c-x",
     });
     let args = json!({
-        "command": ["/bin/sh", "-c", script], "name": "helper", "cwd": home.project, "env": env,
+        "command": [SH.as_str(), "-c", script], "name": "helper", "cwd": home.project, "env": env,
         "cols": 80, "rows": 24,
     });
     let started = wire.call("agent.start", args);

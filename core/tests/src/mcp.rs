@@ -2,8 +2,8 @@
 //! output. Or the daemon's own MCP server, reached as `facade-mcp` reaches it: a relay connection
 //! to the daemon's socket.
 
+use facade_base::paths::ClientSocket;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::UnixStream;
 use std::process::{Child, ExitStatus, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -17,7 +17,7 @@ enum Server {
     /// A `facade-mcp` process.
     Program(Child),
     /// The daemon, over a relay connection.
-    Daemon(UnixStream),
+    Daemon(ClientSocket),
 }
 
 /// A `facade-mcp` process, or a relay connection to the daemon, and the answers it wrote.
@@ -96,7 +96,7 @@ impl McpTestClient {
     /// contract, without the relay.
     pub fn relay(home: &TestHome, args: &[&str], env: &[(&str, &str)]) -> McpTestClient {
         let stream =
-            UnixStream::connect(home.daemon_socket()).expect("could not connect to the daemon");
+            ClientSocket::connect(home.daemon_socket()).expect("could not connect to the daemon");
         let mut output = BufReader::new(stream.try_clone().expect("the connection's other end"));
         // The environment `facade-mcp` would have, run as `open` and `open_guest` run it.
         let mut program = home.command(&test_binaries().mcp);

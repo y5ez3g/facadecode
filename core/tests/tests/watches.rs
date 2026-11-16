@@ -71,7 +71,7 @@ fn agents_watch_observes_immediate_start_then_remove() {
     let started = wire.call(
         "agent.start",
         json!({
-            "command": ["/bin/sh", "-c", "sleep 60"], "name": "brief", "cwd": cwd, "cols": 80,
+            "command": [SH.as_str(), "-c", "sleep 60"], "name": "brief", "cwd": cwd, "cols": 80,
             "rows": 24,
         }),
     );

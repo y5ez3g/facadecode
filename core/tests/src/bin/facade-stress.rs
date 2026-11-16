@@ -8,7 +8,8 @@
 //! read its input box, is only in such builds.
 //!
 //! For `--agents` fake CLIs: the time to start them all, and until each draws its input box; the
-//! daemon's memory, threads and idle CPU, and the keeper's memory; one message from a guest to
+//! daemon's memory, threads and idle CPU (over 30 s, from 40 s after the starts, once they have
+//! settled), and the keeper's memory; one message from a guest to
 //! every agent at once, each response's latency, and each message found in the fake CLIs' log; and
 //! keystroke echo through `facade attach` to an agent running `cat`. Then the same keystrokes and
 //! messages while `--flooders` more agents print continuously (0 skips them). `--large` agents in
@@ -21,9 +22,13 @@
 //! The program exits 1 when a target or the comparison fails, naming what failed, and 2 when the
 //! baseline is of another shape.
 
+#[cfg(unix)]
 use std::io::{Read, Write};
+#[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(unix)]
 use std::process::Command;
 use std::time::{Duration, Instant};
 
@@ -114,6 +119,7 @@ fn summary(mut values: Vec<f64>) -> Value {
 }
 
 /// A process's own memory in MB, as macOS's `footprint` counts it.
+#[cfg(unix)]
 fn memory_mb(pid: i32) -> f64 {
     let out = Command::new("footprint")
         .args(["-p", &pid.to_string()])
@@ -135,6 +141,7 @@ fn memory_mb(pid: i32) -> f64 {
     }
 }
 
+#[cfg(unix)]
 fn cpu_seconds(pid: i32) -> f64 {
     let out = Command::new("ps")
         .args(["-o", "time=", "-p", &pid.to_string()])
@@ -156,6 +163,7 @@ fn cpu_percent(pid: i32, over: Duration) -> f64 {
     100.0 * (cpu_seconds(pid) - before) / over.as_secs_f64()
 }
 
+#[cfg(unix)]
 fn threads(pid: i32) -> usize {
     let out = Command::new("ps")
         .args(["-M", "-p", &pid.to_string()])
@@ -217,7 +225,7 @@ fn idle(home: &TestHome) -> Value {
     let keeper = home.keeper_pid().expect("the keeper runs");
     let report = json!({
         "daemon_mb": memory_mb(daemon), "daemon_threads": threads(daemon),
-        "daemon_cpu_percent": cpu_percent(daemon, secs(8)), "keeper_mb": memory_mb(keeper),
+        "daemon_cpu_percent": cpu_percent(daemon, secs(30)), "keeper_mb": memory_mb(keeper),
     });
     println!("idle: {report}");
     report
@@ -282,6 +290,7 @@ fn message_everyone(
 
 /// Keystroke echo through `facade attach`: each key written to the attach's terminal, timed until
 /// it comes back.
+#[cfg(unix)]
 fn key_latency(home: &TestHome, agent: &str, keys: usize) -> Value {
     let size = nix::pty::Winsize {
         ws_row: 30,
@@ -327,6 +336,9 @@ fn key_latency(home: &TestHome, agent: &str, keys: usize) -> Value {
         times.push(began.elapsed().as_secs_f64() * 1000.0);
         if k % 13 == 12 {
             master.write_all(b"\r").unwrap();
+            // The daemon holds the Enter, and keys typed after it, until the CLI can take input:
+            // the next timed key waits that out.
+            drain(&mut master, Duration::from_millis(200));
         }
         drain(&mut master, Duration::from_millis(20));
     }
@@ -344,6 +356,7 @@ fn key_latency(home: &TestHome, agent: &str, keys: usize) -> Value {
 }
 
 /// What the terminal has for us within `timeout`: nothing once it times out.
+#[cfg(unix)]
 fn read_some(master: &mut std::fs::File, timeout: Duration) -> Vec<u8> {
     let mut poll = libc::pollfd {
         fd: master.as_raw_fd(),
@@ -432,6 +445,8 @@ fn compare(report: &Value, baseline: &Value) -> Result<Vec<String>, String> {
 
 fn main() {
     let options = options();
+    // Under Cargo the first use of the programs builds them: before any timer starts.
+    test_binaries();
     let mut report = json!({
         "agents": options.agents, "flooders": options.flooders, "large": options.large,
         "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
@@ -453,23 +468,35 @@ fn main() {
     let home = TestHome::new("stress");
     let (agents, started) = start(&home, options.agents);
     report["start"] = started;
-    std::thread::sleep(secs(5));
+    // Idle once the starts have settled: their actors' timers still fire for a while after them.
+    std::thread::sleep(secs(40));
     report["idle"] = idle(&home);
     let mut guest =
         McpTestClient::open_guest(&home, "claude", &[("CLAUDE_CODE_SESSION_ID", "stress")]);
     report["messages"] = message_everyone(&home, &mut guest, &agents, "load");
-    let (quiet, _) = start_many(&home, 1, "quiet", &["/bin/cat"]);
+    // The agent keys are typed to and echoed by: `cat` on Unix; on Windows the test CLI, which draws
+    // each key it gets, as an MSYS `cat` under a pseudo console gets none.
+    #[cfg(unix)]
+    let echoing: &[&str] = &["/bin/cat"];
+    #[cfg(windows)]
+    let echoing: &[&str] = &["fake"];
+    let (quiet, _) = start_many(&home, 1, "quiet", echoing);
     let quiet = &quiet[0].0;
     std::thread::sleep(secs(1));
     report["keys"] = key_latency(&home, quiet, 50);
     if options.flooders > 0 {
         println!("== while {} more agents print", options.flooders);
-        start_many(
-            &home,
-            options.flooders,
-            "flood",
-            &["/usr/bin/perl", "-e", FLOOD],
-        );
+        // Perl, which prints without stopping: the system's on Unix, Git's on Windows.
+        #[cfg(unix)]
+        let perl = "/usr/bin/perl".to_string();
+        #[cfg(windows)]
+        let perl = git_install()
+            .join("usr")
+            .join("bin")
+            .join("perl.exe")
+            .display()
+            .to_string();
+        start_many(&home, options.flooders, "flood", &[&perl, "-e", FLOOD]);
         std::thread::sleep(secs(3));
         let daemon = daemon(&home);
         report["flood"] = json!({ "daemon_cpu_percent": cpu_percent(daemon, secs(8)) });
@@ -606,5 +633,136 @@ fn main() {
             eprintln!("  {failure}");
         }
         std::process::exit(1);
+    }
+}
+
+/// A process's own memory in MB: its private bytes, which Windows counts as its commit charge.
+#[cfg(windows)]
+fn memory_mb(pid: i32) -> f64 {
+    use windows_sys::Win32::System::ProcessStatus::{
+        GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX,
+    };
+    use windows_sys::Win32::System::Threading::PROCESS_QUERY_LIMITED_INFORMATION;
+    windows::with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |process| {
+        // SAFETY: the counters are plain data, written by the call within their size.
+        let mut counters: PROCESS_MEMORY_COUNTERS_EX = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<PROCESS_MEMORY_COUNTERS_EX>() as u32;
+        counters.cb = size;
+        // SAFETY: the handle is open, and the counters have the size given.
+        let ok = unsafe {
+            GetProcessMemoryInfo(
+                process,
+                (&raw mut counters).cast::<PROCESS_MEMORY_COUNTERS>(),
+                size,
+            )
+        };
+        (ok != 0).then(|| counters.PrivateUsage as f64 / (1024.0 * 1024.0))
+    })
+    .flatten()
+    .unwrap_or(f64::NAN)
+}
+
+/// The CPU time a process has used, user and kernel, in seconds.
+#[cfg(windows)]
+fn cpu_seconds(pid: i32) -> f64 {
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{
+        GetProcessTimes, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let ticks =
+        |time: FILETIME| (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime);
+    windows::with_process(pid, PROCESS_QUERY_LIMITED_INFORMATION, |process| {
+        // SAFETY: FILETIMEs are plain data, written by the call.
+        let mut times: [FILETIME; 4] = unsafe { std::mem::zeroed() };
+        let [created, exited, kernel, user] = &mut times;
+        // SAFETY: the handle is open, and each time is a valid FILETIME.
+        let ok = unsafe { GetProcessTimes(process, created, exited, kernel, user) };
+        (ok != 0).then(|| (ticks(times[2]) + ticks(times[3])) as f64 / 10_000_000.0)
+    })
+    .flatten()
+    .unwrap_or(f64::NAN)
+}
+
+/// How many threads a process runs, from a Toolhelp snapshot.
+#[cfg(windows)]
+fn threads(pid: i32) -> usize {
+    use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
+    };
+    // SAFETY: the snapshot is checked and closed; each entry has its size set, as the calls require.
+    unsafe {
+        let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0);
+        if snapshot == INVALID_HANDLE_VALUE {
+            return 0;
+        }
+        let mut entry: THREADENTRY32 = std::mem::zeroed();
+        entry.dwSize = std::mem::size_of::<THREADENTRY32>() as u32;
+        let mut count = 0;
+        let mut more = Thread32First(snapshot, &mut entry) != 0;
+        while more {
+            if entry.th32OwnerProcessID == pid as u32 {
+                count += 1;
+            }
+            more = Thread32Next(snapshot, &mut entry) != 0;
+        }
+        CloseHandle(snapshot);
+        count
+    }
+}
+
+/// Keystroke echo through `facade attach`, in a pseudo console as the person's terminal gives
+/// one: each key written to the attach's terminal, timed until it comes back.
+#[cfg(windows)]
+fn key_latency(home: &TestHome, agent: &str, keys: usize) -> Value {
+    let mut term = TestTerminal::spawn(
+        home.command(&test_binaries().facade)
+            .args(["attach", agent]),
+        100,
+        30,
+    );
+    std::thread::sleep(Duration::from_millis(1500));
+    let mut times = Vec::new();
+    for k in 0..keys {
+        let key = b'a' + (k % 26) as u8;
+        let from = term.output_len();
+        let began = Instant::now();
+        term.send(&[key]);
+        // Woken as the echo arrives: a wait by sleeps would add Windows' 15.6 ms timer tick.
+        term.wait_for_bytes(from, &[key], secs(2));
+        times.push(began.elapsed().as_secs_f64() * 1000.0);
+        if k % 13 == 12 {
+            term.send(b"\r");
+            // The daemon holds the Enter, and keys typed after it, until the CLI can take input:
+            // the next timed key waits that out.
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // Ctrl-] detaches.
+    term.send(b"\x1d");
+    let _ = term.wait_exit(Duration::from_millis(300));
+    drop(term);
+    let report = summary(times);
+    println!("keystroke echo: {report}");
+    report
+}
+
+#[cfg(windows)]
+mod windows {
+    use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+    use windows_sys::Win32::System::Threading::OpenProcess;
+
+    /// What `read` gives of process `pid` opened for `access`; None where it cannot be opened.
+    pub fn with_process<T>(pid: i32, access: u32, read: impl FnOnce(HANDLE) -> T) -> Option<T> {
+        // SAFETY: OpenProcess has no memory-safety preconditions; the handle is closed after use.
+        let process = unsafe { OpenProcess(access, 0, pid as u32) };
+        if process.is_null() {
+            return None;
+        }
+        let read = read(process);
+        // SAFETY: the handle was opened above and is closed once.
+        unsafe { CloseHandle(process) };
+        Some(read)
     }
 }

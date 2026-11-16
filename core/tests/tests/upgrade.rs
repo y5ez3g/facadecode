@@ -8,13 +8,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use facade_scenarios::serde_json::json;
 use facade_scenarios::*;
 
-/// The command line of process `pid`, as `ps` shows it.
+/// The command line of process `pid`.
 fn command_of(pid: i32) -> String {
-    let ps = std::process::Command::new("ps")
-        .args(["-o", "command=", "-p", &pid.to_string()])
-        .output()
-        .unwrap();
-    String::from_utf8_lossy(&ps.stdout).trim().to_string()
+    command_line_of(pid)
 }
 
 /// When the first line of `log` that says `text` was written, in milliseconds of its day, as Facade
@@ -38,7 +34,19 @@ fn millis_between(earlier: u64, later: u64) -> u64 {
     (later + 86_400_000 - earlier) % 86_400_000
 }
 
+/// Process `pid`'s state on Windows: `R` while it runs, nothing once it is gone.
+#[cfg(windows)]
+fn process_state(pid: i32) -> String {
+    // Windows keeps no zombies: a process runs, or it is gone.
+    if alive(&process_identity(pid)) {
+        "R".to_string()
+    } else {
+        String::new()
+    }
+}
+
 /// What `ps` shows of process `pid`'s state, nothing once it is gone.
+#[cfg(unix)]
 fn process_state(pid: i32) -> String {
     let ps = std::process::Command::new("ps")
         .args(["-o", "stat=", "-p", &pid.to_string()])
@@ -74,6 +82,174 @@ fn program_of_build(home: &TestHome, build: &str) -> PathBuf {
     build_failing_as(home, build, "")
 }
 
+/// A client with changed bytes and the same build ID starts services from those bytes after the
+/// home's earlier services have ended.
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn a_client_with_the_same_build_and_different_bytes_restarts_the_services() {
+    restart_with_changed_bytes(false);
+}
+
+/// An existing build folder may hold a hard link to the earlier program.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_client_with_the_same_build_and_different_bytes_replaces_a_hard_link() {
+    restart_with_changed_bytes(true);
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn restart_with_changed_bytes(hard_link: bool) {
+    use std::io::Write;
+
+    let home = TestHome::new(if hard_link {
+        "samebuildlink"
+    } else {
+        "samebuildcopy"
+    });
+    let binaries = test_binaries();
+    let copy = |name: &str, marker: &[u8]| {
+        let folder = home.folder().join(name);
+        std::fs::create_dir_all(&folder).unwrap();
+        let program = folder.join(program_name("facade"));
+        std::fs::copy(&binaries.facade, &program).unwrap();
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&program)
+            .unwrap()
+            .write_all(marker)
+            .unwrap();
+        std::fs::copy(&binaries.mcp, folder.join(program_name("facade-mcp"))).unwrap();
+        #[cfg(windows)]
+        {
+            let conpty = folder.join("conpty");
+            std::fs::create_dir_all(&conpty).unwrap();
+            for file in std::fs::read_dir(binaries.facade.parent().unwrap().join("conpty")).unwrap()
+            {
+                let file = file.unwrap();
+                std::fs::copy(file.path(), conpty.join(file.file_name())).unwrap();
+            }
+        }
+        program
+    };
+    let before = copy("before", b"\nfacade same build: old\n");
+    let after = copy("after", b"\nfacade same build: new\n");
+    let old_bytes = std::fs::read(&before).unwrap();
+    let new_bytes = std::fs::read(&after).unwrap();
+    assert!(old_bytes != new_bytes);
+    // Use the normal install path: the harness otherwise asks debug builds for test-only links.
+    let start = |program: &Path, name: &str| {
+        let output = home
+            .command(program)
+            .env_remove("FACADE_TEST_LINK_PROGRAMS")
+            .args(["start", "--name", name, "fake"])
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}\n{}",
+            stderr(&output),
+            home.keeper_log(),
+            home.daemon_log()
+        );
+        started_agent(&stdout(&output))
+    };
+    let first = start(&before, "before");
+    let hello = home.hello_result().unwrap();
+    let build = hello["build"].as_str().unwrap().to_string();
+    let previous_keeper = process_identity(home.keeper_pid().unwrap());
+    let previous_daemon = process_identity(home.daemon_pid().unwrap());
+    assert!(service_images_match(
+        &home, "before", &old_bytes, &new_bytes, false
+    ));
+    {
+        let mut wire = connect(&home);
+        let removed = wire.call("agent.remove", json!({ "agent": first.id }));
+        assert!(removed.get("error").is_none(), "{removed}");
+    }
+    assert!(
+        wait_until(LOADED_TIMEOUT, || !alive(&previous_keeper)
+            && !alive(&previous_daemon)),
+        "the earlier services have not ended\n{}\n{}",
+        home.keeper_log(),
+        home.daemon_log()
+    );
+    assert!(!alive(&first.process), "the earlier fake CLI has ended");
+    let installed = home
+        .path
+        .join("core/bin")
+        .join(&build)
+        .join(program_name("facade"));
+    assert!(std::fs::read(&installed).unwrap() == old_bytes);
+    #[cfg(target_os = "linux")]
+    if hard_link {
+        std::fs::remove_file(&installed).unwrap();
+        std::fs::hard_link(&before, &installed).unwrap();
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            std::fs::metadata(&before).unwrap().ino(),
+            std::fs::metadata(&installed).unwrap().ino()
+        );
+    }
+    eprintln!(
+        "existing home build={build}, hard_link={hard_link}, previous keeper={} and daemon={} ended",
+        previous_keeper.pid, previous_daemon.pid
+    );
+    let second = start(&after, "after");
+    assert_eq!(
+        home.hello_result().unwrap()["build"],
+        build,
+        "the build ID stays the same"
+    );
+    assert!(alive(&second.process), "the new fake CLI runs");
+    assert!(
+        service_images_match(&home, "after", &old_bytes, &new_bytes, true),
+        "a client with the same build ID must restart both services from its own bytes"
+    );
+}
+
+/// Reads the service's actual program: /proc keeps the running inode on Linux, even if its path
+/// was replaced; Windows reports the image path and holds that file while the service runs.
+#[cfg(any(windows, target_os = "linux"))]
+fn service_images_match(
+    home: &TestHome,
+    when: &str,
+    old: &[u8],
+    new: &[u8],
+    want_new: bool,
+) -> bool {
+    let services = [
+        ("keeper", home.keeper_pid().unwrap()),
+        ("daemon", home.daemon_pid().unwrap()),
+    ];
+    let mut matched = true;
+    for (role, pid) in services {
+        #[cfg(target_os = "linux")]
+        let (path, bytes) = {
+            let image = PathBuf::from(format!("/proc/{pid}/exe"));
+            (
+                std::fs::read_link(&image).unwrap(),
+                std::fs::read(image).unwrap(),
+            )
+        };
+        #[cfg(windows)]
+        let (path, bytes) = {
+            let image = program_of(pid).expect("the service's image path");
+            let bytes = std::fs::read(&image).unwrap();
+            (image, bytes)
+        };
+        let (is_old, is_new) = (bytes == old, bytes == new);
+        let marker = String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(24)..]);
+        eprintln!(
+            "{when} {role} pid={pid} image={} bytes={} old={is_old} new={is_new} tail={marker:?}",
+            path.display(),
+            bytes.len()
+        );
+        matched &= if want_new { is_new } else { is_old };
+    }
+    matched
+}
+
 /// Another build, as [`program_of_build`] is, that ends with code 3 when it runs as `role`, such as
 /// `daemon`.
 fn build_failing_as(home: &TestHome, build: &str, role: &str) -> PathBuf {
@@ -85,28 +261,49 @@ fn build_failing_as(home: &TestHome, build: &str, role: &str) -> PathBuf {
 fn build_doing_as(home: &TestHome, build: &str, role: &str, what: &str) -> PathBuf {
     let folder = home.folder().join(format!("build-{build}"));
     std::fs::create_dir_all(&folder).unwrap();
-    let program = folder.join("facade");
-    let fails = if role.is_empty() {
-        String::new()
-    } else {
-        format!("[ \"$1\" = '{role}' ] && {{ {what}; }}\n")
-    };
-    // It notes each line it runs, as `ran.log` beside it.
-    let ran = folder.join("ran.log");
-    let script = format!(
-        "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{fails}FACADE_TEST_BUILD='{build}' \
+    // Windows has no exec for a script to become the program: a copy of the program plays the
+    // build the file beside it names, and notes each line it runs in the log that file names.
+    #[cfg(windows)]
+    {
+        assert!(
+            role.is_empty(),
+            "a build fails as {role} on Unix only: {what}"
+        );
+        let program = folder.join("facade.exe");
+        std::fs::copy(&test_binaries().facade, &program).unwrap();
+        std::fs::copy(&test_binaries().mcp, folder.join("facade-mcp.exe")).unwrap();
+        std::fs::write(
+            folder.join("facade.exe.test-build"),
+            format!("{build}\n{}\n", folder.join("ran.log").display()),
+        )
+        .unwrap();
+        program
+    }
+    #[cfg(unix)]
+    {
+        let program = folder.join(program_name("facade"));
+        let fails = if role.is_empty() {
+            String::new()
+        } else {
+            format!("[ \"$1\" = '{role}' ] && {{ {what}; }}\n")
+        };
+        // It notes each line it runs, as `ran.log` beside it.
+        let ran = folder.join("ran.log");
+        let script = format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n{fails}FACADE_TEST_BUILD='{build}' \
          FACADE_TEST_PROGRAM=\"$0\" exec '{}' \"$@\"\n",
-        ran.display(),
-        test_binaries().facade.display()
-    );
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(
-        &program,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
-    std::os::unix::fs::symlink(&test_binaries().mcp, folder.join("facade-mcp")).unwrap();
-    program
+            ran.display(),
+            test_binaries().facade.display()
+        );
+        std::fs::write(&program, script).unwrap();
+        std::fs::set_permissions(
+            &program,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+        install_program(&folder, "facade-mcp", &test_binaries().mcp);
+        program
+    }
 }
 
 /// A command of a newer build hands the running Facade over to it and says so on one line. The
@@ -125,12 +322,22 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     // A build older than the one before, unchanged for an hour.
     let older = home.path.join("core/bin/0.1.9");
     std::fs::create_dir_all(&older).unwrap();
-    std::fs::write(older.join("facade"), "").unwrap();
+    std::fs::write(older.join(program_name("facade")), "").unwrap();
     let hour_ago = std::time::SystemTime::now() - secs(3600);
-    std::fs::File::open(&older)
-        .unwrap()
-        .set_modified(hour_ago)
-        .unwrap();
+    #[cfg(unix)]
+    let folder = std::fs::File::open(&older).unwrap();
+    // Windows opens a folder only with backup semantics, and changes its times only with the right
+    // to write its attributes.
+    #[cfg(windows)]
+    let folder = {
+        use std::os::windows::fs::OpenOptionsExt;
+        std::fs::OpenOptions::new()
+            .access_mode(0x0100)
+            .custom_flags(0x0200_0000)
+            .open(&older)
+            .unwrap()
+    };
+    folder.set_modified(hour_ago).unwrap();
     // A file written in place, until its rename, is none of the screen's yet.
     let screen_files = || {
         let names = std::fs::read_dir(home.path.join("core/screens/a1"))
@@ -198,11 +405,10 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
         "w1's output goes on in its published screen log"
     );
     // The take-over pointed the launchers at the new build, which a new run names.
-    let launcher = home.path.join("core/bin/facade");
     home.start_fake("w3");
     assert_eq!(
-        std::fs::read_link(&launcher).unwrap(),
-        Path::new("0.2.1/facade"),
+        launcher_build(&home.path).as_deref(),
+        Some("0.2.1"),
         "{}",
         home.keeper_log()
     );
@@ -227,9 +433,13 @@ fn a_newer_build_s_command_takes_over_while_agents_run() {
     );
     // Healthy, the new build keeps the one before it, and an older one goes.
     assert!(
-        home.path.join("core/bin/0.2.0/facade").exists() && !older.exists(),
+        home.path
+            .join("core/bin/0.2.0")
+            .join(program_name("facade"))
+            .exists()
+            && !older.exists(),
         "{:?}",
-        std::fs::read_dir(home.path.join("core/bin"))
+        std::fs::read_dir(home.path.join("core").join("bin"))
             .unwrap()
             .flatten()
             .map(|entry| entry.file_name())
@@ -470,8 +680,12 @@ fn a_message_waiting_as_the_daemon_before_drains_is_typed_by_the_next_daemon_alo
 fn start_asking_from_its_screen(home: &TestHome, name: &str) {
     let programs = home.project.parent().unwrap().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let mut command = home.facade_in_an_empty_home();
     let started = command
         .env("PATH", &path)
@@ -611,8 +825,12 @@ fn an_antigravity_run_keeps_its_plugin_through_a_takeover_and_the_next_start_pla
     let home = TestHome::new("takeoverplugin");
     let programs = home.folder().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let program = program_of_build(&home, "0.2.1");
     // Starts Antigravity by `facade`, one build's program, in a home with none of the person's
     // settings.
@@ -815,7 +1033,7 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
     let home = TestHome::new("takeoverrefused");
     home.start_fake("w1");
     let (before, daemon) = (keeper(&home), home.daemon_pid().unwrap());
-    let launcher = std::fs::read_link(home.path.join("core/bin/facade")).unwrap();
+    let launcher = launcher_build(&home.path).expect("the launchers point at a build");
     let mut wire = connect(&home);
     let program = program_of_build(&home, "0.2.1");
     for (build, why) in [
@@ -845,7 +1063,7 @@ fn the_daemon_refuses_a_takeover_by_its_own_version_and_an_older_one() {
     }
     assert_eq!((keeper(&home), home.daemon_pid()), (before, Some(daemon)));
     assert_eq!(
-        std::fs::read_link(home.path.join("core/bin/facade")).unwrap(),
+        launcher_build(&home.path).expect("the launchers point at a build"),
         launcher
     );
 }
@@ -1178,7 +1396,12 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         "every CLI runs on"
     );
     for build in ["0.2.0", "0.2.1"] {
-        let program = home.path.join("core/bin").join(build).join("facade");
+        let program = home
+            .path
+            .join("core")
+            .join("bin")
+            .join(build)
+            .join(program_name("facade"));
         assert!(
             !std::fs::symlink_metadata(&program)
                 .unwrap()
@@ -1293,19 +1516,23 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     home.start_facade_with(&[("FACADE_TEST_TRIAL_MS", "2000")]);
     let programs = home.folder().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
-    let bin = home.path.join("core/bin");
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
+    let bin = home.path.join("core").join("bin");
     let run = |name: &str| home.agent_from_list_json(name).unwrap_or_default();
     let mut runs = Vec::new();
     for cli in CLIS {
-        std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join(cli)).unwrap();
+        install_program(&programs, cli, &test_binaries().fakecli);
         let mut start = home.facade_in_an_empty_home();
         start.env("PATH", &path);
         // Antigravity starts its plugin's server from its `/mcp` panel, which Facade's start opens;
         // the test CLI runs the others' from the launcher their settings name, as each CLI does.
         match cli {
             "agy" => start.env("FAKECLI_LOOK", "agy"),
-            _ => start.env("FAKECLI_MCP", bin.join("facade-mcp")),
+            _ => start.env("FAKECLI_MCP", bin.join(program_name("facade-mcp"))),
         };
         let name = format!("{cli}-run");
         let started = start
@@ -1353,7 +1580,13 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
     let mut hooks = Vec::new();
     for (cli, name, process) in &runs {
         let id = run(name)["agent_id"].as_str().unwrap().to_string();
-        let mut given = vec![command_of(process.pid as i32)];
+        // On Windows a command line, which quotes each argument by the C runtime's rules, read back
+        // as its arguments, one a line.
+        #[cfg(unix)]
+        let line = command_of(process.pid as i32);
+        #[cfg(windows)]
+        let line = arguments_of(&command_of(process.pid as i32)).join("\n");
+        let mut given = vec![line];
         given.extend(
             facade_base::unix_process::environment(process)
                 .unwrap()
@@ -1386,7 +1619,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         let mut lines: Vec<String> = given[..1]
             .iter()
             .chain(&given[given.len() - files..])
-            .flat_map(|text| hook_lines(text, &bin.join("facade")))
+            .flat_map(|text| hook_lines(text, &bin.join(program_name("facade"))))
             .collect();
         lines.sort();
         lines.dedup();
@@ -1401,18 +1634,16 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
                 .map(|line| (cli.to_string(), name.clone(), line)),
         );
     }
-    let launcher = || {
-        std::fs::read_link(bin.join("facade"))
-            .is_ok_and(|target| target == Path::new("0.2.1/facade"))
-    };
+    let launcher = || launcher_build(&home.path).as_deref() == Some("0.2.1");
     assert!(
         wait_until(secs(15), launcher),
         "{:?}\n{}",
-        std::fs::read_link(bin.join("facade")),
+        launcher_build(&home.path),
         home.keeper_log()
     );
     // The person deletes the build before; the servers that started from it run on, and the hooks
-    // run the new build.
+    // run the new build. Windows deletes no program while it runs, so there the build stays.
+    #[cfg(unix)]
     std::fs::remove_dir_all(bin.join("0.2.0")).unwrap();
     assert!(!hooks.is_empty(), "no run's hook runs Facade's launcher");
     let ran = home.folder().join("build-0.2.1/ran.log");
@@ -1428,9 +1659,29 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
         let id = run(&name)["agent_id"].as_str().unwrap().to_string();
         // The variables its CLI gives it: Antigravity's hooks get the run's agent, and Muse Code's
         // run its own session's.
-        let mut command = home.command("/bin/sh");
+        // Each CLI runs its hooks with its own shell: Codex's Windows session uses PowerShell.
+        #[cfg(windows)]
+        let codex_shell = (cli == "codex").then(|| {
+            let mut shell = home.command(powershell());
+            shell.args(["-NoProfile", "-Command", &hook]);
+            shell
+        });
+        let command = if cfg!(windows) && cli != "claude" {
+            let mut cmd = home.command("cmd.exe");
+            cmd.args(["/d", "/s", "/c"]);
+            #[cfg(windows)]
+            std::os::windows::process::CommandExt::raw_arg(&mut cmd, format!("\"{hook}\""));
+            cmd
+        } else {
+            let mut sh = home.command(SH.as_str());
+            sh.args(["-c", &hook]);
+            sh
+        };
+        #[cfg(windows)]
+        let mut command = codex_shell.unwrap_or(command);
+        #[cfg(unix)]
+        let mut command = command;
         command
-            .args(["-c", &hook])
             .env("FACADE_AGENT", &id)
             .env("MUSE_SESSION_ID", SESSION);
         let mut child = command
@@ -1452,7 +1703,15 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             before + 1,
             "{cli}'s hook `{hook}` ran the new build"
         );
-        if hook.contains(" hook session-start ") {
+        #[cfg(windows)]
+        let script = powershell_script(&hook).unwrap_or_default();
+        #[cfg(unix)]
+        let script = String::new();
+        if hook.contains(" hook session-start ") || script.contains("'hook' 'session-start' ") {
+            // A CLI draws as its hook runs, and the daemon reads the run's session after the
+            // terminal's output: a key typed into the test CLI makes it draw.
+            let typed = home.run_facade(&["type", &name, "x"]);
+            assert!(typed.status.success(), "{cli}: {}", stderr(&typed));
             assert!(
                 wait_until(secs(10), || run(&name)["session"] == SESSION),
                 "{cli}'s session: {}",
@@ -1474,7 +1733,7 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
             .as_str()
             .map(str::to_string);
         let (skill, instructions) = ("skills/facade/SKILL.md", "instructions.md");
-        if hook.contains(" --skill") {
+        if hook.contains(" --skill") || script.contains("'--skill'") {
             assert_eq!(context, Some(own(skill)), "{cli}'s hook `{hook}`");
         } else if hook.contains(" hook instructions muse") {
             assert_eq!(
@@ -1508,6 +1767,51 @@ fn every_cli_s_run_keeps_its_process_and_tools_through_a_takeover_and_its_hooks_
 
 /// The hook lines in `text` that run Facade's launcher `facade`: each whole command as a CLI's
 /// settings hold it, the string it stands in or its line.
+#[cfg(windows)]
+fn hook_lines(text: &str, facade: &Path) -> Vec<String> {
+    // Inside a JSON string, as the CLIs' files hold them: quoted for Git Bash ('…', Claude Code's
+    // hooks) or for cmd.exe (\"…\"), each `\` of the path written `\\`. The line comes back as the
+    // shell reads it.
+    let path = facade.display().to_string().replace('\\', "\\\\");
+    let mut lines = Vec::new();
+    let encoded = "powershell.exe -NoProfile -NonInteractive -EncodedCommand ";
+    for (start, _) in text.match_indices(encoded) {
+        let end = start
+            + encoded.len()
+            + text[start + encoded.len()..]
+                .chars()
+                .take_while(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '+' | '/' | '='))
+                .count();
+        let command = &text[start..end];
+        if powershell_script(command)
+            .is_some_and(|script| script.contains(&facade.display().to_string()))
+        {
+            lines.push(command.to_string());
+        }
+    }
+    for marker in [format!("'{path}' hook "), format!("\\\"{path}\\\" hook ")] {
+        for (at, _) in text.match_indices(&marker) {
+            // A string ends at a quote no `\` escapes, or at the end of its line.
+            let unescaped_quote = |i: usize| {
+                text.as_bytes()[i] == b'\n'
+                    || (text.as_bytes()[i] == b'"' && text.as_bytes()[i - 1] != b'\\')
+            };
+            let start = (1..at)
+                .rev()
+                .find(|&i| unescaped_quote(i))
+                .map_or(0, |i| i + 1);
+            let end = (at + 1..text.len())
+                .find(|&i| unescaped_quote(i))
+                .unwrap_or(text.len());
+            lines.push(text[start..end].replace("\\\"", "\"").replace("\\\\", "\\"));
+        }
+    }
+    lines
+}
+
+/// The lines in `text` that run `facade` as a hook, each whole between the quotes or line ends
+/// around it.
+#[cfg(unix)]
 fn hook_lines(text: &str, facade: &Path) -> Vec<String> {
     let marker = format!("'{}' hook ", facade.display());
     let bounds = |c: char| c == '"' || c == '\n';
@@ -1535,4 +1839,50 @@ fn files_under(folder: &Path) -> Vec<PathBuf> {
             }
         })
         .collect()
+}
+
+/// The arguments of the Windows command line `line`, split as the C runtime splits them: words
+/// between spaces or tabs, quotes around parts of a word, `\"` a quote, and backslashes literal but
+/// before a quote, where each pair is one.
+#[cfg(windows)]
+fn arguments_of(line: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let (mut quoted, mut in_word, mut backslashes) = (false, false, 0usize);
+    for c in line.chars() {
+        match c {
+            '\\' => {
+                backslashes += 1;
+                in_word = true;
+                continue;
+            }
+            '"' => {
+                word.extend(std::iter::repeat_n('\\', backslashes / 2));
+                if backslashes % 2 == 1 {
+                    word.push('"');
+                } else {
+                    quoted = !quoted;
+                }
+                in_word = true;
+            }
+            ' ' | '\t' if !quoted => {
+                word.extend(std::iter::repeat_n('\\', backslashes));
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                }
+                in_word = false;
+            }
+            c => {
+                word.extend(std::iter::repeat_n('\\', backslashes));
+                word.push(c);
+                in_word = true;
+            }
+        }
+        backslashes = 0;
+    }
+    word.extend(std::iter::repeat_n('\\', backslashes));
+    if in_word {
+        words.push(word);
+    }
+    words
 }
