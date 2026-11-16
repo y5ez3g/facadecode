@@ -115,8 +115,17 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	});
 	const alias = cardLines(card).join(' ').match(/#a\d+/)![0];
 	// Its server answered: the agent's Facade tools are there
-	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined);
+	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined)
+		.catch((error: Error) => { throw new Error(`${error.message}\n${startRecord(alias)}`); });
 	return { card, alias };
+}
+
+/** What a start that brought no Facade server left: the daemon's lines about the agent, and the fake CLI's records of its MCP panel and its input. */
+function startRecord(alias: string): string {
+	const last = (file: string, mine: (line: string) => boolean = () => true) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(line => line && mine(line)).slice(-20).join('\n') : '(none)');
+	const named = new RegExp(`${alias}(?!\\d)`);
+	return [`daemon.log:\n${last(path.join(process.env.FACADE_HOME ?? '', 'core', 'logs', 'daemon.log'), line => named.test(line))}`,
+		`${alias}.panel:\n${last(`${RECORD}.panel.${alias}`)}`, `${alias}.stdin:\n${last(`${RECORD}.stdin.${alias}`)}`].join('\n');
 }
 
 /** The message blocks a fake agent's input box took, as it recorded them. */
