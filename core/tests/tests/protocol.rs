@@ -17,7 +17,7 @@ fn hello_reports_protocol_build_and_capabilities() {
     assert!(
         result["build"]
             .as_str()
-            .is_some_and(|build| build.starts_with("0.2")),
+            .is_some_and(|build| build == env!("CARGO_PKG_VERSION")),
         "{welcome}"
     );
     assert_eq!(
