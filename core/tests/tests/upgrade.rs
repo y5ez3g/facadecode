@@ -982,7 +982,11 @@ fn an_older_build_s_command_and_server_work_with_the_running_facade() {
 /// are all answered and typed once each. One agent holds a draft, and a message to it from each way
 /// of sending waits through the takeover. Every CLI and the keeper keep their processes, and a new
 /// daemon serves. The longest wait between two deliveries of the messages sent without pause, the
-/// takeover's pause, stays under 4 seconds. Both builds' programs are copies, as release builds
+/// takeover's pause, stays under 8 seconds: the old daemon hands over within 4.8 seconds (its
+/// drain, 3, its agents going quiet, 0.5 twice, its connections' `closing`, 0.3, and the attached
+/// terminals' last keys, 0.5), the keeper starts the new one after 0.5 seconds, and the new daemon
+/// gets 2.7 seconds to load its 100 agents and deliver again, where it takes under a second on a
+/// fast machine and on Linux with half a CPU. Both builds' programs are copies, as release builds
 /// install them.
 #[test]
 fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
@@ -1165,8 +1169,9 @@ fn messages_sent_through_a_takeover_arrive_once_each_after_a_short_pause() {
         at.len()
     );
     assert!(
-        gap < 4000,
-        "the longest wait between two deliveries was {gap} ms"
+        gap < 8000,
+        "the longest wait between two deliveries was {gap} ms; the daemons' log:\n{}",
+        home.daemon_log()
     );
     assert!(
         agents.iter().all(|agent| alive(&agent.process)),
