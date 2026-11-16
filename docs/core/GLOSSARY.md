@@ -68,6 +68,8 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | input | The bytes written into a terminal | — |
 | input box | The CLI's field where text is typed before Enter | — |
 | draft | The text in the input box that was not entered yet | — |
+| hint | Text a CLI draws in its empty input box that is not a draft, dim or colored, such as a suggestion | placeholder (for this) |
+| probe | A space typed into the input box and taken back, to tell a hint from a draft where a reading cannot | — |
 | type | Write text or keys into a terminal, as `agent.type` does | — |
 | typist | The one writer of an agent's automatic input: messages, the first prompt, typed calls | — |
 | paste | The typist putting a message's text into the input box as a bracketed paste | — |
