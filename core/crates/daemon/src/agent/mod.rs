@@ -125,6 +125,8 @@ pub(crate) enum AgentCommand {
         reply: InputReply,
     },
     Resize(u16, u16),
+    /// The colors its screen replies to color queries with, from the next output on.
+    SetColors(facade_screen::TerminalColors),
     /// Adds a viewer: its snapshot goes through `reply` before any change.
     AddViewer {
         viewer: u64,
@@ -217,6 +219,8 @@ pub(crate) struct ActorStart {
     /// The terminal; None for an agent whose terminal closed.
     pub(crate) master: Option<PtyMaster>,
     pub(crate) screen: ScreenStart,
+    /// The colors its screen replies to color queries with, from the first output on.
+    pub(crate) colors: facade_screen::TerminalColors,
     /// The name of the CLI rule the agent was started by.
     pub(crate) rule: Option<String>,
     /// Whether the running CLI reports its session.

@@ -487,6 +487,7 @@ impl Daemon {
         gate_for_test("after-start-record");
         let screen = self.screens.folder(&id);
         let actor = ActorStart {
+            colors: facade_screen::TerminalColors::default(),
             info: info.clone(),
             master: Some(started.master),
             screen: ScreenStart::New(screen.clone()),

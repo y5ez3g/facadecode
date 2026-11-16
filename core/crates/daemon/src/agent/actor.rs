@@ -17,7 +17,7 @@ use facade_base::daemon::{
 };
 use facade_base::process::{ProcessExit, ProcessState};
 use facade_rules::{InputRule, Rule};
-use facade_screen::ParsedOutput;
+use facade_screen::{ParsedOutput, TerminalColors};
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -94,6 +94,7 @@ pub(super) fn spawn(
         info,
         master,
         screen,
+        colors,
         rule,
         captures,
         deliveries,
@@ -174,7 +175,7 @@ pub(super) fn spawn(
     // Read once more as the task begins.
     actor.state_at = Some(Instant::now());
     let yolo = info.yolo;
-    tokio::spawn(actor.run(commands, recovered, yolo));
+    tokio::spawn(actor.run(commands, recovered, yolo, colors));
     Ok(())
 }
 
@@ -289,8 +290,9 @@ impl Actor {
         mut commands: mpsc::Receiver<AgentCommand>,
         recovered: bool,
         yolo: bool,
+        colors: TerminalColors,
     ) {
-        self.begin(recovered, yolo).await;
+        self.begin(recovered, yolo, colors).await;
         loop {
             if !self.typist.pasting()
                 && let Some(reply) = self.settling.take()
@@ -381,7 +383,7 @@ impl Actor {
     }
 
     /// Sets the screen up, starts keeping the state's facts, and takes up a run that is under way.
-    async fn begin(&mut self, recovered: bool, yolo: bool) {
+    async fn begin(&mut self, recovered: bool, yolo: bool, colors: TerminalColors) {
         let (cols, rows) = {
             let info = self.links.shared.info.lock().unwrap();
             (
@@ -391,7 +393,7 @@ impl Actor {
         };
         let folder = self.facts.parent().map(PathBuf::from).unwrap_or_default();
         let mut handed_over = false;
-        let screen = match self.screen_start.take().expect("the screen starts once") {
+        let mut screen = match self.screen_start.take().expect("the screen starts once") {
             ScreenStart::New(folder) => LoggedScreen::create(folder, &self.id, cols, rows).await,
             ScreenStart::Recovered {
                 screen,
@@ -403,6 +405,7 @@ impl Actor {
             }
             ScreenStart::Released => LoggedScreen::released(folder, &self.id),
         };
+        screen.set_colors(colors);
         self.screen = Some(screen);
         // The screen folder exists now; the facts are kept there.
         self.start_keeping();
@@ -474,6 +477,7 @@ impl Actor {
                 let _ = reply.send(self.take_input(input, run));
             }
             AgentCommand::Resize(cols, rows) => self.take_size(cols, rows),
+            AgentCommand::SetColors(colors) => self.screen_mut().set_colors(colors),
             AgentCommand::AddViewer {
                 viewer,
                 tx,

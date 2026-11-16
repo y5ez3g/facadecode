@@ -277,6 +277,7 @@ impl Daemon {
         };
         let state = self.kept_state(&id, &info, run.as_ref()).await?;
         let actor = ActorStart {
+            colors: facade_screen::TerminalColors::default(),
             info,
             master,
             screen,

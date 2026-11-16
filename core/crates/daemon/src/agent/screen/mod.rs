@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use facade_screen::{ParsedOutput, Screen};
+use facade_screen::{ParsedOutput, Screen, TerminalColors};
 use tokio::task::JoinHandle;
 
 use super::SCROLLBACK_ROWS;
@@ -356,6 +356,7 @@ pub(crate) struct LoggedScreen {
     held: bool,
     log_closed: bool,
     screen: Screen,
+    colors: TerminalColors,
     log: Option<ScreenLog>,
 }
 impl LoggedScreen {
@@ -387,6 +388,7 @@ impl LoggedScreen {
             held: true,
             log_closed: false,
             screen,
+            colors: TerminalColors::default(),
             log,
         }
     }
@@ -398,8 +400,14 @@ impl LoggedScreen {
             held: false,
             log_closed: true,
             screen: Screen::new(2, 1, 0),
+            colors: TerminalColors::default(),
             log: None,
         }
+    }
+    /// Keeps the supplied colors on the current screen and every screen loaded later.
+    pub(crate) fn set_colors(&mut self, colors: TerminalColors) {
+        self.colors = colors;
+        self.screen.set_colors(colors);
     }
     /// Borrows the held screen, or the two-column placeholder; takes no lock.
     pub(crate) fn screen(&self) -> &Screen {
@@ -479,6 +487,7 @@ impl LoggedScreen {
     /// Drops the in-memory screen and waits for any writer before closing its log; takes no lock.
     pub(crate) async fn let_go(&mut self) {
         self.screen = Screen::new(2, 1, 0);
+        self.screen.set_colors(self.colors);
         self.held = false;
         if let Some(journal) = self.log.take() {
             journal.finish().await;
@@ -500,6 +509,7 @@ impl LoggedScreen {
             match tokio::task::spawn_blocking(move || recover(&folder, &id, None, &|| {})).await {
                 Ok(recovered) => {
                     self.screen = recovered.screen;
+                    self.screen.set_colors(self.colors);
                     self.log = recovered.log;
                     self.held = true;
                     self.log_closed = false;
@@ -511,6 +521,7 @@ impl LoggedScreen {
             match read {
                 Ok(Ok(screen)) => {
                     self.screen = screen;
+                    self.screen.set_colors(self.colors);
                     self.held = true;
                     facade_base::service::mark_for_test(&format!("screen-loaded-{}", self.id));
                 }

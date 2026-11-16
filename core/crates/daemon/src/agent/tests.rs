@@ -3,6 +3,7 @@ use std::path::Path;
 
 use facade_base::daemon::TextWritten;
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_screen::TerminalColors;
 
 use super::person::{Enter, PersonKeys};
 use super::screen as screen_log;
@@ -196,6 +197,7 @@ impl Harness {
         };
         let messages = crate::messages::tests::messages().0;
         let start = ActorStart {
+            colors: TerminalColors::default(),
             info,
             master: Some(master),
             screen: screen(dir.clone()),
@@ -1306,6 +1308,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
         started: Instant::now(),
     };
     let start = ActorStart {
+        colors: TerminalColors::default(),
         info: record(ProcessState::Running, None, 80, 24),
         master: Some(master),
         screen: ScreenStart::New(dir),
@@ -1350,6 +1353,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
     };
     let post = crate::messages::tests::messages().0;
     let start = ActorStart {
+        colors: TerminalColors::default(),
         info: record(ProcessState::Running, None, 40, 6),
         master: Some(master),
         screen: ScreenStart::New(dir),
@@ -1486,6 +1490,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
     };
     let messages = crate::messages::tests::messages().0;
     let start = ActorStart {
+        colors: TerminalColors::default(),
         info: record(ProcessState::Running, None, 80, 24),
         master: Some(master),
         screen,
