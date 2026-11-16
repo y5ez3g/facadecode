@@ -42,7 +42,7 @@ export interface ConnectOptions {
 	readonly home: string;
 	/** Core's `facade` program of this package. */
 	readonly program: string;
-	/** The package's build, such as `0.2.0`: a daemon of an older release is handed over to it. */
+	/** The package's build, its manifest's version: this build takes over a daemon of an older release. */
 	readonly build: string;
 	readonly window: WindowDescription;
 	readonly numbersGiven: NumbersGiven;
