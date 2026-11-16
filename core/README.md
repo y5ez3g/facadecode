@@ -36,6 +36,8 @@ CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo run --release -p facade-scenar
 ```
 
 Core builds for macOS and Linux. Linux needs kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed.
+An agent keeps running when the SSH login that started it ends, except where systemd ends a user's processes at
+logout (`KillUserProcesses=yes`): there, run `loginctl enable-linger` first.
 
 ## Try it in a temporary Facade home
 
@@ -97,7 +99,7 @@ rm -rf "$FACADE_HOME"
 | `vendor/alacritty_terminal` | `alacritty_terminal` | The terminal emulator, with the changes [vendor/README.md](vendor/README.md) lists |
 | `protocol` | — | The daemon and keeper protocols, generated from `crates/base` by its test `protocol_files.rs`: do not edit |
 | `rules` | — | One rule file for each CLI |
-| `scripts` | — | The full test run, the check for leftover processes, and the check of each commit |
+| `scripts` | — | The full test run, the check for leftover processes, the check of each commit, and the check that agents outlive an SSH login |
 
 The crates depend in one direction: base and screen, then rules, then keeper and daemon, then facade. The relay depends
 on no other Facade crate.
