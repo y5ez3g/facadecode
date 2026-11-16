@@ -452,8 +452,11 @@ fn an_entry_s_args_are_merged_as_their_cli_reads_them() {
         .filter(|arg| arg.trim_start_matches('-').starts_with("settings"))
         .collect();
     assert_eq!(settings, ["--settings"], "{agy:?}");
-    let merged = &agy[agy.iter().position(|arg| arg == "--settings").unwrap() + 1];
-    assert!(merged.contains("\"theme\":\"light\""), "{merged}");
+    // The merged settings reach it in the run's file, which the argument names.
+    let file = &agy[agy.iter().position(|arg| arg == "--settings").unwrap() + 1];
+    let merged: Value =
+        facade_scenarios::serde_json::from_str(&std::fs::read_to_string(file).unwrap()).unwrap();
+    assert_eq!(merged["theme"], "light", "{merged}");
     let claude = started_with(
         &home,
         "claude-one",

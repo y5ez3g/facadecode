@@ -7,9 +7,9 @@ use std::path::Path;
 
 use serde_json::{Map, Value, json};
 
-use super::Wiring;
 use super::config_files::{agy_settings_file, muse_settings_file};
 use super::integration::is_facade_group;
+use super::{MergedSettings, Wiring};
 use crate::args::{ArgsGrammar, Found};
 use crate::formats::{merge_settings, parse_jsonc, shell_word};
 
@@ -37,8 +37,13 @@ pub(super) fn spans(found: &[Found]) -> impl Iterator<Item = (usize, usize)> + C
     found.iter().map(|found| (found.index, found.span))
 }
 
+/// The file, in the run's folder, of Antigravity's `--settings`.
+const AGY_SETTINGS_FILE: &str = "settings.json";
+
 /// Antigravity's `--settings` with what `wiring` adds merged into the person's own, and the
-/// person's words without their `--settings`. Each key of `--settings` replaces the person's
+/// person's words without their `--settings`. The merged settings go in [`AGY_SETTINGS_FILE`] of
+/// the run's `folder`, and the argument names that file, so that the person's settings, which may
+/// hold keys, never show on the command line. Each key of `--settings` replaces the person's
 /// settings file's for the session, so: their `--settings` arguments, each JSON or a file relative
 /// to `cwd`, merged in order; their permission rules, from those or else from their settings file,
 /// with Facade's after them; any other setting `wiring` adds, as YOLO's trusted folders, merged the
@@ -50,8 +55,9 @@ pub(super) fn agy_settings(
     wiring: &Wiring,
     words: &[String],
     cwd: &Path,
+    folder: &Path,
     environment: &BTreeMap<String, String>,
-) -> Option<(Vec<String>, Vec<String>)> {
+) -> Option<MergedSettings> {
     // Read as Antigravity reads them: `-settings` too, and never another option's value.
     let given = grammar.found(words, "--settings");
     let mut overlay = Map::new();
@@ -120,8 +126,15 @@ pub(super) fn agy_settings(
         title.insert("command".into(), json!(command));
         overlay.insert("title".into(), Value::Object(title));
     }
-    let args = vec!["--settings".into(), Value::Object(overlay).to_string()];
-    Some((args, without(words, spans(&given))))
+    let file = folder.join(AGY_SETTINGS_FILE);
+    Some(MergedSettings {
+        args: vec!["--settings".into(), file.to_string_lossy().into_owned()],
+        files: vec![(
+            AGY_SETTINGS_FILE.into(),
+            format!("{:#}\n", Value::Object(overlay)),
+        )],
+        rest: without(words, spans(&given)),
+    })
 }
 
 /// Muse Code's `-c hooks=` with Facade's hooks `ours`, each an event and its command, after the
@@ -134,7 +147,7 @@ pub(super) fn muse_hooks(
     ours: &[(String, String)],
     words: &[String],
     environment: &BTreeMap<String, String>,
-) -> Option<(Vec<String>, Vec<String>)> {
+) -> Option<MergedSettings> {
     // Read as Muse Code reads them: `-chooks=` and `--config=hooks=` too, and never another
     // option's value.
     let given: Vec<_> = grammar
@@ -169,5 +182,9 @@ pub(super) fn muse_hooks(
         groups.as_array_mut()?.push(group);
     }
     let rest = without(words, given.iter().map(|given| (given.index, given.span)));
-    Some((vec!["-c".into(), format!("hooks={hooks}")], rest))
+    Some(MergedSettings {
+        args: vec!["-c".into(), format!("hooks={hooks}")],
+        files: Vec::new(),
+        rest,
+    })
 }

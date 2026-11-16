@@ -31,12 +31,7 @@ fn rule(cli: &str) -> &'static Rule {
 }
 
 fn settings(launch: &CommandLine) -> Value {
-    let at = launch
-        .command
-        .iter()
-        .position(|word| word == "--settings")
-        .expect("a --settings argument");
-    serde_json::from_str(&launch.command[at + 1]).unwrap()
+    passed_settings(launch)
 }
 
 #[test]
@@ -105,10 +100,16 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
     );
     let title = "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/session'";
     let settings = json!({ "title": { "type": "command", "enabled": true, "command": title } });
+    assert_eq!(self::settings(&agy), settings);
     assert_eq!(
         (agy.command, agy.captures),
         (
-            words(&["agy", "--settings", &settings.to_string(), "x"]),
+            words(&[
+                "agy",
+                "--settings",
+                "/home/.facade/core/runs/a3/1f/settings.json",
+                "x"
+            ]),
             true
         )
     );
@@ -261,6 +262,7 @@ fn without_yolo(
             .position(|word| word == "--settings")
             .unwrap();
         on.command[place + 1] = off.command[place + 1].clone();
+        on.files = off.files.clone();
     }
     on
 }

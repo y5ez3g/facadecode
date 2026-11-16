@@ -52,7 +52,7 @@ impl SessionReport<'_> {
     }
 
     /// The run's folder, which the session file is in.
-    fn folder(&self) -> &Path {
+    pub(crate) fn folder(&self) -> &Path {
         self.file.parent().unwrap_or(Path::new("/"))
     }
 }
