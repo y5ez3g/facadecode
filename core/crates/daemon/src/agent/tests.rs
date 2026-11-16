@@ -1669,6 +1669,24 @@ async fn a_start_readies_antigravity_s_tools_before_its_first_turn() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
+/// A draft that the CLI draws away within a second, as a redraw to a new size does, is no draft
+/// to give up on: the start types `/mcp` once the input reads empty.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_start_waits_for_a_draft_that_is_a_redraw_to_go() {
+    let home = home("readyredraw");
+    let mut harness = antigravity(&home);
+    harness.agy_input("hello");
+    assert!(
+        harness
+            .cli_reads_within(1, Duration::from_millis(300))
+            .is_empty()
+    );
+    harness.agy_input("");
+    assert_eq!(harness.cli_reads(4), b"/mcp");
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
 /// The start types nothing where the input first reads anything but empty, as a draft or a
 /// question of the CLI's, or the CLI is working; and where `/mcp` does not show alone, it
 /// presses no Enter and takes `/mcp` back. Each leaves the tools not started, an error, until
