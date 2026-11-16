@@ -36,6 +36,14 @@ child islands each own one kind of data; this layer owns what joins them.
 - Clients are accepted only once recovery has listed every readable agent.
 - A stop lets go of the actor's copy of the terminal's signal pipe, then keeper_link's, before the keeper
   is asked to stop: on Windows the pseudo console hangs up only once every copy is closed.
+- An agent replies to color queries with the colors of the window it is in now: given at its start or
+  resume there, after its window's `hello` or `window.update`, and after a takeover moved it. After the
+  daemon starts again, they come with the window's next `hello`.
+- A window's `env` stays in windows' memory: never in the store, a log or a response. From it and the
+  window's first folder, an `ide` client's `windows` watch lists the CLIs each window can start, worked
+  out for each snapshot and change, as an agent client's are.
+- An `ide` client's `numbers_given` raises the agent counter through records and the message counter
+  through messages before `hello` responds; a counter is never lowered.
 - The daemon exits only after five idle seconds in a row, decided under the lock that accepts work.
   While an agent runs or a guest is listed, nothing wakes that decision but an exit or a guest's end.
 - `impl Daemon` exists only in this layer's files.
@@ -151,9 +159,9 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - Quiet replies only once no read is under way and what the last reads brought went through the screen log; `LetGoBeforeStop` lets go of the signal pipe and nothing else.
 - **Never does:** touch the database; know other agents; decide when a run starts or ends; type into a terminal that is not Facade's.
 - **Interface:**
-  - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the record, the terminal's `PtyMaster`, a `ScreenStart` (`New(folder)`, `Recovered { screen, log, handed_over_cleanly }`, `Released`), the rule name, the messages' `DeliveryHandle` and a `StateStart`.
+  - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the record, the terminal's `PtyMaster`, a `ScreenStart` (`New(folder)`, `Recovered { screen, log, handed_over_cleanly }`, `Released`), the rule name, the messages' `DeliveryHandle`, a `StateStart`, and the window's `TerminalColors`, which its screen replies to color queries with from the first output on.
   - `AgentHandle`: `guest(info)`, `id()`, `info()`, `is_guest()`, `rule()`, `run()`, `exit()`, `settled()`, `output_seen()` (marked at each output of the terminal), `input_room_changed()`, `send(AgentCommand) -> bool`, `is_closed()`, `mailbox()`, `lock_run_change()`, `try_lock_run_change()`, `tools_connected() -> ToolsConnection` (dropping it closes the connection), and for guests and windows `set_guest_state`, `mark_ended`, `move_window`, `set_window_and_yolo`.
-  - `AgentCommand`: input (`WriteInput`, `Resize`), viewing (`AddViewer`, `RemoveViewer`, `ReadScreen`, `Inspect`), run events (`ProcessExited`, `RecordSession`, `PrepareRestart`, `InstallRun`, `AwaitPrompt`, `StartPrompt`) and control (`Rename`, `Remove`, `Quiesce`, `LetGoBeforeStop`, `SettlePaste`). `Input` is `Raw` keys, `Typed` text or keys, a `Message`, or a `BegunPaste` to finish.
+  - `AgentCommand`: input (`WriteInput`, `Resize`), viewing (`AddViewer`, `RemoveViewer`, `ReadScreen`, `Inspect`), run events (`ProcessExited`, `RecordSession`, `PrepareRestart`, `InstallRun`, `AwaitPrompt`, `StartPrompt`) and control (`Rename`, `Remove`, `Quiesce`, `LetGoBeforeStop`, `SettlePaste`, `SetColors`, the colors its screen replies to color queries with from the next output on). `Input` is `Raw` keys, `Typed` text or keys, a `Message`, or a `BegunPaste` to finish.
   - `Screens`: `new(folder)`, `folder(id)`, `remove(id)`, `delete_without_records(kept)`.
   - For recovery: `recover`, `recover_after_clean_end`, `saved_size`, `screen_writes`, `state_file`, `read_kept`, `instant_of`.
 
@@ -175,7 +183,7 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 - **Owns:** the `Screen`, the open screen log, the checkpoint being written and the count of checkpoints being written. The files in `core/screens/<id>/`: `<g>.checkpoint` (size, a redraw with scrollback, a SHA-256 checksum), `<g>.log` (output, resize and synchronized-update-end records), and `current`, which names the published generation.
 - **Keeps:** Every change is logged before the screen takes it. After 4 MiB of output a checkpoint is taken at a clean point; at the log's 64 MiB cap one is forced, and the log says what a recovery from it loses. A full log reads no output until its checkpoint is written; a failed checkpoint is tried again later. A checkpoint is synced before `current` names it, and the folder is synced before older generations are deleted. Recovery starts from the published checkpoint or a valid older one. Folders and files are private through base (0700 and 0600 on Unix); a folder is synced through base, which needs nothing on Windows.
 - **Never does:** touch the terminal; read CLI rules; know viewers; delete the agent's folder.
-- **Interface:** `create(folder, id, cols, rows)` (async), `recovered(folder, id, screen, log)`, `released(folder, id)`; changes: `feed(bytes) -> ParsedOutput`, `resize(cols, rows)`, `end_synchronized_update()`; reads: `screen() -> &Screen`, `is_held()`; checkpoints: `checkpoint_if_due()`, `is_full()`, `checkpoint_running()`, `checkpoint_written()` (async), `finish_checkpoint(written)`; memory: `let_go()`, `hold()`, `hold_with_log()`, `finish()` (async). Recovery uses `recover`, `recover_after_clean_end` and `saved_size`; the daemon's lifecycle waits for `screen_writes()` to reach 0 before it exits or hands over.
+- **Interface:** `create(folder, id, cols, rows)` (async), `recovered(folder, id, screen, log)`, `released(folder, id)`; changes: `feed(bytes) -> ParsedOutput`, `resize(cols, rows)`, `end_synchronized_update()`, `set_colors(TerminalColors)` (for the screen it holds and every screen it holds later); reads: `screen() -> &Screen`, `is_held()`; checkpoints: `checkpoint_if_due()`, `is_full()`, `checkpoint_running()`, `checkpoint_written()` (async), `finish_checkpoint(written)`; memory: `let_go()`, `hold()`, `hold_with_log()`, `finish()` (async). Recovery uses `recover`, `recover_after_clean_end` and `saved_size`; the daemon's lifecycle waits for `screen_writes()` to reach 0 before it exits or a newer build takes over.
 
 #### state
 
@@ -238,7 +246,7 @@ Numbers every Facade message (#mN), keeps the deliveries still open, and settles
 - **Never does:** reads the agents or guests tables; types into a terminal; finds an agent; deletes an inbox (the daemon does, in the transaction that removes its owner).
 - **Interface:**
   - Daemon layer:
-    - `Messages::new(MessageTable)`, `delivery_handle()`, `take_results() -> Option<Receiver<PostedResult>>`, `subscribe() -> Receiver<Change>`
+    - `Messages::new(MessageTable)`, `raise_above(given)` (every `#mN` above `given` from then on; blocks), `delivery_handle()`, `take_results() -> Option<Receiver<PostedResult>>`, `subscribe() -> Receiver<Change>`
     - `post(Message, request_id) -> Posted`, `notify(Message, request_id) -> (Message, bool)`, `find_request(from, request_id) -> Option<Earlier>`, `withdraw(number) -> bool`
     - `deliver_prompt(Message, Option<OwedResult>)`, `begin_prompt(number, deadline, from_name) -> Option<Message>`
     - `settle(numbers, Outcome)`, `settle_by_deadline(number, &mut settled, deadline)`
@@ -258,7 +266,7 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
   starts not yet registered; each run's exit-saving task; run folders in `core/runs/`; Facade's
   plugin in project folders; session following.
 - **Keeps:** a run keeps only its first exit, and an exit carries its run number, so an old run's
-  exit never reaches a new one. A run is registered before `launch` returns, before the daemon
+  exit never reaches a new one. A run is registered before `start` returns, before the daemon
   commits it. No lock is held while a handle, an `ExitSink` or the event sender is called.
 - **Never does:** touch the database; know an agent's actor; interpret a CLI (asks `facade_rules`);
   end the keeper.
@@ -271,10 +279,12 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
   - Startup: `find_keeper_at_startup() -> FoundKeeper` (`Absent` or `Connected { build, held }`),
     then `serve_keeper()`.
   - Start and resume, in this order: `reserve_start() -> StartReservation`,
-    `reservation.wait_for_keeper()`, `prepare(RunRequest) -> PreparedRun`, for a resume
+    `reservation.wait_for_keeper()`, `prepare(RunRequest) -> PreparedRun` (its `kind`, `RunKind::{Start,
+    Resume}`, says whether it is the agent's first run, whose folders it makes, or a resume; its
+    `session`, the session the command line continues, a resume's or a start's), for a resume
     `previous_run_ended(id, timeout)` and `replace_folders(id, &prepared)`, then
-    `launch(reservation, id, number, &prepared, cols, rows, ExitSink, RunLaunch::{Start, Resume})
-    -> StartedRun { pid, master }`. Once the agent is listed, or a resumed run installed:
+    `start(reservation, id, number, &prepared, cols, rows, ExitSink) -> StartedRun { pid, master }`.
+    Once the agent is listed, or a resumed run installed:
     `installed(id) -> Option<ProcessExit>` (an exit that came first) and
     `prepared.let_go_of_plugin()`.
   - Stop and end: `stop(id) -> Result<bool, ErrorBody>` (true: it was running and the keeper was
@@ -290,7 +300,7 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     daemon may not exit), `keeper_info()`, `keeper_protocol()`.
 
 `runs/mod.rs` joins its two child islands and calls them one after the other, never holding a lock
-of one while calling the other. `launch` has keeper_link register the run, then tells preparation
+of one while calling the other. `start` has keeper_link register the run, then tells preparation
 the run uses the plugin of its folder. `record_exit` records the exit in keeper_link, then tells
 preparation the run ended, so its session is read once more. A run let go of by `release`,
 `remove` or its exit as a cleanup run is let go of as a plugin user too. `previous_run_ended` waits,
@@ -319,7 +329,7 @@ The keeper connection, the run registry, and starts not yet registered.
   sent again); `agent.sync` passes each copy as it is.
 - **Never does:** end a keeper; touch folders, plugins or sessions.
 - **Interface** (runs only): `KeeperLink::new(core, events)`, `find_at_startup`, `serve`,
-  `reserve_start`, `send_start(.., RunLaunch)`, `stop`, `record_exit -> RecordedExit::{Unknown,
+  `reserve_start`, `send_start(.., RunKind)`, `stop`, `record_exit -> RecordedExit::{Unknown,
   Repeated, Kept(ExitRecorded), Dropped}`, `installed`, `release`, `abandon`, `remove`,
   `ended_run_released(id, deadline)`, `running_process`, the recovery calls (`take_back ->
   PtyMaster`, `register_recovered(&HeldAgent, &PtyMaster, ..)`), `busy`,
@@ -368,7 +378,7 @@ Agent IDs, default names, and what a reference names within a client's reach (`r
 - **Keeps:** every `#aN` comes from the number counter, committed before it is used, so no ID is given twice, even after a failed start. A default name is free in the agent's window, ignoring case and surrounding spaces, and no other start holds it; when none is free, the name is the ID, such as `#a7`. A reference names one agent or the person, or fails: an ID outside reach is refused, a name only names agents in reach, and a name several agents have is ambiguous. `#human` always names the person; `human` and `@human` name the person unless an agent in reach has that name.
 - **Never does:** hold agent handles (it reads only `AgentInfo`); touch any other table; take the agents lock (the daemon passes in what it needs).
 - **Interface:**
-  - `Records::new(NumberTable)`; `next_id() -> Result<String, ErrorBody>` (async, `a<N>`); `reserve_name(taken, id, names) -> String` and `release_name(name)`, where `taken` is the names in the agent's window and the caller holds the agents lock; `keep_unreadable(ids)` once at startup; `is_unreadable(id)` during recovery.
+  - `Records::new(NumberTable)`; `next_id() -> Result<String, ErrorBody>` (async, `a<N>`); `raise_above(given)`, after which every `#aN` is above `given` (blocks); `reserve_name(taken, id, names) -> String` and `release_name(name)`, where `taken` is the names in the agent's window and the caller holds the agents lock; `keep_unreadable(ids)` once at startup; `is_unreadable(id)` during recovery.
   - `reach_of(caller, info) -> Reach`: the person, or an agent whose run has YOLO on, reaches all agents; an agent whose run has YOLO off reaches its creation tree. `Reach::reaches(&AgentInfo)`.
   - `resolve(agents, reference, reach, running_only) -> Result<Named, ErrorBody>`, with `Named::Agent(id)` or `Named::Person`. With `running_only`, agents that have ended are left out when matching by name.
   - `agent_number(id) -> u64` to sort by; `normalize_agent_reference(reference)`: `a3`, `#a3` and `3` all become `a3`.
@@ -400,6 +410,7 @@ The editor windows that `ide` clients describe: how many of each window's connec
   - `start_grace(id, departure)` and `forget(id, departure)`: the forget deletes the row and sends `Removed`.
   - `watch_person(id) -> PersonWatch` and `tells_person(id) -> bool`: whether the window's `ide` client watches its messages, so that the window can tell the person.
   - `label(id) -> String`, `subscribe() -> broadcast::Receiver<WindowsChange>`, `infos() -> Vec<WindowInfo>` (editor windows by ID, with no CLIs).
+  - `colors(id) -> Option<TerminalColors>` and `env(id) -> Option<BTreeMap<String, String>>`: what the window last described; its `env` stays in memory only, never in the table.
   - `check_destination(id, cwd) -> Result<String, ErrorBody>`: in the terminal window, `cwd` as given; in an editor window, it must be connected, and `cwd` must be one of its locations, whose folder still exists.
   - `async create_worktree(WorktreeCreateArgs) -> Result<(LocationInfo, Option<LocationsRead>), ErrorBody>`: makes the worktree from one of the window's locations, reads an editor window's locations again, and returns the new location as listed, with that read.
 

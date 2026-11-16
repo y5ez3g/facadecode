@@ -6,14 +6,14 @@
 use std::sync::Arc;
 
 use facade_base::daemon::{
-    AgentState, AgentsChange, HookSession, LocationInfo, TERMINAL_WINDOW, WindowDescription,
-    WorktreeCreateArgs,
+    AgentState, AgentsChange, HookSession, LocationInfo, TERMINAL_WINDOW, TerminalColors,
+    WindowDescription, WorktreeCreateArgs,
 };
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::process::ProcessState;
 use tokio::sync::mpsc;
 
-use crate::agent::AgentHandle;
+use crate::agent::{AgentCommand, AgentHandle};
 use crate::guests::{GuestEvent, Guests, SessionMatch};
 use crate::windows::{LocationsRead, WindowConnection, WindowEvent};
 use crate::{Daemon, blocking_in_place, command_line, gate_for_test, log};
@@ -202,6 +202,9 @@ impl Daemon {
         description: WindowDescription,
     ) -> Result<WindowConnection, ErrorBody> {
         crate::windows::Windows::check(&description)?;
+        if let Some(colors) = &description.colors {
+            terminal_colors(colors)?;
+        }
         self.describe_window(&description, true).await;
         Ok(self.windows.connection(&description.id))
     }
@@ -212,6 +215,9 @@ impl Daemon {
         description: WindowDescription,
     ) -> Result<(), ErrorBody> {
         crate::windows::Windows::check(&description)?;
+        if let Some(colors) = &description.colors {
+            terminal_colors(colors)?;
+        }
         self.describe_window(&description, false).await;
         Ok(())
     }
@@ -227,6 +233,25 @@ impl Daemon {
             .await
         {
             self.stop_gone(&description.id, &read);
+        }
+        self.push_colors(&description.id).await;
+    }
+
+    /// The colors window `id`'s terminals draw with, which its agents reply to color queries with.
+    pub(crate) fn window_colors(&self, id: &str) -> facade_screen::TerminalColors {
+        self.windows
+            .colors(id)
+            .and_then(|colors| terminal_colors(&colors).ok())
+            .unwrap_or_default()
+    }
+
+    /// Gives every agent of window `id` the window's colors, those it took over included.
+    async fn push_colors(&self, id: &str) {
+        let colors = self.window_colors(id);
+        for agent in self.agents() {
+            if agent.info().window_id == id && !agent.is_guest() {
+                agent.send(AgentCommand::SetColors(colors)).await;
+            }
         }
     }
 
@@ -373,4 +398,28 @@ pub(crate) async fn follow_guests(
             }
         }
     }
+}
+
+/// `colors` as the screen replies with them; a color that is not `#` and six hexadecimal digits
+/// is refused.
+fn terminal_colors(colors: &TerminalColors) -> Result<facade_screen::TerminalColors, ErrorBody> {
+    let color = |name: &str, text: &Option<String>| -> Result<Option<[u8; 3]>, ErrorBody> {
+        let Some(text) = text else {
+            return Ok(None);
+        };
+        let digits = text.strip_prefix('#').filter(|digits| {
+            digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_hexdigit())
+        });
+        let Some(digits) = digits else {
+            let message = format!("the {name} color {text:?} is not # and six hexadecimal digits");
+            return Err(ErrorBody::invalid_argument(message));
+        };
+        let channel = |at: usize| u8::from_str_radix(&digits[at..at + 2], 16).expect("hex digits");
+        Ok(Some([channel(0), channel(2), channel(4)]))
+    };
+    Ok(facade_screen::TerminalColors {
+        foreground: color("foreground", &colors.foreground)?,
+        background: color("background", &colors.background)?,
+        cursor: color("cursor", &colors.cursor)?,
+    })
 }

@@ -43,6 +43,9 @@ pub(crate) struct Presence {
     _tools: Option<ToolsConnection>,
 }
 
+/// The highest number `numbers_given` takes, 2^53 - 1: the largest a JSON number holds exactly.
+const MAX_NUMBER_GIVEN: u64 = (1 << 53) - 1;
+
 impl server::Service for Daemon {
     type Hold = Presence;
     type Work = WorkGuard;
@@ -64,6 +67,21 @@ impl server::Service for Daemon {
             _tools: None,
         };
         let mut window = None;
+        if let Some(given) = hello.numbers_given {
+            if hello.kind != ClientKind::Ide {
+                let message = "only an ide client tells the numbers its editor gave";
+                return Err(ErrorBody::invalid_argument(message));
+            }
+            if given.agent.max(given.message) > MAX_NUMBER_GIVEN {
+                let message = "numbers_given takes numbers up to 2^53 - 1";
+                return Err(ErrorBody::invalid_argument(message));
+            }
+            crate::blocking_in_place(|| {
+                self.records.raise_above(given.agent)?;
+                self.messages.raise_above(given.message)
+            })
+            .map_err(ErrorBody::internal)?;
+        }
         match (hello.kind, hello.window) {
             (ClientKind::Ide, Some(_)) if agent.is_some() => {
                 let message = "an ide client acts for the person, not for an agent";
@@ -414,6 +432,11 @@ impl Daemon {
                 return Err(ErrorBody::invalid_argument(
                     "a start from facade-mcp names one CLI of Facade's settings file, and \
                      nothing more",
+                ));
+            }
+            if args.session.is_some() {
+                return Err(ErrorBody::invalid_argument(
+                    "a start from facade-mcp continues no session",
                 ));
             }
             if let Some(agent) = acting {

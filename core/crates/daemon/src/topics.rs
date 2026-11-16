@@ -19,7 +19,7 @@ use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::agent::{AgentCommand, AgentHandle, ViewerChange, viewer_channel};
-use crate::command_line::Clis;
+use crate::command_line::CliViewer;
 use crate::messages::Change;
 use crate::records::{self, Reach};
 use crate::server::{Client, Watch, WatchChange};
@@ -282,15 +282,14 @@ impl Daemon {
     }
 
     /// The windows. A client acting for an agent sees in each which CLIs a start by that agent can
-    /// run. The terminal window changes with its agents.
+    /// run, and an editor's `ide` client which CLIs each window can start, worked out for each
+    /// snapshot and change. The terminal window changes with its agents.
     async fn watch_windows(self: &Arc<Self>, client: &Client) -> Watch {
-        let clis = match client.agent.as_deref() {
-            Some(agent) => self.cli_infos(agent).await,
-            None => Clis::default(),
-        };
+        let viewer = CliViewer::of(client);
         let mut following = self.windows.subscribe();
         let mut agents = self.changes.subscribe();
-        let snapshot = self.window_infos(&clis);
+        let mut snapshot = self.window_infos();
+        self.show_clis(&viewer, &mut snapshot).await;
         let mut known: HashSet<String> = snapshot
             .iter()
             .map(|window| window.window_id.clone())
@@ -304,7 +303,9 @@ impl Daemon {
                     change = following.recv() => match change {
                         Ok(change) => vec![change],
                         Err(RecvError::Lagged(_)) => {
-                            resync_windows(&known, daemon.window_infos(&Clis::default()))
+                            let mut infos = daemon.window_infos();
+                            daemon.show_clis(&viewer, &mut infos).await;
+                            resync_windows(&known, infos)
                         }
                         Err(RecvError::Closed) => return,
                     },
@@ -328,7 +329,9 @@ impl Daemon {
                 for mut change in received {
                     match &mut change {
                         WindowsChange::Updated { window } => {
-                            clis.show_in(window);
+                            daemon
+                                .show_clis(&viewer, std::slice::from_mut(window.as_mut()))
+                                .await;
                             known.insert(window.window_id.clone());
                         }
                         WindowsChange::Removed { window_id } => {
@@ -378,14 +381,10 @@ impl Daemon {
             .is_some_and(|agent| agent.info().window_id == id)
     }
 
-    /// The windows: the editor windows, then the terminal window while it holds running agents,
-    /// each showing `clis`.
-    fn window_infos(&self, clis: &Clis) -> Vec<WindowInfo> {
+    /// The windows: the editor windows, then the terminal window while it holds running agents.
+    fn window_infos(&self) -> Vec<WindowInfo> {
         let mut infos = self.windows.infos();
         infos.extend(self.terminal_window());
-        for info in &mut infos {
-            clis.show_in(info);
-        }
         infos
     }
 

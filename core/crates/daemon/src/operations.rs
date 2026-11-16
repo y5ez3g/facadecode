@@ -291,6 +291,9 @@ impl Daemon {
         // One reading of the settings file gives the start its YOLO, names and entry (RULES-4.3).
         let settings = command_line::read_settings()?;
         let configured = command_line::configure(&settings, &args, by_model)?;
+        if let Some(session) = args.session.as_deref() {
+            command_line::check_session(&configured, &args.command[0], session)?;
+        }
         if let Some(prompt) = args.prompt.as_deref() {
             command_line::check_start_prompt(prompt, &configured, &args.command[0])?;
             let widest = crate::delivery::pending_message(
@@ -389,7 +392,7 @@ impl Daemon {
             window_label: &label,
             creator: creator.as_deref().map(|creator| (creator, creator_name)),
             yolo,
-            resume: None,
+            resume: args.session.as_deref(),
         };
         let mut prepared = match self.runs.prepare(request).await {
             Ok(prepared) => prepared,
@@ -487,7 +490,7 @@ impl Daemon {
         gate_for_test("after-start-record");
         let screen = self.screens.folder(&id);
         let actor = ActorStart {
-            colors: facade_screen::TerminalColors::default(),
+            colors: self.window_colors(&window),
             info: info.clone(),
             master: Some(started.master),
             screen: ScreenStart::New(screen.clone()),
@@ -899,6 +902,10 @@ impl Daemon {
             return Err(error);
         }
         agent.set_window_and_yolo(&window, yolo);
+        // Before the run is installed, so its first color query gets them as a reply.
+        agent
+            .send(AgentCommand::SetColors(self.window_colors(&window)))
+            .await;
         let (reply, installed) = oneshot::channel();
         let install = AgentCommand::InstallRun {
             run: number,
