@@ -72,6 +72,16 @@ impl Catalog {
             .find(|place| same_folder(&place.path, path))
     }
 
+    /// The innermost location whose path is `path` or one of its parents, by whole path
+    /// components, `path` having its links resolved.
+    pub(crate) fn holding(&self, path: &str) -> Option<&LocationInfo> {
+        let path = folder_key(Path::new(path));
+        self.locations
+            .iter()
+            .filter(|place| Path::new(&path).starts_with(folder_key(Path::new(&place.path))))
+            .max_by_key(|place| Path::new(&place.path).components().count())
+    }
+
     /// The paths of the locations that only folders missing from `folders` brought.
     pub(crate) fn left_by(&self, folders: &[String]) -> Vec<String> {
         self.with_sources()

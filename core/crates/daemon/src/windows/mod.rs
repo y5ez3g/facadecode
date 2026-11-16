@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use facade_base::daemon::{
     LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, TerminalColors, WindowDescription,
-    WindowInfo, WindowsChange, WorktreeCreateArgs,
+    WindowInfo, WindowsChange, WorktreeCreateArgs, location_id,
 };
 use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -51,17 +51,28 @@ pub(crate) struct LocationsRead {
 }
 
 impl LocationsRead {
-    /// Whether an agent working in `cwd` lost its location: the window no longer has the folder
-    /// that brought it, or a read with no problem no longer finds the folder.
+    /// Whether an agent working in `cwd` lost its location: no location holds the folder and the
+    /// window no longer has the folder of one that did, or a read with no problem no longer finds
+    /// the folder.
     pub(crate) fn is_gone(&self, cwd: &str) -> bool {
         if self.catalog.location(cwd).is_some() {
             return false;
         }
-        self.dropped
-            .iter()
-            .any(|path| folder_key(Path::new(path)) == folder_key(Path::new(cwd)))
+        let cwd_key = folder_key(Path::new(cwd));
+        (self.catalog.holding(cwd).is_none()
+            && self
+                .dropped
+                .iter()
+                .any(|path| Path::new(&cwd_key).starts_with(folder_key(Path::new(path)))))
             || (self.catalog.problems().is_empty() && !Path::new(cwd).exists())
     }
+}
+
+/// Where an agent starts: its folder, and the ID of the location that holds the folder.
+pub(crate) struct Destination {
+    pub(crate) cwd: String,
+    #[expect(dead_code)]
+    pub(crate) location_id: String,
 }
 
 /// The editor windows, by ID, and the worktree creations under way in them.
@@ -491,10 +502,23 @@ impl Windows {
     }
 
     /// Where an agent of window `id` starts from `cwd`: in the terminal window, `cwd` as given; in
-    /// an editor window that is connected, the location at `cwd`, whose folder must still exist.
-    pub(crate) fn check_destination(&self, id: &str, cwd: &str) -> Result<String, ErrorBody> {
+    /// an editor window that is connected, `cwd` with its links resolved, which must be a location
+    /// of the window or a folder inside one, and still exist. Its location is the innermost one.
+    pub(crate) fn check_destination(&self, id: &str, cwd: &str) -> Result<Destination, ErrorBody> {
+        self.check_place(id, cwd, false)
+    }
+
+    /// As [`Self::check_destination`], where `cwd` must be a location itself.
+    fn check_location(&self, id: &str, cwd: &str) -> Result<Destination, ErrorBody> {
+        self.check_place(id, cwd, true)
+    }
+
+    fn check_place(&self, id: &str, cwd: &str, exact: bool) -> Result<Destination, ErrorBody> {
         if id == TERMINAL_WINDOW {
-            return Ok(cwd.to_string());
+            return Ok(Destination {
+                cwd: cwd.to_string(),
+                location_id: location_id(cwd),
+            });
         }
         let path = real_path(Path::new(cwd)).map_or_else(
             |_| cwd.to_string(),
@@ -507,19 +531,28 @@ impl Windows {
             .ok_or_else(|| {
                 ErrorBody::new(Reason::Unavailable, format!("window {id} is not there now"))
             })?;
-        let location = window.catalog.location(&path).ok_or_else(|| {
+        let location = if exact {
+            window.catalog.location(&path)
+        } else {
+            window.catalog.holding(&path)
+        }
+        .ok_or_else(|| {
+            let nor_inside = if exact { "" } else { ", nor inside one" };
             ErrorBody::invalid_argument(format!(
-                "{cwd} is not a location of window {}",
+                "{cwd} is not a location of window {}{nor_inside}",
                 window.description.label
             ))
         })?;
-        if !Path::new(&location.path).is_dir() {
+        if !Path::new(&path).is_dir() {
             return Err(ErrorBody::new(
                 Reason::Unavailable,
-                format!("the folder {} no longer exists", location.path),
+                format!("the folder {path} no longer exists"),
             ));
         }
-        Ok(location.path.clone())
+        Ok(Destination {
+            location_id: location.location_id.clone(),
+            cwd: path,
+        })
     }
 
     /// Window `id`'s Git branch prefix.
@@ -576,7 +609,7 @@ impl Windows {
         &self,
         args: WorktreeCreateArgs,
     ) -> Result<(LocationInfo, Option<LocationsRead>), ErrorBody> {
-        let source = self.check_destination(&args.window_id, &args.cwd)?;
+        let source = self.check_location(&args.window_id, &args.cwd)?.cwd;
         let prefix = self.branch_prefix(&args.window_id);
         let made = locations::create(
             Path::new(&source),

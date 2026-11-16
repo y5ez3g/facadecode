@@ -358,7 +358,7 @@ impl Daemon {
             .window_id
             .take()
             .unwrap_or_else(|| TERMINAL_WINDOW.to_string());
-        args.cwd = self.windows.check_destination(&window, &args.cwd)?;
+        args.cwd = self.windows.check_destination(&window, &args.cwd)?.cwd;
         configured.find_program(&args.cwd)?;
         let yolo = settings.yolo;
         let rule = configured.rule;
