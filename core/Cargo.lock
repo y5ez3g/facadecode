@@ -410,6 +410,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook 0.4.6",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
