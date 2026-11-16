@@ -600,12 +600,15 @@ export class PtydServer {
 				return runOf(run).type(text, !!enter, lead);
 			}
 			case 'keys': {
-				const { run, keys } = params as Requests['keys']['params'];
+				const { run, keys, unlessTyped } = params as Requests['keys']['params'];
 				const refused = Array.isArray(keys) ? keys.find(key => !isAgentKey(key)) : '';
 				if (refused !== undefined) {
 					throw new Error(`Not a key: ${JSON.stringify(refused)}.`);
 				}
-				return runOf(run).keys(keys);
+				if (unlessTyped !== undefined && !Number.isSafeInteger(unlessTyped)) {
+					throw new Error('unlessTyped is a whole number: the typed of a reading.');
+				}
+				return runOf(run).keys(keys, unlessTyped);
 			}
 			case 'inspect': {
 				const { run, adapter } = params as Requests['inspect']['params'];

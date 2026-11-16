@@ -49,7 +49,7 @@ import { isJsonObject } from '../base/json';
 import type { InputReading } from './composer';
 import type { InputEffect } from './input';
 export type { OwnerClaim } from '../base/ownership';
-export type { InputReading, InputState } from './composer';
+export type { InputLine, InputReading, InputState, LineCell } from './composer';
 export type { InputEffect } from './input';
 
 /**
@@ -224,7 +224,7 @@ export interface Requests {
 	 * connection is told from then on is numbered after it. Only the current workspace owner can attach.
 	 */
 	attach: { params: { readonly run: string }; result: { readonly info: RunInfo; readonly screen: string; readonly seq: number } };
-	/** What the person typed into the run's terminal: straight to its process, with no policy (EXPERIENCE-2.1). */
+	/** What the person typed into the run's terminal: straight to its process, with no policy (EXPERIENCE-2.1), and counted (RULES-1.4). */
 	input: { params: { readonly run: string; readonly data: string }; result: void };
 	resize: { params: { readonly run: string; readonly cols: number; readonly rows: number }; result: void };
 	/** The bottom `lines` lines of the run's screen, once what it wrote is drawn (MCP-5.1). */
@@ -237,8 +237,12 @@ export interface Requests {
 	 * before it takes no lead and pastes the text alone.
 	 */
 	type: { params: { readonly run: string; readonly text: string; readonly enter: boolean; readonly lead?: string }; result: InputEffect };
-	/** Presses keys by name, or printable characters, in order: in turn with other automated input. */
-	keys: { params: { readonly run: string; readonly keys: readonly string[] }; result: InputEffect };
+	/**
+	 * Presses keys by name, or printable characters, in order: in turn with other automated input. With `unlessTyped`, the `typed`
+	 * of a reading, each key goes only while the person's writes still number that many; the first that does not answers
+	 * `typedFirst` (RULES-1.4). A ptyd from before it ignores `unlessTyped`, and its readings carry no `typed` to send.
+	 */
+	keys: { params: { readonly run: string; readonly keys: readonly string[]; readonly unlessTyped?: number }; result: InputEffect };
 	/**
 	 * Reads the run's ordinary-message input with the input reader `adapter`, once what it wrote is drawn (CLIS-2.1, RULES-1.4):
 	 * nothing is typed to find out.

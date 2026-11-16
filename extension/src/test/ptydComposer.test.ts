@@ -317,7 +317,8 @@ suite('Composer: ordinary-message input read from the screen (CLIS-2.1, 2.3, RUL
 		for (const [draft, columns] of [['abcdef', 6], ['请检查', 6], ['fix 登录', 8], ['ship 🚀', 7]] as const) {
 			const screen = await draw(draft, columns);
 			assert.deepStrictEqual([screen.cursor, screen.rows[4].find(cell => cell.x === columns)?.inverse], [{ x: columns, y: 4 }, true], draft);
-			assert.deepStrictEqual(readInput(screen, 'pi-frame'), { state: 'draft', evidence: 'the editor at row 5 holds text', draft }, draft);
+			const { line: _line, ...reading } = readInput(screen, 'pi-frame');
+			assert.deepStrictEqual(reading, { state: 'draft', evidence: 'the editor at row 5 holds text', draft }, draft);
 		}
 	});
 
