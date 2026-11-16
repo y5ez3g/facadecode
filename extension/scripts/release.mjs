@@ -4,6 +4,7 @@
 //   node scripts/release.mjs github --tag extension/<v> --input-dir <dir>   files of this run's native CI jobs
 //   node scripts/release.mjs github --backfill                              every version in archive/catalog.json
 //   node scripts/release.mjs stores --tag extension/<v>                     from the Release to both stores
+//   node scripts/release.mjs version <v>                                    the extension's, the window component's and core's version
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -11,6 +12,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { CORE, withWorkspaceVersion } from './core.mjs';
 import { filesOfZip } from './native.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -324,6 +326,25 @@ async function stores(tag, work) {
 	if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `- ${tag}: Marketplace and Open VSX serve the Release's ${artifacts.length} VSIX files byte for byte.\n`);
 }
 
+/** One version for the extension, its window component and core's workspace: the manifests, the lock file of each. */
+export function raiseVersion(version) {
+	assert.match(version ?? '', /^\d+\.\d+\.\d+$/, `Expected a version <major.minor.patch>, not ${version}`);
+	const rewrite = (file, change) => fs.writeFileSync(file, change(fs.readFileSync(file, 'utf8')));
+	const manifest = file => rewrite(file, text => text.replace(/^(\t"version": ")[^"]+/m, `$1${version}`));
+	manifest(path.join(root, 'package.json'));
+	manifest(path.join(root, 'window', 'package.json'));
+	rewrite(path.join(root, 'package-lock.json'), text => {
+		const lock = JSON.parse(text);
+		lock.version = lock.packages[''].version = version;
+		return `${JSON.stringify(lock, undefined, '\t')}\n`;
+	});
+	rewrite(path.join(CORE, 'Cargo.toml'), text => withWorkspaceVersion(text, version));
+	// Cargo.lock names each of core's crates by it; no registry is asked
+	const result = run('cargo', ['update', '--workspace', '--offline'], { cwd: CORE, stdio: 'inherit' });
+	assert.equal(result.status, 0, 'cargo could not update core\'s Cargo.lock');
+	console.log(`Version ${version}: extension, window component, core. CHANGELOG.md needs its ## ${version} section.`);
+}
+
 async function main() {
 	const [command, ...args] = process.argv.slice(2);
 	const option = name => { const at = args.indexOf(name); return at < 0 ? undefined : args[at + 1]; };
@@ -332,7 +353,8 @@ async function main() {
 		if (command === 'github' && args.includes('--backfill')) await backfill(work);
 		else if (command === 'github') await releaseRun(option('--tag'), path.resolve(option('--input-dir') ?? 'missing --input-dir'), work);
 		else if (command === 'stores') await stores(option('--tag'), work);
-		else throw new Error('Usage: release.mjs github --tag extension/<v> --input-dir <dir> | github --backfill | stores --tag extension/<v>');
+		else if (command === 'version') raiseVersion(args[0]);
+		else throw new Error('Usage: release.mjs github --tag extension/<v> --input-dir <dir> | github --backfill | stores --tag extension/<v> | version <v>');
 	} finally {
 		fs.rmSync(work, { recursive: true, force: true });
 	}

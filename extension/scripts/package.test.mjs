@@ -6,6 +6,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { test } from 'node:test';
+import { checkSources, namesDynamicLinker, programProblems, protocolProblems, versionProblems, withWorkspaceVersion, workspaceVersion, zipModes } from './core.mjs';
 import { binaryTarget, filesOfZip, hostTarget, nativeProblems, packageTarget } from './native.mjs';
 import { packageReadme } from './readme.mjs';
 
@@ -319,7 +320,8 @@ test('the packaged workspace extension names this host\'s target and carries tha
 	assert.match(identity(runtimeFiles), new RegExp(`\\bTargetPlatform="${target}"`));
 	assert.deepEqual(nativeProblems(runtimeFiles, target), []);
 	const binaries = runtimeFiles.filter(each => binaryTarget(each.bytes)).map(each => each.name);
-	assert.ok(binaries.length && binaries.every(each => each.startsWith('extension/node_modules/node-pty/')), binaries.join(', '));
+	// The PTY backend's, and core's programs (checked below)
+	assert.ok(binaries.length && binaries.every(each => each.startsWith('extension/node_modules/node-pty/') || each.startsWith('extension/bin/')), binaries.join(', '));
 	for (const bundle of ['extension.js', 'ptyd.js']) {
 		assert.ok(runtimeFiles.some(each => each.name === `extension/dist/${bundle}`), `The package carries dist/${bundle}`);
 	}
@@ -348,4 +350,61 @@ test('the packaged window dependency runs locally, exports no API and contains n
 		const strings = JSON.parse(file.bytes.toString('utf8'));
 		assert.ok(strings.windowDisplayName && strings.windowDescription, file.name);
 	}
+});
+
+/** A static ELF64 of the machine given, or with one program header that names a dynamic linker, as a glibc build does. */
+function elfStatic(machine, linked = false) {
+	const bytes = Buffer.concat([elf(machine), Buffer.alloc(56)]);
+	bytes[4] = 2;
+	bytes.writeBigUInt64LE(64n, 32);
+	bytes.writeUInt16LE(56, 54);
+	bytes.writeUInt16LE(1, 56);
+	bytes.writeUInt32LE(linked ? 3 : 1, 64);
+	return bytes;
+}
+
+test('core\'s version is the extension\'s and the window component\'s, and the protocol copy is core\'s, or nothing is packaged', () => {
+	const toml = '[workspace]\nmembers = ["a"]\n\n[workspace.package]\nversion = "0.2.0"\nedition = "2024"\n\n[workspace.dependencies]\nversion = "9"\n';
+	assert.equal(workspaceVersion(toml), '0.2.0');
+	assert.equal(workspaceVersion(withWorkspaceVersion(toml, '0.3.1')), '0.3.1');
+	assert.match(withWorkspaceVersion(toml, '0.3.1'), /\[workspace\.dependencies\]\nversion = "9"/);
+	assert.throws(() => workspaceVersion('[package]\nversion = "1.0.0"\n'), /no workspace version/);
+	assert.deepEqual(versionProblems({ extension: '0.2.0', window: '0.2.0', core: '0.2.0' }), []);
+	assert.match(versionProblems({ extension: '0.2.0', window: '0.2.0', core: '0.2.1' }).join(), /core is 0\.2\.1, the extension 0\.2\.0/);
+	assert.match(versionProblems({ extension: '0.2.0', window: '0.1.5', core: '0.2.0' }).join(), /window is 0\.1\.5/);
+	assert.deepEqual(protocolProblems(Buffer.from('a'), Buffer.from('a')), []);
+	assert.match(protocolProblems(Buffer.from('a'), Buffer.from('b')).join(), /not a copy of core\/protocol\/protocol\.ts/);
+	// This checkout: one version, one protocol
+	checkSources();
+});
+
+test('a package carries core\'s two programs, executable, static on Linux, and a Windows package carries none', () => {
+	const modes = names => new Map(names.map(name => [name, 0o755]));
+	const pty = { name: 'extension/node_modules/node-pty/prebuilds/x/pty.node', bytes: Buffer.alloc(0) };
+	const mac = ['facade', 'facade-mcp'].map(program => ({ name: `extension/bin/${program}`, bytes: machO(ARM64) }));
+	const names = mac.map(file => file.name);
+	assert.deepEqual(programProblems([pty, ...mac], 'darwin-arm64', modes(names)), []);
+	assert.deepEqual(programProblems([pty, ...mac.slice(0, 1)], 'darwin-arm64', modes(names)), ['bin/facade-mcp is not in the package']);
+	assert.deepEqual(programProblems([pty, mac[0], { name: mac[1].name, bytes: Buffer.from('#!/bin/sh\n') }], 'darwin-arm64', modes(names)), ['bin/facade-mcp is no program']);
+	assert.deepEqual(programProblems([pty, ...mac], 'darwin-arm64', new Map([[names[0], 0o755], [names[1], 0o644]])), ['bin/facade-mcp is not executable']);
+	const linux = linked => ['facade', 'facade-mcp'].map(program => ({ name: `extension/bin/${program}`, bytes: elfStatic(0x3e, linked && program === 'facade') }));
+	assert.equal(namesDynamicLinker(elfStatic(0x3e)), false);
+	assert.equal(namesDynamicLinker(elfStatic(0x3e, true)), true);
+	assert.deepEqual(programProblems(linux(false), 'linux-x64', modes(names)), []);
+	assert.match(programProblems(linux(true), 'linux-x64', modes(names)).join(), /bin\/facade is not a static musl build/);
+	assert.deepEqual(programProblems([pty], 'win32-x64', new Map()), []);
+	assert.match(programProblems([pty, ...mac], 'win32-x64', modes(names)).join(), /extension\/bin\/facade is core's, in a package for Windows/);
+});
+
+test('the packaged workspace extension carries core\'s programs of this host\'s target at the extension\'s version, and the window component none', () => {
+	const target = hostTarget();
+	const { name, version } = JSON.parse(fs.readFileSync(path.join(stage, 'package.json'), 'utf8'));
+	const file = path.join(root, 'build', 'vsix', `${name}-${target}-${version}.vsix`);
+	const files = filesOfZip(file);
+	assert.deepEqual(programProblems(files, target, zipModes(file)), []);
+	const programs = files.filter(each => each.name.startsWith('extension/bin/'));
+	assert.deepEqual(programs.map(each => each.name).sort(), target.startsWith('win32-') ? [] : ['extension/bin/facade', 'extension/bin/facade-mcp']);
+	assert.deepEqual(nativeProblems(files, target), []);
+	assert.equal(workspaceVersion(fs.readFileSync(path.join(root, '..', 'core', 'Cargo.toml'), 'utf8')), version);
+	assert.ok(!filesOfZip(path.join(root, 'build', 'vsix', `facadecode-window-${version}.vsix`)).some(each => each.name.startsWith('extension/bin/')));
 });
