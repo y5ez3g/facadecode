@@ -44,8 +44,8 @@ Wait for a successful `hello` before using the connection. In this example, `→
 message. The redraw's base64 value is abbreviated.
 
 ```text
-→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[1,1],"build":"0.2.0","kind":"terminal"}}
-← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"build":"0.2.0","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
+→ {"jsonrpc":"2.0","id":1,"method":"hello","params":{"protocol":[1,1],"build":"1.4.2","kind":"terminal"}}
+← {"jsonrpc":"2.0","id":1,"result":{"protocol":1,"build":"1.4.2","pid":4321,"agents":0,"topics":["agents","screen","messages","windows"],"ops":["agent.start","agent.resume","agent.stop","agent.remove","agent.inspect","agent.type","agent.screen","agent.resize","agent.rename","agent.send","hook.session-start","hook.prompt","hook.turn-end","hook.idle","hook.session-end","integration.add","integration.remove","integration.list","window.update","worktree.create","daemon.upgrade","daemon.log"]}}
 → {"jsonrpc":"2.0","id":2,"method":"call","params":{"op":"agent.start","args":{"command":["claude"],"cwd":"/Users/me/project","env":{"HOME":"/Users/me","PATH":"/usr/bin:/bin"},"cols":120,"rows":30}}}
 ← {"jsonrpc":"2.0","id":2,"result":{"agent":{"agent_id":"a1","name":"Pixel","cli":"claude","cwd":"/Users/me/project","window_id":"terminal","location_id":"loc-5f3c2a1b9e8d7c60","pid":5001,"process":"running","cols":120,"rows":30,"created_at":"2026-11-09T17:22:05.123Z","root":"a1","yolo":false,"state":"starting","tools_state":"connecting"}}}
 → {"jsonrpc":"2.0","id":3,"method":"watch","params":{"topic":"screen","args":{"agent":"a1"}}}
