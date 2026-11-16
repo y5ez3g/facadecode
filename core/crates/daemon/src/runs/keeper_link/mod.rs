@@ -4,7 +4,6 @@
 mod client;
 mod registry;
 
-use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant as ClockInstant};
@@ -17,6 +16,7 @@ use facade_base::keeper::{
 };
 use facade_base::process::{ProcessExit, ProcessIdentity};
 use facade_base::service::{self, Report, RestartBackoff, Service};
+use facade_base::terminal::PtyMaster;
 use tokio::sync::{mpsc, watch};
 use tokio::time::Instant;
 
@@ -173,7 +173,7 @@ impl KeeperLink {
         self.runs.begin(id, number, Arc::clone(&exits));
         reservation.sent = true;
         self.connection.lock().unwrap().sent += 1;
-        let response = keeper.call::<AgentStart>(&args, 1).await;
+        let response = keeper.call::<AgentStart>(&args).await;
         let started = match response {
             Err(error) => {
                 if error.uncertain() {
@@ -181,12 +181,12 @@ impl KeeperLink {
                 }
                 Err(error.into())
             }
-            Ok((process, mut descriptors)) => match descriptors.pop() {
+            Ok((process, terminal)) => match terminal {
                 None => {
                     keeper.fence();
                     Err(ErrorBody::new(
                         Reason::Internal,
-                        format!("the keeper started {id} without passing its PTY descriptor"),
+                        format!("the keeper started {id} without passing its terminal"),
                     ))
                 }
                 Some(master) => match master.try_clone() {
@@ -235,7 +235,8 @@ impl KeeperLink {
         started
     }
 
-    /// Marks a registered run stopping, then waits for a ready keeper and its response.
+    /// Marks a registered run stopping and lets go of its copy of the terminal before the stop,
+    /// then waits for a ready keeper and its response.
     pub(crate) async fn stop(&self, id: &str) -> Result<bool, ErrorBody> {
         let running = self.runs.request_stop(id)?;
         if running {
@@ -268,7 +269,8 @@ impl KeeperLink {
         self.runs.release(id)
     }
 
-    /// Converts a failed start into cleanup and asks a ready keeper to stop it in a task.
+    /// Converts a failed start into cleanup, lets go of its copy of the terminal before the stop,
+    /// and asks a ready keeper to stop it in a task.
     pub(crate) fn abandon(&self, id: &str) {
         if self.runs.abandon(id) {
             let link = self.owner.upgrade().expect("link is still owned");
@@ -303,16 +305,16 @@ impl KeeperLink {
     }
 
     /// Recovery: obtains a held run's terminal from the startup connection, before readiness.
-    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<OwnedFd, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
         let keeper = self.recovery_keeper()?;
         Self::terminal(&keeper, held).await
     }
 
-    /// Recovery: keeps a second terminal descriptor and the run's exit sink. Blocking, no I/O waits.
+    /// Recovery: keeps a second terminal copy and the run's exit sink. Blocking, no I/O waits.
     pub(crate) fn register_recovered(
         &self,
         held: &HeldAgent,
-        master: &OwnedFd,
+        master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
         exits: ExitSink,
@@ -501,14 +503,14 @@ impl KeeperLink {
             .ok_or_else(|| ErrorBody::new(Reason::Unavailable, "the keeper is not connected"))
     }
 
-    async fn terminal(keeper: &KeeperClient, held: &HeldAgent) -> Result<OwnedFd, ErrorBody> {
+    async fn terminal(keeper: &KeeperClient, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
         let args = SyncArgs {
             agent: held.id.clone(),
             pid: held.pid,
             birth: held.birth.clone(),
         };
-        let (_, mut fds) = keeper.call::<AgentSync>(&args, 1).await?;
-        fds.pop().ok_or_else(|| {
+        let (_, terminal) = keeper.call::<AgentSync>(&args).await?;
+        terminal.ok_or_else(|| {
             ErrorBody::new(
                 Reason::Internal,
                 format!("the keeper answered for {} without its terminal", held.id),
@@ -518,7 +520,7 @@ impl KeeperLink {
 
     async fn stop_with(keeper: &KeeperClient, id: &str) -> Result<(), ErrorBody> {
         keeper
-            .call::<AgentStop>(&AgentArgs { agent: id.into() }, 0)
+            .call::<AgentStop>(&AgentArgs { agent: id.into() })
             .await?;
         Ok(())
     }
@@ -728,16 +730,13 @@ impl KeeperLink {
         .context("could not start a keeper")?;
         let pid = candidate.pid();
         facade_base::log::write("daemon", "info", &format!("started keeper {pid}"));
-        let (report, child) = tokio::task::spawn_blocking(move || {
+        let (report, process) = tokio::task::spawn_blocking(move || {
             let mut candidate = candidate;
             let report = candidate.report(RestartBackoff::STARTUP_REPORT_TIMEOUT);
-            (report, candidate.into_child())
+            (report, candidate.into_process())
         })
         .await?;
-        tokio::task::spawn_blocking(move || {
-            let mut child = child;
-            child.wait()
-        });
+        tokio::task::spawn_blocking(move || process.wait());
         match report {
             Some(Report::Started | Report::Contention) => {}
             Some(Report::Failed(message)) => {

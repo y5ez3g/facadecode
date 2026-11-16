@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use facade_base::daemon::{Message, TERMINAL_WINDOW};
+use facade_base::files;
 use facade_base::process::{EndReason, ProcessExit};
 use rusqlite::{Connection, Row, params};
 
@@ -443,20 +444,18 @@ fn failing_for_test(name: &str) -> bool {
     facade_base::paths::core_dir().is_ok_and(|core| core.join(name).exists())
 }
 
-/// Sets `core/` to 0700, and the database and its WAL and SHM files to 0600: they name each
-/// agent's CLI and folder. SQLite gives the files it creates the database file's mode.
+/// Makes `core/`, the database and its WAL and SHM files private: they name each agent's CLI and
+/// folder. SQLite gives the files it creates the database file's permissions.
 fn make_private(core: &Path, database: &Path) -> std::io::Result<()> {
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    std::fs::set_permissions(core, std::fs::Permissions::from_mode(0o700))?;
-    std::fs::OpenOptions::new()
+    files::make_private(core)?;
+    files::private_options()
         .write(true)
         .create(true)
         .truncate(false)
-        .mode(0o600)
         .open(database)?;
     for suffix in ["", "-wal", "-shm"] {
         let file = PathBuf::from(format!("{}{suffix}", database.display()));
-        if let Err(err) = std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600))
+        if let Err(err) = files::make_private(&file)
             && err.kind() != std::io::ErrorKind::NotFound
         {
             return Err(err);
@@ -831,7 +830,6 @@ pub(crate) mod tests {
             Store::open(&core, &[]).unwrap().records.is_empty(),
             "an exit after removal must not bring the record back"
         );
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     /// A file of an integration keeps what it held before Facade's entries and when Facade first
@@ -904,7 +902,6 @@ pub(crate) mod tests {
                 .len(),
             1
         );
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -934,7 +931,6 @@ pub(crate) mod tests {
             Store::open(&core, &[]).is_err(),
             "an invalid counter must fail instead of resetting numbering"
         );
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -949,7 +945,6 @@ pub(crate) mod tests {
         let opened = Store::open(&core, &["a4".into(), "a9".into()]).unwrap();
         assert!(opened.records.is_empty());
         assert_eq!(opened.store.number_table().allocate_number().unwrap(), 10);
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -989,7 +984,6 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(kept, "not a number", "the row must not be rewritten");
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -1036,7 +1030,6 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(kept, "eaten_by_a_grue", "the stored name is not rewritten");
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -1113,7 +1106,6 @@ pub(crate) mod tests {
             1,
             "opening again changes nothing"
         );
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     /// An agent's creator, the first agent of its tree and its run's YOLO survive a reopen as they
@@ -1134,7 +1126,6 @@ pub(crate) mod tests {
         let mut records = Store::open(&core, &[]).unwrap().records;
         records.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
         assert_eq!(records, [record("a1"), child]);
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -1178,7 +1169,6 @@ pub(crate) mod tests {
             Store::open(&core, &[]).unwrap().records.is_empty(),
             "a late write must not bring the record back"
         );
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -1228,7 +1218,6 @@ pub(crate) mod tests {
             (vec![0xFF], "not-a-session".to_string()),
             "the stored values are not rewritten"
         );
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     #[test]
@@ -1236,7 +1225,6 @@ pub(crate) mod tests {
         let core = core("garbage");
         std::fs::write(core.join("facade.db"), vec![b'x'; 4096]).unwrap();
         assert!(Store::open(&core, &["a1".into()]).is_err());
-        std::fs::remove_dir_all(&core).unwrap();
     }
 
     /// Message numbers count on their own from 1 and continue after a reopen, also in a store
@@ -1277,6 +1265,5 @@ pub(crate) mod tests {
         let opened = Store::open(&core, &[]).unwrap();
         assert_eq!(numbered(&opened.store), "m3");
         assert_eq!(opened.records[0].name, "Renamed");
-        std::fs::remove_dir_all(&core).unwrap();
     }
 }

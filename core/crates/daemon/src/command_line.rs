@@ -13,6 +13,7 @@ use facade_base::daemon::{CliInfo, Overrides, StartArgs, WindowInfo};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::programs::{on_path, program_of, runnable};
 use facade_base::settings::Settings;
+use facade_base::system::env_var;
 use facade_rules::Rule;
 use facade_rules::entries::{self, Entry};
 
@@ -132,11 +133,12 @@ fn no_such_cli(all: &[Entry], args: &StartArgs) -> ErrorBody {
     ErrorBody::new(Reason::NotFound, message)
 }
 
-/// The file name of the program `command` names.
+/// The name of the program `command` names, as a person calls it: its file name, without the
+/// extension that makes it runnable on Windows; `command` itself where it names no file.
 fn program_name(command: &str) -> String {
-    match Path::new(command).file_name() {
-        Some(name) => name.to_string_lossy().into_owned(),
-        None => command.to_string(),
+    match facade_base::programs::program_name(Path::new(command)) {
+        name if name.is_empty() => command.to_string(),
+        name => name,
     }
 }
 
@@ -206,10 +208,14 @@ pub(crate) fn entry_program(
         let message = format!("the folder {folder} is not available");
         return Err(ErrorBody::new(Reason::Unavailable, message));
     }
-    let (path, setting) = (env.get("PATH").map(String::as_str), &entry.setting);
+    let (path, setting) = (env_var(env, "PATH"), &entry.setting);
     let found = match entry.command.as_deref() {
-        // A path: `~`, relative or absolute.
-        Some(command) if command.contains('/') || command == "~" => {
+        // A path: `~`, relative or absolute, with either separator where the system has two.
+        Some(command)
+            if command.contains('/')
+                || command.contains(std::path::MAIN_SEPARATOR)
+                || command == "~" =>
+        {
             let file = PathBuf::from(program_of(command, env, folder));
             match runnable(&file) {
                 true => Ok(file),

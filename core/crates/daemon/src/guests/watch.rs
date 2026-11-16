@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::process::ProcessIdentity;
-use facade_base::unix_process::{Observed, PROC_POLL_INTERVAL, ProcessObservation};
+use facade_base::unix_process::{Observed, ProcessObservation};
 use tokio::sync::mpsc;
 
 use super::roster::{Roster, SessionKey};
@@ -63,16 +63,15 @@ pub(super) async fn end_with(
     });
 }
 
-/// Returns once the process `identity` names ended: through its descriptor where it has one,
-/// otherwise by looking every 250 ms. Permission and resource errors are tried again, never taken
-/// for an end.
+/// Returns once the process `identity` names ended, as base observes it. Permission and resource
+/// errors while opening the observation are tried again, never taken for an end.
 async fn until_ended(label: &str, identity: &ProcessIdentity) {
     let mut delay = Duration::from_millis(500);
     let observation = loop {
         let opening = identity.clone();
         match tokio::task::spawn_blocking(move || ProcessObservation::open(&opening)).await {
             Ok(Ok(Observed::Ended)) => return,
-            Ok(Ok(Observed::Watching(observation))) => break Arc::new(observation),
+            Ok(Ok(Observed::Watching(observation))) => break observation,
             Ok(Err(err)) => log(
                 "warn",
                 &format!("could not observe {label}: {err}; trying again"),
@@ -82,34 +81,7 @@ async fn until_ended(label: &str, identity: &ProcessIdentity) {
         tokio::time::sleep(delay).await;
         delay = (delay * 2).min(MOST_RETRY_DELAY);
     };
-    // SAFETY: the copy stays open, and is the same descriptor, for as long as the AsyncFd owns it.
-    let readable = observation
-        .descriptor()
-        .and_then(|fd| fd.try_clone_to_owned().ok())
-        .and_then(|fd| unsafe {
-            tokio::io::unix::AsyncFd::register_with_interest(fd, tokio::io::Interest::READABLE).ok()
-        });
-    loop {
-        let checking = observation.clone();
-        match tokio::task::spawn_blocking(move || checking.ended()).await {
-            Ok(Ok(Some(true))) => return,
-            Ok(Ok(_)) => {}
-            Ok(Err(err)) => log(
-                "warn",
-                &format!("could not check {label}: {err}; trying again"),
-            ),
-            Err(err) => log("warn", &format!("could not check {label}: {err}")),
-        }
-        let Some(fd) = &readable else {
-            tokio::time::sleep(PROC_POLL_INTERVAL).await;
-            continue;
-        };
-        match tokio::time::timeout(Duration::from_secs(5), fd.readable()).await {
-            Ok(Ok(mut ready)) => ready.clear_ready(),
-            Ok(Err(_)) => tokio::time::sleep(PROC_POLL_INTERVAL).await,
-            Err(_) => {}
-        }
-    }
+    observation.until_ended().await;
 }
 
 /// Follows the turn guest `id` began now, in `session`, whose CLI reports how the session stands

@@ -7,22 +7,105 @@ use facade_base::jsonrpc::{ErrorBody, Reason};
 use super::person::{Enter, PersonKeys};
 use super::screen as screen_log;
 use super::*;
-use std::fs::File;
-use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::io;
+use std::sync::mpsc as std_mpsc;
 
 use super::typist::TypingAnswer;
 use facade_base::daemon::{InputState, ToolsState};
+use facade_base::terminal::{PtyMaster, TestCli, test_terminal};
 
 /// A folder for one test's store and screens.
 fn home(test: &str) -> crate::test_folder::TestFolder {
     crate::test_folder::TestFolder::new(&format!("actor-{test}"))
 }
 
-/// An agent's actor on a PTY whose CLI side the test holds in raw mode.
+/// The CLI's side of a test terminal: what it writes goes out at once, and what reaches it is
+/// read on a thread of its own, so that a test waits for it for a time. The thread reads only
+/// as many bytes as the test asked for, so the rest stays in the terminal, as with a CLI that
+/// reads no more.
+struct Cli {
+    side: TestCli,
+    wants: std_mpsc::Sender<usize>,
+    input: std_mpsc::Receiver<Vec<u8>>,
+    /// Bytes asked of the thread and not yet brought.
+    asked: usize,
+    kept: Vec<u8>,
+}
+
+impl Cli {
+    fn new(side: TestCli) -> Cli {
+        let mut reader = side.try_clone().unwrap();
+        let (wants, asks) = std_mpsc::channel::<usize>();
+        let (tx, input) = std_mpsc::channel();
+        std::thread::spawn(move || {
+            let mut buffer = [0u8; 4096];
+            for mut left in asks {
+                while left > 0 {
+                    let Ok(n @ 1..) = reader.read_input(&mut buffer[..left.min(4096)]) else {
+                        return;
+                    };
+                    left -= n;
+                    if tx.send(buffer[..n].to_vec()).is_err() {
+                        return;
+                    }
+                }
+            }
+        });
+        Cli {
+            side,
+            wants,
+            input,
+            asked: 0,
+            kept: Vec::new(),
+        }
+    }
+
+    /// Writes all of `bytes` as the CLI's output.
+    fn write_all(&mut self, bytes: &[u8]) -> io::Result<()> {
+        self.side.write_output(bytes)
+    }
+
+    /// What reached the CLI within `time`, at most `count` bytes.
+    fn reads_within(&mut self, count: usize, time: Duration) -> Vec<u8> {
+        let until = std::time::Instant::now() + time;
+        let more = count.saturating_sub(self.kept.len() + self.asked);
+        if more > 0 && self.wants.send(more).is_ok() {
+            self.asked += more;
+        }
+        while self.kept.len() < count {
+            let left = until.saturating_duration_since(std::time::Instant::now());
+            match self.input.recv_timeout(left) {
+                Ok(bytes) => {
+                    self.asked -= bytes.len();
+                    self.kept.extend(bytes);
+                }
+                Err(_) => break,
+            }
+        }
+        let taken = count.min(self.kept.len());
+        self.kept.drain(..taken).collect()
+    }
+
+    /// Exactly `buf.len()` bytes that reached the CLI, waiting at most five seconds for them.
+    fn read_exact(&mut self, buf: &mut [u8]) -> io::Result<()> {
+        let read = self.reads_within(buf.len(), Duration::from_secs(5));
+        if read.len() < buf.len() {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        buf.copy_from_slice(&read);
+        Ok(())
+    }
+
+    /// The terminal size the CLI sees.
+    fn size(&self) -> (u16, u16) {
+        self.side.size()
+    }
+}
+
+/// An agent's actor on a test terminal whose CLI side the test plays.
 struct Harness {
     handle: AgentHandle,
-    cli: File,
+    cli: Cli,
     dir: PathBuf,
     /// The messages the actor delivers from.
     messages: Arc<crate::messages::Messages>,
@@ -102,17 +185,7 @@ impl Harness {
         started: Instant,
         screen: impl FnOnce(PathBuf) -> ScreenStart,
     ) -> Harness {
-        let size = nix::pty::Winsize {
-            ws_row: info.rows.unwrap(),
-            ws_col: info.cols.unwrap(),
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        let pty = crate::test_terminal::open(Some(&size));
-        let mut raw = nix::sys::termios::tcgetattr(&pty.slave).unwrap();
-        nix::sys::termios::cfmakeraw(&mut raw);
-        nix::sys::termios::tcsetattr(&pty.slave, nix::sys::termios::SetArg::TCSANOW, &raw).unwrap();
-        let mut cli = File::from(pty.slave);
+        let (master, mut cli) = raw_terminal(info.cols.unwrap(), info.rows.unwrap());
         cli.write_all(output).unwrap();
         let dir = home.join("screens").join("a1");
         let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
@@ -124,7 +197,7 @@ impl Harness {
         let messages = crate::messages::tests::messages().0;
         let start = ActorStart {
             info,
-            master: Some(pty.master),
+            master: Some(master),
             screen: screen(dir.clone()),
             rule: rule.map(str::to_string),
             captures: false,
@@ -212,29 +285,7 @@ impl Harness {
 
     /// What the CLI reads within `time`, at most `count` bytes.
     fn cli_reads_within(&mut self, count: usize, time: Duration) -> Vec<u8> {
-        let until = std::time::Instant::now() + time;
-        let mut read = Vec::new();
-        let mut buffer = [0u8; 4096];
-        while read.len() < count {
-            let left = until
-                .saturating_duration_since(std::time::Instant::now())
-                .as_millis() as i32;
-            let mut ready = libc::pollfd {
-                fd: self.cli.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: poll receives one valid pollfd for the duration of the call.
-            if left == 0 || unsafe { libc::poll(&mut ready, 1, left) } <= 0 {
-                break;
-            }
-            let n = self
-                .cli
-                .read(&mut buffer[..(count - read.len()).min(4096)])
-                .unwrap();
-            read.extend_from_slice(&buffer[..n]);
-        }
-        read
+        self.cli.reads_within(count, time)
     }
 
     /// Writes CLI output that turns on terminal modes, then waits until the actor parsed it.
@@ -246,16 +297,7 @@ impl Harness {
 
     /// The terminal size the CLI sees.
     fn cli_size(&self) -> (u16, u16) {
-        let mut size = nix::pty::Winsize {
-            ws_row: 0,
-            ws_col: 0,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        nix::ioctl_read_bad!(get_window_size, libc::TIOCGWINSZ, nix::pty::Winsize);
-        // SAFETY: TIOCGWINSZ writes a winsize for the PTY this harness holds.
-        unsafe { get_window_size(self.cli.as_raw_fd(), &mut size) }.unwrap();
-        (size.ws_col, size.ws_row)
+        self.cli.size()
     }
 
     /// Recovers a copy of the agent folder. Call only while the actor cannot append records and
@@ -767,19 +809,10 @@ async fn calls_cut_off_by_the_agent_s_end_say_what_was_typed() {
     std::fs::remove_dir_all(&home).unwrap();
 }
 
-/// A PTY whose CLI side is in raw mode, as a resumed run's terminal.
-fn raw_terminal(cols: u16, rows: u16) -> (OwnedFd, File) {
-    let size = nix::pty::Winsize {
-        ws_row: rows,
-        ws_col: cols,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    let pty = crate::test_terminal::open(Some(&size));
-    let mut raw = nix::sys::termios::tcgetattr(&pty.slave).unwrap();
-    nix::sys::termios::cfmakeraw(&mut raw);
-    nix::sys::termios::tcsetattr(&pty.slave, nix::sys::termios::SetArg::TCSANOW, &raw).unwrap();
-    (pty.master, File::from(pty.slave))
+/// A test terminal whose CLI side the test plays, as a resumed run's terminal.
+fn raw_terminal(cols: u16, rows: u16) -> (PtyMaster, Cli) {
+    let (master, cli) = test_terminal(cols, rows).unwrap();
+    (master, Cli::new(cli))
 }
 
 fn exit_with(code: i32) -> ProcessExit {
@@ -823,13 +856,13 @@ impl Harness {
         prepared.await.unwrap();
     }
 
-    async fn install(&self, run: u64, master: OwnedFd) -> AgentInfo {
+    async fn install(&self, run: u64, master: PtyMaster) -> AgentInfo {
         self.install_given(run, master, ToolsGiven::NotInjected)
             .await
     }
 
     /// Installs run `run` on `master`, its CLI given Facade's tools as `tools` says.
-    async fn install_given(&self, run: u64, master: OwnedFd, tools: ToolsGiven) -> AgentInfo {
+    async fn install_given(&self, run: u64, master: PtyMaster, tools: ToolsGiven) -> AgentInfo {
         let (reply, installed) = oneshot::channel();
         self.send(AgentCommand::InstallRun {
             run,
@@ -1019,8 +1052,8 @@ async fn a_run_that_ends_before_its_terminal_is_installed_ends_the_agent_once_it
         Some(exit_with(1)),
         "the earlier exit stands until the new run is installed"
     );
-    let (master, cli) = raw_terminal(80, 24);
-    drop(cli);
+    // The CLI's side closes at once.
+    let master = test_terminal(80, 24).unwrap().0;
     harness.install(2, master).await;
     let mut exit = harness.handle.exit();
     let ended = tokio::time::timeout(
@@ -1047,17 +1080,8 @@ async fn a_resumed_run_starts_at_the_caller_s_size_and_a_crash_recovers_it_at_th
     harness.prepare_restart(2, 20, 6).await;
     let (master, mut cli) = raw_terminal(10, 6);
     harness.install(2, master).await;
-    let mut size = nix::pty::Winsize {
-        ws_row: 0,
-        ws_col: 0,
-        ws_xpixel: 0,
-        ws_ypixel: 0,
-    };
-    nix::ioctl_read_bad!(get_window_size, libc::TIOCGWINSZ, nix::pty::Winsize);
-    // SAFETY: TIOCGWINSZ writes a winsize for the PTY this test holds.
-    unsafe { get_window_size(cli.as_raw_fd(), &mut size) }.unwrap();
     assert_eq!(
-        (size.ws_col, size.ws_row),
+        cli.size(),
         (20, 6),
         "the new run's terminal has the caller's size"
     );
@@ -1163,9 +1187,9 @@ async fn viewers_get_the_ended_run_before_the_next_and_one_that_never_reads_is_d
         "the last screen takes more bytes than a read"
     );
     assert!(String::from_utf8_lossy(&last_redraw).contains("LAST LINE"));
-    let (master, cli) = raw_terminal(80, 24);
+    // The CLI's side closes at once.
+    let master = test_terminal(80, 24).unwrap().0;
     harness.install(2, master).await;
-    drop(cli);
     harness.end_run(2, 6).await;
     // The viewer that never read still holds the first run's end beyond its budget: it is
     // dropped, not grown.
@@ -1272,7 +1296,8 @@ async fn a_viewer_behind_gets_a_redraw_before_the_exit() {
 #[tokio::test]
 async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_available() {
     let home = home("toolsearly");
-    let pty = crate::test_terminal::open(None);
+    // The CLI's side stays open until the test ends.
+    let (master, _cli) = test_terminal(80, 24).unwrap();
     let dir = home.join("screens").join("a1");
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let state = StateStart {
@@ -1282,7 +1307,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
     };
     let start = ActorStart {
         info: record(ProcessState::Running, None, 80, 24),
-        master: Some(pty.master),
+        master: Some(master),
         screen: ScreenStart::New(dir),
         rule: None,
         captures: false,
@@ -1305,7 +1330,6 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
         .await
         .unwrap();
     removed.await.unwrap();
-    drop(pty.slave);
     std::fs::remove_dir_all(&home).unwrap();
 }
 /// A run's start prompt waits for its start to settle, the CLI's tools connected, and a message
@@ -1443,7 +1467,8 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
 #[tokio::test]
 async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
     let home = home("toolsrecovered");
-    let pty = crate::test_terminal::open(None);
+    // The CLI's side stays open until the test ends.
+    let (master, _cli) = test_terminal(80, 24).unwrap();
     let dir = home.join("screens").join("a1");
     let (tx, rx) = mpsc::channel(MAX_QUEUED_COMMANDS);
     let long_ago = Instant::now()
@@ -1462,7 +1487,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
     let messages = crate::messages::tests::messages().0;
     let start = ActorStart {
         info: record(ProcessState::Running, None, 80, 24),
-        master: Some(pty.master),
+        master: Some(master),
         screen,
         rule: None,
         captures: false,
@@ -1481,7 +1506,6 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         .await
         .unwrap();
     removed.await.unwrap();
-    drop(pty.slave);
     std::fs::remove_dir_all(&home).unwrap();
 }
 /// An Antigravity run given Facade's tools, at 80 by 24, whose CLI has drawn nothing yet.

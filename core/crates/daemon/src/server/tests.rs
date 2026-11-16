@@ -4,9 +4,9 @@ use std::time::Duration;
 use facade_base::daemon::HelloResult;
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::Reason;
+use facade_base::paths::ClientSocket;
 use serde_json::json;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use std::io::{BufRead, BufReader, Write};
 
 use super::*;
 
@@ -93,22 +93,22 @@ impl Service for Hellos {
     }
 }
 
-async fn send(writer: &mut OwnedWriteHalf, message: Value) {
+fn send(writer: &mut ClientSocket, message: Value) {
     let line = format!("{message}\n");
-    writer.write_all(line.as_bytes()).await.unwrap();
+    writer.write_all(line.as_bytes()).unwrap();
 }
 
-async fn receive(reader: &mut BufReader<OwnedReadHalf>) -> Value {
+fn receive(reader: &mut BufReader<ClientSocket>) -> Value {
     let mut line = String::new();
-    reader.read_line(&mut line).await.unwrap();
+    reader.read_line(&mut line).unwrap();
     serde_json::from_str(&line).unwrap()
 }
 
-fn open(service: &Arc<Hellos>) -> (BufReader<OwnedReadHalf>, OwnedWriteHalf) {
-    let (client, server) = UnixStream::pair().unwrap();
+fn open(service: &Arc<Hellos>) -> (BufReader<ClientSocket>, ClientSocket) {
+    let (client, server) = facade_base::sockets::pair().unwrap();
     tokio::spawn(serve_connection(service.clone(), server));
-    let (reader, writer) = client.into_split();
-    (BufReader::new(reader), writer)
+    let writer = client.try_clone().unwrap();
+    (BufReader::new(client), writer)
 }
 
 fn hello() -> Value {
@@ -125,20 +125,25 @@ async fn a_connection_made_while_a_newer_facade_takes_over_is_sent_only_its_hell
         draining: Mutex::new(false),
     });
     let (mut before, mut writer) = open(&service);
-    send(&mut writer, hello()).await;
-    assert!(receive(&mut before).await["result"].is_object());
+    send(&mut writer, hello());
+    assert!(receive(&mut before)["result"].is_object());
     *service.draining.lock().unwrap() = true;
     service.closing.send_replace(Some("0.2.1".into()));
     assert_eq!(
-        receive(&mut before).await["method"],
+        receive(&mut before)["method"],
         "closing",
         "a connection past hello is told"
     );
     let (mut reader, mut writer) = open(&service);
     let mut early = String::new();
-    let sent = tokio::time::timeout(Duration::from_millis(300), reader.read_line(&mut early)).await;
+    let socket = reader.get_ref();
+    socket
+        .set_read_timeout(Some(Duration::from_millis(300)))
+        .unwrap();
+    let sent = reader.read_line(&mut early);
     assert!(sent.is_err(), "sent before hello: {early}");
-    send(&mut writer, hello()).await;
-    let answer = receive(&mut reader).await;
+    reader.get_ref().set_read_timeout(None).unwrap();
+    send(&mut writer, hello());
+    let answer = receive(&mut reader);
     assert_eq!(answer["error"]["data"]["reason"], "upgrading", "{answer}");
 }

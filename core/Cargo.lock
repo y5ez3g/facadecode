@@ -390,8 +390,6 @@ dependencies = [
  "facade-base",
  "facade-rules",
  "facade-screen",
- "libc",
- "nix",
  "rusqlite",
  "serde",
  "serde_json",

@@ -18,6 +18,8 @@ use crate::{Daemon, log};
 
 /// How long the daemon stays idle before it exits.
 const IDLE_EXIT_DELAY: Duration = Duration::from_secs(5);
+/// How soon work the daemon does not count, such as a keeper being started, is looked at again.
+const BUSY_RECHECK: Duration = Duration::from_secs(1);
 
 /// How often the exit waits look again for writers that end.
 const WRITERS_INTERVAL: Duration = Duration::from_millis(20);
@@ -149,6 +151,12 @@ impl Lifecycle {
         }
     }
 
+    /// Wakes whatever waits on the work, where something it does not count changed, such as a
+    /// guest leaving the list.
+    pub(crate) fn note_change(&self) {
+        self.changed.notify_waiters();
+    }
+
     /// The first work under way, by the order of [`Work::ALL`].
     fn first_under_way(&self) -> Option<Work> {
         let counts = self.counts.lock().unwrap();
@@ -157,6 +165,15 @@ impl Lifecycle {
 }
 
 impl Daemon {
+    /// Whether a listed agent runs, or a guest is listed: the daemon then stays, whatever else.
+    fn holds_agents(&self) -> bool {
+        self.agents
+            .lock()
+            .unwrap()
+            .values()
+            .any(|agent| agent.is_guest() || agent.exit().borrow().is_none())
+    }
+
     /// Why the daemon cannot exit now, or None where it is idle.
     fn busy_with(&self) -> Option<String> {
         #[cfg(debug_assertions)]
@@ -191,16 +208,33 @@ pub(crate) async fn exit_when_idle(
     let lifecycle = daemon.lifecycle.clone();
     let mut idle_since: Option<Instant> = None;
     loop {
-        let _ = tokio::time::timeout(Duration::from_secs(1), lifecycle.changed.notified()).await;
-        if let Some(why) = daemon.busy_with() {
+        // Made before the look, so that no change in between goes unheard.
+        let changed = lifecycle.changed.notified();
+        tokio::pin!(changed);
+        changed.as_mut().enable();
+        let busy = daemon.busy_with();
+        if let Some(why) = &busy {
             // Only an error keeps an exit from being saved: the log says it once.
             if why.contains("cannot be saved") {
-                daemon.idle_delay.delayed(&why);
+                daemon.idle_delay.delayed(why);
             }
             idle_since = None;
+        }
+        if daemon.holds_agents() {
+            // Only an agent's exit, saved as counted work, or a guest's end, which notes a change,
+            // can make the daemon idle: nothing else wakes this while agents are listed.
+            idle_since = None;
+            changed.await;
             continue;
         }
-        if idle_since.get_or_insert_with(Instant::now).elapsed() < IDLE_EXIT_DELAY {
+        if busy.is_some() {
+            // Work that is not counted, such as the keeper being started, is looked at again soon.
+            let _ = tokio::time::timeout(BUSY_RECHECK, changed).await;
+            continue;
+        }
+        let since = *idle_since.get_or_insert_with(Instant::now);
+        if since.elapsed() < IDLE_EXIT_DELAY {
+            let _ = tokio::time::timeout_at((since + IDLE_EXIT_DELAY).into(), changed).await;
             continue;
         }
         // Decided under the lock that accepts work: whatever starts, joins or connects is counted

@@ -21,6 +21,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::daemon::{Kept, LocationInfo, LocationKind, Worktree, location_id};
+use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 
 /// The longest a question to Git may take.
@@ -66,13 +67,15 @@ impl Catalog {
 
     /// The location at `path`, a path with its links resolved.
     pub(crate) fn location(&self, path: &str) -> Option<&LocationInfo> {
-        self.locations.iter().find(|place| place.path == path)
+        self.locations
+            .iter()
+            .find(|place| same_folder(&place.path, path))
     }
 
     /// The paths of the locations that only folders missing from `folders` brought.
     pub(crate) fn left_by(&self, folders: &[String]) -> Vec<String> {
         self.with_sources()
-            .filter(|(_, source)| !folders.iter().any(|folder| folder == source))
+            .filter(|(_, source)| !folders.iter().any(|folder| same_folder(folder, source)))
             .map(|(place, _)| place.path.clone())
             .collect()
     }
@@ -160,7 +163,7 @@ fn repository_places(opened: &str, listed: Vec<Checkout>) -> Vec<LocationInfo> {
     }
     let opened_place = match checkouts
         .iter()
-        .position(|checkout| checkout.path == opened)
+        .position(|checkout| same_folder(&checkout.path, opened))
     {
         Some(index) if !checkouts[index].bare => checkouts[index].place(if index == 0 {
             LocationKind::Main
@@ -194,9 +197,14 @@ fn place_at(path: String, label: String, kind: LocationKind) -> LocationInfo {
     }
 }
 
+/// Whether `a` and `b` name the same folder, as the system compares folders.
+fn same_folder(a: &str, b: &str) -> bool {
+    folder_key(Path::new(a)) == folder_key(Path::new(b))
+}
+
 /// `path` with its links resolved, or as it is where it does not exist.
 fn resolve(path: &str) -> String {
-    match std::fs::canonicalize(path) {
+    match real_path(Path::new(path)) {
         Ok(real) => real.to_string_lossy().into_owned(),
         Err(_) => path.to_owned(),
     }
@@ -299,7 +307,7 @@ impl<'a> Git<'a> {
 
     /// Runs `git -C <folder> <args>` for at most `limit` and returns what it printed.
     async fn run(self, args: &[&str], limit: Duration) -> Result<String, GitError> {
-        let mut command = tokio::process::Command::new("git");
+        let mut command = tokio::process::Command::from(facade_base::programs::command("git"));
         command
             .arg("-C")
             .arg(self.folder)
@@ -594,7 +602,10 @@ fn holdable(name: &str) -> bool {
 /// folder, link or registered worktree takes.
 fn free_destination(parent: &Path, folder: &str, registered: &[String]) -> PathBuf {
     let taken = |path: &Path| {
-        path.symlink_metadata().is_ok() || registered.iter().any(|other| Path::new(other) == path)
+        path.symlink_metadata().is_ok()
+            || registered
+                .iter()
+                .any(|other| folder_key(Path::new(other)) == folder_key(path))
     };
     let mut candidate = parent.join(folder);
     let mut suffix = 0;
@@ -712,18 +723,17 @@ mod tests {
         assert_eq!(branch_folder("COM10", None).as_deref(), Some("COM10"));
     }
 
-    /// The destination takes the next free suffix where a file, a folder, a link or a registered
-    /// worktree is in the way.
+    /// The destination takes the next free suffix where a file, a folder or a registered worktree is
+    /// in the way.
     #[test]
     fn a_destination_in_use_takes_the_next_free_suffix() {
         let parent = crate::test_folder::TestFolder::new("destinations");
         std::fs::create_dir_all(parent.join("x")).unwrap();
         std::fs::write(parent.join("x-1"), "").unwrap();
-        std::os::unix::fs::symlink("/nowhere", parent.join("x-2")).unwrap();
-        let registered = vec![parent.join("x-3").to_string_lossy().into_owned()];
+        let registered = vec![parent.join("x-2").to_string_lossy().into_owned()];
         assert_eq!(
             free_destination(&parent, "x", &registered),
-            parent.join("x-4")
+            parent.join("x-3")
         );
         assert_eq!(
             free_destination(&parent, "y", &registered),

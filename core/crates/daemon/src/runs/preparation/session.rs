@@ -16,10 +16,11 @@ use super::super::RunEvent;
 
 const READ_INTERVAL: Duration = Duration::from_secs(1);
 
-/// When following starts, read immediately or wait for the recovery read's next interval.
+/// When following starts: read at once, as a start does, or once the run writes output again, as
+/// recovery does, having read the file already.
 pub(crate) enum FirstRead {
     Now,
-    AfterInterval,
+    AfterOutput,
 }
 
 struct Following {
@@ -66,6 +67,7 @@ impl Sessions {
         run: u64,
         file: PathBuf,
         committed: Option<String>,
+        output: watch::Receiver<()>,
         first: FirstRead,
     ) {
         let mut followers = self.followers.lock().unwrap();
@@ -78,6 +80,7 @@ impl Sessions {
             file,
             committed,
             receiver,
+            output,
             first,
         ));
         followers.active.insert(
@@ -158,13 +161,35 @@ fn stamp(file: &std::path::Path) -> Option<(SystemTime, u64)> {
     Some((metadata.modified().ok()?, metadata.len()))
 }
 
-async fn interval_or_end(ended: &mut watch::Receiver<bool>) {
+/// Waits until the next check is due, or the run ends. A check is due a second after the run's
+/// output: at most once a second while output goes on, and once more a quiet second after the
+/// last of it, as a CLI saves its session while it works. `soon` makes one due a second from now
+/// without output. Without output nothing wakes the follower.
+async fn until_due(
+    ended: &mut watch::Receiver<bool>,
+    output: &mut watch::Receiver<()>,
+    soon: bool,
+) {
+    if !soon && !output.has_changed().unwrap_or(false) {
+        let actor_ended = tokio::select! {
+            changed = output.changed() => changed.is_err(),
+            _ = ended.wait_for(|ended| *ended) => return,
+        };
+        if actor_ended {
+            // The agent's actor ended: only the run's end is left to wait for.
+            let _ = ended.wait_for(|ended| *ended).await;
+            return;
+        }
+    }
+    // Output after this point makes the check after this one due too.
+    output.borrow_and_update();
     tokio::select! {
         _ = tokio::time::sleep(READ_INTERVAL) => {},
         _ = ended.wait_for(|ended| *ended) => {},
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn track(
     events: mpsc::UnboundedSender<RunEvent>,
     id: String,
@@ -172,13 +197,16 @@ async fn track(
     file: PathBuf,
     mut committed: Option<String>,
     mut ended: watch::Receiver<bool>,
+    mut output: watch::Receiver<()>,
     first: FirstRead,
 ) {
     let mut previous = None;
     let mut reported = None;
     let mut logged = false;
-    if matches!(first, FirstRead::AfterInterval) {
-        interval_or_end(&mut ended).await;
+    // A start reads at once and once more a second later; a recovery read the file already.
+    let mut soon = matches!(first, FirstRead::Now);
+    if !soon {
+        until_due(&mut ended, &mut output, false).await;
     }
     loop {
         let last = *ended.borrow();
@@ -208,6 +236,7 @@ async fn track(
             if sent && response.await.unwrap_or(false) {
                 committed = session.clone();
             } else {
+                soon = true;
                 facade_base::log::write(
                     "daemon",
                     "warn",
@@ -218,6 +247,6 @@ async fn track(
         if last {
             return;
         }
-        interval_or_end(&mut ended).await;
+        until_due(&mut ended, &mut output, std::mem::take(&mut soon)).await;
     }
 }

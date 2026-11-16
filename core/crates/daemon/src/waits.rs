@@ -18,8 +18,6 @@ use crate::{Daemon, Sender, log};
 
 /// How long a started agent waits before its creator is told.
 const WAIT_REPORT_DELAY: Duration = Duration::from_secs(20);
-/// How often the waits are looked at.
-const WAITS_INTERVAL: Duration = Duration::from_secs(1);
 
 /// What a started agent waits on, where it is something its creator is told of.
 fn waiting_on(info: &AgentInfo) -> Option<WaitKind> {
@@ -34,6 +32,14 @@ fn waiting_on(info: &AgentInfo) -> Option<WaitKind> {
     .then_some(kind)
 }
 
+/// Sleeps until `at`, or for ever without it.
+async fn sleep_until(at: Option<Instant>) {
+    match at {
+        Some(at) => tokio::time::sleep_until(at).await,
+        None => std::future::pending().await,
+    }
+}
+
 /// One time an agent started waiting.
 struct Wait {
     kind: WaitKind,
@@ -45,7 +51,6 @@ struct Wait {
 pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
     let mut changes = daemon.changes.subscribe();
     let mut waits: HashMap<String, Wait> = HashMap::new();
-    let mut ticks = tokio::time::interval(WAITS_INTERVAL);
     let note = |waits: &mut HashMap<String, Wait>, info: &AgentInfo| match waiting_on(info) {
         Some(kind) => {
             let same = waits
@@ -63,6 +68,13 @@ pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
         None => drop(waits.remove(&info.agent_id)),
     };
     loop {
+        // The first wait not told yet comes due twenty seconds after it began; with none, only a
+        // change of the agents wakes this.
+        let due = waits
+            .values()
+            .filter(|wait| !wait.told)
+            .map(|wait| wait.since + WAIT_REPORT_DELAY)
+            .min();
         tokio::select! {
             change = changes.recv() => match change {
                 Ok(AgentsChange::Updated { agent }) => note(&mut waits, &agent),
@@ -75,7 +87,7 @@ pub(crate) async fn follow_waits(daemon: Arc<Daemon>) {
                 }
                 Err(RecvError::Closed) => return,
             },
-            _ = ticks.tick() => {
+            () = sleep_until(due) => {
                 for (id, wait) in &mut waits {
                     if wait.told || wait.since.elapsed() < WAIT_REPORT_DELAY {
                         continue;

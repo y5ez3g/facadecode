@@ -1,13 +1,13 @@
 //! Run ownership and the registration boundary. Socket work and exit delivery happen after locks.
 
 use std::collections::{HashMap, HashSet};
-use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex};
 use tokio::time::Instant;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::keeper::{HeldAgent, SyncArgs};
 use facade_base::process::{ProcessExit, ProcessIdentity};
+use facade_base::terminal::PtyMaster;
 use tokio::sync::Notify;
 
 use super::{ExitRecorded, ExitSink, RecordedExit, RunExit};
@@ -21,7 +21,7 @@ pub(super) enum RunRole {
 
 pub(super) struct Run {
     pub identity: ProcessIdentity,
-    pub master: OwnedFd,
+    pub master: PtyMaster,
     pub exit: Option<ProcessExit>,
     pub stopping: bool,
     pub role: RunRole,
@@ -108,7 +108,10 @@ impl RunRegistry {
                 )
             })?;
             let running = run.exit.is_none();
-            run.stopping |= running;
+            if running {
+                run.stopping = true;
+                run.master.let_go_before_stop();
+            }
             running
         };
         self.changed.notify_waiters();
@@ -202,6 +205,7 @@ impl RunRegistry {
                     run.role = RunRole::Cleanup;
                     run.exits = None;
                     run.stopping = true;
+                    run.master.let_go_before_stop();
                     true
                 }
                 None => false,
@@ -308,7 +312,7 @@ impl RunRegistry {
     pub fn missing(
         &self,
         inventory: &[HeldAgent],
-    ) -> Result<Vec<(SyncArgs, OwnedFd, bool)>, ErrorBody> {
+    ) -> Result<Vec<(SyncArgs, PtyMaster, bool)>, ErrorBody> {
         let runs = self.runs.lock().unwrap();
         let mut terminals = Vec::new();
         let present: HashSet<_> = inventory.iter().map(|held| held.id.as_str()).collect();
@@ -316,7 +320,7 @@ impl RunRegistry {
             if run.exit.is_some() || present.contains(id.as_str()) {
                 continue;
             }
-            let fd = run.master.try_clone().map_err(|error| {
+            let master = run.master.try_clone().map_err(|error| {
                 ErrorBody::new(
                     Reason::Unavailable,
                     format!("could not copy the terminal of {id}: {error}"),
@@ -328,7 +332,7 @@ impl RunRegistry {
                     pid: run.identity.pid,
                     birth: run.identity.birth.clone(),
                 },
-                fd,
+                master,
                 run.stopping,
             ));
         }

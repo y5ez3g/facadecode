@@ -21,6 +21,7 @@ use facade_base::daemon::{
 };
 use facade_base::jsonrpc::ErrorBody;
 use facade_base::programs::Held;
+use facade_base::system::env_var;
 use facade_rules::integration::{self, Held as Holds, Programs};
 
 use crate::store::{IntegrationFile, IntegrationTable};
@@ -325,7 +326,7 @@ impl Named {
 /// The Facade home the entries name: `home`, where it is not the default for the caller's HOME,
 /// `~/.facade`.
 fn named_home(home: &Path, env: &BTreeMap<String, String>) -> Option<String> {
-    let default = env.get("HOME").map(|user| Path::new(user).join(".facade"));
+    let default = env_var(env, "HOME").map(|user| Path::new(user).join(".facade"));
     if default.as_deref() == Some(home) {
         None
     } else {

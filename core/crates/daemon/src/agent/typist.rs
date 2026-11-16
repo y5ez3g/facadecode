@@ -6,7 +6,8 @@ use std::time::Duration;
 
 use facade_base::daemon::{DeliveryFailure, InputInfo, InputState, TextWritten};
 use facade_base::jsonrpc::{ErrorBody, Reason};
-use facade_rules::PasteRule;
+use facade_base::terminal::{PASTE_BYTES_PER_MS, key_down_records};
+use facade_rules::{ConsoleTyping, PasteRule, Rule};
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
@@ -316,6 +317,8 @@ impl Batch {
 pub(crate) struct Typist {
     deliveries: DeliveryHandle,
     paste: Option<&'static PasteRule>,
+    /// How the CLI takes typing where it reads console input records.
+    console: Option<ConsoleTyping>,
     calls: VecDeque<Typing>,
     current: Option<Typing>,
     inbox: VecDeque<MessageTyping>,
@@ -328,10 +331,15 @@ pub(crate) struct Typist {
 
 impl Typist {
     /// Uses the supplied delivery handle; later message operations may synchronously persist data.
-    pub(crate) fn new(paste: Option<&'static PasteRule>, deliveries: DeliveryHandle) -> Typist {
+    pub(crate) fn new(
+        paste: Option<&'static PasteRule>,
+        console: Option<ConsoleTyping>,
+        deliveries: DeliveryHandle,
+    ) -> Typist {
         Self {
             deliveries,
             paste,
+            console,
             calls: VecDeque::new(),
             current: None,
             inbox: VecDeque::new(),
@@ -546,10 +554,10 @@ impl Typist {
         };
         let mut result = Step::default();
         while let Some(stroke) = call.strokes.pop_front() {
-            stroke.write(modes, &mut result.write);
+            stroke.write(modes, records_above_bmp(self.console), &mut result.write);
             self.entered |= matches!(stroke, Stroke::Key(Key::Enter));
             receipt.boundaries.push(offset + result.write.len() as u64);
-            receipt.delay = stroke.delay(self.paste);
+            receipt.delay = stroke.delay(self.paste, self.console);
             if receipt.delay != Duration::ZERO {
                 break;
             }
@@ -636,7 +644,7 @@ impl Typist {
 
     fn fit_deadlines(&mut self, batch: &mut Batch, rule: &PasteRule, now: Instant) {
         while let Some(due) = batch.deadline() {
-            if now + delivery_time(rule, &joined(&batch.messages)) <= due {
+            if now + delivery_budget(rule, self.console, &joined(&batch.messages)) <= due {
                 break;
             }
             let message = batch.messages.pop().expect("delivery with a deadline");
@@ -722,7 +730,12 @@ impl Typist {
                 if !batch.messages.is_empty() {
                     let draft = DraftCheck::new(rule, joined(&batch.messages), false);
                     let mut write = draft.prefix.as_bytes().to_vec();
-                    write_paste(&draft.text, modes.bracketed_paste, &mut write);
+                    write_paste(
+                        &draft.text,
+                        modes.bracketed_paste,
+                        records_above_bmp(self.console),
+                        &mut write,
+                    );
                     batch.phase = DeliveryPhase::Draft(draft);
                     self.record_write(offset, write.len(), PASTE_DELAY);
                     self.batch = Some(batch);
@@ -866,11 +879,35 @@ fn joined(messages: &[MessageTyping]) -> String {
 }
 
 fn paste_time(text: &str) -> Duration {
-    Duration::from_millis(text.len().div_ceil(4096) as u64)
+    Duration::from_millis(text.len().div_ceil(PASTE_BYTES_PER_MS) as u64)
 }
 
-fn delivery_time(rule: &PasteRule, text: &str) -> Duration {
-    facade_rules::settle_time(rule, text) + DRAFT_TIMEOUT + EMPTY_TIMEOUT + paste_time(text) * 2
+/// How much longer a CLI that reads console input records takes to read `text` a key at a time:
+/// its wait for each UTF-16 code unit.
+fn console_time(console: Option<ConsoleTyping>, text: &str) -> Duration {
+    console.map_or(Duration::ZERO, |console| {
+        console.per_char * text.encode_utf16().count() as u32
+    })
+}
+
+/// The whole time a delivery of `text` to a CLI of `rule` takes at most: its paste, the draft
+/// showing and settling, the CLI reading it a key at a time where it does, and the input emptying
+/// after Enter.
+pub(crate) fn delivery_time(rule: &'static Rule, text: &str) -> Duration {
+    delivery_budget(&rule.paste, facade_rules::console_typing(rule), text)
+}
+
+fn delivery_budget(rule: &PasteRule, console: Option<ConsoleTyping>, text: &str) -> Duration {
+    facade_rules::settle_time(rule, text)
+        + DRAFT_TIMEOUT
+        + EMPTY_TIMEOUT
+        + paste_time(text) * 2
+        + console_time(console, text)
+}
+
+/// Whether characters above U+FFFF go as key-down records.
+fn records_above_bmp(console: Option<ConsoleTyping>) -> bool {
+    console.is_some_and(|console| console.records_above_bmp)
 }
 
 #[derive(Debug)]
@@ -880,10 +917,14 @@ enum Stroke {
 }
 
 impl Stroke {
-    fn write(&self, modes: Modes, bytes: &mut Vec<u8>) {
+    /// Its bytes; with `records`, characters above U+FFFF as key-down records.
+    fn write(&self, modes: Modes, records: bool, bytes: &mut Vec<u8>) {
         match self {
+            Self::Key(Key::Character(c)) if records => {
+                write_text(c.encode_utf8(&mut [0; 4]), true, bytes);
+            }
             Self::Key(key) => key.write(modes.application_cursor_keys, bytes),
-            Self::Paste(text) => write_paste(text, modes.bracketed_paste, bytes),
+            Self::Paste(text) => write_paste(text, modes.bracketed_paste, records, bytes),
         }
     }
 
@@ -892,29 +933,49 @@ impl Stroke {
             return text.len() + PASTE_START.len() + PASTE_END.len();
         }
         let mut bytes = Vec::new();
-        self.write(Modes::default(), &mut bytes);
+        self.write(Modes::default(), false, &mut bytes);
         bytes.len()
     }
 
-    fn delay(&self, rule: Option<&PasteRule>) -> Duration {
+    fn delay(&self, rule: Option<&PasteRule>, console: Option<ConsoleTyping>) -> Duration {
         match self {
             Self::Key(Key::Escape) => ESCAPE_DELAY,
             Self::Key(_) => Duration::ZERO,
             Self::Paste(text) => {
-                PASTE_DELAY + rule.map_or(Duration::ZERO, |r| facade_rules::settle_time(r, text))
+                PASTE_DELAY
+                    + rule.map_or(Duration::ZERO, |r| facade_rules::settle_time(r, text))
+                    + console_time(console, text)
             }
         }
     }
 }
 
-fn write_paste(text: &str, bracketed: bool, bytes: &mut Vec<u8>) {
+fn write_paste(text: &str, bracketed: bool, records: bool, bytes: &mut Vec<u8>) {
     if bracketed {
         bytes.extend(PASTE_START);
         let normalized = text.replace("\r\n", "\r").replace('\n', "\r");
-        bytes.extend(normalized.as_bytes());
+        write_text(&normalized, records, bytes);
         bytes.extend(PASTE_END);
     } else {
+        write_text(text, records, bytes);
+    }
+}
+
+/// `text` as typed: with `records`, each character above U+FFFF as key-down records, which a
+/// Windows console takes whole, and the rest as it is.
+fn write_text(text: &str, records: bool, bytes: &mut Vec<u8>) {
+    if !records {
         bytes.extend(text.as_bytes());
+        return;
+    }
+    for c in text.chars() {
+        let mut utf8 = [0; 4];
+        let c = c.encode_utf8(&mut utf8);
+        if c.len() == 4 {
+            bytes.extend(key_down_records(c));
+        } else {
+            bytes.extend(c.as_bytes());
+        }
     }
 }
 
@@ -1169,7 +1230,7 @@ mod tests {
     fn a_paste_is_bracketed_with_carriage_returns_only_when_the_cli_asked_for_bracketed_paste() {
         let pasted = |bracketed: bool| {
             let mut out = Vec::new();
-            write_paste("one\ntwo\r\nthree\rfour\tend", bracketed, &mut out);
+            write_paste("one\ntwo\r\nthree\rfour\tend", bracketed, false, &mut out);
             out
         };
         assert_eq!(
@@ -1182,7 +1243,7 @@ mod tests {
         typing
             .strokes
             .iter()
-            .for_each(|stroke| stroke.write(ANY, &mut out));
+            .for_each(|stroke| stroke.write(ANY, false, &mut out));
         assert!(
             out.len() <= typing.most_bytes(),
             "the most bytes cover what is written"
@@ -1229,7 +1290,7 @@ mod tests {
     /// reached the terminal.
     #[test]
     fn enter_goes_in_a_write_of_its_own_after_the_text_reached_the_terminal() {
-        let mut typist = Typist::new(None, test_messages().delivery_handle());
+        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         let (typing, mut answer) =
             Typing::text("hello\nworld".into(), true, Sender::person()).unwrap();
@@ -1285,7 +1346,7 @@ mod tests {
     /// alone, and a call cut off before its Enter reached the terminal submit nothing.
     #[test]
     fn only_text_whose_enter_reached_the_terminal_is_submitted() {
-        let mut typist = Typist::new(None, test_messages().delivery_handle());
+        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         for typing in [
             Typing::text("sent".into(), true, Sender::person()),
@@ -1329,7 +1390,7 @@ mod tests {
     /// write.
     #[test]
     fn the_key_after_an_escape_waits() {
-        let mut typist = Typist::new(None, test_messages().delivery_handle());
+        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         let (typing, mut answer) = Typing::keys(&names(&[
             "Down", "Down", "Escape", "x", "Esc", "Esc", "Enter",
@@ -1379,7 +1440,7 @@ mod tests {
                 PASTE_DELAY,
             ),
         ] {
-            let mut typist = Typist::new(None, test_messages().delivery_handle());
+            let mut typist = Typist::new(None, None, test_messages().delivery_handle());
             let mut terminal = Terminal::default();
             let (first, mut answered) = first;
             typist.push(first);
@@ -1410,7 +1471,7 @@ mod tests {
     /// Calls are typed one at a time: the next starts once the one before was answered.
     #[test]
     fn calls_are_typed_whole_in_the_order_they_came() {
-        let mut typist = Typist::new(None, test_messages().delivery_handle());
+        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
         let mut terminal = Terminal::default();
         let (first, mut first_answer) =
             Typing::text("first".into(), true, Sender::person()).unwrap();
@@ -1444,7 +1505,7 @@ mod tests {
 
     #[test]
     fn the_bytes_of_waiting_calls_count_until_they_are_written() {
-        let mut typist = Typist::new(None, test_messages().delivery_handle());
+        let mut typist = Typist::new(None, None, test_messages().delivery_handle());
         let (text, _) = Typing::text("12345".into(), true, Sender::person()).unwrap();
         let (keys, _) = Typing::keys(&names(&["Up", "Delete", "界"])).unwrap();
         typist.push(text);
@@ -1468,7 +1529,7 @@ mod tests {
         // pass, then stops typing with the last `short` bytes queued still short of the terminal.
         let stopped =
             |(typing, mut answer): (Typing, TypingAnswer), pauses: usize, short: usize| {
-                let mut typist = Typist::new(None, test_messages().delivery_handle());
+                let mut typist = Typist::new(None, None, test_messages().delivery_handle());
                 let (waiting, mut waiting_answer) = Typing::keys(&names(&["z"])).unwrap();
                 typist.push(typing);
                 typist.push(waiting);
@@ -1584,6 +1645,7 @@ mod tests {
     fn typist_for(cli: &str, post: &Arc<Messages>) -> Typist {
         Typist::new(
             Some(&facade_rules::find(cli).unwrap().unwrap().paste),
+            None,
             post.delivery_handle(),
         )
     }
@@ -2346,58 +2408,6 @@ mod tests {
         assert_eq!(became(&post, long_number), PENDING, "it is being delivered");
     }
 
-    /// The longest message there is, 8,000 four-byte characters on 540 lines under the longest
-    /// header, its sender's window named in it too, fits a whole delivery to every CLI,
-    /// Antigravity's 45 ms a line included: so one limit holds for every recipient.
-    #[test]
-    fn the_longest_message_fits_a_delivery_to_every_cli() {
-        use facade_base::daemon::{MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES};
-        let mut lines = vec!["\u{1D54F}".repeat(13); MAX_MESSAGE_LINES];
-        let length = |lines: &[String]| {
-            lines.iter().map(|line| line.chars().count()).sum::<usize>() + lines.len() - 1
-        };
-        let rest = MAX_MESSAGE_CHARS - length(&lines);
-        lines[0].push_str(&"\u{1D54F}".repeat(rest));
-        let text = lines.join("\n");
-        assert_eq!(
-            (
-                text.chars().count(),
-                facade_base::daemon::check_message_text(&text)
-            ),
-            (MAX_MESSAGE_CHARS, Ok(()))
-        );
-        let message = facade_base::daemon::Message {
-            message_id: "m999999999".into(),
-            from: "a999999999".into(),
-            from_name: Some("\u{1D54F}".repeat(200)),
-            to: "a1".into(),
-            text,
-            reply_to: Some("m999999999".into()),
-            from_window: Some("\u{1D54F}".repeat(200)),
-            call_id: None,
-            result: None,
-            at: facade_base::time::iso_now(),
-            delivery: facade_base::daemon::Delivery {
-                status: facade_base::daemon::DeliveryStatus::Pending,
-                reason: None,
-                text_written: TextWritten::None,
-                enter_written: Some(false),
-                deadline: None,
-                delivered_via: None,
-                delivered_at: None,
-            },
-        };
-        let typed = facade_base::daemon::typed_text(&message);
-        for rule in facade_rules::rules().unwrap() {
-            let time = delivery_time(&rule.paste, &typed);
-            assert!(
-                time <= crate::messages::delivery_limit(),
-                "{} takes {time:?}",
-                rule.cli
-            );
-        }
-    }
-
     /// A message waiting for the input while a call's paste is stuck, behind a CLI that reads
     /// nothing, is not the typist's to fail at its deadline: nothing of it was typed, so the post
     /// office settles it as `timeout` for its send.
@@ -2514,7 +2524,7 @@ mod tests {
     #[test]
     fn a_message_to_a_cli_without_a_rule_fails_at_once() {
         let post = test_messages();
-        let mut typist = Typist::new(None, post.delivery_handle());
+        let mut typist = Typist::new(None, None, post.delivery_handle());
         let mut terminal = Terminal {
             reading: input(InputState::Usable, None),
             ..Terminal::default()
@@ -2767,13 +2777,15 @@ mod tests {
         };
         let start = Instant::now();
         let (earlier, later) = ("a".repeat(4000), "b".repeat(4000));
-        let one = delivery_time(
+        let one = delivery_budget(
             &facade_rules::find("fake").unwrap().unwrap().paste,
+            None,
             &earlier,
         );
         assert!(
-            delivery_time(
+            delivery_budget(
                 &facade_rules::find("fake").unwrap().unwrap().paste,
+                None,
                 &format!("{earlier}\n\n{later}")
             ) > one
         );
@@ -2819,7 +2831,7 @@ mod tests {
     #[test]
     fn a_paste_begun_before_a_restart_that_no_rule_can_finish_fails_at_once() {
         let post = test_messages();
-        let mut typist = Typist::new(None, post.delivery_handle());
+        let mut typist = Typist::new(None, None, post.delivery_handle());
         let (typing, number) = message(&post, "hello", Instant::now() + Duration::from_secs(20));
         post.delivery_handle().begin_paste(&[number]);
         typist.finish_paste(vec![typing]);
