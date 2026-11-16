@@ -11,14 +11,14 @@
 
 mod locations;
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use facade_base::daemon::{
-    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowDescription, WindowInfo,
-    WindowsChange, WorktreeCreateArgs,
+    LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, TerminalColors, WindowDescription,
+    WindowInfo, WindowsChange, WorktreeCreateArgs,
 };
 use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
@@ -531,6 +531,30 @@ impl Windows {
             .get(id)?
             .description
             .branch_prefix
+            .clone()
+    }
+
+    /// The terminal colors window `id` last described, kept only in memory.
+    pub(crate) fn colors(&self, id: &str) -> Option<TerminalColors> {
+        self.shared
+            .windows
+            .lock()
+            .unwrap()
+            .get(id)?
+            .description
+            .colors
+            .clone()
+    }
+
+    /// The environment window `id` last described, kept only in memory.
+    pub(crate) fn env(&self, id: &str) -> Option<BTreeMap<String, String>> {
+        self.shared
+            .windows
+            .lock()
+            .unwrap()
+            .get(id)?
+            .description
+            .env
             .clone()
     }
 
