@@ -279,9 +279,10 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
   - Startup: `find_keeper_at_startup() -> FoundKeeper` (`Absent` or `Connected { build, held }`),
     then `serve_keeper()`.
   - Start and resume, in this order: `reserve_start() -> StartReservation`,
-    `reservation.wait_for_keeper()`, `prepare(RunRequest) -> PreparedRun` (its `kind`, `RunKind::{Start,
-    Resume}`, says whether it is the agent's first run, whose folders it makes, or a resume; its
-    `session`, the session the command line continues, a resume's or a start's), for a resume
+    `reservation.wait_for_keeper()`, `prepare(RunRequest) -> PreparedRun` (its `location_id` is
+    the one its instructions name; its `kind`, `RunKind::{Start, Resume}`, says whether it is the
+    agent's first run, whose folders it makes, or a resume; its `session`, the session the command
+    line continues, a resume's or a start's), for a resume
     `previous_run_ended(id, timeout)` and `replace_folders(id, &prepared)`, then
     `start(reservation, id, number, &prepared, cols, rows, ExitSink) -> StartedRun { pid, master }`.
     Once the agent is listed, or a resumed run installed:
@@ -405,13 +406,13 @@ The editor windows that `ide` clients describe: how many of each window's connec
   - `Windows::check(&WindowDescription) -> Result<(), ErrorBody>`: refuses an empty ID, the terminal window's ID, or a folder that is not an absolute path.
   - `describe(&WindowDescription, connecting: bool) -> Vec<String>`: takes the description, counts a connection when connecting, writes the row, and returns the windows of the same workspace that it forgot. The daemon moves their agents in one transaction and then calls `taken_over(from)`, which sends `Removed`.
   - `connection(id) -> WindowConnection`: a guard whose drop closes one connection and may send `Left`.
-  - `folders(id) -> Vec<String>` and `async read_locations(id, folders_before: Option<Vec<String>>) -> Option<LocationsRead>`: reads the locations again and sends `Updated`. `LocationsRead::is_gone(cwd)` is true when the window dropped the folder that brought `cwd`, or a read with no problem no longer finds it. The daemon stops the running agents whose folder is gone.
+  - `folders(id) -> Vec<String>` and `async read_locations(id, folders_before: Option<Vec<String>>) -> Option<LocationsRead>`: reads the locations again and sends `Updated`. `LocationsRead::is_gone(cwd)` is true when no location holds `cwd` and the window dropped the folder of one that did, or a read with no problem no longer finds it. The daemon stops the running agents whose folder is gone.
   - `restore(owners: &[String]) -> Vec<String>`: at the daemon's start, takes back the windows that hold running agents as left once, with the description the table kept, or a remote window's grace where it is lost. Deletes the other rows. The daemon then calls `start_grace(id, 1)` for each one returned.
   - `start_grace(id, departure)` and `forget(id, departure)`: the forget deletes the row and sends `Removed`.
   - `watch_person(id) -> PersonWatch` and `tells_person(id) -> bool`: whether the window's `ide` client watches its messages, so that the window can tell the person.
   - `label(id) -> String`, `subscribe() -> broadcast::Receiver<WindowsChange>`, `infos() -> Vec<WindowInfo>` (editor windows by ID, with no CLIs).
   - `colors(id) -> Option<TerminalColors>` and `env(id) -> Option<BTreeMap<String, String>>`: what the window last described; its `env` stays in memory only, never in the table.
-  - `check_destination(id, cwd) -> Result<String, ErrorBody>`: in the terminal window, `cwd` as given; in an editor window, it must be connected, and `cwd` must be one of its locations, whose folder still exists.
+  - `check_destination(id, cwd) -> Result<Destination, ErrorBody>`, with `Destination { cwd, location_id }`: in the terminal window, `cwd` as given; in an editor window, it must be connected, and `cwd`, with its links resolved, must be one of its locations or a folder inside one, and still exist; its location is the innermost one that holds it, by whole path components. A worktree's source must be a location itself.
   - `async create_worktree(WorktreeCreateArgs) -> Result<(LocationInfo, Option<LocationsRead>), ErrorBody>`: makes the worktree from one of the window's locations, reads an editor window's locations again, and returns the new location as listed, with that read.
 
 #### locations
@@ -426,7 +427,7 @@ A window's locations, read from its folders through Git, and the worktrees made 
 - **Never does:** touch windows, send changes or write the table.
 - **Interface** (called by `windows`):
   - `async read(folders: &[String], before: &Catalog) -> Catalog`.
-  - `Catalog::locations() -> &[LocationInfo]`, `problems() -> &[String]`, `location(path) -> Option<&LocationInfo>`, `left_by(folders) -> Vec<String>` (the paths that only folders no longer in `folders` brought).
+  - `Catalog::locations() -> &[LocationInfo]`, `problems() -> &[String]`, `location(path) -> Option<&LocationInfo>`, `holding(path) -> Option<&LocationInfo>` (the innermost location that is `path` or holds it), `left_by(folders) -> Vec<String>` (the paths that only folders no longer in `folders` brought).
   - `async create(source: &Path, worktree: &Worktree, branch_prefix: Option<&str>, creations: &Creations) -> Result<LocationInfo, ErrorBody>`: returns the new location, of kind `Worktree` and labelled with the branch.
 
 ### guests

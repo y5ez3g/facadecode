@@ -71,7 +71,6 @@ impl LocationsRead {
 /// Where an agent starts: its folder, and the ID of the location that holds the folder.
 pub(crate) struct Destination {
     pub(crate) cwd: String,
-    #[expect(dead_code)]
     pub(crate) location_id: String,
 }
 

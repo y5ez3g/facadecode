@@ -10,7 +10,7 @@ use std::time::{Duration, SystemTime};
 
 use facade_base::daemon::{
     AgentInfo, AgentState, AgentsChange, Message, ResumeArgs, StartArgs, StartResult, StopResult,
-    TERMINAL_WINDOW, ToolsState, location_id,
+    TERMINAL_WINDOW, ToolsState,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::process::{ProcessExit, ProcessState};
@@ -358,7 +358,9 @@ impl Daemon {
             .window_id
             .take()
             .unwrap_or_else(|| TERMINAL_WINDOW.to_string());
-        args.cwd = self.windows.check_destination(&window, &args.cwd)?.cwd;
+        let destination = self.windows.check_destination(&window, &args.cwd)?;
+        args.cwd = destination.cwd;
+        let location = destination.location_id;
         configured.find_program(&args.cwd)?;
         let yolo = settings.yolo;
         let rule = configured.rule;
@@ -388,7 +390,7 @@ impl Daemon {
             plain_program: &args.command[0],
             inherited: configured.env.clone(),
             cwd: &args.cwd,
-            location_id: &location_id(&args.cwd),
+            location_id: &location,
             window_id: &window,
             window_label: &label,
             creator: creator.as_deref().map(|creator| (creator, creator_name)),
@@ -428,7 +430,7 @@ impl Daemon {
             agent_id: id.clone(),
             name: name.clone(),
             cli: configured.cli.clone(),
-            location_id: location_id(&args.cwd),
+            location_id: location,
             cwd: args.cwd.clone(),
             window_id: window.clone(),
             pid: Some(started.pid),
@@ -464,6 +466,7 @@ impl Daemon {
             yolo,
             request_id: args.request_id.clone(),
             prompt: None,
+            location_id: Some(info.location_id.clone()),
         };
         // The prompt is committed with the record, so that a start answered with it never loses
         // it; its delivery time begins once the CLI's tools connected or will not.
@@ -845,7 +848,7 @@ impl Daemon {
             plain_program: &rule.cli,
             inherited: resumed.env.clone(),
             cwd: &info.cwd,
-            location_id: &location_id(&info.cwd),
+            location_id: &info.location_id,
             window_id: &window,
             window_label: &label,
             creator: info

@@ -614,6 +614,7 @@ fn record(id: &str) -> AgentRecord {
         yolo: false,
         request_id: None,
         prompt: None,
+        location_id: None,
     }
 }
 

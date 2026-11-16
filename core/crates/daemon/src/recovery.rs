@@ -252,7 +252,10 @@ impl Daemon {
         }
         let info = AgentInfo {
             agent_id: id.clone(),
-            location_id: facade_base::daemon::location_id(&record.cwd),
+            location_id: record
+                .location_id
+                .clone()
+                .unwrap_or_else(|| facade_base::daemon::location_id(&record.cwd)),
             pid: Some(run.as_ref().map_or(record.pid, |run| run.pid)),
             process,
             cols: Some(cols),
