@@ -5,7 +5,9 @@ instead of repeating them: the [daemon protocol](../../core/protocol/PROTOCOL.md
 [MCP contract](../extension/engineering/MCP.md) for Facade's tools, and the [shared rules](../extension/RULES.md) that
 both follow.
 
-Core serves the computer it runs on. The editor extension does not run on it yet.
+Core serves the computer it runs on. The editor extension does not run on it yet. It runs on macOS, on Linux, and on
+Windows 11 or Windows Server 2022 and later, on x64. On Windows it is a native program, and each CLI runs in a pseudo
+console.
 
 ## Agents
 
@@ -26,7 +28,8 @@ An agent is a CLI that Facade runs in a terminal it keeps, or a session that joi
 - **A started agent that waits**: when an agent that another agent of the same window started waits 20 seconds in a row
   on a permission, a question or a sign-in, its creator gets one message saying so. The person gets no message.
 - **Stop and remove**: `facade stop` ends the CLI: SIGHUP to its process group, then SIGKILL 3 seconds later to anything
-  left. The record stays. `facade remove` stops the agent if it runs, then removes the record.
+  left. On Windows its pseudo console closes, which sends `CTRL_CLOSE_EVENT` to every program in it, and its job ends 3
+  seconds later. The record stays. `facade remove` stops the agent if it runs, then removes the record.
 - **Resume**: `facade resume` starts an ended agent's CLI again, continuing the session the CLI reported. The agent
   keeps its ID, `#aN`, name and screen; the resume is a new run of its CLI. An agent can resume when it was started by a
   CLI's name and its CLI reported a session. See [Resume](../../core/protocol/PROTOCOL.md#resume).
@@ -106,7 +109,7 @@ See [YOLO and creation trees](../../core/protocol/PROTOCOL.md#yolo-and-creation-
   for another. A window of the same workspace can take them over. Once the time runs out, its running agents stop, and
   their records stay.
 
-See [Windows](../../core/protocol/PROTOCOL.md#windows).
+See [Editor windows](../../core/protocol/PROTOCOL.md#editor-windows).
 
 ## Guests
 
