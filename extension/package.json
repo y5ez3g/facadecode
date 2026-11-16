@@ -225,6 +225,10 @@
 			],
 			"commandPalette": [
 				{
+					"command": "facade.showAgentLaunch",
+					"when": "facade.engine != rust"
+				},
+				{
 					"command": "facade.renameAgent",
 					"when": "facade.agentSelected"
 				},
@@ -451,6 +455,17 @@
 						"pattern": "^$|^(~[\\\\/]|/|[A-Za-z]:[\\\\/]|\\\\\\\\)",
 						"patternErrorMessage": "%config.home.pattern%",
 						"markdownDescription": "%config.home%"
+					},
+					"facade.rustEngine": {
+						"type": "string",
+						"enum": [
+							"auto",
+							"off"
+						],
+						"default": "auto",
+						"scope": "machine",
+						"order": 1,
+						"markdownDescription": "%config.rustEngine%"
 					},
 					"facade.yolo": {
 						"type": "boolean",

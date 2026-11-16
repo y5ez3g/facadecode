@@ -59,6 +59,7 @@
 	"command.pinAgent": "Pin Agent",
 	"command.unpinAgent": "Unpin Agent",
 	"config.home": "The Facade home is the folder for Facade's settings, agent history, and messages. Only agents in windows with the same Facade home can communicate with each other. The `FACADE_HOME` environment variable overrides the `~/.facade` default; a path here overrides both.\n\n[Edit in facade.json](command:facade.openSettingsFile) to add your own CLIs or terminal programs. You also choose how each starts, what New Agent offers, the names it suggests, and whether YOLO is on.",
+	"config.rustEngine": "Which engine runs the agents: `auto` uses the Rust engine where no agent of the old engine is still running on this computer, and `off` always uses the old engine. A window picks one when it opens or reloads. A remote window reads the remote machine's setting.",
 	"config.home.pattern": "The path must start with ~/ or be absolute.",
 	"config.moved": "Moved to `facade.json`. [Edit in facade.json](command:facade.openSettingsFile)",
 	"config.movedPlain": "Moved to facade.json. Run Facade Code: Open Settings to reach it."
