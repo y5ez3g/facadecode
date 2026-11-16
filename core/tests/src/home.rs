@@ -118,8 +118,12 @@ impl TestHome {
             .map(|d| d.subsec_nanos())
             .unwrap_or_default();
         let n = HOMES.fetch_add(1, Ordering::Relaxed);
-        let base =
-            std::env::temp_dir().join(format!("fcs-{test}-{}-{n}-{nanos:x}", std::process::id()));
+        // Its components again, so that a `TMPDIR` ending in `/` gives no `//` that the paths
+        // Facade reports would not contain.
+        let base = std::env::temp_dir()
+            .components()
+            .collect::<std::path::PathBuf>()
+            .join(format!("fcs-{test}-{}-{n}-{nanos:x}", std::process::id()));
         let path = base.join("home");
         let project = base.join("project");
         facade_base::files::create_private_folder_all(&path)
