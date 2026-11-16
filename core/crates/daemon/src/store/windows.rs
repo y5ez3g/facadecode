@@ -101,6 +101,8 @@ impl WindowTable {
                         workspace,
                         folders: serde_json::from_str(&folders)?,
                         branch_prefix,
+                        colors: None,
+                        env: None,
                     })
                 },
             );
@@ -130,6 +132,8 @@ mod tests {
             workspace: Some(workspace.into()),
             folders: vec!["/work/app".into(), "/work/lib".into()],
             branch_prefix: Some("aaron/".into()),
+            colors: None,
+            env: None,
         }
     }
 
@@ -144,6 +148,8 @@ mod tests {
             .unwrap();
         let renamed = WindowDescription {
             label: "renamed".into(),
+            colors: None,
+            env: None,
             folders: vec!["/work/app".into()],
             ..window("win-1", "k1")
         };

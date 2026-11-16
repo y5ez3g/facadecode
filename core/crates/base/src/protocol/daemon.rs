@@ -192,6 +192,20 @@ pub struct HelloParams {
     /// open.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<WindowDescription>,
+    /// For an `ide` client: the highest agent and message numbers its editor gave before, such as 41
+    /// for `#a41`. The daemon's next numbers are above both these and its own, from then on.
+    /// Refused for any other kind with `invalid_argument`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub numbers_given: Option<NumbersGiven>,
+}
+
+/// The highest numbers an editor gave before.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct NumbersGiven {
+    /// The highest agent number, such as 41 for `#a41`; 0 for none. At most 2^53 - 1.
+    pub agent: u64,
+    /// The highest message number, such as 230 for `#m230`; 0 for none. At most 2^53 - 1.
+    pub message: u64,
 }
 
 /// An editor window as it describes itself, in `hello` and again with `window.update` whenever any
@@ -209,8 +223,9 @@ pub struct WindowDescription {
     /// a window of the same workspace takes them over first.
     pub environment: String,
     /// The key the window's agents are kept under across its reloads: a window that connects with
-    /// the same key while this one has no connection takes its agents over. Omitted for a window
-    /// with no folder.
+    /// the same key takes over the agents of an earlier window with that key that has no
+    /// connection left, those that still run within its grace and those that ended. Omitted for a
+    /// window with no folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// The window's folders, as absolute paths, in the editor's order. Each is a location, and so
@@ -221,6 +236,28 @@ pub struct WindowDescription {
     /// none is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub branch_prefix: Option<String>,
+    /// The colors the window's terminals draw with, which its agents reply to color queries with.
+    /// `window.update` sends them again when the editor's theme changes. Omitted, no color query
+    /// gets a reply.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colors: Option<TerminalColors>,
+    /// The environment the window's agents start with, as the editor works it out for its first
+    /// folder's terminals. Facade looks for each CLI's program on its `PATH` to say in `clis` which
+    /// can start. Omitted, the window lists neither `clis` nor `settings_problem` to an `ide` client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
+}
+
+/// The colors an editor window's terminals draw with, each `#rrggbb`. An agent of the window
+/// replies to its CLI's OSC 10, 11 and 12 queries with them; a color left out gets no reply.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalColors {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub background: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<String>,
 }
 
 /// A place an agent can work: a window's folder, or a checkout of a Git repository one of its
@@ -293,14 +330,16 @@ pub struct WindowInfo {
     /// has not read yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_at: Option<String>,
-    /// The CLIs a start by the agent the client acts for can run in this window, each found on that
-    /// agent's `PATH` or not; none where Facade's settings file cannot be read as a whole. Omitted
-    /// for a client that acts for no agent.
+    /// The CLIs a start can run in this window, each found on a `PATH` or not: for a client that
+    /// acts for an agent, that agent's; for an `ide` client, the one in the window's own `env`.
+    /// None for a window with no folder, and none where Facade's settings file cannot be read as a
+    /// whole. Omitted for a client that acts for no agent, and for an `ide` client where the window
+    /// gave no `env`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clis: Vec<CliInfo>,
-    /// For a client that acts for an agent, what is wrong with Facade's settings file where it
-    /// cannot be read as a whole, which then lists no CLI and stops every start, as one text.
-    /// Omitted where the file reads.
+    /// For a client that acts for an agent, or an `ide` client where the window gave `env`, what is
+    /// wrong with Facade's settings file where it cannot be read as a whole, which then lists no
+    /// CLI and stops every start, as one text. Omitted where the file reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings_problem: Option<String>,
 }
@@ -319,6 +358,12 @@ pub struct CliInfo {
     /// it would start, each said by its setting. Omitted where it can.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub problem: Option<String>,
+    /// A built-in CLI whose entry has no problem and names no program of its own, and whose
+    /// program is not found where the start would run: not installed. Only with `available` false.
+    /// A client may leave it out of its list instead of showing it as one that cannot start.
+    /// Omitted otherwise.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub not_installed: bool,
     /// Whether a start can choose its model and its effort (CLIS-1.4).
     pub overrides: Overrides,
 }
@@ -524,7 +569,8 @@ pub struct AgentInfo {
     /// The window the agent is in: the editor window it was started in, or `terminal` for an agent
     /// started from a terminal.
     pub window_id: String,
-    /// The ID of its location, `cwd`, as its window lists it.
+    /// The ID of its location, as its window lists it: the location `cwd` is, or the innermost one
+    /// `cwd` is inside.
     pub location_id: String,
     /// The CLI's process ID. Omitted for a guest, whose process Facade does not know.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -882,7 +928,7 @@ pub struct StartArgs {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
     /// The CLI's working folder, an absolute path. In an editor window it must be one of the
-    /// window's locations, which `worktree.create` adds to.
+    /// window's locations, which `worktree.create` adds to, or a folder inside one.
     pub cwd: String,
     /// The window the agent goes in: an editor window that is there now, by its ID, or `terminal`,
     /// where any folder will do. Omitted, `terminal`.
@@ -937,6 +983,13 @@ pub struct StartArgs {
     /// The effort this start chooses, over its entry's `effort`, as `model` is.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// A session of the CLI to continue, as `agent.resume` continues one: the CLI's rule gives the
+    /// arguments that continue it, the same way for every CLI. The start is a new agent, with its own
+    /// number. A CLI whose rule does not resume sessions, and a program that is not a CLI of the
+    /// settings file, refuse it with `unsupported` before anything starts. Refused from an `mcp`
+    /// client, as more words are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// The result of `agent.start`.
@@ -2763,6 +2816,7 @@ mod tests {
             worktree: None,
             model: None,
             effort: None,
+            session: None,
         };
         assert_eq!(
             serde_json::to_value(start).unwrap(),

@@ -71,6 +71,11 @@ each number is assigned. Numbering continues across restarts while the home's fi
 deleting a home resets its counter. `a3`, `#a3`, and `3` select the same agent. A unique name also works, with or without `@`,
 and so does a name followed by its ID, as Facade writes a message's sender, such as `@Pixel #a3`: the ID decides.
 
+An `ide` client can send `numbers_given` in `hello`, the highest agent and message numbers its editor gave before, each at
+most 2^53 - 1. The daemon keeps both counters in `core/facade.db` before responding: future numbers exceed its own and the
+editor's; lower values change nothing. A number above that limit, or `numbers_given` from another client kind, refuses
+`hello` with `invalid_argument`.
+
 A missing, empty, or blank name gets a name from the settings file's `names`, else from the built-in names: at random, one no
 agent of its window has, ignoring case and surrounding spaces; once every one is taken, or for a list of none, the agent's ID,
 such as `#a7`. Given names are trimmed and may repeat. Use an ID when names repeat.
@@ -137,6 +142,11 @@ starts, resumes, or is recovered. `unknown` is a state of its own: clients decod
 it as unrecognized, not as `unknown`. No input state means the CLI may be typed into.
 
 ### Resume
+
+`agent.start` with `session` continues that CLI session as a new agent with its own number, using the same arguments as
+`agent.resume`; the agent's `session` still comes from what its run reports. A CLI whose rule does not resume sessions, and a
+program outside the settings file, refuse it with `unsupported` before anything starts, and an `mcp` client cannot
+supply it. Prompt, worktree, request ID and name work as for any start.
 
 `agent.resume` starts an ended agent's CLI again in its terminal, continuing the agent's `session` with the CLI's own resume
 arguments. The agent keeps its ID, name, record, `cwd`, `created_at`, and screen, and takes no agent number. The CLI gets the
@@ -417,15 +427,16 @@ what became of the message is not known to it. The next daemon goes on deliverin
 
 Every agent is in a window: the editor window it was started or last resumed in, or the terminal window, `terminal`, which
 holds the agents started or resumed from a terminal, guests among them. `AgentInfo.window_id` names the window, and
-`location_id` the agent's folder, its location. `agent.start` and `agent.resume` take `window_id`; without it, the agent runs
-in the terminal window, where any folder will do. In an editor window, the agent's folder must be one of the window's
-locations; a window that is not there now is `unavailable`. A resume keeps the agent's folder, so an editor window without
-it among its locations refuses the resume.
+`location_id` its location: the agent's folder, or the innermost location the folder is inside. `agent.start` and
+`agent.resume` take `window_id`; without it, the agent runs in the terminal window, where any folder will do. In an editor
+window, the agent's folder must be one of the window's locations or a folder inside one; a window that is not there now is
+`unavailable`. A resume keeps the agent's folder, so an editor window where it is neither a location nor inside one refuses
+the resume.
 
 An editor window connects as an `ide` client, which acts for the person. Its `hello` describes the window in `window`: its ID,
 which stays the same across its reloads, its name, its `environment`, `local` or a remote authority, the `workspace` key its
-agents are kept under, its folders, and its Git branch prefix. `window.update` sends the whole description again whenever any of
-it changes, and asks the daemon to read the window's locations again, as the client does when a repository of the window
+agents are kept under, its folders, its Git branch prefix, and optionally its terminal `colors` and `env`.
+`window.update` sends the whole description again whenever any of it changes, and asks the daemon to read the window's locations again, as the client does when a repository of the window
 changes. A window's locations are its folders and every checkout of a Git repository one of them is in: the repository's main
 checkout first, then the folder if it is another place, then the other worktrees, each place once, its path with symbolic
 links resolved. The daemon reads them with Git when the window describes itself and after a worktree is made there, never on a
@@ -433,14 +444,21 @@ timer; a read that fails keeps the window's locations as last read and says so i
 
 The `windows` topic lists every editor window that is there or still holds agents, and the terminal window while it holds
 running agents, with their locations; for a client that acts for an agent, each window also lists the CLIs a start by that
-agent can run. `worktree.create` makes a worktree from a checkout of a window, with a new branch, at
+agent can run. An `ide` client also gets `clis` and `settings_problem` for each window that gave `env`: the programs are
+looked for on that environment's `PATH`, with relative entries taken relative to the window's first folder. A window with
+no folder lists no CLI. The environment is that of the first folder's terminals; a start sends its own location's
+environment. A snapshot or change reads the settings file as it is now. The window's `env` stays in memory alone, never
+in the store, a log or a response.
+
+`worktree.create` makes a worktree from a checkout of a window, with a new branch, at
 `<main folder>.worktrees/<branch>`, and answers with the new location; it keeps whatever a failure made, and says what in the
 error's `data.kept`.
 
 A window is there while one of its connections is open. Once its last one closes, its agents wait for it: 90 seconds for a
 `local` window, five minutes for another. A connection of the same window within that time keeps them, and so does a window of
 the same `workspace`, which takes them over from a window with no connection left; the first window, back, has none of them.
-Once the time runs out, the window's running agents end as `agent.stop` ends them, and their records stay. An agent ends too
+Once the time runs out, the window's running agents end as `agent.stop` ends them, and their records stay. A later window of the
+same `workspace` takes over those ended agents too, so its client can resume or remove them. An agent ends too
 once its location is known to be gone: its window no longer has the folder that brought it, or Git no longer lists its worktree
 and its folder no longer exists. A failed read or a disconnected window proves nothing.
 
@@ -570,8 +588,14 @@ provide no response.
 ### Terminal queries and redraws
 
 The daemon's headless terminal replies to supported cursor position, device status, device attributes, and mode queries.
-It does not reply to colour, clipboard, XTGETTCAP, DECRQSS, or kitty graphics queries. Viewers never receive terminal queries,
-so they cannot send a second reply. Using an editor's theme for colour replies is planned.
+An editor window's `colors` give replies to OSC 10, 11 and 12: foreground, background and cursor, each `#rrggbb`; a
+malformed color refuses `hello` or `window.update` with `invalid_argument`. Each 8-bit channel is written twice, so
+`#1e1e1e` replies `rgb:1e1e/1e1e/1e1e`, ended as the query was, with BEL or ST. A color left out gets no reply, and neither
+does any color query from an agent of the terminal window. Agents use their current window's colors from their start or
+resume, after a takeover, and from the next query after `window.update` when the editor's theme changes.
+
+The terminal does not reply to clipboard, XTGETTCAP, DECRQSS, or kitty graphics queries. Viewers never receive terminal
+queries, so they cannot send a second reply.
 
 A redraw restores cells, attributes, wraps, cursor, saved cursor, pen, charsets, and modes from alacritty. Facade also tracks
 and restores the scrolling region, tab stops, active charset, and modifyOtherKeys state, which alacritty keeps private.
@@ -618,8 +642,8 @@ longer than the terminal's buffer leaves the CLI inside it; the next daemon type
 still be inside a paste.
 
 To its editor windows, a daemon's restart is a lost connection, never a close. The next daemon keeps each window's description
-in `facade.db`, and a window that holds running agents waits from the restart as a window whose last connection closed does: one
-that connects again keeps its agents, and one that never comes back ends them after its 90 seconds or five minutes.
+in `facade.db`, apart from its `colors` and `env`, and a window that holds running agents waits from the restart as a window whose last
+connection closed does: one that connects again keeps its agents, and one that never comes back ends them after its 90 seconds or five minutes.
 
 A daemon failure can lose queued input and, for each agent, one output chunk read but not yet logged, at most 64 KiB. Missing
 control sequences can make later output draw incorrectly until the CLI redraws. Recovery sets the terminal to its last logged

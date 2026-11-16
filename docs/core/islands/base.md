@@ -101,9 +101,19 @@ The public paths are `facade_base::<module>`. Grouped by who calls them:
   [PROTOCOL.md](../../../core/protocol/PROTOCOL.md). Also the shared checks and texts the protocol
   defines: `check_message_text`, `display_name`, `typed_text`, `start_result_text`,
   `is_session_id`, `location_id`, `agents_word`, `plain`.
+  `WindowDescription` carries optional `colors: TerminalColors` and `env`: the terminal colors
+  its agents reply to OSC 10, 11 and 12 with, and the environment whose `PATH` gives an `ide`
+  client each window's `WindowInfo.clis` and `settings_problem`. A missing color gets no reply;
+  without `env`, those window fields are omitted for an `ide` client. `CliInfo.not_installed`
+  marks a built-in CLI whose program is not found, so a client may leave it out of its list.
+  The environment stays in memory alone. `StartArgs.session` continues a CLI session as a new agent, with its own number;
+  a resume keeps the agent's ID. `HelloParams.numbers_given: NumbersGiven` lets an `ide` client
+  report the highest agent and message numbers its editor gave, so future numbers exceed them.
 - `jsonrpc`: `Request`, `Response`, `Notification`, `ErrorBody` with one constructor per reason
   (`invalid_argument`, `refused`, `internal`, …), `Reason`, `read_request`, `encode_line`,
   `decode_arguments`, `MAX_LINE_BYTES`.
+  `ErrorData.entry` names the settings entry behind a refused start or resume, so an editor can
+  offer to open the settings file; a model or effort the start chose itself sets no entry.
 - `operations::{Operation, Topic, NoArgs, EmptyResult}`.
 - `programs`: `install`, `install_running`, `point_launchers_at(build, running)`, `launcher`,
   `Held` (`open`, `restore`, `facade_mcp`, `facade_launcher`), and path lookup:

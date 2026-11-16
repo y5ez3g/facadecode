@@ -179,6 +179,7 @@ impl DaemonClient {
             agent: identity.agent.clone(),
             sessions: identity.sessions.clone(),
             window: None,
+            numbers_given: None,
         };
         writer.write_all(&encode_line(&Request::new(
             Some(HELLO_ID),

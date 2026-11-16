@@ -63,6 +63,7 @@ export interface CliInfo {
 	readonly display_name: string;
 	readonly available: boolean;
 	readonly problem?: string;
+	readonly not_installed?: boolean;
 	readonly overrides: Overrides;
 }
 
@@ -119,6 +120,7 @@ export interface ErrorData {
 	readonly enter_written?: boolean;
 	readonly keys_sent?: number;
 	readonly kept?: Kept;
+	readonly entry?: string;
 }
 
 /** The messages `hook.prompt` and `hook.turn-end` take for a guest's model, at its next turn. */
@@ -134,6 +136,7 @@ export interface HelloParams {
 	readonly agent?: string;
 	readonly sessions?: string[];
 	readonly window?: WindowDescription;
+	readonly numbers_given?: NumbersGiven;
 }
 
 /** The result of `hello`: daemon details and supported topics and operations. */
@@ -287,6 +290,12 @@ export interface Notification {
 	readonly jsonrpc?: string;
 	readonly method: string;
 	readonly params?: unknown;
+}
+
+/** The highest numbers an editor gave before. */
+export interface NumbersGiven {
+	readonly agent: number;
+	readonly message: number;
 }
 
 /** Whether a start can choose a CLI's model and its effort. */
@@ -470,6 +479,7 @@ export interface StartArgs {
 	readonly worktree?: Worktree;
 	readonly model?: string;
 	readonly effort?: string;
+	readonly session?: string;
 }
 
 /** What became of a start with a prompt, as its result tells the agent that started it. */
@@ -504,6 +514,14 @@ export interface StopResult {
 	readonly reason?: EndReason;
 	readonly at: string;
 	readonly already_ended?: boolean;
+}
+
+/** The colors an editor window's terminals draw with, each `#rrggbb`. An agent of the window
+ * replies to its CLI's OSC 10, 11 and 12 queries with them; a color left out gets no reply. */
+export interface TerminalColors {
+	readonly foreground?: string;
+	readonly background?: string;
+	readonly cursor?: string;
 }
 
 /** How much of a message reached the recipient's terminal. */
@@ -566,6 +584,8 @@ export interface WindowDescription {
 	readonly workspace?: string;
 	readonly folders?: string[];
 	readonly branch_prefix?: string;
+	readonly colors?: TerminalColors;
+	readonly env?: { readonly [key: string]: string };
 }
 
 /** A window: an editor window, or the terminal window, `terminal`, which holds the agents started

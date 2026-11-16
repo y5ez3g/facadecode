@@ -164,6 +164,7 @@ pub(super) fn start(
         worktree,
         model: optional(arguments, "model"),
         effort: optional(arguments, "effort"),
+        session: None,
     };
     let err = match client.call_with_request_id::<AgentStart>(start, true) {
         Ok((started, _)) => {

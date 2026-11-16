@@ -164,6 +164,11 @@ pub struct ErrorData {
     /// or all of the worktree: what it made, which stays.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kept: Option<Kept>,
+    /// With a refused start or resume that an entry of the settings file caused - its program not
+    /// found, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot
+    /// take - the entry's name, such as `claude`. A client offers to open the settings file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
 }
 
 /// Error reasons shared by both protocols.
@@ -208,7 +213,7 @@ pub enum Reason {
     /// daemon answers.
     Upgrading,
     /// The CLI cannot do what the call asks of it: take a model or an effort it has no way to set,
-    /// or resume a conversation that a CLI of another type had.
+    /// or resume a session that a CLI of another type had.
     Unsupported,
     /// An error reason this build does not recognize.
     #[serde(other)]
@@ -225,6 +230,7 @@ impl ErrorBody {
             enter_written: None,
             keys_sent: None,
             kept: None,
+            entry: None,
         };
         let code = if reason == Reason::InvalidArgument {
             INVALID_PARAMS

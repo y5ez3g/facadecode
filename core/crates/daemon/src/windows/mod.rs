@@ -257,6 +257,8 @@ impl Windows {
                 workspace: None,
                 folders: Vec::new(),
                 branch_prefix: None,
+                colors: None,
+                env: None,
             });
             self.shared
                 .windows

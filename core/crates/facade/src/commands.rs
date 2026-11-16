@@ -89,6 +89,7 @@ pub(crate) fn start(
         worktree: None,
         model: None,
         effort: None,
+        session: None,
     };
     let (started, _) = client.call_with_request_id::<AgentStart>(args, false)?;
     Ok(announce(&started.agent, "started", terminal))

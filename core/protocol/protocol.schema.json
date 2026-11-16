@@ -82,7 +82,7 @@
         },
         "location_id": {
           "type": "string",
-          "description": "The ID of its location, `cwd`, as its window lists it."
+          "description": "The ID of its location, as its window lists it: the location `cwd` is, or the innermost one\n`cwd` is inside."
         },
         "pid": {
           "type": "integer",
@@ -644,6 +644,10 @@
           "type": "string",
           "description": "Why it cannot be started: what is wrong with its entry, or that its program cannot run where\nit would start, each said by its setting. Omitted where it can."
         },
+        "not_installed": {
+          "type": "boolean",
+          "description": "A built-in CLI whose entry has no problem and names no program of its own, and whose\nprogram is not found where the start would run: not installed. Only with `available` false.\nA client may leave it out of its list instead of showing it as one that cannot start.\nOmitted otherwise."
+        },
         "overrides": {
           "$ref": "#/$defs/Overrides",
           "description": "Whether a start can choose its model and its effort (CLIS-1.4)."
@@ -885,6 +889,10 @@
         "kept": {
           "description": "With `worktree.create`, or `agent.start` with a `worktree`, that failed after Git made part\nor all of the worktree: what it made, which stays.",
           "$ref": "#/$defs/Kept"
+        },
+        "entry": {
+          "type": "string",
+          "description": "With a refused start or resume that an entry of the settings file caused - its program not\nfound, the entry turned off or wrong, or a model or effort the entry gives that its CLI cannot\ntake - the entry's name, such as `claude`. A client offers to open the settings file."
         }
       },
       "required": [
@@ -944,6 +952,10 @@
         "window": {
           "description": "The editor window this client is part of. Required for `ide`, and refused for any other\nkind. Every connection of a window describes it; the window is there while one of them is\nopen.",
           "$ref": "#/$defs/WindowDescription"
+        },
+        "numbers_given": {
+          "description": "For an `ide` client: the highest agent and message numbers its editor gave before, such as 41\nfor `#a41`. The daemon's next numbers are above both these and its own, from then on.\nRefused for any other kind with `invalid_argument`.",
+          "$ref": "#/$defs/NumbersGiven"
         }
       },
       "required": [
@@ -1558,6 +1570,28 @@
       ],
       "description": "A message without an ID or response, such as `changed`."
     },
+    "NumbersGiven": {
+      "type": "object",
+      "properties": {
+        "agent": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The highest agent number, such as 41 for `#a41`; 0 for none. At most 2^53 - 1."
+        },
+        "message": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0,
+          "description": "The highest message number, such as 230 for `#m230`; 0 for none. At most 2^53 - 1."
+        }
+      },
+      "required": [
+        "agent",
+        "message"
+      ],
+      "description": "The highest numbers an editor gave before."
+    },
     "Overrides": {
       "type": "object",
       "properties": {
@@ -1723,7 +1757,7 @@
         {
           "type": "string",
           "const": "unsupported",
-          "description": "The CLI cannot do what the call asks of it: take a model or an effort it has no way to set,\nor resume a conversation that a CLI of another type had."
+          "description": "The CLI cannot do what the call asks of it: take a model or an effort it has no way to set,\nor resume a session that a CLI of another type had."
         }
       ],
       "description": "Error reasons shared by both protocols."
@@ -2272,7 +2306,7 @@
         },
         "cwd": {
           "type": "string",
-          "description": "The CLI's working folder, an absolute path. In an editor window it must be one of the\nwindow's locations, which `worktree.create` adds to."
+          "description": "The CLI's working folder, an absolute path. In an editor window it must be one of the\nwindow's locations, which `worktree.create` adds to, or a folder inside one."
         },
         "window_id": {
           "type": "string",
@@ -2323,6 +2357,10 @@
         "effort": {
           "type": "string",
           "description": "The effort this start chooses, over its entry's `effort`, as `model` is."
+        },
+        "session": {
+          "type": "string",
+          "description": "A session of the CLI to continue, as `agent.resume` continues one: the CLI's rule gives the\narguments that continue it, the same way for every CLI. The start is a new agent, with its own\nnumber. A CLI whose rule does not resume sessions, and a program that is not a CLI of the\nsettings file, refuse it with `unsupported` before anything starts. Refused from an `mcp`\nclient, as more words are."
         }
       },
       "required": [
@@ -2461,6 +2499,21 @@
         "at"
       ],
       "description": "The result of `agent.stop`: the CLI's recorded exit, and whether it had ended before this stop."
+    },
+    "TerminalColors": {
+      "type": "object",
+      "properties": {
+        "foreground": {
+          "type": "string"
+        },
+        "background": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string"
+        }
+      },
+      "description": "The colors an editor window's terminals draw with, each `#rrggbb`. An agent of the window\nreplies to its CLI's OSC 10, 11 and 12 queries with them; a color left out gets no reply."
     },
     "TextWritten": {
       "oneOf": [
@@ -2795,7 +2848,7 @@
         },
         "workspace": {
           "type": "string",
-          "description": "The key the window's agents are kept under across its reloads: a window that connects with\nthe same key while this one has no connection takes its agents over. Omitted for a window\nwith no folder."
+          "description": "The key the window's agents are kept under across its reloads: a window that connects with\nthe same key takes over the agents of an earlier window with that key that has no\nconnection left, those that still run within its grace and those that ended. Omitted for a\nwindow with no folder."
         },
         "folders": {
           "type": "array",
@@ -2808,6 +2861,17 @@
         "branch_prefix": {
           "type": "string",
           "description": "The window's Git branch prefix, which a new worktree's folder name leaves out. Omitted where\nnone is set."
+        },
+        "colors": {
+          "description": "The colors the window's terminals draw with, which its agents reply to color queries with.\n`window.update` sends them again when the editor's theme changes. Omitted, no color query\ngets a reply.",
+          "$ref": "#/$defs/TerminalColors"
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "The environment the window's agents start with, as the editor works it out for its first\nfolder's terminals. Facade looks for each CLI's program on its `PATH` to say in `clis` which\ncan start. Omitted, the window lists neither `clis` nor `settings_problem` to an `ide` client."
         }
       },
       "required": [
@@ -2866,11 +2930,11 @@
           "items": {
             "$ref": "#/$defs/CliInfo"
           },
-          "description": "The CLIs a start by the agent the client acts for can run in this window, each found on that\nagent's `PATH` or not; none where Facade's settings file cannot be read as a whole. Omitted\nfor a client that acts for no agent."
+          "description": "The CLIs a start can run in this window, each found on a `PATH` or not: for a client that\nacts for an agent, that agent's; for an `ide` client, the one in the window's own `env`.\nNone for a window with no folder, and none where Facade's settings file cannot be read as a\nwhole. Omitted for a client that acts for no agent, and for an `ide` client where the window\ngave no `env`."
         },
         "settings_problem": {
           "type": "string",
-          "description": "For a client that acts for an agent, what is wrong with Facade's settings file where it\ncannot be read as a whole, which then lists no CLI and stops every start, as one text.\nOmitted where the file reads."
+          "description": "For a client that acts for an agent, or an `ide` client where the window gave `env`, what is\nwrong with Facade's settings file where it cannot be read as a whole, which then lists no\nCLI and stops every start, as one text. Omitted where the file reads."
         }
       },
       "required": [

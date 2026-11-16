@@ -393,6 +393,7 @@ impl Daemon {
                     display_name: entry.display_name().to_string(),
                     available: problem.is_none(),
                     problem,
+                    not_installed: false,
                     overrides: Overrides {
                         model: entry.takes("model"),
                         effort: entry.takes("effort"),
