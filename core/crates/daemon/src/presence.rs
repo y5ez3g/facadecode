@@ -275,6 +275,11 @@ impl Daemon {
         self.windows.taken_over(from);
     }
 
+    /// Whether any listed agent, running or ended, is window `id`'s.
+    fn window_holds_agents(&self, id: &str) -> bool {
+        self.agent_infos().iter().any(|info| info.window_id == id)
+    }
+
     /// The running agents of window `id`.
     fn running_in(&self, id: &str) -> Vec<AgentHandle> {
         self.agents()
@@ -324,14 +329,14 @@ impl Daemon {
     /// Lists again the windows a daemon before this one knew that still have running agents, each
     /// waiting out its grace for its window to come back.
     pub(crate) fn restore_windows(&self) {
-        let owners: Vec<String> = self
-            .agents()
+        let infos = self.agent_infos();
+        let running: Vec<String> = infos
             .iter()
-            .map(AgentHandle::info)
             .filter(|info| info.process == ProcessState::Running)
-            .map(|info| info.window_id)
+            .map(|info| info.window_id.clone())
             .collect();
-        for id in self.windows.restore(&owners) {
+        let agents: Vec<String> = infos.into_iter().map(|info| info.window_id).collect();
+        for id in self.windows.restore(&running, &agents) {
             self.windows.start_grace(&id, 1);
         }
     }
@@ -350,7 +355,11 @@ pub(crate) async fn follow_windows(
                 departure,
             } => {
                 if daemon.running_in(&window_id).is_empty() {
-                    daemon.windows.forget(&window_id, departure);
+                    daemon.windows.remove(
+                        &window_id,
+                        departure,
+                        daemon.window_holds_agents(&window_id),
+                    );
                 } else {
                     daemon.windows.start_grace(&window_id, departure);
                 }
@@ -375,7 +384,8 @@ pub(crate) async fn follow_windows(
                         stops.spawn(async move { daemon.stop(&agent).await });
                     }
                     stops.join_all().await;
-                    daemon.windows.forget(&window_id, departure);
+                    let has_agents = daemon.window_holds_agents(&window_id);
+                    daemon.windows.remove(&window_id, departure, has_agents);
                 });
             }
         }

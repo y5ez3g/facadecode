@@ -241,12 +241,13 @@ impl Windows {
         }
     }
 
-    /// Takes back `owners`, the editor windows that hold running agents, each as left once and
+    /// Takes back `running`, the editor windows that hold running agents, each as left once and
     /// with no connection: to a window, a daemon's restart is a lost connection. Each keeps the
     /// description the table kept, or, where it is lost, its ID as its name and a remote window's
-    /// grace. Deletes the rows of the other windows. Answers the windows taken back, whose graces
-    /// the caller starts. Blocks on the table.
-    pub(crate) fn restore(&self, owners: &[String]) -> Vec<String> {
+    /// grace. The rows of `agents`, the windows that hold any agent's record, stay, unlisted: a
+    /// later window of their workspace takes them over. Deletes the other rows. Answers the
+    /// windows taken back, whose graces the caller starts. Blocks on the table.
+    pub(crate) fn restore(&self, running: &[String], agents: &[String]) -> Vec<String> {
         let kept = blocking_in_place(|| self.shared.table.windows()).unwrap_or_else(|err| {
             warn(&format!("{err:#}"));
             Vec::new()
@@ -256,7 +257,7 @@ impl Windows {
             .map(|description| (description.id.clone(), description))
             .collect();
         let mut restored = Vec::new();
-        for id in owners {
+        for id in running {
             if *id == TERMINAL_WINDOW || restored.contains(id) {
                 continue;
             }
@@ -277,7 +278,7 @@ impl Windows {
                 .insert(id.clone(), Window::new(description, 1));
             restored.push(id.clone());
         }
-        for id in kept.keys() {
+        for id in kept.keys().filter(|id| !agents.contains(id)) {
             if let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
                 warn(&format!("{err:#}"));
             }
@@ -307,8 +308,9 @@ impl Windows {
     }
 
     /// Takes `description` as its window's, counting one more connection where `connecting`, and
-    /// keeps it in the table. Answers the windows of the same workspace that have no connection
-    /// left: they are forgotten here, and their agents are the caller's to move before
+    /// keeps it in the table. Answers the windows of the same workspace that it takes over: those
+    /// listed with no connection left, which are removed here, and those that left and are no
+    /// longer listed, whose rows the table kept. Their agents are the caller's to move before
     /// [`Windows::taken_over`]. Blocks on the table.
     pub(crate) fn describe(
         &self,
@@ -316,10 +318,18 @@ impl Windows {
         connecting: bool,
     ) -> Vec<String> {
         let id = &description.id;
+        let rows = match &description.workspace {
+            Some(_) => blocking_in_place(|| self.shared.table.windows()).unwrap_or_else(|err| {
+                warn(&format!("{err:#}"));
+                Vec::new()
+            }),
+            None => Vec::new(),
+        };
         let taken = {
             let mut windows = self.shared.windows.lock().unwrap();
-            let taken: Vec<String> = match &description.workspace {
-                Some(workspace) => windows
+            let mut taken: Vec<String> = Vec::new();
+            if let Some(workspace) = &description.workspace {
+                taken = windows
                     .iter()
                     .filter(|(other, window)| {
                         *other != id
@@ -327,9 +337,17 @@ impl Windows {
                             && window.description.workspace.as_ref() == Some(workspace)
                     })
                     .map(|(other, _)| other.clone())
-                    .collect(),
-                None => Vec::new(),
-            };
+                    .collect();
+                taken.extend(
+                    rows.iter()
+                        .filter(|row| {
+                            row.id != *id
+                                && row.workspace.as_ref() == Some(workspace)
+                                && !windows.contains_key(&row.id)
+                        })
+                        .map(|row| row.id.clone()),
+                );
+            }
             for other in &taken {
                 windows.remove(other);
             }
@@ -425,9 +443,11 @@ impl Windows {
         });
     }
 
-    /// Forgets window `id` and deletes its row, unless it connected again since its
-    /// `departure`-th leaving. Blocks on the table.
-    pub(crate) fn forget(&self, id: &str, departure: u64) {
+    /// Removes window `id` from the list, unless it connected again since its `departure`-th
+    /// leaving, and deletes its row, except where `has_agents`: agents' records are still under
+    /// its ID, and the row keeps its `workspace`, so that a later window of it can take them over.
+    /// Blocks on the table.
+    pub(crate) fn remove(&self, id: &str, departure: u64, has_agents: bool) {
         {
             let mut windows = self.shared.windows.lock().unwrap();
             if !windows
@@ -438,7 +458,7 @@ impl Windows {
             }
             windows.remove(id);
         }
-        if let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
+        if !has_agents && let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
             warn(&format!("{err:#}"));
         }
         self.shared.publish(WindowsChange::Removed {

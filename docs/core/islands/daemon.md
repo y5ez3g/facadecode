@@ -390,25 +390,25 @@ The editor windows that `ide` clients describe: how many of each window's connec
 - **Owns:**
   - Each editor window's description, open connections, open `messages` watches, locations as last read with the time of that read, and how many times it has left. One lock covers them all. It is a leaf lock: no await, no table write and no event is done while it is held.
   - The `windows` topic's changes (`WindowsChange`).
-  - The `windows` table, through `WindowTable`: a row is written on every description and deleted when the window is forgotten.
+  - The `windows` table, through `WindowTable`: a row is written on every description and deleted when the window is removed, unless agents' records are still under it.
   - The worktree creations under way (`Creations`).
 - **Keeps:**
-  - A window leaves when its last connection closes. Each leaving has its own number, `departure`, and a grace or a forget for an earlier leaving does nothing once the window has connected again.
+  - A window leaves when its last connection closes. Each leaving has its own number, `departure`, and a grace or a removal for an earlier leaving does nothing once the window has connected again.
   - A local window's agents wait 90 seconds for it, any other window's 5 minutes, and a window whose environment is unknown counts as remote. `FACADE_TEST_GRACE_MS` shortens the grace in a debug build.
-  - When a window of a workspace describes itself, every other window of that workspace with no connection left is forgotten, and its ID is returned so that its agents can move.
+  - When a window of a workspace describes itself, every other window of that workspace with no connection left, listed or not, is taken over: its ID is returned so that its agents can move.
   - Window changes are sent only from here.
   - Locations are read when a window describes itself and after a worktree is made there, never on a timer.
 - **Never does:** stop or move agents; read the agent list; run Git (locations does that); list the terminal window or the CLIs (the daemon adds them).
 - **Interface** (called by the daemon in `presence.rs`, `topics.rs`, `operations.rs`, `delivery.rs`, `service.rs`):
   - `Windows::new(table: WindowTable, events: UnboundedSender<WindowEvent>) -> Windows`.
-  - `WindowEvent::Left { window_id, departure }`: the last connection closed. The daemon forgets a window with no running agents and starts the grace of the others.
-  - `WindowEvent::GraceEnded { window_id, departure }`: the grace ran out with the window still away. The daemon stops the window's running agents, then forgets it.
+  - `WindowEvent::Left { window_id, departure }`: the last connection closed. The daemon removes a window with no running agents and starts the grace of the others.
+  - `WindowEvent::GraceEnded { window_id, departure }`: the grace ran out with the window still away. The daemon stops the window's running agents, then removes it.
   - `Windows::check(&WindowDescription) -> Result<(), ErrorBody>`: refuses an empty ID, the terminal window's ID, or a folder that is not an absolute path.
-  - `describe(&WindowDescription, connecting: bool) -> Vec<String>`: takes the description, counts a connection when connecting, writes the row, and returns the windows of the same workspace that it forgot. The daemon moves their agents in one transaction and then calls `taken_over(from)`, which sends `Removed`.
+  - `describe(&WindowDescription, connecting: bool) -> Vec<String>`: takes the description, counts a connection when connecting, writes the row, and returns the windows of the same workspace that have no connection: listed ones, and windows that left and were removed while agents' records were under them. The daemon moves their agents in one transaction and then calls `taken_over(from)`, which sends `Removed`.
   - `connection(id) -> WindowConnection`: a guard whose drop closes one connection and may send `Left`.
   - `folders(id) -> Vec<String>` and `async read_locations(id, folders_before: Option<Vec<String>>) -> Option<LocationsRead>`: reads the locations again and sends `Updated`. `LocationsRead::is_gone(cwd)` is true when no location holds `cwd` and the window dropped the folder of one that did, or a read with no problem no longer finds it. The daemon stops the running agents whose folder is gone.
-  - `restore(owners: &[String]) -> Vec<String>`: at the daemon's start, takes back the windows that hold running agents as left once, with the description the table kept, or a remote window's grace where it is lost. Deletes the other rows. The daemon then calls `start_grace(id, 1)` for each one returned.
-  - `start_grace(id, departure)` and `forget(id, departure)`: the forget deletes the row and sends `Removed`.
+  - `restore(running: &[String], agents: &[String]) -> Vec<String>`: at the daemon's start, takes back the windows that hold running agents as left once, with the description the table kept, or a remote window's grace where it is lost. Keeps unlisted the rows of windows that hold only ended agents, so that a later window of their workspace takes those agents over. Deletes the other rows. The daemon then calls `start_grace(id, 1)` for each one returned.
+  - `start_grace(id, departure)` and `remove(id, departure, has_agents)`: the removal sends `Removed`, and deletes the row unless agents' records are still under the window.
   - `watch_person(id) -> PersonWatch` and `tells_person(id) -> bool`: whether the window's `ide` client watches its messages, so that the window can tell the person.
   - `label(id) -> String`, `subscribe() -> broadcast::Receiver<WindowsChange>`, `infos() -> Vec<WindowInfo>` (editor windows by ID, with no CLIs).
   - `colors(id) -> Option<TerminalColors>` and `env(id) -> Option<BTreeMap<String, String>>`: what the window last described; its `env` stays in memory only, never in the table.
