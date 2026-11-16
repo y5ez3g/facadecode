@@ -43,9 +43,12 @@ export function buildCore(triple = coreTriple()) {
 	console.info(`Core ${workspaceVersion(fs.readFileSync(path.join(CORE, 'Cargo.toml'), 'utf8'))}: ${Object.keys(PROGRAMS).join(', ')} for ${triple} in bin/.`);
 }
 
+/** A Cargo.toml's `[workspace.package]` table up to its version's digits, with LF or CRLF line ends (Windows checkouts). */
+const WORKSPACE_VERSION = /^(\[workspace\.package\]\r?\n(?:(?!\[).*\r?\n)*?version = ")([^"]+)/m;
+
 /** The version of core's workspace: the `version` of the `[workspace.package]` table of a Cargo.toml. */
 export function workspaceVersion(cargoToml) {
-	const version = cargoToml.match(/^\[workspace\.package\]\n(?:(?!\[).*\n)*?version = "([^"]+)"/m)?.[1];
+	const version = cargoToml.match(WORKSPACE_VERSION)?.[2];
 	if (!version) {
 		throw new Error('core/Cargo.toml has no workspace version.');
 	}
@@ -55,7 +58,7 @@ export function workspaceVersion(cargoToml) {
 /** `cargoToml` with its workspace version `version`. */
 export function withWorkspaceVersion(cargoToml, version) {
 	workspaceVersion(cargoToml);
-	return cargoToml.replace(/^(\[workspace\.package\]\n(?:(?!\[).*\n)*?version = ")[^"]+/m, `$1${version}`);
+	return cargoToml.replace(WORKSPACE_VERSION, `$1${version}`);
 }
 
 /** Why the versions - each of `extension`, `window` and `core` - are not one. */

@@ -368,6 +368,9 @@ test('core\'s version is the extension\'s and the window component\'s, and the p
 	assert.equal(workspaceVersion(toml), '0.2.0');
 	assert.equal(workspaceVersion(withWorkspaceVersion(toml, '0.3.1')), '0.3.1');
 	assert.match(withWorkspaceVersion(toml, '0.3.1'), /\[workspace\.dependencies\]\nversion = "9"/);
+	const crlf = toml.replaceAll('\n', '\r\n');
+	assert.equal(workspaceVersion(crlf), '0.2.0');
+	assert.equal(workspaceVersion(withWorkspaceVersion(crlf, '0.3.1')), '0.3.1');
 	assert.throws(() => workspaceVersion('[package]\nversion = "1.0.0"\n'), /no workspace version/);
 	assert.deepEqual(versionProblems({ extension: '0.2.0', window: '0.2.0', core: '0.2.0' }), []);
 	assert.match(versionProblems({ extension: '0.2.0', window: '0.2.0', core: '0.2.1' }).join(), /core is 0\.2\.1, the extension 0\.2\.0/);
