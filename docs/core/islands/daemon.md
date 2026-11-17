@@ -203,6 +203,10 @@ The terminal, as a `PtyIo`, and the input waiting for it.
 `Typist`: types calls and messages into the input box, one at a time, and settles each message.
 
 - **Owns:** the calls and messages waiting, the paste under way, where its bytes are in the terminal, its pauses, and what it submitted; the probe under way, and what this run's probes found of each row they tried (`probed`).
+- The actor allows unstyled hint probes for automatic delivery to a freshly launched input. Starting with a
+  session, recovery, resume, an unconfirmed paste or accepting external input leaves plain writing on the
+  normal draft path. External input that arrives during an unstyled hint probe waits for its Space and
+  Backspace to finish.
 - **Keeps:**
   - Each call goes in whole and in order; a pause counts from when its bytes reached the terminal.
   - A message's bytes are written only after `DeliveryHandle::begin_paste` recorded the paste.

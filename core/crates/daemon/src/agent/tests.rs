@@ -196,11 +196,14 @@ impl Harness {
             started,
         };
         let messages = crate::messages::tests::messages().0;
+        let screen = screen(dir.clone());
+        let untouched_input = matches!(screen, ScreenStart::New(_));
         let start = ActorStart {
             colors: TerminalColors::default(),
             info,
             master: Some(master),
-            screen: screen(dir.clone()),
+            screen,
+            untouched_input,
             rule: rule.map(str::to_string),
             captures: false,
             deliveries: messages.delivery_handle(),
@@ -1312,6 +1315,7 @@ async fn a_server_that_connects_before_the_actor_first_runs_makes_the_tools_avai
         info: record(ProcessState::Running, None, 80, 24),
         master: Some(master),
         screen: ScreenStart::New(dir),
+        untouched_input: false,
         rule: None,
         captures: false,
         deliveries: crate::messages::tests::messages().0.delivery_handle(),
@@ -1357,6 +1361,7 @@ async fn a_start_prompt_waits_for_the_tools_and_messages_sent_meanwhile_wait_beh
         info: record(ProcessState::Running, None, 40, 6),
         master: Some(master),
         screen: ScreenStart::New(dir),
+        untouched_input: false,
         rule: Some("fake".into()),
         captures: false,
         deliveries: post.delivery_handle(),
@@ -1494,6 +1499,7 @@ async fn a_recovered_run_waits_for_its_server_from_the_recovery() {
         info: record(ProcessState::Running, None, 80, 24),
         master: Some(master),
         screen,
+        untouched_input: false,
         rule: None,
         captures: false,
         deliveries: messages.delivery_handle(),
@@ -2215,6 +2221,175 @@ async fn a_quiet_agent_presses_no_key_of_its_start() {
             .is_empty(),
         "no key once quiet"
     );
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+const CLAUDE_PLAIN_HINT: &str = r#"Try "refactor <filepath>""#;
+
+impl Harness {
+    /// Draws Claude Code's plain input with the cursor between `before` and `after`.
+    fn plain_claude_input(&mut self, before: &str, after: &str) {
+        let border = "─".repeat(80);
+        let column = 3 + before.chars().count();
+        let frame = format!(
+            "\x1b[?2004h\x1b[2J\x1b[H{border}\r\n❯\u{a0}{before}{after}\r\n{border}\x1b[2;{column}H"
+        );
+        self.cli.write_all(frame.as_bytes()).unwrap();
+    }
+
+    async fn queue_probe_message(
+        &self,
+        text: &str,
+        deadline: Duration,
+    ) -> watch::Receiver<Option<crate::messages::Settled>> {
+        let (kept, settled) = crate::messages::tests::post_new(
+            &self.messages,
+            crate::messages::tests::message(0, "a1"),
+        );
+        let message = MessageTyping::new(
+            text.into(),
+            crate::messages::number(&kept),
+            Instant::now() + deadline,
+            Submission {
+                text: text.into(),
+                sender: Sender::person(),
+            },
+        );
+        let (reply, taken) = oneshot::channel();
+        self.send(AgentCommand::WriteInput {
+            input: Input::Message(message),
+            run: FIRST_RUN,
+            reply,
+        })
+        .await;
+        taken.await.unwrap().unwrap();
+        settled
+    }
+}
+
+async fn probe_message_settled(
+    mut outcome: watch::Receiver<Option<crate::messages::Settled>>,
+) -> crate::messages::Settled {
+    let settled = tokio::time::timeout(Duration::from_secs(6), outcome.wait_for(Option::is_some))
+        .await
+        .expect("the message is settled")
+        .unwrap();
+    settled.as_ref().unwrap().clone()
+}
+
+async fn assert_plain_draft_held(
+    harness: &mut Harness,
+    outcome: watch::Receiver<Option<crate::messages::Settled>>,
+    draft: &str,
+) {
+    assert!(
+        harness
+            .cli_reads_within(1, Duration::from_millis(500))
+            .is_empty(),
+        "the person's draft gets no probe or paste"
+    );
+    let crate::messages::Settled::Withdrawn(message) = probe_message_settled(outcome).await else {
+        panic!("the draft holds the message until its deadline");
+    };
+    assert_eq!(
+        message.delivery.reason,
+        Some(facade_base::daemon::DeliveryFailure::InputDraft)
+    );
+    assert!(
+        harness
+            .cli_reads_within(1, Duration::from_millis(100))
+            .is_empty()
+    );
+    let row = format!("❯\u{a0}{draft}");
+    assert!(harness.text().await.contains(&row));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_claude_draft_matching_a_probed_hint_holds_the_next_message() {
+    let home = home("claudeprobedhint");
+    let mut harness = claude(&home, false);
+    let hint = CLAUDE_PLAIN_HINT;
+    harness.plain_claude_input("", hint);
+    let first = harness
+        .queue_probe_message("first message", Duration::from_secs(15))
+        .await;
+    assert_eq!(harness.cli_reads(1), b" ", "the fresh hint is probed");
+    harness.plain_claude_input(" ", "");
+    assert_eq!(harness.cli_reads(1), b"\x7f");
+    harness.plain_claude_input("", hint);
+    let paste = b"\x1b[200~first message\x1b[201~";
+    assert_eq!(harness.cli_reads(paste.len()), paste);
+    harness.plain_claude_input("first message", "");
+    assert_eq!(harness.cli_reads(1), b"\r");
+    harness.plain_claude_input("", hint);
+    let crate::messages::Settled::Kept(first) = probe_message_settled(first).await else {
+        panic!("the first message is kept");
+    };
+    assert_eq!(
+        first.delivery.status,
+        facade_base::daemon::DeliveryStatus::Success
+    );
+
+    // The person types the same text and presses Home. The CLI draws the same row and cursor.
+    let edit = format!("{hint}\x1b[H");
+    harness.type_bytes(edit.as_bytes()).await.unwrap();
+    assert_eq!(harness.cli_reads(edit.len()), edit.as_bytes());
+    harness.plain_claude_input("", hint);
+    let second = harness
+        .queue_probe_message("second message", Duration::from_secs(3))
+        .await;
+    assert_plain_draft_held(&mut harness, second, hint).await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_key_during_a_plain_claude_hint_probe_waits_for_its_backspace() {
+    let home = home("claudehintpersonkey");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(5))
+        .await;
+    assert_eq!(harness.cli_reads(1), b" ");
+
+    harness.type_bytes(b"x").await.unwrap();
+    harness.plain_claude_input(" ", "");
+    assert_eq!(harness.cli_reads(1), b"\x7f", "Backspace goes first");
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    let key = harness.cli_reads(1);
+    assert_eq!(key, b"x", "the person's key follows cleanup");
+    harness.plain_claude_input(std::str::from_utf8(&key).unwrap(), "");
+    assert_plain_draft_held(&mut harness, message, "x").await;
+    harness.stop().await;
+    std::fs::remove_dir_all(&home).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_call_held_for_a_plain_claude_hint_probe_runs_after_withdrawal() {
+    let home = home("claudehintcall");
+    let mut harness = claude(&home, false);
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    let message = harness
+        .queue_probe_message("a message", Duration::from_secs(10))
+        .await;
+    assert_eq!(harness.cli_reads(1), b" ");
+
+    let answer = harness
+        .type_call(Typing::keys(&["x".into()]).unwrap())
+        .await
+        .unwrap();
+    assert!(harness.messages.withdraw(1));
+    assert!(matches!(
+        probe_message_settled(message).await,
+        crate::messages::Settled::Cancelled
+    ));
+    harness.plain_claude_input(" ", "");
+    assert_eq!(harness.cli_reads(1), b"\x7f");
+    harness.plain_claude_input("", CLAUDE_PLAIN_HINT);
+    assert_eq!(harness.cli_reads(1), b"x");
+    answered(answer).await.unwrap();
     harness.stop().await;
     std::fs::remove_dir_all(&home).unwrap();
 }

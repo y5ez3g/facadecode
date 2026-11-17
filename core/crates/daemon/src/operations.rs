@@ -498,6 +498,7 @@ impl Daemon {
             info: info.clone(),
             master: Some(started.master),
             screen: ScreenStart::New(screen.clone()),
+            untouched_input: args.session.is_none(),
             rule: rule.map(|rule| rule.cli.clone()),
             captures: prepared.captures,
             deliveries: self.messages.delivery_handle(),
