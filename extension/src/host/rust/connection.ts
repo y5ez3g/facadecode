@@ -20,7 +20,7 @@ import { OLDEST_PROTOCOL, PROTOCOL } from '../../base/coreProtocol';
 import type { ChangedParams, EmptyResult, ErrorBody, HelloParams, HelloResult, NumbersGiven, Operation, ScreenChange, Topic, UpgradeArgs, WatchResult, WindowDescription } from '../../base/coreProtocol';
 import type { Disposable } from '../../core/ports';
 import { DaemonError } from './types';
-import type { DaemonLink } from './types';
+import type { DaemonLink, TerminalNotificationArgs } from './types';
 
 /** The keeper protocol versions the packaged program speaks (its oldest and newest), which `daemon.upgrade` tells the daemon (KEEPER.md). */
 const KEEPER_PROTOCOL: readonly [number, number] = [1, 1];
@@ -294,7 +294,7 @@ class Link implements DaemonLink {
 		}
 	}
 
-	notify(op: 'agent.type' | 'agent.resize', args: object): void {
+	notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]): void {
 		this.connection?.notify('call', { op, args });
 	}
 

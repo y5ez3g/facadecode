@@ -11,7 +11,7 @@ import type { Disposable, Event, PairFacts, RunId, TabPlace } from '../../core/p
 import type { RunBinding } from '../execution/agentPty';
 import { AgentTerminals, type AgentTerminal } from '../execution/agentTerminals';
 import type { RunScreen } from '../execution/hiddenAnswers';
-import type { DaemonLink, RustTerminals } from './types';
+import { encodeTerminalInput, type DaemonLink, type RustTerminals } from './types';
 
 /** What `AgentTerminals` is made with: the layer gives `media`, `icon`, `log` and `colours` alone; the callbacks are this class's own. */
 type TerminalOptions = ConstructorParameters<typeof AgentTerminals>[0];
@@ -206,7 +206,7 @@ export class DaemonTerminals implements RustTerminals, vscode.Disposable {
 					change: change => this.change(pair, change)
 				});
 			}),
-			input: data => this.link.notify('agent.type', { agent, raw: data }),
+			input: data => this.link.notify('agent.type', { agent, raw: encodeTerminalInput(data) }),
 			resize: (cols, rows) => this.link.notify('agent.resize', { agent, cols, rows })
 		};
 	}

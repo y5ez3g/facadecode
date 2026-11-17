@@ -6,7 +6,7 @@
 // daemon protocol (ARCHITECTURE-1.1).
 
 import type { Disposable, ExecutionPort, RunId } from '../../core/ports';
-import type { ErrorData, Operation, Reason, Topic, WindowDescription } from '../../base/coreProtocol';
+import type { ErrorData, Operation, Reason, ResizeArgs, Topic, TypeArgs, WindowDescription } from '../../base/coreProtocol';
 
 /** The engine a window runs its agents on, chosen once as it opens or reloads: core, or the extension's own. */
 export type Engine = 'rust' | 'old';
@@ -21,12 +21,26 @@ export class DaemonError extends Error {
 	}
 }
 
+declare const base64Input: unique symbol;
+type Base64Input = string & { readonly [base64Input]: true };
+
+/** The terminal's input as UTF-8 bytes in standard base64 with padding, as `agent.type.raw` carries them. */
+export function encodeTerminalInput(data: string): Base64Input {
+	return Buffer.from(data, 'utf8').toString('base64') as Base64Input;
+}
+
+/** Notification arguments at the daemon boundary: a plain input string must be encoded before it can be `raw`. */
+export interface TerminalNotificationArgs {
+	readonly 'agent.type': Omit<TypeArgs, 'raw'> & { readonly raw?: Base64Input };
+	readonly 'agent.resize': ResizeArgs;
+}
+
 /** This window's connection to core, kept across core's restarts and handovers to a newer build. */
 export interface DaemonLink {
 	/** Runs `op`; rejects with a {@link DaemonError}. A call refused as `upgrading` is sent again once the new daemon responds. */
 	call<R>(op: Operation, args: object): Promise<R>;
 	/** Sends `op` without a response: what the person types, and a terminal's size. Dropped while disconnected. */
-	notify(op: 'agent.type' | 'agent.resize', args: object): void;
+	notify<O extends keyof TerminalNotificationArgs>(op: O, args: TerminalNotificationArgs[O]): void;
 	/** Follows `topic`: its snapshot, then its changes; a snapshot again after each reconnection, before its changes. */
 	watch<S, C>(topic: Topic, args: object, on: { snapshot(snapshot: S): void; change(change: C): void }): Disposable;
 	/** Describes the window again (`window.update`); the next `hello` describes it so too. */
