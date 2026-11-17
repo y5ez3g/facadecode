@@ -1,6 +1,6 @@
 // Core's two programs for the extension (ARCHITECTURE-4.3): `facade` and `facade-mcp`, built in release mode for this host's
 // target - on Linux for musl, so one file runs on every Linux - and copied into bin/, from where packaging and the integration
-// build take them. The Windows packages carry none: a package without bin/facade runs the old engine.
+// build take them. A Windows package carries facade.exe and facade-mcp.exe, with ConPTY in bin/conpty/.
 //
 //   node scripts/core.mjs [--target <rust target triple>]
 //
@@ -18,27 +18,37 @@ export const BIN = path.join(extension, 'bin');
 /** The programs, by the name each is run by; the Cargo package that builds each is named beside it. */
 export const PROGRAMS = { facade: 'facade', 'facade-mcp': 'facade-relay' };
 
-/** The Rust target core is built for on this host, or none where the extension has no core (Windows). */
+/** The Rust target core is built for on this host, or none for an unsupported host. */
 export function coreTriple(platform = process.platform, arch = process.arch) {
 	const cpu = { x64: 'x86_64', arm64: 'aarch64' }[arch];
 	if (!cpu) {
 		return undefined;
 	}
-	return { darwin: `${cpu}-apple-darwin`, linux: `${cpu}-unknown-linux-musl` }[platform];
+	return { darwin: `${cpu}-apple-darwin`, linux: `${cpu}-unknown-linux-musl`, win32: `${cpu}-pc-windows-msvc` }[platform];
 }
 
-/** Builds core's release for `triple` and puts its programs in bin/, nothing else. */
+/** Builds core's release for `triple` and puts its programs and, on Windows, ConPTY in bin/. */
 export function buildCore(triple = coreTriple()) {
 	if (!triple) {
-		throw new Error(`Core is built for macOS and Linux on x64 and arm64, not for ${process.platform}-${process.arch}.`);
+		throw new Error(`Core is built for macOS, Windows and Linux on x64 and arm64, not for ${process.platform}-${process.arch}.`);
 	}
 	execFileSync('cargo', ['build', '--release', '--locked', '--target', triple, ...Object.values(PROGRAMS).flatMap(name => ['-p', name])], { cwd: CORE, stdio: 'inherit' });
 	const built = path.join(path.resolve(CORE, process.env.CARGO_TARGET_DIR ?? 'target'), triple, 'release');
 	fs.rmSync(BIN, { recursive: true, force: true });
 	fs.mkdirSync(BIN, { recursive: true });
+	const windows = triple.endsWith('-windows-msvc');
 	for (const program of Object.keys(PROGRAMS)) {
-		fs.copyFileSync(path.join(built, program), path.join(BIN, program));
-		fs.chmodSync(path.join(BIN, program), 0o755);
+		const file = windows ? `${program}.exe` : program;
+		fs.copyFileSync(path.join(built, file), path.join(BIN, file));
+		if (!windows) {
+			fs.chmodSync(path.join(BIN, file), 0o755);
+		}
+	}
+	if (windows) {
+		fs.mkdirSync(path.join(BIN, 'conpty'));
+		for (const file of ['conpty.dll', 'OpenConsole.exe']) {
+			fs.copyFileSync(path.join(built, 'conpty', file), path.join(BIN, 'conpty', file));
+		}
 	}
 	console.info(`Core ${workspaceVersion(fs.readFileSync(path.join(CORE, 'Cargo.toml'), 'utf8'))}: ${Object.keys(PROGRAMS).join(', ')} for ${triple} in bin/.`);
 }
@@ -120,23 +130,22 @@ export function zipModes(file) {
 }
 
 /**
- * Why `files` - a package's `{ name, bytes }` each, in `modes` by name - carry core's programs wrongly for `target`: any in a
- * Windows package; in another, a program missing, no binary, not executable, or on Linux not a static one. No problems, none returned.
+ * Why `files` - a package's `{ name, bytes }` each, in `modes` by name - carry core's programs wrongly for `target`: a
+ * program or ConPTY file missing, no binary, on Unix not executable, or on Linux not a static one. No problems, none returned.
  * Whose OS and architecture a binary is of is `nativeProblems`'.
  */
 export function programProblems(files, target, modes) {
 	const inBin = files.filter(file => file.name.startsWith('extension/bin/'));
-	if (target.startsWith('win32-')) {
-		return inBin.map(file => `${file.name} is core's, in a package for Windows`);
-	}
+	const windows = target.startsWith('win32-');
+	const required = windows ? ['facade.exe', 'facade-mcp.exe', 'conpty/conpty.dll', 'conpty/OpenConsole.exe'] : Object.keys(PROGRAMS);
 	const problems = [];
-	for (const program of Object.keys(PROGRAMS)) {
+	for (const program of required) {
 		const file = inBin.find(each => each.name === `extension/bin/${program}`);
 		if (!file) {
 			problems.push(`bin/${program} is not in the package`);
 		} else if (!binaryTarget(file.bytes)) {
 			problems.push(`bin/${program} is no program`);
-		} else if (!((modes.get(file.name) ?? 0) & 0o100)) {
+		} else if (!windows && !((modes.get(file.name) ?? 0) & 0o100)) {
 			problems.push(`bin/${program} is not executable`);
 		} else if (target.startsWith('linux-') && namesDynamicLinker(file.bytes)) {
 			problems.push(`bin/${program} is not a static musl build: it names a dynamic linker`);

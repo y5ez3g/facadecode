@@ -62,5 +62,5 @@
 	"config.home.pattern": "路径必须以 ~/ 开头或是绝对路径。",
 	"config.moved": "已搬到 `facade.json`。[在 facade.json 中编辑](command:facade.openSettingsFile)",
 	"config.movedPlain": "已搬到 facade.json。运行“Facade Code: 打开设置”即可找到它。",
-	"config.rustEngine": "控制运行 Agent 的引擎。全新的 Rust 引擎专为极致性能打造。\n\n- `auto`：使用 Rust 引擎。这台计算机上旧引擎的 Agent 全部结束后，窗口才会切换过去。正在运行的 Agent 不会被打断；一旦可以切换，Facade 会提示你重新加载窗口。\n- `off`：使用旧引擎。如果 Rust 引擎出了问题，请选择 `off` 并重新加载窗口，然后[在 GitHub 上提交问题](https://github.com/y5ez3g/facadecode/issues)告诉我们。\n\n在 Windows 上，Agent 暂时仍使用旧引擎。在远程窗口中，以远程计算机上的设置为准。"
+	"config.rustEngine": "控制运行 Agent 的引擎。全新的 Rust 引擎专为极致性能打造。\n\n- `auto`：使用 Rust 引擎。这台计算机上旧引擎的 Agent 全部结束后，窗口才会切换过去。正在运行的 Agent 不会被打断；一旦可以切换，Facade 会提示你重新加载窗口。\n- `off`：使用旧引擎。如果 Rust 引擎出了问题，请选择 `off` 并重新加载窗口，然后[在 GitHub 上提交问题](https://github.com/y5ez3g/facadecode/issues)告诉我们。\n\n在远程窗口中，以远程计算机上的设置为准。"
 }

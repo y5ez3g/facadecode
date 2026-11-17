@@ -11,8 +11,8 @@ import type { ErrorData, Operation, Reason, ResizeArgs, Topic, TypeArgs, WindowD
 /** The engine a window runs its agents on, chosen once as it opens or reloads: core, or the extension's own. */
 export type Engine = 'rust' | 'old';
 
-/** Core's `facade` program in this extension's package, relative to its folder: none in a package that carries no core. */
-export const FACADE_PROGRAM = 'bin/facade';
+/** Core's `facade` program in this extension's package, relative to its folder (ARCHITECTURE-1.4). */
+export const FACADE_PROGRAM = process.platform === 'win32' ? 'bin/facade.exe' : 'bin/facade';
 
 /** A call core refused: `reason` decides what the person reads, and the message, core's own words, follows it as the detail. */
 export class DaemonError extends Error {

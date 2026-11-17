@@ -55,15 +55,15 @@ size comparison.
 
 Use ARCHITECTURE-5.1's type checks, unit suite, bundle, package checks and isolated integration suite, together with the
 translation check `node scripts/l10n.mjs check` and the specification audit (audit/REPORT.md); the extension's
-pull-request checks run all of them on Linux x64, Windows x64 and macOS arm64. The integration suite runs on each engine
-(ARCHITECTURE-1.4): `FACADE_IT_ENGINE=old`, the default, sets `facade.rustEngine` to `off`; `rust` runs the same journeys,
-and the Rust engine's own (switching engines, End Agent leaving nothing in core, Resume by session, color replies in a
-light theme, `facade list` in a window's terminal), on core's programs in the stage, where the package carries them. Add failure-injection tests where
-behavior involves changed input, lifecycle or result handling; a test that repeats implementation logic is
-insufficient. A fix to a test tool keeps every product assertion. A docs-only amendment needs the specification audit;
-nobody needs to rerun the code suites for it, while the pull-request checks run their own. Re-run relevant checks when
-an amendment changes behavior, and full gates at final code handoff. List unrun platform checks explicitly instead of
-implying a local mock proves native support.
+pull-request checks run all of them on Linux, Windows and macOS, each on x64 and arm64. The integration suite runs on
+each engine (ARCHITECTURE-1.4): `FACADE_IT_ENGINE=old`, the default, sets `facade.rustEngine` to `off`; `rust` runs the
+same journeys, and the Rust engine's own (switching engines, End Agent leaving nothing in core, Resume by session, color
+replies in a light theme, `facade list` in a window's terminal), on core's programs in the stage, where the package
+carries them. Add failure-injection tests where behavior involves changed input, lifecycle or result handling; a test
+that repeats implementation logic is insufficient. A fix to a test tool keeps every product assertion. A docs-only
+amendment needs the specification audit; nobody needs to rerun the code suites for it, while the pull-request checks run
+their own. Re-run relevant checks when an amendment changes behavior, and full gates at final code handoff. List unrun
+platform checks explicitly instead of implying a local mock proves native support.
 
 ## 2 Critical gates
 

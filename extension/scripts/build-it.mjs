@@ -14,7 +14,7 @@ if (!['extension.js', 'ptyd.js'].every(file => fs.existsSync(path.join(shipped, 
 }
 fs.rmSync(stage, { recursive: true, force: true });
 fs.cpSync(shipped, stage, { recursive: true });
-// The Rust engine runs on core's programs; Windows has none and runs the old engine
+// The Rust engine runs on core's programs, on every supported target
 if (coreTriple()) {
 	buildCore();
 	fs.cpSync(BIN, path.join(stage, 'bin'), { recursive: true });
