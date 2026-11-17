@@ -616,7 +616,7 @@ impl Daemon {
         let unreadable = |why: String| {
             ErrorBody::new(
                 Reason::Unavailable,
-                format!("#{id}'s environment cannot be read: {why}; nothing was started"),
+                format!("#{id}'s environment is unavailable: {why}; nothing was started"),
             )
         };
         let agent = self.get_agent(id).ok_or_else(|| {

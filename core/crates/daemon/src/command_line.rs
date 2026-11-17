@@ -363,8 +363,8 @@ pub(crate) fn check_start_prompt(
 
 /// The environment a creator's CLI started with, `read` from its process, less the wiring its
 /// `rule` added, so one CLI's settings never reach another's. Else why it cannot be had: nothing
-/// read means the CLI is not running; a read without the `FACADE_AGENT` Facade set is one the
-/// system keeps hidden, as macOS does for its own programs.
+/// read means the CLI is not running; what was read needs the `FACADE_AGENT` Facade set before
+/// it can be used as a creator's environment.
 pub(crate) fn creator_environment(
     read: Option<BTreeMap<String, String>>,
     rule: Option<&Rule>,
@@ -373,7 +373,7 @@ pub(crate) fn creator_environment(
         return Err("its CLI is not running");
     };
     if !env.contains_key("FACADE_AGENT") {
-        return Err("the system keeps it hidden");
+        return Err("the environment read from its CLI has no FACADE_AGENT");
     }
     if let Some(rule) = rule {
         rule.remove_wiring_environment(&mut env);
