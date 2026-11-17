@@ -1,20 +1,16 @@
 //! Editor windows (RULES-4.1, ARCHITECTURE-2.2): what each `ide` client says of its window, how
-//! many of the window's connections are open, its locations as last read, and how long its agents
-//! wait once it goes.
+//! many of the window's connections are open, and its locations as last read.
 //!
-//! A window whose last connection closes has left. Each leaving has its own number, so a grace that
-//! started then ends nothing once the window has connected again. A local window's agents wait 90
-//! seconds for it, any other window's five minutes. What happens to the agents is not decided here:
-//! leaving and a grace running out are reported as [`WindowEvent`]s, and the agents' owner stops or
-//! moves them. The windows' rows in `facade.db` keep each description, so that a daemon started
-//! anew can give its windows their grace.
+//! Each time a window's last connection closes, it gets a new departure number. The daemon uses
+//! the number from [`WindowEvent::Left`] to verify the window is still disconnected for that
+//! departure before removing it. The rows in `facade.db` keep descriptions for recovery and
+//! takeover by another window of the same workspace.
 
 mod locations;
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use facade_base::daemon::{
     LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, TerminalColors, WindowDescription,
@@ -28,19 +24,13 @@ use crate::blocking_in_place;
 use crate::store::WindowTable;
 use locations::{Catalog, Creations};
 
-/// How long a local window's agents wait for it.
-const LOCAL_GRACE: Duration = Duration::from_secs(90);
-/// How long the agents of any other window, or one whose environment is unknown, wait for it.
-const REMOTE_GRACE: Duration = Duration::from_secs(5 * 60);
 /// The most window changes queued for a watcher before it gets every window again.
 const MAX_QUEUED_CHANGES: usize = 256;
 
-/// What a window did that its agents' owner acts on.
+/// A change in window presence reported to the daemon.
 pub(crate) enum WindowEvent {
     /// The window's last connection closed: its `departure`-th leaving.
     Left { window_id: String, departure: u64 },
-    /// The window did not come back within the grace that its `departure`-th leaving started.
-    GraceEnded { window_id: String, departure: u64 },
 }
 
 /// A read of a window's locations: says which agent folders are gone.
@@ -80,7 +70,7 @@ pub(crate) struct Windows {
     creations: Creations,
 }
 
-/// What [`Windows`] shares with its connection guards and grace timers.
+/// What [`Windows`] shares with its connection and watch guards.
 struct Shared {
     /// The windows' lock: a leaf, taken and released inside each method.
     windows: Mutex<HashMap<String, Window>>,
@@ -103,14 +93,14 @@ struct Window {
 }
 
 impl Window {
-    fn new(description: WindowDescription, departures: u64) -> Window {
+    fn new(description: WindowDescription) -> Window {
         Window {
             description,
             connections: 0,
             watchers: 0,
             catalog: Catalog::default(),
             read_at: None,
-            departures,
+            departures: 0,
         }
     }
 
@@ -146,15 +136,6 @@ impl Shared {
         });
     }
 
-    /// Whether window `id` is still away since its `departure`-th leaving.
-    fn away_since(&self, id: &str, departure: u64) -> bool {
-        self.windows
-            .lock()
-            .unwrap()
-            .get(id)
-            .is_some_and(|window| window.away_since(departure))
-    }
-
     /// One connection of window `id` closed; the last one makes the window leave.
     fn disconnect(&self, id: &str) {
         let departure = {
@@ -179,26 +160,6 @@ impl Shared {
 
 fn warn(message: &str) {
     facade_base::log::write("daemon", "warn", message);
-}
-
-/// The grace a window of `environment` gets; `FACADE_TEST_GRACE_MS` shortens it in a debug build.
-fn grace(environment: &str) -> Duration {
-    #[cfg(debug_assertions)]
-    if let Some(ms) = std::env::var("FACADE_TEST_GRACE_MS")
-        .ok()
-        .and_then(|ms| ms.parse().ok())
-    {
-        return Duration::from_millis(ms);
-    }
-    rules_grace(environment)
-}
-
-/// The grace RULES-4.1 gives a window of `environment`.
-fn rules_grace(environment: &str) -> Duration {
-    match environment {
-        "local" => LOCAL_GRACE,
-        _ => REMOTE_GRACE,
-    }
 }
 
 /// One open connection of an editor window. Dropping the last one makes the window leave.
@@ -228,7 +189,7 @@ impl Drop for PersonWatch {
 }
 
 impl Windows {
-    /// No windows yet. Rows go to `table`; leavings and graces that run out go to `events`.
+    /// No windows yet. Rows go to `table`. Departures go to `events`.
     pub(crate) fn new(table: WindowTable, events: mpsc::UnboundedSender<WindowEvent>) -> Windows {
         Windows {
             shared: Arc::new(Shared {
@@ -241,13 +202,11 @@ impl Windows {
         }
     }
 
-    /// Takes back `running`, the editor windows that hold running agents, each as left once and
-    /// with no connection: to a window, a daemon's restart is a lost connection. Each keeps the
-    /// description the table kept, or, where it is lost, its ID as its name and a remote window's
-    /// grace. The rows of `agents`, the windows that hold any agent's record, stay, unlisted: a
-    /// later window of their workspace takes them over. Deletes the other rows. Answers the
-    /// windows taken back, whose graces the caller starts. Blocks on the table.
-    pub(crate) fn restore(&self, running: &[String], agents: &[String]) -> Vec<String> {
+    /// Restores the editor windows in `running` with no connections. Uses the saved descriptions,
+    /// or each window's ID as its label if its description is missing. Other windows in `agents`
+    /// keep their rows outside the list for a later window of their workspace to take over.
+    /// Deletes rows for windows with no agents. Blocks on the table.
+    pub(crate) fn restore(&self, running: &[String], agents: &[String]) {
         let kept = blocking_in_place(|| self.shared.table.windows()).unwrap_or_else(|err| {
             warn(&format!("{err:#}"));
             Vec::new()
@@ -256,34 +215,29 @@ impl Windows {
             .into_iter()
             .map(|description| (description.id.clone(), description))
             .collect();
-        let mut restored = Vec::new();
-        for id in running {
-            if *id == TERMINAL_WINDOW || restored.contains(id) {
-                continue;
+        {
+            let mut windows = self.shared.windows.lock().unwrap();
+            for id in running.iter().filter(|id| id.as_str() != TERMINAL_WINDOW) {
+                windows.entry(id.clone()).or_insert_with(|| {
+                    let description = kept.remove(id).unwrap_or_else(|| WindowDescription {
+                        id: id.clone(),
+                        label: id.clone(),
+                        environment: "unknown".into(),
+                        workspace: None,
+                        folders: Vec::new(),
+                        branch_prefix: None,
+                        colors: None,
+                        env: None,
+                    });
+                    Window::new(description)
+                });
             }
-            let description = kept.remove(id).unwrap_or_else(|| WindowDescription {
-                id: id.clone(),
-                label: id.clone(),
-                environment: "unknown".into(),
-                workspace: None,
-                folders: Vec::new(),
-                branch_prefix: None,
-                colors: None,
-                env: None,
-            });
-            self.shared
-                .windows
-                .lock()
-                .unwrap()
-                .insert(id.clone(), Window::new(description, 1));
-            restored.push(id.clone());
         }
         for id in kept.keys().filter(|id| !agents.contains(id)) {
             if let Err(err) = blocking_in_place(|| self.shared.table.delete_window(id)) {
                 warn(&format!("{err:#}"));
             }
         }
-        restored
     }
 
     /// Refuses a description no editor window gives: no ID, the terminal window's ID, or a folder
@@ -353,7 +307,7 @@ impl Windows {
             }
             let window = windows
                 .entry(id.clone())
-                .or_insert_with(|| Window::new(description.clone(), 0));
+                .or_insert_with(|| Window::new(description.clone()));
             window.description = description.clone();
             if connecting {
                 window.connections += 1;
@@ -407,40 +361,6 @@ impl Windows {
             self.shared.updated(window);
         }
         Some(LocationsRead { catalog, dropped })
-    }
-
-    /// Starts the grace of window `id`'s `departure`-th leaving: once it runs out with the window
-    /// still away, sends [`WindowEvent::GraceEnded`]. Does not wait.
-    pub(crate) fn start_grace(&self, id: &str, departure: u64) {
-        let environment = self
-            .shared
-            .windows
-            .lock()
-            .unwrap()
-            .get(id)
-            .map(|window| window.description.environment.clone())
-            .unwrap_or_default();
-        let (shared, id) = (self.shared.clone(), id.to_string());
-        tokio::spawn(async move {
-            let grace = grace(&environment);
-            tokio::time::sleep(grace).await;
-            if shared.away_since(&id, departure) {
-                facade_base::log::write(
-                    "daemon",
-                    "info",
-                    &format!(
-                        "window {id} did not come back within {} seconds",
-                        grace.as_secs()
-                    ),
-                );
-                let _ = shared.events.send(WindowEvent::GraceEnded {
-                    window_id: id,
-                    departure,
-                });
-            } else {
-                facade_base::service::mark_for_test("grace-window-back");
-            }
-        });
     }
 
     /// Removes window `id` from the list, unless it connected again since its `departure`-th
@@ -646,24 +566,5 @@ impl Windows {
             .and_then(|read| read.catalog.location(&made.path).cloned())
             .unwrap_or(made);
         Ok((listed, read))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A local window's agents wait 90 seconds for it, and any other window's five minutes
-    /// (RULES-4.1).
-    #[test]
-    fn a_local_window_s_grace_is_90_seconds_and_any_other_s_five_minutes() {
-        assert_eq!(rules_grace("local"), Duration::from_secs(90));
-        for environment in ["ssh-remote+devbox", "wsl+Ubuntu", "unknown"] {
-            assert_eq!(
-                rules_grace(environment),
-                Duration::from_secs(300),
-                "{environment}"
-            );
-        }
     }
 }
