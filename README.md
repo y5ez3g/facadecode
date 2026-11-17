@@ -16,6 +16,15 @@ Run native agent CLIs, edit code, and review changes in the same IDE window. Use
 
 **English** · [简体中文](docs/locales/zh-CN/README.md) · [繁體中文](docs/locales/zh-TW/README.md) · [Português (Brasil)](docs/locales/pt-BR/README.md) · [Español](docs/locales/es/README.md) · [Русский](docs/locales/ru/README.md) · [Deutsch](docs/locales/de/README.md) · [日本語](docs/locales/ja/README.md) · [Bahasa Indonesia](docs/locales/id/README.md) · [Français](docs/locales/fr/README.md) · [한국어](docs/locales/ko/README.md) · [Türkçe](docs/locales/tr/README.md) · [Tiếng Việt](docs/locales/vi/README.md) · [Polski](docs/locales/pl/README.md)
 
+<p>
+  <a href="https://upstar.dev/t/editors/week/2026-11-09">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://upstar.dev/badge/y5ez3g/facadecode/award/editors-dark.svg">
+      <img alt="Upstar: #4 Riser Of The Week in Editors &amp; IDEs, November 9–15, 2026" src="https://upstar.dev/badge/y5ez3g/facadecode/award/editors.svg" width="250" height="55">
+    </picture>
+  </a>
+</p>
+
 </div>
 
 [![Watch the 2-minute demo on facadecode.com](docs/assets/readme/demo-poster.jpg)](https://facadecode.com)
