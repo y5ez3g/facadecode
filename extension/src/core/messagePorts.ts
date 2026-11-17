@@ -196,9 +196,10 @@ export interface InputPort {
 	/**
 	 * The input now: a usable composer without draft, a draft - `own` where it is `own` alone as its CLI draws it, after `lead` where
 	 * that was typed, the message an earlier attempt wrote whole (RULES-1.6), and `seen` itself where its CLI drew it as a placeholder
-	 * then (RULES-1.5) - a native interaction, or unknown.
+	 * then (RULES-1.5) - a native interaction, or unknown; `unsure` where its only row may be a hint or a draft, which a submission
+	 * tells apart in its turn (CLIS-2.1).
 	 */
-	inspect(run: RunId, own?: string, lead?: string, seen?: string): Promise<'usable' | 'draft' | 'own' | 'interaction' | 'unknown'>;
+	inspect(run: RunId, own?: string, lead?: string, seen?: string): Promise<'usable' | 'draft' | 'own' | 'interaction' | 'unknown' | 'unsure'>;
 	/**
 	 * Pastes the complete text once - `lead` typed before it where its CLI takes a paste alone as material (COLLABORATION-2.1) - and presses Enter
 	 * once the input shows it as its own draft, answering what actually went in and whether the input showed it (RULES-1.3, 1.6,
@@ -224,6 +225,8 @@ export interface Submission {
 	readonly shown: boolean;
 	/** The draft it showed as, its own and alone, where it did. */
 	readonly draft?: string;
+	/** What held the input, nothing typed, where a probe found a draft there or could not tell (CLIS-2.1). */
+	readonly held?: 'input_draft' | 'input_unknown';
 }
 
 /** Explicit contact with the person in the sender's window (COLLABORATION-2.3): true once handed to the editor. */

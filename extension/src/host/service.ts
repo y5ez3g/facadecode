@@ -308,7 +308,7 @@ export async function activateFacade(context: vscode.ExtensionContext): Promise<
 		get: run => agents.get(run),
 		inspectInput: (run, adapter) => execution.inspectInput(run, adapter),
 		typeText: (run, text, enter, lead) => execution.typeText(run, text, enter, lead),
-		pressKeys: (run, keys) => execution.pressKeys(run, keys),
+		pressKeys: (run, keys, unlessTyped) => execution.pressKeys(run, keys, unlessTyped),
 		readScreen: (run, lines) => execution.readScreen(run, lines),
 		log: text => log.event(text)
 	});

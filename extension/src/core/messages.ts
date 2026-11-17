@@ -795,7 +795,8 @@ export class MessageService implements Messages, Disposable {
 				// makes its own
 				return input === 'usable' || stage.effects.text_written === 'partial' ? { kind: 'waiting' } : { kind: 'blocked', obstacle: OBSTACLES[input] ?? 'input_unknown' };
 			}
-		} else if (input !== 'usable') {
+		} else if (input !== 'usable' && input !== 'unsure') {
+			// Unsure goes on to its submission, which tells a hint from a draft in the run's turn (CLIS-2.1)
 			return { kind: 'blocked', obstacle: OBSTACLES[input] ?? 'input_unknown' };
 		} else if ([...this.stages].some(other => other !== stage && other.target === stage.target && (other.written || other.submitting) && !other.confirmed && !other.stop.signal.aborted)) {
 			// Another delivery's text may be in the input still, drawn late: nothing is pasted with it (RULES-1.10)
@@ -836,6 +837,10 @@ export class MessageService implements Messages, Disposable {
 			if (!stage.written && stage.batch) {
 				// Nothing typed: the results go on gathering, and one read meanwhile is left out (RULES-1.7)
 				stage.batch.typed = undefined;
+			}
+			if (submission.held !== undefined && !stage.written) {
+				// Its probe found a draft there, or could not tell: held as by such an input (CLIS-2.1)
+				return { kind: 'blocked', obstacle: submission.held };
 			}
 			return { kind: 'submitted', effects: submission.effects };
 		} catch (err) {

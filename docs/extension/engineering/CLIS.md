@@ -186,7 +186,16 @@ would be - the cursor at the input start, nothing typed before it - in a color n
 never as an empty input or a draft, except where its words are recognized, as OpenCode's and Antigravity's mode hints'
 are: a person's draft is never taken for an empty input, and a draft a CLI draws in a color of its own is never
 submitted with a message. OpenCode, which draws typed text and its placeholder
-in the same color, has its placeholder known by its words. A reader goes by layout, not version number, and tells a usable input from a
+in the same color, has its placeholder known by its words. Where that unknown text, dim or colored and some of it colored, is the
+input's only row, a submission, and a start's text before its first turn, probe it in the run's turn: a space typed where the input
+starts, read once drawn still - the same row and cursor read twice a tenth of a second apart, for at most a second. The space went in
+where the cursor moved one column on along the same row; the row gone, its space alone, it was a hint and the input is empty; the row
+there behind the space, a draft; anything else, or a row that never drew still, neither. Backspace follows only where the space went
+in and no menu or question came, and the input is read once drawn still again: every cell and the cursor as before, or, for a hint,
+an empty input or a hint again where it starts. Neither key goes once the person has typed since the probe's reading, compared as each
+key is sent (RULES-1.4); after a space that did not go in, a menu, or an input not put back, nothing more is pressed and the input reads
+unknown. What a probe found is kept with its row for the rest of that run, so that no row is probed twice in a run; reading the input
+before a delivery types nothing and recalls nothing. A reader goes by layout, not version number, and tells a usable input from a
 draft by nothing outside the box: footers, hints, status rows and warnings may change, as a CLI updates or within a
 session, without changing what it reads, apart from the two places below where the box alone cannot tell - Antigravity's
 colored placeholder and the lower edge of Codex's box. A CLI's questions, menus and logins take its box's place: a
