@@ -17,7 +17,7 @@
 // screen no reader recognizes (RULES-1.6) - or ask its terminal a question, as a CLI does. Everything it is given comes in a JSON line of
 // `<record>.stdin.<agent>` too, as it came.
 
-import { spawn } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { randomUUID } from 'crypto';
@@ -75,10 +75,15 @@ if (sessionFile) {
 	// session file is, this fixture writes the file as those reports end up (core's `sessions`: the ID and a newline), once, as it starts
 	if (!hook && !sessionFile && process.env.FACADE_AGENT) {
 		const files = args.flatMap((arg, at) => ['-e', '--settings'].includes(args[at - 1] ?? '') && fs.existsSync(arg) ? [fs.readFileSync(arg, 'utf8')] : []);
-		const text = [...args, process.env.OPENCODE_CONFIG_CONTENT ?? '', process.env.OPENCODE_CLI_CONFIG_CONTENT ?? '', ...files].join('\n');
-		// The run's folder, named by its session file, or by the folder of the plugin that writes it (OpenCode's)
-		const folder = /(\/[^\s'"\\]*\/runs\/[^\s'"\\/]+\/[^\s'"\\/]+)\/(?:session|facade-session)(?![\w.-])/.exec(text)?.[1];
-		const file = folder && `${folder}/session`;
+		// On Windows a hook may come as PowerShell's `-EncodedCommand`, its script in UTF-16 base64 (Codex's)
+		const encoded = [...[...args, ...files].join('\n').matchAll(/-EncodedCommand\s+([A-Za-z0-9+/=]+)/g)].map(match => Buffer.from(match[1], 'base64').toString('utf16le'));
+		const text = [...args, process.env.OPENCODE_CONFIG_CONTENT ?? '', process.env.OPENCODE_CLI_CONFIG_CONTENT ?? '', ...files, ...encoded].join('\n');
+		// The run's folder, named by its session file, or by the folder of the plugin that writes it (OpenCode's); on Windows with
+		// backslashes, doubled where the text escapes them
+		const folder = process.platform === 'win32'
+			? /([A-Za-z]:(?:\\+[^\s'"\\/]+)*?\\+runs\\+[^\s'"\\/]+\\+[^\s'"\\/]+)\\+(?:session|facade-session)(?![\w.-])/.exec(text)?.[1]?.replace(/\\+/g, '\\')
+			: /(\/[^\s'"\\]*\/runs\/[^\s'"\\/]+\/[^\s'"\\/]+)\/(?:session|facade-session)(?![\w.-])/.exec(text)?.[1];
+		const file = folder && path.join(folder, 'session');
 		if (file) {
 			const flag = args.findIndex(arg => ['--resume', '--conversation', '--session', 'resume'].includes(arg));
 			const session = flag >= 0 ? args[flag + 1] : process.env.FACADE_IT_AS === 'opencode' ? `ses_fake${randomUUID().replace(/-/g, '').slice(0, 12)}` : randomUUID();
@@ -94,7 +99,10 @@ if (sessionFile) {
 		if (!fs.existsSync(transcript)) {
 			fs.writeFileSync(transcript, `${JSON.stringify({ type: 'user', sessionId: session, cwd: process.cwd(), parentUuid: null, message: { role: 'user', content: 'Fake conversation' } })}\n`);
 		}
-		const run = spawn('/bin/sh', ['-c', hook], { stdio: ['pipe', 'ignore', 'ignore'], env: process.env });
+		// Claude Code runs hooks in sh: on Windows Git for Windows' `bin\sh.exe`, its install folder three above `git --exec-path`
+		const sh = process.platform === 'win32'
+			? path.join(execFileSync('git', ['--exec-path'], { encoding: 'utf8' }).trim(), '..', '..', '..', 'bin', 'sh.exe') : '/bin/sh';
+		const run = spawn(sh, ['-c', hook],{ stdio: ['pipe', 'ignore', 'ignore'], env: process.env });
 		run.stdin.end(JSON.stringify({ hook_event_name: 'SessionStart', session_id: session, transcript_path: transcript, cwd: process.cwd(), source: flag >= 0 ? 'resume' : 'startup' }));
 	}
 }
@@ -220,7 +228,8 @@ function draw(): void {
 	// What it printed sits right above its input, as a CLI's transcript does
 	const top = height - input.length;
 	body.forEach((line, at) => out.push(`\x1b[${top - body.length + at + 1};1H${line}`));
-	input.forEach((row, at) => out.push(`\x1b[${top + at + 1};1H${row.text}`));
+	// A border may have wrapped onto this row if the terminal resized before the redraw.
+	input.forEach((row, at) => out.push(`\x1b[${top + at + 1};1H\x1b[K${row.text}`));
 	out.push('\x1b8');
 	out.push('\x1b[?2026l');
 	process.stdout.write(out.join(''));

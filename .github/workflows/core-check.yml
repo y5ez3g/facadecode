@@ -26,6 +26,10 @@ jobs:
             target: linux-x64
           - os: ubuntu-24.04-arm
             target: linux-arm64
+          - os: windows-latest
+            target: win32-x64
+          - os: windows-11-arm
+            target: win32-arm64
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     defaults:
@@ -50,10 +54,15 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo clippy --workspace --all-targets -- -D warnings
       - name: Tests
-        if: ${{ !cancelled() }}
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
         run: |
           mkdir -p "$RUNNER_TEMP/facade-tests"
           TMPDIR="$RUNNER_TEMP/facade-tests" scripts/test-all.sh
+      # Its temporary folder is .test-temp, beside the checkout
+      - name: Tests on Windows
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        shell: powershell
+        run: scripts\test-all.ps1
       - name: Agents outlive an SSH login
         if: ${{ !cancelled() && matrix.target == 'linux-x64' }}
         run: |
@@ -68,6 +77,22 @@ jobs:
           ssh-keyscan -t ed25519 localhost >> ~/.ssh/known_hosts
           mkdir -p "$RUNNER_TEMP/facade-tests"
           TMPDIR="$RUNNER_TEMP/facade-tests" scripts/ssh-check.sh
+      - name: Collect the failed Windows run
+        if: ${{ failure() && runner.os == 'Windows' }}
+        shell: powershell
+        run: |
+          $log = 'target/test-all.log.full'
+          if (Test-Path -LiteralPath $log) {
+            Select-String -LiteralPath $log -Pattern "^thread .* panicked at " -Context 0,5 |
+              Select-Object -First 20
+          }
+          $runs = Join-Path (Split-Path $env:GITHUB_WORKSPACE) '.test-temp'
+          if (Test-Path -LiteralPath $runs) {
+            $out = Join-Path $env:RUNNER_TEMP 'facade-tests'
+            New-Item -ItemType Directory -Force $out | Out-Null
+            Get-ChildItem -LiteralPath $runs -Directory -Filter 'facade-test-all.*' |
+              ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $out -Recurse }
+          }
       - name: Keep the failed run's files
         if: failure()
         uses: actions/upload-artifact@v4

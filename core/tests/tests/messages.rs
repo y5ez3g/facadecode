@@ -943,13 +943,11 @@ fn messages_that_fill_their_recipient_s_input_at_a_crash_do_not_hold_up_the_next
         crashed.elapsed()
     );
     // The draft holds the input, so every message is withdrawn by its deadline, nothing of it typed.
-    let pending = || {
+    let remaining = || {
         store
-            .query_row(
-                "SELECT count(*) FROM messages WHERE status = 'pending'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
+            .query_row("SELECT count(*) FROM messages", [], |row| {
+                row.get::<_, i64>(0)
+            })
             .unwrap()
     };
     let by_then = facade_base::time::parse_iso_time(&last).unwrap() + secs(5);
@@ -958,15 +956,11 @@ fn messages_that_fill_their_recipient_s_input_at_a_crash_do_not_hold_up_the_next
             by_then
                 .duration_since(std::time::SystemTime::now())
                 .unwrap_or_default(),
-            || pending() == 0
+            || remaining() == 0
         ),
-        "{} still pending",
-        pending()
+        "{} messages were not withdrawn",
+        remaining()
     );
-    let left: i64 = store
-        .query_row("SELECT count(*) FROM messages", [], |row| row.get(0))
-        .unwrap();
-    assert_eq!(left, 0, "every message is withdrawn");
     assert!(home.submitted_messages().is_empty());
     assert!(
         !home.keeper_log().contains("sent no ping"),

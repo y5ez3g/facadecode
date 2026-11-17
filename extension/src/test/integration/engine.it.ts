@@ -68,7 +68,7 @@ function aliasOf(card: Card): string {
 /** What core says: its programs as the package carries them, run for this root, never as an agent. */
 function facade(...args: string[]): { readonly status: number | null; readonly out: string } {
 	const { FACADE_AGENT: _agent, ...env } = process.env;
-	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', 'facade'), args, { env: { ...env, FACADE_HOME: HOME }, encoding: 'utf8', timeout: 20_000 });
+	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), args, { env: { ...env, FACADE_HOME: HOME }, encoding: 'utf8', timeout: 20_000 });
 	return { status: run.status, out: `${run.stdout}${run.stderr}` };
 }
 
@@ -129,10 +129,14 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		const card = await newCard();
 		const alias = aliasOf(card);
 		const out = path.join(path.dirname(RECORD), 'terminal-list');
-		const shell = vscode.window.createTerminal({ name: 'engine-journey shell' });
+		// On Windows, PowerShell without the person's profile; its files written as ASCII, which `>` would write as UTF-16
+		const windows = process.platform === 'win32';
+		const shell = vscode.window.createTerminal({ name: 'engine-journey shell', ...windows ? { shellPath: 'powershell.exe', shellArgs: ['-NoProfile'] } : {} });
 		try {
 			// PATH has core's program of this root, YOLO is on by default, so the terminal sees the editor's agents
-			shell.sendText(`command -v facade > '${out}.which'; facade list --json > '${out}.json'; echo $? > '${out}.done'`);
+			shell.sendText(windows
+				? `(Get-Command facade).Source | Out-File -Encoding ascii '${out}.which'; facade list --json | Out-File -Encoding ascii '${out}.json'; $LASTEXITCODE | Out-File -Encoding ascii '${out}.done'`
+				: `command -v facade > '${out}.which'; facade list --json > '${out}.json'; echo $? > '${out}.done'`);
 			await until('the terminal\'s `facade list`', () => fs.existsSync(`${out}.done`) ? true : undefined, 60_000);
 			assert.strictEqual(fs.readFileSync(`${out}.done`, 'utf8').trim(), '0', fs.existsSync(`${out}.json`) ? fs.readFileSync(`${out}.json`, 'utf8') : 'no output');
 			assert.strictEqual(path.basename(path.dirname(path.dirname(fs.readFileSync(`${out}.which`, 'utf8').trim()))), 'core', `the terminal runs core's own facade: ${fs.readFileSync(`${out}.which`, 'utf8')}`);

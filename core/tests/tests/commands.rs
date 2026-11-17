@@ -272,20 +272,26 @@ fn no_real_cli_can_start_in_a_test() {
             .output()
             .expect("could not run cmd.exe"),
     );
-    // cmd.exe sets PROMPT for itself where it is not set.
-    let shells: &[&str] = if cfg!(windows) { &["PROMPT"] } else { &[] };
+    // Windows can set PROCESSOR_ARCHITECTURE at process creation. cmd.exe supplies PROMPT.
+    let startup: &[&str] = if cfg!(windows) {
+        &["PROCESSOR_ARCHITECTURE", "PROMPT"]
+    } else {
+        &[]
+    };
     let own = ["FACADE_HOME", "FAKECLI_LOG", "FACADE_TEST_LINK_PROGRAMS"]
         .into_iter()
-        .chain(shells.iter().copied())
+        .chain(startup.iter().copied())
         .chain(home.isolating_env().into_iter().map(|(name, _)| name));
     let allowed: Vec<&str> = own.chain(PASSED_THROUGH.iter().copied()).collect();
-    for variable in given.lines() {
-        let name = variable.split_once('=').map_or(variable, |(name, _)| name);
-        assert!(
-            allowed.contains(&name),
-            "a test's command got {name} from the environment the tests run in"
-        );
-    }
+    let unexpected: Vec<_> = given
+        .lines()
+        .map(|variable| variable.split_once('=').map_or(variable, |(name, _)| name))
+        .filter(|name| !allowed.contains(name))
+        .collect();
+    assert!(
+        unexpected.is_empty(),
+        "unexpected environment names in a test's command: {unexpected:?}"
+    );
     // What each agent finds and is given, written in the project: through sh on Unix; through
     // cmd.exe on Windows, where Git's sh would show its own forms of the paths.
     #[cfg(unix)]

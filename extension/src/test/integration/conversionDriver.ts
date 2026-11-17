@@ -28,7 +28,7 @@ const RUST = process.env.FACADE_IT_ENGINE === 'rust';
 /** The agents core keeps for this root, by ID: what `facade list --json` prints in the window's terminal. */
 function coreAgents(): string[] {
 	const { FACADE_AGENT: _agent, ...env } = process.env;
-	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
+	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
 	try { return (JSON.parse(run.stdout) as { agent_id: string }[]).map(agent => agent.agent_id); } catch { return [`unreadable: ${run.stdout}${run.stderr}`]; }
 }
 
@@ -44,7 +44,7 @@ function sessionOf(runId: string, alias: string): string | undefined {
 		} catch { return undefined; }
 	}
 	const { FACADE_AGENT: _agent, ...env } = process.env;
-	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
+	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), ['list', '--json'], { env, encoding: 'utf8', timeout: 20_000 });
 	try {
 		return (JSON.parse(run.stdout) as { agent_id: string; session?: string }[]).find(agent => `#${agent.agent_id}` === alias)?.session || undefined;
 	} catch { return undefined; }
@@ -148,16 +148,16 @@ export async function activate(): Promise<void> {
 		const claim = reloadedAt !== undefined ? { claimMs: claimedAt - reloadedAt, agents: (await state()).cardCount } : {};
 		if (!steps.length) {
 			void vscode.commands.executeCommand('facade.newAgent');
-			const card = await until('a new card', async () => {
+			const card = await until('the new card with its agent ID', async () => {
 				const now = await state();
-				if (now.cardCount) {
-					return now.cards[0];
+				if (!now.cardCount) {
+					await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
 				}
-				await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-				return undefined;
+				// The Rust engine shows a pending card before core assigns its agent ID.
+				return now.cards.find(each => each.alias);
 			});
 			const alias = card.alias;
-			const pid = await until('the CLI to start', async () => pidOf(alias));
+			const pid = await until(`the CLI to start for ${alias}`, async () => pidOf(alias));
 			// Its terminal open, as a person sees it before adding a folder: one the restart beat to opening tells the editor no
 			// process, which leaves its tab beside the new one, as Facade retires no tab it cannot tell from another's (ARCHITECTURE-2.2)
 			const terminal = await until('its terminal', async () => vscode.window.terminals.find(each => unspun(each.name).startsWith(card.name)));
@@ -228,7 +228,7 @@ export async function activate(): Promise<void> {
 		await until('one terminal of the agent', async () => vscode.window.terminals.filter(each => unspun(each.name) === card?.name).length === 1 ? true : undefined, 15_000).catch(() => undefined);
 		write({ phase: 'workspace', folders: vscode.workspace.workspaceFolders?.length, card: card ? { runId: card.runId, name: card.name, pinned: card.pinned } : null, terminals: vscode.window.terminals.map(each => unspun(each.name)) });
 	} catch (err) {
-		const screens = await Promise.race([state().then(current => Promise.all(current.cards.map(async card => ({ name: card.name,
+		const screens = await Promise.race([state().then(current => Promise.all(current.cards.map(async card => ({ name: card.name, alias: card.alias,
 			text: await Promise.resolve(vscode.commands.executeCommand('facade.screen', card.runId, 500)).catch(() => undefined) }))), () => []), new Promise<never[]>(resolve => setTimeout(() => resolve([]), 5_000))]);
 		write({ phase: 'error', error: String(err), screens });
 	}

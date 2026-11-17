@@ -234,7 +234,8 @@ function assertTools(alias: string): void {
 		// Core wires each CLI its own way (a hook, a plugin, an extension, per-start overrides): what every one has is core's relay or a file of
 		// the run's own folder in what the CLI was given
 		const given = `${args.join('\n')}\n${Object.values(env).join('\n')}\n${[...args.entries()].flatMap(([at, arg]) => ['-e', '--settings'].includes(args[at - 1] ?? '') && fs.existsSync(arg) ? [fs.readFileSync(arg, 'utf8')] : []).join('\n')}`;
-		assert.ok(/facade-mcp|\/core\/runs\//.test(given), `${CLI} is given core's relay or its run's files: ${args.join(' ')}`);
+		// The run's folder with the system's separator: backslashes on Windows
+		assert.ok(/facade-mcp|[\\/]core[\\/]runs[\\/]/.test(given), `${CLI} is given core's relay or its run's files: ${args.join(' ')}`);
 		return;
 	}
 	const routes = (variables: { readonly [name: string]: string }) => ['FACADE_PTYD', 'FACADE_RUN'].every(name => typeof variables[name] === 'string' && variables[name] !== '');
