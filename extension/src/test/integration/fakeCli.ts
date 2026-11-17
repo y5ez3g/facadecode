@@ -405,11 +405,15 @@ function start(): void {
 }
 
 /**
- * Whether it stands in for Antigravity: Facade gives Antigravity alone its run's settings in `agy-settings.json` (CLIS-3.4). What the
- * settings hold tells nothing, as a Claude Code entry's own may hold the same keys.
+ * Whether it stands in for Antigravity: the old engine's `agy-settings.json`, or the built-in this fixture was told to draw
+ * (CLIS-3.4). Read that CLI's settings from its file, or from the earlier core's inline JSON. The keys alone tell nothing, as
+ * a Claude Code entry's own may hold the same ones.
  */
-// The old engine gives its run settings as a file of that name, core inline
-const antigravity = args.includes('--settings') && (path.basename(args[args.indexOf('--settings') + 1] ?? '') === 'agy-settings.json' || (as === 'agy' && (args[args.indexOf('--settings') + 1] ?? '').trimStart().startsWith('{')));
+const settingsAt = args.indexOf('--settings');
+const settingsArgument = settingsAt >= 0 ? args[settingsAt + 1] : undefined;
+const agySettings = settingsArgument !== undefined && (as === 'agy' || path.basename(settingsArgument) === 'agy-settings.json')
+	? JSON.parse(fs.existsSync(settingsArgument) ? fs.readFileSync(settingsArgument, 'utf8') : settingsArgument) as unknown : undefined;
+const antigravity = agySettings !== undefined;
 /** Starts the server Antigravity was given, at its first turn or once its MCP panel opens; nothing until then. */
 let startsServer: (() => void) | undefined;
 

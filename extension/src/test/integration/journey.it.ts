@@ -32,7 +32,7 @@ const ARGUMENTS: { readonly [cli: string]: readonly string[] } = {
 	pi: ['--approve'],
 	'my-cli': ['--from-custom', 'two words']
 };
-/** Whether the windows run on the Rust engine: core starts each CLI with its own wiring (an inline `--settings`, no run files of the extension's). */
+/** Whether the windows run on the Rust engine: core starts each CLI with its own wiring rather than the extension's run files. */
 const RUST = process.env.FACADE_IT_ENGINE === 'rust';
 /** Whether this run's CLI is the suite's program rather than a built-in. */
 const CUSTOM = CLI === 'my-cli';
@@ -195,8 +195,11 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		}
 		// Antigravity's trust in the folder, in its settings in the home its terminal sees: the suite's, never the person's (CLIS-3.3)
 		if (CLI === 'agy') {
-			// Core gives it in the run's own inline `--settings`, the old engine writes it into the CLI's settings file
-			const settings = (RUST ? JSON.parse(launch.args[launch.args.indexOf('--settings') + 1]) : JSON.parse(fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8'))) as { trustedWorkspaces: string[] };
+			// Core gives the run's settings by file, or inline in earlier builds; the old engine updates the CLI's settings file.
+			const argument = launch.args[launch.args.indexOf('--settings') + 1];
+			const text = RUST ? (fs.existsSync(argument) ? fs.readFileSync(argument, 'utf8') : argument)
+				: fs.readFileSync(path.join(AGENTS_HOME!, '.gemini', 'antigravity-cli', 'settings.json'), 'utf8');
+			const settings = JSON.parse(text) as { trustedWorkspaces: string[] };
 			assert.ok(settings.trustedWorkspaces.some(folder => sameFolder(folder, launch.cwd)), JSON.stringify(settings));
 		}
 		// The CLI asked whether its terminal takes reports, was answered by ptyd and reported idle - or, Muse Code reporting nothing,
