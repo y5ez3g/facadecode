@@ -3,18 +3,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 // The Rust engine's acceptance on the extension's side (spec.md "验收"), in one window that runs on it: core of this Facade root runs the
-// agents, the window's terminal reaches it with `facade`, End Agent leaves nothing of an agent in core, Recent continues a conversation
-// by its session as a new agent, and a program asking its terminal's colours is told the theme's. Fake CLIs only; the window runs
+// agents, the window's terminal reaches it with `facade`, End Agent hides the card and tab and keeps the record for Resume Agent,
+// and a program asking its terminal's colours is told the theme's. Fake CLIs only; the window runs
 // `FACADE_IT_ONLY=engine` (or the whole suite with FACADE_IT_ENGINE=rust) and no other part of the suite asks for these.
 
 import * as assert from 'assert';
-import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { DatabaseSync } from 'node:sqlite';
 import * as vscode from 'vscode';
 import type { PanelState } from '../../webview/protocol';
-import { linesOf } from '../detailLines';
+import { until } from './editors';
+import { aliasOf, hasAgentTab, keepConversation, listed, newCard, resumeCard, state } from './rustWindowDriver';
 
 const RECORD = process.env.FACADE_IT_RECORD!;
 /** The Facade root of this run: core's home, its settings file and its programs' state, as a terminal's `FACADE_HOME` names it. */
@@ -22,74 +21,6 @@ const HOME = process.env.FACADE_HOME!;
 const ON = process.env.FACADE_IT_JOURNEY === 'engine';
 
 type Card = PanelState['cards'][number];
-
-async function state(): Promise<PanelState> {
-	return await vscode.commands.executeCommand<PanelState>('facade.state');
-}
-
-async function until<T>(what: string, probe: () => Promise<T | undefined> | T | undefined, ms = 30_000): Promise<T> {
-	const end = Date.now() + ms;
-	for (;;) {
-		const value = await probe();
-		if (value !== undefined) {
-			return value;
-		}
-		if (Date.now() > end) {
-			throw new Error(`Timed out waiting for ${what}`);
-		}
-		await new Promise(resolve => setTimeout(resolve, 200));
-	}
-}
-
-/** New Agent with the preselected CLI, accepted as soon as its picker shows: the card it creates. */
-async function newCard(): Promise<Card> {
-	const before = new Set((await state()).cards.map(card => card.runId));
-	void vscode.commands.executeCommand('facade.newAgent');
-	return until('a new card', async () => {
-		const added = (await state()).cards.find(card => !before.has(card.runId));
-		// Its short ID comes with core's answer to the start
-		if (added && /#a\d+/.test(linesOf(added).join(' '))) {
-			return added;
-		}
-		if (!added) {
-			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-		}
-		return undefined;
-	});
-}
-
-/** The short ID a card shows, `#a1`, which core calls `a1`. */
-function aliasOf(card: Card): string {
-	const alias = linesOf(card).join(' ').match(/#a\d+/)?.[0];
-	assert.ok(alias, 'the card shows its short ID');
-	return alias;
-}
-
-/** What core says: its programs as the package carries them, run for this root, never as an agent. */
-function facade(...args: string[]): { readonly status: number | null; readonly out: string } {
-	const { FACADE_AGENT: _agent, ...env } = process.env;
-	const run = spawnSync(path.join(vscode.extensions.getExtension('facade.facadecode')!.extensionPath, 'bin', process.platform === 'win32' ? 'facade.exe' : 'facade'), args, { env: { ...env, FACADE_HOME: HOME }, encoding: 'utf8', timeout: 20_000 });
-	return { status: run.status, out: `${run.stdout}${run.stderr}` };
-}
-
-interface Listed { readonly agent_id: string; readonly name: string; readonly window_id: string; readonly cwd: string; readonly process: string; readonly session?: string }
-
-function listed(): Listed[] {
-	const run = facade('list', '--json');
-	assert.strictEqual(run.status, 0, run.out);
-	return JSON.parse(run.out) as Listed[];
-}
-
-/** Everything the store holds, as text: each table's rows, so that what a record kept - its start's ID, say - can be looked for. */
-function storeText(): string {
-	const db = new DatabaseSync(path.join(HOME, 'core', 'facade.db'), { readOnly: true });
-	try {
-		const tables = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as { name: string }[];
-		return tables.map(table => JSON.stringify(db.prepare(`SELECT * FROM "${table.name}"`).all(), (_key, value: unknown) => value instanceof Uint8Array ? Buffer.from(value).toString('utf8') : value)).join('\n');
-	} finally {
-		db.close();
-	}
-}
 
 /** A launch's recorded arguments. */
 async function launchOf(alias: string): Promise<{ cwd: string; args: string[] }> {
@@ -140,7 +71,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 			await until('the terminal\'s `facade list`', () => fs.existsSync(`${out}.done`) ? true : undefined, 60_000);
 			assert.strictEqual(fs.readFileSync(`${out}.done`, 'utf8').trim(), '0', fs.existsSync(`${out}.json`) ? fs.readFileSync(`${out}.json`, 'utf8') : 'no output');
 			assert.strictEqual(path.basename(path.dirname(path.dirname(fs.readFileSync(`${out}.which`, 'utf8').trim()))), 'core', `the terminal runs core's own facade: ${fs.readFileSync(`${out}.which`, 'utf8')}`);
-			const seen = (JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as Listed[]).find(agent => `#${agent.agent_id}` === alias);
+			const seen = (JSON.parse(fs.readFileSync(`${out}.json`, 'utf8')) as ReturnType<typeof listed>).find(agent => `#${agent.agent_id}` === alias);
 			assert.ok(seen, `the terminal lists ${alias}: ${fs.readFileSync(`${out}.json`, 'utf8')}`);
 			assert.notStrictEqual(seen.window_id, 'terminal', 'it is the editor window\'s agent');
 		} finally {
@@ -150,7 +81,7 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		}
 	});
 
-	test('End Agent leaves no record and no screen log of the agent in core; Recent has its conversation, and a click continues it by session as a new agent', async function () {
+	test('End Agent hides the card and tab, and Resume Agent continues the retained agent by number (LIFECYCLE-3.1, 3.3)', async function () {
 		this.timeout(120_000);
 		const first = await newCard();
 		const alias = aliasOf(first);
@@ -158,45 +89,35 @@ async function backgroundOf(alias: string, since: number): Promise<number> {
 		const launch = await launchOf(alias);
 		// Core learns the conversation's ID from Claude Code's SessionStart hook
 		const session = await until('its session in core', () => listed().find(agent => agent.agent_id === id)?.session);
-		// What Claude Code itself keeps of its conversation, which Recent reads: the fixture this fake CLI does not write
-		const store = path.join(process.env.CLAUDE_CONFIG_DIR!, 'projects', launch.cwd.replace(/[^A-Za-z0-9]/g, '-'));
-		fs.mkdirSync(store, { recursive: true });
-		fs.writeFileSync(path.join(store, `${session}.jsonl`), [
-			{ type: 'user', sessionId: session, cwd: launch.cwd, parentUuid: null, message: { role: 'user', content: 'Engine journey conversation' } },
-			{ type: 'assistant', sessionId: session, timestamp: new Date().toISOString(), message: { role: 'assistant', content: [] } },
-			{ type: 'ai-title', sessionId: session, aiTitle: 'Engine journey conversation' }
-		].map(value => JSON.stringify(value)).join('\n') + '\n');
+		keepConversation(launch.cwd, session, 'Engine journey conversation');
 		const screens = path.join(HOME, 'core', 'screens');
 		await until('its screen log in core', () => fs.existsSync(path.join(screens, id)) ? true : undefined);
-		assert.ok(storeText().includes(first.runId), 'core keeps the agent\'s record, with its start\'s ID, while it is there');
-		assert.ok(listed().some(agent => agent.agent_id === id));
+		await until('its terminal tab to open', () => hasAgentTab(first) || undefined);
 
 		await vscode.commands.executeCommand('facade.closeAgent', { run_id: first.runId });
-		await until('End Agent to remove the agent from core', () => listed().some(agent => agent.agent_id === id) ? undefined : true);
-		assert.ok(!fs.existsSync(path.join(screens, id)), 'its screen log is gone');
-		assert.ok(!storeText().includes(first.runId), 'its record is gone');
-		assert.ok(!(await state()).cards.some(card => card.runId === first.runId), 'its card is gone');
-
-		// Recent: the conversation is there, and choosing it starts a new agent in core that continues the same session
-		const before = new Set((await state()).cards.map(card => card.runId));
-		void vscode.commands.executeCommand('facade.history');
-		const second = await until('the card Recent starts', async () => {
-			const added = (await state()).cards.find(card => !before.has(card.runId));
-			if (added) {
-				return added;
-			}
-			await vscode.commands.executeCommand('workbench.action.acceptSelectedQuickOpenItem');
-			return undefined;
+		await until('its card and terminal tab to close', async () => !(await state()).cards.some(card => card.alias === alias) && !hasAgentTab(first) || undefined);
+		const stopped = await until('End Agent to stop the retained agent', () => {
+			const record = listed().find(agent => agent.agent_id === id);
+			assert.ok(record, `End Agent retains ${alias} in facade list`);
+			return record.process === 'ended' ? record : undefined;
 		});
+		assert.strictEqual(stopped.session, session);
+		assert.strictEqual(stopped.state_detail?.how, 'stopped');
+		assert.ok(fs.existsSync(path.join(screens, id)), 'its screen log stays');
+
+		const second = await resumeCard();
 		try {
-			const secondAlias = aliasOf(second);
-			assert.notStrictEqual(secondAlias, alias, 'a new agent, with a number of its own');
-			const resumed = await launchOf(secondAlias);
-			const resumeAt = resumed.args.indexOf('--resume');
-			assert.deepStrictEqual(resumeAt >= 0 ? resumed.args.slice(resumeAt, resumeAt + 2) : resumed.args, ['--resume', session], 'its CLI continues the same session');
+			assert.strictEqual(aliasOf(second), alias, 'Resume Agent shows the original number');
+			const resumed = await until('the CLI to resume its original session', async () => {
+				const launch = await launchOf(alias);
+				return launch.args[launch.args.indexOf('--resume') + 1] === session ? launch : undefined;
+			});
 			assert.strictEqual(fs.realpathSync(resumed.cwd), fs.realpathSync(launch.cwd), 'in the same folder');
-			assert.ok(listed().some(agent => `#${agent.agent_id}` === secondAlias), 'core lists the new agent');
-			assert.ok(!listed().some(agent => agent.agent_id === id), 'and not the one End Agent removed');
+			const records = listed().filter(agent => agent.session === session);
+			assert.strictEqual(records.length, 1, 'one record holds the resumed session');
+			const [agent] = records;
+			assert.strictEqual(agent?.agent_id, id, 'core lists the resumed agent by its original number');
+			assert.strictEqual(agent.process, 'running');
 		} finally {
 			await vscode.commands.executeCommand('facade.closeAgent', { run_id: second.runId }).then(undefined, () => undefined);
 		}

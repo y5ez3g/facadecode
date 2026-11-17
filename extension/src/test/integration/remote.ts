@@ -20,6 +20,7 @@
 //   ssh-ssh    an agent of an SSH window works with an agent of another SSH window on the same host
 //   local-ssh  an agent of a local window works with an agent of an SSH window
 //   ssh-local  an agent of an SSH window works with an agent of a local window
+//   ssh-lifetime  a Rust agent keeps its process and screen through the SSH window's lifecycle
 //
 // and, given two hosts, `hosts`: an agent of an SSH window on the first works with an agent of an SSH window on the second.
 //
@@ -32,9 +33,11 @@ import { ChildProcess, execFileSync, spawn } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { DatabaseSync } from 'node:sqlite';
+import type { WindowInfo } from '../../base/coreProtocol';
 import { EDITOR_FLAGS, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, windowLifetime } from './windowLifetime';
 
-const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts'] as const;
+const SCENARIOS = ['ssh', 'ssh-ssh', 'local-ssh', 'ssh-local', 'hosts', 'ssh-lifetime'] as const;
 type Scenario = typeof SCENARIOS[number];
 
 /** A computer the run reaches over SSH, or a container it starts, as the editor and the run address it. */
@@ -117,6 +120,9 @@ async function main(): Promise<void> {
 	const engine = process.env.FACADE_IT_ENGINE ?? 'old';
 	if (engine !== 'old' && engine !== 'rust') {
 		throw new Error('FACADE_IT_ENGINE is old or rust.');
+	}
+	if (only === 'ssh-lifetime' && (engine !== 'rust' || !aliases.length)) {
+		throw new Error('The ssh-lifetime journey needs the Rust engine and an SSH host.');
 	}
 	const base = process.env.FACADE_IT_REMOTE_ROOT || '/tmp';
 	// Read before this: it removes every variable of Facade's and of the CLIs' from this process
@@ -390,6 +396,25 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 		};
 		const app = (host: Host): Folder => ({ host, remote: `${root}/app` });
 		const remotePeer = (host: Host): Folder => ({ host, remote: `${root}/remote-peer` });
+		const sshLifetime = async (host: Host) => {
+			const folder = app(host);
+			const driver = `${root}/lifetime-driver`;
+			const out = `${root}/lifetime.jsonl`;
+			host.run(`mkdir ${quoted(driver)}\n${Object.entries(lifetimeDriverFiles()).map(([name, contents]) => `printf %s ${quoted(contents)} > ${quoted(`${driver}/${name}`)}`).join('\n')}`);
+			const args = [...opened(folder), '--new-window', ...profile('lifetime'), `--extensionDevelopmentPath=${workspaceExtension(folder)}`,
+				`--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${host.uri(driver)}`, ...EDITOR_FLAGS];
+			const env = environment({ FACADE_IT_WINDOW_LIFETIME: out, FACADE_IT_WINDOW_LIFETIME_SSH: '1' });
+			const start = () => spawn(executable, [...args, `--extensionEnvironment=${JSON.stringify(env)}`], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+			const call = (...args: string[]) => host.run(`unset FACADE_AGENT\nFACADE_HOME=${quoted(facade)} ${quoted(`${host.build}/extension-it/bin/facade`)} ${args.map(quoted).join(' ')}`);
+			const probe = 'require(process.argv[1]).windowsInCore(process.argv[2]).then(snapshot => console.log(JSON.stringify(snapshot))).catch(error => { console.error(error); process.exitCode = 1; });';
+			const windows = async () => JSON.parse(host.run(`node -e ${quoted(probe)} ${quoted(`${host.build}/out/test/integration/editors.js`)} ${quoted(facade)}`)) as WindowInfo[];
+			await windowLifetime(start, () => host.run(`if [ -f ${quoted(out)} ]; then cat ${quoted(out)}; fi`), async step => {
+				if (step.after === 'reload') {
+					await afterOldWindowGrace(step.windowId, windows, true);
+					checkClosedAgent(step, call);
+				}
+			});
+		};
 		const runs: { readonly scenario: Scenario; readonly title: string; readonly go: () => Promise<void> }[] = [];
 		for (const host of hosts) {
 			const on = host.title;
@@ -428,6 +453,9 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 			] as const).filter(each => !inContainer || each.scenario === 'local-ssh').filter(each => engine !== 'rust' || each.scenario === (inContainer ? 'local-ssh' : 'ssh')));
 			if (engine === 'rust') {
 				console.log(`\nOn the Rust engine ${on} runs the journeys of one remote window only${inContainer ? ' - a container window cannot be driven by a test editor (Dev Containers attaches it again and the editor refuses), so of a container the local window\'s own journeys run, with the container started beside it' : ''}: agents of different computers do not work together there, as the owner decided - each computer runs its own core - so the scenarios between windows of different computers (and the wait for a peer window to register under extension/network) are not run.`);
+				if (host.kind === 'ssh' && host.platform !== 'windows') {
+					runs.push({ scenario: 'ssh-lifetime', title: on, go: () => sshLifetime(host) });
+				}
 			}
 		}
 		if (hosts.length === 2 && hosts[0].kind === 'ssh' && engine !== 'rust') {
@@ -439,7 +467,11 @@ node=$("\${SHELL:-sh}" -lc 'command -v node' 2>/dev/null || command -v node)
 				}
 			});
 		}
-		for (const run of runs.filter(each => !only || each.scenario === only)) {
+		const selected = runs.filter(each => !only || each.scenario === only);
+		if (only === 'ssh-lifetime' && !selected.length) {
+			throw new Error('The ssh-lifetime journey needs a Linux or macOS SSH host.');
+		}
+		for (const run of selected) {
 			console.log(`\nRemote-SSH journeys: ${run.scenario} (${run.title})`);
 			try {
 				await run.go();

@@ -196,7 +196,7 @@ export async function activate(): Promise<void> {
 			const alias = card.alias;
 			const pid = await until('the restored CLI process', async () => pidOf(alias));
 			const session = await until('the restored native session identity', async () => sessionOf(card.runId, alias));
-			// What a window opened after the grace shows and what core keeps: the other agents are gone from both (spec 验收, RULES-4.1)
+			// The reopened window's cards and terminals, and the Rust records in this Facade home (RULES-4.1).
 			const { cards } = await state();
 			write({ phase: 'reopened', runId: card.runId, pid, session, terminals: vscode.window.terminals.length, cards: cards.map(each => ({ alias: each.alias, dot: each.dot })), ...RUST ? { core: coreAgents() } : {} });
 			return;

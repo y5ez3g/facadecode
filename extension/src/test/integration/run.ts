@@ -14,10 +14,11 @@ import * as os from 'os';
 import * as path from 'path';
 import { parse as parseJsonc, ParseError } from 'jsonc-parser';
 import { isDeepStrictEqual } from 'util';
-import { coreProgram, EDITOR_FLAGS, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment } from './editors';
+import { coreProgram, EDITOR_FLAGS, endCore, endEditors, endMatching, fakeClis, newRepository, officialEditor, registeredWindow, sanitizedEnvironment, windowsInCore } from './editors';
 import { BUILT_IN_NAMES } from '../../base/names';
 import { focusProbe } from './focusProbe';
 import { assertTemporaryState, probeEnvironment } from './probeState';
+import { afterOldWindowGrace, checkClosedAgent, lifetimeDriverFiles, seedLegacyPin, windowLifetime } from './windowLifetime';
 
 /** An entry of Facade's settings file, by its fields (CONFIGURATION-2.2). */
 type Entry = { readonly [field: string]: unknown };
@@ -275,8 +276,6 @@ async function main(): Promise<void> {
 		const editorEnv = { ...process.env, ...passed, FACADE_HOME: facade, FACADE_IT_RECORD: record, FACADE_IT_CONVERSION: out, FACADE_IT_ENGINE: engine,
 			// The first built-in's journey reloads a busy window: twenty agents beside its own (VERIFICATION G2)
 			...!reopening && !nativeLifecycle && cli === BUILT_INS[0] ? { FACADE_IT_LOAD: '20' } : {},
-			// The Rust engine's expiry: two more agents beside the pinned one, which the grace ends and the reopened window must not show
-			...engine === 'rust' && expiry ? { FACADE_IT_LOAD: '2' } : {},
 			FACADE_IT_SECOND: second, FACADE_IT_REOPEN: reopening ? '1' : '0', FACADE_IT_NATIVE: nativeLifecycle ? cli.id : '', CLAUDE_CONFIG_DIR: realConfig ?? claudeConfig };
 		let editor = spawn(executable, [solo, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
 			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], {
@@ -333,15 +332,7 @@ async function main(): Promise<void> {
 				// A local window closed and reopened within its 90 seconds takes its run over, as a reload does - no claim ends it; after its
 				// grace the process ended already and the Pin restores the exact session in a new process (RULES-4.1)
 				if (!after || (expiry ? after.runId === before.runId || after.pid === before.pid || alive(Number(before.pid)) : (engine === 'rust' ? false : after.runId !== before.runId) || after.pid !== before.pid)
-					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))
-					// After the grace, on the Rust engine: the Pin started a new agent; the others are not shown, no card is red, and core keeps no record of them
-					|| (engine === 'rust' && expiry && (() => {
-						const others = (before.others as string[] | undefined) ?? [];
-						const cards = after.cards as { alias: string; dot: string }[] | undefined;
-						const core = after.core as string[] | undefined;
-						return !others.length || !cards || cards.length !== 1 || cards.some(card => card.dot === 'error' || others.includes(card.alias))
-							|| !core || core.some(id => others.includes(`#${id}`));
-					})())) {
+					|| !before.session || after.session !== before.session || after.terminals !== 1 || !alive(Number(after.pid))) {
 					throw new Error(`Closing and reopening did not ${expiry ? 'restore' : 'preserve'} the pinned conversation: ${JSON.stringify(lines())}`);
 				}
 				console.log(`  ✔ ${cli.id}: real window close and ${expiry ? 'reopen after its grace restore the exact pinned session in a new process' : 'immediate reopen preserve Pin, exact session and process'}, with one terminal: ${JSON.stringify(lines())}`);
@@ -693,11 +684,45 @@ async function main(): Promise<void> {
 	};
 	/**
 	 * The Rust engine's acceptance on the extension's side, in one window on it (engine.it.ts): the window runs on core of its Facade
-	 * root, its terminal's `facade list` shows the editor's agent, End Agent leaves nothing of an agent in core and Recent continues
-	 * it by session as a new agent, and a program is told the theme's colours.
+	 * root, its terminal's `facade list` shows the editor's agent, Resume Agent restores the record End Agent retained, and a program
+	 * is told the theme's colours.
 	 */
 	const rustJourneys = async () => {
 		await run('engine', repo, { FACADE_IT_JOURNEY: 'engine', FACADE_IT_GREP: 'Journey: the Rust engine' }, alone('claude'));
+	};
+	/** Real reload, close, reopen and daemon replacement on Rust, followed by saved Pin restoration (RULES-4.1, 4.2). */
+	const rustWindowLifetime = async () => {
+		const folder = path.join(root, 'lifetime');
+		const user = path.join(root, 'u-l'), extensions = path.join(root, 'x-l'), shared = path.join(root, 's-l');
+		const driver = path.join(root, 'driver-lifetime');
+		const facade = path.join(home, 'lifetime');
+		const out = path.join(root, 'lifetime.jsonl');
+		newRepository(folder);
+		fs.mkdirSync(path.join(user, 'User'), { recursive: true });
+		fs.writeFileSync(path.join(user, 'User', 'settings.json'), JSON.stringify(settings));
+		fs.mkdirSync(driver);
+		for (const [name, contents] of Object.entries(lifetimeDriverFiles())) {
+			fs.writeFileSync(path.join(driver, name), contents);
+		}
+		facadeSettings(facade, alone('claude'));
+		const env = { ...process.env, FACADE_HOME: facade, FACADE_IT_RECORD: path.join(root, 'lifetime-cli'), FACADE_IT_WINDOW_LIFETIME: out, CLAUDE_CONFIG_DIR: claudeConfig };
+		const start = () => spawn(executable, [folder, '--new-window', '--disable-extensions', '--user-data-dir', user, '--extensions-dir', extensions, '--shared-data-dir', shared,
+			`--extensionDevelopmentPath=${extension}`, `--extensionDevelopmentPath=${windowComponent}`, `--extensionDevelopmentPath=${driver}`, ...EDITOR_FLAGS], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+		const call = (...args: string[]) => execFileSync(corePrograms, args, { env, encoding: 'utf8', timeout: 20_000 });
+		console.log('\n  Journey: the Rust window lifetime and saved Pins');
+		try {
+			await windowLifetime(start, () => fs.existsSync(out) ? fs.readFileSync(out, 'utf8') : '', async step => {
+				if (step.after === 'reload') {
+					await afterOldWindowGrace(step.windowId, () => windowsInCore(facade), false);
+					checkClosedAgent(step, call);
+				} else if (step.after === 'pins') {
+					call('remove', step.removed);
+					seedLegacyPin(step.legacy);
+				}
+			});
+		} finally {
+			await endRust(facade);
+		}
 	};
 	/**
 	 * Switching engines (spec 验收): two agents under `off`; the setting `auto` and a reload: both go on, on the old engine; both ended,
@@ -804,16 +829,19 @@ async function main(): Promise<void> {
 		if (!only || only === 'reopen') {
 			for (const cli of BUILT_INS) { await conversion(cli, true); }
 		}
-		if (!only || only === 'expiry') {
+		if (engine === 'old' && (!only || only === 'expiry')) {
 			// The shared supervisor's real local grace, not a shortened fixture timer.
 			await conversion(BUILT_INS[0], true, true);
 		}
 		// The Rust engine's acceptance on the extension's side: with the engine on, a run of the whole suite has it, and each is asked for alone
-		if (only === 'engine' || only === 'switch' ? engine !== 'rust' : false) {
+		if ((only === 'engine' || only === 'switch' || only === 'lifetime') && engine !== 'rust') {
 			throw new Error(`FACADE_IT_ONLY=${only} runs on the Rust engine: set FACADE_IT_ENGINE=rust.`);
 		}
 		if (only === 'engine' || (!only && engine === 'rust')) {
 			await rustJourneys();
+		}
+		if (engine === 'rust' && (!only || only === 'lifetime' || only === 'reopen' || only === 'expiry')) {
+			await rustWindowLifetime();
 		}
 		if (only === 'switch' || (!only && engine === 'rust')) {
 			await engineSwitch();
@@ -841,7 +869,7 @@ async function main(): Promise<void> {
 			try {
 				await conversion(cli);
 				await conversion(cli, true);
-				await conversion(cli, true, true);
+				if (engine === 'old') { await conversion(cli, true, true); }
 			} finally {
 				if (cli.id === 'claude') { untrust(path.join(realConfig ?? claudeConfig, '.claude.json'), root); }
 			}

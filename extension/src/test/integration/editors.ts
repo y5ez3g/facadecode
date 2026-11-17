@@ -8,7 +8,10 @@
 import { ChildProcess, execFileSync, spawnSync } from 'child_process';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
+import { createConnection } from 'net';
 import * as path from 'path';
+import { createInterface } from 'readline';
+import type { HelloParams, Response, WatchResult, WindowInfo } from '../../base/coreProtocol';
 
 /** The official VS Code `VSCODE_EXECUTABLE` names, else macOS's standard installation where there is one. */
 export function officialEditor(): string {
@@ -204,6 +207,45 @@ export function coreListens(home: string): boolean {
 /** Core's `facade` program in the folder `bin`, as the package carries it. */
 export function coreProgram(bin: string): string {
 	return path.join(bin, process.platform === 'win32' ? 'facade.exe' : 'facade');
+}
+
+/** Reads a windows snapshot as a terminal client without keeping an editor window connected. */
+export async function windowsInCore(home: string): Promise<readonly WindowInfo[]> {
+	const socket = createConnection(coreSocket(home));
+	const lines = createInterface({ input: socket });
+	const timer = setTimeout(() => socket.destroy(new Error('The driver could not read the windows topic within 5 seconds')), 5_000);
+	const send = (id: number, method: string, params: object) => socket.write(`${JSON.stringify({ jsonrpc: '2.0', id, method, params })}\n`);
+	try {
+		return await new Promise<WindowInfo[]>((resolve, reject) => {
+			const hello: HelloParams = { build: 'window-lifetime-test', protocol: [1, 1], kind: 'terminal' };
+			socket.once('connect', () => send(1, 'hello', hello));
+			socket.once('error', reject);
+			socket.once('close', () => reject(new Error('The windows topic connection closed')));
+			lines.on('line', line => {
+				try {
+					const response = JSON.parse(line) as Response;
+					if (response.error) { throw new Error(response.error.message); }
+					if (response.id === 1) { send(2, 'watch', { topic: 'windows' }); }
+					if (response.id === 2) { resolve((response.result as WatchResult).snapshot as WindowInfo[]); }
+				} catch (error) { reject(error); }
+			});
+		});
+	} finally {
+		clearTimeout(timer);
+		lines.close();
+		socket.destroy();
+	}
+}
+
+/** Waits for the named observation, returning as soon as the test can proceed. */
+export async function until<T>(what: string, probe: () => Promise<T | undefined> | T | undefined, ms = 30_000): Promise<T> {
+	const end = Date.now() + ms;
+	for (;;) {
+		const value = await probe();
+		if (value !== undefined) { return value; }
+		if (Date.now() > end) { throw new Error(`Timed out waiting for ${what}`); }
+		await new Promise(resolve => setTimeout(resolve, 200));
+	}
 }
 
 /**
