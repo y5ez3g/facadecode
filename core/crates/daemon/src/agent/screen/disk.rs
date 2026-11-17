@@ -2,11 +2,10 @@
 use std::collections::BTreeSet;
 use std::fs::File;
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use facade_base::files::create_private_file;
+use facade_base::files::{create_private_file, create_private_folder, make_private, sync_folder};
 
 use super::codec::{Checkpoint, LOG_HEADER, LOG_HEADER_REQUIRES_OWN_CHECKPOINT};
 use super::warn;
@@ -63,11 +62,9 @@ pub(super) fn log_path(folder: &Path, number: u64) -> PathBuf {
 }
 
 pub(super) fn create_agent_dir(folder: &Path) -> io::Result<()> {
-    let private = |path: &Path| match std::fs::DirBuilder::new().mode(0o700).create(path) {
+    let private = |path: &Path| match create_private_folder(path) {
         Ok(()) => Ok(()),
-        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-        }
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => make_private(path),
         Err(e) => Err(e),
     };
     if let Some(parent) = folder.parent() {
@@ -76,7 +73,7 @@ pub(super) fn create_agent_dir(folder: &Path) -> io::Result<()> {
     private(folder)
 }
 pub(super) fn sync_dir(folder: &Path) -> io::Result<()> {
-    File::open(folder)?.sync_all()
+    sync_folder(folder)
 }
 pub(super) fn write_checkpoint(
     folder: &Path,

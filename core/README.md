@@ -2,7 +2,7 @@
 
 Facade core runs AI coding CLIs, such as Claude Code and Codex, as agents. It starts each CLI in a terminal it keeps,
 reads what the CLI shows, types into it, delivers messages between agents, and gives every CLI Facade's tools over MCP.
-Clients, such as the `facade` commands and an editor, use it through a local socket.
+Clients, such as the `facade` commands and an editor, use it through a local socket, a named pipe on Windows.
 
 This folder is a Rust workspace. It builds two programs:
 
@@ -26,7 +26,7 @@ with the home folder there too, then report anything a test wrote to the home fo
 behind:
 
 ```sh
-scripts/test-all.sh
+scripts/test-all.sh        # on Windows, from PowerShell: scripts\test-all.ps1
 ```
 
 The stress test is a program of its own, not part of `cargo test`:
@@ -35,9 +35,11 @@ The stress test is a program of its own, not part of `cargo test`:
 CARGO_PROFILE_RELEASE_DEBUG_ASSERTIONS=true cargo run --release -p facade-scenarios --bin facade-stress
 ```
 
-Core builds for macOS and Linux. Linux needs kernel 5.3 or newer, with process descriptors (`pidfd_open`) allowed.
-An agent keeps running when the SSH login that started it ends, except where systemd ends a user's processes at
-logout (`KillUserProcesses=yes`): there, run `loginctl enable-linger` first.
+Core builds for macOS, for Linux, and for Windows 11 or Windows Server 2022 and later on x64. Linux needs kernel 5.3 or
+newer, with process descriptors (`pidfd_open`) allowed. An agent keeps running when the SSH login that started it ends,
+except where systemd ends a user's processes at logout (`KillUserProcesses=yes`): there, run `loginctl enable-linger`
+first. Windows builds with the MSVC toolchain, and every Windows build carries the ConPTY package in
+[vendor/conpty](vendor/conpty/), which the build copies beside the programs.
 
 ## Try it in a temporary Facade home
 
@@ -84,6 +86,39 @@ while [ -e "$socket" ]; do sleep 0.2; done
 rm -rf "$FACADE_HOME"
 ```
 
+On Windows, the same steps in PowerShell. Empty input starts an agent in the background, as `</dev/null` does. Name
+an agent as `two`, `a2` or `2`: `#` begins a comment in PowerShell, as in sh, so `facade stop #a2` passes no agent,
+and `#a2` needs quotes, `'#a2'`:
+
+```powershell
+$env:FACADE_HOME = Join-Path ([IO.Path]::GetTempPath()) "facade-try-$(Get-Random)"
+$env:PATH = "$PWD\target\debug;$env:PATH"
+facade start fake                          # shows the agent here; Ctrl-] detaches and it keeps running
+$null | facade start --name two fake       # starts in the background and prints "#a2 pid …"
+facade list
+facade type two "hello" --enter
+facade send two "a message"
+facade screen two --lines 20
+facade inspect two
+facade stop two
+facade remove two
+$env:FAKECLI_SESSION = '86da4482-2bae-4a45-b193-a5664c19826a'
+$null | facade start --name three fake; Remove-Item Env:FAKECLI_SESSION
+Start-Sleep 2                              # the CLI reports its session once it runs
+facade stop three
+facade resume three
+```
+
+The services listen on named pipes instead of sockets, and the keeper exits last. To clean up:
+
+```powershell
+foreach ($agent in (facade list --json | ConvertFrom-Json).agent_id) { facade remove $agent }
+$sha = [Security.Cryptography.SHA256]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($env:FACADE_HOME))
+$pipe = "\\.\pipe\facade-core-keeper-" + (-join ($sha[0..4] | ForEach-Object { $_.ToString('x2') }))
+while ([IO.Directory]::GetFiles('\\.\pipe\') -contains $pipe) { Start-Sleep -Milliseconds 200 }
+Remove-Item -Recurse -Force $env:FACADE_HOME
+```
+
 ## What is in this folder
 
 | Folder | Crate | What it is |
@@ -97,6 +132,7 @@ rm -rf "$FACADE_HOME"
 | `crates/facade` | `facade` | The `facade` program: its commands, `attach`, the hooks, and the entry points of both services |
 | `tests` | `facade-scenarios` | Scenario tests, the test CLI `facade-fakecli`, and the stress test `facade-stress` |
 | `vendor/alacritty_terminal` | `alacritty_terminal` | The terminal emulator, with the changes [vendor/README.md](vendor/README.md) lists |
+| `vendor/conpty` | — | Microsoft's ConPTY package for Windows, `conpty.dll` and `OpenConsole.exe`, which every Windows build carries |
 | `protocol` | — | The daemon and keeper protocols, generated from `crates/base` by its test `protocol_files.rs`: do not edit |
 | `rules` | — | One rule file for each CLI |
 | `scripts` | — | The full test run, the check for leftover processes, the check of each commit, and the check that agents outlive an SSH login |

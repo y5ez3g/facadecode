@@ -7,11 +7,43 @@ use sha2::{Digest, Sha256};
 use super::*;
 use crate::find;
 use crate::shell_word;
+use facade_base::system::{SYSTEM, System};
 
 /// OpenCode's CLI configuration for one start, read after its configuration files.
 const OPENCODE_CLI_CONFIG: &str = "OPENCODE_CLI_CONFIG_CONTENT";
 
 const HOOK: &str = "'/opt/facade' hook session-start '/home/.facade/core/runs/a3/1f/session'";
+
+/// [`HOOK`] as cmd.exe runs it, for Windows CLIs other than Claude Code and Codex.
+const CMD_HOOK: &str = r#"@"/opt/facade" hook session-start /home/.facade/core/runs/a3/1f/session"#;
+
+/// `unix` on Unix, `windows` on Windows.
+fn by_system(unix: &str, windows: &str) -> String {
+    match SYSTEM {
+        System::Unix => unix,
+        System::Windows => windows,
+    }
+    .to_string()
+}
+
+/// The session-start hook of `cli`'s runs in these tests, for the shell `cli` runs it with.
+fn hook(cli: &str) -> String {
+    match cli {
+        "claude" => HOOK.to_string(),
+        "codex" if SYSTEM == System::Windows => crate::formats::encoded_powershell(
+            "& '/opt/facade' 'hook' 'session-start' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
+        ),
+        _ => by_system(HOOK, CMD_HOOK),
+    }
+}
+
+/// `name` in the run folder of these tests, as the system joins it.
+fn in_run(name: &str) -> String {
+    Path::new("/home/.facade/core/runs/a3/1f")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
+}
 
 /// Where the runs of these tests report their session: their hook runs [`HOOK`].
 fn report() -> SessionReport<'static> {
@@ -65,7 +97,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
     assert_eq!(
         (launch.env, launch.captures),
         (
-            vec![("FAKECLI_SESSION_HOOK".to_string(), HOOK.to_string())],
+            vec![("FAKECLI_SESSION_HOOK".to_string(), hook("fake"))],
             true
         )
     );
@@ -84,7 +116,7 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         None,
     );
     let hooks = json!({
-        "SessionStart": [{ "hooks": [{ "type": "command", "command": HOOK, "timeout": 5 }] }],
+        "SessionStart": [{ "hooks": [{ "type": "command", "command": hook("muse"), "timeout": 5 }] }],
     });
     assert_eq!(
         (muse.command, muse.captures),
@@ -98,18 +130,16 @@ fn a_start_runs_the_program_the_rule_s_arguments_the_hook_then_the_person_s_word
         &BTreeMap::new(),
         None,
     );
-    let title = "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/session'";
+    let title = by_system(
+        "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/session'",
+        r#"@"/opt/facade" hook title /home/.facade/core/runs/a3/1f/session"#,
+    );
     let settings = json!({ "title": { "type": "command", "enabled": true, "command": title } });
     assert_eq!(self::settings(&agy), settings);
     assert_eq!(
         (agy.command, agy.captures),
         (
-            words(&[
-                "agy",
-                "--settings",
-                "/home/.facade/core/runs/a3/1f/settings.json",
-                "x"
-            ]),
+            words(&["agy", "--settings", &in_run("settings.json"), "x"]),
             true
         )
     );
@@ -175,11 +205,11 @@ fn a_resume_names_the_session_first_and_keeps_no_words_of_the_earlier_start() {
             "--session",
             session,
             "-e",
-            "/home/.facade/core/runs/a3/1f/facade-session.mjs"
+            &in_run("facade-session.mjs")
         ])
     );
     let opencode = "ses_2b9cfe1a7dffRm6kVzQe7xXn3d";
-    let home = [("HOME".to_string(), "/nowhere".to_string())].into();
+    let home = home_environment(Path::new(&by_system("/nowhere", r"C:\nowhere")), &[]);
     let launch = resume_command_line(
         rule("opencode"),
         opencode,
@@ -379,7 +409,9 @@ fn home_environment(home: &Path, more: &[(&str, &str)]) -> BTreeMap<String, Stri
         .iter()
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
-    environment.insert("HOME".into(), home.to_string_lossy().into_owned());
+    let home = home.to_string_lossy().into_owned();
+    environment.insert("HOME".into(), home.clone());
+    environment.insert("USERPROFILE".into(), home);
     environment
 }
 
@@ -401,7 +433,7 @@ fn opencode_reports_its_session_through_a_plugin_after_the_person_s_own() {
     let home = crate::test_folder::TestFolder::new("rules-opencodesession");
     let config = home.join(".config/opencode");
     std::fs::create_dir_all(&config).unwrap();
-    let ours = json!("/home/.facade/core/runs/a3/1f/facade-session");
+    let ours = json!(in_run("facade-session"));
     let plugins = |environment: &BTreeMap<String, String>| {
         let launch = start_command_line(
             rule("opencode"),
@@ -535,13 +567,7 @@ fn pi_reports_its_session_through_an_extension_of_the_run() {
     );
     assert_eq!(
         launch.command,
-        words(&[
-            "pi",
-            "-e",
-            "/home/.facade/core/runs/a3/1f/facade-session.mjs",
-            "--model",
-            "m"
-        ])
+        words(&["pi", "-e", &in_run("facade-session.mjs"), "--model", "m"])
     );
     let (name, text) = &launch.files[0];
     assert_eq!(name, "facade-session.mjs");
@@ -704,12 +730,16 @@ fn codex_trusts_its_session_start_hook_by_the_hash_at_its_group_s_place() {
             group["timeout"].as_integer(),
             group["type"].as_str()
         ),
-        (Some(HOOK), Some(5), Some("command"))
+        (Some(hook("codex").as_str()), Some(5), Some("command"))
     );
-    let trust = &hooks["state"]["/<session-flags>/config.toml:session_start:0:0"];
+    let key = by_system(
+        "/<session-flags>/config.toml:session_start:0:0",
+        r"C:\<session-flags>\config.toml:session_start:0:0",
+    );
+    let trust = &hooks["state"][&key];
     assert_eq!(
         (trust["enabled"].as_bool(), trust["trusted_hash"].as_str()),
-        (Some(true), Some(trusted(HOOK).as_str()))
+        (Some(true), Some(trusted(&hook("codex")).as_str()))
     );
 }
 
@@ -773,20 +803,30 @@ fn codex_merges_the_person_s_hook_overrides_and_keeps_every_other_word_in_order(
         Some("mine"),
         "the person's group stays first"
     );
-    assert_eq!(groups[1]["hooks"][0]["command"].as_str(), Some(HOOK));
+    assert_eq!(
+        groups[1]["hooks"][0]["command"].as_str(),
+        Some(hook("codex").as_str())
+    );
     assert_eq!(
         hooks["Stop"].as_array().unwrap()[0]["hooks"][0]["command"].as_str(),
         Some("stop")
     );
-    let trust = &hooks["state"]["/<session-flags>/config.toml:session_start:1:0"];
+    let key = by_system(
+        "/<session-flags>/config.toml:session_start:1:0",
+        r"C:\<session-flags>\config.toml:session_start:1:0",
+    );
+    let trust = &hooks["state"][&key];
     assert_eq!(
         trust["trusted_hash"].as_str(),
-        Some(trusted(HOOK).as_str()),
+        Some(trusted(&hook("codex")).as_str()),
         "Facade's group is trusted at its own place"
     );
     assert!(
         hooks["state"]
-            .get("/<session-flags>/config.toml:session_start:0:0")
+            .get(by_system(
+                "/<session-flags>/config.toml:session_start:0:0",
+                r"C:\<session-flags>\config.toml:session_start:0:0",
+            ))
             .is_none(),
         "the person's group is not trusted by Facade"
     );
@@ -827,6 +867,10 @@ fn a_hook_command_s_text_stays_one_word_and_one_toml_string() {
         file: Path::new("/s"),
         cwd: Path::new("/"),
     };
+    // A path on Windows holds no quote, and cmd.exe takes no such word: this is the POSIX shell's.
+    if SYSTEM == System::Windows {
+        return;
+    }
     let hooks = codex_table(&start_command_line(
         rule("codex"),
         &[],

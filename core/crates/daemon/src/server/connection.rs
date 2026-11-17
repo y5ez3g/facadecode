@@ -2,7 +2,7 @@
 //! a request that the service answers.
 
 use std::collections::HashMap;
-use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+use std::net::Shutdown;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,12 +16,10 @@ use facade_base::jsonrpc::{
     ErrorBody, MAX_LINE_BYTES, Notification, Reason, decode_arguments, encode_line, parse_request,
 };
 use facade_base::operations::{CallParams, EmptyResult, Operation};
-use nix::sys::socket::Shutdown;
+use facade_base::sockets::{ServerPeer, ServerReader, ServerSocket};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader};
-use tokio::net::UnixStream;
-use tokio::net::unix::OwnedReadHalf;
 use tokio::sync::{Notify, Semaphore, mpsc, watch};
 use tokio::task::JoinHandle;
 
@@ -40,13 +38,13 @@ const CLOSING_ANSWERED_WITHIN: Duration = Duration::from_millis(200);
 /// Screen viewers, numbered across all connections.
 static NEXT_VIEWER: AtomicU64 = AtomicU64::new(1);
 
-pub(super) type Reader = BufReader<OwnedReadHalf>;
+pub(super) type Reader = BufReader<ServerReader>;
 
 /// The client end of a connection.
 pub(super) struct Peer {
-    /// A copy of the socket: watched for the client closing while its reading waits, and shut
-    /// down to cut the client off.
-    socket: OwnedFd,
+    /// Watched for the client closing while its reading waits, and shut down to cut the client
+    /// off.
+    socket: ServerPeer,
     /// True once the client closed: waiting input then stops waiting.
     closed: watch::Sender<bool>,
     /// The client closed while its input waited: input after it would arrive with a gap, so
@@ -75,36 +73,16 @@ impl Peer {
         self.gave_up.store(true, Ordering::SeqCst);
     }
 
-    /// Waits until the client closes, even with bytes still unread, and notes it. Watches the copy
-    /// of the socket, so the connection's reader neither loses bytes nor readiness.
+    /// Waits until the client closes, even with bytes still unread, and notes it. Reads no byte,
+    /// so the connection's reader loses none.
     pub(super) async fn closed(&self) {
-        wait_for_close(&self.socket).await;
+        self.socket.closed().await;
         self.closed.send_replace(true);
         self.give_up();
     }
 
     fn shut(&self, how: Shutdown) {
-        let _ = nix::sys::socket::shutdown(self.socket.as_raw_fd(), how);
-    }
-}
-
-async fn wait_for_close(socket: &OwnedFd) {
-    use tokio::io::Interest;
-    use tokio::io::unix::AsyncFd;
-    let Ok(copy) = socket.try_clone() else {
-        return std::future::pending().await;
-    };
-    // SAFETY: the copy is owned by the AsyncFd, so it stays open, and the same descriptor, for as
-    // long as it is registered.
-    let Ok(watched) = (unsafe { AsyncFd::register_with_interest(copy, Interest::READABLE) }) else {
-        return std::future::pending().await;
-    };
-    while let Ok(mut ready) = watched.readable().await {
-        if ready.ready().is_read_closed() {
-            return;
-        }
-        // Readable bytes belong to the reader: wait for more of them, or for the close.
-        ready.clear_ready();
+        self.socket.shutdown(how);
     }
 }
 
@@ -144,14 +122,14 @@ enum Next {
 }
 
 /// Serves `socket` until the client closes, and cleans up after it.
-pub(super) async fn serve<S: Service>(service: Arc<S>, socket: UnixStream) -> anyhow::Result<()> {
-    let peer_pid = facade_base::unix_process::peer_pid(socket.as_fd());
+pub(super) async fn serve<S: Service>(service: Arc<S>, socket: ServerSocket) -> anyhow::Result<()> {
+    let peer_pid = socket.peer_pid();
+    let (read, write, peer) = socket.into_split();
     let peer = Arc::new(Peer {
-        socket: socket.as_fd().try_clone_to_owned()?,
+        socket: peer,
         closed: watch::channel(false).0,
         gave_up: AtomicBool::new(false),
     });
-    let (read, write) = socket.into_split();
     let (outbox, writer) = Outbox::open(write);
     let mut connection = Connection {
         service,

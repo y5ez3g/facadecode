@@ -11,15 +11,19 @@ name = "facade-mcp"
 path = "src/main.rs"
 
 [dependencies]
+sha2.workspace = true
+
+[target.'cfg(unix)'.dependencies]
 # Not the workspace's nix: the relay uses only poll, the user calls, and on Linux the socket
 # option that names the daemon's user (SO_PEERCRED).
 nix = { version = "0.31", default-features = false, features = ["poll", "user", "socket"] }
-# The daemon socket's name holds a hash of the Facade home's path.
-sha2.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_System_Threading"] }
 
 # Stricter than the workspace: the relay is meant to change almost never.
 [lints.rust]
-unsafe_code = "forbid"
+unsafe_code = "deny"
 
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }

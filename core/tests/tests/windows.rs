@@ -52,7 +52,7 @@ fn repository(folder: &Path) {
 
 /// `path` with symbolic links resolved, as Facade lists locations.
 fn real(path: &Path) -> String {
-    std::fs::canonicalize(path)
+    facade_base::files::real_path(path)
         .unwrap()
         .to_string_lossy()
         .into_owned()
@@ -81,8 +81,8 @@ fn start_shell(
     name: &str,
 ) -> String {
     let args = json!({
-        "command": ["/bin/sh", "-c", "echo READY; sleep 600"], "name": name, "cwd": cwd,
-        "window_id": window, "env": { "PATH": "/usr/bin:/bin", "FACADE_HOME": home.path },
+        "command": [SH.as_str(), "-c", "echo READY; sleep 600"], "name": name, "cwd": cwd,
+        "window_id": window, "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
         "cols": 80, "rows": 24,
     });
     let started = wire.call("agent.start", args);
@@ -537,7 +537,7 @@ fn start_agent_starts_in_a_window_s_location_and_makes_a_worktree_there_where_as
     let mut wire = ide(&home, &window("win-1", Some("k1"), &[real(&repo)]));
     let boss = start_fake(&mut wire, &home, "win-1", &real(&repo), "boss");
     let outside = json!({
-        "command": ["/bin/sh"], "cwd": real(&home.project), "window_id": "win-1", "cols": 80,
+        "command": [SH.as_str()], "cwd": real(&home.project), "window_id": "win-1", "cols": 80,
         "rows": 24,
     });
     let refused = wire.call("agent.start", outside);
@@ -547,7 +547,7 @@ fn start_agent_starts_in_a_window_s_location_and_makes_a_worktree_there_where_as
         "a folder that is not a location of the window: {refused}"
     );
     let absent = json!({
-        "command": ["/bin/sh"], "cwd": real(&repo), "window_id": "win-none", "cols": 80, "rows": 24,
+        "command": [SH.as_str()], "cwd": real(&repo), "window_id": "win-none", "cols": 80, "rows": 24,
     });
     assert_eq!(
         error_reason(&wire.call("agent.start", absent)),
@@ -659,22 +659,30 @@ fn two_creations_of_one_branch_never_claim_the_other_s_branch() {
     repository(&repo);
     let programs = base(&home).join("slowgit");
     std::fs::create_dir_all(&programs).unwrap();
-    let found = std::process::Command::new("/bin/sh")
-        .args(["-c", "command -v git"])
-        .output()
-        .unwrap();
-    let git_program = String::from_utf8(found.stdout).unwrap().trim().to_string();
+    #[cfg(unix)]
+    let git_program = {
+        let found = std::process::Command::new(SH.as_str())
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap();
+        String::from_utf8(found.stdout).unwrap().trim().to_string()
+    };
+    #[cfg(windows)]
+    let git_program = git_install()
+        .join("cmd")
+        .join("git.exe")
+        .display()
+        .to_string();
     let script = format!(
         "#!/bin/sh\ncase \"$*\" in *\"worktree add\"*) sleep 0.5;; esac\nexec \
          '{git_program}' \"$@\"\n"
     );
-    std::fs::write(programs.join("git"), script).unwrap();
-    std::fs::set_permissions(
-        programs.join("git"),
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
-    let path = format!("{}:{}", programs.display(), std::env::var("PATH").unwrap());
+    install_script(&programs, "git", &script);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        std::env::var("PATH").unwrap()
+    );
     home.start_facade_with(&[("PATH", &path)]);
     let mut wire = ide(&home, &window("win-1", Some("k1"), &[real(&repo)]));
     let args =
@@ -730,6 +738,7 @@ fn an_agent_ends_when_its_location_is_gone_from_its_window() {
     let folders = vec![real(&repo), real(&notes)];
     let mut wire = ide(&home, &window("win-1", Some("k1"), &folders));
     let in_notes = start_shell(&mut wire, &home, "win-1", &real(&notes), "notes");
+    #[cfg_attr(windows, allow(unused_variables))]
     let in_fix = start_shell(&mut wire, &home, "win-1", &fix_path, "fix");
     let in_kept = start_shell(&mut wire, &home, "win-1", &real(&kept), "kept");
     let in_main = start_shell(&mut wire, &home, "win-1", &real(&repo), "main");
@@ -743,48 +752,59 @@ fn an_agent_ends_when_its_location_is_gone_from_its_window() {
         wait_until(secs(15), || !running(&home, &in_notes)),
         "an agent in a folder the window no longer has ends"
     );
-    git(&repo, &["worktree", "remove", &fix.to_string_lossy()]);
-    // While another folder of the window cannot be read, nothing proves the worktree gone.
-    let locked = base(&home).join("locked");
-    std::fs::create_dir_all(&locked).unwrap();
-    let with_locked = vec![real(&repo), real(&locked)];
-    std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
-    assert_eq!(
-        wire.call("window.update", window("win-1", Some("k1"), &with_locked))["result"],
-        json!({})
-    );
-    let problems = listed(&home, "win-1").unwrap()["problems"].clone();
-    std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    assert!(
-        problems[0]
-            .as_str()
-            .is_some_and(|problem| problem.starts_with(&format!(
-                "could not read the Git worktrees of {}",
-                real(&locked)
-            ))),
-        "{problems}"
-    );
-    // An update answers once its read decided which agents end, and logs each one before it
-    // answers.
-    assert!(
-        !home.daemon_log().contains(&format!("#{in_fix} ends")),
-        "a failed read proves nothing: {}",
-        home.daemon_log()
-    );
-    assert!(running(&home, &in_fix));
-    assert_eq!(
-        wire.call("window.update", window("win-1", Some("k1"), &with_locked))["result"],
-        json!({})
-    );
-    assert!(
-        wait_until(secs(15), || !running(&home, &in_fix)),
-        "an agent in a deleted worktree ends"
-    );
+    // Windows deletes no folder a running agent works in: its worktree cannot go while it runs.
+    #[cfg(unix)]
+    {
+        git(&repo, &["worktree", "remove", &fix.to_string_lossy()]);
+        // While another folder of the window cannot be read, nothing proves the worktree gone.
+        let locked = base(&home).join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        let with_locked = vec![real(&repo), real(&locked)];
+        // A folder no one may read is made so by its mode on Unix.
+        #[cfg(unix)]
+        {
+            std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o000))
+                .unwrap();
+            assert_eq!(
+                wire.call("window.update", window("win-1", Some("k1"), &with_locked))["result"],
+                json!({})
+            );
+            let problems = listed(&home, "win-1").unwrap()["problems"].clone();
+            std::fs::set_permissions(&locked, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            assert!(
+                problems[0]
+                    .as_str()
+                    .is_some_and(|problem| problem.starts_with(&format!(
+                        "could not read the Git worktrees of {}",
+                        real(&locked)
+                    ))),
+                "{problems}"
+            );
+            // An update answers once its read decided which agents end, and logs each one before it
+            // answers.
+            assert!(
+                !home.daemon_log().contains(&format!("#{in_fix} ends")),
+                "a failed read proves nothing: {}",
+                home.daemon_log()
+            );
+            assert!(running(&home, &in_fix));
+        }
+        assert_eq!(
+            wire.call("window.update", window("win-1", Some("k1"), &with_locked))["result"],
+            json!({})
+        );
+        assert!(
+            wait_until(secs(15), || !running(&home, &in_fix)),
+            "an agent in a deleted worktree ends"
+        );
+    }
     assert!(
         running(&home, &in_kept) && running(&home, &in_main),
         "{}",
         home.daemon_log()
     );
+    #[cfg(unix)]
     assert!(
         home.daemon_log().contains(&format!(
             "#{in_fix} ends: its location {fix_path} is gone from window win-1"

@@ -20,7 +20,6 @@ mod typist;
 mod viewers;
 
 use std::collections::HashSet;
-use std::os::fd::OwnedFd;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -28,6 +27,7 @@ use std::time::Duration;
 
 use facade_base::daemon::{AgentInfo, AgentState, AgentsChange, InputInfo};
 use facade_base::process::{ProcessExit, ProcessState};
+use facade_base::terminal::PtyMaster;
 use facade_screen::Screen;
 use tokio::sync::{Notify, broadcast, mpsc, oneshot, watch};
 use tokio::time::Instant;
@@ -37,8 +37,7 @@ use crate::{Sender, ToolsGiven};
 
 pub(crate) use screen::{ScreenLog, recover, recover_after_clean_end, saved_size, screen_writes};
 pub(crate) use state::{Kept, instant_of, read_kept, state_file};
-pub(crate) use terminal::terminal_size;
-pub(crate) use typist::{MessageTyping, Typing, TypingAnswer};
+pub(crate) use typist::{MessageTyping, Typing, TypingAnswer, delivery_time};
 pub(crate) use viewers::{ViewerChange, ViewerSender, ViewerSnapshot, viewer_channel};
 
 /// Rows of scrollback each agent's screen keeps.
@@ -167,7 +166,7 @@ pub(crate) enum AgentCommand {
     /// with the running record. A run that ended meanwhile then ends at once.
     InstallRun {
         run: u64,
-        master: OwnedFd,
+        master: PtyMaster,
         pid: u32,
         captures: bool,
         /// The CLI's version as its installation names it.
@@ -191,8 +190,14 @@ pub(crate) enum AgentCommand {
         prompt: Option<MessageTyping>,
     },
     /// A newer Facade takes over: stop typing and reading the terminal, write the state's last
-    /// facts, and reply once the queued input is written.
+    /// facts, and reply once no read is under way, what the last reads brought went through the
+    /// screen log, and the queued input is written.
     Quiesce {
+        reply: oneshot::Sender<()>,
+    },
+    /// The run is about to be stopped: the terminal lets go of its copy of what keeps it open, then
+    /// replies. Reading, writing and the record go on until the run's exit.
+    LetGoBeforeStop {
         reply: oneshot::Sender<()>,
     },
     /// A newer Facade takes over: begin no paste, and reply once a begun paste is settled.
@@ -209,8 +214,8 @@ pub(crate) enum AgentCommand {
 /// What an actor starts from.
 pub(crate) struct ActorStart {
     pub(crate) info: AgentInfo,
-    /// The PTY master; None for an agent whose terminal closed.
-    pub(crate) master: Option<OwnedFd>,
+    /// The terminal; None for an agent whose terminal closed.
+    pub(crate) master: Option<PtyMaster>,
     pub(crate) screen: ScreenStart,
     /// The name of the CLI rule the agent was started by.
     pub(crate) rule: Option<String>,
@@ -263,6 +268,7 @@ pub(crate) fn spawn(
     let room = Arc::new(Notify::new());
     let (exit_tx, exit) = watch::channel(start.info.exit.clone());
     let (settled_tx, settled) = watch::channel(false);
+    let (output_tx, output) = watch::channel(());
     // Followed from before the agent can be found, so no connection of its tools is missed.
     let (tools_tx, tools_rx) = watch::channel(0);
     let tools = Arc::new(tools_tx);
@@ -273,6 +279,7 @@ pub(crate) fn spawn(
         room: room.clone(),
         exit,
         settled,
+        output,
         rule: start.rule.clone(),
         run_change: Arc::new(tokio::sync::Mutex::new(())),
         tools: tools.clone(),
@@ -282,6 +289,7 @@ pub(crate) fn spawn(
         room,
         exit: exit_tx,
         settled: settled_tx,
+        output: output_tx,
         changes,
         _tools: tools,
         tools_connections: tools_rx,
@@ -306,6 +314,7 @@ pub(crate) struct AgentHandle {
     room: Arc<Notify>,
     exit: watch::Receiver<Option<ProcessExit>>,
     settled: watch::Receiver<bool>,
+    output: watch::Receiver<()>,
     rule: Option<String>,
     run_change: Arc<tokio::sync::Mutex<()>>,
     tools: Arc<watch::Sender<usize>>,
@@ -326,6 +335,7 @@ impl AgentHandle {
             room: Arc::new(Notify::new()),
             exit: watch::channel(None).1,
             settled: watch::channel(false).1,
+            output: watch::channel(()).1,
             rule: None,
             run_change: Arc::new(tokio::sync::Mutex::new(())),
             tools: Arc::new(watch::channel(0).0),
@@ -363,6 +373,11 @@ impl AgentHandle {
     /// Becomes true once viewers were told the exit, after the run's last output.
     pub(crate) fn settled(&self) -> watch::Receiver<bool> {
         self.settled.clone()
+    }
+
+    /// Marked changed each time the agent's terminal gives output: its CLI works.
+    pub(crate) fn output_seen(&self) -> watch::Receiver<()> {
+        self.output.clone()
     }
 
     /// Fires when input reached the terminal, a size input waited for was applied, or the run

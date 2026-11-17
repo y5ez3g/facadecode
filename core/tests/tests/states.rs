@@ -317,10 +317,10 @@ fn the_person_s_enter_is_said_once_the_cli_takes_what_it_submits() {
         (&json!("human"), None)
     );
     // Keys and their Enter in one write, which the CLI draws 300 ms later.
-    send_signal(cli.pid, libc::SIGSTOP);
+    pause_process(cli.pid);
     term.send(b"ship it\r");
     std::thread::sleep(std::time::Duration::from_millis(300));
-    send_signal(cli.pid, libc::SIGCONT);
+    resume_process(cli.pid);
     said(&home, "w1", "ship it");
     term.send(b"line one\\\r");
     assert!(
@@ -354,10 +354,10 @@ fn an_enter_whose_keys_are_not_drawn_in_time_says_nothing() {
         "{}",
         term.text()
     );
-    send_signal(cli.pid, libc::SIGSTOP);
+    pause_process(cli.pid);
     term.send(b"the build\r");
     std::thread::sleep(secs(3));
-    send_signal(cli.pid, libc::SIGCONT);
+    resume_process(cli.pid);
     assert!(
         wait_until(secs(10), || home
             .submitted_messages()
@@ -398,11 +398,13 @@ while :; do
 	printf '\033[?2026l'
 done
 "#;
-    let cli = programs.join("facade-fakecli");
-    std::fs::write(&cli, script).unwrap();
-    std::fs::set_permissions(&cli, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    install_script(&programs, "facade-fakecli", script);
     let mut wire = connect(&home);
-    let path = format!("{}:/usr/bin:/bin", programs.display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        SYSTEM_PATH.as_str()
+    );
     let args = json!({
         "command": ["fake"], "name": "sync", "cwd": home.project,
         "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
@@ -472,6 +474,8 @@ fn two_pasted_texts_before_one_enter_are_each_said_as_themselves() {
 
 /// An Enter the CLI answers with a question of its own in place of its input takes the draft: it is
 /// said.
+// Its stand-in is a sh script that reads keys, which MSYS sh under a pseudo console does not get.
+#[cfg(unix)]
 #[test]
 fn an_enter_the_cli_answers_with_a_question_is_said() {
     let home = TestHome::new("enterquestion");
@@ -496,11 +500,13 @@ done
 printf '\033[2J\033[H  Muse Code 1.4.14\r\n\r\nWhich one?\r\n⟩ 1  Yes\r\n  2  No\r\n'
 exec sleep 600
 "#.replace("RULE", &"─".repeat(80));
-    let muse = programs.join("muse");
-    std::fs::write(&muse, script).unwrap();
-    std::fs::set_permissions(&muse, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    install_script(&programs, "muse", &script);
     let mut wire = connect(&home);
-    let path = format!("{}:/usr/bin:/bin", programs.display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        SYSTEM_PATH.as_str()
+    );
     let args = json!({
         "command": ["muse"], "name": "muse", "cwd": home.project,
         "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
@@ -616,7 +622,7 @@ fn an_agent_stopped_while_its_daemon_failed_is_listed_as_ended() {
         wait_until(secs(10), || stopped(daemon)),
         "the daemon did not stop before saving the exit"
     );
-    send_signal(daemon, libc::SIGKILL);
+    kill_process(daemon);
     reaches(&home, "w1", "ended");
 }
 
@@ -635,15 +641,13 @@ fn opencode_s_failed_model_call_is_an_error() {
         "#!/bin/sh\nprintf '\\033]7501;state=working\\007'\nsleep 1\nprintf \
          '\\033[2J\\033[H{turn}\\033]7501;state=done\\007'\nexec sleep 600\n"
     );
-    let opencode = programs.join("opencode");
-    std::fs::write(&opencode, script).unwrap();
-    std::fs::set_permissions(
-        &opencode,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
+    install_script(&programs, "opencode", &script);
     let mut wire = connect(&home);
-    let path = format!("{}:/usr/bin:/bin", programs.display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        SYSTEM_PATH.as_str()
+    );
     let args = json!({
         "command": ["opencode"], "name": "opencode", "cwd": home.project,
         "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
@@ -679,11 +683,13 @@ fn a_question_on_the_screen_waits_for_the_person_while_the_cli_starts() {
     let script = format!(
         "#!/bin/sh\nprintf '\\033[2J\\033[H{question}\\033[?25l\\033[7;2H'\nexec sleep 600\n"
     );
-    let claude = programs.join("claude");
-    std::fs::write(&claude, script).unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    install_script(&programs, "claude", &script);
     let mut wire = connect(&home);
-    let path = format!("{}:/usr/bin:/bin", programs.display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        SYSTEM_PATH.as_str()
+    );
     let args = json!({
         "command": ["claude"], "name": "claude", "cwd": home.project,
         "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
@@ -718,11 +724,13 @@ fn an_enter_that_answers_the_cli_s_question_asks_for_nothing() {
         "#!/bin/sh\nprintf '\\033[2J\\033[H{question}\\033[?25l\\033[7;2H'\nread answer\nprintf \
          '\\033[2J\\033[H\\033[?25h'\n{work}\nread line\n{work}\nexec sleep 600\n"
     );
-    let claude = programs.join("claude");
-    std::fs::write(&claude, script).unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    install_script(&programs, "claude", &script);
     let mut wire = connect(&home);
-    let path = format!("{}:/usr/bin:/bin", programs.display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        SYSTEM_PATH.as_str()
+    );
     let args = json!({
         "command": ["claude"], "name": "claude", "cwd": home.project,
         "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
@@ -749,11 +757,13 @@ fn muse_code_s_screen_shows_what_it_does() {
         "#!/bin/sh\nprintf '\\033[2J\\033[H◈ Thinking (3s · esc to interrupt)\\r\\n{frame}'\nsleep \
          3\nprintf '\\033[2J\\033[H  Muse Code 1.4.14\\r\\n\\r\\n{frame}'\nexec sleep 600\n"
     );
-    let muse = programs.join("muse");
-    std::fs::write(&muse, script).unwrap();
-    std::fs::set_permissions(&muse, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    install_script(&programs, "muse", &script);
     let mut wire = connect(&home);
-    let path = format!("{}:/usr/bin:/bin", programs.display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        SYSTEM_PATH.as_str()
+    );
     for (name, command) in [
         ("muse", json!(["muse"])),
         ("words", json!(["muse", "hello"])),
@@ -783,15 +793,13 @@ fn work_no_one_asked_for_is_no_turn() {
     let script = "#!/bin/sh\nr() { printf '\\033]7501;state=%s\\033\\\\' \"$1\"; }\nr idle\n\
                   sleep 1\nr working\nsleep 1\nr idle\nread line\nr working\nsleep 1\nr idle\n\
                   exec sleep 600\n";
-    let starter = programs.join("starter");
-    std::fs::write(&starter, script).unwrap();
-    std::fs::set_permissions(
-        &starter,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
+    install_script(&programs, "starter", script);
     let mut wire = connect(&home);
-    let path = format!("{}:/usr/bin:/bin", programs.display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        SYSTEM_PATH.as_str()
+    );
     let args = json!({
         "command": ["starter"], "name": "starter", "cwd": home.project,
         "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,

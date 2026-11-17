@@ -10,14 +10,6 @@ use serde_json::{Value, json};
 
 use crate::*;
 
-/// What a test's commands take from the environment the tests run in: its temporary folder, its
-/// text encoding, and Rust's backtraces. Nothing else reaches them, so no setting of the person's,
-/// such as `OPENCODE_CONFIG`, reaches a test.
-pub const PASSED_THROUGH: [&str; 5] = ["TMPDIR", "LANG", "LC_ALL", "LC_CTYPE", "RUST_BACKTRACE"];
-
-/// The system's folders: besides the test's own, the only ones a test's processes find programs in.
-const SYSTEM_FOLDERS: [&str; 4] = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
-
 /// What keeps a test's agents inside the test: the test's `PATH`, home and CLI settings folders,
 /// and the test's folder.
 #[derive(Clone, Debug)]
@@ -41,9 +33,9 @@ impl Isolation {
                     .find(|(name, _)| *name == "PATH")
                     .map(|(_, path)| path.as_str())
                     .unwrap_or_default();
-                value
-                    .split(':')
-                    .all(|folder| allowed.split(':').any(|ok| ok == folder) || inside(folder))
+                value.split(PATH_SEPARATOR).all(|folder| {
+                    allowed.split(PATH_SEPARATOR).any(|ok| ok == folder) || inside(folder)
+                })
             }
             _ => inside(value),
         }
@@ -130,7 +122,8 @@ impl TestHome {
             std::env::temp_dir().join(format!("fcs-{test}-{}-{n}-{nanos:x}", std::process::id()));
         let path = base.join("home");
         let project = base.join("project");
-        std::fs::create_dir_all(&path).expect("could not create the test Facade home");
+        facade_base::files::create_private_folder_all(&path)
+            .expect("could not create the test Facade home");
         std::fs::create_dir_all(&project).expect("could not create the test project folder");
         if let Some(log) = std::env::var_os("FACADE_SCENARIO_HOME_LOG") {
             let mut log = std::fs::OpenOptions::new()
@@ -150,9 +143,10 @@ impl TestHome {
 
     /// Installs a debug fault switch in this test home.
     pub fn fault(&self, name: &str, value: &str) {
-        use std::os::unix::fs::DirBuilderExt;
-        std::fs::DirBuilder::new()
-            .mode(0o700)
+        let mut folder = std::fs::DirBuilder::new();
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut folder, 0o700);
+        folder
             .recursive(true)
             .create(self.path.join("core"))
             .unwrap();
@@ -211,10 +205,10 @@ impl TestHome {
             .expect("the programs' folder")
             .display()
             .to_string();
-        std::iter::once(programs.as_str())
-            .chain(SYSTEM_FOLDERS)
+        std::iter::once(programs)
+            .chain(system_folders())
             .collect::<Vec<_>>()
-            .join(":")
+            .join(PATH_SEPARATOR)
     }
 
     /// What keeps a process inside this test: its `PATH`, its home, and the folders the CLIs keep
@@ -222,13 +216,15 @@ impl TestHome {
     pub fn isolating_env(&self) -> Vec<(&'static str, String)> {
         let user = self.user_home();
         let under = |settings: &str| user.join(settings).display().to_string();
-        vec![
+        let mut env = vec![
             ("PATH", self.test_path()),
             ("HOME", user.display().to_string()),
             ("XDG_CONFIG_HOME", under(".config")),
             ("CLAUDE_CONFIG_DIR", under(".claude")),
             ("CODEX_HOME", under(".codex")),
-        ]
+        ];
+        env.extend(home_variables(&user));
+        env
     }
 
     /// What keeps the agents this test starts through the protocol inside it.
@@ -391,27 +387,11 @@ impl TestHome {
     }
 
     /// Finds this test's processes: those whose environment selects its Facade home, and those
-    /// working in its folder.
+    /// of its folder ([`processes_in`]).
     pub fn processes(&self) -> Vec<i32> {
-        let marker = format!("FACADE_HOME={}", self.path.display());
-        let out = Command::new("ps")
-            .args(["axeww", "-o", "pid=,command="])
-            .output()
-            .expect("could not run ps");
-        stdout(&out)
-            .lines()
-            .filter(|line| line.split_whitespace().any(|word| word == marker))
-            .filter_map(|line| {
-                line.split_whitespace()
-                    .next()
-                    .and_then(|pid| pid.parse().ok())
-            })
-            .chain(
-                self.path
-                    .parent()
-                    .map(processes_working_in)
-                    .unwrap_or_default(),
-            )
+        processes_with("FACADE_HOME", &self.path)
+            .into_iter()
+            .chain(self.path.parent().map(processes_in).unwrap_or_default())
             .filter(|pid| *pid != std::process::id() as i32)
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
@@ -453,10 +433,10 @@ impl TestHome {
                 break;
             }
             for pid in &processes {
-                send_signal(*pid, libc::SIGSTOP);
+                pause_process(*pid);
             }
             for pid in &processes {
-                send_signal(*pid, libc::SIGKILL);
+                kill_process(*pid);
             }
             wait_until(secs(3), || {
                 identities.iter().all(|identity| !alive(identity))
@@ -482,7 +462,7 @@ impl Drop for TestHome {
 impl TestHome {
     /// Reads daemon details from hello, or None if no daemon responds.
     pub fn hello_result(&self) -> Option<Value> {
-        let stream = std::os::unix::net::UnixStream::connect(self.daemon_socket()).ok()?;
+        let stream = facade_base::paths::ClientSocket::connect(self.daemon_socket()).ok()?;
         stream.set_read_timeout(Some(secs(5))).ok()?;
         let mut writer = stream.try_clone().ok()?;
         let mut reader = BufReader::new(stream);
@@ -552,13 +532,13 @@ impl TestHome {
         );
     }
 
-    /// Sends SIGKILL to the daemon and returns its process ID.
+    /// Kills the daemon at once and returns its process ID.
     pub fn kill_daemon(&self) -> i32 {
         let pid = self
             .hello_result()
             .and_then(|hello| hello["pid"].as_i64())
             .expect("expected a running daemon") as i32;
-        send_signal(pid, libc::SIGKILL);
+        kill_process(pid);
         pid
     }
 
@@ -618,8 +598,8 @@ impl TestHome {
     /// socket as the last thing it does: the waits leave room above both for a loaded machine.
     pub fn wait_for_idle_exit(&self) {
         assert!(
-            wait_until(LOADED_TIMEOUT, || !self.daemon_socket().exists()
-                && !self.keeper_socket().exists()),
+            wait_until(LOADED_TIMEOUT, || !socket_exists(&self.daemon_socket())
+                && !socket_exists(&self.keeper_socket())),
             "services did not exit: {}\n{}",
             self.daemon_log(),
             self.keeper_log()
@@ -642,19 +622,12 @@ impl TestHome {
 /// A stand-in for `cli` in `bin` that writes the arguments it was given to the file `argv`, one a
 /// line, and waits. It moves the file into place once whole, so a test never reads part of it.
 pub fn stand_in(bin: &Path, cli: &str, argv: &Path) {
-    std::fs::create_dir_all(bin).unwrap();
-    let program = bin.join(cli);
     let script = format!(
         "#!/bin/sh\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\"; done > '{0}.part'\nmv \
          '{0}.part' '{0}'\nexec sleep 600\n",
         argv.display()
     );
-    std::fs::write(&program, script).unwrap();
-    std::fs::set_permissions(
-        &program,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
+    install_script(bin, cli, &script);
 }
 
 /// The arguments a stand-in that writes `argv` started with. The file goes, for the next start.
@@ -674,7 +647,7 @@ pub fn arguments(argv: &Path) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use crate::TestHome;
+    use crate::{TestHome, socket_exists};
 
     /// Cleanup must remove both sockets, including when processes were still running.
     #[test]
@@ -682,14 +655,14 @@ mod tests {
         let (keeper, daemon) = {
             let home = TestHome::new("socketsdrop");
             home.start_fake("w1");
-            assert!(home.keeper_socket().exists() && home.daemon_socket().exists());
+            assert!(socket_exists(&home.keeper_socket()) && socket_exists(&home.daemon_socket()));
             (home.keeper_socket(), home.daemon_socket())
         };
         assert!(
-            !keeper.exists() && !daemon.exists(),
+            !socket_exists(&keeper) && !socket_exists(&daemon),
             "sockets remain after Facade home cleanup: keeper {} daemon {}",
-            keeper.exists(),
-            daemon.exists()
+            socket_exists(&keeper),
+            socket_exists(&daemon)
         );
     }
 }

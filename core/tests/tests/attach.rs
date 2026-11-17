@@ -2,6 +2,7 @@
 
 use facade_scenarios::*;
 
+#[cfg(unix)]
 #[test]
 fn attach_restores_bracketed_paste_and_cooked_mode_on_signal() {
     let home = TestHome::new("attachsignal");
@@ -45,7 +46,7 @@ fn attach_restores_bracketed_paste_and_cooked_mode_on_signal() {
     }
 }
 
-/// Ctrl-], SIGTERM, and SIGHUP must restore the main screen and cooked input.
+/// Ctrl-], and on Unix SIGTERM and SIGHUP, must restore the main screen and cooked input.
 #[test]
 fn attach_restores_main_screen_on_detach_or_signal() {
     let home = TestHome::new("detach");
@@ -57,11 +58,15 @@ fn attach_restores_main_screen_on_detach_or_signal() {
         "printf '\\033[?1049hALT-READY'; sleep 60",
     );
     assert!(wait_for_screen_text(&home, &agent, "ALT-READY"));
-    for (end, note, code) in [
-        ("ctrl-]", "detached", 0),
+    // Termination signals reach attach on Unix alone.
+    #[cfg_attr(windows, allow(unused_mut))]
+    let mut ends = vec![("ctrl-]", "detached", 0)];
+    #[cfg(unix)]
+    ends.extend([
         ("SIGTERM", "ended by SIGTERM", 128 + libc::SIGTERM),
         ("SIGHUP", "ended by SIGHUP", 128 + libc::SIGHUP),
-    ] {
+    ]);
+    for (end, note, code) in ends {
         let mut term = TestTerminal::spawn(
             home.command(&test_binaries().facade)
                 .args(["attach", &agent]),
@@ -75,8 +80,12 @@ fn attach_restores_main_screen_on_detach_or_signal() {
         );
         match end {
             "ctrl-]" => term.send(b"\x1d"),
+            #[cfg(unix)]
             "SIGTERM" => send_signal(term.pid(), libc::SIGTERM),
+            #[cfg(unix)]
             _ => send_signal(term.pid(), libc::SIGHUP),
+            #[cfg(windows)]
+            _ => unreachable!("only Ctrl-] ends an attachment on Windows"),
         }
         let status = term
             .wait_exit(secs(5))
@@ -91,6 +100,7 @@ fn attach_restores_main_screen_on_detach_or_signal() {
             !term.on_alternate_screen(),
             "{end} left the terminal on its alternate screen"
         );
+        #[cfg(unix)]
         assert!(
             term.canonical_input_and_echo_enabled(),
             "{end} left the terminal raw"
@@ -102,6 +112,7 @@ fn attach_restores_main_screen_on_detach_or_signal() {
 /// though the agent prints all the time, turning bracketed paste on in each line, and the
 /// attachment's exit is held after the restoration, as a loaded machine can hold it: bracketed
 /// paste stays off, and the note is the last thing shown. Core Review's reproduction (S17).
+#[cfg(unix)]
 #[test]
 fn nothing_of_the_agent_follows_the_note_of_a_signal() {
     let home = TestHome::new("attachlate");
@@ -164,6 +175,7 @@ fn nothing_of_the_agent_follows_the_note_of_a_signal() {
 /// A connection lost once a termination signal restored the person's terminal draws no reconnect
 /// note over it: the attachment is ending. A test gate holds its exit after the restoration while
 /// the daemon ends and the keeper starts the next.
+#[cfg(unix)]
 #[test]
 fn no_reconnect_note_follows_the_note_of_a_signal() {
     let home = TestHome::new("attachnote");
@@ -193,7 +205,7 @@ fn no_reconnect_note_follows_the_note_of_a_signal() {
         .hello_result()
         .and_then(|hello| hello["pid"].as_i64())
         .expect("the daemon answers") as i32;
-    send_signal(daemon, libc::SIGKILL);
+    kill_process(daemon);
     home.wait_for_daemon_after(daemon, secs(30))
         .expect("the keeper starts the next daemon");
     std::fs::write(core.join("release-attach-restored"), b"").unwrap();
@@ -265,6 +277,7 @@ fn detach_leaves_alternate_screen_set_with_other_modes() {
 }
 
 /// Termination during the initial redraw must restore a terminal whose reader is slow.
+#[cfg(unix)]
 #[test]
 fn attach_restores_terminal_when_signalled_during_initial_redraw() {
     let home = TestHome::new("earlysignal");
@@ -359,6 +372,7 @@ fn detach_delivers_preceding_input() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     use std::io::{BufRead, BufReader, Write};
@@ -371,7 +385,7 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
     let mut term = TestTerminal::spawn(&mut command, 110, 30);
     assert!(term.wait_for(secs(10), |text| text.contains("❯")));
     let keeper = home.lock_record("keeper").unwrap().0;
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     home.kill_daemon();
     std::fs::remove_file(home.daemon_socket()).unwrap();
     let listener = std::os::unix::net::UnixListener::bind(home.daemon_socket()).unwrap();
@@ -408,5 +422,5 @@ fn a_malformed_reconnect_ends_attach_and_keeps_the_unsent_count() {
         term.text_with_scrollback()
     );
     peer.join().unwrap();
-    send_signal(keeper, libc::SIGCONT);
+    resume_process(keeper);
 }

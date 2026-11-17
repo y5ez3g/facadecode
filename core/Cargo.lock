@@ -357,10 +357,9 @@ dependencies = [
  "facade-daemon",
  "facade-keeper",
  "facade-rules",
- "libc",
  "serde",
  "serde_json",
- "signal-hook 0.4.6",
+ "tokio",
  "unicode-width",
 ]
 
@@ -376,7 +375,10 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "signal-hook 0.4.6",
+ "tokio",
  "unicode-segmentation",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -387,8 +389,6 @@ dependencies = [
  "facade-base",
  "facade-rules",
  "facade-screen",
- "libc",
- "nix",
  "rusqlite",
  "serde",
  "serde_json",
@@ -407,6 +407,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook 0.4.6",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -415,6 +416,7 @@ version = "0.2.0"
 dependencies = [
  "nix",
  "sha2",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -444,6 +446,9 @@ dependencies = [
  "nix",
  "rusqlite",
  "serde_json",
+ "sha2",
+ "toml",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

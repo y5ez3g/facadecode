@@ -17,12 +17,15 @@ It keeps nothing on disk.
 
 ## Keeps
 
-- One thread and one loop. It blocks only in `poll`, in a read or write, and while `facade daemon --detach` runs.
+- One loop: on Unix, one thread waits in `poll`; on Windows, the loop waits on an I/O completion port and one other
+  thread blocks reading standard input and posts each read to that port. Reads from the daemon use overlapped I/O.
+  Writes and the hello block, as does running `facade daemon --detach`.
 - Every byte it passes on goes through unchanged. Of a line it reads only the top-level `id`, `method` and `error`.
 - A request stays pending until the daemon sends a line with its `id` and no `method`.
 - When it connects again, it sends the pending requests first, in their order, then the held lines, then new lines.
 - Before it sends the hello, it checks that the process at the socket's other end runs as its own user. The socket
-  folder is under `/tmp`, and the hello carries the CLI's environment, which may hold keys.
+  folder on Unix is under `/tmp`; on Windows it compares the named pipe server's token user SID with its own. The
+  hello carries the CLI's environment, which may hold keys.
 - Once it has responded to `closing`, it sends that daemon nothing more.
 - It runs `facade daemon --detach` at most once for each time it is disconnected, and only where no one listens.
 - Code that differs by operating system stays inside the relay.
@@ -30,7 +33,7 @@ It keeps nothing on disk.
 ## Never does
 
 - Change or make MCP messages. Its hello and its response to `closing` are its only own lines.
-- Depend on a Facade crate. Its dependencies are `nix` and `sha2`.
+- Depend on a Facade crate. Its dependencies are `sha2`, `nix` on Unix and `windows-sys` on Windows.
 - Read its arguments. They go into the hello and nowhere else.
 - Start any process other than `facade daemon --detach`.
 - Time out a request, limit a line's size, or queue anything beyond the pending and held lines.
@@ -59,15 +62,19 @@ server in [daemon](daemon.md).
 **The socket.** The relay works out the daemon socket from the Facade home by the rule in "Connect to the daemon" in
 [PROTOCOL.md](../../../core/protocol/PROTOCOL.md). [base](base.md) follows the same rule in `paths::home_key` and
 `daemon_socket`. The scenario tests that go through the relay keep the two the same: the relay is given no path, so a
-different result would not connect.
+different result would not connect. On Windows the socket is the named pipe
+`\\.\pipe\facade-core-daemon-<key>`, with the same home key: the first five SHA-256 bytes in hex, hashing the home as
+written without changing case or slashes.
 
 **The `facade` program.** Where no one listens, the relay runs `facade daemon --detach` from its own folder, with its
-own environment, as PROTOCOL.md tells a client to.
+own environment, as PROTOCOL.md tells a client to. On Windows the program is `facade.exe`, started with
+`CREATE_NO_WINDOW`.
 
 ## Depends on
 
-- `nix`: `poll`; the user ID; the peer's user, through `getpeereid`, or `SO_PEERCRED` on Linux.
+- `nix` (Unix only): `poll`; the user ID; the peer's user, through `getpeereid`, or `SO_PEERCRED` on Linux.
 - `sha2`: the hash in the socket's name.
+- `windows-sys` (Windows only): the completion port, overlapped pipe I/O and the server's user SID.
 - No Facade crate. At run time it uses the daemon's socket and the `facade` program beside it.
 
 ## Inside
@@ -80,6 +87,7 @@ own environment, as PROTOCOL.md tells a client to.
 | `daemon.rs` | `DaemonLink::open` (connect, check the peer's user, hello), the response to `closing`, `Hello`, `start_facade`. |
 | `jsonrpc.rs` | `read`: sorts a line into `Request`, `Notification`, `Response` or `Other`; `string`: a JSON string for the hello. |
 | `lines.rs` | `Lines`: cuts a stream into lines, newline included. |
+| `windows.rs` | The completion port, standard-input thread, overlapped daemon pipe, user check and process creation flag. The only module that allows unsafe code. |
 
 **The loop.** `relay::run` repeats four steps on one thread:
 
@@ -90,6 +98,12 @@ own environment, as PROTOCOL.md tells a client to.
    wakes at the next try; otherwise it has no timeout.
 4. Read what is ready. A read from the CLI that ends or fails ends the input. A read from the daemon that ends or
    fails ends the link. A failed write to standard output stops the relay with 1.
+
+On Windows, the same loop waits on a completion port instead of `poll`. The standard-input thread posts each read,
+including the end of input, to the port. The loop keeps one daemon read outstanding; its buffer and `OVERLAPPED`
+stay in place until completion. Dropping a link cancels its read and waits before freeing that storage. Each
+connection has its own completion key, so the loop ignores any old cancelled read's packet. Writes and the hello
+use an event with completion-port notification suppressed, and block until their overlapped I/O finishes.
 
 **The daemon's state** is one enum:
 

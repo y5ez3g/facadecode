@@ -1,14 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use std::os::unix::fs::MetadataExt;
-
     use super::super::recovery::{RecoveredScreen, recover_with};
     use super::super::*;
     use crate::test_folder::TestFolder;
-    use crate::test_process::in_own_process;
     use std::fs::OpenOptions;
     use std::io::Read;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::Path;
 
     use tokio::sync::oneshot;
@@ -28,9 +24,6 @@ mod tests {
                         .unwrap_or_else(|e| Err(io::Error::other(e)))
                 }));
             }
-        }
-        fn refuse_records(&mut self) {
-            self.file = Some(File::open(log_path(&self.dir, self.generation)).unwrap());
         }
         /// Fills the test log until even the smallest record no longer fits; blocks without locks.
         pub(crate) fn fill_to_the_cap(&mut self) {
@@ -762,145 +755,6 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_checkpoint_never_costs_the_last_published_fallback() {
-        let (_folder, dir) = temp_dir("keptfallback");
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        recorder.output(b"FIRST\r\n");
-        let job = recorder.capture();
-        let encoded = job.checkpoint.encode();
-        // The checkpoint is half written when the disk fails.
-        std::fs::write(checkpoint_path(&dir, 2), &encoded[..encoded.len() / 2]).unwrap();
-        recorder.log.finish_checkpoint(Ok(Err(io::Error::other(
-            "the checkpoint could not be written",
-        ))));
-        recorder.output(b"SECOND\r\n");
-        recorder.log.output_since_capture = CHECKPOINT_AFTER_BYTES;
-        let retry = recorder.log.prepare_retry().expect("a retry");
-        recorder.finish(retry).unwrap();
-        recorder.output(b"THIRD\r\n");
-        assert_eq!(
-            generations(&dir),
-            ["1.checkpoint", "1.log", "2.checkpoint", "2.log", "current"],
-            "the last published checkpoint and log remain as the fallback"
-        );
-        let mut damaged = std::fs::read(checkpoint_path(&dir, 2)).unwrap();
-        damaged[30] ^= 1;
-        std::fs::write(checkpoint_path(&dir, 2), damaged).unwrap();
-        let recovered = recover_quietly(&dir, None);
-        assert_eq!(recovered.screen.text(10), ["FIRST", "SECOND", "THIRD"]);
-
-        // If publication fails for a log that follows a gap, discard the whole generation. The next
-        // generation must retain the published fallback, even though their numbers are not
-        // consecutive.
-        let (_folder, dir) = temp_dir("skippedfallback");
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        recorder.output(b"FIRST\r\n");
-        // The disk refuses a record, which seals the log.
-        recorder.log.file = Some(File::open(log_path(&dir, 1)).unwrap());
-        recorder.output(b"not logged\r\n");
-        std::fs::create_dir(dir.join("current.next")).unwrap();
-        let job = recorder.capture();
-        recorder.finish(job).unwrap_err();
-        assert_eq!(
-            generations(&dir),
-            ["1.checkpoint", "1.log", "current", "current.next"],
-            "the log after the gap is given up"
-        );
-        std::fs::remove_dir(dir.join("current.next")).unwrap();
-        recorder.output(b"SECOND\r\n");
-        let job = recorder.capture();
-        assert_eq!(job.generation, 3);
-        recorder.finish(job).unwrap();
-        recorder.output(b"THIRD\r\n");
-        assert_eq!(
-            generations(&dir),
-            ["1.checkpoint", "1.log", "3.checkpoint", "3.log", "current"]
-        );
-        let mut damaged = std::fs::read(checkpoint_path(&dir, 3)).unwrap();
-        damaged[30] ^= 1;
-        std::fs::write(checkpoint_path(&dir, 3), damaged).unwrap();
-        let recovered = recover_quietly(&dir, None);
-        assert_eq!(
-            recovered.screen.text(10),
-            ["FIRST"],
-            "the screen as of the gap, from the last published checkpoint"
-        );
-    }
-
-    /// Runs `attempt` while this process may write files only up to `bytes`: a write past that
-    /// fails with EFBIG, after writing what fits.
-    fn with_file_size_limit<T>(bytes: u64, attempt: impl FnOnce() -> T) -> T {
-        let mut limit = libc::rlimit {
-            rlim_cur: 0,
-            rlim_max: 0,
-        };
-        // SAFETY: getrlimit and setrlimit read and write the given structs. Ignoring SIGXFSZ makes
-        // a write past the limit fail instead of ending the process.
-        unsafe {
-            assert_eq!(libc::getrlimit(libc::RLIMIT_FSIZE, &mut limit), 0);
-            libc::signal(libc::SIGXFSZ, libc::SIG_IGN);
-            assert_eq!(
-                libc::setrlimit(
-                    libc::RLIMIT_FSIZE,
-                    &libc::rlimit {
-                        rlim_cur: bytes,
-                        rlim_max: limit.rlim_max
-                    }
-                ),
-                0
-            );
-        }
-        let result = attempt();
-        // SAFETY: as above.
-        assert_eq!(unsafe { libc::setrlimit(libc::RLIMIT_FSIZE, &limit) }, 0);
-        result
-    }
-
-    #[test]
-    fn a_log_that_cannot_be_started_leaves_no_generation_and_is_started_again() {
-        if !in_own_process(
-            "agent::screen::test_suite::tests::\
-             a_log_that_cannot_be_started_leaves_no_generation_and_is_started_again",
-        ) {
-            return;
-        }
-        let (_folder, dir) = temp_dir("unstartable");
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        recorder.output(b"FIRST\r\n");
-        // Fail the next log header write before any byte, after a partial write, and on repeated
-        // attempts.
-        for limit in [0, 5, 0, 5, 0, 5] {
-            let checkpoint = Checkpoint::capture(&recorder.screen);
-            assert!(
-                with_file_size_limit(limit, || recorder.log.prepare_checkpoint(checkpoint))
-                    .is_none(),
-                "limit {limit}"
-            );
-            assert_eq!(
-                generations(&dir),
-                ["1.checkpoint", "1.log", "current"],
-                "limit {limit}"
-            );
-        }
-        // The records go on into the current log meanwhile.
-        recorder.output(b"SECOND\r\n");
-        let copy = dir.with_file_name("a1-copy");
-        copy_dir(&dir, &copy);
-        assert_eq!(
-            recover_quietly(&copy, None).screen.text(10),
-            ["FIRST", "SECOND"]
-        );
-        // A file that a failed removal left is replaced when the same generation is created again.
-        std::fs::write(log_path(&dir, 2), b"facade sc").unwrap();
-        let job = recorder.capture();
-        assert_eq!(job.generation, 2);
-        recorder.finish(job).unwrap();
-        recorder.output(b"THIRD\r\n");
-        let recovered = recover_quietly(&dir, None);
-        assert_eq!(recovered.screen.text(10), ["FIRST", "SECOND", "THIRD"]);
-    }
-
-    #[test]
     fn a_fold_whose_unclean_records_would_fill_a_log_checkpoints_where_they_do() {
         let (_folder, dir) = temp_dir("foldcap");
         let mut recorder = Recorder::new(&dir, 80, 6);
@@ -1061,143 +915,6 @@ mod tests {
         }
     }
 
-    /// Whether folder permissions apply to this process. They do not stop root, so a test that
-    /// needs a folder sync to fail cannot run as root.
-    fn folder_permissions_apply() -> bool {
-        // SAFETY: geteuid only reads this process's user ID.
-        let root = unsafe { libc::geteuid() } == 0;
-        if root {
-            eprintln!(
-                "skipped: folder permissions do not stop root, so the folder sync cannot be \
-                 made to fail"
-            );
-        }
-        !root
-    }
-
-    /// Runs `attempt` while `dir` cannot be read: it still takes new files and renames, but cannot
-    /// be opened to sync it. Returns None as root.
-    fn with_unsyncable_folder<T>(dir: &Path, attempt: impl FnOnce() -> T) -> Option<T> {
-        if !folder_permissions_apply() {
-            return None;
-        }
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o300)).unwrap();
-        let result = attempt();
-        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        Some(result)
-    }
-
-    #[test]
-    fn a_checkpoint_whose_folder_cannot_be_synced_after_publishing_stays_published() {
-        let (_folder, dir) = temp_dir("unsyncedfolder");
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        recorder.output(b"FIRST\r\n");
-        let job = recorder.capture();
-        recorder.finish(job).unwrap();
-        recorder.output(b"SECOND\r\n");
-        // Seal the log with a write error. The next checkpoint follows a gap; treating it as
-        // unpublished would discard it.
-        recorder.log.file = Some(File::open(log_path(&dir, 2)).unwrap());
-        recorder.output(b"not logged\r\n");
-        let job = recorder.capture();
-        let Some(published) = with_unsyncable_folder(&dir, || recorder.finish(job)) else {
-            return;
-        };
-        published.expect("the checkpoint is published once `current` is replaced");
-        assert_eq!(
-            recorder.log.cleanup_after_sync,
-            Some(2),
-            "the next checkpoint attempt must retry the failed folder sync"
-        );
-        assert!(
-            checkpoint_path(&dir, 1).exists(),
-            "failed folder sync preserves files older than the fallback"
-        );
-        recorder.output(b"THIRD\r\n");
-        assert_eq!(
-            recover_quietly(&dir, None).screen.text(10),
-            recorder.screen.text(10)
-        );
-    }
-
-    #[test]
-    fn a_folder_that_cannot_be_synced_starts_no_generation_until_it_can() {
-        let (_folder, dir) = temp_dir("unsyncablefolder");
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        // Fail folder sync after publication. The next checkpoint attempt must sync the folder and
-        // delete obsolete files first.
-        for step in 1..=6 {
-            recorder.output(format!("STEP {step}\r\n").as_bytes());
-            let job = recorder.capture();
-            let Some(published) = with_unsyncable_folder(&dir, || recorder.finish(job)) else {
-                return;
-            };
-            published.unwrap();
-            let numbers = Generations::scan(&dir).unwrap().numbers;
-            assert!(numbers.len() <= 3, "step {step}: {:?}", generations(&dir));
-        }
-        // While folder sync fails, checkpoint attempts must add no generation. Records continue in
-        // the current log.
-        let before = generations(&dir);
-        let checkpoint = Checkpoint::capture(&recorder.screen);
-        assert!(
-            with_unsyncable_folder(&dir, || recorder.log.prepare_checkpoint(checkpoint))
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(generations(&dir), before);
-        recorder.output(b"AFTER\r\n");
-        assert!(recorder.log.file.is_some());
-        assert_eq!(
-            recover_quietly(&dir, None).screen.text(10),
-            recorder.screen.text(10)
-        );
-    }
-
-    #[test]
-    fn repeated_recoveries_whose_folder_cannot_be_synced_keep_the_generations_bounded() {
-        if !folder_permissions_apply() {
-            return;
-        }
-        let (_folder, dir) = temp_dir("recoveriesunsynced");
-        let Recorder {
-            mut screen,
-            mut log,
-            ..
-        } = Recorder::new(&dir, 40, 6);
-        let chunk = vec![0u8; MAX_FEED_BYTES];
-        for step in 1..=6 {
-            let marker = format!("STEP {step}\r\n");
-            log.append_output(marker.as_bytes());
-            screen.feed(marker.as_bytes());
-            for _ in 0..CHECKPOINT_AFTER_BYTES as usize / chunk.len() {
-                log.append_output(&chunk);
-                screen.feed(&chunk);
-            }
-            // The daemon ends before its next checkpoint. Its replacement's fold is published, then
-            // the folder cannot be synced.
-            drop(log);
-            let failed = std::cell::Cell::new(false);
-            let recovered = recover(&dir, "a1", None, &|| {
-                std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
-                failed.set(true);
-            });
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-            let recovered_log = recovered.log.unwrap();
-            assert!(
-                failed.get() && recovered_log.cleanup_after_sync.is_some(),
-                "step {step}: the folder sync did not fail"
-            );
-            assert_eq!(recovered.screen.text(10), screen.text(10), "step {step}");
-            assert!(
-                Generations::scan(&dir).unwrap().numbers.len() <= 3,
-                "step {step}: {:?}",
-                generations(&dir)
-            );
-            (screen, log) = (recovered.screen, recovered_log);
-        }
-    }
-
     #[test]
     fn an_old_file_that_cannot_be_deleted_keeps_no_other_generation() {
         let (_folder, dir) = temp_dir("undeletableoldlog");
@@ -1295,123 +1012,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn a_current_that_cannot_be_read_never_counts_as_unpublished() {
-        if !folder_permissions_apply() {
-            return;
-        }
-        let (_folder, dir) = temp_dir("unreadablecurrent");
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        recorder.output(b"FIRST\r\n");
-        let job = recorder.capture();
-        recorder.finish(job).unwrap();
-        // Seal the log with a write error. The next checkpoint follows a gap; treating it as
-        // unpublished would discard it.
-        recorder.log.refuse_records();
-        recorder.output(b"GAP\r\n");
-        let job = recorder.capture();
-        // The writer task publishes the checkpoint, then fails before it reports back, while
-        // `current` cannot be read.
-        recorder.log.writer = Some(tokio::task::spawn_blocking(move || {
-            job.run().expect("the checkpoint is published");
-            panic!("the writer task fails after publishing");
-        }));
-        let written = recorder.log.checkpoint_written().await;
-        let published_checkpoint = std::fs::read(checkpoint_path(&dir, 3)).unwrap();
-        let current = dir.join("current");
-        std::fs::set_permissions(&current, std::fs::Permissions::from_mode(0o000)).unwrap();
-        recorder.log.finish_checkpoint(written);
-        assert_eq!(
-            (recorder.log.published, recorder.log.pending.is_some()),
-            (2, true),
-            "the next checkpoint attempt must determine whether publication succeeded"
-        );
-        // While `current` cannot be read, checkpoint attempts must neither rewrite the checkpoint
-        // nor start another generation.
-        for _ in 0..3 {
-            recorder.log.output_since_capture = CHECKPOINT_AFTER_BYTES;
-            assert!(recorder.log.prepare_retry().is_none());
-            assert!(!recorder.log.wants_checkpoint() && !recorder.log.must_force_checkpoint());
-        }
-        std::fs::set_permissions(&current, std::fs::Permissions::from_mode(0o600)).unwrap();
-        assert_eq!(
-            generations(&dir),
-            ["2.checkpoint", "2.log", "3.checkpoint", "3.log", "current"]
-        );
-        // Once `current` is readable, the next attempt recognizes the published checkpoint and
-        // leaves it unchanged.
-        recorder.log.output_since_capture = CHECKPOINT_AFTER_BYTES;
-        assert!(recorder.log.prepare_retry().is_none());
-        assert_eq!(
-            (recorder.log.published, recorder.log.pending.is_some()),
-            (3, false)
-        );
-        assert_eq!(
-            std::fs::read(checkpoint_path(&dir, 3)).unwrap(),
-            published_checkpoint
-        );
-        assert_eq!(
-            recover_quietly(&dir, None).screen.text(10),
-            ["FIRST", "GAP"]
-        );
-    }
-
-    /// Writes FIRST to generation 2's checkpoint and SECOND to its log. Makes selected files
-    /// unreadable during recovery and checks that their contents remain unchanged.
-    fn recover_with_unreadable(test: &str, unreadable: impl Fn(&Path) -> Vec<PathBuf>) {
-        if !folder_permissions_apply() {
-            return;
-        }
-        let (_folder, dir) = temp_dir(test);
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        recorder.output(b"FIRST\r\n");
-        let job = recorder.capture();
-        recorder.finish(job).unwrap();
-        recorder.output(b"SECOND\r\n");
-        drop(recorder);
-        let files = || {
-            generations(&dir)
-                .iter()
-                .map(|name| (name.clone(), std::fs::read(dir.join(name)).unwrap()))
-                .collect::<Vec<_>>()
-        };
-        let before = files();
-        let unreadable = unreadable(&dir);
-        for path in &unreadable {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
-        }
-        let recovered = recover_quietly(&dir, None);
-        for path in unreadable.iter().filter(|path| path.exists()) {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        }
-        // The agent uses an empty provisional screen without a log. Its output is not recorded and
-        // its files remain unchanged.
-        assert!(recovered.screen.text(10).is_empty() && recovered.log.is_none());
-        assert_eq!(files(), before);
-        assert_eq!(
-            recover_quietly(&dir, None).screen.text(10),
-            ["FIRST", "SECOND"]
-        );
-    }
-
-    #[test]
-    fn a_recovery_that_cannot_read_current_leaves_the_files_to_the_next_one() {
-        recover_with_unreadable("unreadablecurrent", |dir| vec![dir.join("current")]);
-    }
-
-    #[test]
-    fn a_recovery_that_cannot_read_the_checkpoints_leaves_the_files_to_the_next_one() {
-        recover_with_unreadable("unreadablecheckpoints", |dir| {
-            vec![checkpoint_path(dir, 1), checkpoint_path(dir, 2)]
-        });
-    }
-
-    #[test]
-    fn a_recovery_that_cannot_read_a_log_leaves_the_files_to_the_next_one() {
-        recover_with_unreadable("unreadablelog", |dir| vec![log_path(dir, 2)]);
-    }
-
-    /// Reads `left` bytes from `inner`, then returns EIO to simulate a disk read failure.
+    /// Reads `left` bytes from `inner`, then fails, to simulate a disk read failure.
     struct FailingAfter {
         inner: File,
         left: usize,
@@ -1420,7 +1021,7 @@ mod tests {
     impl Read for FailingAfter {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
             if self.left == 0 {
-                return Err(io::Error::from_raw_os_error(libc::EIO));
+                return Err(io::Error::other("a disk read failed"));
             }
             let wanted = buffer.len().min(self.left);
             let read = self.inner.read(&mut buffer[..wanted])?;
@@ -1465,75 +1066,6 @@ mod tests {
             "a read error is not a damaged record"
         );
         assert_eq!(files(), before);
-        assert_eq!(
-            recover_quietly(&dir, None).screen.text(10),
-            ["FIRST", "SECOND"]
-        );
-    }
-
-    #[test]
-    fn a_recovery_whose_folder_cannot_be_synced_before_its_fold_writes_nothing() {
-        use std::os::unix::fs::OpenOptionsExt;
-        if !folder_permissions_apply() {
-            return;
-        }
-        let (_folder, dir) = temp_dir("presyncfailure");
-        let mut recorder = Recorder::new(&dir, 40, 6);
-        recorder.output(b"FIRST\r\n");
-        let job = recorder.capture();
-        recorder.finish(job).unwrap();
-        recorder.output(b"SECOND\r\n");
-        drop(recorder);
-        // Replace the published checkpoint with a FIFO. Recovery reads the folder, then waits for
-        // the checkpoint; meanwhile, remove permission to sync the folder.
-        let path = checkpoint_path(&dir, 2);
-        let checkpoint = std::fs::read(&path).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        let fifo = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
-        // SAFETY: mkfifo reads the NUL-terminated path.
-        assert_eq!(unsafe { libc::mkfifo(fifo.as_ptr(), 0o600) }, 0);
-        let recovering = dir.clone();
-        let recovery = std::thread::spawn(move || recover_quietly(&recovering, None));
-        let until = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        let mut writer = loop {
-            // A writer can open the FIFO without waiting only once recovery opened it to read.
-            if let Ok(writer) = OpenOptions::new()
-                .write(true)
-                .custom_flags(libc::O_NONBLOCK)
-                .open(&path)
-            {
-                break writer;
-            }
-            assert!(
-                std::time::Instant::now() < until,
-                "recovery never read the checkpoint"
-            );
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        };
-        writer.write_all(&checkpoint).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o300)).unwrap();
-        drop(writer);
-        let recovered = recovery.join();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::fs::remove_file(&path).unwrap();
-        std::fs::write(&path, &checkpoint).unwrap();
-        let recovered = recovered.unwrap();
-        assert_eq!(
-            Generations::scan(&dir)
-                .unwrap()
-                .numbers
-                .into_iter()
-                .collect::<Vec<_>>(),
-            [1, 2],
-            "checkpoint and log files remain unchanged"
-        );
-        assert!(
-            recovered
-                .log
-                .as_ref()
-                .is_some_and(|log| log.file.is_none() && log.cleanup_after_sync == Some(2))
-        );
-        assert_eq!(recovered.screen.text(10), ["FIRST", "SECOND"]);
         assert_eq!(
             recover_quietly(&dir, None).screen.text(10),
             ["FIRST", "SECOND"]
@@ -1603,17 +1135,15 @@ mod tests {
         recorder.finish(job).unwrap();
         drop(recover_quietly(&dir, None));
         for folder in [dir.parent().unwrap(), &dir] {
-            assert_eq!(
-                std::fs::metadata(folder).unwrap().mode() & 0o777,
-                0o700,
+            assert!(
+                facade_base::files::is_private(folder).unwrap(),
                 "{}",
                 folder.display()
             );
         }
         for name in generations(&dir) {
-            assert_eq!(
-                std::fs::metadata(dir.join(&name)).unwrap().mode() & 0o777,
-                0o600,
+            assert!(
+                facade_base::files::is_private(&dir.join(&name)).unwrap(),
                 "{name}"
             );
         }

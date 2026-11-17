@@ -1,10 +1,16 @@
 //! Raw input ordering, queue limits, waiting notifications, terminal-query replies, and text and
 //! keys typed by `facade type`.
 
+#[cfg(unix)]
 use std::io::Write;
-use std::time::{Duration, Instant};
+#[cfg(unix)]
+use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
-use facade_scenarios::serde_json::{Value, json};
+#[cfg(unix)]
+use facade_scenarios::serde_json::Value;
+use facade_scenarios::serde_json::json;
 use facade_scenarios::*;
 
 #[test]
@@ -92,6 +98,8 @@ fn each_terminal_query_gets_one_reply_with_multiple_viewers() {
 }
 
 /// Reject input that does not fit in the queue, while still allowing stop.
+// A PTY whose buffer fills is Unix's: a pseudo console's host reads all its input.
+#[cfg(unix)]
 #[test]
 fn input_limit_rejects_overflow_and_recovers_after_drain() {
     let home = TestHome::new("input");
@@ -144,6 +152,8 @@ fn input_limit_rejects_overflow_and_recovers_after_drain() {
 
 /// Drop input notifications waiting for room when their connection closes. Repeated disconnected
 /// clients must not accumulate input.
+// Input waiting for room is Unix's: a pseudo console's host reads all its input.
+#[cfg(unix)]
 #[test]
 fn disconnect_discards_waiting_input_and_following_requests() {
     let home = TestHome::new("waitinginput");
@@ -184,6 +194,8 @@ fn disconnect_discards_waiting_input_and_following_requests() {
 }
 
 /// Terminal-query replies count toward the input queue limit.
+// Input waiting for room is Unix's: a pseudo console's host reads all its input.
+#[cfg(unix)]
 #[test]
 fn query_replies_share_the_input_limit() {
     let home = TestHome::new("queryinput");
@@ -211,6 +223,8 @@ fn query_replies_share_the_input_limit() {
 /// Input that waits for room holds its connection's reading once its agent's lane on that
 /// connection is full too. After the waiting input fits, the requests behind it run without more
 /// client traffic.
+// A PTY whose buffer fills is Unix's: a pseudo console's host reads all its input.
+#[cfg(unix)]
 #[test]
 fn queued_calls_resume_when_input_room_returns() {
     let home = TestHome::new("livepipeline");
@@ -361,6 +375,8 @@ fn raw_keys_sent_after_text_follow_its_enter() {
 
 /// One `agent.type` call carries at most 1 MiB as written, a paste counted with its brackets: a
 /// larger one is refused before anything is typed, and one at the limit is typed whole.
+// Its stand-in is a sh script that reads keys, which MSYS sh under a pseudo console does not get.
+#[cfg(unix)]
 #[test]
 fn one_typed_call_carries_at_most_1_mib() {
     let home = TestHome::new("typelimit");
@@ -406,6 +422,8 @@ fn one_typed_call_carries_at_most_1_mib() {
 /// A text call into an agent whose CLI takes no input holds nothing else on its connection: typing
 /// into another agent goes on, a call for that agent that does not fit fails at once, and a stop of
 /// that agent answers the held call with what was typed.
+// A PTY whose buffer fills is Unix's: a pseudo console's host reads all its input.
+#[cfg(unix)]
 #[test]
 fn a_text_call_held_by_one_agent_holds_nothing_else_on_its_connection() {
     let home = TestHome::new("typelanes");

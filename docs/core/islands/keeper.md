@@ -1,26 +1,32 @@
 # Keeper
 
 The keeper is the long-lived parent of every CLI in a Facade home, one per home. It holds a copy of
-each CLI's PTY master, so a terminal outlives a daemon crash, and it keeps one daemon running. It is
+each CLI's terminal, so a terminal outlives a daemon crash, and it keeps one daemon running. It is
 its own island because it must stay small and stable: CLIs and terminals survive anything that
 happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `facade keeper`.
 
 ## Owns
 
 - **The CLI processes.** Each CLI it starts is its child and leads a session and process group of its
-  own. CLIs the daemon syncs to it after a keeper ended are held too, without being children.
-- **One PTY master per CLI.** The keeper's own copy; it never reads or writes it.
+  own; on Windows it runs in a pseudo console of its own and in a job of its own, which does not kill
+  it when the keeper ends. CLIs the daemon syncs to it after a keeper ended are held too, without
+  being children.
+- **One terminal per CLI.** The keeper's own copy; it never reads, writes or binds it. On Windows: the
+  input pipe's write end, the output pipe's read end, the signal pipe's write end until a stop lets go
+  of it, and the job (`facade_base::terminal::PtyMaster`).
 - **The daemon process** it starts, and the watch on a daemon it found already running.
 - **The daemon's link**: the one proved connection on the keeper's socket.
 - **Files:**
   - `<home>/core/keeper.lock`;
   - the socket `keeper-<key>.sock` in the socket folder, at the path
-    `facade_base::paths::keeper_socket` gives, removed when the keeper exits.
+    `facade_base::paths::keeper_socket` gives, removed when the keeper exits; on Windows the named
+    pipe at that path, `\\.\pipe\facade-core-keeper-<key>`, which goes with the process.
 - **Its log**, `<home>/core/logs/keeper.log`: its standard error, which whoever started it opened.
 
 ## Keeps
 
-- One thread, one `poll` loop: no tokio, no locks, no other threads.
+- One thread, one wait: `poll` on Unix, an I/O completion port on Windows. No tokio, no locks, no
+  other threads, and no thread per CLI.
 - Only the process holding `keeper.lock` serves; a second keeper reports `contention` and exits.
 - A connection is accepted only from this user's process whose pid and birth match
   `core/daemon.lock`; a newly proved connection replaces the one before.
@@ -35,7 +41,10 @@ happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `fa
 - The daemon always starts from the launcher, `core/bin/facade daemon`, so it runs whichever build
   the launcher points at.
 - The keeper exits when no daemon runs and it holds no CLI, and never otherwise except on
-  SIGTERM or SIGINT.
+  SIGTERM or SIGINT. On Windows it has no console, so nothing asks it to end; it is ended only by
+  `TerminateProcess`.
+- On Windows a daemon is started only once the one before it has ended, including one the
+  watchdog ended: only then may the next daemon take the terminals' pipe ends from it.
 
 ## Never does
 
@@ -45,8 +54,10 @@ happens to the daemon. Crate `facade-keeper` in `core/crates/keeper`, run as `fa
 - Replace itself with another build in place. A new keeper build runs only after the old keeper exited.
 - Stop a CLI the daemon did not ask it to stop. It does kill a CLI whose start failed after the
   spawn. On SIGTERM or SIGINT, only groups already being stopped get SIGKILL.
-- Wait for anything except in `poll`. The only bounded wait is writing to the daemon
-  (`SEND_TIMEOUT`, 1 second).
+- Wait for anything except in `poll` or the completion port. The only bounded wait is writing to
+  the daemon (`SEND_TIMEOUT`, 1 second; on Windows the write is then cancelled).
+- On Windows: resize a terminal, load `conpty.dll` from anywhere but its build's ConPTY folder, or
+  open a console window.
 - Queue messages for a daemon that is not connected. A CLI end with nobody to tell is not reported;
   the next `hello` shows the CLI has ended.
 
@@ -71,7 +82,9 @@ types in `facade_base::keeper`):
 - Requests the keeper serves: `hello`, then `call` with `agent.start`, `agent.stop`,
   `agent.sync` and `daemon.ping`.
 - The one notification it sends: `changed`, when a CLI ended.
-- PTY masters travel with `SCM_RIGHTS`, at most one per message.
+- Terminals travel with `SCM_RIGHTS` on Unix, at most one per message. On Windows a terminal is the
+  line's `terminal` member: handles the sender duplicated into the receiver's process
+  (`facade_base::terminal_lines`).
 
 **Programs it starts:** `core/bin/facade daemon`, and the CLIs `agent.start` names.
 
@@ -90,7 +103,13 @@ types in `facade_base::keeper`):
     - `unix_process` (birth, group signals, process observation, child exits);
     - `limits`, `paths`, `programs::launcher`;
   - `log`, `time`.
-- **Third party:** `nix`, `libc`, `signal-hook`, `serde`, `serde_json`, `anyhow`.
+- **On Windows:** `sockets::server_pipe`, `service::authenticate_client`,
+  `terminal_lines::{PeerProcess, add_terminal, take_terminal}`, `terminal::PtyMaster`,
+  `unix_process::WaitPacket`, `programs::{quoted_command, bin_dir, CONPTY_FOLDER}`.
+- **Third party:** `serde`, `serde_json`, `anyhow`; on Unix `nix`, `libc`, `signal-hook`; on Windows
+  `windows-sys`.
+- **The ConPTY package** (`core/vendor/conpty/`), which `build.rs` copies into `<target>/<profile>/conpty/`
+  for Windows targets, and the install into `core/bin/<build>/conpty/`.
 
 ## Inside
 
@@ -192,6 +211,49 @@ as closing a terminal does.
 - **The keeper itself ended.** The daemon still holds every master. It starts a new keeper through
   the launcher and syncs each CLI to it with `agent.sync`. Those CLIs then end without an exit code.
 
+### On Windows
+
+The same keeper, in `src/windows/`; the Unix modules are not built there.
+
+- **The loop** (`windows/mod.rs`, `port.rs`): one I/O completion port, waited on with
+  `GetQueuedCompletionStatusEx` and the nearest deadline as its timeout. Every overlapped operation
+  and every process end completes on it under a key of its own; a key is never reused, so a
+  completion for something already let go of names nothing and is ignored.
+- **The listener and the link** (`link.rs`): each instance of the keeper's pipe
+  (`sockets::server_pipe`, owner only) waits in an overlapped `ConnectNamedPipe`; once one connects,
+  the next instance waits. The client is proved with `service::authenticate_client` before a byte is
+  read. The link keeps one overlapped read under way; dropping it cancels that read and waits for
+  it. A write is waited for up to `SEND_TIMEOUT`, then cancelled, and the link dropped; its
+  completion never reaches the port. A terminal leaves in a line through `add_terminal`, duplicated
+  into the daemon, and arrives through `take_terminal`, which also closes one a line should not
+  carry.
+- **A start** (`console.rs`): the package's `conpty.dll` is loaded once, from
+  `core/bin/<build>/conpty/`, with its search limited to that folder and System32; without it a start
+  fails with an error naming the folder. Then:
+  1. two named pipes, owner only: the pseudo console's end the server, synchronous; Facade's end the
+     client, overlapped;
+  2. a pseudo console on them (`CreatePseudoConsole`), and a copy of the signal pipe's write end,
+     the first of the three handles behind the `HPCON`;
+  3. the CLI, created suspended with `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`, no standard handles of
+     the keeper's, its command line from `programs::quoted_command`, exactly the environment and
+     folder `agent.start` gave;
+  4. a job without kill on close; the CLI joins it, then runs;
+  5. `ReleasePseudoConsole`, so the pseudo console ends with its last program and the output reaches its
+     end, then `ClosePseudoConsole`, which frees the `HPCON` and closes the package's own copies
+     without waiting for the console host: the pseudo console lives on through the copies of the signal
+     pipe the services hold.
+     - The keeper does not keep the `HPCON`. It holds the package's own copy of the signal pipe,
+       so a stop's hang-up, which closes the keeper's copy, would not end the console.
+- **Ends** (`cli.rs`, `supervisor.rs`): a wait completion packet (`WaitPacket`) for each CLI and the
+  daemon, on the process handle the keeper holds, so a CLI's exit always has its code, whether the
+  keeper started it or took it over through `agent.sync`. A CLI that cannot be watched is refused
+  with an error.
+- **A stop**: hang up by closing the keeper's copy of the signal pipe, after the daemon closed its
+  own; the console host then closes its programs. `TerminateJobObject` at `STOP_TIMEOUT` or once the
+  CLI ends, whichever comes first, tried again after 100 ms if it fails.
+- **The watchdog** ends a silent daemon with `TerminateProcess` and waits for its end to arrive
+  before the backoff starts the next one.
+
 ## Reading the code
 
 1. `src/lib.rs`: `serve`, from startup to `Keeper::run`.
@@ -201,3 +263,5 @@ as closing a terminal does.
 4. `src/cli.rs`: `Cli::spawn`, `own_terminal`, `begin_stop` and `kill_group`.
 5. `src/supervisor.rs`: `Supervisor::due`, `launch`, `kill` and `ended`.
 6. `src/link.rs` and `src/wake.rs`: the connection and the `poll`.
+7. On Windows, `src/windows/`: `mod.rs` (`Keeper::turn`, `completed`), `requests.rs`,
+   `console.rs` (`ConPty::start`), `cli.rs`, `supervisor.rs`, `link.rs` and `port.rs`.

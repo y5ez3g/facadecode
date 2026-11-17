@@ -178,12 +178,15 @@ a message.
 
 ## Scripts
 
-Run them from `core/`:
+Run them from `core/`, the `.ps1` ones from PowerShell on Windows. `check-each-commit.sh` runs on macOS or Linux,
+where every commit must build.
 
 | Script | What it does |
 | --- | --- |
 | `scripts/test-all.sh [<log>]` | Runs every test of the workspace in an empty temporary folder of its own, with `HOME` there too and no `FACADE_HOME`, then lists anything a test wrote to the home folder and any process the run left behind. Writes a short log and cargo's full output; exits 1 when a test fails, writes to the home folder, or leaves a process |
 | `scripts/leftovers.sh <TMPDIR> [<core folder>]` | Lists the processes a test run left behind: those working in its `TMPDIR` or naming a Facade home inside it, and those working in `core/` that outlived their parent |
+| `scripts\test-all.ps1 [<log>]` | The same on Windows, its temporary folder in `.test-temp\` beside the checkout, outside every checkout so that no test's Git reaches the repository. It builds first with the person's own folders, as any build does, then runs the tests with `USERPROFILE`, `HOME`, `APPDATA` and `LOCALAPPDATA` in its temporary folder, and lists only the processes started after the tests began |
+| `scripts\leftovers.ps1 <temporary folder> [<core folder>] [-Since <time>]` | The same on Windows: reads each process's working folder and environment, and ends nothing. With `-Since`, a UTC file time, it counts only processes started since then |
 | `scripts/check-each-commit.sh <base> [<head>]` | Checks every commit after `<base>`: the whole workspace builds, all targets, and cargo leaves `Cargo.lock` as it is. Works in a temporary worktree it removes at the end |
 | `scripts/ssh-check.sh [<destination>]` | On Linux, over real ssh to this machine and with the test CLI: a login starts an agent and detaches, another login drops while attached, a new login finds both agents running with their screens and types into one, and once they stop, both services exit. Needs a key login without a prompt. Exits 1 when a step fails |
 

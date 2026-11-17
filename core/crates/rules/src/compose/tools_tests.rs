@@ -6,13 +6,53 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::*;
-use crate::shell_word;
 
 /// The session-start hook of the runs of these tests.
 const HOOK: &str = "'/opt/facade' hook session-start '/home/.facade/core/runs/a3/1f/session'";
 
 /// Antigravity's title command for the runs of these tests, which reports their session.
 const TITLE: &str = "'/opt/facade' hook title '/home/.facade/core/runs/a3/1f/session'";
+
+/// `unix` on Unix, `windows` on Windows.
+fn by_system(unix: &str, windows: &str) -> String {
+    match facade_base::system::SYSTEM {
+        facade_base::system::System::Unix => unix,
+        facade_base::system::System::Windows => windows,
+    }
+    .to_string()
+}
+
+/// [`HOOK`] for the shell `cli` runs it with.
+fn hook_of(cli: &str) -> String {
+    match cli {
+        "claude" => HOOK.to_string(),
+        "codex" if facade_base::system::SYSTEM == facade_base::system::System::Windows => {
+            crate::formats::encoded_powershell(
+                "& '/opt/facade' 'hook' 'session-start' '/home/.facade/core/runs/a3/1f/session'; exit $LASTEXITCODE",
+            )
+        }
+        _ => by_system(
+            HOOK,
+            r#"@"/opt/facade" hook session-start /home/.facade/core/runs/a3/1f/session"#,
+        ),
+    }
+}
+
+/// [`TITLE`] for the shell Antigravity runs it with.
+fn title_hook() -> String {
+    by_system(
+        TITLE,
+        r#"@"/opt/facade" hook title /home/.facade/core/runs/a3/1f/session"#,
+    )
+}
+
+/// `name` in the run folder of these tests, as the system joins it.
+fn in_run(name: &str) -> String {
+    Path::new("/home/.facade/core/runs/a3/1f")
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
+}
 use crate::find;
 use crate::{
     INSTRUCTIONS_FILE, PLUGIN_MEMBERS, SKILL_FILE, guest_entry_serves_run, runs_start_guest_entry,
@@ -55,10 +95,14 @@ fn launch_in(cwd: &Path, cli: &str, given: &[&str], environment: &[(&str, &str)]
         cwd,
         facade: "/opt/facade",
     };
-    let environment: BTreeMap<String, String> = environment
+    let mut environment: BTreeMap<String, String> = environment
         .iter()
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
+    // The home a test names is the CLIs' home on either system.
+    if let Some(home) = environment.get("HOME").cloned() {
+        environment.entry("USERPROFILE".into()).or_insert(home);
+    }
     start_command_line(
         find(cli).unwrap().unwrap(),
         &words(given),
@@ -91,10 +135,7 @@ fn after<'a>(launch: &'a CommandLine, word: &str) -> &'a str {
 fn claude_gets_a_server_file_of_the_run_its_tools_allowed_and_no_project_facade_server() {
     let launch = launch("claude", &["--model", "opus"], &[]);
     assert_eq!(launch.tools, Tools::Injected);
-    assert_eq!(
-        after(&launch, "--mcp-config"),
-        "/home/.facade/core/runs/a3/1f/mcp.json"
-    );
+    assert_eq!(after(&launch, "--mcp-config"), in_run("mcp.json"));
     assert_eq!(after(&launch, "--allowedTools"), "mcp__facade");
     assert_eq!(
         launch.command[launch.command.len() - 2..],
@@ -316,10 +357,7 @@ fn opencode_gets_the_server_in_the_person_s_own_inline_configuration_after_their
 #[test]
 fn pi_gets_an_extension_of_the_run_that_registers_the_server_and_its_instructions() {
     let launch = launch("pi", &[], &[]);
-    assert_eq!(
-        after(&launch, "-e"),
-        "/home/.facade/core/runs/a3/1f/facade-pi.mjs"
-    );
+    assert_eq!(after(&launch, "-e"), in_run("facade-pi.mjs"));
     let (name, text) = &launch.files[0];
     assert_eq!(name, "facade-pi.mjs");
     assert!(
@@ -353,10 +391,7 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
             .map(|(_, text)| text.clone())
     };
     let claude = launch("claude", &["fix it"], &[]);
-    assert_eq!(
-        after(&claude, "--plugin-dir"),
-        "/home/.facade/core/runs/a3/1f/plugin"
-    );
+    assert_eq!(after(&claude, "--plugin-dir"), in_run("plugin"));
     assert_eq!(
         file(&claude, "plugin/skills/facade/SKILL.md").as_ref(),
         Some(&skill)
@@ -380,10 +415,7 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
     .unwrap();
     assert_eq!(
         config["instructions"],
-        json!([
-            "mine.md",
-            "/home/.facade/core/runs/a3/1f/skills/facade/SKILL.md"
-        ]),
+        json!(["mine.md", in_run("skills/facade/SKILL.md")]),
         "after the person's own"
     );
     assert_eq!(file(&opencode, SKILL_FILE).as_ref(), Some(&skill));
@@ -424,18 +456,31 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
         Some(&skill)
     );
     let hooks = |launch: &CommandLine| {
-        launch
+        let setting = launch
             .command
             .iter()
             .find(|word| word.starts_with("hooks="))
             .cloned()
-            .unwrap_or_default()
+            .unwrap_or_default();
+        let table: toml::Table = toml::from_str(&setting).unwrap();
+        let command = table["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        crate::formats::encoded_powershell_words(command)
+            .or_else(|| crate::formats::Shell::words(command))
+            .unwrap()
     };
     let codex = launch("codex", &["fix it"], &[]);
     assert!(
         hooks(&codex)
-            .contains("hook session-start '/home/.facade/core/runs/a3/1f/session' --skill"),
-        "{}",
+            == words(&[
+                "/opt/facade",
+                "hook",
+                "session-start",
+                "/home/.facade/core/runs/a3/1f/session",
+                "--skill"
+            ]),
+        "{:?}",
         hooks(&codex)
     );
     assert_eq!(
@@ -456,8 +501,8 @@ fn each_cli_given_the_tools_is_given_the_skill_in_its_place() {
         )
     };
     assert!(
-        !hooks(&without("codex")).contains("--skill")
-            && hooks(&without("codex")).contains("session-start")
+        !hooks(&without("codex")).contains(&"--skill".to_string())
+            && hooks(&without("codex")).contains(&"session-start".to_string())
     );
     for cli in ["claude", "opencode", "pi", "agy"] {
         let plain = without(cli);
@@ -505,7 +550,10 @@ fn pi_s_extension_gives_the_run_s_skill_unless_the_same_one_is_loaded() {
 			if (discover() !== undefined) throw new Error('the same loaded: ' + JSON.stringify(discover()));"#,
         module = json!(format!("file://{}", folder.join("facade-pi.mjs").display())),
         // Node names the module by its real path.
-        own = json!(std::fs::canonicalize(&*folder).unwrap().join(SKILL_FILE)),
+        own = json!(SKILL_FILE.split('/').fold(
+            facade_base::files::real_path(&folder).unwrap(),
+            |path, part| path.join(part)
+        )),
         other = json!(other),
         same = json!(same),
     );
@@ -608,10 +656,16 @@ fn muse_code_gets_an_optional_server_by_c_for_the_run_alone_and_a_hook_with_the_
         })
     };
     // Muse Code passes its hooks none of the run's variables: the instructions hook names them.
-    let ours =
-        hook("FACADE_AGENT='a3' FACADE_HOME='/home/.facade' '/opt/facade' hook instructions muse");
-    let approves = hook("'/opt/facade' hook approve muse");
-    let session = json!({ "hooks": [{ "type": "command", "command": HOOK, "timeout": 5 }] });
+    let ours = hook(&by_system(
+        "FACADE_AGENT='a3' FACADE_HOME='/home/.facade' '/opt/facade' hook instructions muse",
+        r#"set "FACADE_AGENT=a3" && set "FACADE_HOME=/home/.facade" && @"/opt/facade" hook instructions muse"#,
+    ));
+    let approves = hook(&by_system(
+        "'/opt/facade' hook approve muse",
+        r#"@"/opt/facade" hook approve muse"#,
+    ));
+    let session =
+        json!({ "hooks": [{ "type": "command", "command": hook_of("muse"), "timeout": 5 }] });
     assert_eq!(
         config(&muse, "hooks"),
         json!({ "SessionStart": [ours, session], "PermissionRequest": [approves] }),
@@ -895,7 +949,9 @@ fn a_facade_server_of_the_person_s_own_leaves_any_cli_without_the_tools() {
         let launch = launch_in(&cwd, cli, &[], environment);
         match &launch.tools {
             Tools::NotGiven(why) => assert!(
-                why.contains(expected) && why.ends_with("the run has no Facade tools"),
+                why.replace('\\', "/")
+                    .contains(&expected.replace('\\', "/"))
+                    && why.ends_with("the run has no Facade tools"),
                 "{cli}: {why}"
             ),
             other => panic!("{cli} given the tools beside {expected}: {other:?}"),
@@ -934,9 +990,10 @@ fn a_facade_server_of_the_person_s_own_leaves_any_cli_without_the_tools() {
     let claude = home.join(".claude.json");
     for text in [
         servers("mcpServers", mine),
+        // Claude Code keys its projects with forward slashes on Windows.
         format!(
-            "{{ \"projects\": {{ \"{}\": {} }} }}",
-            cwd.display(),
+            "{{ \"projects\": {{ {}: {} }} }}",
+            json!(cwd.display().to_string().replace('\\', "/")),
             servers("mcpServers", mine)
         ),
     ] {
@@ -1083,7 +1140,11 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
         }),
         "no run's identity"
     );
-    let hook = json!({ "type": "command", "command": "'/opt/facade' hook instructions agy" });
+    let command = by_system(
+        "'/opt/facade' hook instructions agy",
+        r#"@"/opt/facade" hook instructions agy"#,
+    );
+    let hook = json!({ "type": "command", "command": command });
     assert_eq!(
         plugin["hooks.json"],
         json!({ "facade": { "PreInvocation": [hook] } })
@@ -1101,7 +1162,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
         PLUGIN_MEMBERS,
         "every member, the skill too"
     );
-    let title = json!({ "type": "command", "enabled": true, "command": TITLE.to_string() });
+    let title = json!({ "type": "command", "enabled": true, "command": title_hook() });
     assert_eq!(
         passed_settings(&agy),
         json!({ "permissions": { "allow": ["mcp(facade_facade/*)"] }, "title": title })
@@ -1205,10 +1266,7 @@ fn antigravity_s_settings_reach_it_in_a_file_of_the_run_s_never_on_its_command_l
         &["--settings", "mine.json", "go"],
         &[("HOME", "/nowhere/home")],
     );
-    assert_eq!(
-        after(&agy, "--settings"),
-        "/home/.facade/core/runs/a3/1f/settings.json"
-    );
+    assert_eq!(after(&agy, "--settings"), in_run("settings.json"));
     assert!(
         agy.command.iter().all(|word| !word.contains("s3cret")),
         "{:?}",
@@ -1312,7 +1370,11 @@ fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_p
         file.clone(),
         r#"{ "title": { "type": "command", "command": "echo mine", "refresh": 5 } }"#,
     );
-    let theirs = format!("{TITLE} {}", shell_word("echo mine"));
+    let theirs = format!(
+        "{} {}",
+        title_hook(),
+        by_system("'echo mine'", "\"echo mine\"")
+    );
     assert_eq!(
         title(&launch("agy", &[], &environment)),
         json!({ "type": "command", "enabled": true, "command": theirs, "refresh": 5 })
@@ -1324,7 +1386,11 @@ fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_p
     );
     assert_eq!(
         title(&passed)["command"],
-        format!("{TITLE} {}", shell_word("echo passed")),
+        format!(
+            "{} {}",
+            title_hook(),
+            by_system("'echo passed'", "\"echo passed\"")
+        ),
         "theirs for the session goes first"
     );
     write(
@@ -1333,7 +1399,7 @@ fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_p
     );
     assert_eq!(
         title(&launch("agy", &[], &environment))["command"],
-        TITLE.to_string(),
+        title_hook(),
         "a title command they turned off stays off"
     );
     std::fs::remove_dir_all(&home).unwrap();

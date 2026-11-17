@@ -1,12 +1,27 @@
 //! The `facade` program: terminal commands, and the keeper and daemon services.
 
+/// Prints to standard output as `print!` does; a reader that went away ends the command quietly.
+macro_rules! print_or_end {
+    ($($arg:tt)*) => {
+        $crate::write_or_end(format_args!($($arg)*))
+    };
+}
+
+/// Prints a line to standard output as `println!` does; a reader that went away ends the command
+/// quietly.
+macro_rules! println_or_end {
+    ($($arg:tt)*) => {
+        $crate::write_or_end(format_args!("{}\n", format_args!($($arg)*)))
+    };
+}
+
 mod attach;
 mod commands;
 mod daemon_client;
 mod hooks;
 
 use std::fmt;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 
 use clap::{Parser, Subcommand};
 use facade_base::daemon::DEFAULT_TERMINAL_SIZE;
@@ -70,9 +85,11 @@ enum Command {
     },
     /// Stop an agent and keep its record in the list.
     ///
-    /// Send SIGHUP to a running agent's process group, then SIGKILL to anything left 3 seconds
-    /// after Facade accepted the first stop. Return the recorded exit once the agent ends; an ended
-    /// agent returns it without another signal.
+    /// Hang up a running agent's terminal, then kill the CLI and the processes it started if any
+    /// are left 3 seconds after Facade accepted the first stop. On macOS and Linux that is SIGHUP,
+    /// then SIGKILL, to its process group; on Windows, closing its pseudo console, then killing.
+    /// Return the recorded exit once the agent ends; an ended agent returns it without another
+    /// signal.
     Stop(Target),
     /// Remove an agent record.
     ///
@@ -224,13 +241,15 @@ enum Command {
 }
 
 /// An agent's exit as a person reads it: `code 3`, the signal's name, or what is known of an exit
-/// with neither.
+/// with neither. A code outside 0–255, such as a Windows status, shows its 32 bits in hex:
+/// `code 0xC000013A`.
 pub(crate) struct ExitText<'a>(pub(crate) &'a ProcessExit);
 
 impl fmt::Display for ExitText<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match (self.0.code, &self.0.signal, self.0.reason) {
-            (Some(code), _, _) => write!(f, "code {code}"),
+            (Some(code @ 0..=255), _, _) => write!(f, "code {code}"),
+            (Some(code), _, _) => write!(f, "code {:#X}", code as u32),
             (None, Some(signal), _) => f.write_str(signal),
             (None, None, Some(EndReason::TerminalClosed)) => {
                 f.write_str("the terminal closed; the CLI may still be running")
@@ -247,8 +266,12 @@ fn main() {
         Err(error) if error.use_stderr() && is_hook_line() => skip_hook_line(&error),
         Err(error) => error.exit(),
     };
+    // A command whose output is closed early, as by `facade list | head`, ends without an error,
+    // like other shell tools: by SIGPIPE where the system has it, else through `write_or_end`. The
+    // keeper and the daemon keep the default of Rust programs: a peer that closes is an error they
+    // handle.
     if !matches!(command, Command::Keeper | Command::Daemon { .. }) {
-        end_quietly_on_closed_output();
+        facade_base::service::default_broken_pipe();
     }
     let code = run(command).unwrap_or_else(|error| {
         eprintln!("facade: {error:#}");
@@ -257,19 +280,23 @@ fn main() {
     std::process::exit(code)
 }
 
+/// Writes `text` to standard output, for [`print_or_end`] and [`println_or_end`]. Where the reader
+/// went away, the command ends quietly with code 0: it did what it was asked, and nobody reads more.
+/// Any other failure panics, as `print!` does.
+fn write_or_end(text: fmt::Arguments<'_>) {
+    let mut stdout = std::io::stdout().lock();
+    match stdout.write_fmt(text).and_then(|()| stdout.flush()) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::BrokenPipe => std::process::exit(0),
+        Err(error) => panic!("failed printing to stdout: {error}"),
+    }
+}
+
 /// Whether this program runs as a CLI's hook: `facade hook …`.
 fn is_hook_line() -> bool {
     std::env::args_os()
         .nth(1)
         .is_some_and(|word| word == "hook")
-}
-
-/// Lets a command whose output is closed early, as by `facade list | head`, end without an error,
-/// like other shell tools. The keeper and the daemon keep the default of Rust programs: a peer that
-/// closes is an error they handle.
-fn end_quietly_on_closed_output() {
-    // SAFETY: called before any thread starts; it only puts SIGPIPE's default action back.
-    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
 }
 
 /// Does nothing for a hook line another build wrote, naming an event or an argument this build
@@ -298,7 +325,7 @@ fn skip_hook_line(error: &clap::Error) -> ! {
         .iter()
         .find_map(|word| facade_rules::hook::empty_output(word))
     {
-        println!("{output}");
+        println_or_end!("{output}");
     }
     std::process::exit(0)
 }

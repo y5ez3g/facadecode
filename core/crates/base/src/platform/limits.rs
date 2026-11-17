@@ -1,11 +1,13 @@
-//! The open-file limit, raised when a service starts.
+//! The open-file limit, raised when a service starts. Windows has none.
 
 /// The open-file limits tried, highest first.
+#[cfg(unix)]
 const WANTED_OPEN_FILES: [libc::rlim_t; 3] = [65_536, 10_240, 4_096];
 
 /// Raises this process's open-file limit to the first of 65,536, 10,240 and 4,096 the system
 /// allows, never lowering it. Every agent holds a PTY descriptor in the keeper and another in the
 /// daemon, and the CLIs the keeper starts inherit its limit.
+#[cfg(unix)]
 pub fn raise_open_files() {
     let mut limit = libc::rlimit {
         rlim_cur: 0,
@@ -29,3 +31,7 @@ pub fn raise_open_files() {
         }
     }
 }
+
+/// Does nothing: Windows has no open-file limit to raise.
+#[cfg(windows)]
+pub fn raise_open_files() {}

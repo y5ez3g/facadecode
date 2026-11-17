@@ -55,7 +55,10 @@ fn a_hook_line_this_build_cannot_use_does_nothing_and_exits_0() {
         !std::path::Path::new(file).exists(),
         "a line this build cannot use wrote the session"
     );
-    assert!(!home.daemon_socket().exists(), "a hook line started Facade");
+    assert!(
+        !socket_exists(&home.daemon_socket()),
+        "a hook line started Facade"
+    );
     let typo = home.run_facade(&["lsit"]);
     assert_eq!(typo.status.code(), Some(2), "{typo:?}");
 }
@@ -98,7 +101,10 @@ fn every_cli_s_hook_lines_do_nothing_where_this_build_does_not_know_them() {
         !std::path::Path::new(file).exists(),
         "a line this build cannot use wrote the session"
     );
-    assert!(!home.daemon_socket().exists(), "a hook line started Facade");
+    assert!(
+        !socket_exists(&home.daemon_socket()),
+        "a hook line started Facade"
+    );
 }
 
 /// Runs `facade-mcp <words>` with `env` as a CLI runs its server, asks for its tools, and returns

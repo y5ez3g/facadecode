@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use facade_base::programs::Held;
+use facade_base::system::env_var;
 use facade_rules::{CommandLine, Rule};
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -65,6 +66,7 @@ impl Preparation {
         let Some(rule) = request.rule else {
             let mut command = vec![request.program.unwrap_or(request.plain_program).to_owned()];
             command.extend_from_slice(request.words);
+            let command = started_directly(None, command, &env, request.cwd).await;
             return Ok(PreparedRun {
                 command,
                 env,
@@ -193,6 +195,7 @@ impl Preparation {
             file_work(move || created.create()).await?;
         }
         let version = installed_version(rule, &command[0], &env, request.cwd).await;
+        let command = started_directly(Some(rule), command, &env, request.cwd).await;
         let tools = match tools {
             facade_rules::Tools::Injected => ToolsGiven::Injected,
             facade_rules::Tools::NotInjected => ToolsGiven::NotInjected,
@@ -274,11 +277,18 @@ impl Preparation {
         id: &str,
         run: u64,
         committed: Option<String>,
+        output: tokio::sync::watch::Receiver<()>,
         first: FirstRead,
     ) {
         if let Some(folder) = folder::find(&self.folders, id) {
-            self.sessions
-                .follow(id, run, folder::session_file(&folder), committed, first);
+            self.sessions.follow(
+                id,
+                run,
+                folder::session_file(&folder),
+                committed,
+                output,
+                first,
+            );
         }
     }
 
@@ -301,6 +311,20 @@ impl Preparation {
     pub(crate) async fn read_session(&self, id: &str) -> Option<Option<String>> {
         let folder = folder::find(&self.folders, id)?;
         session::read(id, folder::session_file(&folder), &mut false).await
+    }
+
+    /// A nonempty, valid report reads as no session only until the CLI saves its session.
+    pub(crate) async fn has_unsaved_session(&self, id: &str) -> bool {
+        let Some(folder) = folder::find(&self.folders, id) else {
+            return false;
+        };
+        let file = folder::session_file(&folder);
+        tokio::task::spawn_blocking(move || {
+            std::fs::metadata(&file).is_ok_and(|metadata| metadata.len() > 0)
+                && facade_rules::read_session_file(&file) == facade_rules::SessionFile::NoSession
+        })
+        .await
+        .unwrap_or(false)
     }
 
     /// Whether exactly one run folder holds a session report file. Blocking; takes no lock.
@@ -338,7 +362,7 @@ async fn installed_version(
     rule.version_file.as_ref()?;
     let (program, path, cwd) = (
         program.to_owned(),
-        env.get("PATH").cloned(),
+        env_var(env, "PATH").map(str::to_owned),
         PathBuf::from(cwd),
     );
     tokio::task::spawn_blocking(move || {
@@ -351,4 +375,29 @@ async fn installed_version(
     .await
     .ok()
     .flatten()
+}
+
+/// `command` with its program started directly where that program is a wrapper, such as npm's
+/// shim of a Node script (`facade_rules::direct_command`), found on the run's `PATH` from `cwd`
+/// as its version is. A program started as it is, or not found, stays as the command names it.
+async fn started_directly(
+    rule: Option<&'static Rule>,
+    mut command: Vec<String>,
+    env: &BTreeMap<String, String>,
+    cwd: &str,
+) -> Vec<String> {
+    let (program, env, cwd) = (command[0].clone(), env.clone(), PathBuf::from(cwd));
+    let direct = tokio::task::spawn_blocking(move || {
+        let path = env_var(&env, "PATH");
+        let file = facade_base::programs::on_path(&program, path, &cwd)?;
+        let direct = facade_rules::direct_command(rule, &file, &env, &cwd);
+        (direct != [file.to_string_lossy()]).then_some(direct)
+    })
+    .await
+    .ok()
+    .flatten();
+    if let Some(direct) = direct {
+        command.splice(..1, direct);
+    }
+    command
 }

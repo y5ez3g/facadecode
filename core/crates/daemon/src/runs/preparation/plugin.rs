@@ -308,7 +308,7 @@ mod tests {
     /// the last of them lets go of it, with each folder above it that it leaves empty.
     #[tokio::test]
     async fn the_plugin_is_placed_shared_and_taken_away_with_the_folders_it_leaves_empty() {
-        let (preparation, home, cwd) = preparation("shared");
+        let (preparation, _home, cwd) = preparation("shared");
         let files = preparation.plugins.files().unwrap();
         let plugin = cwd.join(facade_rules::PLUGIN_FOLDER);
         let first = preparation.plugins.hold(&cwd, &files).unwrap();
@@ -330,7 +330,8 @@ mod tests {
             !cwd.join(".agents/plugins").exists() && cwd.join(".agents/skills/mine.md").exists(),
             "a folder that holds anything else stays"
         );
-        std::fs::remove_dir_all(&home).unwrap();
+        // The held programs close before their folder goes.
+        drop(preparation);
     }
 
     /// A plugin that is not Facade core's - the person's own, or the Facade Code extension's - or
@@ -339,7 +340,7 @@ mod tests {
     /// stays after its runs.
     #[tokio::test]
     async fn a_plugin_that_is_not_facade_core_s_is_left_as_it_is() {
-        let (preparation, home, cwd) = preparation("foreign");
+        let (preparation, _home, cwd) = preparation("foreign");
         let files = preparation.plugins.files().unwrap();
         let plugin = cwd.join(facade_rules::PLUGIN_FOLDER);
         std::fs::create_dir_all(&plugin).unwrap();
@@ -402,7 +403,8 @@ mod tests {
             "changed",
             "a plugin changed since stays"
         );
-        std::fs::remove_dir_all(&home).unwrap();
+        // The held programs close before their folder goes.
+        drop(preparation);
     }
 
     /// Facade core's plugin from an earlier version is brought up to date by a start and goes after
@@ -410,7 +412,7 @@ mod tests {
     /// stays after it.
     #[tokio::test]
     async fn an_earlier_version_s_plugin_is_brought_up_to_date_and_a_later_one_s_stands() {
-        let (preparation, home, cwd) = preparation("versions");
+        let (preparation, _home, cwd) = preparation("versions");
         let files = preparation.plugins.files().unwrap();
         let plugin = cwd.join(facade_rules::PLUGIN_FOLDER);
         let marked = |version: &str| {
@@ -457,7 +459,8 @@ mod tests {
             marked("99.0.0"),
             "and stays after the run"
         );
-        std::fs::remove_dir_all(&home).unwrap();
+        // The held programs close before their folder goes.
+        drop(preparation);
     }
 
     /// A running Antigravity agent keeps its plugin through a recorded reference. A start beside
@@ -465,7 +468,7 @@ mod tests {
     /// and that plugin goes once its last run ends.
     #[tokio::test]
     async fn a_running_antigravity_agent_keeps_its_folder_s_plugin() {
-        let (preparation, home, cwd) = preparation("used");
+        let (preparation, _home, cwd) = preparation("used");
         let files = preparation.plugins.files().unwrap();
         preparation.plugin_used("a1", Some("agy"), &cwd);
         drop(preparation.plugins.hold(&cwd, &files).unwrap());
@@ -490,6 +493,7 @@ mod tests {
             !cwd.join(".agents").exists(),
             "no run uses it any more, and an earlier version's goes too"
         );
-        std::fs::remove_dir_all(&home).unwrap();
+        // The held programs close before their folder goes.
+        drop(preparation);
     }
 }

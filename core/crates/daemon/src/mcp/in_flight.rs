@@ -9,17 +9,17 @@
 
 use std::collections::HashMap;
 use std::io::Write;
-use std::os::unix::net::UnixStream;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use facade_base::daemon_client::{DaemonClient, cancel_line};
+use facade_base::paths::ClientSocket;
 
 /// A call under way.
 #[derive(Default)]
 struct Pending {
     cancelled: bool,
     /// The daemon connection its call went out on, and the call's request ID there.
-    written: Option<(UnixStream, u64)>,
+    written: Option<(ClientSocket, u64)>,
 }
 
 #[derive(Default)]

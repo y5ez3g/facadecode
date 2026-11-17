@@ -18,7 +18,6 @@ mod keeper_link;
 mod preparation;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -28,6 +27,7 @@ use facade_base::jsonrpc::ErrorBody;
 use facade_base::keeper::{HeldAgent, StartArgs};
 use facade_base::process::ProcessExit;
 use facade_base::programs::Held;
+use facade_base::terminal::PtyMaster;
 use facade_rules::Rule;
 use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
@@ -130,7 +130,7 @@ pub(crate) enum RunLaunch {
 pub(crate) struct StartedRun {
     pub(crate) pid: u32,
     /// The terminal's master side; the runs keep a copy.
-    pub(crate) master: OwnedFd,
+    pub(crate) master: PtyMaster,
 }
 
 /// What became of an exit the keeper reported.
@@ -341,15 +341,22 @@ impl Runs {
         id: &str,
         run: u64,
         committed: Option<String>,
+        output: tokio::sync::watch::Receiver<()>,
         first: FirstRead,
     ) {
-        self.preparation.follow_session(id, run, committed, first);
+        self.preparation
+            .follow_session(id, run, committed, output, first);
     }
 
     /// Reads agent `id`'s session file once: the session it reports, or None where it reports
     /// none.
     pub(crate) async fn read_session(&self, id: &str) -> Option<Option<String>> {
         self.preparation.read_session(id).await
+    }
+
+    /// Whether the CLI reported a session whose saved file is not there yet.
+    pub(crate) async fn has_unsaved_session(&self, id: &str) -> bool {
+        self.preparation.has_unsaved_session(id).await
     }
 
     /// Whether agent `id`'s CLI reports its session to its run folder.
@@ -390,7 +397,7 @@ impl Runs {
     }
 
     /// Recovery: takes back from the startup keeper the terminal of a run it holds.
-    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<OwnedFd, ErrorBody> {
+    pub(crate) async fn take_back(&self, held: &HeldAgent) -> Result<PtyMaster, ErrorBody> {
         self.link.take_back(held).await
     }
 
@@ -400,7 +407,7 @@ impl Runs {
     pub(crate) fn register_recovered(
         &self,
         held: &HeldAgent,
-        master: &OwnedFd,
+        master: &PtyMaster,
         exit: Option<ProcessExit>,
         number: u64,
         rule: Option<&str>,

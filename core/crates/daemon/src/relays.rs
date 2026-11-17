@@ -94,11 +94,9 @@ impl Daemon {
     fn connect(self: &Arc<Self>) -> Connect {
         let (daemon, runtime) = (self.clone(), tokio::runtime::Handle::current());
         Box::new(move |identity: &Identity| {
-            let (ours, theirs) = std::os::unix::net::UnixStream::pair()?;
-            theirs.set_nonblocking(true)?;
-            let theirs = {
+            let (ours, theirs) = {
                 let _in_runtime = runtime.enter();
-                tokio::net::UnixStream::from_std(theirs)?
+                facade_base::sockets::pair()?
             };
             runtime.spawn(server::serve_connection(daemon.clone(), theirs));
             match DaemonClient::hello(ours, identity) {

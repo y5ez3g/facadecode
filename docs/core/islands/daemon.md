@@ -34,7 +34,10 @@ child islands each own one kind of data; this layer owns what joins them.
 - The cross-island orders (start, paste, session, output, removal and window takeover, guest join
   and end) are kept as [ARCHITECTURE](../ARCHITECTURE.md) states them.
 - Clients are accepted only once recovery has listed every readable agent.
+- A stop lets go of the actor's copy of the terminal's signal pipe, then keeper_link's, before the keeper
+  is asked to stop: on Windows the pseudo console hangs up only once every copy is closed.
 - The daemon exits only after five idle seconds in a row, decided under the lock that accepts work.
+  While an agent runs or a guest is listed, nothing wakes that decision but an exit or a guest's end.
 - `impl Daemon` exists only in this layer's files.
 - One actor task per agent, on a multi-thread tokio runtime; blocking work goes to blocking workers
   or runs in place.
@@ -69,7 +72,7 @@ child islands each own one kind of data; this layer owns what joins them.
 - [screen](screen.md): an agent's terminal grid.
 - [rules](rules.md): the rule files; command lines; input, state and session reading; wiring and
   integrations.
-- Third-party: tokio, rusqlite, nix, serde.
+- Third-party: tokio, rusqlite, serde.
 
 ## Inside
 
@@ -79,7 +82,7 @@ The layer's files:
 |---|---|
 | `lib.rs` | `run`, startup and serving, the `Daemon` value, the values the parts share, the hourly sweep. |
 | `store/` | `facade.db`: the schema, the cross-table transactions, the table handles. |
-| `operations.rs` | Start, resume, stop, remove, rename, a run's exit, the environment of an agent's CLI. |
+| `operations.rs` | Start, resume, stop, remove, rename, a run's exit, the environment of an agent's CLI. Resume distinguishes a session the CLI has not saved yet from one never reported. |
 | `delivery.rs` | `agent.send`, start prompts, results, and input handed to an agent. |
 | `presence.rs` | Guests joining and ending; windows connecting, leaving and taking over. |
 | `topics.rs` | The four watch topics: snapshots, changes, resyncs, and what a watch's end lets go of. |
@@ -110,7 +113,7 @@ results and long waits, and the hourly sweep; bind the socket; report the start;
 
 | Part | Gets when made | Reports back |
 |---|---|---|
-| agent | per actor: its PTY, screen start, messages' delivery handle, the `agents` topic's sender | its handle's methods and replies; changes on the topic |
+| agent | per actor: its terminal's `PtyMaster`, screen start, messages' delivery handle, the `agents` topic's sender | its handle's methods and replies; changes on the topic |
 | messages | `MessageTable` | return values; a receiver of the results it wrote |
 | runs | the home, the held programs, a `RunEvent` sender; per run, an `ExitSink` | `RunEvent::Exited`, `RunEvent::Session` (acknowledged once committed) |
 | records | `NumberTable` | return values |
@@ -129,14 +132,15 @@ files no one can use go; log lines older than 30 days go.
 **Long waits** (`waits.rs`): the layer follows the `agents` topic. An agent another agent of the
 same window started, that has waited 20 seconds in a row on its permission, question or sign-in,
 is reported to that creator once each time it starts waiting, as a Facade result, while the
-creator runs. A guest creator finds it in its inbox at its next turn. The person never gets a message from
-it ([RULES](../../extension/RULES.md) 1.8).
+creator runs. Nothing wakes the follower but a change of the agents or the twentieth second of
+the next such wait. A guest creator finds it in its inbox at its next turn. The person never gets
+a message from it ([RULES](../../extension/RULES.md) 1.8).
 
 ### agent
 
 One tokio task per agent, the actor, that owns the agent's terminal and screen, and the handle the rest of the daemon reaches it through.
 
-- **Owns:** one actor per agent the daemon started (a guest has a handle with no actor). The actor holds the PTY master, the input waiting for it, the screen and its screen log, the state, the typist, the viewers and the start of each run. The agent's record (`AgentInfo`) is shared with its handles under a leaf lock; only the actor changes it while it runs. `core/screens/<id>/`: one folder per agent, deleted through `Screens`.
+- **Owns:** one actor per agent the daemon started (a guest has a handle with no actor). The actor holds the terminal (a `PtyIo`), the input waiting for it, the screen and its screen log, the state, the typist, the viewers and the start of each run. The agent's record (`AgentInfo`) is shared with its handles under a leaf lock; only the actor changes it while it runs. `core/screens/<id>/`: one folder per agent, deleted through `Screens`.
 - **Keeps:**
   - Input and exits reach only the run they name. Each run has a number, starting at `FIRST_RUN`; `WriteInput`, `ProcessExited` and `StartPrompt` for any other run are refused as ended or dropped. An exit of a run whose terminal is not installed yet waits until it is.
   - Automatic input never interleaves (RULES 1.10): messages wait behind the start prompt; while the start readies the tools, keys and calls wait and then go in the order they came; the person's Enter waits, with the keys after it, until the input can be read.
@@ -144,32 +148,33 @@ One tokio task per agent, the actor, that owns the agent's terminal and screen, 
   - The record shows a run's end before anything waiting on the run learns it.
   - A CLI waiting for the person or reporting an error is published at once; other changes of the record within 200 ms go out together.
   - At most `MAX_INPUT_BYTES` (1 MiB) of input waits; more is refused with the input given back.
+  - Quiet replies only once no read is under way and what the last reads brought went through the screen log; `LetGoBeforeStop` lets go of the signal pipe and nothing else.
 - **Never does:** touch the database; know other agents; decide when a run starts or ends; type into a terminal that is not Facade's.
 - **Interface:**
-  - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the record, the PTY master, a `ScreenStart` (`New(folder)`, `Recovered { screen, log, handed_over_cleanly }`, `Released`), the rule name, the messages' `DeliveryHandle` and a `StateStart`.
-  - `AgentHandle`: `guest(info)`, `id()`, `info()`, `is_guest()`, `rule()`, `run()`, `exit()`, `settled()`, `input_room_changed()`, `send(AgentCommand) -> bool`, `is_closed()`, `mailbox()`, `lock_run_change()`, `try_lock_run_change()`, `tools_connected() -> ToolsConnection` (dropping it closes the connection), and for guests and windows `set_guest_state`, `mark_ended`, `move_window`, `set_window_and_yolo`.
-  - `AgentCommand`: input (`WriteInput`, `Resize`), viewing (`AddViewer`, `RemoveViewer`, `ReadScreen`, `Inspect`), run events (`ProcessExited`, `RecordSession`, `PrepareRestart`, `InstallRun`, `AwaitPrompt`, `StartPrompt`) and control (`Rename`, `Remove`, `Quiesce`, `SettlePaste`). `Input` is `Raw` keys, `Typed` text or keys, a `Message`, or a `BegunPaste` to finish.
+  - `spawn(ActorStart, rx, tx, changes) -> anyhow::Result<AgentHandle>`. `ActorStart` carries the record, the terminal's `PtyMaster`, a `ScreenStart` (`New(folder)`, `Recovered { screen, log, handed_over_cleanly }`, `Released`), the rule name, the messages' `DeliveryHandle` and a `StateStart`.
+  - `AgentHandle`: `guest(info)`, `id()`, `info()`, `is_guest()`, `rule()`, `run()`, `exit()`, `settled()`, `output_seen()` (marked at each output of the terminal), `input_room_changed()`, `send(AgentCommand) -> bool`, `is_closed()`, `mailbox()`, `lock_run_change()`, `try_lock_run_change()`, `tools_connected() -> ToolsConnection` (dropping it closes the connection), and for guests and windows `set_guest_state`, `mark_ended`, `move_window`, `set_window_and_yolo`.
+  - `AgentCommand`: input (`WriteInput`, `Resize`), viewing (`AddViewer`, `RemoveViewer`, `ReadScreen`, `Inspect`), run events (`ProcessExited`, `RecordSession`, `PrepareRestart`, `InstallRun`, `AwaitPrompt`, `StartPrompt`) and control (`Rename`, `Remove`, `Quiesce`, `LetGoBeforeStop`, `SettlePaste`). `Input` is `Raw` keys, `Typed` text or keys, a `Message`, or a `BegunPaste` to finish.
   - `Screens`: `new(folder)`, `folder(id)`, `remove(id)`, `delete_without_records(kept)`.
-  - For recovery: `recover`, `recover_after_clean_end`, `saved_size`, `screen_writes`, `state_file`, `read_kept`, `instant_of`, `terminal_size`.
+  - For recovery: `recover`, `recover_after_clean_end`, `saved_size`, `screen_writes`, `state_file`, `read_kept`, `instant_of`.
 
 The agent layer is `agent/mod.rs` (the interface above), `agent/actor.rs` (the task's loop) and `agent/person.rs` (the person's keys). The six child islands are plain values the actor owns: no task, no lock, and none calls another. The actor's loop waits on its commands, the terminal, the tools connections and its timers, and passes what one child learns to the next: output goes from the terminal into the screen, then to the viewers, the state, readiness and the typist; what the typist and readiness write goes back into the terminal's queue. Readiness hands the keys it wants pressed to a closure the actor gives it, which turns them into typist calls. Only the actor publishes the record.
 
 #### terminal
 
-The PTY master and the input waiting for it, read and written without blocking.
+The terminal, as a `PtyIo`, and the input waiting for it.
 
-- **Owns:** the PTY master (none between runs or once the terminal closed), the input queue, the last output read, whether the CLI's side closed, the bytes written so far and when.
-- **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the master drops the queued input. `ready` can be cancelled safely.
+- **Owns:** the `PtyIo` (none between runs or once the terminal closed), the input queue, the last output read, whether the CLI's side closed, the bytes written so far and when.
+- **Keeps:** Input is written in order, at most 64 KiB at a time; a read takes at most 64 KiB. The count of bytes written never resets, across runs too: the typist finds its own bytes by it. Letting go of the terminal drops the queued input. `ready` can be cancelled safely. A write under way is given the same head of the queue until it returns; clearing the queue keeps those bytes. `stop_reading` leaves no read under way.
 - **Never does:** parse output; decide what input may wait or how much; press Enter.
-- **Interface:** `new(Option<OwnedFd>)`, `install(OwnedFd)`, `detach()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
+- **Interface:** `new(Option<PtyMaster>)`, `install(PtyMaster)`, `detach()`, `stop_reading() -> Option<usize>` (async), `let_go_before_stop()`; `ready(TerminalWait) -> TerminalEvent` (`Read`, `Closed`, `Wrote`, `WriteFailed`), `read_now() -> Option<usize>`, `output() -> &[u8]`; `push(&[u8])`, `clear()`, `queued()`, `written()`, `written_at()`; `is_open()`, `is_closed()`, `set_size(cols, rows)`.
 
 #### screen
 
 `LoggedScreen`: the agent's screen and its screen log, in memory or left in its files.
 
 - **Owns:** the `Screen`, the open screen log, the checkpoint being written and the count of checkpoints being written. The files in `core/screens/<id>/`: `<g>.checkpoint` (size, a redraw with scrollback, a SHA-256 checksum), `<g>.log` (output, resize and synchronized-update-end records), and `current`, which names the published generation.
-- **Keeps:** Every change is logged before the screen takes it. After 4 MiB of output a checkpoint is taken at a clean point; at the log's 64 MiB cap one is forced, and the log says what a recovery from it loses. A full log reads no output until its checkpoint is written; a failed checkpoint is tried again later. A checkpoint is synced before `current` names it, and the folder is synced before older generations are deleted. Recovery starts from the published checkpoint or a valid older one. Folders are 0700 and files 0600.
-- **Never does:** touch the PTY; read CLI rules; know viewers; delete the agent's folder.
+- **Keeps:** Every change is logged before the screen takes it. After 4 MiB of output a checkpoint is taken at a clean point; at the log's 64 MiB cap one is forced, and the log says what a recovery from it loses. A full log reads no output until its checkpoint is written; a failed checkpoint is tried again later. A checkpoint is synced before `current` names it, and the folder is synced before older generations are deleted. Recovery starts from the published checkpoint or a valid older one. Folders and files are private through base (0700 and 0600 on Unix); a folder is synced through base, which needs nothing on Windows.
+- **Never does:** touch the terminal; read CLI rules; know viewers; delete the agent's folder.
 - **Interface:** `create(folder, id, cols, rows)` (async), `recovered(folder, id, screen, log)`, `released(folder, id)`; changes: `feed(bytes) -> ParsedOutput`, `resize(cols, rows)`, `end_synchronized_update()`; reads: `screen() -> &Screen`, `is_held()`; checkpoints: `checkpoint_if_due()`, `is_full()`, `checkpoint_running()`, `checkpoint_written()` (async), `finish_checkpoint(written)`; memory: `let_go()`, `hold()`, `hold_with_log()`, `finish()` (async). Recovery uses `recover`, `recover_after_clean_end` and `saved_size`; the daemon's lifecycle waits for `screen_writes()` to reach 0 before it exits or hands over.
 
 #### state
@@ -181,7 +186,7 @@ The PTY master and the input waiting for it, read and written without blocking.
   - One state, by a fixed order: `Ended`; the CLI's own `WaitingForYou` or `Error`; a question in place of the input box (`WaitingForYou`); tools unavailable (`Error`); `JustDone`; `Working`; `Starting`; `Idle`; a failed start (`Error`); else `Unknown`.
   - Work that stops reads `Working` for 1 more second; a turn someone asked for that ends unwatched reads `JustDone` until a terminal shows the agent.
   - A start and the tools' connection get 60 seconds each; time the CLI spends asking a question does not count.
-  - Only `keep` writes the state file, through a 0600 temporary file and a rename. What the screen shows is read again, never kept.
+  - Only `keep` writes the state file, through a private temporary file and a rename. What the screen shows is read again, never kept.
 - **Never does:** touch the terminal; change the agent's record; publish.
 - **Interface:** `new(rule, started, kept, exit, screen)`; evidence: `take(events)`, `reads_screen()`, `observe(&Screen)`, `asks(asking, now)`; run: `ended(exit, stopped)`, `restarted(started, version, tools)`, `recovered(now)`; people: `said(Submission)`, `asked()`, `seen()`; tools: `tools_connection(open)`, `tools_not_started()`; reads: `read(now, Viewing) -> StateReading`, `said_line()`, `kept()`, `started()`, `works()`, `start_bound()`, `tools_given()`. The actor runs `keep(file, changes)`. Start and recovery use `Kept::new_run`, `state_file`, `read_kept` and `instant_of`.
 
@@ -196,8 +201,9 @@ The PTY master and the input waiting for it, read and written without blocking.
   - Enter goes only once the input box shows this paste alone and stays still for the CLI's settle time.
   - A message counts as delivered only once the input box is usable again after its Enter.
   - The start prompt is pasted alone; a paste an earlier daemon began is never typed again.
-- **Never does:** write the PTY (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
-- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(paste_rule, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, read) -> Step { write, wake }`; it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
+  - The wait before Enter counts the paste rate from `PASTE_BYTES_PER_MS`. With console typing, characters above U+FFFF go as key-down records, and a paste's Enter and a message's time add `per_char` for each UTF-16 code unit.
+- **Never does:** write the terminal (it hands its bytes to the actor); read the screen except through the reading the actor gives it; take the person's keys; touch the database.
+- **Interface:** the daemon builds `Typing::text(text, enter, sender)`, `Typing::keys(names)` and `MessageTyping::{new, start_prompt}(text, number, deadline, submission)`. The actor uses `new(paste_rule, console_typing, DeliveryHandle)`, `push`, `deliver`, `deliver_first`, `finish_paste`, `fail_ended`, `fail_all(written, why)`, `hold_pastes()`, and `step(now, written, queued, modes, read) -> Step { write, wake }`; it reads `take_submitted()`, `take_entered()`, `held_bytes()`, `paste_rule()`, `busy()`, `pasting()`, `types_calls()`, `reads_input()`. Through `DeliveryHandle` it asks `still_to_type(number)`, records `begin_paste(numbers)` and `settle(numbers, outcome)`.
 
 #### viewers
 
@@ -275,9 +281,9 @@ runs, each run's terminal and exit, its files and plugin, and the session its CL
     asked); `record_exit(id, exit) -> ExitRecorded { known, committed }`, called with the agent list
     locked; `keep_exit_task(id, task)`; `release(id)`; `abandon(id)`; `remove(id)`;
     `remove_folders(id)`.
-  - Sessions: `follow_session(id, run, committed, FirstRead::{Now, AfterInterval})`,
-    `end_session_following(id)`, `read_session(id)`, `captures(id)`.
-  - Recovery: `take_back(&HeldAgent) -> OwnedFd`, `register_recovered(..)`,
+  - Sessions: `follow_session(id, run, committed, output, FirstRead::{Now, AfterOutput})`,
+    `end_session_following(id)`, `read_session(id)`, `has_unsaved_session(id)`, `captures(id)`.
+  - Recovery: `take_back(&HeldAgent) -> PtyMaster`, `register_recovered(..)`,
     `take_keeper_only(HeldAgent, KeeperOnly::{Unreadable, NoRecord})`,
     `delete_folders_without_records(&kept)`, `let_go_of_unused_plugins(agents)`.
   - Other: `environment_of(id)` (the running CLI's environment, blocking), `busy()` (why the
@@ -296,9 +302,10 @@ the run.
 The keeper connection, the run registry, and starts not yet registered.
 `runs/keeper_link/` (`mod.rs`, `client.rs`, `registry.rs`).
 
-- **Owns:** the keeper connection and its state (absent, connecting, ready); the client socket with
-  its requests, pings and passed descriptors; the registry: per run its process identity, a copy of
-  its master, its first exit, its role (agent, unreadable record, cleanup), whether Facade is
+- **Owns:** the keeper connection and its state (absent, connecting, ready); the client socket
+  (base's `ClientSocket`) with its requests, pings and the terminals its lines carry (`LineSender`,
+  `LineReceiver`); the registry: per run its process identity, a copy of
+  its terminal (`PtyMaster`), its first exit, its role (agent, unreadable record, cleanup), whether Facade is
   stopping it, its run number and `ExitSink`, and whether the daemon has committed it; the pending
   starts, which hold an exit that comes before registration.
 - **Keeps:** a keeper becomes ready only after `agent.sync` has given it every terminal the daemon
@@ -307,12 +314,15 @@ The keeper connection, the run registry, and starts not yet registered.
   reconnects, at once while runs need a keeper; a failed restart backs off from 0.5 to 30 seconds.
   A start or stop waits up to 10 seconds for a ready keeper, and each request up to 10 seconds for
   its response. The keeper is pinged every second. Lock order: the registry, then pending starts;
-  the connection lock is a leaf.
+  the connection lock is a leaf. The keeper is proved (`authenticate_server`) before its hello. The registry's copy
+  of a run's terminal lets go before any `agent.stop` for that run (a stop, an abandoned start, a stop
+  sent again); `agent.sync` passes each copy as it is.
 - **Never does:** end a keeper; touch folders, plugins or sessions.
 - **Interface** (runs only): `KeeperLink::new(core, events)`, `find_at_startup`, `serve`,
   `reserve_start`, `send_start(.., RunLaunch)`, `stop`, `record_exit -> RecordedExit::{Unknown,
   Repeated, Kept(ExitRecorded), Dropped}`, `installed`, `release`, `abandon`, `remove`,
-  `ended_run_released(id, deadline)`, `running_process`, the recovery calls, `busy`,
+  `ended_run_released(id, deadline)`, `running_process`, the recovery calls (`take_back ->
+  PtyMaster`, `register_recovered(&HeldAgent, &PtyMaster, ..)`), `busy`,
   `keeper_info`, `keeper_protocol`. `busy` says, in this order: runs are being handed to the
   keeper; an unreadable record's exit cannot be saved; an agent is running; an exit is being saved
   or its output drained; the keeper is being started or a start is waiting.
@@ -323,7 +333,8 @@ A run's command line, environment, folder, plugin and session following.
 `runs/preparation/` (`mod.rs`, `environment.rs`, `folder.rs`, `plugin.rs`, `session.rs`).
 
 - **Owns:** composing a run's command line from its rule (`facade_rules::start_command_line`,
-  `resume_command_line`) with Facade's tools and the CLI's installed version; the run's
+  `resume_command_line`) with Facade's tools and the CLI's installed version, its program started
+  directly where the program found on the run's `PATH` is a wrapper (`facade_rules::direct_command`); the run's
   environment, made from the client's by the rule of `env` in
   [`StartArgs`](../../../core/protocol/PROTOCOL.md#startargs), with `FACADE_HOME` and `FACADE_AGENT`
   added; run folders `core/runs/<agent>/<random>/`, readable only by their owner, with the session
@@ -336,14 +347,16 @@ A run's command line, environment, folder, plugin and session following.
   Facade core's, or a later version's, is never changed. It goes when the last start holding it
   and the last run using it have ended, and only if it is still this version's or an earlier one's.
   Only CLIs for which `facade_rules::uses_folder_plugin` holds use it. The session file is checked
-  every second by its modified time and size and read when they change, when it names a session
+  by its modified time and size a second after the run's terminal gives output, as a CLI saves its
+  session while it works: at most once a second while output goes on, once more a quiet second
+  after it, and nothing while the run is idle. It is read when they change, when it names a session
   its CLI has not saved yet, and once more after the run ends; a session that failed to commit is
-  sent again on the next check.
+  sent again a second later.
 - **Never does:** touch the registry or the keeper; commit a session itself.
 - **Interface** (runs only): `Preparation::new(folders, Arc<Held>, events)`, `prepare`,
   `replace_folders`, `plugin_used`, `plugin_released`, `remove_folders`,
   `delete_folders_without_records`, `let_go_of_unused_plugins`, `follow_session`, `run_ended`,
-  `session_followed(id, deadline)`, `end_session_following`, `read_session`, `captures`; the types
+  `session_followed(id, deadline)`, `end_session_following`, `read_session`, `has_unsaved_session`, `captures`; the types
   `RunFiles`, `PluginHold`, `FirstRead`. The test gate `before-plugin-let-go` is passed only when a
   run that used the plugin lets go of it.
 
@@ -395,9 +408,9 @@ A window's locations, read from its folders through Git, and the worktrees made 
 
 - **Owns:** `Catalog`, which holds the locations, the folder that brought each one, and the problems of the read. `Creations` holds one turn for each `.worktrees` folder. Both are values that `Windows` holds.
 - **Keeps:**
-  - For each folder, the locations are the repository's main checkout, then the folder itself where it is another place, then the other worktrees by branch and path. Paths have links resolved, and each place is listed once. A folder outside any repository, or a machine without Git, still gives the folder as a location.
+  - For each folder, the locations are the repository's main checkout, then the folder itself where it is another place, then the other worktrees by branch and path. Paths have links resolved, and each place is listed once; folders are compared as the system compares them (`files::folder_key`: on Windows without regard to letter case or `/` against `\`). A folder outside any repository, or a machine without Git, still gives the folder as a location.
   - A folder that cannot be read keeps the locations that the last read gave it, and the failure is a problem. A failed read never proves that a location is gone.
-  - Git runs from an argument list, never through a shell, without the 8 variables that point it at another repository or a prompt program, with optional locks off, prompts off and English messages. A read waits at most 10 seconds, and `worktree add` at most 120 seconds.
+  - Git starts through `programs::command`, which opens no console window. It runs from an argument list, never through a shell, without the 8 variables that point it at another repository or a prompt program, with optional locks off, prompts off and English messages. A read waits at most 10 seconds, and `worktree add` at most 120 seconds.
   - A worktree goes to `<main checkout>.worktrees/<branch folder>`, with the first free suffix. A creation is refused before any change for a folder outside any repository, a repository with no commit, a base that is not a commit, a branch name Git refuses or already has, or a folder name some system cannot hold. Creations into one `.worktrees` folder take turns, waiting at most 120 seconds, and the branch is checked again in the turn. When Git fails partway, the error's `data.kept` says what was left.
 - **Never does:** touch windows, send changes or write the table.
 - **Interface** (called by `windows`):
@@ -432,7 +445,7 @@ The agents the daemon lists but did not start, and the integrations through whic
 The daemon protocol on its socket: it reads requests, hands them to the daemon through the `Service`
 trait and writes responses and watch changes back, without knowing what any operation means.
 
-- **Owns:** the listening socket; each connection with its outbox, its call slots, the calls a
+- **Owns:** the listening socket (base's `DaemonListener`); each connection with its outbox, its call slots, the calls a
   `cancel` can name, its lanes and its watches; the watch and viewer numbers.
 - **Keeps:**
   - Every request with an ID gets exactly one response; a relay's MCP request too.
@@ -451,12 +464,13 @@ trait and writes responses and watch changes back, without knowing what any oper
     what the client sent before its response, or within 0.2 seconds, still runs; then its reading
     ends.
   - While the daemon decides to exit, arriving connections are closed before `hello`.
+  - Once base reports `termination_requested`, it removes the daemon socket and exits.
 - **Never does:** decide what a hello, operation, topic or relay means; call the agent list,
   messages, guests, windows or mcp; count calls as the daemon's work (each call counts its own).
 - **Interface:**
-  - `bind() -> Result<UnixListener>`; `serve(listener, service: Arc<S>, closing:
+  - `bind() -> Result<DaemonListener>`; `serve(listener: DaemonListener, service: Arc<S>, closing:
     watch::Receiver<bool>, paused: watch::Sender<bool>)`: accepts clients, pausing while
-    `closing` is true and saying so in `paused`; `serve_connection(service, socket)`: one
+    `closing` is true and saying so in `paused`; `serve_connection(service, socket: ServerSocket)`: one
     connection, also the daemon's own in-process MCP server's.
   - `trait Service`, implemented by the daemon:
     - `hello(HelloParams, peer_pid) -> (HelloResult, Client, Hold)`: after the server checked the
@@ -483,7 +497,7 @@ trait and writes responses and watch changes back, without knowing what any oper
 
 The MCP server behind each relay connection: it responds to the MCP client's JSON-RPC lines and turns each of the 8 tools ([MCP.md](../../extension/engineering/MCP.md)) into daemon protocol calls. Directory `core/crates/daemon/src/mcp/`.
 
-- **Owns:** each relay connection's state (`Relay`: its hello, the relay's process, the member it serves, its `send_message` calls under way, the connection that shows an agent's tools are there); the result files in `core/results/`, for results longer than 8,000 characters: their names (`screen-…`, `messages-m<first>-…`, `agents-…`), writing them (0600, in a 0700 folder) and deleting them.
+- **Owns:** each relay connection's state (`Relay`: its hello, the relay's process, the member it serves, its `send_message` calls under way, the connection that shows an agent's tools are there); the result files in `core/results/`, for results longer than 8,000 characters: their names (`screen-…`, `messages-m<first>-…`, `agents-…`), writing them (private, in a private folder) and deleting them.
 - **Keeps:**
   - Every tool call reaches the daemon over a protocol connection of its own, opened through `Connect`, so it passes the same checks as any client and a slow send holds up no other call.
   - Every request gets exactly one response, a cancelled `send_message` included.

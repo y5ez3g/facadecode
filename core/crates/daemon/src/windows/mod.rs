@@ -20,6 +20,7 @@ use facade_base::daemon::{
     LocationInfo, TERMINAL_WINDOW, TERMINAL_WINDOW_LABEL, WindowDescription, WindowInfo,
     WindowsChange, WorktreeCreateArgs,
 };
+use facade_base::files::{folder_key, real_path};
 use facade_base::jsonrpc::{ErrorBody, Reason};
 use tokio::sync::{broadcast, mpsc};
 
@@ -56,7 +57,9 @@ impl LocationsRead {
         if self.catalog.location(cwd).is_some() {
             return false;
         }
-        self.dropped.iter().any(|path| path == cwd)
+        self.dropped
+            .iter()
+            .any(|path| folder_key(Path::new(path)) == folder_key(Path::new(cwd)))
             || (self.catalog.problems().is_empty() && !Path::new(cwd).exists())
     }
 }
@@ -491,7 +494,7 @@ impl Windows {
         if id == TERMINAL_WINDOW {
             return Ok(cwd.to_string());
         }
-        let path = std::fs::canonicalize(cwd).map_or_else(
+        let path = real_path(Path::new(cwd)).map_or_else(
             |_| cwd.to_string(),
             |path| path.to_string_lossy().into_owned(),
         );

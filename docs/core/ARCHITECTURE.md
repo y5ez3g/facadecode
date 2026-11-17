@@ -11,8 +11,8 @@ flowchart LR
     P["facade commands"] -->|daemon protocol| D["daemon<br/>facade daemon"]
     E["editor windows"] -->|daemon protocol| D
     K["keeper<br/>facade keeper"] -->|starts, watches| D
-    D -->|keeper protocol, PTY masters| K
-    K -->|parent of| C["CLIs, each in a PTY"]
+    D -->|keeper protocol, terminals| K
+    K -->|parent of| C["CLIs, each in a PTY or pseudo console"]
     C -->|runs, MCP over stdio| R["relay<br/>facade-mcp"]
     R -->|relay hello, then MCP lines| D
     C -->|runs| H["facade hook …"]
@@ -26,9 +26,9 @@ else comes and goes.
 | --- | --- | --- | --- |
 | Command | `facade <command>` | One command. It connects to the daemon and, when nothing responds, starts the keeper | One; `attach` adds a few for the person's keys, signals and writes |
 | Hook | `facade hook …`, run by a CLI | One hook call. It reaches a running daemon only, never starts one, reads its input for at most a second, and always exits 0 | One |
-| Keeper | `facade keeper` | While it holds a CLI or a daemon runs | One, around one `poll`: no tokio, no locks |
+| Keeper | `facade keeper` | While it holds a CLI or a daemon runs | One, around one `poll`, or on Windows one I/O completion port: no tokio, no locks |
 | Daemon | `facade daemon` | Until 5 seconds pass with no running agent, client or unfinished work | A tokio runtime (below) |
-| Relay | `facade-mcp`, run by a CLI or an MCP client | As long as its MCP client runs | One, around one `poll` |
+| Relay | `facade-mcp`, run by a CLI or an MCP client | As long as its MCP client runs | One, around one `poll`; on Windows the loop around an I/O completion port, and one thread that reads standard input |
 | CLI | `claude`, `codex`, … | Until it ends or is stopped | The CLI's own |
 
 **Starting.** A command connects to the daemon's socket. When nothing responds, no daemon holds the daemon lock and no
@@ -37,12 +37,18 @@ the daemon, and the command says `hello` until the daemon responds, for up to 10
 `contention` or `failed` to whoever started it, on a startup channel. The daemon accepts clients only after it has
 recovered every agent it can read. Nothing runs at login.
 
-**Programs.** `core/bin/<build>/` holds each build's `facade` and `facade-mcp`. Two launchers, `core/bin/facade` and
-`core/bin/facade-mcp`, are symbolic links into the current build. Runs are given launcher paths only, so a run's next
-hook or MCP server is always the current build's.
+**Programs.** `core/bin/<build>/` holds each build's `facade` and `facade-mcp`; on Windows, `facade.exe`,
+`facade-mcp.exe` and `conpty\`, the ConPTY package every Windows build ships. Two launchers, `core/bin/facade` and
+`core/bin/facade-mcp` (with `.exe` on Windows), name the current build: symbolic links into it on macOS and Linux; on
+Windows, copies of its programs, pointed at another build by renaming the one in use aside and copying the new one in,
+with `core/bin/current-build` naming the build. Runs are given launcher paths only, so a run's next hook or MCP server
+is always the current build's.
 
-**The keeper keeps the CLIs.** Every CLI is the keeper's child, the leader of its own session and process group. The
-keeper and the daemon each hold the CLI's PTY master, so a terminal outlives either service:
+**The keeper keeps the CLIs.** Every CLI is the keeper's child. On macOS and Linux it leads a session and process group
+of its own, in a PTY. On Windows it runs in a pseudo console that the keeper makes through the ConPTY package, in a job
+of its own. The keeper and the daemon each hold the CLI's terminal: its PTY master, or on Windows copies of its input
+and output pipes, of the signal pipe that keeps the pseudo console open, and of its job. So a terminal outlives either
+service:
 
 - When the daemon ends, the keeper starts another, after 0.5 seconds, doubling after repeated failures up to 30
   seconds. The new daemon takes the terminals back and recovers each screen from its log.
@@ -63,14 +69,15 @@ exits. The keeper starts the launcher's daemon, now the new build. Every CLI run
 - **Blocking work**: store writes, screen logs and checkpoints, state files and file preparation run on tokio's
   blocking workers, or in place on a worker that first moves its other tasks away.
 - **Dedicated threads**: two for the keeper link, one reading and one writing, and one for each integration command,
-  reading its error output.
+  reading its error output. On Windows, one more: the terminal I/O thread, around a completion port of its own, reads
+  and writes every agent's terminal and takes the ends of guests' processes. No thread is added per agent.
 
 ## Interfaces between processes
 
 | Between | Interface | Defined in |
 | --- | --- | --- |
-| A client and the daemon | The daemon protocol: JSON-RPC 2.0, one object a line, on the daemon socket `/tmp/facade-core-<uid>/daemon-<key>.sock`. `hello`, then `call` (the operations), `watch` and `unwatch` (four topics), `cancel`; from the daemon, `changed` and `closing` | [PROTOCOL](../../core/protocol/PROTOCOL.md) |
-| The daemon and the keeper | The keeper protocol, on the keeper's socket beside the daemon's: `hello`, `agent.start`, `agent.stop`, `agent.sync`, `daemon.ping`. PTY masters ride along with the lines | [KEEPER](../../core/protocol/KEEPER.md) |
+| A client and the daemon | The daemon protocol: JSON-RPC 2.0, one object a line, on the daemon socket `/tmp/facade-core-<uid>/daemon-<key>.sock`, or on Windows the named pipe `\\.\pipe\facade-core-daemon-<key>`. `hello`, then `call` (the operations), `watch` and `unwatch` (four topics), `cancel`; from the daemon, `changed` and `closing` | [PROTOCOL](../../core/protocol/PROTOCOL.md) |
+| The daemon and the keeper | The keeper protocol, on the keeper's socket beside the daemon's: `hello`, `agent.start`, `agent.stop`, `agent.sync`, `daemon.ping`. A terminal rides along with its line: a PTY master, or on Windows its handles, duplicated into the receiving process and named in the line | [KEEPER](../../core/protocol/KEEPER.md) |
 | A relay and the daemon | The daemon protocol's relay contract: a `hello` that names the relay contract, then MCP lines both ways. `closing` hands the calls without a response over to the next daemon | [PROTOCOL: The relay](../../core/protocol/PROTOCOL.md#the-relay) |
 | A CLI and its relay | MCP over standard input and output: Facade's eight tools | [MCP](../extension/engineering/MCP.md) |
 | A CLI and its hooks | The CLI runs `facade hook <event> …` with its hook input; the hook calls the daemon's `hook.*` operations and prints its output in the CLI's own format | [facade](islands/facade.md), [rules](islands/rules.md) |
@@ -145,7 +152,8 @@ on no other Facade crate. Inside base, texts may use protocol, and protocol and 
 - **Rust's visibility holds the lines.** A parent declares its children privately; an island's interface is
   `pub(crate)` inside a crate and `pub` between crates; everything else is private.
 - **Locks.** Only the daemon nests locks, in the order [daemon](islands/daemon.md) gives: its layer's first, a part's
-  after. The keeper and the relay have one thread and no locks.
+  after. The keeper and the relay take no locks: the keeper has one thread, and the relay one on macOS and Linux and
+  two on Windows, its loop and the thread that reads its standard input.
 - **One place for each kind of knowledge.** Only base's platform, the keeper and the relay branch by operating system.
   Only rules names a CLI or branches by one, but for the texts a model reads. Only records gives agent numbers, and only
   messages gives message numbers.

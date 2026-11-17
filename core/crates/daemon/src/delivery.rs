@@ -10,6 +10,7 @@ use facade_base::daemon::{
     TERMINAL_WINDOW, TextWritten,
 };
 use facade_base::jsonrpc::{ErrorBody, Reason};
+use facade_rules::Rule;
 use tokio::sync::{mpsc, oneshot, watch};
 
 use crate::agent::{
@@ -28,6 +29,36 @@ pub(crate) enum InputWait {
     UntilCancelled(Cancel),
     /// It waits as long as its caller does: a message, which its deadline bounds.
     Always,
+}
+
+/// The widest number a message gets, so that a check of its length holds whatever number it gets.
+const WIDEST_NUMBER: &str = "m999999999";
+
+/// Refuses `message` where its recipient's CLI, by `rule`, could not take it within a delivery: its
+/// paste, its Enter and their confirmation at that CLI's rates here (RULES-1.5, MCP-4.1).
+/// `recipient` names the recipient in the error, and `instead` says what to do instead.
+pub(crate) fn check_fits(
+    rule: Option<&'static Rule>,
+    recipient: &str,
+    message: &Message,
+    instead: &str,
+) -> Result<(), ErrorBody> {
+    let Some(rule) = rule else {
+        return Ok(());
+    };
+    let widest = Message {
+        message_id: WIDEST_NUMBER.into(),
+        ..message.clone()
+    };
+    let typed = facade_base::daemon::typed_text(&widest);
+    if agent::delivery_time(rule, &typed) <= messages::delivery_limit() {
+        return Ok(());
+    }
+    Err(ErrorBody::invalid_argument(format!(
+        "the message is too long for {recipient}'s CLI, {}, to take within thirty seconds at its \
+         paste rate here; {instead}",
+        rule.display_name
+    )))
 }
 
 /// A message from `from` to `to`, pending until `deadline`, or with no deadline: a start's prompt
@@ -228,6 +259,17 @@ impl Daemon {
                 .map(|window| self.windows.label(&window)),
             ..pending_message(sender, to.id(), args.text, reply_to, deadline)
         };
+        if !to.is_guest() {
+            let rule = to
+                .rule()
+                .and_then(|name| facade_rules::find(name).ok().flatten());
+            check_fits(
+                rule,
+                &format!("#{}", to.id()),
+                &message,
+                "send it in shorter parts",
+            )?;
+        }
         let (message, mut settled) =
             match self.messages.post(message, args.request_id.as_deref())? {
                 Posted::New(message, settled) => (message, settled),
@@ -579,5 +621,76 @@ pub(crate) async fn deliver_results(
                     .await;
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use facade_base::daemon::{
+        Delivery, DeliveryStatus, MAX_MESSAGE_CHARS, MAX_MESSAGE_LINES, Message, TextWritten,
+    };
+
+    use super::check_fits;
+
+    /// The longest message there is, 8,000 four-byte characters on 540 lines under the longest
+    /// header, its sender's window named in it too, either fits a whole delivery to each CLI or is
+    /// refused before it is sent, the refusal naming that CLI (RULES-1.5, MCP-4.1).
+    #[test]
+    fn the_longest_message_fits_each_cli_or_is_refused_naming_it() {
+        let mut lines = vec!["\u{1D54F}".repeat(13); MAX_MESSAGE_LINES];
+        let length = |lines: &[String]| {
+            lines.iter().map(|line| line.chars().count()).sum::<usize>() + lines.len() - 1
+        };
+        let rest = MAX_MESSAGE_CHARS - length(&lines);
+        lines[0].push_str(&"\u{1D54F}".repeat(rest));
+        let text = lines.join("\n");
+        assert_eq!(
+            (
+                text.chars().count(),
+                facade_base::daemon::check_message_text(&text)
+            ),
+            (MAX_MESSAGE_CHARS, Ok(()))
+        );
+        let message = Message {
+            message_id: String::new(),
+            from: "a999999999".into(),
+            from_name: Some("\u{1D54F}".repeat(200)),
+            to: "a1".into(),
+            text,
+            reply_to: Some("m999999999".into()),
+            from_window: Some("\u{1D54F}".repeat(200)),
+            call_id: None,
+            result: None,
+            at: facade_base::time::iso_now(),
+            delivery: Delivery {
+                status: DeliveryStatus::Pending,
+                reason: None,
+                text_written: TextWritten::None,
+                enter_written: Some(false),
+                deadline: None,
+                delivered_via: None,
+                delivered_at: None,
+            },
+        };
+        let widest = Message {
+            message_id: "m999999999".into(),
+            ..message.clone()
+        };
+        let typed = facade_base::daemon::typed_text(&widest);
+        for rule in facade_rules::rules().unwrap() {
+            let fits =
+                crate::agent::delivery_time(rule, &typed) <= crate::messages::delivery_limit();
+            match check_fits(Some(rule), "#a1", &message, "send it in shorter parts") {
+                Ok(()) => assert!(fits, "{} was let through", rule.cli),
+                Err(refused) => {
+                    assert!(!fits, "{} was refused: {}", rule.cli, refused.message);
+                    assert!(
+                        refused.message.contains(&rule.display_name),
+                        "{}",
+                        refused.message
+                    );
+                }
+            }
+        }
     }
 }

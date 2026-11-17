@@ -34,5 +34,6 @@
 		"sign_in": ["^ *Log in with browser\\b", "^ *Set an API key\\b"],
 		"trust": "^Do you trust this workspace\\?$"
 	},
-	"yolo": { "args": ["--disable-approval", "--disable-sandbox", "--trust-workspace"] }
+	"yolo": { "args": ["--disable-approval", "--disable-sandbox", "--trust-workspace"] },
+	"console": { "per_char_ms": 1, "records_above_bmp": true }
 }

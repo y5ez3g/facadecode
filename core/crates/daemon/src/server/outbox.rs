@@ -4,9 +4,9 @@ use std::sync::Arc;
 
 use facade_base::daemon::{ChangedParams, methods};
 use facade_base::jsonrpc::{ErrorBody, Notification, Response, encode_line};
+use facade_base::sockets::ServerWriter;
 use serde_json::Value;
 use tokio::io::AsyncWriteExt;
-use tokio::net::unix::OwnedWriteHalf;
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinHandle;
 
@@ -29,7 +29,7 @@ pub(super) struct Outbox {
 impl Outbox {
     /// Starts writing to `write`. The task ends once every outbox is dropped or the client stops
     /// reading; senders waiting for room then learn that the connection closed.
-    pub(super) fn open(mut write: OwnedWriteHalf) -> (Outbox, JoinHandle<()>) {
+    pub(super) fn open(mut write: ServerWriter) -> (Outbox, JoinHandle<()>) {
         let (lines, mut waiting) = mpsc::unbounded_channel::<Vec<u8>>();
         let room = Arc::new(Semaphore::new(MAX_OUTBOX_BYTES));
         let freed = room.clone();

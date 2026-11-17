@@ -35,6 +35,7 @@ use facade_base::daemon::{
 };
 use facade_base::keeper::HeldAgent;
 use facade_base::process::{EndReason, ProcessExit, ProcessState};
+use facade_base::terminal::PtyMaster;
 use tokio::sync::{Semaphore, mpsc, watch};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -179,13 +180,14 @@ impl Daemon {
         {
             let id = handle.id().to_owned();
             if follows_session {
-                // Recovery read the session file before serving: the next read is a second away.
+                // Recovery read the session file before serving: the next read follows output.
                 let committed = handle.info().session;
                 self.runs.follow_session(
                     &id,
                     agent::FIRST_RUN,
                     committed,
-                    crate::runs::FirstRead::AfterInterval,
+                    handle.output_seen(),
+                    crate::runs::FirstRead::AfterOutput,
                 );
             }
             match then {
@@ -226,7 +228,7 @@ impl Daemon {
             })?),
             None => None,
         };
-        let terminal = master.as_ref().and_then(agent::terminal_size);
+        let terminal = master.as_ref().and_then(PtyMaster::size);
         let (screen, cols, rows) = self
             .recover_screen(&id, run.is_some(), terminal, &steps)
             .await?;

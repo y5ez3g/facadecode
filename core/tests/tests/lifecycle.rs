@@ -35,7 +35,7 @@ fn detach_starts_a_daemon_once_one_that_held_the_lock_has_ended() {
     std::thread::scope(|scope| {
         let detach = scope.spawn(|| home.run_facade(&["daemon", "--detach"]));
         std::thread::sleep(Duration::from_millis(300));
-        send_signal(holder.id() as i32, libc::SIGKILL);
+        kill_process(holder.id() as i32);
         let _ = holder.wait();
         let detached = detach.join().unwrap();
         assert!(detached.status.success(), "{}", stderr(&detached));
@@ -107,24 +107,28 @@ fn a_daemon_outlives_the_terminal_that_launched_it() {
     );
     let daemon = home.lock_record("daemon").unwrap().0;
     assert!(wait_until(secs(5), || stopped(daemon)));
-    send_signal(term.pid(), libc::SIGKILL);
+    kill_process(term.pid());
     term.wait_exit(secs(5));
     drop(term);
-    send_signal(daemon, libc::SIGCONT);
+    resume_process(daemon);
     assert!(
         wait_until(secs(10), || home.hello_result().is_some()),
         "the daemon did not survive its terminal: {}",
         home.daemon_log()
     );
-    let tty = std::process::Command::new("ps")
-        .args(["-o", "tty=", "-p", &daemon.to_string()])
-        .output()
-        .unwrap();
-    assert!(
-        stdout(&tty).trim().starts_with('?'),
-        "the daemon has a controlling terminal: {}",
-        stdout(&tty)
-    );
+    // A controlling terminal is Unix's; on Windows the daemon runs without a console.
+    #[cfg(unix)]
+    {
+        let tty = std::process::Command::new("ps")
+            .args(["-o", "tty=", "-p", &daemon.to_string()])
+            .output()
+            .unwrap();
+        assert!(
+            stdout(&tty).trim().starts_with('?'),
+            "the daemon has a controlling terminal: {}",
+            stdout(&tty)
+        );
+    }
     home.run_facade_ok(&["list"]);
 }
 
@@ -172,7 +176,7 @@ fn the_services_exit_when_idle_and_the_records_survive() {
         home.keeper_log()
     );
     assert!(
-        !home.daemon_socket().exists() && !home.keeper_socket().exists(),
+        !socket_exists(&home.daemon_socket()) && !socket_exists(&home.keeper_socket()),
         "the sockets are removed"
     );
     let status = home.run_facade_ok(&["status"]);
@@ -210,7 +214,7 @@ fn a_client_arriving_as_the_daemon_exits_reaches_the_next_daemon() {
     let status = std::thread::scope(|scope| {
         let status = scope.spawn(|| home.run_facade(&["status"]));
         std::thread::sleep(Duration::from_millis(500));
-        send_signal(exiting, libc::SIGCONT);
+        resume_process(exiting);
         status.join().unwrap()
     });
     assert!(status.status.success(), "{}", stderr(&status));
@@ -237,7 +241,7 @@ fn detach_reports_a_living_worker_still_recovering_as_starting() {
         .unwrap();
     home.wait_for_gate("before-recovery");
     assert!(
-        !home.daemon_socket().exists(),
+        !socket_exists(&home.daemon_socket()),
         "started cannot be reported before serving"
     );
     let output = child.wait_with_output().unwrap();
@@ -252,6 +256,7 @@ fn detach_reports_a_living_worker_still_recovering_as_starting() {
     home.wait_for_idle_exit();
 }
 
+#[cfg(unix)]
 #[test]
 fn a_writable_home_is_refused_and_a_lock_keeps_its_inode_when_made_private() {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -281,6 +286,7 @@ fn a_writable_home_is_refused_and_a_lock_keeps_its_inode_when_made_private() {
     assert_eq!((meta.ino(), meta.mode() & 0o777), (inode, 0o600));
 }
 
+#[cfg(unix)]
 #[test]
 fn inherited_descriptor_enumeration_failure_reaches_the_launcher() {
     let home = TestHome::new("fdenumeration");
@@ -296,9 +302,10 @@ fn inherited_descriptor_enumeration_failure_reaches_the_launcher() {
         "{}",
         stderr(&output)
     );
-    assert!(!home.daemon_socket().exists());
+    assert!(!socket_exists(&home.daemon_socket()));
 }
 
+#[cfg(unix)]
 #[test]
 fn an_eof_before_hello_retries_until_the_real_daemon_serves() {
     use std::io::{BufRead, BufReader};
@@ -322,6 +329,7 @@ fn an_eof_before_hello_retries_until_the_real_daemon_serves() {
     assert!(home.lock_record("daemon").is_some());
 }
 
+#[cfg(unix)]
 #[test]
 fn a_malformed_hello_is_a_permanent_failure_without_a_daemon_launch() {
     use std::io::{BufRead, BufReader, Write};
@@ -362,13 +370,14 @@ fn an_acceptance_pause_requested_before_the_accept_loop_starts_is_observed() {
     home.wait_for_gate("before-accept-loop");
     home.wait_for_gate("acceptance-pause-requested");
     assert!(
-        home.daemon_socket().exists(),
+        socket_exists(&home.daemon_socket()),
         "the listener has not acknowledged pausing acceptance"
     );
     home.release_gate("before-accept-loop");
     home.wait_for_idle_exit();
 }
 
+#[cfg(unix)]
 #[test]
 fn nonregular_lock_paths_fail_promptly_with_the_owned_regular_file_message() {
     use std::os::unix::fs::symlink;

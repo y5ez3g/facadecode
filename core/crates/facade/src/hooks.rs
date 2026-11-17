@@ -158,7 +158,7 @@ pub(crate) fn run(
 /// none.
 fn print_output(cli: &str, output: Option<String>) {
     if let Some(output) = output.as_deref().or_else(|| hook::empty_output(cli)) {
-        println!("{output}");
+        println_or_end!("{output}");
     }
 }
 
@@ -172,7 +172,7 @@ fn start_run_session(file: &Path, skill: bool) {
         .then(|| std::fs::read_to_string(file.with_file_name(facade_rules::SKILL_FILE)).ok())
         .flatten();
     if let Some(text) = skill_text {
-        print!("{}", hook::skill_output(&text));
+        print_or_end!("{}", hook::skill_output(&text));
     }
     let Some(input) = read_input() else { return };
     let Some(reported) = facade_rules::session_from_hook(&input) else {
@@ -206,12 +206,16 @@ fn is_session_file(file: &Path) -> bool {
     file.is_absolute() && file.file_name() == Some(OsStr::new(facade_rules::SESSION_FILE))
 }
 
-/// Runs the shell command `command` with `input` on its standard input and the hook's standard
-/// output and error as its own, and waits for it.
+/// Runs the shell command `command`, with the shell the CLI that runs title hooks uses, with
+/// `input` on its standard input and the hook's standard output and error as its own, and waits
+/// for it.
 fn pipe_to_shell(command: &str, input: &[u8]) {
-    let shell = Command::new("/bin/sh")
-        .arg("-c")
-        .arg(command)
+    let words = facade_rules::hook::title_command(command);
+    let Some((program, arguments)) = words.split_first() else {
+        return;
+    };
+    let shell = Command::new(program)
+        .args(arguments)
         .stdin(Stdio::piped())
         .spawn();
     if let Ok(mut shell) = shell {
@@ -244,14 +248,14 @@ fn print_run_start(cli: &str, agent: Option<&str>) {
         skill: skill.as_deref(),
     };
     if let Some(output) = hook::run_start_output(cli, &start) {
-        print!("{output}");
+        print_or_end!("{output}");
     }
 }
 
 /// `approve <cli>`: prints the approval of a call of one of Facade's own tools.
 fn print_approval(cli: &str) {
     if let Some(output) = read_json().and_then(|input| hook::approval_output(cli, &input)) {
-        print!("{output}");
+        print_or_end!("{output}");
     }
 }
 

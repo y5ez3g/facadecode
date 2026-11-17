@@ -13,12 +13,16 @@ use std::path::Path;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use facade_base::system::{SYSTEM, System, env_var};
+
 use super::Wiring;
 use super::config_files::config_home;
 use super::settings::{spans, values, without};
 use crate::Rule;
 use crate::args::ArgsGrammar;
-use crate::formats::{inline_toml, merge_settings, parse_jsonc, shell_word};
+use crate::formats::{
+    Shell, encoded_powershell, inline_toml, merge_settings, parse_jsonc, powershell_word,
+};
 
 /// Where a run's CLI reports the session it selects: the run's session file, which `facade`, this
 /// program, writes for the CLI's hooks, and which a plugin or extension of the run's writes itself.
@@ -34,21 +38,24 @@ pub struct SessionReport<'a> {
 }
 
 impl SessionReport<'_> {
-    /// `facade hook <command> <session file>`, each word quoted for the shell.
-    fn facade_hook(&self, command: &str) -> String {
-        let file = shell_word(&self.file.to_string_lossy());
-        format!("{} hook {command} {file}", shell_word(self.facade))
+    /// `facade hook <command> <session file>`, each word quoted for the shell `cli` runs its hooks
+    /// with. A path on Windows holds no `"`, so cmd.exe carries the file as it is.
+    fn facade_hook(&self, cli: &str, command: &str) -> String {
+        let shell = Shell::of(cli);
+        let file = self.file.to_string_lossy();
+        let file = shell.word(&file).unwrap_or_else(|| format!("\"{file}\""));
+        format!("{} hook {command} {file}", shell.program(self.facade))
     }
 
     /// The shell command of a CLI's session-start hook.
-    pub(super) fn hook(&self) -> String {
-        self.facade_hook("session-start")
+    pub(super) fn hook(&self, cli: &str) -> String {
+        self.facade_hook(cli, "session-start")
     }
 
     /// The shell command of Antigravity's title command, which writes the session from the title's
     /// input. The person's own title command follows it as one more word, where they have one.
     pub(super) fn title(&self) -> String {
-        self.facade_hook("title")
+        self.facade_hook("agy", "title")
     }
 
     /// The run's folder, which the session file is in.
@@ -99,15 +106,31 @@ pub(crate) fn install_hook(
         "claude" => claude_settings(
             &rule.arguments,
             words,
-            &session.hook(),
+            &session.hook("claude"),
             wiring.settings.as_ref(),
         ),
         "codex" => {
-            let hook = match wiring.session_skill {
-                true => format!("{} --skill", session.hook()),
-                false => session.hook(),
+            // Codex uses the session's shell, normally PowerShell on Windows. Encoding also
+            // carries the hook unchanged through its cmd.exe fallback.
+            let hook = match SYSTEM {
+                System::Windows => {
+                    let skill = if wiring.session_skill {
+                        " '--skill'"
+                    } else {
+                        ""
+                    };
+                    encoded_powershell(&format!(
+                        "& {} 'hook' 'session-start' {}{skill}; exit $LASTEXITCODE",
+                        powershell_word(session.facade),
+                        powershell_word(&session.file.to_string_lossy()),
+                    ))
+                }
+                System::Unix if wiring.session_skill => {
+                    format!("{} --skill", session.hook("codex"))
+                }
+                System::Unix => session.hook("codex"),
             };
-            codex_hooks(&rule.arguments, words, &hook)
+            codex_hooks(&rule.arguments, words, &hook, SYSTEM)
         }
         "opencode" => opencode_plugin(words, session, environment),
         "pi" => {
@@ -121,7 +144,7 @@ pub(crate) fn install_hook(
         }
         "fake" => adding(
             Vec::new(),
-            vec![(FAKE_HOOK.into(), session.hook())],
+            vec![(FAKE_HOOK.into(), session.hook("fake"))],
             Vec::new(),
         ),
         _ => None,
@@ -199,7 +222,12 @@ fn claude_settings(
 /// in it only where the layer's `state` holds the SHA-256 of the hook's definition at its group's
 /// place. The person's hook overrides are merged into one `hooks` table with Facade's group added
 /// last to `SessionStart`, and its trust recorded, so every other hook keeps its own.
-fn codex_hooks(grammar: &ArgsGrammar, words: &[String], hook: &str) -> Option<Hooked> {
+fn codex_hooks(
+    grammar: &ArgsGrammar,
+    words: &[String],
+    hook: &str,
+    system: System,
+) -> Option<Hooked> {
     let mut hooks = toml::Table::new();
     let mut taken = Vec::new();
     // Read as Codex reads them: `-chooks=` and `--config=hooks=` too, and never another option's
@@ -237,10 +265,12 @@ fn codex_hooks(grammar: &ArgsGrammar, words: &[String], hook: &str) -> Option<Ho
         "trusted_hash".into(),
         toml::Value::String(format!("sha256:{hex}")),
     );
-    let place = format!(
-        "/<session-flags>/config.toml:session_start:{}:0",
-        groups.len()
-    );
+    // Codex uses a synthetic path rooted at a literal C:\ on Windows, whatever the run's drive.
+    let source = match system {
+        System::Unix => "/<session-flags>/config.toml",
+        System::Windows => r"C:\<session-flags>\config.toml",
+    };
+    let place = format!("{source}:session_start:{}:0", groups.len());
     state.insert(place, toml::Value::Table(trust));
     let mut ours = toml::Table::new();
     ours.insert("type".into(), "command".into());
@@ -306,9 +336,7 @@ fn opencode_plugin(
         true => json!({}),
         false => config_object(&folder.join("tui.json"))?,
     };
-    let given = environment
-        .get(OPENCODE_CLI_CONFIG)
-        .filter(|text| !text.trim().is_empty());
+    let given = env_var(environment, OPENCODE_CLI_CONFIG).filter(|text| !text.trim().is_empty());
     let mut overlay = match given {
         Some(text) => parse_jsonc(text).ok().filter(Value::is_object)?,
         None => json!({}),
@@ -459,6 +487,33 @@ export default {{
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn codex_s_hook_trust_names_its_session_flags_layer_on_each_system() {
+        let rule = crate::find("codex").unwrap().unwrap();
+        for (system, key) in [
+            (
+                System::Unix,
+                "/<session-flags>/config.toml:session_start:0:0",
+            ),
+            (
+                System::Windows,
+                r"C:\<session-flags>\config.toml:session_start:0:0",
+            ),
+        ] {
+            let hooked = codex_hooks(
+                &rule.arguments,
+                &[],
+                "facade hook session-start session",
+                system,
+            )
+            .unwrap();
+            let parsed: toml::Table = toml::from_str(&hooked.args[1]).unwrap();
+            let state = parsed["hooks"]["state"].as_table().unwrap();
+            assert_eq!(state.keys().map(String::as_str).collect::<Vec<_>>(), [key]);
+            assert_eq!(state[key]["enabled"].as_bool(), Some(true));
+        }
+    }
 
     /// Pi's extension writes the session Pi starts and the file Pi saves it in, and no session
     /// where it cannot name both.

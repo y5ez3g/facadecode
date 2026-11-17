@@ -15,8 +15,8 @@ use std::time::Instant;
 use facade_base::daemon::{HelloParams, HelloResult, methods};
 use facade_base::daemon_client::Identity;
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::sockets::{DaemonListener, ServerSocket};
 use serde_json::Value;
-use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, watch};
 
 use crate::Cancel;
@@ -144,10 +144,9 @@ pub(crate) fn is_closing_response(line: &[u8]) -> bool {
 
 /// Binds the client socket. This daemon holds the daemon lock, so a socket already there belongs
 /// to a daemon that ended.
-pub(crate) fn bind() -> anyhow::Result<UnixListener> {
+pub(crate) fn bind() -> anyhow::Result<DaemonListener> {
     let path = facade_base::paths::daemon_socket()?;
-    let _ = std::fs::remove_file(&path);
-    let listener = UnixListener::bind(&path)?;
+    let listener = DaemonListener::bind(&path)?;
     let build = facade_base::build_id();
     log(
         "info",
@@ -160,7 +159,7 @@ pub(crate) fn bind() -> anyhow::Result<UnixListener> {
 /// connections are closed before their hello, and `paused` says so. Once `closing` turns false
 /// again, accepting goes on with the same listener.
 pub(crate) async fn serve<S: Service>(
-    listener: UnixListener,
+    mut listener: DaemonListener,
     service: Arc<S>,
     mut closing: watch::Receiver<bool>,
     paused: watch::Sender<bool>,
@@ -176,7 +175,7 @@ pub(crate) async fn serve<S: Service>(
         was_paused = pause;
         paused.send_replace(pause);
         let socket = tokio::select! {
-            accepted = listener.accept() => accepted?.0,
+            accepted = listener.accept() => accepted?,
             _ = closing.changed() => continue,
         };
         if *closing.borrow() {
@@ -194,25 +193,15 @@ pub(crate) async fn serve<S: Service>(
 }
 
 /// Serves one connected socket until it closes: a client's, or the daemon's own MCP server's.
-pub(crate) async fn serve_connection<S: Service>(service: Arc<S>, socket: UnixStream) {
+pub(crate) async fn serve_connection<S: Service>(service: Arc<S>, socket: ServerSocket) {
     if let Err(err) = connection::serve(service, socket).await {
         log("warn", &format!("a connection ended: {err}"));
     }
 }
 
-/// On SIGTERM or SIGINT, removes the daemon socket and exits.
+/// Once the daemon is asked to end, removes the daemon socket and exits.
 async fn exit_on_signal() {
-    use tokio::signal::unix::{SignalKind, signal};
-    let (Ok(mut terminate), Ok(mut interrupt)) = (
-        signal(SignalKind::terminate()),
-        signal(SignalKind::interrupt()),
-    ) else {
-        return;
-    };
-    tokio::select! {
-        _ = terminate.recv() => {}
-        _ = interrupt.recv() => {}
-    }
+    facade_base::service::termination_requested().await;
     log("info", "shutdown requested; removing the daemon socket");
     if let Ok(path) = facade_base::paths::daemon_socket() {
         let _ = std::fs::remove_file(path);

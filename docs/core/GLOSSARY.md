@@ -18,7 +18,7 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 |---|---|---|
 | agent | A CLI session Facade knows, with its own ID such as `#a3`: a run Facade started, or a guest | — |
 | run | One CLI run Facade started, from a start or a resume until it ends | process, child, session (for this) |
-| process | An operating system's process: its ID, its group, its exit | run (for this) |
+| process | An operating system's process: its ID, its group (on Windows, its job), its exit | run (for this) |
 | session | A CLI's own session, the one it can resume | conversation |
 | guest | A CLI session a person started that joined Facade through an integration | — |
 | member, MCP member | An MCP client that neither Facade started nor a CLI's hooks report, listed as a guest through its relay | — |
@@ -39,8 +39,8 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | remove | Delete an agent's record, stopping it first if it runs | delete, forget (for this) |
 | end, ended | A run that no longer runs, for any reason | finish, gone |
 | exit | A process's own exit code or signal | — |
-| kill | Send SIGKILL | — |
-| hang up | Send SIGHUP | — |
+| kill | Send SIGKILL; on Windows, end the CLI's job (`TerminateJobObject`) | — |
+| hang up | Send SIGHUP; on Windows, close every copy of the pseudo console's signal pipe, so that the console host ends it | — |
 
 ## Messages
 
@@ -78,7 +78,7 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | Use | Means | Not these |
 |---|---|---|
 | screen | What an agent's terminal shows, and the `Screen` that computes it | view (for this) |
-| terminal | A terminal without a display; the pseudo-terminal an agent's CLI runs in | tty |
+| terminal | A terminal without a display; the pseudo-terminal an agent's CLI runs in, on Windows a pseudo console | tty |
 | terminal app | The program a person sees terminals in, such as Terminal or iTerm, named by `TERM_PROGRAM` | — |
 | output | The bytes a terminal writes | — |
 | scrollback | The lines that scrolled off the top of a screen | history |
@@ -137,7 +137,7 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | settings | What the settings file holds | configuration, config |
 | problem | One thing wrong in the settings file, with where it is | issue |
 | home | The folder `FACADE_HOME` names, `~/.facade` by default | root, base (for this) |
-| home folder | The operating system user's own home, `$HOME`; Facade's is the Facade home | home (for this) |
+| home folder | The operating system user's own home: `HOME` on macOS and Linux, `USERPROFILE` on Windows; Facade's is the Facade home | home (for this) |
 
 ## Reach
 
@@ -171,9 +171,9 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | relay | `facade-mcp`: forwards MCP lines between an MCP client and the daemon, line by line | proxy, bridge, shim |
 | link | A long connection that reconnects when it breaks: the relay's `DaemonLink`, the daemon's keeper link | — |
 | program | An executable file | binary, executable |
-| launcher | One of the two links in `core/bin/` that name the current build's programs | shim |
-| build | The programs of one build, in `core/bin/<build>/` | — |
-| install | Copy a build's programs into `core/bin/<build>/` | — |
+| launcher | One of the two programs in `core/bin/` that run the current build's: a symbolic link on macOS and Linux, a copy on Windows | shim, wrapper |
+| build | The programs of one build, in `core/bin/<build>/`, with its ConPTY folder on Windows | — |
+| install | Copy a build's programs, and on Windows its ConPTY folder, into `core/bin/<build>/` | — |
 | version | A three-part version number | — |
 | sync | The daemon giving a keeper the terminals it lacks, with `agent.sync` | hand over |
 | drain | The daemon letting calls under way finish before a newer build takes over | — |
@@ -191,6 +191,30 @@ now; [Names on the wire](#names-on-the-wire) lists those that differ from this g
 | base | The crate of shared contracts and small tools, `facade-base` | common, shared, utils |
 | handle | What a part gets at creation to reach another part's data: a small type, a channel's sender, or a closure | — |
 | table | A handle to one database table, `<Thing>Table`, with that table's methods and nothing else | — |
+
+## Operating systems
+
+| Use | Means | Not these |
+|---|---|---|
+| Windows | The operating system, with a capital W; an editor window is a window | — |
+| socket | Where the keeper or the daemon listens and its clients connect: a Unix socket on macOS and Linux, a named pipe on Windows. `ClientSocket` is the end that connects, `ServerSocket` the end that accepts | — |
+| named pipe | A Windows pipe with a name, such as `\\.\pipe\facade-core-daemon-<key>` | — |
+| pipe instance | One client's connection to a named pipe, on the server's side | — |
+| console | The terminal a person runs a `facade` command in, which `attach` sets into raw and VT modes: a Windows console, or a tty on macOS and Linux | terminal (for this) |
+| pseudo console | An agent's terminal on Windows, made through ConPTY; always written in full | console (for this) |
+| console host | The program behind a pseudo console: `OpenConsole.exe`, from the ConPTY package every Windows build carries | — |
+| signal pipe | The pipe through which a pseudo console is resized; while any copy of its write end is open, the pseudo console stays | — |
+| let go before a stop | A service closing its copies of a terminal's signal pipe before `agent.stop`, so that the stop's hang-up can end the pseudo console | — |
+| job | The Windows job object a CLI runs in, one per CLI, in place of the process group | — |
+| completion port | A Windows I/O completion port: one wait for the I/O of many pipes and the ends of many processes | — |
+| wait completion packet | A process's end, delivered to a completion port as an I/O completion is | — |
+| binding | A pipe end's tie to the completion port it was first registered with | — |
+| terminal I/O thread | The daemon's one thread on Windows that reads and writes every terminal and takes guests' process ends | — |
+| win32-input-mode | The console host's input mode, `CSI ?9001h`, in which keys travel as key records | — |
+| key-down record | A key press in win32-input-mode's form, `CSI <vk>;<sc>;<char>;1;<cs>;<rc>_` | — |
+| console input record | An input event as a Windows console holds it: a key, or a change of size | — |
+| console typing | What a CLI that reads console input records needs: a wait for each UTF-16 code unit before Enter, and key-down records for characters above U+FFFF | — |
+| wrapper | A script that starts a CLI's real program, such as npm's `.cmd` shim, Pi's `pi.cmd` or Muse Code's PowerShell script; Facade starts the program directly where it can | launcher |
 
 ## Naming rules
 
@@ -256,6 +280,10 @@ code that mirrors them keeps it too.
 | `conversation` | Antigravity's fields, such as `conversationId` |
 | `launchd` | macOS |
 | `forget` | `std::mem::forget` |
+| `HANDLE`, `OwnedHandle`, `BorrowedHandle`; "a Windows handle" in text | Windows, and the standard library's `std::os::windows::io`; Facade's own handle is an island's (above) |
+| `sync_all`, `sync_data`; to sync a file or folder | The standard library: written through to disk, as `files::sync_folder` does. Facade's own sync is `agent.sync` |
+| ConPTY, `conhost`, `OpenConsole` | Windows and Microsoft's ConPTY package |
+| shim, `pi-launcher.js`, `.muse-launcher.ps1` | npm's name for its wrappers, and the files Pi's and Muse Code's installers write |
 
 ## Names not yet changed
 
@@ -280,3 +308,5 @@ stay.
 | `MAX_`, not `_LIMIT` or `MOST_` | `READ_LIMIT`, `ADD_LIMIT`, `TURN_LIMIT`, `OUTBOX_LIMIT`, `SESSION_FILE_LIMIT`, `OPENCODE_ID_LIMIT`, `MAX_MESSAGES_LIMIT`, `MOST_SAID`, `MOST_PARTS`, `MOST_RETRY_DELAY` |
 | `_DELAY` or a threshold, not `_AFTER` or `AFTER_` | `ENTER_DRAWN_AFTER`, `HEALTHY_AFTER`, `AFTER_REPEATS`, `CHECKPOINT_AFTER_BYTES` |
 | `_INTERVAL`, not `_EVERY` | `FOLLOW_EVERY` |
+| process, not one system's name, for code on every system | `unix_process` |
+| console, not terminal, for the person's | facade's `terminal_size`, `restore_terminal`, `RESTORE_TERMINAL_SEQUENCE` |

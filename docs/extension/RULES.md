@@ -112,8 +112,9 @@ CLIS-2.1's measured paste rates: one that would not fit is not begun, nothing ty
 slot has more time. A text whose paste, Enter and confirmation could not fit even a whole stage at its recipient's rates -
 many hundred lines for Antigravity, or eight thousand characters, CJK ones, for Codex on Windows - is a permanent
 obstacle: a send of it fails at once as `invalid_argument` before its record is made - no message ID, nothing for
-read_messages - asking for shorter parts, and a start's post-start prompt of it is given up, nothing typed, its result
-saying so and its record staying readable through read_messages (MCP-2.3). Fitting is an admission, not a guarantee that the CLI finishes in time: a
+read_messages - asking for shorter parts, and a start with it as its first prompt is refused the same way, before
+anything starts (MCP-2.3). Until the editor extension runs on core, it still starts such an agent and gives the prompt
+up, nothing typed, its result saying so and its record staying readable through read_messages. Fitting is an admission, not a guarantee that the CLI finishes in time: a
 CLI that stalls still meets the deadline, the stage ending with its actual full, partial or unknown effects. A part of a message's text in the input, which no wait makes its own, is not waited for. An input still unavailable then means failure; delivery is not a promise to overcome a permanently
 unavailable target. A read through read_messages delivers the message immediately and cancels any paste that has not
 begun. If text is already being written or remains as this message's own complete draft, the existing stage may finish

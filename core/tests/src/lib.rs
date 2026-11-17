@@ -3,7 +3,7 @@
 //! `FACADE_SCENARIO_KEEP=1` to keep the files for inspection. Tests use workspace builds and a
 //! terminal driver that reads their visible screens.
 
-use std::process::{Command, Output};
+use std::process::Output;
 use std::time::{Duration, Instant};
 
 pub use serde_json;
@@ -12,12 +12,14 @@ mod binaries;
 mod connections;
 mod home;
 mod mcp;
+mod system;
 mod terminal;
 
 pub use binaries::*;
 pub use connections::*;
 pub use home::*;
 pub use mcp::*;
+pub use system::*;
 pub use terminal::*;
 
 pub fn secs(seconds: u64) -> Duration {
@@ -65,76 +67,13 @@ pub fn alive(identity: &facade_base::process::ProcessIdentity) -> bool {
     }
 }
 
-/// Checks whether a process is stopped by a signal, such as SIGSTOP.
-pub fn stopped(pid: i32) -> bool {
-    let state = Command::new("ps")
-        .args(["-o", "stat=", "-p", &pid.to_string()])
-        .output()
-        .map(|out| stdout(&out))
-        .unwrap_or_default();
-    state.trim_start().starts_with('T')
-}
-
+/// Sends `signal` to process `pid`, on Unix: tests of signals stay there.
+#[cfg(unix)]
 pub fn send_signal(pid: i32, signal: i32) {
     // SAFETY: sending a signal has no memory-safety preconditions.
     unsafe {
         libc::kill(pid, signal);
     }
-}
-
-/// The processes working in `folder` or a folder inside it. macOS shows no environment for its own
-/// programs, such as `/bin/sh` and `sleep`, so this is how a test finds the scripts it started,
-/// also once they outlive the keeper that held their terminals.
-pub fn processes_working_in(folder: &std::path::Path) -> Vec<i32> {
-    let Ok(folder) = std::fs::canonicalize(folder) else {
-        return Vec::new();
-    };
-    let out = Command::new("ps")
-        .args(["-axo", "pid="])
-        .output()
-        .expect("could not run ps");
-    stdout(&out)
-        .lines()
-        .filter_map(|pid| pid.trim().parse().ok())
-        .filter(|pid| working_folder(*pid).is_some_and(|working| working.starts_with(&folder)))
-        .collect()
-}
-
-/// The folder a process works in, where it can be read.
-#[cfg(target_os = "macos")]
-fn working_folder(pid: i32) -> Option<std::path::PathBuf> {
-    use std::os::unix::ffi::OsStringExt;
-    // SAFETY: proc_vnodepathinfo is plain data, valid with every byte zero.
-    let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
-    let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
-    // SAFETY: proc_pidinfo writes at most `size` bytes into `info`.
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid,
-            libc::PROC_PIDVNODEPATHINFO,
-            0,
-            (&raw mut info).cast(),
-            size,
-        )
-    };
-    if written != size {
-        return None;
-    }
-    let path: Vec<u8> = info
-        .pvi_cdir
-        .vip_path
-        .as_flattened()
-        .iter()
-        .map(|&byte| byte as u8)
-        .take_while(|&byte| byte != 0)
-        .collect();
-    (!path.is_empty()).then(|| std::ffi::OsString::from_vec(path).into())
-}
-
-/// The folder a process works in, where it can be read.
-#[cfg(target_os = "linux")]
-fn working_folder(pid: i32) -> Option<std::path::PathBuf> {
-    std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
 }
 
 pub fn stdout(output: &Output) -> String {

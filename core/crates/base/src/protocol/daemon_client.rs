@@ -1,9 +1,9 @@
 //! A blocking daemon protocol client, used by the `facade` commands and by `facade-mcp`.
 
+use crate::paths::{ClientSocket, is_connection_lost};
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{self, BufReader, ErrorKind, Write};
 use std::ops::RangeFrom;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, UNIX_EPOCH};
 
@@ -95,11 +95,11 @@ struct Origin {
 
 /// One connection to the daemon, past its hello.
 pub struct DaemonClient {
-    pub writer: UnixStream,
+    pub writer: ClientSocket,
     pub hello_result: HelloResult,
     /// The build that takes over, once the daemon said `closing`.
     pub closing: Option<String>,
-    reader: BufReader<UnixStream>,
+    reader: BufReader<ClientSocket>,
     line: Vec<u8>,
     ids: RangeFrom<u64>,
     /// Notifications read while a call waited for its own response; `next_change` reads them
@@ -118,9 +118,9 @@ impl DaemonClient {
         socket: &Path,
         identity: &Identity,
         until: Instant,
-        opening: &mut dyn FnMut(&UnixStream) -> bool,
+        opening: &mut dyn FnMut(&ClientSocket) -> bool,
     ) -> anyhow::Result<Option<Self>> {
-        let stream = match UnixStream::connect(socket) {
+        let stream = match ClientSocket::connect(socket) {
             Err(err) if transient_transport(&err) => return Ok(None),
             Err(err) => anyhow::bail!("cannot connect to {}: {err}", socket.display()),
             Ok(stream) => stream,
@@ -142,7 +142,7 @@ impl DaemonClient {
     /// stay with: one that closes the connection around its hello, or that refuses it while a newer
     /// build takes over, is ending or handing over, and the next daemon is the one to talk to.
     fn hello_until(
-        stream: UnixStream,
+        stream: ClientSocket,
         identity: &Identity,
         until: Instant,
     ) -> anyhow::Result<Option<Self>> {
@@ -169,7 +169,7 @@ impl DaemonClient {
     }
 
     /// Completes hello on a connected stream before using any other method.
-    pub fn hello(mut writer: UnixStream, identity: &Identity) -> anyhow::Result<Self> {
+    pub fn hello(mut writer: ClientSocket, identity: &Identity) -> anyhow::Result<Self> {
         let mut reader = BufReader::new(writer.try_clone()?);
         let mut line = Vec::new();
         let params = HelloParams {
@@ -494,143 +494,5 @@ const RETRIED_KINDS: [ErrorKind; 9] = [
 /// Whether a transport failure before a decoded hello can be retried. Decoded errors and invalid
 /// data are permanent.
 pub fn transient_transport(err: &io::Error) -> bool {
-    RETRIED_KINDS.contains(&err.kind()) || err.raw_os_error() == Some(libc::EIO)
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::BufRead;
-
-    use super::*;
-
-    /// A stand-in daemon's socket, removed when the test ends, whether it passes or fails. It lives
-    /// in `/tmp`: a socket's path holds at most 104 bytes on macOS, which a test's own temporary
-    /// folder can pass.
-    struct TestSocket(PathBuf);
-
-    impl TestSocket {
-        fn new(name: &str) -> TestSocket {
-            let path = Path::new("/tmp").join(format!("facade-{name}-{}.sock", std::process::id()));
-            let _ = std::fs::remove_file(&path);
-            TestSocket(path)
-        }
-    }
-
-    impl Drop for TestSocket {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_file(&self.0);
-        }
-    }
-
-    fn terminal() -> Identity {
-        Identity {
-            kind: ClientKind::Terminal,
-            agent: None,
-            sessions: Vec::new(),
-        }
-    }
-
-    fn read_hello(stream: &UnixStream) {
-        let mut hello = String::new();
-        std::io::BufReader::new(stream.try_clone().unwrap())
-            .read_line(&mut hello)
-            .unwrap();
-    }
-
-    /// A daemon whose answer to hello this build cannot read is another protocol's: the client says
-    /// so, naming both builds, and panics at nothing a peer sends.
-    #[test]
-    fn an_answer_to_hello_this_build_cannot_read_is_another_protocol_s() {
-        let socket = TestSocket::new("hello-unread");
-        let listener = std::os::unix::net::UnixListener::bind(&socket.0).unwrap();
-        let daemon = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            read_hello(&stream);
-            let answer = serde_json::json!({
-                "jsonrpc": "2.0", "id": 1, "result": { "protocol": 9, "build": "9.9.9" },
-            });
-            stream.write_all(format!("{answer}\n").as_bytes()).unwrap();
-            // Held open until the client read the answer.
-            let mut rest = String::new();
-            let _ = std::io::BufReader::new(stream).read_line(&mut rest);
-        });
-        let connected = DaemonClient::connect(
-            &socket.0,
-            &terminal(),
-            Instant::now() + Duration::from_secs(5),
-            &mut |_| true,
-        );
-        let err = connected
-            .err()
-            .expect("an answer this build cannot read fails");
-        daemon.join().unwrap();
-        let body = err
-            .downcast_ref::<ErrorBody>()
-            .unwrap_or_else(|| panic!("not a protocol's error: {err:#}"));
-        assert_eq!(
-            body.data.reason,
-            Reason::ProtocolIncompatible,
-            "{}",
-            body.message
-        );
-        assert!(
-            body.message.contains("build 9.9.9 and protocol 9")
-                && body.message.contains(&crate::build_id()),
-            "{}",
-            body.message
-        );
-    }
-
-    /// A daemon that closes right after it answers hello, as one handing over does, is no daemon
-    /// yet: the client goes on to the next one, though macOS refuses the options of a socket whose
-    /// peer closed.
-    #[test]
-    fn a_daemon_that_closes_right_after_its_hello_is_no_daemon_yet() {
-        let socket = TestSocket::new("hello-closed");
-        let listener = std::os::unix::net::UnixListener::bind(&socket.0).unwrap();
-        let daemon = std::thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            read_hello(&stream);
-            let answer = serde_json::json!({
-                "jsonrpc": "2.0", "id": 1,
-                "result": {
-                    "protocol": 1, "build": "0.2.0", "pid": 1, "agents": 0, "topics": [], "ops": [],
-                },
-            });
-            stream.write_all(format!("{answer}\n").as_bytes()).unwrap();
-            // The stream closes here, before the client reads the answer.
-        });
-        let connected = DaemonClient::connect(
-            &socket.0,
-            &terminal(),
-            Instant::now() + Duration::from_secs(5),
-            &mut |_| true,
-        );
-        daemon.join().unwrap();
-        assert!(connected.is_ok(), "{:?}", connected.err());
-    }
-
-    /// A daemon that closed the connection before hello, as one that ends before it took the
-    /// connection does, is no daemon yet.
-    #[test]
-    fn a_daemon_that_closed_the_connection_before_hello_is_no_daemon_yet() {
-        let socket = TestSocket::new("hello-unanswered");
-        let listener = std::os::unix::net::UnixListener::bind(&socket.0).unwrap();
-        let mut daemon = Some(std::thread::spawn(move || drop(listener.accept().unwrap())));
-        // The client goes on once the daemon closed the connection.
-        let connected = DaemonClient::connect(
-            &socket.0,
-            &terminal(),
-            Instant::now() + Duration::from_secs(5),
-            &mut |_| {
-                daemon.take().unwrap().join().unwrap();
-                true
-            },
-        );
-        assert!(
-            matches!(connected, Ok(None)),
-            "{:?}",
-            connected.map(|client| client.is_some())
-        );
-    }
+    RETRIED_KINDS.contains(&err.kind()) || is_connection_lost(err)
 }

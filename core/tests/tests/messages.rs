@@ -400,7 +400,7 @@ fn a_client_acts_for_the_agent_its_hello_names() {
     );
     let screen = home.screen(&agent);
     assert!(screen.contains(&format!("agent={agent}")), "{screen}");
-    let canonical = home.path.canonicalize().unwrap();
+    let canonical = facade_base::files::real_path(&home.path).unwrap();
     assert!(
         screen.contains(&format!("home={}", canonical.display()))
             || screen.contains(&format!("home={}", home.path.display())),
@@ -510,13 +510,19 @@ fn a_message_to_a_cli_that_reads_no_input_fails_within_30_seconds_and_is_never_s
         .find(|change| change["change"]["message"]["message_id"] == "m1")
         .unwrap()["change"]["message"]["delivery"]
         .clone();
+    // A pseudo console's host reads its input whether or not the CLI does, so on Windows all of the
+    // paste is typed and only its Enter is held back.
+    #[cfg(unix)]
+    let written = (json!("unknown"), None);
+    #[cfg(windows)]
+    let written = (json!("full"), Some(&json!(false)));
     assert_eq!(
         (
             &delivery["reason"],
             &delivery["text_written"],
             delivery.get("enter_written")
         ),
-        (&json!("submission_unconfirmed"), &json!("unknown"), None)
+        (&json!("submission_unconfirmed"), &written.0, written.1)
     );
     assert!(home.submitted_messages().is_empty());
 }
@@ -549,8 +555,12 @@ fn a_message_too_long_for_any_cli_is_refused_before_it_is_kept() {
     let home = TestHome::new("sendlong");
     let programs = home.path.join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let started = home
         .command(&test_binaries().facade)
         .args(["start", "--name", "slow", "agy"])
@@ -595,7 +605,7 @@ fn a_command_acts_for_the_agent_whose_session_its_cli_names() {
     let home = TestHome::new("sessioncommand");
     let outside = home.run_facade(&["messages"]);
     assert!(
-        !outside.status.success() && !home.daemon_socket().exists(),
+        !outside.status.success() && !socket_exists(&home.daemon_socket()),
         "{}",
         stderr(&outside)
     );
@@ -739,7 +749,7 @@ fn crash_at(home: &TestHome, point: &str) {
     let (pid, _) = home
         .lock_record("daemon")
         .expect("the daemon's lock record");
-    send_signal(pid, libc::SIGKILL);
+    kill_process(pid);
     home.wait_for_daemon_after(pid, secs(30))
         .expect("the keeper starts the next daemon");
 }
@@ -1142,9 +1152,9 @@ fn a_message_whose_recipient_ended_while_no_daemon_ran_fails_as_ended() {
     let send = send_in_background(&home, &["worker", "hello"]);
     assert!(wait_for_delivery(&inbox, watch, "m1", "pending"));
     let (daemon, _) = home.lock_record("daemon").unwrap();
-    send_signal(daemon, libc::SIGSTOP);
-    send_signal(cli, libc::SIGKILL);
-    send_signal(daemon, libc::SIGKILL);
+    pause_process(daemon);
+    kill_process(cli);
+    kill_process(daemon);
     cut_off(send);
     home.run_facade_ok(&["list"]);
     assert_eq!(
@@ -1193,7 +1203,6 @@ fn a_removed_agent_s_inbox_goes_and_what_it_sent_stays() {
 /// them; newer ones and their files stay, across an idle exit, and numbers go on.
 #[test]
 fn messages_older_than_30_days_go_with_their_files_as_a_daemon_starts() {
-    use std::os::unix::fs::DirBuilderExt;
     let home = TestHome::new("expiry");
     connect(&home);
     home.wait_for_idle_exit();
@@ -1216,11 +1225,7 @@ fn messages_older_than_30_days_go_with_their_files_as_a_daemon_starts() {
         .unwrap();
     drop(connection);
     let results = home.path.join("core/results");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&results)
-        .unwrap();
+    facade_base::files::create_private_folder_all(&results).unwrap();
     for name in [
         "messages-m1-20261011T000000000Z-1-0.txt",
         "messages-m2-20261111T000000000Z-1-1.txt",

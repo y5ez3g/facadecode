@@ -13,6 +13,7 @@ use std::ops::RangeInclusive;
 use std::sync::LazyLock;
 
 use facade_base::settings::{Json, Member, Settings, is_space};
+use facade_base::system::{SYSTEM, System, env_var};
 use regex::{Captures, Regex};
 
 use crate::{FILES, Rule, rules};
@@ -157,6 +158,14 @@ pub fn find<'a>(entries: &'a [Entry], name: &str) -> Option<&'a Entry> {
     entries.iter().find(|entry| entry.name == name)
 }
 
+/// Whether two variable names name the same variable: Windows compares them without case.
+fn same_variable(one: &str, other: &str) -> bool {
+    match SYSTEM {
+        System::Windows => one.eq_ignore_ascii_case(other),
+        System::Unix => one == other,
+    }
+}
+
 impl Entry {
     /// What lists show: the product name for a built-in's own entry (`Claude Code`), the key for
     /// every other.
@@ -217,16 +226,17 @@ impl Entry {
 
     /// The environment it runs with (CONFIGURATION-3.2): `env`, as the start passes it, changed
     /// by the entry's `env` one variable at a time. A value is set with each `${env:NAME}` read
-    /// from the start's `env`, once; a None unsets.
+    /// from the start's `env`, once; a None unsets. On Windows a name is the same variable in any
+    /// letter case, and a set one takes the place of each spelling.
     pub fn environment(&self, env: &BTreeMap<String, String>) -> BTreeMap<String, String> {
         let mut result = env.clone();
         for (name, value) in &self.env {
+            result.retain(|each, _| !same_variable(each, name));
             match value {
-                None => {
-                    result.remove(name);
-                }
+                None => {}
                 Some(value) => {
-                    let lookup = |found: &Captures| env.get(&found[1]).cloned().unwrap_or_default();
+                    let lookup =
+                        |found: &Captures| env_var(env, &found[1]).unwrap_or_default().to_string();
                     let value = ENV_REFERENCE.replace_all(value, lookup).into_owned();
                     result.insert(name.clone(), value);
                 }
@@ -244,7 +254,7 @@ impl Entry {
             let Some(value) = value else { continue };
             for found in ENV_REFERENCE.captures_iter(value) {
                 let variable = &found[1];
-                if env.contains_key(variable) {
+                if env_var(env, variable).is_some() {
                     continue;
                 }
                 problems.push(format!(

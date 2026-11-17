@@ -101,15 +101,17 @@ const fn ctrl(key: u8) -> u8 {
 fn no_terminal(err: std::io::Error) -> ErrorBody {
     let message = format!("could not open a terminal: {err}");
     #[cfg(target_os = "macos")]
-    let mut message = message;
-    #[cfg(target_os = "macos")]
-    if let Some(limit) = macos::pty_limit() {
-        let in_use = macos::ptys_in_use();
-        message.push_str(&format!(
-            ". macOS allows {limit} terminals at once (kern.tty.ptmx_max) and {in_use} are in use; \
-             `sudo sysctl -w kern.tty.ptmx_max=999` raises the limit until the Mac restarts"
-        ));
-    }
+    let message = match macos::pty_limit() {
+        Some(limit) => {
+            let in_use = macos::ptys_in_use();
+            format!(
+                "{message}. macOS allows {limit} terminals at once (kern.tty.ptmx_max) and {in_use} \
+                 are in use; `sudo sysctl -w kern.tty.ptmx_max=999` raises the limit until the Mac \
+                 restarts"
+            )
+        }
+        None => message,
+    };
     ErrorBody::new(Reason::Unavailable, message)
 }
 

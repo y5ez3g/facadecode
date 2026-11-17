@@ -48,7 +48,6 @@ fn type_draft(home: &TestHome, agent: &str, draft: &str) {
 /// in a file only this user can read, each message whole between lines naming it.
 #[test]
 fn a_long_read_puts_the_messages_in_a_file() {
-    use std::os::unix::fs::PermissionsExt;
     let home = TestHome::new("mcpfile");
     home.start_named_fake("ada", &[]);
     home.start_named_fake("bob", &[]);
@@ -68,12 +67,19 @@ fn a_long_read_puts_the_messages_in_a_file() {
     let path = std::path::PathBuf::from(read["data"]["file"].as_str().expect("a file"));
     assert!(
         path.starts_with(home.path.join("core/results"))
-            || path.starts_with(home.path.canonicalize().unwrap().join("core/results")),
+            || path.starts_with(
+                facade_base::files::real_path(&home.path)
+                    .unwrap()
+                    .join("core/results")
+            ),
         "{}",
         path.display()
     );
+    // Only this user may read it: by its mode on Unix; on Windows by the home's permissions.
+    #[cfg(unix)]
     assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions())
+            & 0o777,
         0o600
     );
     let messages: Value =
@@ -220,7 +226,6 @@ fn a_long_read_whose_file_cannot_be_written_returns_the_messages_whole() {
 /// the result names it.
 #[test]
 fn a_long_screen_comes_as_a_file() {
-    use std::os::unix::fs::PermissionsExt;
     let home = TestHome::new("mcpscreenfile");
     let mut wire = connect(&home);
     let agent = start_script(
@@ -238,8 +243,11 @@ fn a_long_screen_comes_as_a_file() {
         "{read}"
     );
     let path = std::path::PathBuf::from(read["data"]["file"].as_str().expect("a file"));
+    // Only this user may read it: by its mode on Unix; on Windows by the home's permissions.
+    #[cfg(unix)]
     assert_eq!(
-        std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&path).unwrap().permissions())
+            & 0o777,
         0o600
     );
     let screen = std::fs::read_to_string(&path).unwrap();
@@ -272,7 +280,6 @@ fn a_stop_that_runs_out_of_time_says_its_termination_is_unconfirmed() {
 /// older than thirty days. Other files stay.
 #[test]
 fn a_starting_daemon_deletes_result_files_no_one_can_use() {
-    use std::os::unix::fs::DirBuilderExt;
     let home = TestHome::new("mcpcleanup");
     connect(&home);
     home.wait_for_idle_exit();
@@ -286,11 +293,7 @@ fn a_starting_daemon_deletes_result_files_no_one_can_use() {
         .unwrap();
     drop(connection);
     let results = home.path.join("core/results");
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&results)
-        .unwrap();
+    facade_base::files::create_private_folder_all(&results).unwrap();
     let month = std::time::Duration::from_secs(31 * 24 * 60 * 60);
     for (name, age) in [
         (
@@ -386,7 +389,7 @@ fn a_prompt_given_to_claude_stays_its_prompt() {
     let folder = home.project.parent().unwrap().to_path_buf();
     let (bin, argv) = (folder.join("bin"), folder.join("argv"));
     stand_in(&bin, "claude", &argv);
-    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let path = format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str());
     let started = home
         .facade_in_an_empty_home()
         .env("PATH", &path)
@@ -552,9 +555,9 @@ fn a_start_prompt_from_an_agent_s_terminal_comes_from_that_agent() {
         "FAKECLI_LOG='{log}' PATH='{path}' '{facade}' start --prompt 'from the boss' --name child \
          fake </dev/null; sleep 60"
     );
-    let env = json!({ "PATH": "/usr/bin:/bin", "FACADE_HOME": home.path });
+    let env = json!({ "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path });
     let args = json!({
-        "command": ["/bin/sh", "-c", script], "name": "boss", "cwd": home.project, "env": env,
+        "command": [SH.as_str(), "-c", script], "name": "boss", "cwd": home.project, "env": env,
         "cols": 80, "rows": 24,
     });
     let starting = wire.send("call", json!({ "op": "agent.start", "args": args }));
@@ -591,18 +594,18 @@ fn a_start_prompt_that_could_not_be_sent_starts_nothing() {
     let home = TestHome::new("startpromptrefused");
     let path = home.path_with_test_programs();
     let lines = vec!["a line"; 600].join("\n");
+    let not_a_cli = format!(
+        "only a CLI of facade.json takes a prompt, as Facade reads its input to send it; {} is not \
+         one",
+        SH.as_str()
+    );
     for (prompt, cli, said) in [
         (
             "  ",
             "fake",
             "the prompt cannot go as a message: text is blank",
         ),
-        (
-            "hi",
-            "/bin/sh",
-            "only a CLI of facade.json takes a prompt, as Facade reads its input to send it; \
-             /bin/sh is not one",
-        ),
+        ("hi", SH.as_str(), not_a_cli.as_str()),
         (
             lines.as_str(),
             "agy",
@@ -691,7 +694,11 @@ fn a_muse_code_run_gets_its_server_by_c_unless_its_project_names_one() {
     let folder = home.project.parent().unwrap().to_path_buf();
     let argv = folder.join("argv");
     stand_in(&folder.join("bin"), "muse", &argv);
-    let path = format!("{}:/usr/bin:/bin", folder.join("bin").display());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        folder.join("bin").display(),
+        SYSTEM_PATH.as_str()
+    );
     let start = |name: &str| {
         let started = home
             .facade_in_an_empty_home()
@@ -766,8 +773,12 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_whose_runs_ended_meanwhile() {
     let home = TestHome::new("agyrecover");
     let programs = home.project.parent().unwrap().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let started = home
         .facade_in_an_empty_home()
         .env("PATH", &path)
@@ -784,7 +795,7 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_whose_runs_ended_meanwhile() {
         .unwrap() as i32;
     let old = home.kill_daemon();
     let cli = process_identity(pid);
-    send_signal(pid, libc::SIGKILL);
+    kill_process(pid);
     assert!(wait_until(secs(10), || !alive(&cli)), "the CLI ended");
     home.run_facade_ok(&["list"]);
     home.wait_for_daemon_after(old, secs(10))
@@ -804,8 +815,12 @@ fn a_daemon_that_starts_again_lets_go_of_a_plugin_its_predecessor_kept() {
     home.start_facade_with(&[("FACADE_TEST_GATES", "before-plugin-let-go")]);
     let programs = home.project.parent().unwrap().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let started = home
         .facade_in_an_empty_home()
         .env("PATH", &path)
@@ -843,8 +858,12 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     let home = TestHome::new("agyplugin");
     let programs = home.project.parent().unwrap().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let start = |name: &str| {
         let mut command = home.facade_in_an_empty_home();
         let started = command
@@ -876,7 +895,13 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     let servers: Value =
         serde_json::from_str(&std::fs::read_to_string(plugin.join("mcp_config.json")).unwrap())
             .unwrap();
-    let launcher = home.path.join("core/bin/facade-mcp").display().to_string();
+    let launcher = home
+        .path
+        .join("core")
+        .join("bin")
+        .join(program_name("facade-mcp"))
+        .display()
+        .to_string();
     assert_eq!(
         servers["mcpServers"]["facade"]["command"],
         launcher.as_str(),
@@ -887,14 +912,20 @@ fn an_antigravity_run_gets_the_plugin_and_readies_its_tools_before_its_first_tur
     let hook = hooks["facade"]["PreInvocation"][0]["command"]
         .as_str()
         .unwrap_or_default();
-    let program = hook
-        .strip_suffix(" hook instructions agy")
-        .map(|program| program.trim_matches('\''));
+    // Quoted for sh on Unix ('…'), and for cmd.exe on Windows (@"…").
+    let program = hook.strip_suffix(" hook instructions agy").map(|program| {
+        program
+            .trim_start_matches('@')
+            .trim_matches('"')
+            .trim_matches('\'')
+    });
     assert_eq!(
         program,
         Some(
             home.path
-                .join("core/bin/facade")
+                .join("core")
+                .join("bin")
+                .join(program_name("facade"))
                 .display()
                 .to_string()
                 .as_str()
@@ -974,8 +1005,12 @@ fn keys_typed_while_an_antigravity_start_readies_its_tools_wait_for_it() {
     let home = TestHome::new("agyhold");
     let programs = home.project.parent().unwrap().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let mut command = home.facade_in_an_empty_home();
     command
         .env("PATH", &path)
@@ -1031,8 +1066,12 @@ fn a_start_prompt_to_antigravity_goes_once_its_tools_are_ready() {
     let home = TestHome::new("agyprompt");
     let programs = home.project.parent().unwrap().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let mut command = home.facade_in_an_empty_home();
     command
         .env("PATH", &path)
@@ -1169,14 +1208,24 @@ fn the_instructions_hook_says_where_the_run_s_agent_works() {
     let home = TestHome::new("instructionsplace");
     let programs = home.project.parent().unwrap().join("programs");
     std::fs::create_dir_all(&programs).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     let starts = r#"{"hook_event_name":"SessionStart","session_id":"s1"}"#;
     for cli in ["muse", "agy"] {
-        std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join(cli)).unwrap();
+        install_program(&programs, cli, &test_binaries().fakecli);
         let mut command = home.facade_in_an_empty_home();
         match cli {
             "agy" => command.env("FAKECLI_LOOK", "agy"),
-            _ => command.env("FAKECLI_MCP", home.path.join("core/bin/facade-mcp")),
+            _ => command.env(
+                "FAKECLI_MCP",
+                home.path
+                    .join("core")
+                    .join("bin")
+                    .join(program_name("facade-mcp")),
+            ),
         };
         let started = command
             .env("PATH", &path)
@@ -1354,8 +1403,12 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
         std::fs::create_dir_all(&own).unwrap();
         let programs = home.project.parent().unwrap().join("programs");
         std::fs::create_dir_all(&programs).unwrap();
-        std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-        let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+        install_program(&programs, "agy", &test_binaries().fakecli);
+        let path = format!(
+            "{}{PATH_SEPARATOR}{}",
+            programs.display(),
+            home.path_with_test_programs()
+        );
         home.start_facade_with(&[("FACADE_TEST_PAUSE_AT", point)]);
         let daemon = home
             .hello_result()
@@ -1382,7 +1435,7 @@ fn an_antigravity_start_cut_before_its_record_leaves_no_plugin() {
             plugin.join("mcp_config.json").exists(),
             "{point}: the start placed the plugin"
         );
-        send_signal(daemon, libc::SIGKILL);
+        kill_process(daemon);
         // The keeper replaces a daemon that ends once it runs the agent; before that, the next
         // command starts one.
         if keeper {
@@ -1413,7 +1466,8 @@ impl Golden {
     /// Responses given in `home`, whose runs work in its project and whose guests in its Facade home,
     /// where their servers start.
     fn new(home: &TestHome) -> Golden {
-        let canonical = |path: &std::path::Path| std::fs::canonicalize(path).unwrap_or(path.into());
+        let canonical =
+            |path: &std::path::Path| facade_base::files::real_path(path).unwrap_or(path.into());
         let mut placeholders = Vec::new();
         for folder in [home.folder().to_path_buf(), canonical(home.folder())] {
             placeholders.push((folder.to_string_lossy().into_owned(), "<test>"));
@@ -1491,13 +1545,14 @@ impl Golden {
                     .collect(),
             ),
             Value::String(text) if is_facade_time(text) => json!("<time>"),
-            Value::String(text) => Value::String(
-                self.placeholders
+            Value::String(text) => Value::String(slashed_after_placeholders(
+                &self
+                    .placeholders
                     .iter()
                     .fold(text.clone(), |text, (varies, placeholder)| {
                         text.replace(varies.as_str(), placeholder)
                     }),
-            ),
+            )),
             other => other.clone(),
         }
     }
@@ -1515,7 +1570,10 @@ impl Golden {
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, &now).unwrap();
         }
-        let recorded = std::fs::read_to_string(&path).unwrap_or_default();
+        // A checkout may turn the file's line endings into CRLF, as Git does on Windows.
+        let recorded = std::fs::read_to_string(&path)
+            .unwrap_or_default()
+            .replace("\r\n", "\n");
         if recorded == now {
             return;
         }
@@ -1620,6 +1678,29 @@ fn wait_for_tools(home: &TestHome, named: &[&str]) {
             home.agent_from_list_json(name)
         );
     }
+}
+
+/// `text` with each path that follows a placeholder, such as `<test>\project`, written with `/`, as
+/// the golden files record it on every system. On Unix nothing changes.
+fn slashed_after_placeholders(text: &str) -> String {
+    if cfg!(unix) {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut in_path = false;
+    for c in text.chars() {
+        match c {
+            '>' => in_path = true,
+            '\\' if in_path => {
+                out.push('/');
+                continue;
+            }
+            c if c.is_whitespace() || c == '"' || c == '\'' || c == ',' => in_path = false,
+            _ => {}
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// Whether `text` is a time as Facade writes one: UTC, with milliseconds, such as
@@ -1910,8 +1991,12 @@ fn each_cli_s_guest_server_responds_as_recorded(through: Through) {
 
     let programs = home.project.parent().unwrap().join("programs");
     stand_in(&programs, "muse", &programs.join("muse-arguments"));
-    std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join("agy")).unwrap();
-    let path = format!("{}:{}", programs.display(), home.path_with_test_programs());
+    install_program(&programs, "agy", &test_binaries().fakecli);
+    let path = format!(
+        "{}{PATH_SEPARATOR}{}",
+        programs.display(),
+        home.path_with_test_programs()
+    );
     for (cli, name) in [("muse", "muser"), ("agy", "voyager")] {
         let started = home
             .facade_in_an_empty_home()

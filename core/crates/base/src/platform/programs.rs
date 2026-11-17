@@ -10,21 +10,45 @@
 //! they moved from, a service still runs from it, or it changed in the last ten minutes.
 
 use std::collections::BTreeMap;
-use std::fs::{File, OpenOptions, Permissions};
-use std::io::{self, Read};
-use std::os::unix::fs::{FileExt, OpenOptionsExt, PermissionsExt, symlink};
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, SystemTime};
 
+#[cfg(unix)]
+use std::fs::{OpenOptions, Permissions};
+#[cfg(unix)]
+use std::io::Read;
+#[cfg(unix)]
+use std::os::unix::fs::{FileExt, OpenOptionsExt, PermissionsExt, symlink};
+
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::{copy_from_start, place};
+#[cfg(windows)]
+pub use windows::{on_path, program_of, quoted_command, runnable};
+
 /// Facade's programs by file name: `facade`, then its MCP server, which lies beside it.
+#[cfg(unix)]
 pub const PROGRAMS: [&str; 2] = ["facade", "facade-mcp"];
+
+/// Facade's programs by file name: `facade.exe`, then its MCP server, which lies beside it.
+#[cfg(windows)]
+pub const PROGRAMS: [&str; 2] = ["facade.exe", "facade-mcp.exe"];
+
+/// The folder beside a build's programs that holds the ConPTY package, which Windows terminals
+/// need.
+pub const CONPTY_FOLDER: &str = "conpty";
 
 /// How long a build's folder is kept after it last changed, whatever else holds: a build installed
 /// to become the next one is not removed before it does.
 const NEW_BUILD_GRACE: Duration = Duration::from_secs(600);
 
 /// How much of a program is compared at a time.
+#[cfg(unix)]
 const CHUNK_BYTES: usize = 1 << 20;
 
 // The program a command names.
@@ -33,6 +57,7 @@ const CHUNK_BYTES: usize = 1 << 20;
 /// is, for the `PATH` to find. `~` and `~/…` are under `HOME` as `env`, the environment it starts
 /// with, gives it, else as this process has it. Any other relative path is from its folder `cwd`,
 /// and an absolute one is itself.
+#[cfg(unix)]
 pub fn program_of(command: &str, env: &BTreeMap<String, String>, cwd: &str) -> String {
     let home_relative = match command.strip_prefix('~') {
         Some(rest) if rest.is_empty() || rest.starts_with('/') => {
@@ -57,6 +82,7 @@ pub fn program_of(command: &str, env: &BTreeMap<String, String>, cwd: &str) -> S
 /// Where `program` is found on `path`, the first entry that holds a file by that name that can
 /// run. A relative entry, the empty one too, is from `folder`; without a `PATH`, `/usr/bin` and
 /// `/bin` are searched.
+#[cfg(unix)]
 pub fn on_path(program: &str, path: Option<&str>, folder: &Path) -> Option<PathBuf> {
     let entries = path.unwrap_or("/usr/bin:/bin").split(':');
     let mut candidates = entries.map(|entry| folder.join(entry).join(program));
@@ -64,11 +90,56 @@ pub fn on_path(program: &str, path: Option<&str>, folder: &Path) -> Option<PathB
 }
 
 /// Whether `file` is a file someone may run.
+#[cfg(unix)]
 pub fn runnable(file: &Path) -> bool {
     let Ok(meta) = std::fs::metadata(file) else {
         return false;
     };
     meta.is_file() && meta.permissions().mode() & 0o111 != 0
+}
+
+/// The name of the program at `path`, as a person calls it: its file name, without the extension
+/// that makes it runnable on Windows (`.exe`, `.com`, `.cmd` or `.bat`, in any case), so that
+/// `C:\bin\codex.cmd` is `codex` as `/usr/bin/codex` is.
+pub fn program_name(path: &Path) -> String {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    #[cfg(windows)]
+    if let Some((stem, extension)) = name.rsplit_once('.')
+        && ["exe", "com", "cmd", "bat"].contains(&extension.to_ascii_lowercase().as_str())
+        && !stem.is_empty()
+    {
+        return stem.to_string();
+    }
+    name.into_owned()
+}
+
+/// What runs `program` itself, where it is a wrapper: npm's wrapper of a Node script becomes
+/// `[node, script]`, with Node beside the wrapper, else on `env`'s `PATH` where it is a program of
+/// its own; a wrapper of a native program becomes that program. Anything else, and every program on
+/// Unix, is `[program]`. `cwd` is the folder relative entries of the `PATH` are from.
+pub fn direct_command(program: &Path, env: &BTreeMap<String, String>, cwd: &Path) -> Vec<String> {
+    #[cfg(unix)]
+    {
+        let _ = (env, cwd);
+        vec![program.to_string_lossy().into_owned()]
+    }
+    #[cfg(windows)]
+    windows::direct_command(program, env, cwd)
+}
+
+/// A command that runs `program` for the daemon, such as Git, or a CLI's own program as it adds
+/// its integration. On Windows it opens no console window.
+pub fn command(program: impl AsRef<OsStr>) -> std::process::Command {
+    #[cfg(unix)]
+    return std::process::Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
+        let mut command = std::process::Command::new(program);
+        command.creation_flags(CREATE_NO_WINDOW);
+        command
+    }
 }
 
 // Facade's installed programs.
@@ -78,9 +149,16 @@ pub fn bin_dir() -> anyhow::Result<PathBuf> {
     Ok(Bin::here()?.0)
 }
 
-/// The launcher of `program`, one of [`PROGRAMS`]: the path a run is given.
+/// The launcher of `program`, `facade` or `facade-mcp`: the path a run is given, with the system's
+/// suffix for programs (`facade.exe` on Windows). A name that has the suffix already, as
+/// [`PROGRAMS`]' do, is taken as it is.
 pub fn launcher(program: &str) -> anyhow::Result<PathBuf> {
-    Ok(Bin::here()?.0.join(program))
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let file = match program.strip_suffix(suffix) {
+        Some(_) => program.to_string(),
+        None => format!("{program}{suffix}"),
+    };
+    Ok(Bin::here()?.0.join(file))
 }
 
 /// Installs this build's programs, the running program and the `facade-mcp` beside it, and returns
@@ -127,6 +205,7 @@ impl Bin {
     }
 
     /// Makes this folder and `build`'s, each private to this user.
+    #[cfg(unix)]
     fn make_private(&self, build: &Path) -> io::Result<()> {
         for folder in [&self.0, build] {
             std::fs::create_dir_all(folder)?;
@@ -162,13 +241,22 @@ impl Bin {
                 anyhow::bail!("{source} could not be installed in {folder}: {err}");
             }
         }
+        if cfg!(debug_assertions) {
+            carry_test_build(program, &installed)?;
+        }
+        // Windows launchers are copies: this build may have new bytes under the same name.
+        #[cfg(windows)]
+        if self.current().as_deref() == Some(build) {
+            self.point_at(build, &[])?;
+        }
         // Marked as changed now, so that another build's start leaves it while it waits to become
         // current.
-        let _ = File::open(&folder).and_then(|folder| folder.set_modified(SystemTime::now()));
+        let _ = mark_changed(&folder);
         Ok(installed)
     }
 
     /// The build the `facade` launcher points into.
+    #[cfg(unix)]
     fn current(&self) -> Option<String> {
         let target = std::fs::read_link(self.0.join(PROGRAMS[0])).ok()?;
         let first = target.iter().next()?;
@@ -181,6 +269,10 @@ impl Bin {
         self.build(build)?;
         let before = self.current();
         self.link_launchers(build)?;
+        if cfg!(debug_assertions) {
+            let program = self.build(build)?.join(PROGRAMS[0]);
+            carry_test_build(&program, &self.0.join(PROGRAMS[0]))?;
+        }
         match before {
             Some(before) if before != build => self.remove_builds_but(&[build, &before], running),
             _ => Ok(()),
@@ -189,6 +281,7 @@ impl Bin {
 
     /// Points each launcher at `build`'s program, by a link relative to this folder, where it does
     /// not already.
+    #[cfg(unix)]
     fn link_launchers(&self, build: &str) -> io::Result<()> {
         for name in PROGRAMS {
             let target = Path::new(build).join(name);
@@ -235,6 +328,22 @@ pub struct Held {
     restoring: Mutex<()>,
 }
 
+/// Opens a program to hold it. On Windows nobody may delete or rename it meanwhile: it is opened
+/// without `FILE_SHARE_DELETE`.
+fn open_held(program: &Path) -> io::Result<File> {
+    #[cfg(unix)]
+    return File::open(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+        std::fs::OpenOptions::new()
+            .read(true)
+            .share_mode(FILE_SHARE_READ)
+            .open(program)
+    }
+}
+
 impl Held {
     /// Opens `program`, the installed `facade` of build `build`, and the `facade-mcp` beside it
     /// where there is one. `program` is in its build's folder, `<bin>/<build>/facade`: what is
@@ -244,9 +353,9 @@ impl Held {
             let message = format!("{} is not in a build's folder", program.display());
             return Err(io::Error::new(io::ErrorKind::InvalidInput, message));
         };
-        let facade = File::open(program)?;
+        let facade = open_held(program)?;
         let server = program.parent().map(|folder| folder.join(PROGRAMS[1]));
-        let server = server.and_then(|server| File::open(server).ok());
+        let server = server.and_then(|server| open_held(&server).ok());
         let mut programs = vec![(PROGRAMS[0], facade)];
         programs.extend(server.map(|server| (PROGRAMS[1], server)));
         Ok(Held {
@@ -315,6 +424,7 @@ impl Held {
 /// way, which could lead back to `target`. Else a private copy, made only where `target` holds
 /// other bytes. Either way the new file is made beside `target` and renamed onto it, so a process
 /// already running the file there runs on.
+#[cfg(unix)]
 fn place(source: &Path, target: &Path, link: bool) -> io::Result<()> {
     if !link {
         if same_contents(source, target) {
@@ -330,6 +440,50 @@ fn place(source: &Path, target: &Path, link: bool) -> io::Result<()> {
         return Ok(());
     }
     make_in_place(target, |fresh| symlink(&file, fresh))
+}
+
+/// Sets the folder `folder`'s modification time to now. Windows opens a folder only with backup
+/// semantics, and needs the right to write its attributes to set its times.
+fn mark_changed(folder: &Path) -> io::Result<()> {
+    #[cfg(unix)]
+    let opened = File::open(folder);
+    #[cfg(windows)]
+    let opened = {
+        use std::os::windows::fs::OpenOptionsExt;
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_FLAG_BACKUP_SEMANTICS, FILE_WRITE_ATTRIBUTES,
+        };
+        std::fs::OpenOptions::new()
+            .access_mode(FILE_WRITE_ATTRIBUTES)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(folder)
+    };
+    opened?.set_modified(SystemTime::now())
+}
+
+/// In a test of a debug build: puts the file that names the build `source` plays
+/// ([`crate::TEST_BUILD_SUFFIX`]) beside `target` as well, or removes one there where `source` has
+/// none, so that `target` plays the same build.
+fn carry_test_build(source: &Path, target: &Path) -> io::Result<()> {
+    let beside = |program: &Path| {
+        let mut name = program.file_name().unwrap_or_default().to_os_string();
+        name.push(crate::TEST_BUILD_SUFFIX);
+        program.with_file_name(name)
+    };
+    let (from, to) = (beside(source), beside(target));
+    if from == to {
+        return Ok(());
+    }
+    match std::fs::copy(&from, &to) {
+        Ok(_) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound && !from.exists() => {
+            match std::fs::remove_file(&to) {
+                Err(err) if err.kind() != io::ErrorKind::NotFound => Err(err),
+                _ => Ok(()),
+            }
+        }
+        Err(err) => Err(err),
+    }
 }
 
 /// Makes `target` anew: `make` writes it under a name of this process's own beside it, which is
@@ -349,6 +503,7 @@ fn make_in_place(target: &Path, make: impl FnOnce(&Path) -> io::Result<()>) -> i
 
 /// Whether `a` and `b` hold the same bytes; false where either cannot be read. Compares a chunk at
 /// a time and stops at the first difference, so a program is never read whole.
+#[cfg(unix)]
 fn same_contents(a: &Path, b: &Path) -> bool {
     let (Ok(a), Ok(b)) = (File::open(a), File::open(b)) else {
         return false;
@@ -376,6 +531,7 @@ fn same_contents(a: &Path, b: &Path) -> bool {
 
 /// Copies all of the open `file`, from its start whatever its position, into `to`, a new file that
 /// only this user can read or run.
+#[cfg(unix)]
 fn copy_from_start(file: &File, to: &Path) -> io::Result<()> {
     let mut copy = OpenOptions::new()
         .write(true)
@@ -386,11 +542,13 @@ fn copy_from_start(file: &File, to: &Path) -> io::Result<()> {
 }
 
 /// Reads a file from an offset of its own, leaving the file's position alone.
+#[cfg(unix)]
 struct FromStart<'a> {
     file: &'a File,
     offset: u64,
 }
 
+#[cfg(unix)]
 impl Read for FromStart<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         let read = self.file.read_at(buffer, self.offset)?;
@@ -399,7 +557,7 @@ impl Read for FromStart<'_> {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use std::os::unix::fs::MetadataExt;
 

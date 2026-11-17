@@ -2,20 +2,20 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::os::fd::{AsFd, OwnedFd};
-use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use facade_base::descriptors::{DescriptorLines, send_line};
 use facade_base::jsonrpc::{ErrorBody, Reason, Request, ServerMessage, encode_line};
 use facade_base::keeper::{self, AgentChange, DaemonPing, HelloParams, HelloResult, methods};
 use facade_base::operations::{CallParams, NoArgs, Operation};
+use facade_base::paths::ClientSocket;
 use facade_base::process::ProcessIdentity;
 use facade_base::service::{self, Service};
+use facade_base::terminal::PtyMaster;
+use facade_base::terminal_lines::{LineReceiver, LineSender};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot, watch};
@@ -28,8 +28,8 @@ const PROTOCOL: [u32; 2] = [
     keeper::MIN_KEEPER_PROTOCOL_VERSION,
     keeper::KEEPER_PROTOCOL_VERSION,
 ];
-type Response = Result<(Value, Vec<OwnedFd>), CallError>;
-type Outgoing = (Vec<u8>, Option<OwnedFd>);
+type Response = Result<(Value, Option<PtyMaster>), CallError>;
+type Outgoing = (Vec<u8>, Option<PtyMaster>);
 
 pub(super) enum CallError {
     Refused(ErrorBody),
@@ -81,7 +81,6 @@ impl std::error::Error for ConnectError {}
 
 struct Waiting {
     sender: oneshot::Sender<Response>,
-    descriptors: usize,
     expired: bool,
 }
 
@@ -99,8 +98,8 @@ impl Transport {
     }
 }
 
-// Shutting down the original socket also wakes readers holding cloned descriptors.
-struct Socket(UnixStream);
+// Shutting down the original socket also wakes the reader and writer blocked on its clones.
+struct Socket(ClientSocket);
 impl Drop for Socket {
     fn drop(&mut self) {
         let _ = self.0.shutdown(std::net::Shutdown::Both);
@@ -162,30 +161,31 @@ fn decode<O: Operation>(value: Value) -> Result<O::Result, ErrorBody> {
 }
 
 impl KeeperClient {
+    /// Calls an operation; its result comes with the terminal its response carried, if any.
     pub async fn call<O: Operation>(
         &self,
         args: &O::Args,
-        count: usize,
-    ) -> Result<(O::Result, Vec<OwnedFd>), CallError> {
-        let (value, fds) = self
-            .request(methods::CALL, call_params::<O>(args), count, None)
+    ) -> Result<(O::Result, Option<PtyMaster>), CallError> {
+        let (value, terminal) = self
+            .request(methods::CALL, call_params::<O>(args), None)
             .await?;
-        Ok((decode::<O>(value).map_err(CallError::Unknown)?, fds))
+        Ok((decode::<O>(value).map_err(CallError::Unknown)?, terminal))
     }
 
+    /// Calls an operation whose request carries a copy of `master` as it is.
     pub async fn send_master<O: Operation>(
         &self,
         args: &O::Args,
-        fd: &OwnedFd,
+        master: &PtyMaster,
     ) -> Result<O::Result, ErrorBody> {
-        let descriptor = fd.try_clone().map_err(|error| {
+        let copy = master.try_clone().map_err(|error| {
             ErrorBody::new(
                 Reason::Unavailable,
-                format!("could not copy the descriptor for {}: {error}", O::NAME),
+                format!("could not copy the terminal for {}: {error}", O::NAME),
             )
         })?;
         let (value, _) = self
-            .request(methods::CALL, call_params::<O>(args), 0, Some(descriptor))
+            .request(methods::CALL, call_params::<O>(args), Some(copy))
             .await?;
         decode::<O>(value)
     }
@@ -194,8 +194,7 @@ impl KeeperClient {
         &self,
         method: &str,
         params: impl Serialize,
-        count: usize,
-        fd: Option<OwnedFd>,
+        terminal: Option<PtyMaster>,
     ) -> Response {
         if *self.io.closed.borrow() {
             return Err(CallError::Unsent(disconnected()));
@@ -206,12 +205,11 @@ impl KeeperClient {
             number,
             Waiting {
                 sender,
-                descriptors: count,
                 expired: false,
             },
         );
         let line = encode_line(&Request::new(Some(number), method, params));
-        if let Err(error) = self.outgoing.try_send((line, fd)) {
+        if let Err(error) = self.outgoing.try_send((line, terminal)) {
             self.io.calls.lock().unwrap().remove(&number);
             let body = match error {
                 TrySendError::Disconnected(_) => disconnected(),
@@ -226,7 +224,7 @@ impl KeeperClient {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(CallError::Unknown(disconnected())),
             Err(_) => {
-                // Keep descriptor counts until the corresponding response arrives, even late.
+                // A late response is still read, and the terminal it carries closed.
                 if let Some(call) = self.io.calls.lock().unwrap().get_mut(&number) {
                     call.expired = true;
                 }
@@ -255,7 +253,7 @@ impl KeeperClient {
         tokio::spawn(async move {
             let mut closed = connection.closed();
             while !*closed.borrow() {
-                let _ = connection.call::<DaemonPing>(&NoArgs {}, 0).await;
+                let _ = connection.call::<DaemonPing>(&NoArgs {}).await;
                 let _ = tokio::time::timeout(Duration::from_secs(1), closed.changed()).await;
             }
         });
@@ -269,52 +267,44 @@ impl KeeperClient {
     ) -> Result<Arc<Self>, ConnectError> {
         let address = facade_base::paths::keeper_socket()
             .map_err(|error| ConnectError::Unreachable(format!("{error:#}")))?;
-        let socket = UnixStream::connect(address).map_err(|error| {
+        let socket = ClientSocket::connect(address).map_err(|error| {
             ConnectError::Unreachable(format!("could not connect to the keeper: {error}"))
         })?;
-        let peer = service::peer(&socket).map_err(|error| {
-            ConnectError::Unreachable(format!("could not connect to the keeper: {error}"))
-        })?;
-        // SAFETY: getuid takes no arguments and always succeeds.
-        if peer.uid != unsafe { libc::getuid() } {
-            return Err(ConnectError::NotTheKeeper(format!(
-                "process {} at the keeper socket belongs to another user",
-                peer.pid
-            )));
-        }
-        let authenticated = service::authenticate(&socket, core, Service::Keeper);
-        let mut connection = Self::hello(socket, &peer, events, wakeup).await?;
+        let identity = service::authenticate_server(&socket, core, Service::Keeper)
+            .map_err(ConnectError::NotTheKeeper)?;
+        let pid = identity.pid;
+        let connection = Self::hello(socket, identity, events, wakeup).await?;
         if keeper::shared_version(PROTOCOL, connection.hello.protocol).is_none() {
-            return Err(ConnectError::Incompatible { pid: peer.pid });
+            return Err(ConnectError::Incompatible { pid });
         }
-        let identity = authenticated.map_err(ConnectError::NotTheKeeper)?;
-        if expected.is_some_and(|wanted| wanted != &identity) {
+        if expected.is_some_and(|wanted| wanted != &connection.identity) {
             return Err(ConnectError::NotTheKeeper(format!(
-                "keeper {} is not the keeper this daemon was following",
-                identity.pid
+                "keeper {pid} is not the keeper this daemon was following"
             )));
         }
-        connection.identity = identity;
         facade_base::log::write(
             "daemon",
             "info",
             &format!(
-                "connected to keeper {} (keeper protocol {:?}, build {})",
-                peer.pid, connection.hello.protocol, connection.hello.build
+                "connected to keeper {pid} (keeper protocol {:?}, build {})",
+                connection.hello.protocol, connection.hello.build
             ),
         );
         Ok(Arc::new(connection))
     }
 
+    /// Says hello on `stream`, whose other end is proved to be the keeper `identity`.
     async fn hello(
-        stream: UnixStream,
-        peer: &service::Peer,
+        stream: ClientSocket,
+        identity: ProcessIdentity,
         events: mpsc::UnboundedSender<RunEvent>,
         wakeup: watch::Sender<u64>,
     ) -> Result<Self, ConnectError> {
+        let pid = identity.pid;
         let socket = Socket(stream);
         let writing = socket.0.try_clone().map_err(connection_io)?;
-        let reading = socket.0.try_clone().map_err(connection_io)?;
+        let writing = LineSender::new(writing, &identity).map_err(connection_io)?;
+        let reading = LineReceiver::new(socket.0.try_clone().map_err(connection_io)?);
         let io = Arc::new(Transport {
             calls: Mutex::default(),
             closed: watch::channel(false).0,
@@ -330,8 +320,7 @@ impl KeeperClient {
             .name("keeper-writer".into())
             .spawn(move || {
                 for (line, carried) in queued {
-                    let fds: Vec<_> = carried.iter().map(AsFd::as_fd).collect();
-                    if let Err(error) = send_line(writing.as_fd(), &line, &fds, None) {
+                    if let Err(error) = writing.send(&line, carried.as_ref()) {
                         facade_base::log::write(
                             "daemon",
                             "warn",
@@ -363,10 +352,7 @@ impl KeeperClient {
             socket,
             outgoing,
             sequence: AtomicU64::new(1),
-            identity: ProcessIdentity {
-                pid: peer.pid,
-                birth: String::new(),
-            },
+            identity,
             hello: HelloResult {
                 protocol: [0, 0],
                 build: String::new(),
@@ -374,7 +360,7 @@ impl KeeperClient {
             },
         };
         let value = match connection
-            .request(methods::HELLO, HelloParams { protocol: PROTOCOL }, 0, None)
+            .request(methods::HELLO, HelloParams { protocol: PROTOCOL }, None)
             .await
         {
             Ok((value, _)) => value,
@@ -382,18 +368,13 @@ impl KeeperClient {
                 facade_base::log::write(
                     "daemon",
                     "warn",
-                    &format!(
-                        "keeper {} refused this daemon: {}",
-                        peer.pid,
-                        error.body().message
-                    ),
+                    &format!("keeper {pid} refused this daemon: {}", error.body().message),
                 );
-                return Err(ConnectError::Incompatible { pid: peer.pid });
+                return Err(ConnectError::Incompatible { pid });
             }
             Err(error) => {
                 return Err(ConnectError::Unreachable(format!(
-                    "keeper {} did not accept this daemon: {}",
-                    peer.pid,
+                    "keeper {pid} did not accept this daemon: {}",
                     error.body().message
                 )));
             }
@@ -402,21 +383,17 @@ impl KeeperClient {
             facade_base::log::write(
                 "daemon",
                 "warn",
-                &format!(
-                    "keeper {} sent a hello result this build cannot read: {error}",
-                    peer.pid
-                ),
+                &format!("keeper {pid} sent a hello result this build cannot read: {error}"),
             );
             connection.fence();
-            ConnectError::Incompatible { pid: peer.pid }
+            ConnectError::Incompatible { pid }
         })?;
         Ok(connection)
     }
 }
 
-fn read(socket: UnixStream, io: &Transport) -> anyhow::Result<()> {
-    let mut incoming = DescriptorLines::new(socket);
-    while let Some((begin, bytes)) = incoming.next_line()? {
+fn read(mut incoming: LineReceiver, io: &Transport) -> anyhow::Result<()> {
+    while let Some((bytes, terminal)) = incoming.next_line()? {
         let response = match serde_json::from_slice::<ServerMessage>(&bytes) {
             Ok(ServerMessage::Response(response)) => response,
             Ok(ServerMessage::Notification(message)) => {
@@ -466,24 +443,9 @@ fn read(socket: UnixStream, io: &Transport) -> anyhow::Result<()> {
             );
             continue;
         };
-        let result = if let Some(error) = response.error {
-            Err(CallError::Refused(error))
-        } else {
-            let fds = if call.descriptors == 0 {
-                Ok(vec![])
-            } else {
-                incoming.take(begin, call.descriptors)
-            };
-            fds.map(|fds| (response.result.unwrap_or(Value::Null), fds))
-                .map_err(|came| {
-                    CallError::Unknown(ErrorBody::new(
-                        Reason::Internal,
-                        format!(
-                            "the keeper response carried {came} descriptors; {} were expected",
-                            call.descriptors
-                        ),
-                    ))
-                })
+        let result = match response.error {
+            Some(error) => Err(CallError::Refused(error)),
+            None => Ok((response.result.unwrap_or(Value::Null), terminal)),
         };
         if call.expired {
             if result.is_ok() {
@@ -504,43 +466,35 @@ fn read(socket: UnixStream, io: &Transport) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{Read, Write};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
     #[tokio::test]
     async fn a_failed_hello_closes_both_socket_threads() {
-        let (client, mut server) = UnixStream::pair().unwrap();
-        // SAFETY: getuid has no preconditions.
-        let peer = service::Peer {
-            uid: unsafe { libc::getuid() },
-            pid: std::process::id(),
-        };
-        let peer_thread = std::thread::spawn(move || {
-            let mut byte = [0];
-            loop {
-                server.read_exact(&mut byte).unwrap();
-                if byte[0] == b'\n' {
-                    break;
-                }
-            }
+        let (client, server) = facade_base::sockets::pair().unwrap();
+        let identity = facade_base::unix_process::own_identity().unwrap();
+        let peer_task = tokio::spawn(async move {
+            let mut server = BufReader::new(server);
+            let mut line = Vec::new();
+            server.read_until(b'\n', &mut line).await.unwrap();
             server
+                .get_mut()
                 .write_all(
                     b"{\"jsonrpc\":\"2.0\",\"id\":1,\"error\":{\"code\":-32000,\"message\":\
                       \"fixture refusal\",\"data\":{\"reason\":\"refused\"}}}\n",
                 )
+                .await
                 .unwrap();
-            server
-                .set_read_timeout(Some(Duration::from_secs(2)))
-                .unwrap();
-            server.read(&mut byte)
+            let mut byte = [0];
+            tokio::time::timeout(Duration::from_secs(2), server.read(&mut byte)).await
         });
         let (events, _) = mpsc::unbounded_channel();
         assert!(
-            KeeperClient::hello(client, &peer, events, tokio::sync::watch::channel(0).0)
+            KeeperClient::hello(client, identity, events, tokio::sync::watch::channel(0).0)
                 .await
                 .is_err()
         );
         assert!(
-            matches!(peer_thread.join().unwrap(), Ok(0)),
+            matches!(peer_task.await.unwrap(), Ok(Ok(0))),
             "a refused handshake must shut down every socket copy"
         );
     }

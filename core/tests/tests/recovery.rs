@@ -1,6 +1,7 @@
 //! Checks daemon replacement and recovery of agent records, exits, screens, and terminals before
 //! clients can connect.
 
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,7 @@ fn open(home: &TestHome) -> DaemonTestClient {
 
 /// Starts Facade with a pause marker already present, so the first daemon passes the pause point.
 /// Returns the marker path; deleting it makes the next daemon pause there.
+#[cfg(unix)]
 fn start_facade_with_pause_disarmed(home: &TestHome, point: &str) -> PathBuf {
     let marker = home.path.join(format!("core/paused-at-{point}"));
     std::fs::create_dir_all(marker.parent().unwrap()).unwrap();
@@ -25,6 +27,7 @@ fn start_facade_with_pause_disarmed(home: &TestHome, point: &str) -> PathBuf {
 }
 
 /// Waits for the keeper to start a daemon that is not in `known`, and returns it.
+#[cfg(unix)]
 fn next_started_daemon(home: &TestHome, known: &[i32]) -> i32 {
     let mut found = None;
     assert!(
@@ -110,26 +113,30 @@ fn a_killed_daemon_is_replaced_and_takes_back_every_agent() {
         "a3",
         "numbering goes on"
     );
-    // Checkpoints and screen logs contain terminal output, so only the user may read them.
-    use std::os::unix::fs::MetadataExt;
-    let screens = home.path.join("core/screens");
-    assert_eq!(std::fs::metadata(&screens).unwrap().mode() & 0o777, 0o700);
-    for agent in [&running, &ended] {
-        let dir = screens.join(agent);
-        assert_eq!(
-            std::fs::metadata(&dir).unwrap().mode() & 0o777,
-            0o700,
-            "{}",
-            dir.display()
-        );
-        for file in std::fs::read_dir(&dir).unwrap() {
-            let file = file.unwrap().path();
+    // Checkpoints and screen logs contain terminal output, so only the user may read them. On
+    // Windows they inherit the home's permissions.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let screens = home.path.join("core/screens");
+        assert_eq!(std::fs::metadata(&screens).unwrap().mode() & 0o777, 0o700);
+        for agent in [&running, &ended] {
+            let dir = screens.join(agent);
             assert_eq!(
-                std::fs::metadata(&file).unwrap().mode() & 0o777,
-                0o600,
+                std::fs::metadata(&dir).unwrap().mode() & 0o777,
+                0o700,
                 "{}",
-                file.display()
+                dir.display()
             );
+            for file in std::fs::read_dir(&dir).unwrap() {
+                let file = file.unwrap().path();
+                assert_eq!(
+                    std::fs::metadata(&file).unwrap().mode() & 0o777,
+                    0o600,
+                    "{}",
+                    file.display()
+                );
+            }
         }
     }
 }
@@ -142,7 +149,7 @@ fn a_daemon_that_stops_answering_is_replaced() {
         .hello_result()
         .and_then(|hello| hello["pid"].as_i64())
         .unwrap() as i32;
-    send_signal(old, libc::SIGSTOP);
+    pause_process(old);
     let stalled = Instant::now();
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
@@ -190,7 +197,7 @@ fn a_removal_interrupted_after_its_record_is_deleted_is_finished_by_the_next_dae
             wait_until(LOADED_TIMEOUT, || stopped(daemon)),
             "the daemon did not stop after deleting the record"
         );
-        send_signal(daemon, libc::SIGKILL);
+        kill_process(daemon);
         let removed = removing.join().unwrap();
         assert!(
             !removed.status.success() && stderr(&removed).contains("the outcome is unknown"),
@@ -238,8 +245,8 @@ fn a_start_interrupted_before_its_record_is_undone_and_its_number_never_reused()
         .and_then(|hello| hello["pid"].as_i64())
         .unwrap() as i32;
     let args = json!({
-        "command": ["/bin/sh", "-c", "echo $$ > orphan-pid; sleep 60"], "name": "orphan",
-        "cwd": home.project, "env": { "PATH": "/usr/bin:/bin", "FACADE_HOME": home.path },
+        "command": [SH.as_str(), "-c", "echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > orphan-pid; sleep 60"], "name": "orphan",
+        "cwd": home.project, "env": { "PATH": SYSTEM_PATH.as_str(), "FACADE_HOME": home.path },
         "cols": 80, "rows": 24,
     });
     wire.send("call", json!({ "op": "agent.start", "args": args }));
@@ -249,7 +256,7 @@ fn a_start_interrupted_before_its_record_is_undone_and_its_number_never_reused()
     );
     let orphan = read_pid(&home, "orphan-pid");
     let orphan_process = process_identity(orphan);
-    send_signal(daemon, libc::SIGKILL);
+    kill_process(daemon);
     home.wait_for_daemon_after(daemon, secs(30))
         .expect("a replacement daemon");
     assert!(home.agents().is_empty(), "{:?}", home.agents());
@@ -342,12 +349,12 @@ fn keys_typed_while_attach_is_disconnected_are_sent_after_it_reconnects() {
     let keeper = home.keeper_pid().expect("a keeper");
     // The paused keeper starts no daemon, so the attachment stays disconnected while the keys are
     // typed.
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     home.kill_daemon();
     assert!(term.wait_for_output(secs(10), LOST_NOTE), "{}", term.text());
     term.send(b"typed while away\r");
     std::thread::sleep(Duration::from_millis(500));
-    send_signal(keeper, libc::SIGCONT);
+    resume_process(keeper);
     assert!(
         wait_until(secs(15), || home.submitted_messages()
             == ["typed while away"]),
@@ -361,7 +368,7 @@ fn keys_typed_while_attach_is_disconnected_are_sent_after_it_reconnects() {
         "{:?}",
         home.submitted_messages()
     );
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     home.kill_daemon();
     assert!(
         term.wait_for(secs(10), |text| text.contains(LOST_NOTE)),
@@ -374,7 +381,7 @@ fn keys_typed_while_attach_is_disconnected_are_sent_after_it_reconnects() {
     let status = term
         .wait_exit(secs(5))
         .expect("Ctrl-] ends a disconnected attachment");
-    send_signal(keeper, libc::SIGCONT);
+    resume_process(keeper);
     assert!(status.success(), "{status:?}");
     assert!(
         term.wait_for(secs(2), |text| text
@@ -397,7 +404,7 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
         &mut wire,
         &home,
         "survivor",
-        "trap '' HUP; echo $$ > survivor-pid; echo SURVIVOR-READY; while :; do sleep 1; done",
+        "trap '' HUP; echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > survivor-pid; echo SURVIVOR-READY; while :; do sleep 1; done",
     );
     assert!(wait_for_screen_text(&home, &agent_id, "SURVIVOR-READY"));
     let survivor = read_pid(&home, "survivor-pid");
@@ -406,14 +413,22 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
     let keeper_process = process_identity(keeper);
     let daemon = home.lock_record("daemon").unwrap().0;
     let daemon_process = process_identity(daemon);
-    send_signal(daemon, libc::SIGSTOP);
-    send_signal(keeper, libc::SIGKILL);
-    send_signal(daemon, libc::SIGKILL);
+    pause_process(daemon);
+    kill_process(keeper);
+    kill_process(daemon);
     assert!(wait_until(secs(5), || !alive(&keeper_process)
         && !alive(&daemon_process)));
+    // A terminal whose last holder ended leaves a CLI that ignores the hang-up running on Unix;
+    // on Windows the console ends, and with it every program in it.
+    #[cfg(unix)]
     assert!(
         alive(&survivor_process),
         "the CLI ignores the hangup and survives both services"
+    );
+    #[cfg(windows)]
+    assert!(
+        wait_until(secs(15), || !alive(&survivor_process)),
+        "the CLI outlived its console"
     );
     let line = home.list_line("survivor").expect("the agent stays listed");
     assert!(
@@ -467,21 +482,25 @@ fn when_both_services_end_agents_are_ended_because_their_terminals_closed_and_no
     home.run_facade_ok(&["remove", &agent_id]);
     assert!(home.agents().is_empty());
     std::thread::sleep(Duration::from_millis(500));
+    // On Windows the CLI ended with its console, before any stop.
+    #[cfg(unix)]
     assert!(
         alive(&survivor_process),
         "neither stop nor remove signals the recorded process ID"
     );
-    send_signal(survivor, libc::SIGKILL);
+    kill_process(survivor);
 }
 
 /// A stop in progress when the daemon dies still ends the process group at the keeper's original
 /// deadline. The caller learns that the outcome is unknown.
+// A process group and SIGHUP are Unix's: a Windows stop closes the console and ends the job.
+#[cfg(unix)]
 #[test]
 fn a_stop_in_progress_when_the_daemon_dies_still_ends_the_agent_at_its_deadline() {
     let home = TestHome::new("stopdeadline");
     let mut wire = connect(&home);
-    let script = "trap 'touch hup-seen' HUP; sh -c 'trap \"\" HUP; echo $$ > member-pid; exec \
-                  sleep 60' & echo $$ > leader-pid; echo READY; while :; do sleep 1; done";
+    let script = "trap 'touch hup-seen' HUP; sh -c 'trap \"\" HUP; echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > member-pid; exec \
+                  sleep 60' & echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > leader-pid; echo READY; while :; do sleep 1; done";
     let agent_id = start_script(&mut wire, &home, "stubborn", script);
     assert!(wait_for_screen_text(&home, &agent_id, "READY"));
     let (leader, member) = (read_pid(&home, "leader-pid"), read_pid(&home, "member-pid"));
@@ -596,6 +615,7 @@ fn a_hundred_agents_are_recovered_without_a_stall_kill_and_listed_all_at_once() 
 
 /// Deliver a screen log through a FIFO in 4 MiB chunks every four seconds. Recovery must last
 /// beyond the 15-second watchdog deadline and keep the daemon alive by pinging as replay advances.
+#[cfg(unix)]
 #[test]
 fn a_slow_recovery_that_keeps_progressing_is_not_killed() {
     use std::io::Write;
@@ -607,7 +627,7 @@ fn a_slow_recovery_that_keeps_progressing_is_not_killed() {
     assert!(wait_for_screen_text(&home, &agent_id, "READY"));
     let keeper = home.keeper_pid().expect("a keeper");
     // The paused keeper starts no daemon while the published generation's log becomes a FIFO.
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     let old_process = process_identity(home.lock_record("daemon").unwrap().0);
     let old = home.kill_daemon();
     assert!(wait_until(secs(5), || !alive(&old_process)));
@@ -617,7 +637,7 @@ fn a_slow_recovery_that_keeps_progressing_is_not_killed() {
     let logged = std::fs::read(&log).unwrap();
     std::fs::remove_file(&log).unwrap();
     make_fifo(&log);
-    send_signal(keeper, libc::SIGCONT);
+    resume_process(keeper);
     let recovering = next_started_daemon(&home, &[old]);
     let recovering_process = process_identity(recovering);
     // A writer can open the FIFO without waiting only once the recovering daemon opened it to read.
@@ -680,6 +700,8 @@ fn a_slow_recovery_that_keeps_progressing_is_not_killed() {
 
 /// Recovery narrows a running CLI's terminal by one column, then returns it to the logged size to
 /// prompt a redraw.
+// The narrower step of the redraw nudge is Unix's to check: a Windows CLI may not see it.
+#[cfg(unix)]
 #[test]
 fn the_redraw_nudge_shows_the_cli_a_narrower_terminal_and_then_its_own() {
     let home = TestHome::new("nudge");
@@ -706,7 +728,7 @@ fn the_redraw_nudge_shows_the_cli_a_narrower_terminal_and_then_its_own() {
     )
     .unwrap_or_default()
     .contains("24 79")));
-    send_signal(replacement, libc::SIGCONT);
+    resume_process(replacement);
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
     let sizes = || std::fs::read_to_string(home.project.join("sizes")).unwrap_or_default();
@@ -741,24 +763,28 @@ fn a_recovered_cli_s_screen_reads_as_before_after_the_nudge_s_redraws() {
     home.wait_for_daemon_after(old, secs(30))
         .expect("a replacement daemon");
     // The CLI draws its input's frame across the terminal: once one column narrower, then at its
-    // own width again.
-    let logged = || {
-        let screens = std::fs::read_dir(home.path.join("core/screens/a1"))
-            .into_iter()
-            .flatten()
-            .flatten();
-        screens
-            .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
-            .map(|entry| std::fs::read(entry.path()).unwrap_or_default())
-            .collect::<Vec<_>>()
-    };
-    let narrow = format!("\x1b[2m{}\x1b[0m", "─".repeat(cols - 1)).into_bytes();
-    assert!(
-        wait_until(secs(10), || logged()
-            .iter()
-            .any(|log| log.windows(narrow.len()).any(|bytes| bytes == narrow))),
-        "no narrower frame"
-    );
+    // own width again. A Windows CLI may not see a narrower size it holds this briefly; the
+    // console host redraws the whole screen after a resize all the same.
+    #[cfg(unix)]
+    {
+        let logged = || {
+            let screens = std::fs::read_dir(home.path.join("core/screens/a1"))
+                .into_iter()
+                .flatten()
+                .flatten();
+            screens
+                .filter(|entry| entry.path().extension().is_some_and(|ext| ext == "log"))
+                .map(|entry| std::fs::read(entry.path()).unwrap_or_default())
+                .collect::<Vec<_>>()
+        };
+        let narrow = format!("\x1b[2m{}\x1b[0m", "─".repeat(cols - 1)).into_bytes();
+        assert!(
+            wait_until(secs(10), || logged()
+                .iter()
+                .any(|log| log.windows(narrow.len()).any(|bytes| bytes == narrow))),
+            "no narrower frame"
+        );
+    }
     let own = "─".repeat(cols);
     assert!(
         wait_until(secs(10), || screen().lines().any(|line| line == own)),
@@ -772,6 +798,8 @@ fn a_recovered_cli_s_screen_reads_as_before_after_the_nudge_s_redraws() {
 
 /// A successful `agent.type` confirms queued input. Daemon failure loses bytes still in that queue;
 /// recovery must not repeat input.
+// Input queued in a terminal is Unix's: a pseudo console's host reads all its input.
+#[cfg(unix)]
 #[test]
 fn input_queued_when_the_daemon_dies_is_lost_and_never_sent_twice() {
     let home = TestHome::new("queuedinput");
@@ -813,6 +841,7 @@ fn input_queued_when_the_daemon_dies_is_lost_and_never_sent_twice() {
 }
 
 /// Makes `path` a FIFO. Opening it waits for the other end, so a daemon opening it is stuck there.
+#[cfg(unix)]
 fn make_fifo(path: &std::path::Path) {
     let path = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
     // SAFETY: mkfifo reads the NUL-terminated path.
@@ -826,6 +855,8 @@ fn make_fifo(path: &std::path::Path) {
 
 /// If the daemon ends during its redraw nudge, the terminal stays one column narrower. Recovery
 /// must use the screen log's size and reset the terminal to it.
+// The narrower step of the redraw nudge is Unix's to check: a Windows CLI may not see it.
+#[cfg(unix)]
 #[test]
 #[cfg_attr(
     not(debug_assertions),
@@ -849,7 +880,7 @@ fn a_daemon_ending_inside_its_redraw_nudge_leaves_the_agent_s_size() {
         // The next daemon stops itself inside its nudge, with the terminal a column narrower, and
         // is ended there.
         std::fs::remove_file(&marker).unwrap();
-        send_signal(daemon, libc::SIGKILL);
+        kill_process(daemon);
         daemon = next_started_daemon(&home, &known);
         known.push(daemon);
         assert!(
@@ -866,7 +897,7 @@ fn a_daemon_ending_inside_its_redraw_nudge_leaves_the_agent_s_size() {
             sizes()
         );
     }
-    send_signal(daemon, libc::SIGKILL);
+    kill_process(daemon);
     home.wait_for_daemon_after(daemon, secs(30))
         .expect("a daemon that finishes its nudge");
     assert!(
@@ -979,6 +1010,7 @@ fn a_reconnect_keeps_the_cursor_the_agent_saved() {
 
 /// The input queue is full and the daemon cannot read more keys. Signals must end attachment
 /// without waiting; Ctrl-] waits at most one second. Both restore the person's terminal.
+#[cfg(unix)]
 #[test]
 fn attach_ends_at_once_on_a_signal_or_ctrl_bracket_while_its_input_is_blocked() {
     let home = TestHome::new("blockedinput");
@@ -1064,7 +1096,7 @@ fn attach_keeps_retrying_while_recovery_waits_and_detaches_at_once() {
         term.text()
     );
     let keeper = home.keeper_pid().expect("a keeper");
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     home.kill_daemon();
     assert!(term.wait_for_output(secs(10), LOST_NOTE), "{}", term.text());
     term.send(b"held keys");
@@ -1095,7 +1127,7 @@ fn attach_keeps_retrying_while_recovery_waits_and_detaches_at_once() {
         "{}",
         term.text()
     );
-    send_signal(keeper, libc::SIGCONT);
+    resume_process(keeper);
     assert!(
         home.submitted_messages().is_empty(),
         "{:?}",
@@ -1119,7 +1151,7 @@ fn a_failed_exit_commit_retains_evidence_and_delays_idle_until_it_succeeds() {
         .daemon_log()
         .contains("idle exit delayed: could not save the exit")));
     std::thread::sleep(secs(7));
-    assert!(home.daemon_socket().exists() && home.keeper_socket().exists());
+    assert!(socket_exists(&home.daemon_socket()) && socket_exists(&home.keeper_socket()));
     assert_eq!(
         home.daemon_log()
             .matches("idle exit delayed: could not save the exit")
@@ -1141,6 +1173,7 @@ fn a_failed_exit_commit_retains_evidence_and_delays_idle_until_it_succeeds() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn a_blocked_log_open_keeps_exit_drain_and_the_socket_pending() {
     use std::io::Read;
@@ -1180,11 +1213,11 @@ fn a_blocked_log_open_keeps_exit_drain_and_the_socket_pending() {
         )
         .unwrap()
         .is_some()));
-    let _ = std::fs::remove_file(home.path.join("core/reached-exit-drain-and-writer-counted"));
+    // The daemon marks this once its exit has begun with the drain and the blocked writer counted.
     home.wait_for_gate("exit-drain-and-writer-counted");
     std::thread::sleep(secs(7));
     assert!(
-        home.daemon_socket().exists(),
+        socket_exists(&home.daemon_socket()),
         "the blocked writer and exit drain are still work"
     );
     let mut read = std::fs::OpenOptions::new()

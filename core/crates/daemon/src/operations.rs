@@ -293,6 +293,19 @@ impl Daemon {
         let configured = command_line::configure(&settings, &args, by_model)?;
         if let Some(prompt) = args.prompt.as_deref() {
             command_line::check_start_prompt(prompt, &configured, &args.command[0])?;
+            let widest = crate::delivery::pending_message(
+                sender.clone(),
+                "a999999999",
+                prompt.to_owned(),
+                None,
+                None,
+            );
+            crate::delivery::check_fits(
+                configured.rule,
+                "the new agent",
+                &widest,
+                "start it with a shorter prompt and send the rest as messages",
+            )?;
         }
         let Some(worktree) = args.worktree.take() else {
             return self.start_in(args, sender, &settings, configured).await;
@@ -527,8 +540,13 @@ impl Daemon {
         // Listed now: the plugin's hold goes, and the session is followed.
         prepared.let_go_of_plugin();
         if self.runs.captures(&id) {
-            self.runs
-                .follow_session(&id, agent::FIRST_RUN, None, FirstRead::Now);
+            self.runs.follow_session(
+                &id,
+                agent::FIRST_RUN,
+                None,
+                handle.output_seen(),
+                FirstRead::Now,
+            );
         }
         let (prompt, result_message_id) = match prompt {
             Some((prompt, owed, settled, started)) => {
@@ -642,6 +660,12 @@ impl Daemon {
             )));
         }
         let _stopping = self.lifecycle.begin(Work::Stop);
+        // The console hangs up only once every copy of its signal pipe is closed: the actor's
+        // first, then keeper_link's, then the keeper's.
+        let (reply, let_go) = oneshot::channel();
+        if !agent.send(AgentCommand::LetGoBeforeStop { reply }).await || let_go.await.is_err() {
+            return Err(agent_stopped(&id));
+        }
         let running = self.runs.stop(&id).await?;
         match tokio::time::timeout(STOP_TIMEOUT, exit.wait_for(Option::is_some)).await {
             Ok(Ok(exit)) => Ok(StopResult {
@@ -783,9 +807,14 @@ impl Daemon {
             })?;
         let info = agent.info();
         let Some(session) = info.session.clone() else {
-            return Err(unavailable(format!(
-                "#{id} has no recorded session to resume"
-            )));
+            let message = if self.runs.has_unsaved_session(&id).await {
+                format!(
+                    "#{id} has no session to resume yet: its CLI has not saved one, as when no turn has run"
+                )
+            } else {
+                format!("#{id} has no recorded session to resume")
+            };
+            return Err(unavailable(message));
         };
         let window = args
             .window_id
@@ -890,8 +919,13 @@ impl Daemon {
         let captures = prepared.captures;
         prepared.let_go_of_plugin();
         if captures {
-            self.runs
-                .follow_session(&id, number, info.session.clone(), FirstRead::Now);
+            self.runs.follow_session(
+                &id,
+                number,
+                info.session.clone(),
+                agent.output_seen(),
+                FirstRead::Now,
+            );
         }
         // An exit that came before the resume committed its run is saved now.
         if let Some(exit) = early_exit {

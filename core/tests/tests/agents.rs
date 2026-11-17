@@ -37,6 +37,7 @@ fn remove_ends_a_running_agent_first_and_removes_an_ended_one() {
 }
 
 /// Removing an agent stops its process group, including a leader and subprocess that ignore SIGHUP.
+#[cfg(unix)]
 #[test]
 fn remove_terminates_the_agent_process_group() {
     let home = TestHome::new("descendants");
@@ -45,13 +46,13 @@ fn remove_terminates_the_agent_process_group() {
         &mut wire,
         &home,
         "parent",
-        "sh -c 'trap \"\" HUP; echo $$ > child-pid; exec sleep 60' & echo READY; wait",
+        "sh -c 'trap \"\" HUP; echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > child-pid; exec sleep 60' & echo READY; wait",
     );
     let stubborn = start_script(
         &mut wire,
         &home,
         "stubborn",
-        "trap '' HUP; echo $$ > leader-pid; echo READY; while :; do sleep 1; done",
+        "trap '' HUP; echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > leader-pid; echo READY; while :; do sleep 1; done",
     );
     assert!(
         wait_for_screen_text(&home, &child, "READY")
@@ -95,10 +96,13 @@ fn stop_returns_process_exit() {
     home.start_fake("w1");
     let mut wire = connect(&home);
     let stopped = wire.call("agent.stop", json!({ "agent": "w1" }));
-    assert!(
-        stopped["result"]["signal"] == "SIGHUP" && stopped["result"]["at"].is_string(),
-        "{stopped}"
-    );
+    // A hang-up ends the CLI by SIGHUP on Unix; on Windows the console's closing ends it with
+    // 0xC000013A, a code.
+    #[cfg(unix)]
+    let ended = stopped["result"]["signal"] == "SIGHUP";
+    #[cfg(windows)]
+    let ended = stopped["result"]["code"] == json!(0xC000013A_u32 as i32);
+    assert!(ended && stopped["result"]["at"].is_string(), "{stopped}");
     assert!(
         stopped["result"].get("already_ended").is_none(),
         "{stopped}"
@@ -116,7 +120,7 @@ fn stop_returns_process_exit() {
 fn concurrent_starts_reserve_unused_default_names() {
     let home = TestHome::new("names40");
     let mut wire = connect(&home);
-    let args = json!({ "command": ["/usr/bin/true"], "cwd": home.project, "cols": 80, "rows": 24 });
+    let args = json!({ "command": [SH.as_str(), "-c", "exit 0"], "cwd": home.project, "cols": 80, "rows": 24 });
     let asked: Vec<u64> = (0..40)
         .map(|_| wire.send("call", json!({ "op": "agent.start", "args": args })))
         .collect();
@@ -148,6 +152,7 @@ fn agent_numbers_continue_after_restart() {
     assert_eq!(home.start_fake("w2").id, "a2");
 }
 
+#[cfg(unix)]
 #[test]
 fn stop_sends_sigkill_after_the_kill_delay() {
     let home = TestHome::new("stubborn");
@@ -156,7 +161,7 @@ fn stop_sends_sigkill_after_the_kill_delay() {
         "start",
         "--name",
         "stubborn",
-        "/bin/sh",
+        SH.as_str(),
         "-c",
         "trap '' HUP; echo ready; while :; do sleep 1; done",
     ]);
@@ -190,11 +195,60 @@ fn stop_sends_sigkill_after_the_kill_delay() {
     );
 }
 
+/// A stop hangs up, closing the CLI's console, and ends the CLI and every process it started once 3
+/// seconds pass, whichever of them holds the closing up or never sees it: here the CLI's handler
+/// holds the closing up, and its child runs outside any console, which only ending the CLI's job
+/// ends.
+#[cfg(windows)]
+#[test]
+fn a_stop_ends_a_cli_that_holds_its_console_s_closing_up_and_its_children_at_3_seconds() {
+    let home = TestHome::new("stubborn");
+    let child_pid = home.folder().join("child-pid");
+    let agent = home.start_named_fake(
+        "stubborn",
+        &[("FAKECLI_IGNORE_CLOSE", &child_pid.display().to_string())],
+    );
+    let mut child = None;
+    assert!(
+        wait_until(secs(30), || {
+            child = std::fs::read_to_string(&child_pid)
+                .ok()
+                .and_then(|pid| pid.trim().parse::<i32>().ok());
+            child.is_some()
+        }),
+        "the CLI reported no child PID: {}",
+        home.screen("stubborn")
+    );
+    let child = child.unwrap();
+    let child_process = process_identity(child);
+    assert!(alive(&child_process), "the child {child} does not run");
+    let asked = std::time::Instant::now();
+    home.run_facade_ok(&["stop", "stubborn"]);
+    assert!(
+        asked.elapsed() >= std::time::Duration::from_millis(2500),
+        "the CLI ended before the kill delay"
+    );
+    assert!(!alive(&agent.process), "the CLI {} still runs", agent.pid);
+    assert!(
+        wait_until(secs(5), || !alive(&child_process)),
+        "its child {child} still runs"
+    );
+    assert!(
+        wait_until(secs(5), || home
+            .agent_from_list_json("stubborn")
+            .is_some_and(
+                |record| record["process"] == "ended" && record["exit"]["code"].is_number()
+            )),
+        "{:?}",
+        home.agent_from_list_json("stubborn")
+    );
+}
+
 #[test]
 fn immediate_exit_is_listed_with_exit_code() {
     let home = TestHome::new("quick");
     // An immediate exit must be recorded even if it arrives before the agent is listed.
-    let started = home.run_facade_ok(&["start", "--name", "quick", "/bin/sh", "-c", "exit 3"]);
+    let started = home.run_facade_ok(&["start", "--name", "quick", SH.as_str(), "-c", "exit 3"]);
     assert!(started.starts_with("#a1 pid "), "{started}");
     assert!(
         wait_until(secs(10), || home.agent_from_list_json("quick").is_some_and(
@@ -218,10 +272,10 @@ fn immediate_exit_is_listed_with_exit_code() {
 #[test]
 fn blank_names_get_defaults_and_supplied_names_are_trimmed() {
     let home = TestHome::new("names");
-    home.run_facade_ok(&["start", "/bin/sh", "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", "--name", "", "/bin/sh", "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", "--name", "   ", "/bin/sh", "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", "--name", "  Bob  ", "/bin/sh", "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "--name", "", SH.as_str(), "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "--name", "   ", SH.as_str(), "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", "--name", "  Bob  ", SH.as_str(), "-c", "sleep 60"]);
     let agents = home.agents();
     let names: Vec<&str> = agents
         .iter()
@@ -249,6 +303,7 @@ fn blank_names_get_defaults_and_supplied_names_are_trimmed() {
 }
 
 /// Agent records name each CLI and working folder, so the store is readable only by the user.
+#[cfg(unix)]
 #[test]
 fn the_agent_store_is_private_to_the_user() {
     use std::os::unix::fs::MetadataExt;
@@ -265,6 +320,7 @@ fn the_agent_store_is_private_to_the_user() {
     }
 }
 
+#[cfg(unix)]
 #[test]
 fn an_ended_cli_s_hangup_ignoring_descendant_runs_on_through_its_release_and_removal() {
     let home = TestHome::new("endedgroup");
@@ -274,7 +330,7 @@ fn an_ended_cli_s_hangup_ignoring_descendant_runs_on_through_its_release_and_rem
         &mut wire,
         &home,
         "parent",
-        "sh -c 'trap \"\" HUP; echo $$ > descendant; exec sleep 600' & echo $$ > leader; echo \
+        "sh -c 'trap \"\" HUP; echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > descendant; exec sleep 600' & echo $(cat /proc/$$/winpid 2>/dev/null || echo $$) > leader; echo \
          READY; read line; exit 0",
     );
     assert!(wait_for_screen_text(&home, &id, "READY"));
@@ -319,6 +375,6 @@ fn an_ended_cli_s_hangup_ignoring_descendant_runs_on_through_its_release_and_rem
         );
     }
     // This fixture owns the descendant and its FACADE_HOME; Facade deliberately left it alone.
-    send_signal(pid, libc::SIGKILL);
+    kill_process(pid);
     assert!(wait_until(secs(5), || !alive(&descendant)));
 }

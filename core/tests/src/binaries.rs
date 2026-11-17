@@ -1,5 +1,6 @@
 //! Locates the workspace programs used by scenario tests.
 
+use std::env::consts::EXE_SUFFIX;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -25,12 +26,15 @@ pub fn test_binaries() -> &'static TestBinaries {
             dir.pop();
         }
         let bins = TestBinaries {
-            facade: dir.join("facade"),
-            mcp: dir.join("facade-mcp"),
-            fakecli: dir.join("facade-fakecli"),
+            facade: dir.join(format!("facade{EXE_SUFFIX}")),
+            mcp: dir.join(format!("facade-mcp{EXE_SUFFIX}")),
+            fakecli: dir.join(format!("facade-fakecli{EXE_SUFFIX}")),
         };
-        // When run through Cargo, build from this source. When run directly, use adjacent binaries.
-        if let Some(cargo) = std::env::var_os("CARGO") {
+        // When run through Cargo, build from this source unless test-all already built the programs.
+        // When run directly, use adjacent binaries.
+        if let Some(cargo) = std::env::var_os("CARGO")
+            .filter(|_| std::env::var_os("FACADE_TEST_BINARIES_BUILT").is_none())
+        {
             let workspace = Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
                 .expect("the workspace folder")

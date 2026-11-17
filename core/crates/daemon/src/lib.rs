@@ -67,7 +67,7 @@ use store::Store;
 use windows::Windows;
 
 #[cfg(test)]
-pub(crate) use testing::{test_folder, test_process, test_terminal};
+pub(crate) use testing::test_folder;
 
 /// The queued agent changes allowed before a client must get a complete list instead.
 const MAX_QUEUED_AGENT_CHANGES: usize = 1024;
@@ -211,7 +211,7 @@ pub(crate) struct Daemon {
 /// the foreground.
 pub fn run() -> anyhow::Result<()> {
     let mut channel = StartupChannel::take();
-    base_service::close_inherited_fds(channel.as_ref().map(StartupChannel::raw_fd).as_slice())
+    base_service::close_inherited(channel.as_ref())
         .map_err(|err| failed(&mut channel, err.into()))?;
     facade_base::limits::raise_open_files();
     let workers = std::thread::available_parallelism()

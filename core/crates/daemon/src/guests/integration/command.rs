@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use facade_base::daemon::PartState;
 use facade_base::jsonrpc::ErrorBody;
+use facade_base::system::{env_var, home_folder_in};
 use facade_rules::integration::{self, Programs};
 use serde_json::Value;
 
@@ -128,17 +129,16 @@ impl<'a> Server<'a> {
     }
 
     /// The user server named `facade` in the CLI's global configuration: `.claude.json` in
-    /// `CLAUDE_CONFIG_DIR`, or in HOME.
+    /// `CLAUDE_CONFIG_DIR`, or in the user's home folder.
     fn now(&self) -> Result<Option<Value>, ErrorBody> {
-        let folder = self
-            .env
-            .get("CLAUDE_CONFIG_DIR")
-            .or_else(|| self.env.get("HOME"))
-            .filter(|folder| !folder.is_empty());
+        let folder = env_var(self.env, "CLAUDE_CONFIG_DIR")
+            .filter(|folder| !folder.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| home_folder_in(self.env));
         let Some(folder) = folder else {
             return Ok(None);
         };
-        let Some(bytes) = super::files::read(&Path::new(folder).join(".claude.json"))? else {
+        let Some(bytes) = super::files::read(&folder.join(".claude.json"))? else {
             return Ok(None);
         };
         let config: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
@@ -147,7 +147,7 @@ impl<'a> Server<'a> {
 
     /// The CLI's program on the caller's PATH.
     fn find(&self) -> Option<PathBuf> {
-        let path = self.env.get("PATH")?;
+        let path = env_var(self.env, "PATH")?;
         facade_base::programs::on_path(self.program, Some(path), Path::new("/"))
     }
 
@@ -166,7 +166,7 @@ fn run(
     args: &[String],
 ) -> Result<(), ErrorBody> {
     let command = format!("{name} {}", args.join(" "));
-    let mut child = std::process::Command::new(program)
+    let mut child = facade_base::programs::command(program)
         .args(args)
         .env_clear()
         .envs(env)
@@ -234,32 +234,44 @@ fn keep_the_end(mut output: impl std::io::Read + Send + 'static) -> Receiver<Str
 mod tests {
     use super::*;
 
-    /// A stand-in `claude` in a folder of its own, which writes a mebibyte to its error output,
-    /// more than a pipe holds, then `last` and exits with `code`.
-    fn chatty_claude(
-        name: &str,
-        last: &str,
-        code: i32,
-    ) -> (crate::test_folder::TestFolder, PathBuf) {
-        let folder = crate::test_folder::TestFolder::new(name);
-        let claude = folder.join("claude");
-        let script = format!(
-            "#!/bin/sh\nhead -c 1048576 /dev/zero | tr '\\0' x >&2\necho {last} >&2\nexit {code}\n"
-        );
-        std::fs::write(&claude, script).unwrap();
-        std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-            .unwrap();
-        (folder, claude)
+    /// A stand-in `claude`: this test binary, run as a child with `FACADE_TEST_CHATTY` set, writes a
+    /// mebibyte to its error output, more than a pipe holds, then that variable's text, and exits
+    /// with `FACADE_TEST_CHATTY_CODE`. Run as a test, it does nothing.
+    #[test]
+    fn chatty_claude() {
+        use std::io::Write;
+        let Ok(last) = std::env::var("FACADE_TEST_CHATTY") else {
+            return;
+        };
+        let code = std::env::var("FACADE_TEST_CHATTY_CODE")
+            .ok()
+            .and_then(|code| code.parse().ok())
+            .unwrap_or(0);
+        let mut said = std::io::stderr().lock();
+        said.write_all(&vec![b'x'; 1 << 20]).unwrap();
+        writeln!(said, "{last}").unwrap();
+        said.flush().unwrap();
+        std::process::exit(code);
+    }
+
+    /// Runs the stand-in `claude` through `run`, saying `last` and exiting with `code`.
+    fn run_chatty_claude(last: &str, code: i32) -> Result<(), ErrorBody> {
+        let mut env: BTreeMap<String, String> = std::env::vars_os()
+            .filter_map(|(name, value)| Some((name.into_string().ok()?, value.into_string().ok()?)))
+            .collect();
+        env.insert("FACADE_TEST_CHATTY".into(), last.into());
+        env.insert("FACADE_TEST_CHATTY_CODE".into(), code.to_string());
+        let test = "guests::integration::command::tests::chatty_claude";
+        let args = [test.into(), "--exact".into(), "--nocapture".into()];
+        run("claude", &std::env::current_exe().unwrap(), &env, &args)
     }
 
     /// `claude` saying more on its error output than a pipe holds finishes at once: Facade reads it
     /// as it comes.
     #[test]
     fn a_claude_that_says_much_finishes_at_once() {
-        let (_folder, claude) = chatty_claude("chatty", "done", 0);
-        let env = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
         let started = Instant::now();
-        run("claude", &claude, &env, &["mcp".into(), "list".into()]).unwrap();
+        run_chatty_claude("done", 0).unwrap();
         assert!(
             started.elapsed() < Duration::from_secs(10),
             "it took {:?}",
@@ -270,9 +282,7 @@ mod tests {
     /// A failure says the end of what `claude` said, where it says why, and no more than that.
     #[test]
     fn a_failure_says_the_end_of_what_claude_said() {
-        let (_folder, claude) = chatty_claude("failing", "the-reason", 1);
-        let env = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
-        let failed = run("claude", &claude, &env, &["mcp".into(), "list".into()]).unwrap_err();
+        let failed = run_chatty_claude("the-reason", 1).unwrap_err();
         assert!(
             failed.message.ends_with("the-reason"),
             "{}",

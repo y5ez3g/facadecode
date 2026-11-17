@@ -124,7 +124,7 @@ pub(crate) fn resume(
 /// and its ID is all they need; with it, the agent comes back to be attached to.
 fn announce(agent: &AgentInfo, began: &str, terminal: Option<(u16, u16)>) -> Option<String> {
     if terminal.is_none() {
-        println!("#{}{}", agent.agent_id, pid_of(agent));
+        println_or_end!("#{}{}", agent.agent_id, pid_of(agent));
         return None;
     }
     eprintln!(
@@ -147,11 +147,11 @@ pub(crate) enum Format {
 pub(crate) fn list(client: &mut DaemonClient, format: Format) -> anyhow::Result<()> {
     let agents = client.snapshot::<AgentsTopic>(NoArgs {})?;
     if let Format::Json = format {
-        println!("{}", serde_json::to_string_pretty(&agents)?);
+        println_or_end!("{}", serde_json::to_string_pretty(&agents)?);
         return Ok(());
     }
     if agents.is_empty() {
-        println!("No agents.");
+        println_or_end!("No agents.");
         return Ok(());
     }
     let rows: Vec<[String; 4]> = agents
@@ -185,12 +185,12 @@ pub(crate) fn list(client: &mut DaemonClient, format: Format) -> anyhow::Result<
                 .map(|pid| format!("pid {pid}"))
                 .unwrap_or_default()
         };
-        println!("{line}{process:<11} {}", agent.cwd);
+        println_or_end!("{line}{process:<11} {}", agent.cwd);
         if let Some(text) = agent.state_detail.as_ref().and_then(|d| d.text.as_ref()) {
-            println!("       {text}");
+            println_or_end!("       {text}");
         }
         if let Some(said) = &agent.said {
-            println!("       {} said: {}", speaker(said), said.text);
+            println_or_end!("       {} said: {}", speaker(said), said.text);
         }
     }
     Ok(())
@@ -204,7 +204,7 @@ pub(crate) fn inspect(
 ) -> anyhow::Result<()> {
     let inspected = client.call::<AgentInspect>(AgentArgs { agent })?;
     match format {
-        Format::Json => println!("{}", serde_json::to_string_pretty(&inspected)?),
+        Format::Json => println_or_end!("{}", serde_json::to_string_pretty(&inspected)?),
         Format::Text => print_inspection(&inspected),
     }
     Ok(())
@@ -219,7 +219,7 @@ pub(crate) fn screen(
     // The daemon renders the screen, so this needs no terminal parser.
     let screen = client.call::<AgentScreen>(ScreenArgs { agent, lines })?;
     if screen.line_count > 0 {
-        println!("{}", facade_base::daemon::plain(&screen.text));
+        println_or_end!("{}", facade_base::daemon::plain(&screen.text));
     }
     Ok(())
 }
@@ -263,12 +263,14 @@ pub(crate) fn send(
     let (id, to) = (&message.message_id, &message.to);
     match (message.delivery.status, message.delivery.delivered_via) {
         // A guest takes its messages at its next turn.
-        (DeliveryStatus::Pending, _) => println!("#{id} waits for #{to}'s next turn"),
-        (DeliveryStatus::Success, Some(DeliveredVia::Read)) => println!("#{id} was read by #{to}"),
-        (DeliveryStatus::Success, Some(DeliveredVia::Notified)) => {
-            println!("#{id} was handed to the person's editor window")
+        (DeliveryStatus::Pending, _) => println_or_end!("#{id} waits for #{to}'s next turn"),
+        (DeliveryStatus::Success, Some(DeliveredVia::Read)) => {
+            println_or_end!("#{id} was read by #{to}")
         }
-        (DeliveryStatus::Success, _) => println!("#{id} was typed into #{to}"),
+        (DeliveryStatus::Success, Some(DeliveredVia::Notified)) => {
+            println_or_end!("#{id} was handed to the person's editor window")
+        }
+        (DeliveryStatus::Success, _) => println_or_end!("#{id} was typed into #{to}"),
         _ => anyhow::bail!(
             "#{id} to #{to}: {}",
             message.delivery.failure_words(&format!("#{to}"))
@@ -288,7 +290,7 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
         .map(facade_base::daemon::typed_text)
         .collect();
     if !shown.is_empty() {
-        println!("{}", shown.join("\n\n"));
+        println_or_end!("{}", shown.join("\n\n"));
     }
     Ok(())
 }
@@ -296,7 +298,7 @@ pub(crate) fn messages(client: &mut DaemonClient) -> anyhow::Result<()> {
 /// Renames an agent and prints it with its new name.
 pub(crate) fn rename(client: &mut DaemonClient, agent: String, name: String) -> anyhow::Result<()> {
     let renamed = client.call::<AgentRename>(RenameArgs { agent, name })?;
-    println!("#{} {}", renamed.agent_id, display_name(&renamed.name));
+    println_or_end!("#{} {}", renamed.agent_id, display_name(&renamed.name));
     Ok(())
 }
 
@@ -356,8 +358,8 @@ pub(crate) fn status(client: &DaemonClient) {
         hello.build, hello.pid, hello.agents
     );
     match &hello.keeper {
-        Some(keeper) => println!("{daemon}, keeper pid {} ({})", keeper.pid, keeper.build),
-        None => println!("{daemon}; no keeper is running"),
+        Some(keeper) => println_or_end!("{daemon}, keeper pid {} ({})", keeper.pid, keeper.build),
+        None => println_or_end!("{daemon}; no keeper is running"),
     }
 }
 
@@ -420,38 +422,39 @@ fn print_inspection(inspected: &InspectResult) {
     if let Some(exit) = &agent.exit {
         let _ = write!(process, " ({})", ExitText(exit));
     }
-    println!(
+    println_or_end!(
         "#{} {}: {}{guest}, {process}",
         agent.agent_id,
         display_name(&agent.name),
         agent.cli
     );
-    println!("Rule: {}", inspected.rule.as_deref().unwrap_or("none"));
-    println!("Folder: {}", agent.cwd);
-    println!("YOLO: {}", if agent.yolo { "on" } else { "off" });
+    println_or_end!("Rule: {}", inspected.rule.as_deref().unwrap_or("none"));
+    println_or_end!("Folder: {}", agent.cwd);
+    println_or_end!("YOLO: {}", if agent.yolo { "on" } else { "off" });
 
     let why = agent
         .state_detail
         .as_ref()
         .and_then(|d| d.text.as_deref().or(d.reason.map(StateReason::words)));
-    println!("State: {}{}", state_of(agent), reason(why));
+    println_or_end!("State: {}{}", state_of(agent), reason(why));
     let tools_why = agent.tools_reason.map(|why| why.words());
-    println!("Tools: {}{}", agent.tools_state.as_str(), reason(tools_why));
+    println_or_end!("Tools: {}{}", agent.tools_state.as_str(), reason(tools_why));
 
     let input = &inspected.input;
     let mechanism = input
         .mechanism
         .map(|mechanism| format!(" ({})", mechanism.as_str()))
         .unwrap_or_default();
-    println!(
+    println_or_end!(
         "Input: {}{mechanism}; {}",
         input.state.as_str(),
         input.evidence
     );
     if let Some(hidden) = input.hidden {
-        println!(
+        println_or_end!(
             "Hidden draft rows: {} above, {} below",
-            hidden.above, hidden.below
+            hidden.above,
+            hidden.below
         );
     }
 
@@ -459,15 +462,15 @@ fn print_inspection(inspected: &InspectResult) {
         Some(said) => format!("Said by {} at {}: {}", speaker(said), said.at, said.text),
         None => "Said: nothing yet".to_string(),
     };
-    println!("{said}");
+    println_or_end!("{said}");
     let session = agent.session.as_deref().unwrap_or("unknown");
-    println!("Session: {session}");
+    println_or_end!("Session: {session}");
     let tracking = if inspected.session_tracking {
         "available"
     } else {
         "unavailable"
     };
-    println!("Session tracking: {tracking}");
+    println_or_end!("Session tracking: {tracking}");
 }
 
 /// `; why` after a state, or nothing when there is no why.
@@ -482,12 +485,12 @@ fn print_integration(info: &IntegrationInfo) {
         .as_ref()
         .map(|at| format!(": added {at}"))
         .unwrap_or_default();
-    println!("{}{added}", info.cli);
+    println_or_end!("{}{added}", info.cli);
     for part in &info.parts {
-        println!("  {}: {}", part.file, entries(part.state));
+        println_or_end!("  {}: {}", part.file, entries(part.state));
     }
     for note in &info.notes {
-        println!("  {note}");
+        println_or_end!("  {note}");
     }
 }
 

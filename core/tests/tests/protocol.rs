@@ -1,7 +1,7 @@
 //! Daemon protocol handshake, methods, validation, line limits, and bounded response queues.
 
+use facade_base::paths::ClientSocket;
 use std::io::Write;
-use std::os::unix::net::UnixStream;
 
 use facade_scenarios::serde_json::{Value, json};
 use facade_scenarios::*;
@@ -106,8 +106,8 @@ fn a_start_with_no_program_or_no_terminal_size_is_an_invalid_argument() {
     let cwd = home.project.to_string_lossy().into_owned();
     for args in [
         json!({ "command": [], "cwd": cwd, "cols": 80, "rows": 24 }),
-        json!({ "command": ["/bin/sh"], "cwd": cwd, "cols": 0, "rows": 24 }),
-        json!({ "command": ["/bin/sh"], "cwd": cwd }),
+        json!({ "command": [SH.as_str()], "cwd": cwd, "cols": 0, "rows": 24 }),
+        json!({ "command": [SH.as_str()], "cwd": cwd }),
     ] {
         assert_eq!(
             error_reason(&wire.call("agent.start", args.clone())),
@@ -125,8 +125,7 @@ fn malformed_requests_get_json_rpc_errors_and_oversized_lines_close_connection()
     use std::io::{BufRead, Write};
     let home = TestHome::new("norequest");
     home.start_fake("w1");
-    let mut stream =
-        std::os::unix::net::UnixStream::connect(home.daemon_socket()).expect("the daemon's socket");
+    let mut stream = ClientSocket::connect(home.daemon_socket()).expect("the daemon's socket");
     stream.set_read_timeout(Some(secs(10))).unwrap();
     let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
     let mut response = || {
@@ -189,19 +188,9 @@ fn unread_responses_backpressure_the_connection() {
         "seq 1 3000 | sed 's/$/ some text to fill the line up/'; echo DONE; sleep 60",
     );
     assert!(wait_for_screen_text(&home, &agent, "DONE"));
-    let rss = || -> u64 {
-        let daemon = home
-            .daemon_pid()
-            .expect("expected a running daemon")
-            .to_string();
-        let out = std::process::Command::new("ps")
-            .args(["-o", "rss=", "-p", &daemon])
-            .output()
-            .expect("could not run ps");
-        stdout(&out).trim().parse().unwrap_or(0)
-    };
+    let rss = || -> u64 { resident_kib(home.daemon_pid().expect("expected a running daemon")) };
     let before = rss();
-    let stream = UnixStream::connect(home.daemon_socket()).unwrap();
+    let stream = ClientSocket::connect(home.daemon_socket()).unwrap();
     let mut writer = stream.try_clone().unwrap();
     writer
         .write_all(

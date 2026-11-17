@@ -3,7 +3,6 @@
 //! their own in the test's folder, and on PATH only a stand-in `claude` and the system's programs,
 //! so nothing of this computer's own configuration is read or written.
 
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
@@ -16,6 +15,8 @@ use facade_scenarios::*;
 const CLAUDE: &str = r#"#!/bin/sh
 printf '%s\n' "$*" >> "$STANDIN_LOG"
 config="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+# A value as a JSON string holds it: each \ and " escaped, as a Windows path needs.
+json() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 case "$1 $2" in
 "mcp add")
 	if grep -q '"facade"' "$config" 2>/dev/null; then
@@ -25,15 +26,15 @@ case "$1 $2" in
 	shift 5
 	env='{}'
 	if [ "$1" = "-e" ]; then
-		env="{\"${2%%=*}\": \"${2#*=}\"}"
+		env="{\"${2%%=*}\": \"$(json "${2#*=}")\"}"
 		shift 2
 	fi
 	shift
-	command="$1"
+	command="$(json "$1")"
 	shift
 	args=""
 	for arg in "$@"; do
-		args="$args${args:+, }\"$arg\""
+		args="$args${args:+, }\"$(json "$arg")\""
 	done
 	printf '{"mcpServers": {"facade": {"type": "stdio", "command": "%s", "args": [%s], "env": %s}}}\n' "$command" "$args" "$env" > "$config"
 	;;
@@ -62,13 +63,11 @@ impl Person {
         let bin = base.join("bin");
         std::fs::create_dir_all(&home).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
-        std::fs::write(bin.join("claude"), CLAUDE).unwrap();
-        std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755))
-            .unwrap();
+        install_script(&bin, "claude", CLAUDE);
         Person {
             home,
             log: base.join("claude.log"),
-            path: format!("{}:/usr/bin:/bin", bin.display()),
+            path: format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str()),
         }
     }
 
@@ -82,6 +81,8 @@ impl Person {
             .env("XDG_CONFIG_HOME", self.home.join(".config"))
             .env("PATH", &self.path)
             .env("STANDIN_LOG", &self.log);
+        // On Windows a CLI's settings are under USERPROFILE and APPDATA, which follow the home.
+        command.envs(home_variables(&self.home));
         command
             .env_remove("CLAUDE_CONFIG_DIR")
             .env_remove("CODEX_HOME");
@@ -109,9 +110,32 @@ impl Person {
 
     /// Runs a hook's shell command as its CLI does, with `input` on standard input.
     fn hook(&self, test: &TestHome, command: &str, input: &Value) -> Output {
-        let mut child = self
-            .command(test, "/bin/sh")
-            .args(["-c", command])
+        // Codex uses the session's PowerShell shell on Windows; other hooks use cmd.exe or Git Bash.
+        // A cmd.exe hook starts with `@"…"`, or with `set "FACADE_HOME=…" &&` where the home is not
+        // the default.
+        let for_cmd = command.starts_with('@') || command.starts_with("set \"");
+        #[cfg(windows)]
+        if command.starts_with("powershell.exe ") {
+            let mut shell = self.command(test, powershell());
+            shell.args(["-NoProfile", "-Command", command]);
+            return self.run_hook(shell, input);
+        }
+        let shell = if cfg!(windows) && for_cmd {
+            let mut cmd = self.command(test, "cmd.exe");
+            cmd.args(["/d", "/s", "/c"]);
+            #[cfg(windows)]
+            std::os::windows::process::CommandExt::raw_arg(&mut cmd, format!("\"{command}\""));
+            cmd
+        } else {
+            let mut sh = self.command(test, SH.as_str());
+            sh.args(["-c", command]);
+            sh
+        };
+        self.run_hook(shell, input)
+    }
+
+    fn run_hook(&self, mut shell: Command, input: &Value) -> Output {
+        let mut child = shell
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -125,8 +149,10 @@ impl Person {
         child.wait_with_output().unwrap()
     }
 
+    /// `name`, a path with `/` between its parts, in the person's home, as the system writes it.
     fn file(&self, name: &str) -> PathBuf {
-        self.home.join(name)
+        name.split('/')
+            .fold(self.home.clone(), |path, part| path.join(part))
     }
 
     fn write(&self, name: &str, text: &str) {
@@ -207,7 +233,13 @@ fn claude_s_sessions_join_through_what_add_writes_and_remove_puts_it_back() {
     );
     let (home, launcher) = (
         shell_quoted(&test.path),
-        shell_quoted(&test.path.join("core/bin/facade")),
+        shell_quoted(
+            &test
+                .path
+                .join("core")
+                .join("bin")
+                .join(program_name("facade")),
+        ),
     );
     for (event, name) in [
         ("session-start", "SessionStart"),
@@ -230,7 +262,11 @@ fn claude_s_sessions_join_through_what_add_writes_and_remove_puts_it_back() {
         (2, "mcp remove --scope user facade"),
         "an older Facade's server goes first: {ran:?}"
     );
-    let server = test.path.join("core/bin/facade-mcp");
+    let server = test
+        .path
+        .join("core")
+        .join("bin")
+        .join(program_name("facade-mcp"));
     assert_eq!(
         ran[1],
         format!(
@@ -329,14 +365,24 @@ fn claude_s_sessions_join_through_what_add_writes_and_remove_puts_it_back() {
 fn remove_keeps_the_person_s_changes_and_names_a_changed_entry_that_stays() {
     let test = TestHome::new("integrate-changed");
     let person = Person::new(&test);
-    person.write("dotfiles/claude-settings.json", "{}\n");
-    std::fs::create_dir_all(person.file(".claude")).unwrap();
-    std::os::unix::fs::symlink(
-        person.file("dotfiles/claude-settings.json"),
-        person.file(".claude/settings.json"),
-    )
-    .unwrap();
+    // The settings file is reached through a link on Unix. Windows makes links only in Developer
+    // Mode, so there the person's file is the settings file itself.
+    #[cfg(unix)]
+    let settings_file = "dotfiles/claude-settings.json";
+    #[cfg(windows)]
+    let settings_file = ".claude/settings.json";
+    person.write(settings_file, "{}\n");
+    #[cfg(unix)]
+    {
+        std::fs::create_dir_all(person.file(".claude")).unwrap();
+        std::os::unix::fs::symlink(
+            person.file(settings_file),
+            person.file(".claude/settings.json"),
+        )
+        .unwrap();
+    }
     person.facade_ok(&test, &["integration", "add", "claude"]);
+    #[cfg(unix)]
     assert!(
         person
             .file(".claude/settings.json")
@@ -346,13 +392,13 @@ fn remove_keeps_the_person_s_changes_and_names_a_changed_entry_that_stays() {
             .is_symlink(),
         "the link stays"
     );
-    let mut settings = person.json("dotfiles/claude-settings.json");
+    let mut settings = person.json(settings_file);
     settings["hooks"]["Stop"].as_array_mut().unwrap().insert(
         0,
         json!({ "hooks": [{ "type": "command", "command": "say done" }] }),
     );
     settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["timeout"] = json!(5);
-    person.write("dotfiles/claude-settings.json", &settings.to_string());
+    person.write(settings_file, &settings.to_string());
     let removed = person.facade_ok(&test, &["integration", "remove", "claude"]);
     let file = person.file(".claude/settings.json");
     assert!(
@@ -366,7 +412,7 @@ fn remove_keeps_the_person_s_changes_and_names_a_changed_entry_that_stays() {
         removed.contains(&line(&file, "Facade's entries, changed")),
         "{removed}"
     );
-    let left = person.json("dotfiles/claude-settings.json");
+    let left = person.json(settings_file);
     assert_eq!(
         left["hooks"]["Stop"],
         json!([{ "hooks": [{ "type": "command", "command": "say done" }] }])
@@ -381,6 +427,7 @@ fn remove_keeps_the_person_s_changes_and_names_a_changed_entry_that_stays() {
             && left.get("permissions").is_none(),
         "{left}"
     );
+    #[cfg(unix)]
     assert!(
         person
             .file(".claude/settings.json")
@@ -403,20 +450,23 @@ fn codex_opencode_and_pi_entries_are_written_and_taken_out() {
     let person = Person::new(&test);
     let own = "# mine\nmodel = \"o3\"\n";
     person.write(".codex/config.toml", own);
+    // The mode a file keeps is Unix's: Windows gives Facade's files no mode of their own.
+    #[cfg(unix)]
     std::fs::set_permissions(
         person.file(".codex/config.toml"),
-        std::fs::Permissions::from_mode(0o600),
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
     )
     .unwrap();
     let added = person.facade_ok(&test, &["integration", "add", "codex"]);
+    #[cfg(unix)]
     assert_eq!(
-        person
-            .file(".codex/config.toml")
-            .metadata()
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777,
+        std::os::unix::fs::PermissionsExt::mode(
+            &person
+                .file(".codex/config.toml")
+                .metadata()
+                .unwrap()
+                .permissions()
+        ) & 0o777,
         0o600,
         "the file's mode stays"
     );
@@ -429,19 +479,29 @@ fn codex_opencode_and_pi_entries_are_written_and_taken_out() {
     );
     let config = person.read(".codex/config.toml").unwrap();
     assert!(
-        config.starts_with(&format!("{own}\n[mcp_servers.facade]\ncommand = \"/"))
-            && config.contains("args = [\"--guest\",\"codex\"]\n"),
+        // An absolute path: from the root on Unix, from a drive on Windows.
+        config.starts_with(&format!(
+            "{own}\n[mcp_servers.facade]\ncommand = \"{}",
+            if cfg!(windows) { "" } else { "/" }
+        )) && config.contains("args = [\"--guest\",\"codex\"]\n"),
         "{config}"
     );
     assert!(
         config.contains("default_tools_approval_mode = \"approve\"\n"),
         "{config}"
     );
+    let hooks = person.json(".codex/hooks.json");
+    let command = hooks["hooks"]["Stop"][0]["hooks"][0]["command"]
+        .as_str()
+        .unwrap();
+    #[cfg(unix)]
+    assert!(command.ends_with("/facade' hook turn-end --cli codex"));
+    #[cfg(windows)]
     assert!(
-        person.json(".codex/hooks.json")["hooks"]["Stop"][0]["hooks"][0]["command"]
-            .as_str()
-            .unwrap()
-            .ends_with("/facade' hook turn-end --cli codex")
+        powershell_script(command).is_some_and(|script| {
+            script.contains("\\facade.exe' 'hook' 'turn-end' '--cli' 'codex'")
+        }),
+        "{command}"
     );
     person.write(
         ".config/opencode/plugins/theirs/index.js",
@@ -596,11 +656,23 @@ fn muse_and_antigravity_entries_are_written_and_their_hooks_join_and_end_session
     };
     // Antigravity runs its hooks through `sh -c` as its children: here `perl` stands for `agy`, and
     // ends 3 seconds after them.
+    // On Windows Antigravity runs them with cmd.exe: there the test CLI stands for it, in its mode
+    // that runs hooks.
     let agy = |inputs: &[Value]| {
-        let script = "for my $i (0 .. $#ARGV / 2) { open(my $h, '|-', '/bin/sh', '-c', $ARGV[2 * \
-                      $i]); print $h $ARGV[2 * $i + 1]; close($h); } sleep 3;";
-        let mut command = person.command(&test, "/usr/bin/perl");
-        command.args(["-e", script]);
+        #[cfg(unix)]
+        let mut command = {
+            let script = "for my $i (0 .. $#ARGV / 2) { open(my $h, '|-', '/bin/sh', '-c', \
+                          $ARGV[2 * $i]); print $h $ARGV[2 * $i + 1]; close($h); } sleep 3;";
+            let mut perl = person.command(&test, "/usr/bin/perl");
+            perl.args(["-e", script]);
+            perl
+        };
+        #[cfg(windows)]
+        let mut command = {
+            let mut fake = person.command(&test, &test_binaries().fakecli);
+            fake.env("FAKECLI_HOOKS", "1");
+            fake
+        };
         for input in inputs {
             command.args([
                 agy_hook(input["hookEventName"].as_str().unwrap()),
@@ -731,7 +803,7 @@ fn nothing_is_written_where_the_person_has_a_facade_of_their_own() {
     let mut command = person.command(&test, &test_binaries().facade);
     let without_claude = command
         .args(["integration", "add", "claude"])
-        .env("PATH", "/usr/bin:/bin")
+        .env("PATH", SYSTEM_PATH.as_str())
         .stdin(Stdio::null())
         .output()
         .unwrap();
@@ -777,11 +849,15 @@ fn a_run_beside_the_integration_keeps_facade_s_tools_and_skill() {
         person.facade_ok(&test, &["integration", "add", cli]);
         let programs = test.path.parent().unwrap().join("programs");
         std::fs::create_dir_all(&programs).unwrap();
-        std::os::unix::fs::symlink(&test_binaries().fakecli, programs.join(cli)).unwrap();
+        install_program(&programs, cli, &test_binaries().fakecli);
         let mut start = person.command(&test, &test_binaries().facade);
         start.env(
             "PATH",
-            format!("{}:{}", programs.display(), test.path_with_test_programs()),
+            format!(
+                "{}{PATH_SEPARATOR}{}",
+                programs.display(),
+                test.path_with_test_programs()
+            ),
         );
         let started = start
             .args(["start", "--name", "beside", cli])
@@ -823,11 +899,12 @@ fn has_the_skill(test: &TestHome, cli: &str, run: &Value) -> bool {
     let skill = |file: PathBuf| {
         std::fs::read_to_string(file).is_ok_and(|text| text == facade_base::skill::text())
     };
-    let ps = Command::new("ps")
-        .args(["-ww", "-o", "command=", "-p", &run["pid"].to_string()])
-        .output()
-        .unwrap();
-    let command = String::from_utf8_lossy(&ps.stdout).into_owned();
+    let command = command_line_of(run["pid"].as_i64().unwrap() as i32);
+    #[cfg(windows)]
+    let command = format!(
+        "{command} {}",
+        powershell_script(&command).unwrap_or_default()
+    );
     match cli {
         "claude" => {
             command.contains("--plugin-dir") && skill(folder.join("plugin/skills/facade/SKILL.md"))

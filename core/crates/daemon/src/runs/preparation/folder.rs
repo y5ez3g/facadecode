@@ -3,7 +3,6 @@
 
 use std::collections::HashSet;
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 const PLUGIN_NOTE: &str = "plugin-folder";
@@ -67,10 +66,9 @@ impl RunFiles {
                 if let Some(parent) = path.parent().filter(|parent| *parent != at) {
                     private_folder(parent)?;
                 }
-                let mut file = std::fs::OpenOptions::new()
+                let mut file = facade_base::files::private_options()
                     .write(true)
                     .create_new(true)
-                    .mode(0o600)
                     .open(&path)?;
                 file.write_all(text.as_bytes())
             };
@@ -82,10 +80,7 @@ impl RunFiles {
 }
 
 fn private_folder(path: &Path) -> io::Result<()> {
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
+    facade_base::files::create_private_folder_all(path)
 }
 
 pub(super) fn session_file(folder: &Path) -> PathBuf {
@@ -154,12 +149,13 @@ mod tests {
             RunFiles::new(&runs, "a2"),
             RunFiles::new(&runs, "a1"),
         );
-        gone.note_plugin(Path::new("/work/probe")).unwrap();
-        kept.note_plugin(Path::new("/work/kept")).unwrap();
+        let (probe, kept_project) = (runs.join("probe"), runs.join("kept"));
+        gone.note_plugin(&probe).unwrap();
+        kept.note_plugin(&kept_project).unwrap();
         plain.fill(None, vec![]);
         plain.create().unwrap();
         let projects = discard_unrecorded(&runs, &HashSet::from(["a2".to_string()])).unwrap();
-        assert_eq!(projects, [PathBuf::from("/work/probe")]);
+        assert_eq!(projects, [probe]);
         assert!(
             !runs.join("a1").exists(),
             "the folders of an agent without a record go"
@@ -172,7 +168,6 @@ mod tests {
 
     #[test]
     fn a_run_s_folder_is_new_and_private_and_only_one_counts() {
-        use std::os::unix::fs::PermissionsExt;
         let runs = crate::test_folder::TestFolder::new("runs");
         let (mut first, mut second) = (RunFiles::new(&runs, "a1"), RunFiles::new(&runs, "a1"));
         assert_ne!(
@@ -191,9 +186,8 @@ mod tests {
         assert_eq!(find(&runs, "a1"), Some(first.path().to_owned()));
         assert!(session_file(first.path()).exists());
         for folder in [first.path(), &first.path().join("plugin")] {
-            assert_eq!(
-                std::fs::metadata(folder).unwrap().permissions().mode() & 0o777,
-                0o700,
+            assert!(
+                facade_base::files::is_private(folder).unwrap(),
                 "{}",
                 folder.display()
             );
@@ -203,9 +197,8 @@ mod tests {
             first.path().join("mcp.json"),
             first.path().join("plugin/index.mjs"),
         ] {
-            assert_eq!(
-                std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-                0o600,
+            assert!(
+                facade_base::files::is_private(&file).unwrap(),
                 "{}",
                 file.display()
             );

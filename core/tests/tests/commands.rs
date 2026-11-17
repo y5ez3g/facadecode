@@ -4,13 +4,14 @@ use facade_scenarios::serde_json::json;
 use facade_scenarios::*;
 
 /// Omit non-UTF-8 environment variables and name them on stderr.
+#[cfg(unix)]
 #[test]
 fn start_reports_non_utf8_environment_variables() {
     use std::os::unix::ffi::OsStrExt;
     let home = TestHome::new("nonutf8");
     let output = home
         .command(&test_binaries().facade)
-        .args(["start", "--name", "odd", "/bin/sh", "-c", "sleep 60"])
+        .args(["start", "--name", "odd", SH.as_str(), "-c", "sleep 60"])
         .env(
             std::ffi::OsStr::from_bytes(b"ODD"),
             std::ffi::OsStr::from_bytes(b"\xff\xfe"),
@@ -22,7 +23,9 @@ fn start_reports_non_utf8_environment_variables() {
     assert!(stderr(&output).contains("ODD"), "{}", stderr(&output));
 }
 
-/// A zero-size terminal must use the default agent size.
+/// A zero-size terminal must use the default agent size. Windows makes no pseudo console of size
+/// zero, so the person's terminal there always has one.
+#[cfg(unix)]
 #[test]
 fn start_uses_default_size_when_terminal_size_is_zero() {
     let home = TestHome::new("nosize");
@@ -31,7 +34,7 @@ fn start_uses_default_size_when_terminal_size_is_zero() {
             "start",
             "--name",
             "sized",
-            "/bin/sh",
+            SH.as_str(),
             "-c",
             "stty size; sleep 60",
         ]),
@@ -49,17 +52,21 @@ fn start_uses_default_size_when_terminal_size_is_zero() {
 #[test]
 fn interactive_start_propagates_process_exit_status() {
     let home = TestHome::new("exitcode");
-    for (script, code, said) in [
-        ("sleep 1; exit 3", 3, "ended with code 3"),
-        (
-            "sleep 1; kill -TERM $$",
-            128 + libc::SIGTERM,
-            "ended with SIGTERM",
-        ),
-    ] {
+    // An end by a signal is Unix's alone.
+    #[cfg_attr(windows, allow(unused_mut))]
+    let mut ends = vec![("sleep 1; exit 3", 3, "ended with code 3")];
+    #[cfg(unix)]
+    ends.push((
+        "sleep 1; kill -TERM $$",
+        128 + libc::SIGTERM,
+        "ended with SIGTERM",
+    ));
+    for (script, code, said) in ends {
         let mut term = TestTerminal::spawn(
             home.command(&test_binaries().facade)
-                .args(["start", "/bin/sh", "-c", script]),
+                .arg("start")
+                .arg(shell())
+                .args(["-c", script]),
             80,
             24,
         );
@@ -170,8 +177,18 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
     // Use a shell that prints its received arguments.
     let script = "printf 'given:%s\\n' \"$*\"; sleep 60";
     let named = home.run_facade_ok(&[
-        "start", "--name", "echoer", "/bin/sh", "-c", script, "sh", "--model", "x", "--name",
-        "its own", "-p",
+        "start",
+        "--name",
+        "echoer",
+        SH.as_str(),
+        "-c",
+        script,
+        "sh",
+        "--model",
+        "x",
+        "--name",
+        "its own",
+        "-p",
     ]);
     assert!(named.starts_with("#a1 "), "{named}");
     assert!(
@@ -182,8 +199,8 @@ fn start_takes_its_options_before_the_cli_and_forwards_every_word_after_it() {
         home.screen("echoer")
     );
     // Unnamed agents use unused suggested names while available.
-    home.run_facade_ok(&["start", "/bin/sh", "-c", "sleep 60"]);
-    home.run_facade_ok(&["start", "/bin/sh", "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
+    home.run_facade_ok(&["start", SH.as_str(), "-c", "sleep 60"]);
     let listed: Vec<String> = stdout(&home.run_facade(&["list"]))
         .lines()
         .filter_map(|line| line.split_whitespace().nth(1).map(str::to_string))
@@ -228,25 +245,40 @@ fn no_real_cli_can_start_in_a_test() {
     const CLIS: &str = "claude codex agy muse opencode pi";
     let home = TestHome::new("isolation");
     for path in [home.test_path(), home.path_with_test_programs()] {
-        for folder in path.split(':') {
+        for folder in path.split(PATH_SEPARATOR) {
             for cli in CLIS.split(' ') {
-                assert!(
-                    !std::path::Path::new(folder).join(cli).exists(),
-                    "{folder}/{cli} can be found from a test's PATH"
-                );
+                // Windows finds a program by its name with an extension of PATHEXT, too.
+                for program in [cli.to_string(), format!("{cli}.exe"), format!("{cli}.cmd")] {
+                    assert!(
+                        !std::path::Path::new(folder).join(&program).exists(),
+                        "{folder}/{program} can be found from a test's PATH"
+                    );
+                }
             }
         }
     }
+    #[cfg(unix)]
     let given = stdout(
         &home
             .command("/usr/bin/env")
             .output()
             .expect("could not run env"),
     );
+    #[cfg(windows)]
+    let given = stdout(
+        &home
+            .command("cmd.exe")
+            .args(["/d", "/c", "set"])
+            .output()
+            .expect("could not run cmd.exe"),
+    );
+    // cmd.exe sets PROMPT for itself where it is not set.
+    let shells: &[&str] = if cfg!(windows) { &["PROMPT"] } else { &[] };
     let own = ["FACADE_HOME", "FAKECLI_LOG", "FACADE_TEST_LINK_PROGRAMS"]
         .into_iter()
+        .chain(shells.iter().copied())
         .chain(home.isolating_env().into_iter().map(|(name, _)| name));
-    let allowed: Vec<&str> = own.chain(PASSED_THROUGH).collect();
+    let allowed: Vec<&str> = own.chain(PASSED_THROUGH.iter().copied()).collect();
     for variable in given.lines() {
         let name = variable.split_once('=').map_or(variable, |(name, _)| name);
         assert!(
@@ -254,27 +286,50 @@ fn no_real_cli_can_start_in_a_test() {
             "a test's command got {name} from the environment the tests run in"
         );
     }
+    // What each agent finds and is given, written in the project: through sh on Unix; through
+    // cmd.exe on Windows, where Git's sh would show its own forms of the paths.
+    #[cfg(unix)]
     let script = |name: &str| {
-        format!(
-            "for cli in {CLIS}; do command -v \"$cli\"; done > {name}-found.txt; env > \
-             {name}-env.tmp; mv {name}-env.tmp {name}-env.txt; sleep 60"
-        )
+        vec![
+            shell().display().to_string(),
+            "-c".to_string(),
+            format!(
+                "for cli in {CLIS}; do command -v \"$cli\"; done > {name}-found.txt; env > \
+                 {name}-env.tmp; mv {name}-env.tmp {name}-env.txt; sleep 60"
+            ),
+        ]
+    };
+    #[cfg(windows)]
+    let script = |name: &str| {
+        vec![
+            "cmd.exe".to_string(),
+            "/d".to_string(),
+            "/s".to_string(),
+            "/c".to_string(),
+            format!(
+                "(for %c in ({CLIS}) do @where %c 2>nul) > {name}-found.txt & set > \
+                 {name}-env.tmp & move /y {name}-env.tmp {name}-env.txt >nul & ping -n 61 \
+                 127.0.0.1 >nul"
+            ),
+        ]
     };
     let started = home
         .command(&test_binaries().facade)
-        .args([
-            "start",
-            "--name",
-            "command",
-            "/bin/sh",
-            "-c",
-            &script("command"),
-        ])
+        .args(["start", "--name", "command"])
+        .args(script("command"))
         .output()
         .unwrap();
     assert!(started.status.success(), "{}", stderr(&started));
     let mut wire = connect(&home);
-    start_script(&mut wire, &home, "wire", &script("wire"));
+    let path = system_folders().join(PATH_SEPARATOR);
+    let wired = wire.call(
+        "agent.start",
+        json!({
+            "command": script("wire"), "name": "wire", "cwd": home.project,
+            "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+        }),
+    );
+    assert!(wired["result"]["agent"]["agent_id"].is_string(), "{wired}");
     let isolation = home.isolation();
     for name in ["command", "wire"] {
         let written = home.project.join(format!("{name}-env.txt"));
@@ -307,7 +362,7 @@ fn no_real_cli_can_start_in_a_test() {
     }
     let outside = std::env::var("HOME").unwrap_or_else(|_| "/".into());
     let args = json!({
-        "command": ["/bin/sh", "-c", "sleep 60"], "name": "outside", "cwd": home.project,
+        "command": [shell(), "-c", "sleep 60"], "name": "outside", "cwd": home.project,
         "env": { "HOME": outside }, "cols": 80, "rows": 24,
     });
     let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -320,6 +375,7 @@ fn no_real_cli_can_start_in_a_test() {
 }
 
 /// The command line of process `pid`, as `ps` shows it.
+#[cfg(unix)]
 fn command_of(pid: i32) -> String {
     let ps = std::process::Command::new("ps")
         .args(["-o", "command=", "-p", &pid.to_string()])
@@ -332,11 +388,12 @@ fn command_of(pid: i32) -> String {
 /// programs first, and the launchers `core/bin/facade` and `core/bin/facade-mcp` point at them. A
 /// run's CLI is given the launchers for its MCP server and its hooks, so the current build's
 /// programs serve it, whichever that is.
+#[cfg(unix)]
 #[test]
 fn facade_runs_from_its_build_s_folder_and_runs_name_the_launchers() {
     let home = TestHome::new("programs");
     let agent = home.start_named_fake("w1", &[]);
-    let bin = home.path.join("core/bin");
+    let bin = home.path.join("core").join("bin");
     let build = std::fs::read_link(bin.join("facade"))
         .expect("the launcher")
         .parent()
@@ -394,29 +451,28 @@ fn facade_runs_from_its_build_s_folder_and_runs_name_the_launchers() {
 
 /// Facade's programs and launchers that the person deletes while the daemon runs are put back
 /// before a start names them, so the start's CLI gets its tools.
+// Windows refuses to delete a program while it runs, so the person cannot delete them there.
+#[cfg(unix)]
 #[test]
 fn programs_deleted_while_facade_runs_are_put_back_before_a_start_names_them() {
     let home = TestHome::new("putback");
     home.start_named_fake("w1", &[]);
-    let bin = home.path.join("core/bin");
-    let build = std::fs::read_link(bin.join("facade"))
-        .expect("the launcher")
-        .parent()
-        .unwrap()
-        .to_path_buf();
+    let bin = home.path.join("core").join("bin");
+    let build = launcher_build(&home.path).expect("the launchers point at a build");
     std::fs::remove_dir_all(&bin).unwrap();
     // The fake CLI draws once its server answers.
     home.start_named_fake("w2", &[]);
     for name in ["facade", "facade-mcp"] {
+        #[cfg(unix)]
         assert_eq!(
             std::fs::read_link(bin.join(name)).unwrap(),
-            build.join(name),
+            std::path::Path::new(&build).join(name),
             "the launcher of {name} is back"
         );
         assert!(
-            bin.join(name).is_file(),
-            "{name} is back in {}",
-            build.display()
+            bin.join(&build).join(program_name(name)).is_file()
+                && bin.join(program_name(name)).is_file(),
+            "{name} is back in {build}"
         );
     }
     let ready = || {
@@ -434,6 +490,7 @@ fn programs_deleted_while_facade_runs_are_put_back_before_a_start_names_them() {
 /// installs its own by copy and rename, as release builds are installed: the keeper runs on from
 /// the file it started from and takes the new daemon, and an agent that ran before types on. The
 /// keeper starts the next daemon from the new file.
+#[cfg(unix)]
 #[test]
 fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_rename() {
     use std::io::Write;
@@ -483,7 +540,7 @@ fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_
         .unwrap();
     assert!(detached.status.success(), "{}", stderr(&detached));
     let agent = home.start_named_fake("w1", &[]);
-    let bin = home.path.join("core/bin");
+    let bin = home.path.join("core").join("bin");
     let installed = bin.join(std::fs::read_link(bin.join("facade")).unwrap());
     let keeper = home.keeper_pid().expect("the keeper runs");
     assert!(
@@ -497,9 +554,9 @@ fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_
     );
     // The keeper is held still meanwhile, so that it starts no daemon of its own before the second
     // copy's.
-    send_signal(keeper, libc::SIGSTOP);
+    pause_process(keeper);
     let ending = process_identity(daemon);
-    send_signal(daemon, libc::SIGKILL);
+    kill_process(daemon);
     let ended = wait_until(secs(10), || !alive(&ending));
     let said = home.folder().join("second.log");
     let mut serving = without_switch(&second, &["daemon"])
@@ -511,7 +568,7 @@ fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_
     let replaced = wait_until(secs(10), || {
         std::fs::metadata(&installed).is_ok_and(|meta| meta.len() == length)
     });
-    send_signal(keeper, libc::SIGCONT);
+    resume_process(keeper);
     let log = || std::fs::read_to_string(&said).unwrap_or_default();
     assert!(
         ended && replaced,
@@ -544,7 +601,7 @@ fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_
         home.submitted_messages()
     );
     let second_daemon = serving.id() as i32;
-    send_signal(second_daemon, libc::SIGKILL);
+    kill_process(second_daemon);
     let _ = serving.wait();
     let again = home
         .wait_for_daemon_after(second_daemon, secs(20))
@@ -561,6 +618,7 @@ fn programs_installed_again_while_the_keeper_runs_them_are_replaced_by_copy_and_
 /// daemon started as the copy starts. Once that copy is gone, a run's hook still writes its
 /// session, a new run's server starts through its launcher, and the keeper starts a killed daemon
 /// again from the build's folder.
+#[cfg(unix)]
 #[test]
 fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
     use std::os::unix::fs::PermissionsExt;
@@ -584,7 +642,7 @@ fn facade_started_from_a_copy_runs_on_once_that_copy_is_gone() {
     };
     let detached = as_copy(&["daemon", "--detach"]).output().unwrap();
     assert!(detached.status.success(), "{}", stderr(&detached));
-    let bin = home.path.join("core/bin");
+    let bin = home.path.join("core").join("bin");
     let build = bin.join(
         std::fs::read_link(bin.join("facade"))
             .unwrap()

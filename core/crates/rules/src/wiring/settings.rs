@@ -11,7 +11,7 @@ use super::config_files::{agy_settings_file, muse_settings_file};
 use super::integration::is_facade_group;
 use super::{MergedSettings, Wiring};
 use crate::args::{ArgsGrammar, Found};
-use crate::formats::{merge_settings, parse_jsonc, shell_word};
+use crate::formats::{Shell, merge_settings, parse_jsonc};
 
 /// The values of the options `found` gives, all of them, or None where one has no value.
 pub(super) fn values(found: &[Found]) -> Option<Vec<&str>> {
@@ -49,7 +49,7 @@ const AGY_SETTINGS_FILE: &str = "settings.json";
 /// with Facade's after them; any other setting `wiring` adds, as YOLO's trusted folders, merged the
 /// same way into theirs; and their title settings, from both, with the title command of the run's
 /// session report, which runs their own title command after it with the same input. None where
-/// something of theirs cannot be read.
+/// something of theirs cannot be read, or their title command cannot go through Antigravity's shell.
 pub(super) fn agy_settings(
     grammar: &ArgsGrammar,
     wiring: &Wiring,
@@ -118,7 +118,9 @@ pub(super) fn agy_settings(
             .and_then(Value::as_str)
             .filter(|_| enabled);
         let command = match theirs {
-            Some(theirs) => format!("{hook} {}", shell_word(theirs)),
+            // A title command its shell cannot carry is left to Antigravity, as settings that
+            // cannot be read are: Facade adds nothing, and the run reports no session this way.
+            Some(theirs) => format!("{hook} {}", Shell::of("agy").word(theirs)?),
             None => hook.to_string(),
         };
         title.insert("type".into(), json!("command"));

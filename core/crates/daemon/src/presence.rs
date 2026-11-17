@@ -136,6 +136,8 @@ impl Daemon {
         let _ = self.changes.send(AgentsChange::Removed {
             agent_id: id.to_string(),
         });
+        // With its last guest gone, the daemon may become idle.
+        self.lifecycle.note_change();
     }
 
     /// Facade heard from `guest` at a hook that gave `env`: a guest with no environment kept, as

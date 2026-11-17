@@ -48,6 +48,14 @@ fn a_rule_s_name_runs_its_cli_and_a_path_runs_the_program_as_given() {
 fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too() {
     let home = TestHome::new("unusable");
     let mut wire = connect(&home);
+    // A folder from the root: on Windows one names its drive, or it is relative.
+    #[cfg(unix)]
+    let no_folder = "/no/such/folder".to_string();
+    #[cfg(windows)]
+    let no_folder = format!(
+        r"{}\no\such\folder",
+        &home.project.display().to_string()[..2]
+    );
     let start =
         |wire: &mut DaemonTestClient, command: Value, cwd: &str, path: &str| {
             wire.call("agent.start", json!({
@@ -56,7 +64,7 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
             }))
         };
     let project = home.project.display().to_string();
-    let missing = start(&mut wire, json!(["fake"]), &project, "/usr/bin:/bin");
+    let missing = start(&mut wire, json!(["fake"]), &project, SYSTEM_PATH.as_str());
     assert_eq!(
         error_reason(&missing),
         "not_found",
@@ -75,7 +83,7 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
             &mut wire,
             json!(["/no/such/program"]),
             &project,
-            "/usr/bin:/bin"
+            SYSTEM_PATH.as_str()
         )),
         "unavailable",
         "a missing program"
@@ -85,8 +93,8 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
         error_reason(&start(
             &mut wire,
             json!([fake]),
-            "/no/such/folder",
-            "/usr/bin:/bin"
+            no_folder.as_str(),
+            SYSTEM_PATH.as_str()
         )),
         "unavailable",
         "a missing folder"
@@ -94,7 +102,7 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
     let named = start(
         &mut wire,
         json!(["fake"]),
-        "/no/such/folder",
+        no_folder.as_str(),
         &home.path_with_test_programs(),
     );
     assert_eq!(
@@ -103,7 +111,12 @@ fn a_program_or_folder_that_cannot_be_used_is_refused_and_a_relative_folder_too(
         "a missing folder for a rule's CLI"
     );
     assert_eq!(
-        error_reason(&start(&mut wire, json!([fake]), "project", "/usr/bin:/bin")),
+        error_reason(&start(
+            &mut wire,
+            json!([fake]),
+            "project",
+            SYSTEM_PATH.as_str()
+        )),
         "invalid_argument",
         "a relative folder"
     );
@@ -173,7 +186,10 @@ fn inspect_reads_the_input_from_the_screen_without_typing() {
         )
     );
     assert!(
-        lines[2].starts_with("Folder: /") && lines[2].ends_with("/project"),
+        lines[2]
+            .strip_prefix("Folder: ")
+            .map(std::path::Path::new)
+            .is_some_and(|folder| folder.is_absolute() && folder.ends_with("project")),
         "{plain}"
     );
     assert_eq!(

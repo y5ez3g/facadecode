@@ -18,8 +18,9 @@ facade-daemon.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 crossterm.workspace = true
-libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-signal-hook.workspace = true
 unicode-width.workspace = true
+
+[dev-dependencies]
+tokio.workspace = true

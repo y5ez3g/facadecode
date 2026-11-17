@@ -13,7 +13,7 @@ use facade_scenarios::*;
 
 /// `path` with symbolic links resolved, as Facade lists locations.
 fn real(path: &Path) -> String {
-    std::fs::canonicalize(path)
+    facade_base::files::real_path(path)
         .unwrap()
         .to_string_lossy()
         .into_owned()
@@ -433,6 +433,7 @@ fn a_resume_reads_yolo_from_the_settings_file_as_a_start_does() {
     );
 }
 
+#[cfg(unix)]
 /// A stand-in for Claude Code 2.1.322 in `bin`: it asks its question about trusting the folder as
 /// Claude Code does, behind a hidden cursor. It draws the question, its selection on the answer
 /// that refuses, asks the terminal for its attributes, and draws the question again 150 ms after
@@ -469,11 +470,10 @@ fn claude_asking(bin: &Path, keys: &Path, answered: Answered) {
          {after}\n{again}'❯ ' '  '\ndd bs=1 count=1 of='{keys}/again' 2>/dev/null\n\
          exec sleep 600\n"
     );
-    let claude = bin.join("claude");
-    std::fs::write(&claude, script).unwrap();
-    std::fs::set_permissions(&claude, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    install_script(bin, "claude", &script);
 }
 
+#[cfg(unix)]
 /// What the stand-in for Claude Code does once its question is answered, before it asks once more.
 #[derive(Clone, Copy)]
 enum Answered {
@@ -490,6 +490,7 @@ enum Answered {
     Redrawn,
 }
 
+#[cfg(unix)]
 /// What the stand-in wrote to its key file `name`, or None before it opened it.
 fn key(keys: &Path, name: &str) -> Option<Vec<u8>> {
     std::fs::read(keys.join(name)).ok()
@@ -502,6 +503,8 @@ fn key(keys: &Path, name: &str) -> Option<Vec<u8>> {
 /// second, even while the CLI keeps drawing; one that stays on is left to the person, even when it
 /// is drawn again on a cleared screen, which shows no question for a moment. A run with YOLO off
 /// types nothing: the question waits for the person.
+// Its stand-in is a sh script that reads keys, which MSYS sh under a pseudo console does not get.
+#[cfg(unix)]
 #[test]
 fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_person_with_yolo_off()
 {
@@ -514,7 +517,7 @@ fn claude_code_s_trust_question_is_answered_once_with_yolo_on_and_left_to_the_pe
             base.join(format!("keys-{name}")),
         );
         claude_asking(&bin, &keys, answered);
-        let path = format!("{}:/usr/bin:/bin", bin.display());
+        let path = format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str());
         let args = json!({
             "command": ["claude"], "name": name, "cwd": home.project,
             "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
@@ -711,7 +714,7 @@ fn each_cli_launches_with_yolo_on_as_its_rule_says_and_with_yolo_off_as_it_nativ
     let home = TestHome::new("yololaunches");
     let base = home.project.parent().unwrap().to_path_buf();
     let (bin, argv) = (base.join("bin"), base.join("argv"));
-    let path = format!("{}:/usr/bin:/bin", bin.display());
+    let path = format!("{}{PATH_SEPARATOR}{}", bin.display(), SYSTEM_PATH.as_str());
     let launch = |cli: &str, name: &str| {
         stand_in(&bin, cli, &argv);
         let started = home
@@ -730,10 +733,17 @@ fn each_cli_launches_with_yolo_on_as_its_rule_says_and_with_yolo_off_as_it_nativ
     let clis = ["claude", "codex", "agy", "muse", "opencode", "pi"];
     for cli in clis {
         let (args, folder) = launch(cli, &format!("{cli}-on"));
+        // Codex's folder as a TOML string: on Windows with its drive letter in lower case, as
+        // Codex keys its projects, and each `\` written `\\`.
+        #[cfg(unix)]
+        let in_toml = folder.clone();
+        #[cfg(windows)]
+        let in_toml =
+            format!("{}{}", folder[..1].to_lowercase(), &folder[1..]).replace('\\', "\\\\");
         let at = launch_arguments(cli);
         let added: Vec<String> = yolo_arguments(cli)
             .iter()
-            .map(|arg| arg.replace("${folder}", &folder))
+            .map(|arg| arg.replace("${folder}", &in_toml))
             .collect();
         assert_eq!(
             args.get(at..at + added.len()),

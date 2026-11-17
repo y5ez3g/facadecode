@@ -1,8 +1,8 @@
 //! Line-by-line daemon and keeper protocol connections for scenario tests.
 
+use facade_base::paths::ClientSocket;
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,7 +12,7 @@ use crate::*;
 
 /// A raw daemon protocol connection to the test's Facade home.
 pub struct DaemonTestClient {
-    stream: std::os::unix::net::UnixStream,
+    stream: ClientSocket,
     responses: Arc<Mutex<HashMap<u64, Value>>>,
     notifications: Arc<Mutex<Vec<Value>>>,
     next: u64,
@@ -28,7 +28,7 @@ impl DaemonTestClient {
 
     /// Connects to the daemon for `home`, or None when none listens.
     pub fn try_open(home: &TestHome) -> Option<DaemonTestClient> {
-        let stream = std::os::unix::net::UnixStream::connect(home.daemon_socket()).ok()?;
+        let stream = ClientSocket::connect(home.daemon_socket()).ok()?;
         let reader = stream.try_clone().expect("could not clone the test socket");
         let responses: Arc<Mutex<HashMap<u64, Value>>> = Arc::default();
         let notifications: Arc<Mutex<Vec<Value>>> = Arc::default();
@@ -139,14 +139,14 @@ impl Drop for DaemonTestClient {
 
 /// A raw keeper protocol connection to the test's Facade home.
 pub struct KeeperTestClient {
-    writer: UnixStream,
-    pub reader: BufReader<UnixStream>,
+    writer: ClientSocket,
+    pub reader: BufReader<ClientSocket>,
     next: u64,
 }
 
 impl KeeperTestClient {
     pub fn open(home: &TestHome) -> KeeperTestClient {
-        let stream = UnixStream::connect(home.keeper_socket())
+        let stream = ClientSocket::connect(home.keeper_socket())
             .expect("could not connect to the test keeper");
         stream.set_read_timeout(Some(LOADED_TIMEOUT)).unwrap();
         KeeperTestClient {
@@ -236,7 +236,7 @@ pub fn connect(home: &TestHome) -> DaemonTestClient {
     }
 }
 
-/// Starts `/bin/sh` with `script` as agent `name` in the test project. Sets `FACADE_HOME` so
+/// Starts [`shell`] with `script` as agent `name` in the test project. Sets `FACADE_HOME` so
 /// cleanup can find the process. Returns the agent ID.
 pub fn start_script(
     wire: &mut DaemonTestClient,
@@ -244,9 +244,13 @@ pub fn start_script(
     name: &str,
     script: &str,
 ) -> String {
+    #[cfg(unix)]
+    let path = "/usr/bin:/bin".to_string();
+    #[cfg(windows)]
+    let path = system_folders().join(PATH_SEPARATOR);
     let args = json!({
-        "command": ["/bin/sh", "-c", script], "name": name, "cwd": home.project,
-        "env": { "PATH": "/usr/bin:/bin", "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
+        "command": [shell(), "-c", script], "name": name, "cwd": home.project,
+        "env": { "PATH": path, "FACADE_HOME": home.path }, "cols": 80, "rows": 24,
     });
     let started = wire.call("agent.start", args);
     started["result"]["agent"]["agent_id"]
@@ -270,15 +274,15 @@ pub fn wait_for_screen_text(home: &TestHome, agent: &str, text: &str) -> bool {
 
 /// A connection read only when the test requests the next line.
 pub struct ManualReadClient {
-    pub writer: UnixStream,
-    reader: BufReader<UnixStream>,
+    pub writer: ClientSocket,
+    reader: BufReader<ClientSocket>,
     /// Keeps the agents this client starts inside the test.
     isolation: Isolation,
 }
 
 impl ManualReadClient {
     pub fn open(home: &TestHome) -> ManualReadClient {
-        let stream = UnixStream::connect(home.daemon_socket())
+        let stream = ClientSocket::connect(home.daemon_socket())
             .expect("could not connect to the test daemon");
         stream.set_read_timeout(Some(LOADED_TIMEOUT)).unwrap();
         let mut raw = ManualReadClient {

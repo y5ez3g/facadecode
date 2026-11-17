@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+#[cfg(unix)]
 use nix::unistd::Uid;
 use sha2::{Digest, Sha256};
 
@@ -14,10 +15,14 @@ pub(crate) fn daemon_socket() -> Result<PathBuf, String> {
     let digest = Sha256::digest(home.to_string_lossy().as_bytes());
     let key = digest.iter().take(5).map(|byte| format!("{byte:02x}"));
     let key = key.collect::<Vec<_>>().concat();
-    Ok(PathBuf::from(format!(
+    #[cfg(unix)]
+    let socket = PathBuf::from(format!(
         "/tmp/facade-core-{}/daemon-{key}.sock",
         Uid::current()
-    )))
+    ));
+    #[cfg(windows)]
+    let socket = PathBuf::from(format!(r"\\.\pipe\facade-core-daemon-{key}"));
+    Ok(socket)
 }
 
 /// The Facade home, by the same rule.

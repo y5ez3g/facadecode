@@ -267,7 +267,7 @@ fn passed_settings(launch: &CommandLine) -> serde_json::Value {
     let file = launch
         .files
         .iter()
-        .find(|(name, _)| given.ends_with(&format!("/{name}")));
+        .find(|(name, _)| Path::new(given).ends_with(name));
     serde_json::from_str(file.map_or(given.as_str(), |(_, text)| text.as_str())).unwrap()
 }
 

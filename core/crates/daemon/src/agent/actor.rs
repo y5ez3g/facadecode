@@ -76,6 +76,8 @@ pub(super) struct Links {
     pub(super) room: Arc<Notify>,
     pub(super) exit: watch::Sender<Option<ProcessExit>>,
     pub(super) settled: watch::Sender<bool>,
+    /// Marked at each output, for whoever follows the CLI's work, such as its session.
+    pub(super) output: watch::Sender<()>,
     pub(super) changes: broadcast::Sender<AgentsChange>,
     /// Keeps the tools channel open while the actor runs.
     pub(super) _tools: Arc<watch::Sender<usize>>,
@@ -132,7 +134,11 @@ pub(super) fn spawn(
         state_changed: false,
         state_at: Some(Instant::now()),
         screen_status_at: None,
-        typist: Typist::new(rule.map(|rule| &rule.paste), deliveries),
+        typist: Typist::new(
+            rule.map(|rule| &rule.paste),
+            rule.and_then(facade_rules::console_typing),
+            deliveries,
+        ),
         viewers: Viewers::new(),
         readiness: Readiness::new(rule, &info.agent_id),
         ready_at: None,
@@ -592,6 +598,11 @@ impl Actor {
                 (self.quiet, self.typist_at) = (true, None);
                 // It reads no more, so the person's keys go as they come.
                 self.let_enter_go();
+                // No read is under way once it replies, and what the last reads brought went
+                // through the screen log, so the next daemon reads on from there.
+                while self.terminal.stop_reading().await.is_some() {
+                    self.take_output();
+                }
                 // The last facts are written before the next daemon reads them.
                 self.stop_keeping().await;
                 if self.terminal.queued() == 0 {
@@ -599,6 +610,10 @@ impl Actor {
                 } else {
                     self.quieting = Some(reply);
                 }
+            }
+            AgentCommand::LetGoBeforeStop { reply } => {
+                self.terminal.let_go_before_stop();
+                let _ = reply.send(());
             }
             AgentCommand::SettlePaste { reply } => {
                 self.typist.hold_pastes();
@@ -789,6 +804,7 @@ impl Actor {
 
     /// The CLI wrote: into the log and the screen, then to everyone who follows it.
     fn take_output(&mut self) {
+        self.links.output.send_replace(());
         self.end_nudge();
         self.undrawn = None;
         self.drawn_at = Some(Instant::now());
@@ -801,6 +817,10 @@ impl Actor {
             self.catch_up_at = Some(Instant::now());
         }
         self.screen_mut().checkpoint_if_due();
+        // A quiet agent starts and types nothing more: the next daemon does.
+        if self.quiet {
+            return;
+        }
         // The CLI drew: the start, a message waiting for the input and the person's Enter look
         // again.
         if self.readiness.is_under_way() {

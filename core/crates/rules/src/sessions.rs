@@ -13,10 +13,12 @@
 //! see half a file. Nothing here creates a run's folder: once a run's folder is removed, its late
 //! hooks have nowhere to write.
 
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{self, Read, Write};
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+
+use facade_base::files;
+use facade_base::system::{SYSTEM, System};
 
 /// For each CLI, the variables it sets for the commands its model runs, and for MCP servers that
 /// inherit its environment, to name its session: the session itself first, then, for a CLI that
@@ -68,11 +70,19 @@ pub fn session_variable(cli: &str) -> Option<&'static str> {
 /// Whether a new agent must not inherit the variable `name` because it marks some CLI's session,
 /// thread or run: one of [`SESSION_VARIABLES`] or of [`RUN_VARIABLES`].
 pub fn is_session_variable(name: &str) -> bool {
-    let named_by_a_cli = SESSION_VARIABLES
+    SESSION_VARIABLES
         .iter()
         .flat_map(|(_, names)| names.iter())
-        .any(|known| *known == name);
-    named_by_a_cli || RUN_VARIABLES.contains(&name)
+        .chain(RUN_VARIABLES.iter())
+        .any(|known| same_name(known, name))
+}
+
+/// Whether two variable names name the same variable: Windows compares them without case.
+fn same_name(one: &str, other: &str) -> bool {
+    match SYSTEM {
+        System::Windows => one.eq_ignore_ascii_case(other),
+        System::Unix => one == other,
+    }
 }
 
 /// What the session file is called inside a run's folder.
@@ -302,7 +312,7 @@ pub fn write_session_file(path: &Path, session: Option<&Reported>) -> Result<(),
         path,
         &text,
         &|from, to| std::fs::rename(from, to),
-        &|folder| File::open(folder)?.sync_all(),
+        &files::sync_folder,
     )
 }
 
@@ -337,8 +347,8 @@ fn fill(mut file: File, text: &str) -> io::Result<()> {
 /// writers share it.
 fn temporary_in(folder: &Path) -> io::Result<(PathBuf, File)> {
     let pid = std::process::id();
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true).mode(0o600);
+    let mut options = files::private_options();
+    options.write(true).create_new(true);
     let mut attempt = 0u32;
     loop {
         let temporary = folder.join(format!(".{SESSION_FILE}.{pid}.{attempt}"));
@@ -391,14 +401,19 @@ mod tests {
     #[test]
     fn only_a_session_start_with_a_uuid_or_no_session_is_written() {
         let hook = |input: &str| session_from_hook(input.as_bytes());
+        // An absolute path on this system.
+        let transcript = match SYSTEM {
+            System::Unix => "/x",
+            System::Windows => "C:/x",
+        };
         assert_eq!(
             hook(&format!(
-                r#"{{"hook_event_name":"SessionStart","session_id":"{}","transcript_path":"/x","cwd":"/w"}}"#,
+                r#"{{"hook_event_name":"SessionStart","session_id":"{}","transcript_path":"{transcript}","cwd":"/w"}}"#,
                 ID.to_uppercase()
             )),
             Some(Some(Reported {
                 id: ID.into(),
-                saved_in: Some("/x".into())
+                saved_in: Some(transcript.into())
             }))
         );
         for transcript in [r#""relative/x""#, r#""""#, "7", r#""/a\nb""#] {
@@ -454,12 +469,8 @@ mod tests {
                 SessionFile::Unreadable(_)
             ));
         }
-        use std::os::unix::fs::PermissionsExt;
         write_session_file(&path, saved(ID).as_ref()).unwrap();
-        assert_eq!(
-            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        assert!(files::is_private(&path).unwrap());
         assert_eq!(
             std::fs::read_dir(&dir).unwrap().count(),
             1,

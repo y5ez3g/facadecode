@@ -196,7 +196,9 @@ A missing path answers:
 ```
 
 A start with a prompt has the same result fields. Its later Facade message says whether the prompt reached the agent;
-a prompt failure does not destroy a successfully started agent. Tool unavailability does not kill a usable CLI.
+a prompt failure does not destroy a successfully started agent. A first prompt whose paste could not fit a whole
+delivery stage at its CLI's rates (RULES-1.5) refuses the start as `invalid_argument` before anything starts, asking
+for a shorter prompt. Until the editor extension runs on core, it still starts such an agent and gives the prompt up. Tool unavailability does not kill a usable CLI.
 COLLABORATION-2.2 owns native/post-start prompt selection. A failure states any known or unknown startup effects in
 message, including the path of a worktree that was created and kept. There is no task object, completion expectation
 or automatic creator progress report.

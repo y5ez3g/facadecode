@@ -488,6 +488,14 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         .as_str()
         .unwrap()
         .to_string();
+    // A path from the root names the drive of the folder it runs in on Windows.
+    #[cfg(unix)]
+    let gone = "/nope/facade-fakecli".to_string();
+    #[cfg(windows)]
+    let gone = format!(
+        "{}/nope/facade-fakecli",
+        &home.project.display().to_string()[..2]
+    );
     let said = [
         (
             "oc",
@@ -505,9 +513,10 @@ fn an_entry_s_program_that_cannot_run_is_said_by_its_setting() {
         ),
         (
             "gone",
-            "clis.gone.command is \"/nope/facade-fakecli\", and /nope/facade-fakecli is not a \
-             program that can be run"
-                .to_string(),
+            format!(
+                "clis.gone.command is \"/nope/facade-fakecli\", and {gone} is not a program that \
+                 can be run"
+            ),
         ),
     ];
     for (cli, problem) in said {
@@ -655,26 +664,18 @@ fn a_resume_refuses_an_entry_turned_off_or_wrong() {
 fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
     let home = TestHome::new("configcommand");
     let fakecli = test_binaries().fakecli.clone();
-    std::fs::create_dir_all(home.user_home().join("bin")).unwrap();
-    std::os::unix::fs::symlink(&fakecli, home.user_home().join("bin/home-fakecli")).unwrap();
-    std::fs::create_dir_all(home.project.join("rel")).unwrap();
-    std::os::unix::fs::symlink(&fakecli, home.project.join("rel/rel-fakecli")).unwrap();
+    install_program(&home.user_home().join("bin"), "home-fakecli", &fakecli);
+    install_program(&home.project.join("rel"), "rel-fakecli", &fakecli);
     let marker = home.project.parent().unwrap().join("wrapper.ran");
-    let wrapper = home.project.parent().unwrap().join("wrapper.sh");
-    std::fs::write(
-        &wrapper,
-        format!(
+    let wrapper = install_script(
+        home.project.parent().unwrap(),
+        "wrapper",
+        &format!(
             "#!/bin/sh\necho ran > '{}'\nexec '{}' \"$@\"\n",
             marker.display(),
             fakecli.display()
         ),
-    )
-    .unwrap();
-    std::fs::set_permissions(
-        &wrapper,
-        std::os::unix::fs::PermissionsExt::from_mode(0o755),
-    )
-    .unwrap();
+    );
     let clis = json!({
         "fake": { "command": wrapper },
         "homed": { "type": "fake", "command": "~/bin/home-fakecli" },
@@ -705,7 +706,7 @@ fn an_entry_s_command_runs_in_place_of_its_type_s_program() {
 fn a_name_from_names_is_one_no_agent_of_its_window_has() {
     let home = TestHome::new("configwindows");
     settings(&home, &json!({ "names": ["Solo"] }));
-    let folder = std::fs::canonicalize(&home.project)
+    let folder = facade_base::files::real_path(&home.project)
         .unwrap()
         .to_string_lossy()
         .into_owned();
@@ -841,7 +842,7 @@ fn a_start_its_settings_refuse_makes_no_worktree() {
             "first",
         ],
     );
-    let repo = std::fs::canonicalize(&repo).unwrap();
+    let repo = facade_base::files::real_path(&repo).unwrap();
     let folder = repo.to_string_lossy().into_owned();
     let mut window = ide(
         &home,
@@ -900,7 +901,7 @@ fn dumper(home: &TestHome) -> (Value, std::path::PathBuf) {
     );
     (
         json!({
-            "type": "custom", "command": "/bin/sh", "args": ["-c", script],
+            "type": "custom", "command": SH.as_str(), "args": ["-c", script],
             "env": { "COPY": "${env:PROVIDER_KEY}" },
         }),
         dumped,

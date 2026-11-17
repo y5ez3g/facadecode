@@ -10,6 +10,58 @@ use facade_scenarios::*;
 const FIRST: &str = "86da4482-2bae-4a45-b193-a5664c19826a";
 const SECOND: &str = "96da4482-2bae-4a45-b193-a5664c19826b";
 
+/// Codex runs its SessionStart command through its session's PowerShell shell on Windows.
+/// The command supplied by Facade must report the session at both start and resume.
+#[cfg(windows)]
+#[test]
+fn a_codex_session_start_hook_runs_in_powershell_and_the_session_resumes() {
+    let home = TestHome::new("codexpowershell");
+    let programs = home.folder().join("programs");
+    install_program(&programs, "codex", &test_binaries().fakecli);
+    let path = format!("{}{PATH_SEPARATOR}{}", programs.display(), home.test_path());
+    let started = home
+        .command(&test_binaries().facade)
+        .env("PATH", &path)
+        .env("FAKECLI_SESSION", FIRST)
+        .args(["start", "--name", "codex", "codex"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(started.status.success(), "{}", stderr(&started));
+    let first = started_agent(&stdout(&started));
+    assert!(
+        records_session(&home, "codex", Some(FIRST)),
+        "Codex's PowerShell SessionStart hook did not report its session: {}",
+        home.daemon_log()
+    );
+    let first_session = session_file(&home, &first.id);
+    home.run_facade_ok(&["stop", "codex"]);
+    let resumed = home
+        .command(&test_binaries().facade)
+        .env("PATH", &path)
+        .args(["resume", "codex"])
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(resumed.status.success(), "{}", stderr(&resumed));
+    let second = started_agent(&stdout(&resumed));
+    assert_eq!(second.id, first.id);
+    assert_ne!(second.pid, first.pid);
+    let resumed_session = session_file(&home, &second.id);
+    assert_ne!(
+        resumed_session, first_session,
+        "a resume has its own run folder"
+    );
+    assert!(
+        wait_for_screen_text(&home, "codex", &format!("session {FIRST}")),
+        "the resumed CLI selects the recorded session"
+    );
+    assert_eq!(
+        std::fs::read_to_string(resumed_session).unwrap(),
+        format!("{FIRST}\n")
+    );
+}
+
 /// Runs `facade resume <agent>` without a terminal, with the test programs on `PATH` so the fake
 /// CLI's rule finds its program.
 fn resume(home: &TestHome, agent: &str) -> Output {
@@ -135,7 +187,10 @@ fn a_session_counts_once_its_cli_saved_it() {
     home.run_facade_ok(&["stop", "unsaved"]);
     let refused = resume(&home, "unsaved");
     assert!(
-        !refused.status.success() && stderr(&refused).contains("has no recorded session to resume"),
+        !refused.status.success()
+            && stderr(&refused).contains(
+                "#a1 has no session to resume yet: its CLI has not saved one, as when no turn has run",
+            ),
         "{}",
         stderr(&refused)
     );
@@ -207,7 +262,7 @@ fn a_session_reported_while_no_daemon_ran_is_recorded_before_clients_are_served(
     assert!(records_session(&home, "worker", Some(FIRST)));
     let file = session_file(&home, "a1");
     let daemon_pid = home.hello_result().unwrap()["pid"].as_i64().unwrap() as i32;
-    send_signal(daemon_pid, libc::SIGSTOP);
+    pause_process(daemon_pid);
     let reported = run_hook(
         &home,
         &file,
@@ -215,7 +270,7 @@ fn a_session_reported_while_no_daemon_ran_is_recorded_before_clients_are_served(
         &[],
     );
     assert!(reported.status.success() && reported.stdout.is_empty() && reported.stderr.is_empty());
-    send_signal(daemon_pid, libc::SIGKILL);
+    kill_process(daemon_pid);
     home.wait_for_daemon_after(daemon_pid, secs(30))
         .expect("a replacement daemon");
     // The first list after recovery already shows the session.
@@ -351,7 +406,13 @@ fn antigravity_s_title_command_writes_the_conversation_and_runs_the_person_s_own
     let (file, forwarded) = (folder.join("session"), home.project.join("forwarded.json"));
     let input =
         format!(r#"{{"product":"antigravity","conversation_id":"{FIRST}","agent_state":"idle"}}"#);
+    // The person's own command, for the shell Antigravity runs it with: sh, or on Windows cmd.exe.
+    // Facade adds no title hook on Windows for a command with a `"` in it, which cmd.exe could not
+    // be given whole, so this one has none, and only Unix's keeps what it was given.
+    #[cfg(unix)]
     let theirs = format!("cat > '{}'; printf 'my title'", forwarded.display());
+    #[cfg(windows)]
+    let theirs = "<nul set /p =my title".to_string();
     let mut command = home.command(&test_binaries().facade);
     command
         .args(["hook", "title"])
@@ -381,11 +442,14 @@ fn antigravity_s_title_command_writes_the_conversation_and_runs_the_person_s_own
         std::fs::read_to_string(&file).unwrap(),
         format!("{FIRST}\n")
     );
+    #[cfg(unix)]
     assert_eq!(
         std::fs::read_to_string(&forwarded).unwrap(),
         input,
         "the same input"
     );
+    #[cfg(windows)]
+    let _ = (&forwarded, &input);
 }
 
 #[test]
@@ -645,6 +709,8 @@ fn a_screen_watch_follows_the_agent_through_its_end_and_resume() {
 
 /// Input that waited for room when its run ended, and retries only after the agent resumed, never
 /// reaches the new CLI.
+// Input waiting for room is Unix's: a pseudo console's host reads all its input.
+#[cfg(unix)]
 #[test]
 fn input_waiting_when_its_run_ends_never_reaches_the_resumed_run() {
     let home = TestHome::new("waitinginput");
@@ -747,14 +813,20 @@ fn a_codex_run_keeps_the_version_its_installation_names_and_a_resume_reads_it_ag
         .unwrap()
     };
     install("0.166.0");
-    let codex = release.join("bin/codex");
-    std::fs::write(
-        &codex,
+    #[cfg(unix)]
+    install_script(
+        &release.join("bin"),
+        "codex",
         "#!/bin/sh\nprintf '\\033]7501;state=idle\\007› '\nexec sleep 600\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&codex, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let path = format!("{}:/usr/bin:/bin", release.join("bin").display());
+    );
+    // A program of its own on Windows: a stand-in .cmd would go through cmd.exe, which Codex's
+    // arguments cannot (npm's own shims are read through to the program behind them).
+    #[cfg(windows)]
+    install_program(&release.join("bin"), "codex", &test_binaries().fakecli);
+    let path = std::iter::once(release.join("bin").display().to_string())
+        .chain(system_folders())
+        .collect::<Vec<_>>()
+        .join(PATH_SEPARATOR);
     let mut wire = connect(&home);
     let args = json!({
         "command": ["codex"], "name": "codex", "cwd": home.project,

@@ -1553,7 +1553,6 @@ mod tests {
 
     #[tokio::test]
     async fn the_newest_facts_are_kept_privately_and_an_unreadable_file_starts_anew() {
-        use std::os::unix::fs::PermissionsExt;
         let dir = crate::test_folder::TestFolder::new("state-kept");
         let file = state_file(&dir);
         assert_eq!(read_kept(&file), Kept::default(), "no file keeps nothing");
@@ -1578,10 +1577,7 @@ mod tests {
             Some("three"),
             "the newest change is written last"
         );
-        assert_eq!(
-            std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
+        assert!(facade_base::files::is_private(&file).unwrap());
         std::fs::write(&file, "{").unwrap();
         assert_eq!(read_kept(&file), Kept::default());
         let (kept, changes) = watch::channel(Kept::new_run(None, ToolsGiven::Injected));

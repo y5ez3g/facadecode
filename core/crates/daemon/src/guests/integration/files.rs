@@ -172,7 +172,7 @@ fn parts_of(kind: Kind, bytes: Option<&[u8]>) -> Vec<Part> {
 /// The file a path names, through a link to it, so that the person's links to their configuration
 /// stay.
 pub(super) fn real_path(file: &Path) -> PathBuf {
-    std::fs::canonicalize(file).unwrap_or_else(|_| file.to_path_buf())
+    facade_base::files::real_path(file).unwrap_or_else(|_| file.to_path_buf())
 }
 
 /// A file's bytes, or None where there is no file.
@@ -187,10 +187,9 @@ pub(super) fn read(file: &Path) -> Result<Option<Vec<u8>>, ErrorBody> {
     }
 }
 
-/// Writes `bytes` to `file` through a file beside it, renamed into place, keeping the file's mode;
-/// makes its folder if needed.
+/// Writes `bytes` to `file` through a file beside it, renamed into place, keeping the file's
+/// permissions; makes its folder if needed.
 fn write_file(file: &Path, bytes: &[u8]) -> Result<(), ErrorBody> {
-    use std::os::unix::fs::PermissionsExt;
     let failed = |err: std::io::Error| {
         ErrorBody::internal(format!("cannot write {}: {err}", file.display()))
     };
@@ -203,10 +202,7 @@ fn write_file(file: &Path, bytes: &[u8]) -> Result<(), ErrorBody> {
     std::fs::create_dir_all(folder).map_err(failed)?;
     let name = file.file_name().unwrap_or_default().to_string_lossy();
     let beside = folder.join(format!(".{name}.facade-{}", std::process::id()));
-    let mode = file
-        .metadata()
-        .ok()
-        .map(|meta| std::fs::Permissions::from_mode(meta.permissions().mode() & 0o7777));
+    let mode = file.metadata().ok().map(|meta| meta.permissions());
     let written = std::fs::File::create(&beside)
         .and_then(|mut out| out.write_all(bytes).and_then(|()| out.sync_all()))
         .and_then(|()| mode.map_or(Ok(()), |mode| std::fs::set_permissions(&beside, mode)))

@@ -6,9 +6,7 @@
 //!   message is no longer kept (COLLABORATION-4.2);
 //! - `agents-<time>-<process>-<n>.json`: a list of agents, never deleted.
 
-use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
@@ -50,10 +48,7 @@ pub(crate) fn results_folder(core: &Path) -> PathBuf {
 pub(super) fn write(kind: ResultFile<'_>, text: &str) -> anyhow::Result<PathBuf> {
     static WRITTEN: AtomicU64 = AtomicU64::new(0);
     let folder = results_folder(&facade_base::paths::core_dir()?);
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&folder)?;
+    facade_base::files::create_private_folder_all(&folder)?;
     let time: String = facade_base::time::iso_now()
         .chars()
         .filter(char::is_ascii_alphanumeric)
@@ -64,10 +59,9 @@ pub(super) fn write(kind: ResultFile<'_>, text: &str) -> anyhow::Result<PathBuf>
         "{start}{time}-{}-{count}.{extension}",
         std::process::id()
     ));
-    let mut file = OpenOptions::new()
+    let mut file = facade_base::files::private_options()
         .write(true)
         .create_new(true)
-        .mode(0o600)
         .open(&path)?;
     file.write_all(text.as_bytes())?;
     Ok(path)

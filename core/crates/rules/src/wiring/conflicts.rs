@@ -57,11 +57,18 @@ fn claude_servers(cwd: &Path, environment: &BTreeMap<String, String>) -> Vec<(St
         && let Some(config) = read_config(&file)
     {
         found.extend(facade_in(&file, &config["mcpServers"]));
-        // Claude Code keys a project by its folder, which may be the canonical path.
+        // Claude Code keys a project by its folder, which may be the canonical path, and on
+        // Windows with forward slashes.
         let canonical = std::fs::canonicalize(cwd).ok();
+        let mut keys: Vec<String> = Vec::new();
         for folder in std::iter::once(cwd.to_path_buf()).chain(canonical) {
-            let project = &config["projects"][folder.to_string_lossy().as_ref()];
-            found.extend(facade_in(&file, &project["mcpServers"]));
+            let folder = folder.to_string_lossy();
+            for key in [folder.to_string(), folder.replace('\\', "/")] {
+                if !keys.contains(&key) {
+                    found.extend(facade_in(&file, &config["projects"][&key]["mcpServers"]));
+                    keys.push(key);
+                }
+            }
         }
     }
     for file in project_files(cwd, &[MCP_FILE]) {
@@ -113,7 +120,8 @@ fn opencode_servers(cwd: &Path, environment: &BTreeMap<String, String>) -> Vec<(
 
 /// Antigravity's: `mcpServers.facade` in its own MCP configuration, which `agy mcp add` writes.
 fn agy_servers(environment: &BTreeMap<String, String>) -> Vec<(String, Value)> {
-    let file = home(environment).map(|home| home.join(".gemini/config/mcp_config.json"));
+    let file =
+        home(environment).map(|home| home.join(".gemini").join("config").join("mcp_config.json"));
     let found = || facade_in(file.as_ref()?, &read_config(file.as_ref()?)?["mcpServers"]);
     found().into_iter().collect()
 }
