@@ -16,6 +16,15 @@ Execute CLIs nativas de agentes, edite código e revise alterações na mesma ja
 
 [English](../../../README.md) · [简体中文](../zh-CN/README.md) · [繁體中文](../zh-TW/README.md) · **Português (Brasil)** · [Español](../es/README.md) · [Русский](../ru/README.md) · [Deutsch](../de/README.md) · [日本語](../ja/README.md) · [Bahasa Indonesia](../id/README.md) · [Français](../fr/README.md) · [한국어](../ko/README.md) · [Türkçe](../tr/README.md) · [Tiếng Việt](../vi/README.md) · [Polski](../pl/README.md)
 
+<p>
+  <a href="https://upstar.dev/t/editors/week/2026-11-09">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://upstar.dev/badge/y5ez3g/facadecode/award/editors-dark.svg">
+      <img alt="Upstar: #4 Riser Of The Week in Editors &amp; IDEs, November 9–15, 2026" src="https://upstar.dev/badge/y5ez3g/facadecode/award/editors.svg" width="250" height="55">
+    </picture>
+  </a>
+</p>
+
 </div>
 
 [![Assista à demonstração de 2 minutos em facadecode.com](../../assets/readme/demo-poster.jpg)](https://facadecode.com)
