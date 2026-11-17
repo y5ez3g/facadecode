@@ -8,15 +8,16 @@ fn main() {
     if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    assert_eq!(
-        env::var("CARGO_CFG_TARGET_ARCH").as_deref(),
-        Ok("x86_64"),
-        "the bundled ConPTY package supports Windows x64"
-    );
+    let runtime = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
+        Ok("x86_64") => "win-x64",
+        Ok("aarch64") => "win-arm64",
+        _ => panic!("the bundled ConPTY package supports Windows x86_64 and aarch64 targets"),
+    };
 
     let source =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets the manifest path"))
-            .join("../../vendor/conpty/1.25.260303002/win10-x64");
+            .join("../../vendor/conpty/1.25.260303002")
+            .join(runtime);
     let out = PathBuf::from(env::var_os("OUT_DIR").expect("cargo sets the build output path"));
     let destination = out
         .ancestors()
