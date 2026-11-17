@@ -4,10 +4,15 @@
 
 import * as assert from 'assert';
 import * as fs from 'fs';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { OLDEST_PROTOCOL, PROTOCOL } from '../../base/coreProtocol';
+import type { HelloParams, InspectResult, Response, ScreenText } from '../../base/coreProtocol';
+import { lineReader } from '../../base/lines';
 import { linesOf as cardLines } from '../detailLines';
+import { coreSocket } from './editors';
 import { BUILT_IN_ADAPTERS } from '../../clis/catalog';
 import type { Card, PanelState } from '../../webview/protocol';
 
@@ -116,8 +121,81 @@ async function personAgent(): Promise<{ readonly card: Card; readonly alias: str
 	const alias = cardLines(card).join(' ').match(/#a\d+/)![0];
 	// Its server answered: the agent's Facade tools are there
 	await until(`${alias}'s Facade server`, () => linesOf(alias).some(line => line.step === 'tools/list') ? true : undefined)
-		.catch((error: Error) => { throw new Error(`${error.message}\n${startRecord(alias)}`); });
+		.catch(async (error: Error) => {
+			if (RUST && CLI === 'agy') {
+				try { await agyStartRecord(card, alias); }
+				catch (diagnostic) { console.error(`Rust agy startup diagnostics unavailable: ${diagnostic}`); }
+				throw error;
+			}
+			throw new Error(`${error.message}\n${startRecord(alias)}`);
+		});
 	return { card, alias };
+}
+
+/** Late, read-only evidence for the Rust agy server wait: never the historical first-draft frame or a reason to start core. */
+async function agyStartRecord(card: Card, alias: string): Promise<void> {
+	console.error(`Rust agy startup diagnostics ${JSON.stringify({ started_at: new Date().toISOString(), runId: card.runId, alias, engine: 'rust', platform: process.platform, arch: process.arch })}`);
+	try {
+		const configured = process.env.FACADE_HOME;
+		if (!configured || !RECORD || !path.isAbsolute(configured) || !path.isAbsolute(RECORD) || card.alias !== alias || !/^#a\d+$/.test(alias)) {
+			throw new Error('unavailable: missing run root/record prefix or mismatched card alias');
+		}
+		// RECORD is a prefix, not a file; run.ts puts this case's root in <run>/home/<case> beside <run>/fake-cli.log.
+		const root = fs.realpathSync(path.dirname(RECORD));
+		const home = fs.realpathSync(configured);
+		const record = path.join(root, path.basename(RECORD));
+		if (path.dirname(home) !== path.join(root, 'home') || path.basename(RECORD) !== 'fake-cli.log') {
+			throw new Error('unavailable: Facade root and fake record prefix do not belong to the same integration run');
+		}
+		console.error(`diagnostic root given=${configured}; real=${home}; fake record prefix=${record}`);
+		try {
+			// A single terminal connection: no startup, takeover, window, reconnect, watch, attach, input or resize.
+			const hello: HelloParams = { protocol: [OLDEST_PROTOCOL, PROTOCOL], build: 'integration-test-diagnostics', kind: 'terminal' };
+			const requests = [{ method: 'hello', params: hello },
+				{ method: 'call', params: { op: 'agent.inspect', args: { agent: alias } } },
+				{ method: 'call', params: { op: 'agent.screen', args: { agent: alias, lines: 400 } } }];
+			const socket = net.createConnection(coreSocket(configured));
+			const timer = setTimeout(() => socket.destroy(new Error('diagnostic connection exceeded 5 seconds')), 5_000);
+			try {
+				await new Promise<void>((resolve, reject) => {
+					let id = 0;
+					const next = () => socket.write(`${JSON.stringify({ jsonrpc: '2.0', id: ++id, ...requests[id - 1] })}\n`);
+					socket.once('connect', next);
+					socket.once('error', reject);
+					socket.once('close', () => reject(new Error('diagnostic connection closed')));
+					socket.on('data', lineReader(line => {
+						try {
+							const response = JSON.parse(line) as Response;
+							if (response.id !== id) { return; }
+							const label = ['hello', 'agent.inspect', 'agent.screen (current screen captured after wait failure)'][id - 1];
+							if (response.error) {
+								console.error(`${label} unavailable at ${new Date().toISOString()}: ${JSON.stringify(response.error)}`);
+								if (id === 1) { reject(new Error('diagnostic hello refused')); return; }
+							} else if (id > 1) {
+								const inspect = response.result as InspectResult;
+								const screen = response.result as ScreenText;
+								const returned = id === 2 ? inspect?.agent?.agent_id : screen?.agent_id;
+								if (returned?.replace(/^#/, '') !== alias.slice(1)) {
+									console.error(`${label} unavailable: returned agent_id does not match ${alias}`);
+								} else {
+									console.error(`${label} at ${new Date().toISOString()}:\n${JSON.stringify(response.result)}`);
+									if (id === 2) { console.error(`dimensions from inspect.agent: cols=${inspect.agent.cols ?? 'unknown'} rows=${inspect.agent.rows ?? 'unknown'}; screen.line_count is not rows`); }
+								}
+							}
+							if (id < requests.length) { next(); } else { resolve(); }
+						} catch (error) { reject(error); }
+					}, reject));
+				});
+			} finally { clearTimeout(timer); socket.destroy(); }
+		} catch (error) { console.error(`remaining core diagnostics unavailable: ${error}`); }
+		for (const [file, base64] of [[path.join(home, 'core', 'logs', 'daemon.log'), false], [path.join(home, 'core', 'logs', 'keeper.log'), false],
+			[`${record}.stdin.${alias}`, false], [`${record}.bytes.${alias}`, true], [`${record}.panel.${alias}`, false]] as const) {
+			try {
+				if (fs.realpathSync(file) !== file) { throw new Error('diagnostic file resolves outside its expected run path'); }
+				console.error(`${file}${base64 ? ' (base64)' : ''} at ${new Date().toISOString()}:\n${fs.readFileSync(file).toString(base64 ? 'base64' : 'utf8')}`);
+			} catch (error) { console.error(`${file} unavailable: ${error}`); }
+		}
+	} finally { console.error(`Rust agy startup diagnostics ended_at=${new Date().toISOString()}`); }
 }
 
 /** What a start that brought no Facade server left: the daemon's lines about the agent, and the fake CLI's records of its MCP panel and its input. */
