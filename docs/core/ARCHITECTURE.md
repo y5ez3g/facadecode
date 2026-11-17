@@ -125,7 +125,7 @@ core
 │   │   ├── keeper_link   the keeper connection and the runs it holds
 │   │   └── preparation   run folders, environment, plugins, session following
 │   ├── records     agent numbers, names and reach
-│   ├── windows     editor windows and their grace
+│   ├── windows     editor windows and their connections
 │   │   └── locations   a window's folders and worktrees
 │   ├── guests      guests, MCP members and integrations
 │   ├── server      client connections

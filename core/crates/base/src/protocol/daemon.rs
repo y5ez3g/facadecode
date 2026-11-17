@@ -218,14 +218,11 @@ pub struct WindowDescription {
     /// The window's name.
     pub label: String,
     /// `local`, or the remote authority, such as `ssh-remote+devbox`, of a window whose user
-    /// interface is on another computer. Once the window's last connection closes, its agents end
-    /// after 90 seconds if it is `local`, otherwise after five minutes, unless it connects again or
-    /// a window of the same workspace takes them over first.
+    /// interface is on another computer.
     pub environment: String,
     /// The key the window's agents are kept under across its reloads: a window that connects with
-    /// the same key takes over the agents of an earlier window with that key that has no
-    /// connection left, those that still run within its grace and those that ended. Omitted for a
-    /// window with no folder.
+    /// the same key takes over every agent, running or ended, of an earlier window with that key
+    /// that has no connection left. Omitted for a window with no folder.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace: Option<String>,
     /// The window's folders, as absolute paths, in the editor's order. Each is a location, and so

@@ -464,13 +464,13 @@ in the store, a log or a response.
 `<main folder>.worktrees/<branch>`, and answers with the new location; it keeps whatever a failure made, and says what in the
 error's `data.kept`.
 
-A window is there while one of its connections is open. Once its last one closes, its agents wait for it: 90 seconds for a
-`local` window, five minutes for another. A connection of the same window within that time keeps them, and so does a window of
-the same `workspace`, which takes them over from a window with no connection left; the first window, back, has none of them.
-Once the time runs out, the window's running agents end as `agent.stop` ends them, and their records stay. A later window of the
-same `workspace` takes over those ended agents too, so its client can resume or remove them. An agent ends too
-once its location is known to be gone: its window no longer has the folder that brought it, or Git no longer lists its worktree
-and its folder no longer exists. A failed read or a disconnected window proves nothing.
+A window is there while one of its connections is open. Once its last one closes, its agents go on running: a window that
+holds running agents stays listed, with `connected` false, and one that holds none leaves the list. A connection of the same
+window has its agents again, and so does a window of the same `workspace`, which takes over every agent, running or ended, of a
+window with no connection left; the first window, back, has none of them. A window's agent ends only as any agent does: by its
+CLI's own exit, by `agent.stop` or `agent.remove`, or once its location is known to be gone: its window no longer has the
+folder that brought it, or Git no longer lists its worktree and its folder no longer exists. A failed read or a disconnected
+window proves nothing.
 
 ### YOLO and creation trees
 
@@ -652,8 +652,8 @@ longer than the terminal's buffer leaves the CLI inside it; the next daemon type
 still be inside a paste.
 
 To its editor windows, a daemon's restart is a lost connection, never a close. The next daemon keeps each window's description
-in `facade.db`, apart from its `colors` and `env`, and a window that holds running agents waits from the restart as a window whose last
-connection closed does: one that connects again keeps its agents, and one that never comes back ends them after its 90 seconds or five minutes.
+in `facade.db`, apart from its `colors` and `env`, and lists a window that holds running agents as one whose last connection
+closed: not connected, its agents running, until it connects again or a window of its `workspace` takes them over.
 
 A daemon failure can lose queued input and, for each agent, one output chunk read but not yet logged, at most 64 KiB. Missing
 control sequences can make later output draw incorrectly until the CLI redraws. Recovery sets the terminal to its last logged
@@ -1627,8 +1627,8 @@ An editor window as it describes itself, in `hello` and again with `window.updat
 |---|---|---|---|
 | `id` | `string` | yes | The window's ID, which stays the same across its reloads. `terminal` is not an editor window's. |
 | `label` | `string` | yes | The window's name. |
-| `environment` | `string` | yes | `local`, or the remote authority, such as `ssh-remote+devbox`, of a window whose user interface is on another computer. Once the window's last connection closes, its agents end after 90 seconds if it is `local`, otherwise after five minutes, unless it connects again or a window of the same workspace takes them over first. |
-| `workspace` | `string` | no | The key the window's agents are kept under across its reloads: a window that connects with the same key takes over the agents of an earlier window with that key that has no connection left, those that still run within its grace and those that ended. Omitted for a window with no folder. |
+| `environment` | `string` | yes | `local`, or the remote authority, such as `ssh-remote+devbox`, of a window whose user interface is on another computer. |
+| `workspace` | `string` | no | The key the window's agents are kept under across its reloads: a window that connects with the same key takes over every agent, running or ended, of an earlier window with that key that has no connection left. Omitted for a window with no folder. |
 | `folders` | `string[]` | no | The window's folders, as absolute paths, in the editor's order. Each is a location, and so is every checkout of a Git repository one of them is in. |
 | `branch_prefix` | `string` | no | The window's Git branch prefix, which a new worktree's folder name leaves out. Omitted where none is set. |
 | `colors` | `TerminalColors` | no | The colors the window's terminals draw with, which its agents reply to color queries with. `window.update` sends them again when the editor's theme changes. Omitted, no color query gets a reply. |
