@@ -305,6 +305,22 @@ for repo in app remote-peer; do
 	git -C "$repo" -c user.email=t@t -c user.name=t commit -q --allow-empty -m first
 done
 `);
+				// A machine setting belongs to the remote server, before its first extension activation.
+				if (host.platform !== 'windows') {
+					const qaMachine = host.kind === 'container'
+						? '/home/node/.vscode-server/data/Machine/settings.json'
+						: `${server(host)}/.vscode-server/data/Machine/settings.json`;
+					const qaValue = engine === 'old' ? 'off' : 'auto';
+					const qaText = JSON.stringify({ 'facade.rustEngine': qaValue });
+					const qaNode = "const fs=require('fs'),crypto=require('crypto');const p=process.argv[1],s=fs.readFileSync(p,'utf8');console.log(JSON.stringify({path:p,sha256:crypto.createHash('sha256').update(s).digest('hex'),settings:JSON.parse(s)}))";
+					const qaReadback = host.run(`set -e
+umask 077
+mkdir -p ${quoted(path.posix.dirname(qaMachine))}
+printf '%s' ${quoted(qaText)} > ${quoted(qaMachine)}
+node -e ${quoted(qaNode)} ${quoted(qaMachine)}
+`);
+					console.log('QA_MACHINE_PRESET ' + JSON.stringify({ host: host.alias, file: qaMachine, value: qaValue, readback: qaReadback.trim() }));
+				}
 			} catch (err) {
 				throw new Error(`${host.alias} cannot run the journeys: ${failureOf(err)}. It needs Node and Git, and the extension built for the suite in ${host.build}.`);
 			}
