@@ -329,6 +329,7 @@ async fn start_and_serve(channel: &mut Option<StartupChannel>) -> anyhow::Result
         .await?;
     daemon.restore_guests()?;
     daemon.take_up_messages()?;
+    // Restore disconnected windows from the recovered agent records before accepting clients.
     daemon.restore_windows();
     // A plugin whose runs ended while no daemon ran goes now.
     let users = daemon

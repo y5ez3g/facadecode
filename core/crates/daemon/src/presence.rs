@@ -326,8 +326,7 @@ impl Daemon {
         Ok(location)
     }
 
-    /// Lists again the windows a daemon before this one knew that still have running agents, each
-    /// waiting out its grace for its window to come back.
+    /// Lists the windows of recovered running agents as disconnected.
     pub(crate) fn restore_windows(&self) {
         let infos = self.agent_infos();
         let running: Vec<String> = infos
@@ -336,58 +335,23 @@ impl Daemon {
             .map(|info| info.window_id.clone())
             .collect();
         let agents: Vec<String> = infos.into_iter().map(|info| info.window_id).collect();
-        for id in self.windows.restore(&running, &agents) {
-            self.windows.start_grace(&id, 1);
-        }
+        self.windows.restore(&running, &agents);
     }
 }
 
-/// Handles what windows report: a window whose last connection went waits out its grace where it
-/// has running agents, and one whose grace ended without it coming back has them stopped.
+/// Removes a window from the list when its last connection closes and it has no running agents.
 pub(crate) async fn follow_windows(
     daemon: Arc<Daemon>,
     mut events: mpsc::UnboundedReceiver<WindowEvent>,
 ) {
-    while let Some(event) = events.recv().await {
-        match event {
-            WindowEvent::Left {
-                window_id,
-                departure,
-            } => {
-                if daemon.running_in(&window_id).is_empty() {
-                    daemon.windows.remove(
-                        &window_id,
-                        departure,
-                        daemon.window_holds_agents(&window_id),
-                    );
-                } else {
-                    daemon.windows.start_grace(&window_id, departure);
-                }
-            }
-            WindowEvent::GraceEnded {
-                window_id,
-                departure,
-            } => {
-                let agents = daemon.running_in(&window_id);
-                log(
-                    "info",
-                    &format!(
-                        "window {window_id} did not come back in time: its {} running agents end",
-                        agents.len()
-                    ),
-                );
-                let daemon = daemon.clone();
-                tokio::spawn(async move {
-                    let mut stops = tokio::task::JoinSet::new();
-                    for agent in agents {
-                        let daemon = daemon.clone();
-                        stops.spawn(async move { daemon.stop(&agent).await });
-                    }
-                    stops.join_all().await;
-                    let has_agents = daemon.window_holds_agents(&window_id);
-                    daemon.windows.remove(&window_id, departure, has_agents);
-                });
-            }
+    while let Some(WindowEvent::Left {
+        window_id,
+        departure,
+    }) = events.recv().await
+    {
+        if daemon.running_in(&window_id).is_empty() {
+            let has_agents = daemon.window_holds_agents(&window_id);
+            daemon.windows.remove(&window_id, departure, has_agents);
         }
     }
 }

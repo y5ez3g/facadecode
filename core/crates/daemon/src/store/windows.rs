@@ -1,8 +1,7 @@
-//! The `windows` table: each editor window as it last described itself, so that a daemon started
-//! anew knows how long each window's agents wait for it and what to call it meanwhile. A window's
-//! row is written whenever it describes itself and deleted when the window goes, or with
-//! `Store::take_over` when another window takes its agents. The terminal window is never kept: it
-//! is always there.
+//! The `windows` table keeps each editor window's last description for daemon recovery and
+//! workspace takeover. A window writes its row whenever it describes itself. The row is deleted
+//! when the window is removed and holds no agent records, or in `Store::take_over` when another
+//! window takes its agents. The daemon lists the terminal window separately.
 
 use std::sync::Arc;
 
