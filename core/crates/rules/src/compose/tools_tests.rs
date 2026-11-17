@@ -1103,18 +1103,23 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
     );
     let title = json!({ "type": "command", "enabled": true, "command": TITLE.to_string() });
     assert_eq!(
-        serde_json::from_str::<Value>(after(&agy, "--settings")).unwrap(),
+        passed_settings(&agy),
         json!({ "permissions": { "allow": ["mcp(facade_facade/*)"] }, "title": title })
     );
     assert_eq!(agy.command[agy.command.len() - 2..], ["--model", "m"]);
     assert!(agy.env.is_empty());
     assert_eq!(
-        agy.files,
-        [(
+        agy.files[0],
+        (
             INSTRUCTIONS_FILE.to_string(),
             "You are Facade agent #a3.".to_string()
-        )],
+        ),
         "the run's instructions, which the hook gives"
+    );
+    assert_eq!(
+        agy.files.iter().map(|(name, _)| name).collect::<Vec<_>>(),
+        [INSTRUCTIONS_FILE, "settings.json"],
+        "and its settings"
     );
 
     // `--settings` replaces each key for the session: the person's own rules go in it, from
@@ -1127,8 +1132,7 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
          [\"mcp(other_other/*)\"], }, // mine\n\t\"theme\": \"dark\"\n}\n",
     );
     let environment = [("HOME", home.to_str().unwrap())];
-    let settings =
-        |launch: &CommandLine| serde_json::from_str::<Value>(after(launch, "--settings")).unwrap();
+    let settings = |launch: &CommandLine| passed_settings(launch);
     let own = json!({
         "permissions": {
             "allow": ["command(ls)", "mcp(facade_facade/*)"], "deny": ["mcp(other_other/*)"],
@@ -1188,6 +1192,34 @@ fn antigravity_gets_the_plugin_and_its_tools_allowed_beside_the_person_s_own_rul
     std::fs::remove_dir_all(&cwd).unwrap();
 }
 
+/// Antigravity's merged settings, which may hold the person's keys, reach it in a file of the
+/// run's, and its command line names only that file (CLIS-3.4).
+#[test]
+fn antigravity_s_settings_reach_it_in_a_file_of_the_run_s_never_on_its_command_line() {
+    let cwd = scratch("agysecret");
+    let secret = r#"{ "mcpServers": { "mine": { "env": { "TOKEN": "s3cret" } } } }"#;
+    write(cwd.join("mine.json"), secret);
+    let agy = launch_in(
+        &cwd,
+        "agy",
+        &["--settings", "mine.json", "go"],
+        &[("HOME", "/nowhere/home")],
+    );
+    assert_eq!(
+        after(&agy, "--settings"),
+        "/home/.facade/core/runs/a3/1f/settings.json"
+    );
+    assert!(
+        agy.command.iter().all(|word| !word.contains("s3cret")),
+        "{:?}",
+        agy.command
+    );
+    assert_eq!(
+        passed_settings(&agy)["mcpServers"]["mine"]["env"]["TOKEN"],
+        "s3cret"
+    );
+}
+
 /// The merges read the person's words as their CLI reads them (CLIS-3.1): Antigravity's
 /// `-settings` and `-settings=` are its `--settings`, merged into the one Facade passes; Muse
 /// Code's `-chooks=` is its `-c hooks=`; Claude Code's; and a `--settings` that is another
@@ -1202,8 +1234,7 @@ fn the_merges_read_the_person_s_words_as_their_cli_reads_them() {
             .filter(|word| word.trim_start_matches('-').starts_with(name))
             .count()
     };
-    let settings =
-        |launch: &CommandLine| serde_json::from_str::<Value>(after(launch, "--settings")).unwrap();
+    let settings = |launch: &CommandLine| passed_settings(launch);
     for given in [
         &["-settings", r#"{"theme":"light"}"#][..],
         &[r#"-settings={"theme":"light"}"#],
@@ -1276,9 +1307,7 @@ fn antigravity_reports_its_conversation_through_its_title_command_and_runs_the_p
     let home = scratch("agytitle");
     let file = home.join(".gemini/antigravity-cli/settings.json");
     let environment = [("HOME", home.to_str().unwrap())];
-    let title = |launch: &CommandLine| {
-        serde_json::from_str::<Value>(after(launch, "--settings")).unwrap()["title"].clone()
-    };
+    let title = |launch: &CommandLine| passed_settings(launch)["title"].clone();
     write(
         file.clone(),
         r#"{ "title": { "type": "command", "command": "echo mine", "refresh": 5 } }"#,

@@ -97,9 +97,12 @@ pub(crate) struct Wiring {
 }
 
 /// The arguments that carry the run's additions to the CLI's settings, merged with the person's
-/// own, and the person's words without their own such arguments.
+/// own, the files in the run's folder they name, and the person's words without their own such
+/// arguments.
 pub(crate) struct MergedSettings {
     pub(crate) args: Vec<String>,
+    /// Files in the run's folder: each name and its text.
+    pub(crate) files: Vec<(String, String)>,
     pub(crate) rest: Vec<String>,
 }
 
@@ -144,32 +147,32 @@ pub(crate) fn report_session(cli: &str, wiring: &mut Wiring, session: &SessionRe
 /// person's, and the person's `words` left. Antigravity's `--settings` replaces the person's
 /// settings key by key for the session, so the permission rules they keep go in it beside
 /// Facade's; Muse Code's `-c hooks=` replaces the hooks of its settings, so their own hooks go in
-/// it before Facade's. `cwd` is the folder the CLI starts in. Settings Facade cannot read are left
+/// it before Facade's. `cwd` is the folder the CLI starts in, `folder` the run's own, without
+/// which Antigravity's are not merged. Settings Facade cannot read are left
 /// as they are, for the CLI to say what is wrong with them, and nothing is added to them.
 pub(crate) fn merged_settings(
     rule: &Rule,
     wiring: &Wiring,
     words: Vec<String>,
     cwd: &Path,
+    folder: Option<&Path>,
     environment: &BTreeMap<String, String>,
 ) -> MergedSettings {
     let grammar = &rule.arguments;
     let merged = match rule.cli.as_str() {
-        "agy" if wiring.settings.is_some() || wiring.title.is_some() => {
-            settings::agy_settings(grammar, wiring, &words, cwd, environment)
-        }
+        "agy" if wiring.settings.is_some() || wiring.title.is_some() => folder.and_then(|folder| {
+            settings::agy_settings(grammar, wiring, &words, cwd, folder, environment)
+        }),
         "muse" if !wiring.hooks.is_empty() => {
             settings::muse_hooks(grammar, &wiring.hooks, &words, environment)
         }
         _ => None,
     };
-    match merged {
-        Some((args, rest)) => MergedSettings { args, rest },
-        None => MergedSettings {
-            args: Vec::new(),
-            rest: words,
-        },
-    }
+    merged.unwrap_or(MergedSettings {
+        args: Vec::new(),
+        files: Vec::new(),
+        rest: words,
+    })
 }
 
 /// Takes out of `env`, the environment a run of `cli` started with, everything the run added to

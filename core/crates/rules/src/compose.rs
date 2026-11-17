@@ -58,6 +58,7 @@ pub fn start_command_line(
     let (hook_args, rest) = (hooked.args, hooked.rest);
     let MergedSettings {
         args: merged,
+        files: settings_files,
         mut rest,
     } = merge(rule, &wiring, rest, server, session, yolo, environment);
     // A CLI that reports its session through its settings reports it only where they merged.
@@ -77,7 +78,7 @@ pub fn start_command_line(
         command,
         env: [hooked.env, wiring.env].concat(),
         captures,
-        files: [wiring.files, hooked.files].concat(),
+        files: [wiring.files, hooked.files, settings_files].concat(),
         plugin: wiring.plugin,
         tools,
     }
@@ -109,6 +110,7 @@ pub fn resume_command_line(
     command.extend(hooked.args);
     let MergedSettings {
         args: merged,
+        files: settings_files,
         mut rest,
     } = merge(
         rule,
@@ -128,7 +130,7 @@ pub fn resume_command_line(
         command,
         env: [hooked.env, wiring.env].concat(),
         captures,
-        files: [wiring.files, hooked.files].concat(),
+        files: [wiring.files, hooked.files, settings_files].concat(),
         plugin: wiring.plugin,
         tools,
     })
@@ -207,9 +209,10 @@ fn rule_args(rule: &Rule, yolo: Option<&Path>) -> Vec<String> {
     command
 }
 
-/// The arguments that carry the tools' and YOLO's settings merged with the person's, and the
-/// person's words left. The settings are read in the run's folder: the server's, else the
-/// session's, else YOLO's.
+/// The arguments that carry the tools' and YOLO's settings merged with the person's, the files they
+/// name, and the person's words left. The settings are read in the folder the CLI starts in: the
+/// server's, else the session's, else YOLO's; their files go in the run's folder, the server's or
+/// else the session's.
 fn merge(
     rule: &Rule,
     wiring: &Wiring,
@@ -223,10 +226,14 @@ fn merge(
         .map(|server| server.cwd)
         .or(session.map(|session| session.cwd))
         .or(yolo);
+    let folder = server
+        .map(|server| server.folder)
+        .or(session.map(|session| session.folder()));
     match cwd {
-        Some(cwd) => wiring::merged_settings(rule, wiring, words, cwd, environment),
+        Some(cwd) => wiring::merged_settings(rule, wiring, words, cwd, folder, environment),
         None => MergedSettings {
             args: Vec::new(),
+            files: Vec::new(),
             rest: words,
         },
     }
@@ -249,6 +256,19 @@ fn place_tool_args(
     } else {
         command.extend(tool_args);
     }
+}
+
+/// The settings `launch` passes with `--settings`: the text of the run's file it names, else its
+/// JSON.
+#[cfg(test)]
+fn passed_settings(launch: &CommandLine) -> serde_json::Value {
+    let at = launch.command.iter().position(|word| word == "--settings");
+    let given = &launch.command[at.expect("a --settings argument") + 1];
+    let file = launch
+        .files
+        .iter()
+        .find(|(name, _)| given.ends_with(&format!("/{name}")));
+    serde_json::from_str(file.map_or(given.as_str(), |(_, text)| text.as_str())).unwrap()
 }
 
 #[cfg(test)]

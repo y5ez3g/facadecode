@@ -691,10 +691,16 @@ fn launch_arguments(cli: &str) -> usize {
     }
 }
 
-/// The run settings a stand-in was given, where it was.
+/// The run settings a stand-in was given, where it was: their JSON, or the run's file that holds
+/// them.
 fn run_settings(args: &[String]) -> Option<Value> {
     let at = args.iter().position(|arg| arg == "--settings")?;
-    facade_scenarios::serde_json::from_str(&args[at + 1]).ok()
+    let given = &args[at + 1];
+    let text = match given.starts_with('{') {
+        true => given.clone(),
+        false => std::fs::read_to_string(given).ok()?,
+    };
+    facade_scenarios::serde_json::from_str(&text).ok()
 }
 
 /// Each of the six CLIs launched with YOLO on runs without asking and trusts its folder by what its
