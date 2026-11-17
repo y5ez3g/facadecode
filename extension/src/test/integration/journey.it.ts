@@ -230,6 +230,42 @@ suite(`Journey: a person starts and closes ${CLI} (J07)`, () => {
 		await until('the process to end in the background', async () => alive(pid) ? undefined : true);
 	});
 
+	test('LIFECYCLE-2.2: a person types English, Chinese and emoji in an agent terminal, unchanged and without submitting', async function () {
+		if (CUSTOM) { this.skip(); }
+		const card = await newCard();
+		let watching: vscode.Disposable | undefined;
+		try {
+			const alias = linesOf(card).join(' ').match(/#a\d+/)![0];
+			const terminal = vscode.window.terminals.find(each => unspun(each.name) === card.name);
+			assert.ok(terminal, 'the agent has its editor terminal');
+			await until('its editor tab in front', async () => {
+				const tab = vscode.window.tabGroups.activeTabGroup.activeTab;
+				return tab?.input instanceof vscode.TabInputTerminal && unspun(tab.label) === card.name ? true : undefined;
+			});
+			await until('the fake CLI ready', async () => (await state()).cards.find(each => each.runId === card.runId)?.stateText === 'Idle' ? true : undefined);
+			const pty = (terminal.creationOptions as vscode.ExtensionTerminalOptions).pty;
+			assert.ok(pty, 'the terminal uses the product Pseudoterminal');
+			let screen = '';
+			// Read the same output that draws this terminal, on either engine.
+			watching = pty.onDidWrite(data => { screen += data; });
+			const file = `${RECORD}.bytes.${alias}`;
+			const offset = fs.existsSync(file) ? fs.statSync(file).size : 0;
+			const received = () => fs.existsSync(file) ? fs.readFileSync(file).subarray(offset) : Buffer.alloc(0);
+			const text = 'hello 中文 🚀';
+			const expected = Buffer.from(text, 'utf8');
+			// VS Code sends this through the Pseudoterminal's handleInput, as it does a person's typing; no tool types for them.
+			terminal.sendText(text, false);
+			const bytes = await until('the fake CLI to receive all typed bytes', async () => received().length >= expected.length ? received() : undefined)
+				.catch(error => { throw new Error(`${(error as Error).message}; expected UTF-8 ${expected.toString('hex')}, received ${received().toString('hex')}`); });
+			assert.deepStrictEqual(bytes, expected, 'the CLI receives exactly the typed UTF-8 bytes, with no Enter');
+			await until('the same text drawn in its input box', async () => screen.includes(text) ? true : undefined);
+			assert.strictEqual(fs.existsSync(`${RECORD}.received.${alias}`), false, 'the draft was never submitted');
+		} finally {
+			watching?.dispose();
+			await vscode.commands.executeCommand('facade.closeAgent', { run_id: card.runId });
+		}
+	});
+
 	test('LIFECYCLE-2.2: a split of an agent\'s tab becomes, in the new group, an ordinary terminal in the agent\'s folder; the agent stays in its group, no agent starts, and no empty tab is left', async function () {
 		if (CLI !== 'claude') { this.skip(); }
 		this.timeout(90_000);

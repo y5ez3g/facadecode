@@ -23,6 +23,7 @@ import * as path from 'path';
 import { randomUUID } from 'crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { pathToFileURL } from 'url';
+import { StringDecoder } from 'string_decoder';
 
 const ESC = '\x1b';
 const ST = `${ESC}\\`;
@@ -357,8 +358,12 @@ function start(): void {
 	if (process.stdin.isTTY) {
 		process.stdin.setRawMode(true);
 	}
-	process.stdin.setEncoding('utf8');
-	process.stdin.on('data', received);
+	const decoder = new StringDecoder('utf8');
+	process.stdin.on('data', (chunk: Buffer) => {
+		// The bytes before decoding, so a person's terminal input can be checked independently of its screen (LIFECYCLE-2.2).
+		fs.appendFileSync(`${record}.bytes.${agent}`, chunk);
+		received(decoder.write(chunk));
+	});
 	process.stdout.on('resize', draw);
 	// What a test asks of its screen shows within a fifth of a second
 	let quirked = '';
